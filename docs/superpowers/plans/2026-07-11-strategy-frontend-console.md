@@ -37,7 +37,7 @@ modules/strategy/
 ├── proto/strategy.proto
 ├── schema/strategy.sql
 ├── internal/domain/frontend.go
-├── internal/repository/frontend_queries.go
+├── internal/store/frontend_queries.go
 ├── internal/rpc/frontend_service.go
 └── test/frontend_e2e_test.go
 
@@ -125,9 +125,9 @@ Expected: 空 SQLite 数据库可创建全部表，唯一键阻止重复绩效�
 ## Task 3: 实现查询 repository
 
 **Files:**
-- Create: `modules/strategy/internal/repository/frontend_queries.go`
-- Create: `modules/strategy/internal/repository/frontend_queries_test.go`
-- Modify: `modules/strategy/internal/repository/repository.go`
+- Create: `modules/strategy/internal/store/frontend_queries.go`
+- Create: `modules/strategy/internal/store/frontend_queries_test.go`
+- Modify: `modules/strategy/internal/store/repository.go`
 
 - [ ] **Step 1: 写真实 SQLite 测试**
 
@@ -143,7 +143,7 @@ Expected: 空 SQLite 数据库可创建全部表，唯一键阻止重复绩效�
 
 - [ ] **Step 4: 执行 race 测试**
 
-Run: `cd modules/strategy && GOWORK=off go test ./internal/repository -race -count=1`
+Run: `cd modules/strategy && GOWORK=off go test ./internal/store -race -count=1`
 
 Expected: 分页、来源隔离、幂等和 stale 判定全部通过。
 

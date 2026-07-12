@@ -1,4 +1,4 @@
-package repository
+package store
 
 import (
 	"context"
@@ -48,7 +48,7 @@ type PerformanceFilter struct {
 }
 
 func (r *Repository) UpsertHealth(ctx context.Context, health domain.BindingHealth) error {
-	if r == nil || r.DB == nil {
+	if r == nil || r.db == nil {
 		return errors.New("strategy repository is unavailable")
 	}
 	if health.BindingID == "" {
@@ -57,15 +57,15 @@ func (r *Repository) UpsertHealth(ctx context.Context, health domain.BindingHeal
 	if health.ObservedAt.IsZero() {
 		health.ObservedAt = time.Now().UTC()
 	}
-	return r.DB.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_binding_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status", "c_mode", "c_last_run_id", "c_last_success_at", "c_last_error_type", "c_last_error_message", "c_last_data_revision", "c_data_cutoff", "c_worker_status", "c_outbox_lag_seconds", "c_observed_at"})}).Create(&health).Error
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_binding_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status", "c_mode", "c_last_run_id", "c_last_success_at", "c_last_error_type", "c_last_error_message", "c_last_data_revision", "c_data_cutoff", "c_worker_status", "c_outbox_lag_seconds", "c_observed_at"})}).Create(&health).Error
 }
 
 func (r *Repository) ListRunningStrategies(ctx context.Context, filter RunningFilter, page Page) ([]domain.RunningStrategySummary, int64, error) {
-	if r == nil || r.DB == nil {
+	if r == nil || r.db == nil {
 		return nil, 0, errors.New("strategy repository is unavailable")
 	}
 	p := page.normalized()
-	query := r.DB.WithContext(ctx).Table("t_strategy_bindings AS b").
+	query := r.db.WithContext(ctx).Table("t_strategy_bindings AS b").
 		Select("b.c_strategy_id AS strategy_id, b.c_strategy_version AS version, b.c_binding_id AS binding_id, b.c_space_id AS space_id, b.c_view_id AS view_id, b.c_freq AS freq, COALESCE((SELECT e.c_mode FROM t_strategy_execution_bindings AS e WHERE e.c_group_id=b.c_group_id AND e.c_status='enabled' LIMIT 1), 'observe') AS mode, b.c_status AS status, d.c_source_hash AS source_hash, COALESCE(s.c_last_run_id, '') AS last_run_id, h.c_status AS health_status, h.c_last_success_at AS last_success_at, h.c_last_error_type AS last_error_type, h.c_last_error_message AS last_error_message, h.c_last_data_revision AS last_data_revision, h.c_data_cutoff AS data_cutoff, h.c_worker_status AS worker_status, h.c_outbox_lag_seconds AS outbox_lag_seconds, h.c_observed_at AS observed_at").
 		Joins("JOIN t_strategy_defs AS d ON d.c_strategy_id=b.c_strategy_id AND d.c_version=b.c_strategy_version").
 		Joins("LEFT JOIN t_strategy_states AS s ON s.c_binding_id=b.c_binding_id").
@@ -131,7 +131,7 @@ func (r runningRow) summary() domain.RunningStrategySummary {
 
 func (r *Repository) GetHealth(ctx context.Context, bindingID string) (domain.BindingHealth, error) {
 	var health domain.BindingHealth
-	if err := r.DB.WithContext(ctx).Where("c_binding_id=?", bindingID).First(&health).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_binding_id=?", bindingID).First(&health).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return domain.BindingHealth{BindingID: bindingID, Status: "unknown"}, nil
 		}
@@ -142,7 +142,7 @@ func (r *Repository) GetHealth(ctx context.Context, bindingID string) (domain.Bi
 
 func (r *Repository) ListRuns(ctx context.Context, filter RunFilter, page Page) ([]domain.StrategyRun, int64, error) {
 	p := page.normalized()
-	query := r.DB.WithContext(ctx).Where("c_binding_id=?", filter.BindingID)
+	query := r.db.WithContext(ctx).Where("c_binding_id=?", filter.BindingID)
 	if !filter.From.IsZero() {
 		query = query.Where("c_trigger_bar_time >= ?", filter.From.UTC().Format(time.RFC3339Nano))
 	}
@@ -163,12 +163,12 @@ func (r *Repository) ListRuns(ctx context.Context, filter RunFilter, page Page) 
 func (r *Repository) ListTargets(ctx context.Context, runID string, page Page) ([]domain.TargetWeight, int64, error) {
 	p := page.normalized()
 	var run domain.StrategyRun
-	if err := r.DB.WithContext(ctx).Where("c_run_id=?", runID).First(&run).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_run_id=?", runID).First(&run).Error; err != nil {
 		return nil, 0, err
 	}
 	var targets []domain.TargetWeight
 	var raw string
-	if err := r.DB.WithContext(ctx).Table("t_strategy_runs").Select("c_output_json").Where("c_run_id=?", runID).Scan(&raw).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table("t_strategy_runs").Select("c_output_json").Where("c_run_id=?", runID).Scan(&raw).Error; err != nil {
 		return nil, 0, err
 	}
 	var output domain.Output
@@ -177,7 +177,7 @@ func (r *Repository) ListTargets(ctx context.Context, runID string, page Page) (
 	}
 	total := int64(len(output.Targets))
 	var comparisons []domain.TargetComparison
-	if err := r.DB.WithContext(ctx).Where("c_run_id=?", runID).Find(&comparisons).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_run_id=?", runID).Find(&comparisons).Error; err != nil {
 		return nil, 0, err
 	}
 	comparisonByInstrument := make(map[string]domain.TargetComparison, len(comparisons))
@@ -216,7 +216,7 @@ func (r *Repository) ListPerformancePoints(ctx context.Context, filter Performan
 	if filter.Source != "" && !domain.ValidPerformanceSource(filter.Source) {
 		return nil, fmt.Errorf("unsupported performance source %q", filter.Source)
 	}
-	query := r.DB.WithContext(ctx).Where("c_binding_id=?", filter.BindingID)
+	query := r.db.WithContext(ctx).Where("c_binding_id=?", filter.BindingID)
 	if filter.Source != "" {
 		query = query.Where("c_performance_source=?", filter.Source)
 	}
@@ -239,7 +239,7 @@ func (r *Repository) ListPerformanceDaily(ctx context.Context, filter Performanc
 	if filter.Source != "" && !domain.ValidPerformanceSource(filter.Source) {
 		return nil, fmt.Errorf("unsupported performance source %q", filter.Source)
 	}
-	query := r.DB.WithContext(ctx).Where("c_binding_id=?", filter.BindingID)
+	query := r.db.WithContext(ctx).Where("c_binding_id=?", filter.BindingID)
 	if filter.Source != "" {
 		query = query.Where("c_performance_source=?", filter.Source)
 	}

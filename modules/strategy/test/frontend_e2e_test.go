@@ -7,8 +7,8 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"gorm.io/gorm"
@@ -41,7 +41,7 @@ func TestStrategyFrontendQueriesAndPerformanceE2E(t *testing.T) {
 	if err := db.Create(&point).Error; err != nil {
 		t.Fatal(err)
 	}
-	service := &rpc.Service{Repo: repository.New(db)}
+	service := &rpc.Service{Repo: store.New(db)}
 	ctx := context.Background()
 	list, err := service.ListRunningStrategies(ctx, &strategypb.ListRunningStrategiesReq{Page: &strategypb.PageReq{Page: 1, PageSize: 20}, SpaceId: "space-1"})
 	if err != nil || list.GetRetInfo().GetCode() != 0 || len(list.GetItems()) != 1 {

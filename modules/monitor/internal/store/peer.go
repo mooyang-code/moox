@@ -17,6 +17,20 @@ func NewPeerRepository(db *gorm.DB) *PeerRepository {
 	return &PeerRepository{db: db}
 }
 
+func (r *PeerRepository) CountActive(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&domain.MonitorInstance{}).
+		Where("c_status = ?", domain.InstanceStatusActive).Count(&count).Error
+	return count, err
+}
+
+func (r *PeerRepository) IsActive(ctx context.Context, instanceID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&domain.MonitorInstance{}).
+		Where("c_instance_id = ? AND c_status = ?", instanceID, domain.InstanceStatusActive).Count(&count).Error
+	return count > 0, err
+}
+
 func (r *PeerRepository) UpsertInstance(ctx context.Context, instance *domain.MonitorInstance) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_instance_id"}},

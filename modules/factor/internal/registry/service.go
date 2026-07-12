@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/repository"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
 )
 
@@ -26,14 +26,14 @@ type Options struct {
 
 // Service manages local factor definitions.
 type Service struct {
-	factors   *repository.FactorRepository
+	factors   *store.FactorRepository
 	meta      *MetadataSync
 	opts      Options
 	publisher *moduleregistry.SourcePublisher
 }
 
 // NewService creates a registry service.
-func NewService(factors *repository.FactorRepository, meta *MetadataSync, opts Options) *Service {
+func NewService(factors *store.FactorRepository, meta *MetadataSync, opts Options) *Service {
 	if opts.FactorsDir == "" {
 		opts.FactorsDir = "./factors"
 	}

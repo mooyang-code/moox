@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
-	"github.com/mooyang-code/moox/modules/collector/internal/repository"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -33,8 +33,8 @@ type Dependencies struct {
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	ruleRepo     *repository.TaskRuleRepository
-	instanceRepo *repository.TaskInstanceRepository
+	ruleRepo     *store.TaskRuleRepository
+	instanceRepo *store.TaskInstanceRepository
 	builder      *planner.TaskBuilder
 	datasetSrc   *storagesource.DatasetSource
 	cloudJobs    *taskpublisher.Client
@@ -43,8 +43,8 @@ type Service struct {
 // New creates a collector management service.
 func New(db *gorm.DB, deps Dependencies) *Service {
 	return &Service{
-		ruleRepo:     repository.NewTaskRuleRepository(db),
-		instanceRepo: repository.NewTaskInstanceRepository(db),
+		ruleRepo:     store.NewTaskRuleRepository(db),
+		instanceRepo: store.NewTaskInstanceRepository(db),
 		builder:      planner.NewTaskBuilder(),
 		datasetSrc:   storagesource.NewDatasetSource(deps.StorageMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
@@ -112,7 +112,7 @@ func (s *Service) GetTaskRuleList(ctx context.Context, req *pb.GetTaskRuleListRe
 		return &pb.GetTaskRuleListRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	page, size := pageParams(req.GetPage())
-	rules, total, err := s.ruleRepo.List(ctx, repository.TaskRuleFilter{
+	rules, total, err := s.ruleRepo.List(ctx, store.TaskRuleFilter{
 		SpaceID:  spaceID,
 		DataType: req.GetDataType(),
 		Exchange: req.GetExchange(),
@@ -214,7 +214,7 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 		return &pb.GetTaskInstanceListRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	spaceID := strings.TrimSpace(filter.GetSpaceId())
-	repoFilter := repository.TaskInstanceFilter{Page: 1, PageSize: 50}
+	repoFilter := store.TaskInstanceFilter{Page: 1, PageSize: 50}
 	page, size := 1, 50
 	if filter != nil {
 		page, size = pageParams(filter.GetPage())

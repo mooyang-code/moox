@@ -1,4 +1,4 @@
-package repository
+package store
 
 const (
 	defaultPageSize = 50

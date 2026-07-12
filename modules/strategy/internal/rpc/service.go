@@ -7,18 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 	"github.com/mooyang-code/moox/modules/strategy/internal/action"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"time"
 )
 
 type Service struct {
-	Repo         *repository.Repository
+	Repo         *store.Repository
 	Registry     *registry.Service
 	Workers      int
 	ReadyWorkers int

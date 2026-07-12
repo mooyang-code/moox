@@ -13,10 +13,10 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/repository"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
@@ -43,8 +43,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	SetGlobalConfig(cfg)
 
-	dbm := NewManager()
-	if err := dbm.Initialize(&cfg.Database); err != nil {
+	dbm := store.NewManager()
+	keepDB := false
+	defer func() {
+		if !keepDB {
+			_ = dbm.Close()
+		}
+	}()
+	if err := dbm.Initialize(&store.Options{
+		Path:            cfg.Database.Path,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
+	}); err != nil {
 		log.ErrorContextf(ctx, "初始化 factor 数据库失败: %v", err)
 		return nil, err
 	}
@@ -54,7 +66,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 
 	authInfo := factorAuthInfo(cfg)
-	factorRepo := repository.NewFactorRepository(dbm.DB())
+	factorRepo := store.NewFactorRepository(dbm.DB())
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.MetadataTarget), authInfo)
 	_ = registry.NewService(factorRepo, meta, registry.Options{FactorsDir: cfg.Engine.FactorsDir})
 
@@ -128,6 +140,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
+	keepDB = true
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
 }
@@ -156,7 +169,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *Manager, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor) error {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Manager, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor) error {
 	if cfg == nil {
 		return nil
 	}
@@ -171,7 +184,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *Manager, sched *schedule
 	return nil
 }
 
-func factorHealthSnapshot(cfg *Config, dbm *Manager, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, state *health.State) healthz.SnapshotFunc {
+func factorHealthSnapshot(cfg *Config, dbm *store.Manager, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
 		workerReady := runtimeExec != nil && runtimeExec.Status().Workers > 0
@@ -267,7 +280,7 @@ type realtimeLoopDeps struct {
 	consumer       interface{ Close() error }
 	debounce       *trigger.Debouncer
 	scheduler      *scheduler.Service
-	factors        *repository.FactorRepository
+	factors        *store.FactorRepository
 	meta           *registry.MetadataSync
 	db             *gorm.DB
 	debounceWindow time.Duration
@@ -341,7 +354,7 @@ func drainDebounced(ctx context.Context, deps realtimeLoopDeps) {
 	}
 }
 
-func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, factorsDir string, task trigger.Task) (scheduler.Task, error) {
+func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, factorsDir string, task trigger.Task) (scheduler.Task, error) {
 	specs := make([]engine.FactorSpec, 0, len(task.FactorIDs))
 	lookback := 0
 	for _, factorID := range task.FactorIDs {
@@ -395,7 +408,7 @@ func buildSchedulerTask(ctx context.Context, repo *repository.FactorRepository, 
 	}, nil
 }
 
-func syncTaskMetadata(ctx context.Context, meta *registry.MetadataSync, task scheduler.Task, repo *repository.FactorRepository) error {
+func syncTaskMetadata(ctx context.Context, meta *registry.MetadataSync, task scheduler.Task, repo *store.FactorRepository) error {
 	if meta == nil {
 		return nil
 	}

@@ -1,21 +1,30 @@
-// Package storage provides SQLite persistence for moox-cloudnode.
-package storage
+// Package store owns Factor's SQLite connection and persistence repositories.
+package store
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Manager owns the cloudnode SQLite connection.
+// Manager owns the factor SQLite connection.
 type Manager struct {
 	db *gorm.DB
+}
+
+// Options configures the Factor SQLite store.
+type Options struct {
+	Path            string
+	MaxIdleConns    int
+	MaxOpenConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
 
 // NewManager creates a persistence manager.
@@ -23,11 +32,11 @@ func NewManager() *Manager {
 	return &Manager{}
 }
 
-// Initialize opens SQLite. Schema creation is handled before service startup.
-func (m *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
-	dbPath := "./data/moox_cloudnode.db"
-	if dbCfg != nil && dbCfg.Path != "" {
-		dbPath = dbCfg.Path
+// Initialize opens SQLite. Schema creation is handled by schema/bootstrap code.
+func (m *Manager) Initialize(opts *Options) error {
+	dbPath := "./data/factor/factor.db"
+	if opts != nil && opts.Path != "" {
+		dbPath = opts.Path
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
@@ -37,19 +46,22 @@ func (m *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	m.db = db
-	applySQLitePoolConfig(m.db, dbCfg)
-	log.Infof("初始化 CloudNode SQLite 数据库: %s", dbPath)
+	applySQLitePoolConfig(m.db, opts)
+	log.Infof("初始化 Factor SQLite 数据库: %s", dbPath)
 	return nil
 }
 
 // DB returns the raw gorm connection.
 func (m *Manager) DB() *gorm.DB {
+	if m == nil {
+		return nil
+	}
 	return m.db
 }
 
-// Close closes the underlying SQL connection.
+// Close releases the underlying SQL connection.
 func (m *Manager) Close() error {
-	if m.db == nil {
+	if m == nil || m.db == nil {
 		return nil
 	}
 	sqlDB, err := m.db.DB()
@@ -62,7 +74,7 @@ func (m *Manager) Close() error {
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
+		"_pragma=synchronous(NORMAL)",
 		"_pragma=busy_timeout(5000)",
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",
@@ -75,14 +87,19 @@ func buildSQLiteDSN(dbPath string) string {
 	return dbPath + sep + strings.Join(pragmas, "&")
 }
 
-func applySQLitePoolConfig(db *gorm.DB, cfg *config.DatabaseConfig) {
+func applySQLitePoolConfig(db *gorm.DB, cfg *Options) {
 	sqlDB, err := db.DB()
 	if err != nil {
 		return
 	}
+	maxOpen := 30
+	maxIdle := 20
 	if cfg != nil {
-		if cfg.MaxOpenConns > 1 || cfg.MaxIdleConns > 1 {
-			log.Warnf("CloudNode SQLite 强制使用单连接写入队列: configured max_open_conns=%d max_idle_conns=%d", cfg.MaxOpenConns, cfg.MaxIdleConns)
+		if cfg.MaxOpenConns > 0 {
+			maxOpen = cfg.MaxOpenConns
+		}
+		if cfg.MaxIdleConns > 0 && cfg.MaxIdleConns < maxOpen {
+			maxIdle = cfg.MaxIdleConns
 		}
 		if cfg.ConnMaxLifetime > 0 {
 			sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
@@ -91,6 +108,6 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *config.DatabaseConfig) {
 			sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 		}
 	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
 }

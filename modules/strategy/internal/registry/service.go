@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"gopkg.in/yaml.v3"
 	"io"
 	"strings"
@@ -21,7 +21,7 @@ type Manifest struct {
 	Entrypoint         string `yaml:"entrypoint"`
 	StateSchemaVersion int    `yaml:"state_schema_version"`
 }
-type Service struct{ Repo *repository.Repository }
+type Service struct{ Repo *store.Repository }
 
 func Parse(raw string) (Manifest, error) {
 	var m Manifest
@@ -83,7 +83,7 @@ func (s *Service) Save(ctx context.Context, d domain.StrategyDefinition) error {
 			// this service: a successfully loaded draft may become enabled, but
 			// an enabled version can never be downgraded by a retry.
 			if old.Status == "draft" && d.Status == "enabled" {
-				return s.Repo.DB.WithContext(ctx).Model(&domain.StrategyDefinition{}).Where("c_strategy_id=? AND c_version=?", d.StrategyID, d.Version).Update("c_status", "enabled").Error
+				return s.Repo.DB().WithContext(ctx).Model(&domain.StrategyDefinition{}).Where("c_strategy_id=? AND c_version=?", d.StrategyID, d.Version).Update("c_status", "enabled").Error
 			}
 			return ErrImmutableVersion
 		}

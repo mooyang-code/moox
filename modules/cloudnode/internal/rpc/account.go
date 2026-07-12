@@ -3,7 +3,7 @@ package rpc
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 )
 
@@ -92,7 +92,7 @@ func (s *Service) ListCloudRegions(ctx context.Context, req *pb.ListCloudRegions
 	return &pb.ListCloudRegionsRsp{RetInfo: retOK(), Regions: regions, Total: int64(len(regions))}, nil
 }
 
-func toPBAccountSummary(account repository.CloudAccount) *pb.CloudAccountSummary {
+func toPBAccountSummary(account store.CloudAccount) *pb.CloudAccountSummary {
 	return &pb.CloudAccountSummary{
 		Id:          int32(account.ID),
 		AccountId:   account.AccountID,
@@ -108,8 +108,8 @@ func toPBAccountSummary(account repository.CloudAccount) *pb.CloudAccountSummary
 	}
 }
 
-func fromPBAccountInput(account *pb.CloudAccountInput) repository.CloudAccount {
-	return repository.CloudAccount{
+func fromPBAccountInput(account *pb.CloudAccountInput) store.CloudAccount {
+	return store.CloudAccount{
 		AccountID:   account.GetAccountId(),
 		AccountName: account.GetAccountName(),
 		Provider:    firstString(account.GetProvider(), "tencent"),

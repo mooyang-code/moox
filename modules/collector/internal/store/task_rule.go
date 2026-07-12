@@ -1,5 +1,5 @@
 // Package repository contains Collector persistence adapters.
-package repository
+package store
 
 import (
 	"context"

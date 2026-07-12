@@ -9,8 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/storage"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"gorm.io/gorm"
 )
@@ -18,13 +17,13 @@ import (
 // Service is the independent cloudnode service implementation.
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
-	dbm              *storage.Manager
+	dbm              *store.Manager
 	jobState         jobstate.Store
 	history          *jobhistory.Store
 	executionQueue   jobqueue.ExecutionQueue
 	heartbeatSink    projection.HeartbeatSink
-	catalog          *repository.CatalogRepository
-	scfClientFactory func(repository.CloudAccount) scfProvisioner
+	catalog          *store.CatalogRepository
+	scfClientFactory func(store.CloudAccount) scfProvisioner
 }
 
 type scfProvisioner interface {
@@ -52,10 +51,10 @@ func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
 }
 
 // New creates a cloudnode RPC service.
-func New(dbm *storage.Manager, opts ...Option) *Service {
+func New(dbm *store.Manager, opts ...Option) *Service {
 	svc := &Service{
 		dbm:              dbm,
-		catalog:          repository.NewCatalogRepository(dbm.DB()),
+		catalog:          store.NewCatalogRepository(dbm.DB()),
 		scfClientFactory: defaultSCFClientFactory,
 	}
 	for _, opt := range opts {
@@ -64,7 +63,7 @@ func New(dbm *storage.Manager, opts ...Option) *Service {
 	return svc
 }
 
-func defaultSCFClientFactory(account repository.CloudAccount) scfProvisioner {
+func defaultSCFClientFactory(account store.CloudAccount) scfProvisioner {
 	return tencentscf.New(account.SecretID, account.SecretKey)
 }
 
@@ -78,7 +77,7 @@ func retErr(code pb.ErrorCode, msg string) *pb.RetInfo {
 
 func retFromError(err error) *pb.RetInfo {
 	switch {
-	case errors.Is(err, repository.ErrPollingNodeNotFound):
+	case errors.Is(err, store.ErrPollingNodeNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "cloud node not found")
 	case errors.Is(err, jobstate.ErrConflict):
 		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation")

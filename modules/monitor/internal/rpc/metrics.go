@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -257,8 +256,7 @@ func (s *Service) GetMetricRuleState(ctx context.Context, req *monitorpb.GetMetr
 }
 
 func (s *Service) webhookEnabled(ctx context.Context, spaceID, id string) (bool, error) {
-	var found domain.WebhookChannel
-	err := s.db.WithContext(ctx).Where("c_space_id = ? AND c_webhook_id = ? AND c_is_deleted = 0", spaceID, id).First(&found).Error
+	found, err := s.alerts.GetWebhook(ctx, spaceID, id)
 	if err != nil {
 		return false, err
 	}

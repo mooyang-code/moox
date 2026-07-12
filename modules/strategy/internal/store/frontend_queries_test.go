@@ -1,4 +1,4 @@
-package repository
+package store
 
 import (
 	"context"
@@ -27,10 +27,10 @@ func TestListRunningStrategiesPaginatesAndFiltersBySpace(t *testing.T) {
 	ctx := context.Background()
 	for i, space := range []string{"s1", "s1", "s2"} {
 		id := "b" + string(rune('1'+i))
-		if err := r.DB.Create(&domain.StrategyDefinition{StrategyID: "demo", Version: id, API: "moox.strategy/v1", SourceHash: id, ManifestYAML: "id: demo", SourceCode: "def run(): pass", Status: "enabled"}).Error; err != nil {
+		if err := r.db.Create(&domain.StrategyDefinition{StrategyID: "demo", Version: id, API: "moox.strategy/v1", SourceHash: id, ManifestYAML: "id: demo", SourceCode: "def run(): pass", Status: "enabled"}).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := r.DB.Create(&domain.Binding{BindingID: id, StrategyID: "demo", StrategyVersion: id, SpaceID: space, Status: "enabled"}).Error; err != nil {
+		if err := r.db.Create(&domain.Binding{BindingID: id, StrategyID: "demo", StrategyVersion: id, SpaceID: space, Status: "enabled"}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}

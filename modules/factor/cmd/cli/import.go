@@ -10,7 +10,7 @@ import (
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/repository"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 )
 
@@ -31,7 +31,7 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return fmt.Errorf("read factors dir: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	svc := registry.NewService(repository.NewFactorRepository(db), nil, registry.Options{
+	svc := registry.NewService(store.NewFactorRepository(db), nil, registry.Options{
 		FactorsDir:    cfg.FactorsDir,
 		DefaultParams: cfg.DefaultParams,
 	})

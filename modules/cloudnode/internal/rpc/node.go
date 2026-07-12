@@ -9,8 +9,8 @@ import (
 	"time"
 
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -199,7 +199,7 @@ func (s *Service) heartbeatDirectives(ctx context.Context, spaceID string, nodeI
 	return nil, nil
 }
 
-func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudNode, item *pb.NodeCreateItem) error {
+func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {
 	pkg, account, err := s.packageAndAccount(ctx, node.SpaceID, node.PackageID, node.CloudAccountID)
 	if err != nil {
 		return err
@@ -262,7 +262,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *repository.CloudN
 	return nil
 }
 
-func mergeSCFFunctionMetadata(node *repository.CloudNode, info *tencentscf.FunctionInfo) {
+func mergeSCFFunctionMetadata(node *store.CloudNode, info *tencentscf.FunctionInfo) {
 	if node == nil || info == nil {
 		return
 	}
@@ -281,7 +281,7 @@ func mergeSCFFunctionMetadata(node *repository.CloudNode, info *tencentscf.Funct
 	}
 }
 
-func (s *Service) updateSCFFunctionCode(ctx context.Context, node repository.CloudNode, pkg repository.FunctionPackage) error {
+func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNode, pkg store.FunctionPackage) error {
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil {
 		return err
@@ -310,7 +310,7 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node repository.Clo
 	return nil
 }
 
-func (s *Service) packageAndAccount(ctx context.Context, spaceID string, packageID string, accountID string) (*repository.FunctionPackage, *repository.CloudAccount, error) {
+func (s *Service) packageAndAccount(ctx context.Context, spaceID string, packageID string, accountID string) (*store.FunctionPackage, *store.CloudAccount, error) {
 	pkg, err := s.catalog.GetPackage(ctx, spaceID, packageID)
 	if err != nil {
 		return nil, nil, err
@@ -331,7 +331,7 @@ func (s *Service) packageAndAccount(ctx context.Context, spaceID string, package
 	return pkg, account, nil
 }
 
-func (s *Service) scfClient(account repository.CloudAccount) scfProvisioner {
+func (s *Service) scfClient(account store.CloudAccount) scfProvisioner {
 	factory := s.scfClientFactory
 	if factory == nil {
 		factory = defaultSCFClientFactory
@@ -379,7 +379,7 @@ func copyStringMap(values map[string]string) map[string]string {
 	return out
 }
 
-func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int) repository.CloudNode {
+func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int) store.CloudNode {
 	metadata := structMap(item.GetMetadata())
 	if _, ok := metadata["index"]; !ok {
 		metadata["index"] = index
@@ -403,7 +403,7 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 		fmt.Sprintf("%s-%s-%s", prefix, firstString(item.GetRegion(), "region"), indexSuffix),
 	)
 	nodeID := firstString(metadataString(metadata, "node_id"), functionName)
-	return repository.CloudNode{
+	return store.CloudNode{
 		SpaceID:            spaceID,
 		NodeID:             nodeID,
 		CloudAccountID:     item.GetCloudAccountId(),
@@ -421,7 +421,7 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 	}
 }
 
-func mergeNodeUpdate(existing repository.CloudNode, node *pb.CloudNode) repository.CloudNode {
+func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNode {
 	next := existing
 	if node.GetCloudAccountId() != "" {
 		next.CloudAccountID = node.GetCloudAccountId()
@@ -468,7 +468,7 @@ func mergeNodeUpdate(existing repository.CloudNode, node *pb.CloudNode) reposito
 	return next
 }
 
-func toPBNode(node repository.CloudNode) *pb.CloudNode {
+func toPBNode(node store.CloudNode) *pb.CloudNode {
 	lastHeartbeat := ""
 	if node.LastHeartbeatAt != nil {
 		lastHeartbeat = node.LastHeartbeatAt.UTC().Format(time.RFC3339)
@@ -510,7 +510,7 @@ func toPBNode(node repository.CloudNode) *pb.CloudNode {
 	}
 }
 
-func fromPBNode(spaceID string, node *pb.CloudNode) repository.CloudNode {
+func fromPBNode(spaceID string, node *pb.CloudNode) store.CloudNode {
 	metadata := nodeMetadataFromPB(node)
 	supported := "[]"
 	if len(node.GetSupportedWorkloads()) > 0 {
@@ -519,7 +519,7 @@ func fromPBNode(spaceID string, node *pb.CloudNode) repository.CloudNode {
 	} else if workloads := supportedWorkloadsFromMetadata(metadata); workloads != "[]" {
 		supported = workloads
 	}
-	return repository.CloudNode{
+	return store.CloudNode{
 		SpaceID:            spaceID,
 		NodeID:             node.GetNodeId(),
 		CloudAccountID:     node.GetCloudAccountId(),

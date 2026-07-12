@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
@@ -126,7 +126,7 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	if err != nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "presign upload url failed: "+err.Error())}, nil
 	}
-	pkg := repository.FunctionPackage{
+	pkg := store.FunctionPackage{
 		SpaceID:        spaceID,
 		PackageID:      packageID,
 		PackageName:    req.GetPackageName(),
@@ -198,7 +198,7 @@ func (s *Service) CompletePackageUpload(ctx context.Context, req *pb.CompletePac
 	return &pb.CompletePackageUploadRsp{RetInfo: retOK(), Detail: toPBPackageDetail(*pkg)}, nil
 }
 
-func toPBPackageListItem(pkg repository.FunctionPackage) *pb.PackageListItem {
+func toPBPackageListItem(pkg store.FunctionPackage) *pb.PackageListItem {
 	return &pb.PackageListItem{
 		PackageId:      pkg.PackageID,
 		PackageName:    pkg.PackageName,
@@ -216,7 +216,7 @@ func toPBPackageListItem(pkg repository.FunctionPackage) *pb.PackageListItem {
 	}
 }
 
-func toPBPackageDetail(pkg repository.FunctionPackage) *pb.PackageDetail {
+func toPBPackageDetail(pkg store.FunctionPackage) *pb.PackageDetail {
 	return &pb.PackageDetail{
 		Id:               int64(pkg.ID),
 		SpaceId:          pkg.SpaceID,
@@ -242,14 +242,14 @@ func toPBPackageDetail(pkg repository.FunctionPackage) *pb.PackageDetail {
 	}
 }
 
-func cosURL(pkg repository.FunctionPackage) string {
+func cosURL(pkg store.FunctionPackage) string {
 	if pkg.COSBucket == "" || pkg.COSRegion == "" || pkg.COSPath == "" {
 		return ""
 	}
 	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", pkg.COSBucket, pkg.COSRegion, strings.TrimPrefix(pkg.COSPath, "/"))
 }
 
-func presignCOSPut(ctx context.Context, account repository.CloudAccount, objectPath string, expires time.Time) (string, error) {
+func presignCOSPut(ctx context.Context, account store.CloudAccount, objectPath string, expires time.Time) (string, error) {
 	bucketURL, err := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	if err != nil {
 		return "", err
@@ -267,7 +267,7 @@ func presignCOSPut(ctx context.Context, account repository.CloudAccount, objectP
 	return u.String(), nil
 }
 
-func newCOSClient(account repository.CloudAccount) *cos.Client {
+func newCOSClient(account store.CloudAccount) *cos.Client {
 	bucketURL, _ := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	return cos.NewClient(&cos.BaseURL{BucketURL: bucketURL}, &http.Client{
 		Transport: &cos.AuthorizationTransport{
@@ -277,7 +277,7 @@ func newCOSClient(account repository.CloudAccount) *cos.Client {
 	})
 }
 
-func verifyCOSObject(ctx context.Context, account repository.CloudAccount, objectPath string, expectedSize int64, expectedMD5 string) error {
+func verifyCOSObject(ctx context.Context, account store.CloudAccount, objectPath string, expectedSize int64, expectedMD5 string) error {
 	client := newCOSClient(account)
 	key := strings.TrimPrefix(objectPath, "/")
 	resp, err := client.Object.Head(ctx, key, nil)

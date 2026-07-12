@@ -73,7 +73,7 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
 - Create: `modules/factor/config/app.yaml`
 - Create: `modules/factor/config/trpc_go.yaml`
 - Create: `modules/factor/internal/app/control/config.go`
-- Create: `modules/factor/internal/app/control/database.go`
+- Create: `modules/factor/internal/store/database.go`
 - Create: `modules/factor/internal/app/control/bootstrap.go`
 - Create: `modules/factor/internal/app/control/discovery.go`
 - Create: `modules/factor/cmd/server/main.go`
@@ -87,10 +87,10 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
 - Create: `modules/factor/internal/domain/factor.go`
 - Create: `modules/factor/internal/domain/binding.go`
 - Create: `modules/factor/internal/domain/run.go`
-- Create: `modules/factor/internal/repository/factor.go`
-- Create: `modules/factor/internal/repository/binding.go`
-- Create: `modules/factor/internal/repository/run.go`
-- Create: `modules/factor/internal/repository/page.go`
+- Create: `modules/factor/internal/store/factor.go`
+- Create: `modules/factor/internal/store/binding.go`
+- Create: `modules/factor/internal/store/run.go`
+- Create: `modules/factor/internal/store/page.go`
 
 ### Registry And Storage RPC
 
@@ -160,7 +160,7 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
 - Create: `modules/factor/config/trpc_go.yaml`
 - Create: `modules/factor/internal/app/control/config.go`
 - Create: `modules/factor/internal/app/control/config_test.go`
-- Create: `modules/factor/internal/app/control/database.go`
+- Create: `modules/factor/internal/store/database.go`
 - Create: `modules/factor/cmd/server/main.go`
 - Modify: `scripts/build.sh`
 
@@ -223,7 +223,7 @@ Create `modules/factor/config/app.yaml` matching the defaults above. Create `mod
 
 - [ ] **Step 4: Add SQLite manager**
 
-Implement `internal/app/control/database.go` following collector 的 DSN 结构，但 **`synchronous` 用 `NORMAL` 而非 collector 现用的 `OFF`**（factor 是新模块，不继承已在代码审查中被标记为 C13 的坏做法；因子运行记录/定义不应在断电时丢失）：
+Implement `internal/store/database.go` following collector 的 DSN 结构，但 **`synchronous` 用 `NORMAL` 而非 collector 现用的 `OFF`**（factor 是新模块，不继承已在代码审查中被标记为 C13 的坏做法；因子运行记录/定义不应在断电时丢失）：
 
 ```text
 journal_mode(WAL), synchronous(NORMAL), busy_timeout(5000), temp_store(MEMORY), cache_size(-64000), wal_autocheckpoint(1000)
@@ -258,11 +258,11 @@ Expected: PASS; `bin/moox-factor` is produced.
 - Create: `modules/factor/internal/domain/factor.go`
 - Create: `modules/factor/internal/domain/binding.go`
 - Create: `modules/factor/internal/domain/run.go`
-- Create: `modules/factor/internal/repository/factor.go`
-- Create: `modules/factor/internal/repository/binding.go`
-- Create: `modules/factor/internal/repository/run.go`
-- Create: `modules/factor/internal/repository/page.go`
-- Create: `modules/factor/internal/repository/*_test.go`
+- Create: `modules/factor/internal/store/factor.go`
+- Create: `modules/factor/internal/store/binding.go`
+- Create: `modules/factor/internal/store/run.go`
+- Create: `modules/factor/internal/store/page.go`
+- Create: `modules/factor/internal/store/*_test.go`
 
 - [ ] **Step 1: Write schema test**
 
@@ -395,7 +395,7 @@ Repository tests must cover:
 Run:
 
 ```bash
-go test ./modules/factor/schema ./modules/factor/internal/repository -count=1
+go test ./modules/factor/schema ./modules/factor/internal/store -count=1
 ```
 
 Expected: PASS.

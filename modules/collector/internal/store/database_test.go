@@ -1,4 +1,4 @@
-package control
+package store
 
 import (
 	"path/filepath"
@@ -8,14 +8,13 @@ import (
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	mgr := NewManager()
-	if err := mgr.Initialize(&DatabaseConfig{Path: dbPath}); err != nil {
+	if err := mgr.Initialize(&Options{Path: dbPath}); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}
-	sqlDB, err := mgr.DB().DB()
-	if err != nil {
+	t.Cleanup(func() { _ = mgr.Close() })
+	if _, err := mgr.DB().DB(); err != nil {
 		t.Fatalf("DB() error = %v", err)
 	}
-	defer sqlDB.Close()
 
 	var count int64
 	if err := mgr.DB().Raw(`

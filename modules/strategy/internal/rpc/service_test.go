@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"gorm.io/gorm"
@@ -28,7 +28,7 @@ func TestRunOnceEvaluatesAndOptionallyCommits(t *testing.T) {
 	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC","target_weight":"0.25"}],"next_state":{"revision":context["data_revision"],"close":data.iloc[0]["close"]}}`
 	h := sha256.Sum256([]byte(source))
 	d := domain.StrategyDefinition{StrategyID: "demo", Version: "1.0.0", API: "moox.strategy/v1", SourceCode: source, SourceHash: hex.EncodeToString(h[:]), Status: "enabled"}
-	r := repository.New(db)
+	r := store.New(db)
 	if err := r.SaveDefinition(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}

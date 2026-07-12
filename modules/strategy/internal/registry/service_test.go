@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"gorm.io/gorm"
 )
@@ -32,7 +32,7 @@ func TestPublishKeepsVersionImmutable(t *testing.T) {
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		t.Fatal(err)
 	}
-	r := &Service{Repo: repository.New(db)}
+	r := &Service{Repo: store.New(db)}
 	manifest := "id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n"
 	if _, err := r.Publish(context.Background(), manifest, "def run(a,b,c,d): return {'action':'hold','targets':[],'next_state':{}}\n"); err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestPublishRejectsManifestChangeWithSameSource(t *testing.T) {
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		t.Fatal(err)
 	}
-	r := &Service{Repo: repository.New(db)}
+	r := &Service{Repo: store.New(db)}
 	manifest := "id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n"
 	source := "def run(a,b,c,d): return {'action':'hold','targets':[],'next_state':{}}\n"
 	if _, err := r.Publish(context.Background(), manifest, source); err != nil {
@@ -71,7 +71,7 @@ func TestSavePromotesLoadedDraft(t *testing.T) {
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		t.Fatal(err)
 	}
-	r := &Service{Repo: repository.New(db)}
+	r := &Service{Repo: store.New(db)}
 	manifest := "id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n"
 	source := "def run(a,b,c,d): return {'action':'hold','targets':[],'next_state':{}}\n"
 	if _, err := r.Publish(context.Background(), manifest, source); err != nil {

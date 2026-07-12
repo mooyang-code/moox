@@ -9,8 +9,8 @@ import (
 
 	"github.com/glebarez/sqlite"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudnode/schema"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -19,7 +19,7 @@ import (
 
 func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	db := newNodeSCFTestDB(t)
-	catalog := repository.NewCatalogRepository(db)
+	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
@@ -31,7 +31,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	}}
 	svc := &Service{
 		catalog: catalog,
-		scfClientFactory: func(account repository.CloudAccount) scfProvisioner {
+		scfClientFactory: func(account store.CloudAccount) scfProvisioner {
 			if account.SecretID != "secret-id" || account.SecretKey != "secret-key" {
 				t.Fatalf("account credentials were not passed to provider")
 			}
@@ -119,9 +119,9 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 
 func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) {
 	db := newNodeSCFTestDB(t)
-	catalog := repository.NewCatalogRepository(db)
+	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
-	if err := catalog.UpsertNode(context.Background(), repository.CloudNode{
+	if err := catalog.UpsertNode(context.Background(), store.CloudNode{
 		SpaceID:        "crypto",
 		NodeID:         "node-a",
 		CloudAccountID: "account-a",
@@ -139,7 +139,7 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	fake := &fakeSCFClient{}
 	svc := &Service{
 		catalog: catalog,
-		scfClientFactory: func(account repository.CloudAccount) scfProvisioner {
+		scfClientFactory: func(account store.CloudAccount) scfProvisioner {
 			return fake
 		},
 	}
@@ -221,10 +221,10 @@ func newNodeSCFTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func seedSCFAccountAndPackage(t *testing.T, catalog *repository.CatalogRepository) {
+func seedSCFAccountAndPackage(t *testing.T, catalog *store.CatalogRepository) {
 	t.Helper()
 	now := time.Now().UTC()
-	if err := catalog.UpsertAccount(context.Background(), repository.CloudAccount{
+	if err := catalog.UpsertAccount(context.Background(), store.CloudAccount{
 		AccountID:   "account-a",
 		AccountName: "test-account",
 		Provider:    "tencent",
@@ -237,7 +237,7 @@ func seedSCFAccountAndPackage(t *testing.T, catalog *repository.CatalogRepositor
 	}); err != nil {
 		t.Fatalf("seed account: %v", err)
 	}
-	if err := catalog.UpsertPackage(context.Background(), repository.FunctionPackage{
+	if err := catalog.UpsertPackage(context.Background(), store.FunctionPackage{
 		SpaceID:        "crypto",
 		PackageID:      "moox-collector_dev",
 		PackageName:    "moox-collector",

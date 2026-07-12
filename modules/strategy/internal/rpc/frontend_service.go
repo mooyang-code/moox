@@ -9,26 +9,26 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
 )
 
-func pageFromProto(page *strategypb.PageReq) repository.Page {
+func pageFromProto(page *strategypb.PageReq) store.Page {
 	if page == nil {
-		return repository.Page{Number: 1, Size: 20}
+		return store.Page{Number: 1, Size: 20}
 	}
-	return repository.Page{Number: int(page.GetPage()), Size: int(page.GetPageSize())}
+	return store.Page{Number: int(page.GetPage()), Size: int(page.GetPageSize())}
 }
 
 func (s *Service) ListRunningStrategies(ctx context.Context, req *strategypb.ListRunningStrategiesReq) (*strategypb.ListRunningStrategiesRsp, error) {
 	if s == nil || s.Repo == nil {
 		return &strategypb.ListRunningStrategiesRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
 	}
-	var filter repository.RunningFilter
+	var filter store.RunningFilter
 	if req != nil {
-		filter = repository.RunningFilter{SpaceID: req.GetSpaceId(), Status: req.GetStatus(), Mode: req.GetMode(), StrategyID: req.GetStrategyId()}
+		filter = store.RunningFilter{SpaceID: req.GetSpaceId(), Status: req.GetStatus(), Mode: req.GetMode(), StrategyID: req.GetStrategyId()}
 	}
 	if scopedSpace := requestSpaceID(ctx); scopedSpace != "" {
 		filter.SpaceID = scopedSpace
@@ -81,7 +81,7 @@ func (s *Service) ListStrategyRuns(ctx context.Context, req *strategypb.ListStra
 	} else if err := ensureBindingScope(ctx, binding); err != nil {
 		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
 	}
-	filter := repository.RunFilter{BindingID: req.GetBindingId()}
+	filter := store.RunFilter{BindingID: req.GetBindingId()}
 	if r := req.GetRange(); r != nil {
 		filter.From, _ = parseTime(r.GetFrom())
 		filter.To, _ = parseTime(r.GetTo())
@@ -103,7 +103,7 @@ func (s *Service) GetStrategyRun(ctx context.Context, req *strategypb.GetStrateg
 		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(errors.New("run_id is required"))}, nil
 	}
 	var run domain.StrategyRun
-	if err := s.Repo.DB.WithContext(ctx).Where("c_run_id=?", req.GetRunId()).First(&run).Error; err != nil {
+	if err := s.Repo.DB().WithContext(ctx).Where("c_run_id=?", req.GetRunId()).First(&run).Error; err != nil {
 		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(err)}, nil
 	}
 	if binding, err := s.Repo.GetBinding(ctx, run.BindingID); err != nil {
@@ -113,7 +113,7 @@ func (s *Service) GetStrategyRun(ctx context.Context, req *strategypb.GetStrateg
 	}
 	var metrics domain.RunMetrics
 	metricsJSON := "{}"
-	if err := s.Repo.DB.WithContext(ctx).Where("c_run_id=?", run.RunID).First(&metrics).Error; err == nil {
+	if err := s.Repo.DB().WithContext(ctx).Where("c_run_id=?", run.RunID).First(&metrics).Error; err == nil {
 		b, _ := json.Marshal(metrics)
 		metricsJSON = string(b)
 	}
@@ -125,7 +125,7 @@ func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListS
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(errors.New("run_id is required"))}, nil
 	}
 	var targetRun domain.StrategyRun
-	if err := s.Repo.DB.WithContext(ctx).Where("c_run_id=?", req.GetRunId()).First(&targetRun).Error; err != nil {
+	if err := s.Repo.DB().WithContext(ctx).Where("c_run_id=?", req.GetRunId()).First(&targetRun).Error; err != nil {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
 	}
 	if binding, err := s.Repo.GetBinding(ctx, targetRun.BindingID); err != nil {
@@ -186,7 +186,7 @@ func (s *Service) GetStrategyPerformance(ctx context.Context, req *strategypb.Ge
 	} else if err := ensureBindingScope(ctx, binding); err != nil {
 		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
 	}
-	filter := repository.PerformanceFilter{BindingID: req.GetBindingId(), Source: req.GetPerformanceSource()}
+	filter := store.PerformanceFilter{BindingID: req.GetBindingId(), Source: req.GetPerformanceSource()}
 	if r := req.GetRange(); r != nil {
 		filter.From, _ = parseTime(r.GetFrom())
 		filter.To, _ = parseTime(r.GetTo())
@@ -265,7 +265,7 @@ func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecu
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
-	err = s.Repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.Repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing struct {
 			Mode string `gorm:"column:c_mode"`
 		}
@@ -297,7 +297,7 @@ func (s *Service) changeBindingStatus(ctx context.Context, req *strategypb.Bindi
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
-	err = s.Repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.Repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&domain.Binding{}).Where("c_binding_id=?", binding.BindingID).Update("c_status", status).Error; err != nil {
 			return err
 		}
@@ -311,15 +311,15 @@ func (s *Service) changeBindingStatus(ctx context.Context, req *strategypb.Bindi
 }
 
 func (s *Service) writeAudit(ctx context.Context, operationID, action, bindingID, oldValue, newValue, reason string) error {
-	return s.Repo.DB.WithContext(ctx).Create(&domain.OperationAudit{OperationID: operationID, Operator: "admin", Action: action, BindingID: bindingID, OldValue: oldValue, NewValue: newValue, Reason: reason, RequestID: operationID}).Error
+	return s.Repo.DB().WithContext(ctx).Create(&domain.OperationAudit{OperationID: operationID, Operator: "admin", Action: action, BindingID: bindingID, OldValue: oldValue, NewValue: newValue, Reason: reason, RequestID: operationID}).Error
 }
 
 func (s *Service) findAudit(ctx context.Context, operationID string) (domain.OperationAudit, bool) {
 	var audit domain.OperationAudit
-	if operationID == "" || s == nil || s.Repo == nil || s.Repo.DB == nil {
+	if operationID == "" || s == nil || s.Repo == nil || s.Repo.DB() == nil {
 		return audit, false
 	}
-	if err := s.Repo.DB.WithContext(ctx).Where("c_operation_id=?", operationID).First(&audit).Error; err != nil {
+	if err := s.Repo.DB().WithContext(ctx).Where("c_operation_id=?", operationID).First(&audit).Error; err != nil {
 		return domain.OperationAudit{}, false
 	}
 	return audit, true

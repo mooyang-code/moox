@@ -5,18 +5,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -29,18 +26,25 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if _, err := exec.LookPath(cfg.PythonBin); err != nil {
 		return nil, nil, fmt.Errorf("strategy python executable: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.Database), 0o755); err != nil {
-		return nil, nil, err
-	}
-	db, err := gorm.Open(sqlite.Open(cfg.Database), &gorm.Config{})
+	db, err := store.Open(cfg.Database)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+	keepResources := false
+	var eng *engine.Engine
+	defer func() {
+		if keepResources {
+			return
+		}
+		_ = db.Close()
+		if eng != nil {
+			_ = eng.Close()
+		}
+	}()
+	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, nil, fmt.Errorf("apply strategy schema: %w", err)
 	}
-	repo := repository.New(db)
-	var eng *engine.Engine
+	repo := store.New(db.DB())
 	if cfg.WorkerPath != "" {
 		eng, err = engine.New(ctx, cfg.PythonBin, cfg.WorkerPath)
 		if err != nil {
@@ -60,20 +64,23 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, fmt.Errorf("register strategy health service: %w", err)
 	}
 	closeFn := func() error {
-		if sqlDB, err := db.DB(); err == nil {
-			defer sqlDB.Close()
+		var engineErr error
+		if eng != nil {
+			engineErr = eng.Close()
 		}
-		if eng == nil {
-			return nil
+		dbErr := db.Close()
+		if engineErr != nil {
+			return engineErr
 		}
-		return eng.Close()
+		return dbErr
 	}
+	keepResources = true
 	return s, closeFn, nil
 }
 
-func strategyHealthSnapshot(db *gorm.DB, eng *engine.Engine, workers int, state *health.State) func(context.Context) healthz.Response {
+func strategyHealthSnapshot(db *store.Manager, eng *engine.Engine, workers int, state *health.State) func(context.Context) healthz.Response {
 	return func(ctx context.Context) healthz.Response {
-		databaseReady := db != nil && db.WithContext(ctx).Exec("SELECT 1").Error == nil
+		databaseReady := db != nil && db.DB() != nil && db.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
 		engineReady := eng != nil
 		ready := databaseReady && engineReady && state.Ready()
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)

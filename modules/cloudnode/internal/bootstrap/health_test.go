@@ -7,12 +7,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/storage"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 )
 
 func TestCloudNodeHealthSnapshot(t *testing.T) {
 	cfg := config.Default()
-	dbm := storage.NewManager()
+	dbm := store.NewManager()
 	if err := dbm.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "cloudnode.db")}); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}

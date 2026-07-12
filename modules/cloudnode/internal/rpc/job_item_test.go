@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -41,8 +41,8 @@ func TestPollJobItemsRequiresSupportedProtocolVersion(t *testing.T) {
 func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 	ctx := context.Background()
 	db := newNodeSCFTestDB(t)
-	catalog := repository.NewCatalogRepository(db)
-	if err := catalog.UpsertNode(ctx, repository.CloudNode{
+	catalog := store.NewCatalogRepository(db)
+	if err := catalog.UpsertNode(ctx, store.CloudNode{
 		SpaceID:   "crypto",
 		NodeID:    "node-1",
 		PackageID: "collector-scf",
@@ -267,8 +267,8 @@ func TestSubmitJobItemsRetriesEnqueueFailedActiveKVItem(t *testing.T) {
 func TestPollJobItemsTerminatesAndArchivesWhenMaxAttemptsExhausted(t *testing.T) {
 	ctx := context.Background()
 	db := newNodeSCFTestDB(t)
-	catalog := repository.NewCatalogRepository(db)
-	if err := catalog.UpsertNode(ctx, repository.CloudNode{
+	catalog := store.NewCatalogRepository(db)
+	if err := catalog.UpsertNode(ctx, store.CloudNode{
 		SpaceID:   "crypto",
 		NodeID:    "node-1",
 		PackageID: "collector-scf",

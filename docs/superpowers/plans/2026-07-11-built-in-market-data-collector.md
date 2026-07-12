@@ -104,7 +104,7 @@ modules/collector/
   internal/coverage/            # 预期桶、watermark、近期/历史巡检
   internal/jobs/{instrument,calendar,kline,coverage}/
   internal/domain/              # Market-oriented rule/instance/attempt/lease model
-  internal/repository/          # 上述控制面状态的 SQLite repository
+  internal/store/               # SQLite 连接和上述控制面状态的 repository
   proto/collector.proto         # Market/Query/Refresh/Attempt/Continuation RPC
   schema/collector.sql
 
@@ -748,7 +748,7 @@ git commit -m "feat(collector): add bounded market pipelines"
 - Modify: `modules/collector/cmd/cli/init_schema.go`
 - Modify: `modules/collector/cmd/cli/init_schema_test.go`
 - Modify: `modules/collector/internal/app/control/config.go`
-- Modify: `modules/collector/internal/app/control/database.go`
+- Modify: `modules/collector/internal/store/database.go`
 - Modify: `modules/collector/internal/app/control/database_test.go`
 - Replace: `modules/collector/internal/domain/collect_params.go`
 - Replace: `modules/collector/internal/domain/task_rule.go`
@@ -759,15 +759,15 @@ git commit -m "feat(collector): add bounded market pipelines"
 - Create: `modules/collector/internal/domain/lease.go`
 - Create: `modules/collector/internal/domain/generation.go`
 - Create: `modules/collector/internal/domain/attempt_outbox.go`
-- Replace: `modules/collector/internal/repository/task_rule.go`
-- Replace: `modules/collector/internal/repository/task_instance.go`
-- Create: `modules/collector/internal/repository/task_binding.go`
-- Create: `modules/collector/internal/repository/task_attempt.go`
-- Create: `modules/collector/internal/repository/provider_runtime.go`
-- Create: `modules/collector/internal/repository/lease.go`
-- Create: `modules/collector/internal/repository/generation.go`
-- Create: `modules/collector/internal/repository/attempt_outbox.go`
-- Create: `modules/collector/internal/repository/repository_test.go`
+- Replace: `modules/collector/internal/store/task_rule.go`
+- Replace: `modules/collector/internal/store/task_instance.go`
+- Create: `modules/collector/internal/store/task_binding.go`
+- Create: `modules/collector/internal/store/task_attempt.go`
+- Create: `modules/collector/internal/store/provider_runtime.go`
+- Create: `modules/collector/internal/store/lease.go`
+- Create: `modules/collector/internal/store/generation.go`
+- Create: `modules/collector/internal/store/attempt_outbox.go`
+- Create: `modules/collector/internal/store/repository_test.go`
 - Modify: `modules/collector/proto/collector.proto`
 - Regenerate: `modules/collector/proto/collectorgen/*`
 - Modify: `modules/collector/internal/rpc/convert.go`
@@ -812,14 +812,14 @@ Do not include Rule ID or Provider ID. Include Exchange only where it is part of
 
 ```bash
 make -C modules/collector/proto all
-go test -count=1 ./modules/collector/schema ./modules/collector/internal/domain ./modules/collector/internal/repository ./modules/collector/internal/rpc -v
+go test -count=1 ./modules/collector/schema ./modules/collector/internal/domain ./modules/collector/internal/store ./modules/collector/internal/rpc -v
 (cd modules/collector && go test -count=1 ./...)
 ```
 
 - [ ] **Step 10: Commit.**
 
 ```bash
-git add modules/collector/schema modules/collector/config/app.yaml modules/collector/cmd/cli modules/collector/internal/app/control modules/collector/internal/domain modules/collector/internal/repository modules/collector/proto modules/collector/internal/jobs modules/collector/internal/planner modules/collector/internal/rpc modules/collector/internal/taskpublisher modules/collector/internal/executor modules/collector/internal/sources
+git add modules/collector/schema modules/collector/config/app.yaml modules/collector/cmd/cli modules/collector/internal/app/control modules/collector/internal/domain modules/collector/internal/store modules/collector/proto modules/collector/internal/jobs modules/collector/internal/planner modules/collector/internal/rpc modules/collector/internal/taskpublisher modules/collector/internal/executor modules/collector/internal/sources
 git commit -m "feat(collector): adopt logical market tasks"
 ```
 
@@ -1027,8 +1027,8 @@ git commit -m "feat(collector): migrate binance to market pipeline"
 - Create: `modules/collector/internal/coverage/reconciler.go`
 - Create: `modules/collector/internal/coverage/reconciler_test.go`
 - Create: `modules/collector/internal/domain/coverage.go`
-- Create: `modules/collector/internal/repository/coverage_cursor.go`
-- Create: `modules/collector/internal/repository/coverage_cursor_test.go`
+- Create: `modules/collector/internal/store/coverage_cursor.go`
+- Create: `modules/collector/internal/store/coverage_cursor_test.go`
 - Create: `modules/collector/internal/jobs/coverage/definition.go`
 - Create: `modules/collector/internal/jobs/coverage/handler.go`
 - Create: `modules/collector/internal/jobs/coverage/handler_test.go`
@@ -1047,13 +1047,13 @@ git commit -m "feat(collector): migrate binance to market pipeline"
 - [ ] **Step 8: Run tests.**
 
 ```bash
-go test -count=1 ./modules/collector/internal/coverage ./modules/collector/internal/repository ./modules/collector/internal/jobs ./modules/collector/internal/jobs/coverage ./modules/collector/internal/rpc -run 'Coverage|ExpectedBucket|Repair|Registry' -v
+go test -count=1 ./modules/collector/internal/coverage ./modules/collector/internal/store ./modules/collector/internal/jobs ./modules/collector/internal/jobs/coverage ./modules/collector/internal/rpc -run 'Coverage|ExpectedBucket|Repair|Registry' -v
 ```
 
 - [ ] **Step 9: Commit.**
 
 ```bash
-git add modules/collector/internal/coverage modules/collector/internal/domain/coverage.go modules/collector/internal/repository/coverage_cursor* modules/collector/internal/jobs/coverage modules/collector/internal/jobs/registry.go modules/collector/internal/jobs/registry_test.go modules/collector/config/trpc_go.yaml modules/collector/internal/rpc/schedule.go
+git add modules/collector/internal/coverage modules/collector/internal/domain/coverage.go modules/collector/internal/store/coverage_cursor* modules/collector/internal/jobs/coverage modules/collector/internal/jobs/registry.go modules/collector/internal/jobs/registry_test.go modules/collector/config/trpc_go.yaml modules/collector/internal/rpc/schedule.go
 git commit -m "feat(collector): reconcile market coverage"
 ```
 

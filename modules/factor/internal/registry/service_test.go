@@ -12,7 +12,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/repository"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -29,7 +29,7 @@ func TestImportFactorFileDefaults(t *testing.T) {
 		t.Fatalf("write factor: %v", err)
 	}
 	db := openRegistryTestDB(t)
-	svc := NewService(repository.NewFactorRepository(db), nil, Options{
+	svc := NewService(store.NewFactorRepository(db), nil, Options{
 		FactorsDir:    dir,
 		DefaultParams: []int{20},
 	})
@@ -57,7 +57,7 @@ func TestImportFactorFileDefaults(t *testing.T) {
 func TestImportFactorFilePublishesImmutableSourcePath(t *testing.T) {
 	dir := t.TempDir()
 	db := openRegistryTestDB(t)
-	svc := NewService(repository.NewFactorRepository(db), nil, Options{FactorsDir: dir})
+	svc := NewService(store.NewFactorRepository(db), nil, Options{FactorsDir: dir})
 	path := filepath.Join(dir, "Bias.py")
 	if err := os.WriteFile(path, []byte("def signal(*args): return args[0]\n"), 0o644); err != nil {
 		t.Fatal(err)

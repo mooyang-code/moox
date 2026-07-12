@@ -17,6 +17,18 @@ func NewAlertRepository(db *gorm.DB) *AlertRepository {
 	return &AlertRepository{db: db}
 }
 
+func (r *AlertRepository) CountFiring(ctx context.Context, spaceID string) (int64, error) {
+	query := r.db.WithContext(ctx).Model(&domain.AlertState{}).Where("c_status = ?", domain.AlertStatusFiring)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (r *AlertRepository) CreateWebhook(ctx context.Context, webhook *domain.WebhookChannel) error {
 	return r.db.WithContext(ctx).Create(webhook).Error
 }

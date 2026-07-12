@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/metricspublish"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -30,11 +31,23 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	SetGlobalConfig(cfg)
 
-	dbm := NewManager()
-	if err := dbm.Initialize(&cfg.Database); err != nil {
+	dbm := store.NewManager()
+	if err := dbm.Initialize(&store.Options{
+		Path:            cfg.Database.Path,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
+	}); err != nil {
 		log.ErrorContextf(ctx, "初始化 collector 数据库失败: %v", err)
 		return nil, err
 	}
+	keepDB := false
+	defer func() {
+		if !keepDB {
+			_ = dbm.Close()
+		}
+	}()
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
@@ -55,6 +68,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	registerCollectorSchedule(s)
 	registerMetricsReporter(s)
 
+	keepDB = true
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
 }
@@ -76,7 +90,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *Manager) error {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Manager) error {
 	if cfg == nil {
 		return nil
 	}
@@ -91,7 +105,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *Manager) error {
 	return nil
 }
 
-func collectorHealthSnapshot(cfg *Config, dbm *Manager, state *health.State) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, dbm *store.Manager, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
 		state.SetReady(databaseReady)

@@ -1,4 +1,4 @@
-package repository
+package store
 
 import (
 	"context"
@@ -16,19 +16,25 @@ var ErrStateConflict = errors.New("strategy: state conflict")
 var ErrIdempotencyConflict = errors.New("strategy: idempotency conflict")
 
 type Repository struct {
-	DB       *gorm.DB
+	db       *gorm.DB
 	commitMu sync.Mutex
 }
 
-func New(db *gorm.DB) *Repository { return &Repository{DB: db} }
+func New(db *gorm.DB) *Repository { return &Repository{db: db} }
+func (r *Repository) DB() *gorm.DB {
+	if r == nil {
+		return nil
+	}
+	return r.db
+}
 func (r *Repository) SaveDefinition(ctx context.Context, d domain.StrategyDefinition) error {
 	// Strategy versions are immutable. A database conflict is intentionally
 	// surfaced to the registry service, which compares the existing hash.
-	return r.DB.WithContext(ctx).Create(&d).Error
+	return r.db.WithContext(ctx).Create(&d).Error
 }
 func (r *Repository) GetDefinition(ctx context.Context, id, version string) (domain.StrategyDefinition, error) {
 	var d domain.StrategyDefinition
-	err := r.DB.WithContext(ctx).Where("c_strategy_id=? AND c_version=?", id, version).First(&d).Error
+	err := r.db.WithContext(ctx).Where("c_strategy_id=? AND c_version=?", id, version).First(&d).Error
 	return d, err
 }
 
@@ -37,12 +43,12 @@ func (r *Repository) GetDefinition(ctx context.Context, id, version string) (dom
 // callers choose a different version accidentally.
 func (r *Repository) GetBinding(ctx context.Context, id string) (domain.Binding, error) {
 	var b domain.Binding
-	err := r.DB.WithContext(ctx).Where("c_binding_id=?", id).First(&b).Error
+	err := r.db.WithContext(ctx).Where("c_binding_id=?", id).First(&b).Error
 	return b, err
 }
 func (r *Repository) GetState(ctx context.Context, binding string) (domain.State, error) {
 	var s domain.State
-	err := r.DB.WithContext(ctx).Where("c_binding_id=?", binding).First(&s).Error
+	err := r.db.WithContext(ctx).Where("c_binding_id=?", binding).First(&s).Error
 	return s, err
 }
 func (r *Repository) Commit(ctx context.Context, task domain.Task, out domain.Output, inputHash string) error {
@@ -65,7 +71,7 @@ func (r *Repository) Commit(ctx context.Context, task domain.Task, out domain.Ou
 func (r *Repository) commitOnce(ctx context.Context, task domain.Task, out domain.Output, inputHash string) error {
 	r.commitMu.Lock()
 	defer r.commitMu.Unlock()
-	return r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing struct {
 			RunID     string `gorm:"column:c_run_id"`
 			InputHash string `gorm:"column:c_input_hash"`

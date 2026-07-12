@@ -8,7 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -218,7 +218,7 @@ func (s *Service) pollJobItemsWithActiveKV(ctx context.Context, req *pb.PollJobI
 		return nil, err
 	}
 	if node == nil {
-		return nil, repository.ErrPollingNodeNotFound
+		return nil, store.ErrPollingNodeNotFound
 	}
 	deliveries, err := s.executionQueue.Fetch(ctx, jobqueue.FetchRequest{
 		SpaceID:           req.GetSpaceId(),

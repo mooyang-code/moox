@@ -7,7 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -67,7 +67,7 @@ func TestReportHeartbeatReturnsCancelDirectiveFromActiveKV(t *testing.T) {
 	if err := stateStore.MarkCanceled(ctx, "crypto", "ji-kv-directive", "user canceled"); err != nil {
 		t.Fatalf("MarkCanceled() error = %v", err)
 	}
-	catalog := repository.NewCatalogRepository(newNodeSCFTestDB(t))
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	svc := &Service{catalog: catalog, jobState: stateStore}
 
 	rsp, err := svc.ReportHeartbeat(ctx, &pb.ReportHeartbeatReq{

@@ -4,11 +4,11 @@ import (
 	"context"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/modules/strategy/internal/repository"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 )
 
 type Service struct {
-	Repo   *repository.Repository
+	Repo   *store.Repository
 	Engine *engine.Engine
 }
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -31,6 +32,34 @@ func (r *ResultRepository) Recent(ctx context.Context, spaceID, checkID string, 
 		Limit(limit).
 		Find(&results).Error
 	return results, err
+}
+
+func (r *ResultRepository) Stats(ctx context.Context, spaceID string, since time.Time) (float64, int64, error) {
+	query := r.db.WithContext(ctx).Where("c_checked_at >= ?", since)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	var results []domain.CheckResult
+	if err := query.Find(&results).Error; err != nil {
+		return 0, 0, err
+	}
+	if len(results) == 0 {
+		return 0, 0, nil
+	}
+	successes := 0
+	latencies := make([]int64, 0, len(results))
+	for _, result := range results {
+		if result.Success {
+			successes++
+			latencies = append(latencies, result.LatencyMS)
+		}
+	}
+	var p95 int64
+	if len(latencies) > 0 {
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		p95 = latencies[int(float64(len(latencies)-1)*0.95)]
+	}
+	return float64(successes) / float64(len(results)), p95, nil
 }
 
 func (r *ResultRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {

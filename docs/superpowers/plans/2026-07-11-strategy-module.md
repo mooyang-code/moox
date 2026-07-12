@@ -147,12 +147,12 @@ git commit -m "feat(strategy): define manager and event contracts"
 - Create: `modules/strategy/schema/strategy.sql`
 - Create: `modules/strategy/schema/schema.go`
 - Create: `modules/strategy/schema/schema_test.go`
-- Create: `modules/strategy/internal/repository/repository.go`
-- Create: `modules/strategy/internal/repository/strategy.go`
-- Create: `modules/strategy/internal/repository/state.go`
-- Create: `modules/strategy/internal/repository/execution.go`
-- Create: `modules/strategy/internal/repository/outbox.go`
-- Create: `modules/strategy/internal/repository/repository_test.go`
+- Create: `modules/strategy/internal/store/repository.go`
+- Create: `modules/strategy/internal/store/strategy.go`
+- Create: `modules/strategy/internal/store/state.go`
+- Create: `modules/strategy/internal/store/execution.go`
+- Create: `modules/strategy/internal/store/outbox.go`
+- Create: `modules/strategy/internal/store/repository_test.go`
 
 - [ ] **Step 1: 写唯一约束、state CAS 和 Outbox 同事务测试**
 
@@ -179,12 +179,12 @@ CommitAction 在同事务写 run、targets、CAS state、outbox；任一步失�
 
 - [ ] **Step 4: 运行 SQLite 真实测试并提交**
 
-Run: `cd modules/strategy && go test -race ./schema ./internal/repository -count=1`
+Run: `cd modules/strategy && go test -race ./schema ./internal/store -count=1`
 
 Expected: PASS。
 
 ```bash
-git add modules/strategy/schema modules/strategy/internal/domain modules/strategy/internal/repository
+git add modules/strategy/schema modules/strategy/internal/domain modules/strategy/internal/store
 git commit -m "feat(strategy): persist strategy state and execution facts"
 ```
 

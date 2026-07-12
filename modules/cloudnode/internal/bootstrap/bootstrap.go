@@ -17,9 +17,8 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/metricspublish"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/storage"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -40,11 +39,17 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	config.SetGlobalConfig(cfg)
 	startDebugServer(ctx, cfg.Debug.PprofAddr)
 
-	dbm := storage.NewManager()
+	dbm := store.NewManager()
 	if err := dbm.Initialize(&cfg.Database); err != nil {
 		log.ErrorContextf(ctx, "初始化 cloudnode 数据库失败: %v", err)
 		return nil, err
 	}
+	keepDB := false
+	defer func() {
+		if !keepDB {
+			_ = dbm.Close()
+		}
+	}()
 	historyStore := jobhistory.NewStore(jobhistory.StoreOptions{
 		Dir:           cfg.JobItem.HistoryDir,
 		RetentionDays: cfg.JobItem.HistoryRetentionDays,
@@ -83,7 +88,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
 			DefaultMaxBatch: cfg.JobItem.MaxLimit,
 		})
-		catalog := repository.NewCatalogRepository(dbm.DB())
+		catalog := store.NewCatalogRepository(dbm.DB())
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
 			MaxKeys:       2048,
 			FlushInterval: time.Second,
@@ -104,6 +109,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
+	keepDB = true
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
 }
@@ -125,7 +131,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerHealth(s *server.Server, cfg *config.Config, dbm *storage.Manager) error {
+func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Manager) error {
 	if cfg == nil {
 		return nil
 	}
@@ -140,7 +146,7 @@ func registerHealth(s *server.Server, cfg *config.Config, dbm *storage.Manager) 
 	return nil
 }
 
-func cloudnodeHealthSnapshot(cfg *config.Config, dbm *storage.Manager, state *health.State) healthz.SnapshotFunc {
+func cloudnodeHealthSnapshot(cfg *config.Config, dbm *store.Manager, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.DB() != nil && dbm.DB().WithContext(ctx).Exec("SELECT 1").Error == nil
 		state.SetReady(databaseReady)

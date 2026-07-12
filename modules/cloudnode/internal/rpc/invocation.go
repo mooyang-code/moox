@@ -12,8 +12,8 @@ import (
 	"time"
 
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencent-scf"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/repository"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -117,7 +117,7 @@ func (s *Service) InvokeSync(ctx context.Context, req *pb.InvokeSyncReq) (*pb.In
 	}, nil
 }
 
-func (s *Service) invokePayloads(ctx context.Context, node *repository.CloudNode, req *pb.InvokeSyncReq) []*pb.InvokeSyncResult {
+func (s *Service) invokePayloads(ctx context.Context, node *store.CloudNode, req *pb.InvokeSyncReq) []*pb.InvokeSyncResult {
 	payloads := req.GetPayloads()
 	results := make([]*pb.InvokeSyncResult, len(payloads))
 	parallelism := int(req.GetMaxParallelism())
@@ -171,7 +171,7 @@ func (s *Service) invokePayloads(ctx context.Context, node *repository.CloudNode
 	return results
 }
 
-func (s *Service) invokeNode(ctx context.Context, node *repository.CloudNode, eventData any, invokeType string, qualifier string) (*pb.InvokeFunctionRsp, error) {
+func (s *Service) invokeNode(ctx context.Context, node *store.CloudNode, eventData any, invokeType string, qualifier string) (*pb.InvokeFunctionRsp, error) {
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil {
 		return nil, err

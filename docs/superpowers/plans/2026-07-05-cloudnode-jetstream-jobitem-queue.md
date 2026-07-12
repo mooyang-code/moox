@@ -365,7 +365,7 @@ Expected: pass.
 **Files:**
 - Create: `modules/cloudnode/internal/projection/repository.go`
 - Modify: `modules/cloudnode/schema/cloudnode.sql`
-- Modify: `modules/cloudnode/internal/repository/job_item.go`
+- Modify: `modules/cloudnode/internal/store/job_item.go`
 - Test: `modules/cloudnode/internal/projection/repository_test.go`
 
 - [ ] **Step 1: Write failing projection tests**
@@ -828,10 +828,10 @@ Expected: pass.
 ### Task 9: Remove SQLite Queue Leasing From Hot Path
 
 **Files:**
-- Modify: `modules/cloudnode/internal/repository/job_item.go`
-- Modify: `modules/cloudnode/internal/repository/job_item_test.go`
+- Modify: `modules/cloudnode/internal/store/job_item.go`
+- Modify: `modules/cloudnode/internal/store/job_item_test.go`
 - Modify: `modules/cloudnode/internal/rpc/server.go`
-- Test: `modules/cloudnode/internal/repository/job_item_test.go`
+- Test: `modules/cloudnode/internal/store/job_item_test.go`
 
 - [ ] **Step 1: Write failing guard test**
 
@@ -842,7 +842,7 @@ Add a test or compile-time assertion that RPC service does not call old `JobItem
 Run:
 
 ```bash
-go test ./modules/cloudnode/internal/repository ./modules/cloudnode/internal/rpc
+go test ./modules/cloudnode/internal/store ./modules/cloudnode/internal/rpc
 ```
 
 Expected: fail until service is wired to `jobqueue.ExecutionQueue` and `projection.Repository`.

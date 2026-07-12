@@ -107,6 +107,13 @@ func (r *CheckRepository) Count(ctx context.Context, opts ListChecksOptions) (in
 	return total, err
 }
 
+func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).Model(&domain.Check{}).
+		Where("c_is_deleted = 0 AND c_enabled = 1").Count(&total).Error
+	return total, err
+}
+
 func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
 	q = q.Where("c_is_deleted = 0")
 	if opts.SpaceID != "" {

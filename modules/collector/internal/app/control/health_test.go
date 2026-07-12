@@ -6,14 +6,16 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 )
 
 func TestCollectorHealthSnapshot(t *testing.T) {
 	cfg := Default()
-	dbm := NewManager()
-	if err := dbm.Initialize(&DatabaseConfig{Path: filepath.Join(t.TempDir(), "collector.db")}); err != nil {
+	dbm := store.NewManager()
+	if err := dbm.Initialize(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")}); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
+	t.Cleanup(func() { _ = dbm.Close() })
 	state := health.New("collector", "collector", "", "")
 	rsp := collectorHealthSnapshot(cfg, dbm, state)(context.Background())
 

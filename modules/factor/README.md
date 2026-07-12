@@ -26,7 +26,7 @@ config/trpc_go.yaml
 internal/app/control/
 internal/engine/
 internal/registry/
-internal/repository/
+internal/store/
 internal/storageio/
 pyworker/
 examples/run-once/

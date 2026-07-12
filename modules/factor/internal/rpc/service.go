@@ -15,8 +15,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/repository"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
@@ -59,8 +59,8 @@ func WithMetadataSync(syncer *registry.MetadataSync) Option {
 // Service implements FactorMgr.
 type Service struct {
 	db         *gorm.DB
-	factors    *repository.FactorRepository
-	bindings   *repository.BindingRepository
+	factors    *store.FactorRepository
+	bindings   *store.BindingRepository
 	scheduler  schedulerRuntime
 	engine     engineStatusProvider
 	factorsDir string
@@ -79,8 +79,8 @@ func New(db *gorm.DB) *Service {
 func NewWithRuntime(db *gorm.DB, sched schedulerRuntime, eng engineStatusProvider, opts ...Option) *Service {
 	s := &Service{
 		db:         db,
-		factors:    repository.NewFactorRepository(db),
-		bindings:   repository.NewBindingRepository(db),
+		factors:    store.NewFactorRepository(db),
+		bindings:   store.NewBindingRepository(db),
 		scheduler:  sched,
 		engine:     eng,
 		factorsDir: "./factors",

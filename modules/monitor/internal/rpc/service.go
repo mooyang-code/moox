@@ -37,7 +37,6 @@ type Service struct {
 	results          *store.ResultRepository
 	alerts           *store.AlertRepository
 	peers            *store.PeerRepository
-	db               *gorm.DB
 	runner           probe.Runner
 	onResult         func(context.Context, domain.Check, domain.CheckResult)
 	syncSystem       func(context.Context) (int, error)
@@ -64,7 +63,6 @@ func New(db *gorm.DB, opts Options) *Service {
 		results:          store.NewResultRepository(db),
 		alerts:           store.NewAlertRepository(db),
 		peers:            store.NewPeerRepository(db),
-		db:               db,
 		runner:           runner,
 		onResult:         opts.OnResult,
 		syncSystem:       opts.SyncSystem,
@@ -232,19 +230,12 @@ func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq
 	}
 	sort.Slice(overview.Groups, func(i, j int) bool { return overview.Groups[i].GroupName < overview.Groups[j].GroupName })
 	overview.SuccessRate_24H, overview.P95LatencyMs = s.resultStats(ctx, req.GetSpaceId(), time.Now().Add(-24*time.Hour))
-	var firing int64
-	firingQuery := s.db.WithContext(ctx).Table("t_monitor_alert_states").Where("c_status = ?", domain.AlertStatusFiring)
-	if req.GetSpaceId() != "" {
-		firingQuery = firingQuery.Where("c_space_id = ?", req.GetSpaceId())
-	}
-	_ = firingQuery.Count(&firing).Error
+	firing, _ := s.alerts.CountFiring(ctx, req.GetSpaceId())
 	overview.FiringAlerts = int32(firing)
-	var activeInstances int64
-	_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activeInstances).Error
+	activeInstances, _ := s.peers.CountActive(ctx)
 	if s.instance != "" {
-		var localActive int64
-		_ = s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_instance_id = ? AND c_status = ?", s.instance, domain.InstanceStatusActive).Scan(&localActive).Error
-		if localActive == 0 {
+		localActive, _ := s.peers.IsActive(ctx, s.instance)
+		if !localActive {
 			activeInstances++
 		}
 	}
@@ -256,29 +247,11 @@ func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq
 }
 
 func (s *Service) resultStats(ctx context.Context, spaceID string, since time.Time) (float64, int64) {
-	var results []domain.CheckResult
-	query := s.db.WithContext(ctx).Where("c_checked_at >= ?", since)
-	if spaceID != "" {
-		query = query.Where("c_space_id = ?", spaceID)
-	}
-	if err := query.Find(&results).Error; err != nil || len(results) == 0 {
+	successRate, p95, err := s.results.Stats(ctx, spaceID, since)
+	if err != nil {
 		return 0, 0
 	}
-	successes := 0
-	latencies := make([]int64, 0, len(results))
-	for _, result := range results {
-		if result.Success {
-			successes++
-			latencies = append(latencies, result.LatencyMS)
-		}
-	}
-	var p95 int64
-	if len(latencies) > 0 {
-		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-		idx := int(float64(len(latencies)-1) * 0.95)
-		p95 = latencies[idx]
-	}
-	return float64(successes) / float64(len(results)), p95
+	return successRate, p95
 }
 
 func (s *Service) CreateWebhookChannel(ctx context.Context, req *monitorpb.CreateWebhookChannelReq) (*monitorpb.CreateWebhookChannelRsp, error) {

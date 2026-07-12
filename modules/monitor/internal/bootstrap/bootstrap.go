@@ -526,13 +526,11 @@ func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snaps
 
 func monitorHealthSnapshot(cfg *config.Config, mgr *store.Manager, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		var activeChecks int64
-		var activePeers int64
-		var checksErr error
-		var peersErr error
+		var activeChecks, activePeers int64
+		var checksErr, peersErr error
 		if mgr != nil && mgr.DB() != nil {
-			checksErr = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_checks WHERE c_is_deleted = 0 AND c_enabled = 1").Scan(&activeChecks).Error
-			peersErr = mgr.DB().WithContext(ctx).Raw("SELECT COUNT(1) FROM t_monitor_instances WHERE c_status = ?", domain.InstanceStatusActive).Scan(&activePeers).Error
+			activeChecks, checksErr = store.NewCheckRepository(mgr.DB()).CountEnabled(ctx)
+			activeChecks, peersErr = store.NewPeerRepository(mgr.DB()).CountActive(ctx)
 		}
 		databaseReady := mgr != nil && mgr.DB() != nil && checksErr == nil && peersErr == nil
 		ready := databaseReady && defaultScheduler != nil

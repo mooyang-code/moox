@@ -1,9 +1,23 @@
-package control
+package store
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestManagerInitializeAndClose(t *testing.T) {
+	mgr := NewManager()
+	if err := mgr.Initialize(&Options{Path: filepath.Join(t.TempDir(), "factor.db")}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if mgr.DB() == nil {
+		t.Fatal("DB() returned nil")
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
 
 func TestBuildSQLiteDSNUsesDurablePragmas(t *testing.T) {
 	dsn := buildSQLiteDSN("./data/factor/factor.db")

@@ -12,8 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/repository"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -37,7 +37,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return fmt.Errorf("apply factor schema: %w", err)
 	}
 
-	factorRepo := repository.NewFactorRepository(db)
+	factorRepo := store.NewFactorRepository(db)
 	factors, err := factorRepo.ListEnabledTimeseries(ctx)
 	if err != nil {
 		return err
