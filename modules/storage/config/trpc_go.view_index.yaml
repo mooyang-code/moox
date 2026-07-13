@@ -35,11 +35,12 @@ client:
     - validation
 
 plugins:
-  prometheus:
-    ip: 127.0.0.1
-    port: 12961
-    path: /metrics
-    enablepush: false
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12961
+      path: /metrics
+      enablepush: false
   auth:
     validation:
       enable_error_log: true
