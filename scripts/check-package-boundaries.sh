@@ -64,6 +64,20 @@ while IFS= read -r match; do
 	violations+=("${file}:${line}: official tRPC timer network does not support params, disable, or location options")
 done < <(rg -n 'network:.*[?&](params|disable|location)=' modules --glob '*.yaml' || true)
 
+required_timer_services=(
+	"modules/admin/config/trpc_go.yaml:trpc.dnsproxy.timer"
+	"modules/admin/config/trpc_go.yaml:trpc.dnsprobe.timer"
+	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.schedule.timer"
+	"modules/factor/config/trpc_go.yaml:trpc.moox.factor.reconcile.timer"
+)
+for required in "${required_timer_services[@]}"; do
+	file="${required%%:*}"
+	service="${required#*:}"
+	if ! rg -q --fixed-strings "name: ${service}" "${file}"; then
+		violations+=("${file}: required timer service ${service} is not configured")
+	fi
+done
+
 if (( ${#violations[@]} > 0 )); then
 	{
 		echo "package boundary violations:"

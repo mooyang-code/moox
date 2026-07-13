@@ -26,6 +26,11 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+    - name: trpc.moox.collector.schedule.timer
+      port: 11403
+      network: "0 */1 * * * *?scheduler=collectorSchedule"
+      protocol: timer
+      timeout: 60000
     - name: trpc.moox.collector.metrics.timer
       port: 11412
       network: "*/30 * * * * *"
