@@ -21,7 +21,7 @@ datasets:
   - space_id: moox_system
     dataset_id: moox_service_metrics
     data_source_id: moox_monitor
-    name: MooX Service Metrics
+    name: 服务指标
     description: Historical tRPC application and business metrics
     data_kind: time_series
     freqs: ["30s"]

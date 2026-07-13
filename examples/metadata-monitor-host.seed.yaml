@@ -20,10 +20,10 @@ data_sources:
     status: active
 
 datasets:
-  - {space_id: moox_system, dataset_id: host_resource_v1, data_source_id: moox_host_agent, name: Host CPU and memory, description: Per-minute host CPU and memory snapshots, data_kind: time_series, freqs: ["1m"], status: active}
-  - {space_id: moox_system, dataset_id: host_fs_v1, data_source_id: moox_host_agent, name: Host filesystems, description: Per-minute filesystem snapshots, data_kind: time_series, freqs: ["1m"], status: active}
-  - {space_id: moox_system, dataset_id: host_disk_v1, data_source_id: moox_host_agent, name: Host disks, description: Per-minute disk counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
-  - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: Host networks, description: Per-minute network counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, data_source_id: moox_host_agent, name: 主机资源, description: Per-minute host CPU and memory snapshots, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_fs_v1, data_source_id: moox_host_agent, name: 主机文件系统, description: Per-minute filesystem snapshots, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_disk_v1, data_source_id: moox_host_agent, name: 主机磁盘, description: Per-minute disk counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: 主机网络, description: Per-minute network counters and rates, data_kind: time_series, freqs: ["1m"], status: active}
 
 fields:
   - {space_id: moox_system, field_id: host_agent_id, name: Host agent ID, value_type: string, status: active}
