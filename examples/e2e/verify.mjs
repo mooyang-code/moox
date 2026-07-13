@@ -141,7 +141,7 @@ async function prepare(args) {
     await assertWebHost(args.web);
     return true;
   });
-  const token = await login(args);
+  const token = args.phase === "sysdeploy" ? "" : await login(args);
   await updatePublicDeployments(args, token);
   await assertSysDeploySingleInstanceContract(args, token);
   if (args.phase === "sysdeploy") {
@@ -561,7 +561,10 @@ async function adminPost(args, token, service, method, body, options = {}) {
   if (options.spaceId) {
     headers["X-Space-Id"] = options.spaceId;
   }
-  const rsp = await fetchJSON(`${args.gateway}/api/admin/${service}/${method}`, {
+  const url = args.phase === "sysdeploy" && service === "sysdeploy"
+    ? `http://127.0.0.1:11109/trpc.moox.ops.SysDeploy/${method}`
+    : `${args.gateway}/api/admin/${service}/${method}`;
+  const rsp = await fetchJSON(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body || {}),
