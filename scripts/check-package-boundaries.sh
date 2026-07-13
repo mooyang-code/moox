@@ -6,17 +6,6 @@ cd "${ROOT}"
 
 violations=()
 
-check_forbidden_imports() {
-	local root="$1"
-	local forbidden="$2"
-	while IFS= read -r match; do
-		local file="${match%%:*}"
-		local rest="${match#*:}"
-		local line="${rest%%:*}"
-		violations+=("${file}:${line}: packages under ${root} must not import ${forbidden}")
-	done < <(rg -n '"github.com/mooyang-code/moox/modules/[^/]+/internal/(infra|service|services|application|rpc)/' "${root}" --glob '*.go' || true)
-}
-
 # Domain and core packages contain business rules and must not depend on delivery
 # or persistence details. Infrastructure is the opposite direction of the edge.
 for root in modules/*/internal/domain modules/*/internal/core; do

@@ -5,7 +5,6 @@ MooX 命令行工具，用于本地运维与数据初始化：用户注册、Sto
 ## 命令概览
 
 ```bash
-moox-cli auth register              # 交互式用户注册（经 admin Auth 服务）
 moox-cli metadata import ...        # 导入 Storage 元数据 seed
 moox-cli metadata apply ...         # 创建并校验 Storage 元数据契约（不覆盖已有不兼容资源）
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset

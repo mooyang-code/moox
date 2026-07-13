@@ -1,21 +1,20 @@
 package gateway
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/serviceauth"
 )
 
 const (
-	defaultServiceAuthVersion       = "moox-auth-v1"
-	defaultServiceAuthExpireSeconds = int64(1800)
-	defaultServiceAuthClockSkewSecs = int64(300)
+	defaultServiceAuthVersion       = serviceauth.Version
+	defaultServiceAuthExpireSeconds = int64(60)
+	defaultServiceAuthClockSkewSecs = int64(30)
 )
+
+var serviceNonceCache = serviceauth.NewNonceCache(65536)
 
 func normalizeServiceAuthConfig(cfg ServiceAuthConfig) ServiceAuthConfig {
 	if cfg.Version == "" {
@@ -45,60 +44,23 @@ func currentServiceAuthConfig() (ServiceAuthConfig, error) {
 	if !cfg.Enabled {
 		return cfg, fmt.Errorf("service auth is disabled")
 	}
+	if cfg.Version != serviceauth.Version {
+		return cfg, fmt.Errorf("service auth version must be %s", serviceauth.Version)
+	}
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return cfg, fmt.Errorf("service auth access_key and secret_key are required")
 	}
 	return cfg, nil
 }
 
-func validateServiceAuthHeader(authHeader string, body []byte, now time.Time, cfg ServiceAuthConfig) error {
+func validateServiceAuthHeader(header, method, path string, body []byte, now time.Time, cfg ServiceAuthConfig) error {
 	cfg = normalizeServiceAuthConfig(cfg)
-	parts := strings.Split(authHeader, "/")
-	if len(parts) != 5 {
-		return fmt.Errorf("invalid auth format")
-	}
-	version, accessKey, timestampText, expireText, signature := parts[0], parts[1], parts[2], parts[3], parts[4]
-	if version != cfg.Version {
-		return fmt.Errorf("invalid auth version")
-	}
-	if accessKey != cfg.AccessKey {
-		return fmt.Errorf("invalid access key")
-	}
-	timestamp, err := strconv.ParseInt(timestampText, 10, 64)
+	claims, err := serviceauth.VerifyHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.MaxExpireSecs, ClockSkewSeconds: cfg.ClockSkewSecs}, serviceauth.Request{Method: method, Path: path, Body: body}, header, now)
 	if err != nil {
-		return fmt.Errorf("invalid timestamp")
+		return err
 	}
-	expireSeconds, err := strconv.ParseInt(expireText, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid expire time")
-	}
-	if expireSeconds <= 0 || expireSeconds > cfg.MaxExpireSecs {
-		return fmt.Errorf("invalid expire time")
-	}
-
-	nowUnix := now.Unix()
-	if nowUnix+cfg.ClockSkewSecs < timestamp {
-		return fmt.Errorf("auth timestamp is in the future")
-	}
-	if nowUnix > timestamp+expireSeconds+cfg.ClockSkewSecs {
-		return fmt.Errorf("auth signature expired")
-	}
-
-	prefix := fmt.Sprintf("%s/%s/%d/%d", version, accessKey, timestamp, expireSeconds)
-	expected := generateServiceAuthSignature(cfg.SecretKey, prefix, string(body))
-	if !hmac.Equal([]byte(signature), []byte(expected)) {
-		return fmt.Errorf("invalid signature")
+	if !serviceNonceCache.Consume(claims.AccessKey, claims.Nonce, claims.TTL, now) {
+		return fmt.Errorf("service auth nonce was already used")
 	}
 	return nil
-}
-
-func generateServiceAuthSignature(secretKey string, prefix string, body string) string {
-	signKeyHex := hmacSha256Hex(secretKey, prefix)
-	return hmacSha256Hex(signKeyHex, body)
-}
-
-func hmacSha256Hex(key string, data string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	_, _ = mac.Write([]byte(data))
-	return hex.EncodeToString(mac.Sum(nil))
 }

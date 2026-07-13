@@ -7,6 +7,8 @@ replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../stor
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
 
 require (
+	github.com/mooyang-code/moox/packages/servicegateway v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/serviceauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.9.1
@@ -16,6 +18,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
 )
+
+replace github.com/mooyang-code/moox/packages/servicegateway => ../../packages/servicegateway
+replace github.com/mooyang-code/moox/packages/serviceauth => ../../packages/serviceauth
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

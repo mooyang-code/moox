@@ -45,6 +45,7 @@ func TestValidateAccessToken_ValidToken_ShouldReturnClaims(t *testing.T) {
 		"username":   "admin",
 		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),
 		"token_type": "access",
+		"sid":        "session-1",
 	}, secret, "moox-admin", time.Hour)
 	require.NoError(t, err)
 

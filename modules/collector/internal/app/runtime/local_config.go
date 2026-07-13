@@ -67,8 +67,8 @@ func DefaultConfig() *AppConfig {
 			StorageMetadataTarget: "127.0.0.1:20100",
 			StorageAccessTarget:   "127.0.0.1:20102",
 			ServiceAuth: ServiceAuthConfig{
-				Version:   "moox-auth-v1",
-				ExpireSec: 1800,
+				Version:   "moox-auth-v2",
+				ExpireSec: 60,
 			},
 		},
 		EventBus: &EventBusConfig{
@@ -99,10 +99,10 @@ func GetServiceAuthConfig() ServiceAuthConfig {
 	localAppConfigMu.RUnlock()
 
 	if cfg.Version == "" {
-		cfg.Version = "moox-auth-v1"
+		cfg.Version = "moox-auth-v2"
 	}
 	if cfg.ExpireSec <= 0 {
-		cfg.ExpireSec = 1800
+		cfg.ExpireSec = 60
 	}
 	if value := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); value != "" {
 		cfg.Version = value

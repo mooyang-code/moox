@@ -99,6 +99,61 @@ func (c *CacheDB) Del(ctx context.Context, keys ...string) error {
 	})
 }
 
+// Delete removes one cached value.
+func (c *CacheDB) Delete(ctx context.Context, key string) error {
+	return c.Del(ctx, key)
+}
+
+// SetIfAbsent stores a value only when key does not already exist.
+func (c *CacheDB) SetIfAbsent(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	for {
+		inserted := false
+		err := c.db.Update(func(txn *badger.Txn) error {
+			_, err := txn.Get([]byte(key))
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, badger.ErrKeyNotFound) {
+				return err
+			}
+			entry := badger.NewEntry([]byte(key), []byte(value))
+			if ttl > 0 {
+				entry = entry.WithTTL(ttl)
+			}
+			if err := txn.SetEntry(entry); err != nil {
+				return err
+			}
+			inserted = true
+			return nil
+		})
+		if errors.Is(err, badger.ErrConflict) {
+			continue
+		}
+		return inserted, err
+	}
+}
+
+func (c *CacheDB) consume(ctx context.Context, key string) (string, error) {
+	var value string
+	err := c.db.Update(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte(key))
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return ErrKeyNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if err := item.Value(func(val []byte) error {
+			value = string(append([]byte(nil), val...))
+			return nil
+		}); err != nil {
+			return err
+		}
+		return txn.Delete([]byte(key))
+	})
+	return value, err
+}
+
 // Exists 检查键是否存在
 func (c *CacheDB) Exists(ctx context.Context, key string) (bool, error) {
 	err := c.db.View(func(txn *badger.Txn) error {

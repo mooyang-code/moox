@@ -57,12 +57,20 @@ type LoginSalt struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// ChangePasswordSalt 修改密码盐值缓存 (用于BadgerDB)
-type ChangePasswordSalt struct {
-	UserID    string    `json:"user_id"`
-	Salt      string    `json:"salt"`
-	Timestamp int64     `json:"timestamp"`
-	ExpiresAt time.Time `json:"expires_at"`
+type RequestSigningSession struct {
+	SessionID       string    `json:"session_id"`
+	UserID          string    `json:"user_id"`
+	EncryptedSecret string    `json:"encrypted_secret"`
+	ExpiresAt       time.Time `json:"expires_at"`
+}
+
+type RawSessionTicket struct {
+	TicketID          string    `json:"ticket_id"`
+	SessionID         string    `json:"session_id"`
+	ResourceSessionID string    `json:"resource_session_id"`
+	UserID            string    `json:"user_id"`
+	Operation         string    `json:"operation"`
+	ExpiresAt         time.Time `json:"expires_at"`
 }
 
 // LoginAttempt 登录尝试记录 (用于BadgerDB)
@@ -89,16 +97,15 @@ const (
 
 // 操作类型枚举
 const (
-	ActionRegister       = "register"
-	ActionChangePassword = "change_password"
-	ActionUpdateProfile  = "update_profile"
-	ActionGetUserInfo    = "get_user_info"
+	ActionUpdateProfile = "update_profile"
+	ActionGetUserInfo   = "get_user_info"
 )
 
 // 上下文元数据键常量
 const (
-	CtxUserID   = "X-User-ID"
-	CtxUsername = "X-User-Name"
-	CtxUserRole = "X-User-Role"
-	CtxTraceID  = "X-Trace-ID"
+	CtxUserID    = "X-User-ID"
+	CtxUsername  = "X-User-Name"
+	CtxUserRole  = "X-User-Role"
+	CtxSessionID = "X-Session-ID"
+	CtxTraceID   = "X-Trace-ID"
 )

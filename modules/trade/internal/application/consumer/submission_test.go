@@ -66,7 +66,7 @@ func TestSubmissionWorker_Handle_ReadyOrder_ShouldSubmit(t *testing.T) {
 	}))
 
 	engine := &command.Engine{
-		Store: s,
+		Store:   s,
 		Adapter: stubSubmitAdapter{},
 	}
 	placed, err := engine.Place(ctx, command.PlaceInput{

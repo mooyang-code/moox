@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
+	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	exchange "github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

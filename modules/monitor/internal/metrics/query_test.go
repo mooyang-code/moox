@@ -1,10 +1,10 @@
 package metrics
 
 import (
-	"testing"
-	"time"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 func TestParseTime(t *testing.T) {

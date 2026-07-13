@@ -20,6 +20,7 @@ import (
 
 func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string) {
 	t.Helper()
+	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
@@ -45,11 +46,13 @@ func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string)
 
 	svc := &AuthServiceImpl{
 		cfg: &authconfig.Config{
-			JWT: authconfig.JWTConfig{SecretKey: secretKey, AccessExpired: time.Hour},
+			JWT: authconfig.JWTConfig{SecretKey: secretKey, AccessExpired: 24 * time.Hour},
 			Security: authconfig.SecurityConfig{
 				SaltExpired:     10 * time.Minute,
 				MaxLoginAttempt: 5,
 				LockDuration:    time.Minute,
+				SessionTTL:      24 * time.Hour,
+				RawTicketTTL:    time.Minute,
 			},
 		},
 		userDAO: dao.NewUserDAO(db, cache),
@@ -110,10 +113,33 @@ func TestLogin_ValidCredentials_ShouldReturnAccessToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, loginRsp.GetRetInfo().GetCode())
 	assert.NotEmpty(t, loginRsp.GetAccessToken())
+	assert.Len(t, loginRsp.GetSessionId(), 32)
+	assert.Len(t, loginRsp.GetRequestSigningKey(), 64)
+	assert.WithinDuration(t, time.Now().Add(24*time.Hour), time.Unix(loginRsp.GetExpiresAt(), 0), 2*time.Second)
 
 	claims, err := mooxcrypto.ParseToken(loginRsp.GetAccessToken(), secretKey)
 	require.NoError(t, err)
 	assert.Equal(t, "user-login-1", claims["user_id"])
+	assert.Equal(t, loginRsp.GetSessionId(), claims["sid"])
+	assert.Equal(t, float64(loginRsp.GetExpiresAt()), claims["exp"])
+	session, err := svc.userDAO.GetSigningSession(ctx, loginRsp.GetSessionId())
+	require.NoError(t, err)
+	assert.NotEqual(t, loginRsp.GetRequestSigningKey(), session.EncryptedSecret)
+}
+
+func TestLoginSaltCannotBeReusedAfterFailedPassword(t *testing.T) {
+	svc, _, _ := newAuthServiceForLoginTest(t)
+	ctx := context.Background()
+	salt, err := svc.GetLoginSalt(ctx, &pb.GetLoginSaltReq{Username: "admin"})
+	require.NoError(t, err)
+	req := &pb.LoginReq{Username: "admin", Salt: salt.GetSalt(), Timestamp: salt.GetTimestamp()}
+	req.PasswordHash = encryptLoginPassword(t, "wrong-password", req.Salt, req.Timestamp)
+	first, err := svc.Login(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_NO_AUTH, first.GetRetInfo().GetCode())
+	second, err := svc.Login(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, second.GetRetInfo().GetCode())
 }
 
 func TestGetLoginSalt_ExistingValidSalt_ShouldReuse(t *testing.T) {

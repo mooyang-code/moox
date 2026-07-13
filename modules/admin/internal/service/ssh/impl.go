@@ -20,9 +20,9 @@ import (
 
 // ServiceImpl SSH 服务实现
 type ServiceImpl struct {
-	hostDAO       *dao.SSHHostDAO
+	hostDAO    *dao.SSHHostDAO
 	sessionDAO *dao.SSHSessionDAO
-	sessionMgr    *conn.SessionManager
+	sessionMgr *conn.SessionManager
 }
 
 // NewService 创建 SSH 服务
@@ -70,7 +70,7 @@ func (s *ServiceImpl) ListHosts(ctx context.Context, keyword string, offset, lim
 
 // ========== SSH 会话 ==========
 
-func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP string) (string, error) {
+func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP, userID string) (string, error) {
 	host, err := s.hostDAO.FindByID(hostID)
 	if err != nil {
 		return "", fmt.Errorf("主机不存在: %w", err)
@@ -80,6 +80,7 @@ func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP st
 	sshConn := &conn.SSHConn{
 		Host:      host,
 		SessionID: sessionID,
+		UserID:    userID,
 	}
 
 	if err := sshConn.Connect(clientIP); err != nil {
@@ -128,6 +129,11 @@ func (s *ServiceImpl) ResizeWindow(ctx context.Context, sessionID string, w, h i
 
 func (s *ServiceImpl) GetSessionConn(sessionID string) (*conn.SSHConn, bool) {
 	return s.sessionMgr.Load(sessionID)
+}
+
+func (s *ServiceImpl) SessionBelongsToUser(sessionID, userID string) bool {
+	sshConn, ok := s.sessionMgr.Load(sessionID)
+	return ok && sshConn != nil && userID != "" && sshConn.UserID == userID
 }
 
 // ========== SFTP ==========

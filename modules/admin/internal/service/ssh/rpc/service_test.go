@@ -5,6 +5,7 @@ import (
 	"mime/multipart"
 	"testing"
 
+	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	mocker "github.com/tencent/goom"
+	"trpc.group/trpc-go/trpc-go"
 )
 
 type fakeSSHService struct {
@@ -28,13 +30,13 @@ func (f *fakeSSHService) CreateHost(ctx context.Context, host *model.SSHHost) er
 	return nil
 }
 
-func (f *fakeSSHService) UpdateHost(ctx context.Context, host *model.SSHHost) error   { return nil }
-func (f *fakeSSHService) DeleteHost(ctx context.Context, id int) error               { return nil }
+func (f *fakeSSHService) UpdateHost(ctx context.Context, host *model.SSHHost) error { return nil }
+func (f *fakeSSHService) DeleteHost(ctx context.Context, id int) error              { return nil }
 func (f *fakeSSHService) GetHost(ctx context.Context, id int) (*model.SSHHost, error) {
 	return &model.SSHHost{ID: 1, Name: "dev"}, nil
 }
 
-func (f *fakeSSHService) CreateSession(ctx context.Context, hostID int, clientIP string) (string, error) {
+func (f *fakeSSHService) CreateSession(ctx context.Context, hostID int, clientIP, userID string) (string, error) {
 	return "sess-mock", nil
 }
 
@@ -44,6 +46,7 @@ func (f *fakeSSHService) ResizeWindow(ctx context.Context, sessionID string, w, 
 }
 
 func (f *fakeSSHService) GetSessionConn(sessionID string) (*conn.SSHConn, bool) { return nil, false }
+func (f *fakeSSHService) SessionBelongsToUser(sessionID, userID string) bool    { return false }
 
 func (f *fakeSSHService) SftpList(ctx context.Context, sessionID string, dirPath string) (interface{}, error) {
 	return map[string]interface{}{}, nil
@@ -60,9 +63,9 @@ func (f *fakeSSHService) SftpDownload(ctx context.Context, sessionID, filePath s
 func (f *fakeSSHService) SftpDelete(ctx context.Context, sessionID, path string) error { return nil }
 func (f *fakeSSHService) SftpMkdir(ctx context.Context, sessionID, path string) error  { return nil }
 
-func (f *fakeSSHService) GetOnlineSessions(ctx context.Context) []conn.SessionInfo { return nil }
+func (f *fakeSSHService) GetOnlineSessions(ctx context.Context) []conn.SessionInfo    { return nil }
 func (f *fakeSSHService) ForceDisconnect(ctx context.Context, sessionID string) error { return nil }
-func (f *fakeSSHService) GetSessionManager() *conn.SessionManager                   { return conn.NewSessionManager() }
+func (f *fakeSSHService) GetSessionManager() *conn.SessionManager                     { return conn.NewSessionManager() }
 
 func newMockSSHService(t *testing.T) ssh.Service {
 	t.Helper()
@@ -70,7 +73,7 @@ func newMockSSHService(t *testing.T) ssh.Service {
 	t.Cleanup(func() { mock.Reset() })
 
 	sshSvc := (ssh.Service)(nil)
-	mock.Interface(&sshSvc).Method("CreateSession").Apply(func(_ *mocker.IContext, _ context.Context, hostID int, _ string) (string, error) {
+	mock.Interface(&sshSvc).Method("CreateSession").Apply(func(_ *mocker.IContext, _ context.Context, hostID int, _, _ string) (string, error) {
 		if hostID == 0 {
 			return "", assert.AnError
 		}
@@ -116,7 +119,9 @@ func TestService_CreateSession_MissingHostID_ShouldReturnInvalidParam(t *testing
 
 func TestService_CreateSession_ValidHostID_ShouldReturnSession(t *testing.T) {
 	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.CreateSession(context.Background(), &pb.CreateSessionReq{HostId: 1})
+	ctx := trpc.BackgroundContext()
+	trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte("user-1"))
+	rsp, err := svc.CreateSession(ctx, &pb.CreateSessionReq{HostId: 1})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, "sess-mock", rsp.GetSessionId())

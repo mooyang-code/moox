@@ -14,12 +14,12 @@ security:
   encryption_key: "moox-cloud-secret-key-32bytes"
 
 control_gateway:
-  base_url: "http://106.53.107.122:11000"
+  base_url: "https://106.53.107.122:11001"
   service_auth:
-    version: "moox-auth-v1"
+    version: "moox-auth-v2"
     access_key: "moox-service"
-    secret_key: "moox-service-secret-change-me"
-    expire_seconds: 1800
+    secret_key: ""
+    expire_seconds: 60
 
 sync:
   enabled: true

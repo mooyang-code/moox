@@ -19,13 +19,15 @@ import (
 
 type gatewayConfig struct {
 	ListenAddr string
+	HealthAddr string
 }
 
 var webHostStartedAt = time.Now()
 
 func loadGatewayConfig() gatewayConfig {
 	return gatewayConfig{
-		ListenAddr: envOr("MOOX_WEB_HOST_ADDR", ":10080"),
+		ListenAddr: envOr("MOOX_WEB_HOST_ADDR", "127.0.0.1:9528"),
+		HealthAddr: envOr("MOOX_WEB_HOST_HEALTH_ADDR", "127.0.0.1:19527"),
 	}
 }
 
@@ -204,15 +206,20 @@ func shouldCompress(r *http.Request, path string) bool {
 	return false
 }
 
-func newHTTPHandler(statikFS http.FileSystem) http.Handler {
+func newHealthHandler() http.Handler {
 	mux := healthz.NewMux()
 	snapshot := func(ctx context.Context) healthz.Response {
 		return healthz.Base("web-host", "web-host", "", "", webHostStartedAt, true)
 	}
 	mux.Handle("/healthz", healthz.LivenessHandler(snapshot))
 	mux.Handle("/readyz", healthz.ReadinessHandler(snapshot))
+	return mux
+}
+
+func newStaticHandler(statikFS http.FileSystem) http.Handler {
+	mux := healthz.NewMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if isAPIRequest(r.URL.Path) {
+		if isAPIRequest(r.URL.Path) || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
 			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
 			http.NotFound(w, r)
 			return
@@ -223,6 +230,8 @@ func newHTTPHandler(statikFS http.FileSystem) http.Handler {
 	})
 	return mux
 }
+
+func newHTTPHandler(statikFS http.FileSystem) http.Handler { return newStaticHandler(statikFS) }
 
 // 设置正确的Content-Type
 func setContentType(w http.ResponseWriter, path string) {
@@ -266,10 +275,18 @@ func main() {
 	}
 
 	cfg := loadGatewayConfig()
+	healthHandler, err := healthz.WrapFromEnv(newHealthHandler())
+	if err != nil {
+		log.Fatalf("健康检查鉴权配置无效: %v", err)
+	}
 
-	// 启动服务器
-	log.Printf("服务器启动在 http://localhost%s", cfg.ListenAddr)
+	// Caddy owns the public listeners; both web-host listeners stay on loopback.
+	log.Printf("静态服务器启动在 http://%s", cfg.ListenAddr)
+	log.Printf("健康检查启动在 http://%s", cfg.HealthAddr)
 	log.Println("静态文件服务: /")
-	log.Println("API请求不经过web-host，请前端直连网关 /api/admin")
-	log.Fatal(http.ListenAndServe(cfg.ListenAddr, newHTTPHandler(statikFS)))
+	log.Println("API 请求由 Caddy 转发，web-host 不处理 /api/*")
+	errCh := make(chan error, 2)
+	go func() { errCh <- http.ListenAndServe(cfg.ListenAddr, newStaticHandler(statikFS)) }()
+	go func() { errCh <- http.ListenAndServe(cfg.HealthAddr, healthHandler) }()
+	log.Fatal(<-errCh)
 }

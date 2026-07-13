@@ -13,10 +13,10 @@ import (
 
 // 缓存key前缀和TTL配置
 const (
-	nodeDNSCacheKeyPrefix      = "dnsproxy:node_dns:"       // 终端DNS缓存key前缀
-	nodeDNSCacheTTL      int64 = 365 * 24 * 3600            // 365天TTL（永不过期）
-	mergedResultCacheKeyPrefix = "dnsproxy:merged_result:"  // 合并探测结果缓存key前缀
-	mergedResultCacheTTL int64 = 300                        // 5分钟TTL
+	nodeDNSCacheKeyPrefix            = "dnsproxy:node_dns:"      // 终端DNS缓存key前缀
+	nodeDNSCacheTTL            int64 = 365 * 24 * 3600           // 365天TTL（永不过期）
+	mergedResultCacheKeyPrefix       = "dnsproxy:merged_result:" // 合并探测结果缓存key前缀
+	mergedResultCacheTTL       int64 = 300                       // 5分钟TTL
 )
 
 // GetActiveNodeIDsFunc 获取活跃节点ID列表的函数（由外部注入，避免循环依赖）

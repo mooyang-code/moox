@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
-	"testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	mocker "github.com/tencent/goom"
+	"testing"
 )
 
 type memoryAccountStore struct {
@@ -65,8 +65,8 @@ func (m *memoryAccountStore) ListFundFlows(context.Context, string, FundFlowFilt
 	return nil, 0, nil
 }
 func (m *memoryAccountStore) AppendFundFlows(context.Context, string, []*FundFlow) error { return nil }
-func (m *memoryAccountStore) CreateAPIKey(context.Context, string, *APIKey) error       { return nil }
-func (m *memoryAccountStore) DeleteAPIKey(context.Context, string, string) error          { return nil }
+func (m *memoryAccountStore) CreateAPIKey(context.Context, string, *APIKey) error        { return nil }
+func (m *memoryAccountStore) DeleteAPIKey(context.Context, string, string) error         { return nil }
 func (m *memoryAccountStore) ListAPIKeys(context.Context, string, string) ([]*APIKey, error) {
 	return nil, nil
 }
@@ -117,9 +117,9 @@ func (m *memoryAccountStore) ListChannels(_ context.Context, _ string, _ Channel
 	}
 	return out, len(out), nil
 }
-func (m *memoryAccountStore) SaveOrder(context.Context, string, *Order) error { return nil }
-func (m *memoryAccountStore) UpsertOrders(context.Context, string, []*Order) error        { return nil }
-func (m *memoryAccountStore) UpdateOrder(context.Context, string, *Order) error           { return nil }
+func (m *memoryAccountStore) SaveOrder(context.Context, string, *Order) error      { return nil }
+func (m *memoryAccountStore) UpsertOrders(context.Context, string, []*Order) error { return nil }
+func (m *memoryAccountStore) UpdateOrder(context.Context, string, *Order) error    { return nil }
 func (m *memoryAccountStore) GetOrder(context.Context, string, string, string) (*Order, error) {
 	return nil, ErrNotFound
 }

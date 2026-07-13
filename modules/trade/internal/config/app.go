@@ -110,12 +110,12 @@ func DefaultConfig() *AppConfig {
 			EncryptionKey: "moox-cloud-secret-key-32bytes",
 		},
 		ControlGateway: ControlGatewayConfig{
-			BaseURL: "http://106.53.107.122:11000",
+			BaseURL: "https://106.53.107.122:11001",
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v1",
+				Version:       "moox-auth-v2",
 				AccessKey:     "moox-service",
-				SecretKey:     "moox-service-secret-change-me",
-				ExpireSeconds: 1800,
+				SecretKey:     "",
+				ExpireSeconds: 60,
 			},
 		},
 		Sync: SyncConfig{

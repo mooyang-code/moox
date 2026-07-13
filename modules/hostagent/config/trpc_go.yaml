@@ -10,6 +10,7 @@ server:
       protocol: http
       timeout: 30000
     - name: trpc.moox.hostagent.Health
+      ip: 127.0.0.1
       port: 11425
       network: tcp
       protocol: http_no_protocol

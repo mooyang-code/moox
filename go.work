@@ -32,5 +32,8 @@ use (
 	./packages/metricspb
 	./packages/pyruntime
 	./packages/report
+	./packages/requestauth
+	./packages/servicegateway
+	./packages/serviceauth
 	./web-host
 )

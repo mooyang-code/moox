@@ -20,13 +20,13 @@ storage:
 
 sysdeploy:
   # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 JobItem。
-  # 本地开发默认指向 moox-admin gateway（11000）；生产环境应配置实际 admin 网关地址。
-  admin_gateway_url: "http://127.0.0.1:11000"
+  # 同机后台调用默认直连 service gateway；远程环境应使用 HTTPS 11001。
+  admin_gateway_url: "http://127.0.0.1:11002"
   service_auth:
-    version: "moox-auth-v1"
+    version: "moox-auth-v2"
     access_key: "moox-service"
-    secret_key: "moox-service-secret-change-me"
-    expire_seconds: 1800
+    secret_key: ""
+    expire_seconds: 60
 
 health:
   addr: ":11412"

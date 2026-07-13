@@ -13,7 +13,11 @@ import (
 var agentStartedAt = time.Now().UTC()
 
 func RegisterHealth(service server.Service, agent *Agent) error {
-	return healthz.RegisterNoProtocolServiceMux(service, healthHandler(agent))
+	handler, err := healthz.WrapFromEnv(healthHandler(agent))
+	if err != nil {
+		return err
+	}
+	return healthz.RegisterNoProtocolServiceMux(service, handler)
 }
 
 func healthHandler(agent *Agent) http.Handler {

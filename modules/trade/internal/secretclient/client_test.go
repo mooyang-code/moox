@@ -54,7 +54,7 @@ func TestListExchangeSecretsRevealsPlainSecretWithServiceAuth(t *testing.T) {
 	client := New(Config{
 		GatewayBaseURL: srv.URL,
 		ServiceAuth: ServiceAuthConfig{
-			Version:   "moox-auth-v1",
+			Version:   "moox-auth-v2",
 			AccessKey: "access",
 			SecretKey: "secret",
 		},

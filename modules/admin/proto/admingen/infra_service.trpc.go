@@ -19,38 +19,18 @@ import (
 
 // AuthService defines service.
 type AuthService interface {
-	// Register 用户注册
-	Register(ctx context.Context, req *RegisterReq) (*RegisterRsp, error)
 	// GetLoginSalt 获取登录盐值
 	GetLoginSalt(ctx context.Context, req *GetLoginSaltReq) (*GetLoginSaltRsp, error)
 	// Login 用户登录
 	Login(ctx context.Context, req *LoginReq) (*LoginRsp, error)
-	// GetChangePasswordSalt 获取修改密码盐值
-	GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq) (*GetChangePasswordSaltRsp, error)
-	// ChangePassword 修改密码
-	ChangePassword(ctx context.Context, req *ChangePasswordReq) (*ChangePasswordRsp, error)
+
+	Logout(ctx context.Context, req *LogoutReq) (*LogoutRsp, error)
+
+	IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq) (*IssueRawSessionTicketRsp, error)
 	// GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq) (*GetUserInfoRsp, error)
 	// UpdateUserInfo 更新用户信息
 	UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error)
-}
-
-func AuthService_Register_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RegisterReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AuthService).Register(ctx, reqbody.(*RegisterReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func AuthService_GetLoginSalt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -89,14 +69,14 @@ func AuthService_Login_Handler(svr interface{}, ctx context.Context, f server.Fi
 	return rsp, nil
 }
 
-func AuthService_GetChangePasswordSalt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetChangePasswordSaltReq{}
+func AuthService_Logout_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &LogoutReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AuthService).GetChangePasswordSalt(ctx, reqbody.(*GetChangePasswordSaltReq))
+		return svr.(AuthService).Logout(ctx, reqbody.(*LogoutReq))
 	}
 
 	var rsp interface{}
@@ -107,14 +87,14 @@ func AuthService_GetChangePasswordSalt_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func AuthService_ChangePassword_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ChangePasswordReq{}
+func AuthService_IssueRawSessionTicket_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &IssueRawSessionTicketReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AuthService).ChangePassword(ctx, reqbody.(*ChangePasswordReq))
+		return svr.(AuthService).IssueRawSessionTicket(ctx, reqbody.(*IssueRawSessionTicketReq))
 	}
 
 	var rsp interface{}
@@ -167,10 +147,6 @@ var AuthServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*AuthService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.infra.Auth/Register",
-			Func: AuthService_Register_Handler,
-		},
-		{
 			Name: "/trpc.moox.infra.Auth/GetLoginSalt",
 			Func: AuthService_GetLoginSalt_Handler,
 		},
@@ -179,12 +155,12 @@ var AuthServer_ServiceDesc = server.ServiceDesc{
 			Func: AuthService_Login_Handler,
 		},
 		{
-			Name: "/trpc.moox.infra.Auth/GetChangePasswordSalt",
-			Func: AuthService_GetChangePasswordSalt_Handler,
+			Name: "/trpc.moox.infra.Auth/Logout",
+			Func: AuthService_Logout_Handler,
 		},
 		{
-			Name: "/trpc.moox.infra.Auth/ChangePassword",
-			Func: AuthService_ChangePassword_Handler,
+			Name: "/trpc.moox.infra.Auth/IssueRawSessionTicket",
+			Func: AuthService_IssueRawSessionTicket_Handler,
 		},
 		{
 			Name: "/trpc.moox.infra.Auth/GetUserInfo",
@@ -275,11 +251,6 @@ func RegisterDnsService(s server.Service, svr DnsService) {
 
 type UnimplementedAuth struct{}
 
-// Register 用户注册
-func (s *UnimplementedAuth) Register(ctx context.Context, req *RegisterReq) (*RegisterRsp, error) {
-	return nil, errors.New("rpc Register of service Auth is not implemented")
-}
-
 // GetLoginSalt 获取登录盐值
 func (s *UnimplementedAuth) GetLoginSalt(ctx context.Context, req *GetLoginSaltReq) (*GetLoginSaltRsp, error) {
 	return nil, errors.New("rpc GetLoginSalt of service Auth is not implemented")
@@ -289,15 +260,11 @@ func (s *UnimplementedAuth) GetLoginSalt(ctx context.Context, req *GetLoginSaltR
 func (s *UnimplementedAuth) Login(ctx context.Context, req *LoginReq) (*LoginRsp, error) {
 	return nil, errors.New("rpc Login of service Auth is not implemented")
 }
-
-// GetChangePasswordSalt 获取修改密码盐值
-func (s *UnimplementedAuth) GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq) (*GetChangePasswordSaltRsp, error) {
-	return nil, errors.New("rpc GetChangePasswordSalt of service Auth is not implemented")
+func (s *UnimplementedAuth) Logout(ctx context.Context, req *LogoutReq) (*LogoutRsp, error) {
+	return nil, errors.New("rpc Logout of service Auth is not implemented")
 }
-
-// ChangePassword 修改密码
-func (s *UnimplementedAuth) ChangePassword(ctx context.Context, req *ChangePasswordReq) (*ChangePasswordRsp, error) {
-	return nil, errors.New("rpc ChangePassword of service Auth is not implemented")
+func (s *UnimplementedAuth) IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq) (*IssueRawSessionTicketRsp, error) {
+	return nil, errors.New("rpc IssueRawSessionTicket of service Auth is not implemented")
 }
 
 // GetUserInfo 获取用户信息
@@ -330,16 +297,14 @@ func (s *UnimplementedDns) GetDNSRecord(ctx context.Context, req *GetDNSRecordRe
 
 // AuthClientProxy defines service client proxy
 type AuthClientProxy interface {
-	// Register 用户注册
-	Register(ctx context.Context, req *RegisterReq, opts ...client.Option) (rsp *RegisterRsp, err error)
 	// GetLoginSalt 获取登录盐值
 	GetLoginSalt(ctx context.Context, req *GetLoginSaltReq, opts ...client.Option) (rsp *GetLoginSaltRsp, err error)
 	// Login 用户登录
 	Login(ctx context.Context, req *LoginReq, opts ...client.Option) (rsp *LoginRsp, err error)
-	// GetChangePasswordSalt 获取修改密码盐值
-	GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq, opts ...client.Option) (rsp *GetChangePasswordSaltRsp, err error)
-	// ChangePassword 修改密码
-	ChangePassword(ctx context.Context, req *ChangePasswordReq, opts ...client.Option) (rsp *ChangePasswordRsp, err error)
+
+	Logout(ctx context.Context, req *LogoutReq, opts ...client.Option) (rsp *LogoutRsp, err error)
+
+	IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq, opts ...client.Option) (rsp *IssueRawSessionTicketRsp, err error)
 	// GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq, opts ...client.Option) (rsp *GetUserInfoRsp, err error)
 	// UpdateUserInfo 更新用户信息
@@ -353,26 +318,6 @@ type AuthClientProxyImpl struct {
 
 var NewAuthClientProxy = func(opts ...client.Option) AuthClientProxy {
 	return &AuthClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *AuthClientProxyImpl) Register(ctx context.Context, req *RegisterReq, opts ...client.Option) (*RegisterRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Auth/Register")
-	msg.WithCalleeServiceName(AuthServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("Auth")
-	msg.WithCalleeMethod("Register")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RegisterRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func (c *AuthClientProxyImpl) GetLoginSalt(ctx context.Context, req *GetLoginSaltReq, opts ...client.Option) (*GetLoginSaltRsp, error) {
@@ -415,40 +360,40 @@ func (c *AuthClientProxyImpl) Login(ctx context.Context, req *LoginReq, opts ...
 	return rsp, nil
 }
 
-func (c *AuthClientProxyImpl) GetChangePasswordSalt(ctx context.Context, req *GetChangePasswordSaltReq, opts ...client.Option) (*GetChangePasswordSaltRsp, error) {
+func (c *AuthClientProxyImpl) Logout(ctx context.Context, req *LogoutReq, opts ...client.Option) (*LogoutRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Auth/GetChangePasswordSalt")
+	msg.WithClientRPCName("/trpc.moox.infra.Auth/Logout")
 	msg.WithCalleeServiceName(AuthServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("infra")
 	msg.WithCalleeService("Auth")
-	msg.WithCalleeMethod("GetChangePasswordSalt")
+	msg.WithCalleeMethod("Logout")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetChangePasswordSaltRsp{}
+	rsp := &LogoutRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *AuthClientProxyImpl) ChangePassword(ctx context.Context, req *ChangePasswordReq, opts ...client.Option) (*ChangePasswordRsp, error) {
+func (c *AuthClientProxyImpl) IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq, opts ...client.Option) (*IssueRawSessionTicketRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Auth/ChangePassword")
+	msg.WithClientRPCName("/trpc.moox.infra.Auth/IssueRawSessionTicket")
 	msg.WithCalleeServiceName(AuthServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("infra")
 	msg.WithCalleeService("Auth")
-	msg.WithCalleeMethod("ChangePassword")
+	msg.WithCalleeMethod("IssueRawSessionTicket")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ChangePasswordRsp{}
+	rsp := &IssueRawSessionTicketRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

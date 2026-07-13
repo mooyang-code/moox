@@ -7,6 +7,9 @@ bash -n "${SCRIPT}"
 grep -q 'id -u' "${SCRIPT}"
 grep -q 'systemctl --user' "${SCRIPT}"
 grep -q 'install -m 0600' "${SCRIPT}"
+grep -q -- '--health-auth-file' "${SCRIPT}"
+grep -q 'health-auth.env' "${SCRIPT}"
+grep -q 'MOOX_HOST_AGENT_HEALTH_ADDR.*127.0.0.1' "${SCRIPT}"
 grep -q 'sub(/\\/$/' "${SCRIPT}"
 if grep -q 'sudo' "${SCRIPT}"; then
   echo "host-agent deploy must remain rootless" >&2

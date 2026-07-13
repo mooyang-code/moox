@@ -1,6 +1,9 @@
 import { defineStore } from "pinia";
 import persistedstateConfig from "@/store/config/index";
 import { getUserInfoAPI } from "@/api/modules/user/index";
+import { logoutAPI } from "@/api/modules/user/index";
+import { clearBrowserSession } from "@/api/admin/signed-client";
+import { loadSigningSession, saveSigningSession } from "@/utils/request-signing";
 
 interface Account {
   user: any; // 用户信息
@@ -49,6 +52,8 @@ const userInfoStore = () => {
   });
   // token
   const token = ref<string>("");
+  const sessionId = ref<string>("");
+  const expiresAt = ref<number>(0);
 
   // 设置账号信息
   async function setAccount() {
@@ -112,10 +117,12 @@ const userInfoStore = () => {
       
       // 关键修复：获取用户信息失败时，完全清除token状态，避免路由守卫死循环
       token.value = "";
+      sessionId.value = "";
+      expiresAt.value = 0;
       
       // 同时清除localStorage中的持久化数据
       try {
-        localStorage.removeItem('user-info');
+        await clearBrowserSession();
       } catch (storageError) {
         console.error("setAccount: 清除localStorage失败", storageError);
       }
@@ -131,9 +138,26 @@ const userInfoStore = () => {
   async function setToken(data: string) {
     token.value = data;
   }
+
+  async function setLoginSession(data: { token: string; sessionId: string; signingKey: string; expiresAt: number }) {
+    await saveSigningSession({ sessionId: data.sessionId, rawKeyHex: data.signingKey, expiresAt: data.expiresAt });
+    token.value = data.token;
+    sessionId.value = data.sessionId;
+    expiresAt.value = data.expiresAt;
+  }
+
+  async function hasValidSession() {
+    const now = Math.floor(Date.now() / 1000);
+    return Boolean(token.value && sessionId.value && expiresAt.value > now && await loadSigningSession(sessionId.value));
+  }
   
   // 退出登录
   async function logOut() {
+    try {
+      if (token.value && sessionId.value) await logoutAPI();
+    } catch {
+      // Local logout is authoritative even when the server cannot be reached.
+    }
     // 清除账号数据
     account.value = {
       user: {},
@@ -141,11 +165,14 @@ const userInfoStore = () => {
       permissions: []
     };
     token.value = "";
+    sessionId.value = "";
+    expiresAt.value = 0;
+    await clearBrowserSession();
   }
 
-  return { account, token, setAccount, setToken, logOut };
+  return { account, token, sessionId, expiresAt, setAccount, setToken, setLoginSession, hasValidSession, logOut };
 };
 
 export const useUserInfoStore = defineStore("user-info", userInfoStore, {
-  persist: persistedstateConfig("user-info", ["token"])
+  persist: persistedstateConfig("user-info", ["token", "sessionId", "expiresAt"])
 });

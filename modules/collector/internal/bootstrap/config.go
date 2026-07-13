@@ -148,8 +148,8 @@ func Default() *Config {
 		},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v1",
-				ExpireSeconds: 1800,
+				Version:       "moox-auth-v2",
+				ExpireSeconds: 60,
 			},
 		},
 		Health: HealthConfig{

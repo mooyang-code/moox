@@ -2,28 +2,28 @@ package rpc
 
 import (
 	"context"
-	"path/filepath"
-	"testing"
+	"errors"
+	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
+	"github.com/mooyang-code/moox/modules/trade/internal/service/dao"
+	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	tradeschema "github.com/mooyang-code/moox/modules/trade/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"gorm.io/gorm"
 	"net/http"
 	"net/http/httptest"
-	"github.com/mooyang-code/moox/modules/trade/internal/service/dao"
-	tradeschema "github.com/mooyang-code/moox/modules/trade/schema"
-	"github.com/glebarez/sqlite"
+	"path/filepath"
+	"testing"
 	thttp "trpc.group/trpc-go/trpc-go/http"
-	"gorm.io/gorm"
-	"errors"
 )
 
 type dustStubAdapter struct {
@@ -504,7 +504,7 @@ type rpcStubAdapter struct {
 	placeResult *exchange.OrderResult
 }
 
-func (a *rpcStubAdapter) Name() string { return "stub" }
+func (a *rpcStubAdapter) Name() string                                             { return "stub" }
 func (a *rpcStubAdapter) Ping(context.Context, exchange.Credential) (int64, error) { return 0, nil }
 func (a *rpcStubAdapter) GetInstruments(context.Context, exchange.MarketType) ([]exchange.Instrument, error) {
 	return []exchange.Instrument{{Symbol: "BTCUSDT", LotSize: "0.001", MinQty: "0.001"}}, nil
@@ -815,9 +815,9 @@ func TestServer_CreateRebalance_ValidPlan_ShouldSucceed(t *testing.T) {
 	rsp, err := h.CreateRebalance(ctx, &tradepb.CreateRebalanceReq{
 		RunId: "run-1", IdempotencyKey: "idem-1", AccountId: "acct-1", ChannelId: "chan-1",
 		MarketSnapshotId: "m1", PositionSnapshotId: "p1", RulesVersion: "r1",
-		Targets: []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
+		Targets:  []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
 		Currents: []*tradepb.CurrentPosition{{Symbol: "BTCUSDT", Quantity: "2"}},
-		Markets: []*tradepb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Markets:  []*tradepb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
@@ -830,9 +830,9 @@ func TestServer_AdvanceRebalance_PlannedRun_ShouldExecute(t *testing.T) {
 	_, err := h.CreateRebalance(ctx, &tradepb.CreateRebalanceReq{
 		RunId: "run-adv", IdempotencyKey: "idem-adv", AccountId: "acct-1", ChannelId: "chan-1",
 		MarketSnapshotId: "m1", PositionSnapshotId: "p1", RulesVersion: "r1",
-		Targets: []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
+		Targets:  []*tradepb.TargetPosition{{Symbol: "BTCUSDT", Quantity: "0"}},
 		Currents: []*tradepb.CurrentPosition{{Symbol: "BTCUSDT", Quantity: "2"}},
-		Markets: []*tradepb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Markets:  []*tradepb.RebalanceMarket{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
 	})
 	require.NoError(t, err)
 	rsp, err := h.AdvanceRebalance(ctx, &tradepb.AdvanceRebalanceReq{

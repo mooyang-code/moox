@@ -24,6 +24,7 @@ ensure_required_binary() {
   mkdir -p "${ROOT}/bin"
   cat >"${path}" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${1:-}" == random-secret ]]; then printf '{"status":"ok","bytes":32,"secret":"%064d"}\n' 0; fi
 exit 0
 EOF
   chmod +x "${path}"
@@ -73,8 +74,24 @@ assert_order() {
 ensure_required_binary moox-admin
 ensure_required_binary moox-admin-cli
 ensure_required_binary moox-cli
+ensure_required_binary moox-eventbus
+ensure_required_binary moox-archive
+ensure_required_binary moox-archive-cli
 ensure_required_binary moox-storage
 ensure_required_binary moox-storage-cli
+
+HEALTH_SECRET_CLI="${TMP_ROOT}/moox-admin-cli"
+cat >"${HEALTH_SECRET_CLI}" <<'EOF'
+#!/usr/bin/env bash
+printf '{"status":"ok","bytes":32,"secret":"%064d"}\n' 0
+EOF
+chmod +x "${HEALTH_SECRET_CLI}"
+export MOOX_HEALTH_SECRET_CLI="${HEALTH_SECRET_CLI}"
+export HOME="${TMP_ROOT}/home"
+mkdir -p "${HOME}/.config/moox/credentials" "${DEPLOY_DIR}/data"
+printf 'fixture-encryption-key' >"${HOME}/.config/moox/credentials/admin-encryption-key"
+chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
+: >"${DEPLOY_DIR}/data/admin.db"
 
 "${ROOT}/scripts/deploy-moox.sh" \
   --target localhost \
@@ -91,6 +108,16 @@ ensure_required_binary moox-storage-cli
 for binary in moox-storage-access moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
   assert_file "${DEPLOY_DIR}/bin/${binary}"
 done
+
+assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
+[[ $(stat -f '%Lp' "${DEPLOY_DIR}/secrets/health-auth.env" 2>/dev/null || stat -c '%a' "${DEPLOY_DIR}/secrets/health-auth.env") == 600 ]] || { echo 'health auth mode must be 0600' >&2; exit 1; }
+assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
+assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
+secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
+"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor >/dev/null
+[[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
+assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
+assert_grep 'sign_health_request' "${DEPLOY_DIR}/healthcheck.sh"
 
 assert_grep 'start_storage_process "storage-access" "moox-storage-access"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'storage\.access\.yaml' "${DEPLOY_DIR}/start.sh"

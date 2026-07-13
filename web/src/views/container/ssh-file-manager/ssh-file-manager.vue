@@ -26,7 +26,8 @@
           新建目录
         </a-button>
         <a-upload
-          :action="uploadAction"
+          action="/"
+          :custom-request="uploadFile"
           :show-file-list="false"
           :data="uploadFormData"
           name="file"
@@ -182,8 +183,6 @@ const mkdirLoading = ref(false);
 const newDirName = ref('');
 
 // ---------- 上传相关 ----------
-const uploadAction = computed(() => getSftpUploadUrl());
-
 const uploadFormData = computed(() => ({
   session_id: resolvedSessionId.value,
   path: currentDir.value,
@@ -288,9 +287,29 @@ const onUploadError = () => {
   Message.error('文件上传失败');
 };
 
+const uploadFile = async (option: {
+  fileItem: { file?: File };
+  onSuccess: (response: unknown) => void;
+  onError: (error: Error) => void;
+}) => {
+  try {
+    const url = await getSftpUploadUrl(resolvedSessionId.value);
+    const formData = new FormData();
+    formData.append('session_id', uploadFormData.value.session_id);
+    formData.append('path', uploadFormData.value.path);
+    formData.append('file', option.fileItem.file!);
+    const response = await fetch(url, { method: 'POST', body: formData });
+    if (!response.ok) throw new Error(`upload failed: ${response.status}`);
+    option.onSuccess(await response.json());
+  } catch (error) {
+    option.onError(error as Error);
+  }
+  return { abort() {} };
+};
+
 // ---------- 下载 ----------
-const downloadFile = (record: SftpFileItem) => {
-  const url = getSftpDownloadUrl(resolvedSessionId.value, record.path);
+const downloadFile = async (record: SftpFileItem) => {
+  const url = await getSftpDownloadUrl(resolvedSessionId.value, record.path);
   const a = document.createElement('a');
   a.href = url;
   a.download = record.name;

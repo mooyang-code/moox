@@ -142,6 +142,10 @@ ALTER TABLE t_service_deployments_next RENAME TO t_service_deployments;
 `).Error
 }
 
+func ensureAdminSchema(dbPath string) error {
+	return applySchema(dbPath, adminschema.AdminSQL())
+}
+
 func initSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",

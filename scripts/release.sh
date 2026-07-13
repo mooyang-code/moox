@@ -84,6 +84,7 @@ mkdir -p \
   "${RELEASE_ROOT}/archive/config" \
   "${RELEASE_ROOT}/examples" \
   "${RELEASE_ROOT}/docs"
+mkdir -p "${RELEASE_ROOT}/lib" "${RELEASE_ROOT}/config/caddy"
 if [[ "${OS}" == "linux" && ( "${ARCH}" == "amd64" || "${ARCH}" == "arm64" ) ]]; then
   mkdir -p "${RELEASE_ROOT}/hostagent/bin" "${RELEASE_ROOT}/hostagent/config"
 fi
@@ -141,6 +142,10 @@ cp -R "${ROOT}/examples/." "${RELEASE_ROOT}/examples/"
 cp -R "${ROOT}/docs/." "${RELEASE_ROOT}/docs/" 2>/dev/null || true
 chmod +x "${RELEASE_ROOT}/storage/start.sh" "${RELEASE_ROOT}/storage/stop.sh"
 cp "${ROOT}/README.md" "${RELEASE_ROOT}/README.md" 2>/dev/null || true
+cp "${ROOT}/scripts/lib/caddy-managed.sh" "${RELEASE_ROOT}/lib/caddy-managed.sh"
+cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${RELEASE_ROOT}/lib/caddy-v2.11.4-checksums.txt"
+cp "${ROOT}/deploy/caddy/Caddyfile" "${RELEASE_ROOT}/config/caddy/Caddyfile"
+chmod +x "${RELEASE_ROOT}/lib/caddy-managed.sh"
 
 tar -C "${ROOT}/release" -czf "${ARCHIVE}" "$(basename "${RELEASE_ROOT}")"
 echo "==> release package: ${ARCHIVE}"

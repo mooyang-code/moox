@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"golang.org/x/crypto/ssh"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/websocket"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -21,6 +21,7 @@ type SSHConn struct {
 
 	// 会话信息
 	SessionID      string    `json:"session_id"`
+	UserID         string    `json:"user_id"`
 	LastActiveTime time.Time `json:"last_active_time"`
 	StartTime      time.Time `json:"start_time"`
 	ClientIP       string    `json:"client_ip"`

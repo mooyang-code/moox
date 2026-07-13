@@ -12,8 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	trpc "trpc.group/trpc-go/trpc-go"
 )

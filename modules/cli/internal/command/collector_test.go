@@ -43,7 +43,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_SERVICE_AUTH_ACCESS_KEY"] != "svc-ak" || item.Environment["MOOX_SERVICE_AUTH_SECRET_KEY"] != "svc-sk" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_EXPIRE_SECONDS"] != "1800" {
+	if item.Environment["MOOX_SERVICE_AUTH_EXPIRE_SECONDS"] != "60" {
 		t.Fatalf("service auth expire env = %#v", item.Environment)
 	}
 	if item.Metadata["function_name_prefix"] != "moox-collector" {

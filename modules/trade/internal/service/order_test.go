@@ -1,13 +1,13 @@
 package service
 
 import (
+	"context"
 	"errors"
-	"testing"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"context"
+	"testing"
 )
 
 func TestOrderService_NewAdapter_KnownExchange_ShouldReturnAdapter(t *testing.T) {

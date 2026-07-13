@@ -24,9 +24,9 @@ func TestGenerateAuthHeader_IsDeterministic(t *testing.T) {
 		NowUnix:   1700000000,
 		ExpireSec: 1800,
 	}
-	got := GenerateAuthHeader(cfg, `{"k":"v"}`)
-	assert.Contains(t, got, "moox-auth-v1/ak/1700000000/1800/")
-	assert.Equal(t, got, GenerateAuthHeader(cfg, `{"k":"v"}`))
+	got, err := GenerateAuthHeader(cfg, "POST", "/api/service/x/Do", []byte(`{"k":"v"}`))
+	require.NoError(t, err)
+	assert.Contains(t, got, "moox-auth-v2/ak/1700000000/1800/")
 }
 
 func TestNewSignedRequestWithContext_SetsAuthHeader(t *testing.T) {

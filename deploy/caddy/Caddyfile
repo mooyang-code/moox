@@ -1,0 +1,48 @@
+{
+	auto_https disable_redirects
+	admin 127.0.0.1:2019
+}
+
+https://{$MOOX_PUBLIC_HOST}:{$MOOX_BROWSER_HTTPS_PORT:9527} {
+	tls internal
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+	}
+
+	handle /api/admin/* {
+		reverse_proxy 127.0.0.1:11000 {
+			stream_close_delay 5m
+		}
+	}
+	handle /api/* {
+		respond 404
+	}
+	handle /healthz {
+		respond 404
+	}
+	handle /readyz {
+		respond 404
+	}
+	handle /metrics {
+		respond 404
+	}
+	handle {
+		reverse_proxy 127.0.0.1:9528
+	}
+}
+
+https://{$MOOX_PUBLIC_HOST}:{$MOOX_SERVICE_HTTPS_PORT:11001} {
+	tls internal
+
+	handle /api/service/* {
+		reverse_proxy 127.0.0.1:11002
+	}
+	handle {
+		respond 404
+	}
+}

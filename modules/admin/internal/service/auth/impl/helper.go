@@ -21,16 +21,6 @@ func (s *AuthServiceImpl) validateLoginSalt(ctx context.Context, username, salt 
 	return loginSalt.Salt == salt && loginSalt.Timestamp == timestamp && time.Now().Before(loginSalt.ExpiresAt)
 }
 
-// validateChangePasswordSalt 验证修改密码盐值
-func (s *AuthServiceImpl) validateChangePasswordSalt(ctx context.Context, userID, salt string, timestamp int64) bool {
-	changePwdSalt, err := s.userDAO.GetChangePasswordSalt(ctx, userID)
-	if err != nil {
-		return false
-	}
-
-	return changePwdSalt.Salt == salt && changePwdSalt.Timestamp == timestamp && time.Now().Before(changePwdSalt.ExpiresAt)
-}
-
 // isUserLocked 检查用户是否被锁定
 func (s *AuthServiceImpl) isUserLocked(ctx context.Context, username, ip string) bool {
 	attempt, err := s.userDAO.GetLoginAttempt(ctx, username, ip)

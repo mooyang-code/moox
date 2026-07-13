@@ -43,6 +43,10 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
   const loadingStore = useLoadingStore(pinia);
   const { token, account } = storeToRefs(store);
 
+  if (token.value && !(await store.hasValidSession())) {
+    await store.logOut();
+  }
+
   // 显示路由加载状态
   loadingStore.showRouteLoading();
 

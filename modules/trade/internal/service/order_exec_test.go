@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"errors"
-	"testing"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 type execOrderStore struct {
@@ -98,7 +98,9 @@ func (s *execOrderStore) AppendOrderOperation(_ context.Context, _ string, op *O
 	return nil
 }
 
-func (s *execOrderStore) UpdateOrderOperation(context.Context, string, *OrderOperation) error { return nil }
+func (s *execOrderStore) UpdateOrderOperation(context.Context, string, *OrderOperation) error {
+	return nil
+}
 func (s *execOrderStore) AppendTrades(_ context.Context, spaceID string, trades []*Trade) error {
 	for _, tr := range trades {
 		cp := *tr
@@ -108,9 +110,9 @@ func (s *execOrderStore) AppendTrades(_ context.Context, spaceID string, trades 
 	return nil
 }
 func (s *execOrderStore) AppendFundFlows(context.Context, string, []*FundFlow) error { return nil }
-func (s *execOrderStore) CreateAccount(context.Context, string, *Account) error       { return nil }
-func (s *execOrderStore) UpdateAccount(context.Context, string, *Account) error       { return nil }
-func (s *execOrderStore) DeleteAccount(context.Context, string, string) error          { return nil }
+func (s *execOrderStore) CreateAccount(context.Context, string, *Account) error      { return nil }
+func (s *execOrderStore) UpdateAccount(context.Context, string, *Account) error      { return nil }
+func (s *execOrderStore) DeleteAccount(context.Context, string, string) error        { return nil }
 func (s *execOrderStore) ListAccounts(context.Context, string, AccountFilter, Page) ([]*Account, int, error) {
 	return nil, 0, nil
 }
@@ -128,7 +130,7 @@ func (s *execOrderStore) ListAPIKeys(context.Context, string, string) ([]*APIKey
 }
 func (s *execOrderStore) CreateChannel(context.Context, string, *TradeChannel) error { return nil }
 func (s *execOrderStore) UpdateChannel(context.Context, string, *TradeChannel) error { return nil }
-func (s *execOrderStore) DeleteChannel(context.Context, string, string) error          { return nil }
+func (s *execOrderStore) DeleteChannel(context.Context, string, string) error        { return nil }
 func (s *execOrderStore) ListChannels(context.Context, string, ChannelFilter, Page) ([]*TradeChannel, int, error) {
 	return nil, 0, nil
 }

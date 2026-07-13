@@ -45,8 +45,24 @@ seed_disabled_component() {
 ensure_required_binary moox-admin
 ensure_required_binary moox-admin-cli
 ensure_required_binary moox-cli
+ensure_required_binary moox-eventbus
+ensure_required_binary moox-archive
+ensure_required_binary moox-archive-cli
+
+HEALTH_SECRET_CLI="${TMP_ROOT}/moox-admin-cli"
+printf '#!/usr/bin/env bash\nprintf '\''{"status":"ok","bytes":32,"secret":"%%064d"}\\n'\'' 0\n' >"${HEALTH_SECRET_CLI}"
+chmod +x "${HEALTH_SECRET_CLI}"
+export MOOX_HEALTH_SECRET_CLI="${HEALTH_SECRET_CLI}"
+export HOME="${TMP_ROOT}/home"
+mkdir -p "${HOME}/.config/moox/credentials"
+printf 'fixture-encryption-key' >"${HOME}/.config/moox/credentials/admin-encryption-key"
+chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
 
 mkdir -p "${DEPLOY_DIR}/data" "${DEPLOY_DIR}/logs" "${DEPLOY_DIR}/run"
+: >"${DEPLOY_DIR}/data/admin.db"
+mkdir -p "${DEPLOY_DIR}/secrets" "${DEPLOY_DIR}/certs/caddy"
+printf 'MOOX_SERVICE_AUTH_SECRET_KEY=keep-this-secret\nMOOX_SERVICE_AUTH_EXPIRE_SECONDS=1800\n' >"${DEPLOY_DIR}/secrets/service-auth.env"
+printf 'keep-this-ca\n' >"${DEPLOY_DIR}/certs/caddy/root.crt"
 seed_disabled_component cloudnode moox-cloudnode moox-cloudnode-cli
 seed_disabled_component collector moox-collector moox-collector-cli moox-collector-scf
 seed_disabled_component factor moox-factor moox-factor-cli
@@ -84,5 +100,9 @@ do
     exit 1
   fi
 done
+
+grep -Fq 'MOOX_SERVICE_AUTH_SECRET_KEY=keep-this-secret' "${DEPLOY_DIR}/secrets/service-auth.env"
+grep -Fq 'MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60' "${DEPLOY_DIR}/secrets/service-auth.env"
+grep -Fq 'keep-this-ca' "${DEPLOY_DIR}/certs/caddy/root.crt"
 
 echo "disabled deployment artifacts preserved"

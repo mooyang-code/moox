@@ -24,6 +24,16 @@ METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
 HOST_ROUTE_SEED="${MOOX_HOST_STORAGE_ROUTE_SEED:-}"
 EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
+PUBLIC_HOST=""
+BROWSER_HTTPS_PORT=9527
+SERVICE_HTTPS_PORT=11001
+LOCAL_CA=auto
+LOCAL_CA_OUTPUT=""
+FETCHED_CA_FILE=""
+ADMIN_USERNAME="admin"
+ADMIN_PASSWORD_FILE=""
+ADMIN_PASSWORD=""
+BOOTSTRAP_ADMIN=0
 
 usage() {
   cat <<'EOF'
@@ -49,6 +59,14 @@ Options:
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
   --reset-data                    Remove target data directory before deploying. Use when rebuilding from examples.
+  --admin-username <name>         Initial Admin username. Default: admin.
+  --admin-password-file <path>    Local 0600 password file for non-interactive first deployment.
+  --public-host <ip-or-dns>       Certificate SAN and public HTTPS host; enables managed Caddy.
+  --browser-https-port <port>     Browser HTTPS edge. Default: 9527.
+  --service-https-port <port>     Service HTTPS edge. Default: 11001.
+  --local-ca <auto|install|skip>  Operator CA workflow. Default: auto.
+  --local-ca-output <path>        Fetched root CA path. Default: ~/.moox/certs/<public-host>-root.crt.
+  --caddy-conflict <fail>         Refuse unrelated listeners (the only supported policy).
   -h, --help                      Show this help.
 
 Examples:
@@ -65,6 +83,15 @@ log() {
 fail() {
   printf '[deploy-moox] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+generate_secret() {
+  local cli="$1" purpose="$2" output secret
+  output=$("${cli}" random-secret --bytes 32)
+  secret=$(printf '%s' "${output}" | sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
+  [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
+  [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || fail "moox-admin-cli returned an invalid ${purpose} secret"
+  printf '%s' "${secret}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -141,6 +168,14 @@ while [[ $# -gt 0 ]]; do
       RESET_DATA=1
       shift
       ;;
+    --admin-username) ADMIN_USERNAME="${2:-}"; shift 2 ;;
+    --admin-password-file) ADMIN_PASSWORD_FILE="${2:-}"; shift 2 ;;
+    --public-host) PUBLIC_HOST="${2:-}"; shift 2 ;;
+    --browser-https-port) BROWSER_HTTPS_PORT="${2:-}"; shift 2 ;;
+    --service-https-port) SERVICE_HTTPS_PORT="${2:-}"; shift 2 ;;
+    --local-ca) LOCAL_CA="${2:-}"; shift 2 ;;
+    --local-ca-output) LOCAL_CA_OUTPUT="${2:-}"; shift 2 ;;
+    --caddy-conflict) [[ "${2:-}" == fail ]] || fail 'only --caddy-conflict fail is supported'; shift 2 ;;
     -h|--help)
       usage
       exit 0
@@ -153,10 +188,16 @@ done
 
 [[ -n "${TARGET}" ]] || fail "--target cannot be empty"
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
+[[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"
+[[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 
 is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
 }
+
+if [[ "${WITH_WEB_HOST}" -eq 1 && -z "${PUBLIC_HOST}" ]] && ! is_local_target; then
+  fail "--public-host is required when deploying web-host to a remote target"
+fi
 
 normalize_os() {
   local raw
@@ -209,10 +250,45 @@ shell_quote() {
   printf "'%s'" "$(printf '%s' "${value}" | sed "s/'/'\\\\''/g")"
 }
 
+local_file_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
+target_admin_db_exists() {
+  [[ "${RESET_DATA}" -eq 0 ]] || return 1
+  if is_local_target; then
+    [[ -f "$(expand_local_path "${DEPLOY_DIR}")/data/admin.db" ]]
+    return
+  fi
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "DEPLOY_DIR=$(shell_quote "${DEPLOY_DIR}"); if [[ \"\${DEPLOY_DIR}\" == '~' ]]; then DEPLOY_DIR=\"\${HOME}\"; elif [[ \"\${DEPLOY_DIR}\" == '~/'* ]]; then DEPLOY_DIR=\"\${HOME}/\${DEPLOY_DIR#\~/}\"; fi; test -f \"\${DEPLOY_DIR%/}/data/admin.db\""
+}
+
+read_admin_password() {
+  target_admin_db_exists && return 0
+  BOOTSTRAP_ADMIN=1
+  if [[ -n "${ADMIN_PASSWORD_FILE}" ]]; then
+    ADMIN_PASSWORD_FILE="$(expand_local_path "${ADMIN_PASSWORD_FILE}")"
+    [[ -f "${ADMIN_PASSWORD_FILE}" ]] || fail "--admin-password-file must name a local regular file"
+    [[ "$(local_file_mode "${ADMIN_PASSWORD_FILE}")" == "600" ]] || fail "--admin-password-file must have mode 0600"
+    IFS= read -r ADMIN_PASSWORD <"${ADMIN_PASSWORD_FILE}" || [[ -n "${ADMIN_PASSWORD}" ]]
+  elif [[ -t 0 && -t 1 ]]; then
+    local confirmation
+    read -r -s -p "Initial Admin password: " ADMIN_PASSWORD </dev/tty
+    printf '\n' >/dev/tty
+    read -r -s -p "Confirm Admin password: " confirmation </dev/tty
+    printf '\n' >/dev/tty
+    [[ "${ADMIN_PASSWORD}" == "${confirmation}" ]] || fail "Admin passwords do not match"
+  else
+    fail "first deployment and --reset-data require a 0600 local --admin-password-file in non-interactive mode"
+  fi
+  [[ -n "${ADMIN_PASSWORD}" ]] || fail "Admin password cannot be empty"
+}
+
 TARGET_GOOS="${TARGET_GOOS:-$(detect_os)}"
 TARGET_GOARCH="${TARGET_GOARCH:-$(detect_arch)}"
 TARGET_GOOS="$(normalize_os "${TARGET_GOOS}")"
 TARGET_GOARCH="$(normalize_arch "${TARGET_GOARCH}")"
+read_admin_password
 
 HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
@@ -401,6 +477,20 @@ write_runtime_scripts() {
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
+[[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
+[[ -r "${ROOT}/secrets/service-auth.env" ]] || { echo "missing service credentials" >&2; exit 1; }
+[[ -r "${ROOT}/secrets/admin-jwt.env" ]] || { echo "missing Admin JWT credentials" >&2; exit 1; }
+set -a
+source "${ROOT}/secrets/health-auth.env"
+source "${ROOT}/secrets/service-auth.env"
+source "${ROOT}/secrets/admin-jwt.env"
+if [[ -r "${ROOT}/certs/caddy/root.crt" ]]; then
+  MOOX_SERVICE_GATEWAY_CA_FILE="${ROOT}/certs/caddy/root.crt"
+  MOOX_SERVICE_GATEWAY_CA_PEM_B64=$(base64 <"${ROOT}/certs/caddy/root.crt" | tr -d '\r\n')
+fi
+export MOOX_SERVICE_GATEWAY_CA_FILE MOOX_SERVICE_GATEWAY_CA_PEM_B64
+set +a
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
@@ -468,28 +558,28 @@ STORAGE_SCHEMA_ENV=(
 )
 
 COLLECTOR_ENV=(
-  "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11000}"
-  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v1}"
+  "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
+  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v2}"
   "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-moox-service-secret-change-me}"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-1800}"
+  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}"
+  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}"
 )
 
 FACTOR_ENV=(
-  "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11000}"
+  "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
   "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
-  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v1}"
+  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v2}"
   "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-moox-service-secret-change-me}"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-1800}"
+  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}"
+  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}"
 )
 
 MONITOR_ENV=(
-  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v1}"
+  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v2}"
   "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-moox-service-secret-change-me}"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-1800}"
+  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}"
+  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}"
 )
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -565,13 +655,37 @@ wait_http() {
   local attempts="${2:-30}"
   echo "waiting for ${url}"
   for _ in $(seq 1 "${attempts}"); do
-    if curl --fail --silent --max-time 2 "${url}" >/dev/null 2>&1; then
+    if curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET "${url#*://*/}")" "${url}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
   echo "${url} not ready after ${attempts}s" >&2
   return 1
+}
+
+sign_health_request() {
+  local method="$1" path="$2" timestamp nonce body_hash canonical signature
+  path="/${path#/}"
+  timestamp=$(date +%s)
+  nonce=$(openssl rand -hex 32)
+  body_hash=$(printf '' | openssl dgst -sha256 | awk '{print $NF}')
+  canonical=$(printf 'moox-request-v1\n%s\n%s\n%s\n%s\n%s' "${method}" "${path}" "${body_hash}" "${timestamp}" "${nonce}")
+  signature=$(printf '%s' "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}" | awk '{print $NF}')
+  printf '%s/%s/%s/%s/%s' "${MOOX_HEALTH_AUTH_VERSION}" "${MOOX_HEALTH_AUTH_ACCESS_KEY}" "${timestamp}" "${nonce}" "${signature}"
+}
+
+probe_service() {
+  local name="$1" url=""
+  case "${name}" in
+    eventbus) url=http://127.0.0.1:11419/healthz ;;
+    storage-access) url=http://127.0.0.1:20210/healthz ;;
+    storage-view-builder) url=http://127.0.0.1:20211/healthz ;;
+    storage-view-query) url=http://127.0.0.1:20212/healthz ;;
+    storage-view-index) url=http://127.0.0.1:20213/healthz ;;
+    *) return 0 ;;
+  esac
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
 }
 
 wait_http_reachable() {
@@ -827,7 +941,7 @@ start_web_host() {
   fi
   start_service "web-host" "${ROOT}" \
     env \
-      "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-:9527}" \
+      "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-127.0.0.1:9528}" \
       "${ROOT}/bin/moox-web-host"
 }
 
@@ -924,6 +1038,9 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+set -a
+source "${ROOT}/secrets/health-auth.env"
+set +a
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
@@ -1168,6 +1285,28 @@ LOG_FILE="${ROOT}/logs/healthcheck.log"
 
 mkdir -p "${ROOT}/run" "$(dirname "${LOG_FILE}")"
 
+sign_health_request() {
+  local method="$1" path="$2" timestamp nonce body_hash canonical signature
+  timestamp=$(date +%s); nonce=$(openssl rand -hex 32)
+  body_hash=$(printf '' | openssl dgst -sha256 | awk '{print $NF}')
+  canonical=$(printf 'moox-request-v1\n%s\n%s\n%s\n%s\n%s' "${method}" "${path}" "${body_hash}" "${timestamp}" "${nonce}")
+  signature=$(printf '%s' "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}" | awk '{print $NF}')
+  printf '%s/%s/%s/%s/%s' "${MOOX_HEALTH_AUTH_VERSION}" "${MOOX_HEALTH_AUTH_ACCESS_KEY}" "${timestamp}" "${nonce}" "${signature}"
+}
+
+probe_service() {
+  local name="$1" url=""
+  case "${name}" in
+    eventbus) url=http://127.0.0.1:11419/healthz ;;
+    storage-access) url=http://127.0.0.1:20210/healthz ;;
+    storage-view-builder) url=http://127.0.0.1:20211/healthz ;;
+    storage-view-query) url=http://127.0.0.1:20212/healthz ;;
+    storage-view-index) url=http://127.0.0.1:20213/healthz ;;
+    *) return 0 ;;
+  esac
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
+}
+
 default_services=()
 if [[ "${WITH_ARCHIVE}" == "1" ]]; then
   default_services+=(archive)
@@ -1214,12 +1353,14 @@ ensure_service() {
 
   if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
     echo "${name}: running pid=${pid}"
-    return 0
+    probe_service "${name}"
+    return
   fi
 
   log_line "${name}: stopped or stale pid=${pid:-none}; restarting"
   echo "${name}: stopped; restarting"
   if STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}" "${ROOT}/start.sh" "${name}" >> "${LOG_FILE}" 2>&1; then
+    probe_service "${name}"
     log_line "${name}: restart success"
     return 0
   fi
@@ -1260,6 +1401,11 @@ prepare_stage() {
     "${STAGE_DIR}/data" \
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
+  mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
+  cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
+  cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${STAGE_DIR}/lib/caddy-v2.11.4-checksums.txt"
+  cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile"
+  chmod +x "${STAGE_DIR}/lib/caddy-managed.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/storage/config" "${STAGE_DIR}/storage/schema"
   fi
@@ -1343,9 +1489,14 @@ prepare_stage() {
 }
 
 sync_local_stage() {
-  local deploy_dir
+  local deploy_dir caddy_rollback_tmp="" caddy_data_tmp=""
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
+
+  if [[ -s "${deploy_dir}/config/caddy/Caddyfile" ]]; then
+    caddy_rollback_tmp=$(mktemp "${TMPDIR:-/tmp}/moox-caddy-config.XXXXXX")
+    cp "${deploy_dir}/config/caddy/Caddyfile" "${caddy_rollback_tmp}"
+  fi
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -1377,11 +1528,20 @@ sync_local_stage() {
   fi
 
   if [[ "${RESET_DATA}" -eq 1 ]]; then
+    if [[ -d "${deploy_dir}/data/caddy" ]]; then
+      caddy_data_tmp=$(mktemp -d "${TMPDIR:-/tmp}/moox-caddy-data.XXXXXX")
+      mv "${deploy_dir}/data/caddy" "${caddy_data_tmp}/caddy"
+    fi
     rm -rf "${deploy_dir}/data"
+    if [[ -n "${caddy_data_tmp}" ]]; then
+      mkdir -p "${deploy_dir}/data"
+      mv "${caddy_data_tmp}/caddy" "${deploy_dir}/data/caddy"
+      rmdir "${caddy_data_tmp}"
+    fi
   fi
 
   if command -v rsync >/dev/null 2>&1; then
-    local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/')
+    local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/' --exclude '/secrets/' --exclude '/certs/')
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-access' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-view-builder' --exclude '/bin/moox-storage-view-query')
     fi
@@ -1452,7 +1612,30 @@ sync_local_stage() {
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
 
+  if [[ -n "${caddy_rollback_tmp}" ]]; then
+    cp "${caddy_rollback_tmp}" "${deploy_dir}/config/caddy/Caddyfile.rollback"
+    rm -f "${caddy_rollback_tmp}"
+  fi
+
   chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
+  mkdir -p "${deploy_dir}/secrets"
+  if [[ ! -s "${deploy_dir}/secrets/health-auth.env" ]]; then
+    secret=$(generate_secret "${MOOX_HEALTH_SECRET_CLI:-${deploy_dir}/bin/moox-admin-cli}" health)
+    umask 077
+    printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "${secret}" >"${deploy_dir}/secrets/health-auth.env"
+  fi
+  chmod 0600 "${deploy_dir}/secrets/health-auth.env"
+  if [[ ! -s "${deploy_dir}/secrets/service-auth.env" ]]; then
+    umask 077
+    printf 'MOOX_SERVICE_AUTH_VERSION=moox-auth-v2\nMOOX_SERVICE_AUTH_ACCESS_KEY=moox-service\nMOOX_SERVICE_AUTH_SECRET_KEY=%s\nMOOX_SERVICE_AUTH_EXPIRE_SECONDS=60\n' "$(generate_secret "${MOOX_SECURITY_SECRET_CLI:-${MOOX_HEALTH_SECRET_CLI:-${deploy_dir}/bin/moox-admin-cli}}" service-auth)" >"${deploy_dir}/secrets/service-auth.env"
+  fi
+  sed -i.bak 's/^MOOX_SERVICE_AUTH_EXPIRE_SECONDS=.*/MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60/' "${deploy_dir}/secrets/service-auth.env"
+  rm -f "${deploy_dir}/secrets/service-auth.env.bak"
+  if [[ ! -s "${deploy_dir}/secrets/admin-jwt.env" ]]; then
+    umask 077
+    printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret "${MOOX_SECURITY_SECRET_CLI:-${MOOX_HEALTH_SECRET_CLI:-${deploy_dir}/bin/moox-admin-cli}}" admin-jwt)" >"${deploy_dir}/secrets/admin-jwt.env"
+  fi
+  chmod 0600 "${deploy_dir}/secrets/service-auth.env" "${deploy_dir}/secrets/admin-jwt.env"
   log "deployed to ${deploy_dir}"
 
   mkdir -p "${HOME}/.config/moox/credentials"
@@ -1464,8 +1647,26 @@ sync_local_stage() {
     umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${key_file}"; chmod 600 "${key_file}"
   fi
 
+  if [[ "${BOOTSTRAP_ADMIN}" -eq 1 ]]; then
+    printf '%s\n' "${ADMIN_PASSWORD}" | "${deploy_dir}/bin/moox-admin-cli" user ensure \
+      --db-path "${deploy_dir}/data/admin.db" --username "${ADMIN_USERNAME}" --password-stdin >/dev/null
+    ADMIN_PASSWORD=""
+  fi
+
   if [[ "${NO_START}" -eq 0 ]]; then
+    local had_caddy_ca=0
+    [[ -s "${deploy_dir}/certs/caddy/root.crt" ]] && had_caddy_ca=1
     "${deploy_dir}/start.sh"
+    if [[ -n "${PUBLIC_HOST}" ]]; then
+      MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
+        MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
+        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+    fi
+    if [[ "${had_caddy_ca}" -eq 0 && -s "${deploy_dir}/certs/caddy/root.crt" ]]; then
+      [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector
+      [[ "${WITH_FACTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" factor
+      [[ "${WITH_MONITOR}" -eq 0 ]] || "${deploy_dir}/start.sh" monitor
+    fi
   fi
 }
 
@@ -1478,7 +1679,7 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -1496,9 +1697,23 @@ sync_remote_stage() {
   quoted_host_route_seed="$(shell_quote "${HOST_ROUTE_SEED}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
   quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
+  quoted_public_host="$(shell_quote "${PUBLIC_HOST}")"
+  quoted_browser_https_port="$(shell_quote "${BROWSER_HTTPS_PORT}")"
+  quoted_service_https_port="$(shell_quote "${SERVICE_HTTPS_PORT}")"
+  quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
+  quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
+
+generate_secret() {
+  local purpose="$1" output secret
+  output=$("${DEPLOY_DIR}/bin/moox-admin-cli" random-secret --bytes 32)
+  secret=$(printf '%s' "${output}" | sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
+  [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
+  [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid ${purpose} secret" >&2; exit 1; }
+  printf '%s' "${secret}"
+}
 
 if [[ "${DEPLOY_DIR}" == "~" ]]; then
   DEPLOY_DIR="${HOME}"
@@ -1508,6 +1723,12 @@ fi
 
 mkdir -p "${DEPLOY_DIR}"
 mkdir -p "${HOME}/.config/moox/credentials"
+CADDY_ROLLBACK_TMP=""
+CADDY_DATA_TMP=""
+if [[ -s "${DEPLOY_DIR}/config/caddy/Caddyfile" ]]; then
+  CADDY_ROLLBACK_TMP=$(mktemp /tmp/moox-caddy-config.XXXXXX)
+  cp "${DEPLOY_DIR}/config/caddy/Caddyfile" "${CADDY_ROLLBACK_TMP}"
+fi
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
 if [[ ! -f "${KEY_FILE}" ]]; then
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
@@ -1540,7 +1761,16 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
 fi
 
 if [[ "${RESET_DATA}" == "1" ]]; then
+  if [[ -d "${DEPLOY_DIR}/data/caddy" ]]; then
+    CADDY_DATA_TMP=$(mktemp -d /tmp/moox-caddy-data.XXXXXX)
+    mv "${DEPLOY_DIR}/data/caddy" "${CADDY_DATA_TMP}/caddy"
+  fi
   rm -rf "${DEPLOY_DIR}/data"
+  if [[ -n "${CADDY_DATA_TMP}" ]]; then
+    mkdir -p "${DEPLOY_DIR}/data"
+    mv "${CADDY_DATA_TMP}/caddy" "${DEPLOY_DIR}/data/caddy"
+    rmdir "${CADDY_DATA_TMP}"
+  fi
 fi
 
 rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
@@ -1584,12 +1814,51 @@ if [[ "${WITH_STORAGE}" == "1" ]]; then
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
+if [[ -n "${CADDY_ROLLBACK_TMP}" ]]; then
+  cp "${CADDY_ROLLBACK_TMP}" "${DEPLOY_DIR}/config/caddy/Caddyfile.rollback"
+  rm -f "${CADDY_ROLLBACK_TMP}"
+fi
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
+mkdir -p "${DEPLOY_DIR}/secrets"
+if [[ ! -s "${DEPLOY_DIR}/secrets/health-auth.env" ]]; then
+  secret=$(generate_secret health)
+  umask 077
+  printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "${secret}" >"${DEPLOY_DIR}/secrets/health-auth.env"
+fi
+chmod 0600 "${DEPLOY_DIR}/secrets/health-auth.env"
+if [[ ! -s "${DEPLOY_DIR}/secrets/service-auth.env" ]]; then
+  umask 077
+  printf 'MOOX_SERVICE_AUTH_VERSION=moox-auth-v2\nMOOX_SERVICE_AUTH_ACCESS_KEY=moox-service\nMOOX_SERVICE_AUTH_SECRET_KEY=%s\nMOOX_SERVICE_AUTH_EXPIRE_SECONDS=60\n' "$(generate_secret service-auth)" >"${DEPLOY_DIR}/secrets/service-auth.env"
+fi
+sed -i.bak 's/^MOOX_SERVICE_AUTH_EXPIRE_SECONDS=.*/MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60/' "${DEPLOY_DIR}/secrets/service-auth.env"
+rm -f "${DEPLOY_DIR}/secrets/service-auth.env.bak"
+if [[ ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; then
+  umask 077
+  printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret admin-jwt)" >"${DEPLOY_DIR}/secrets/admin-jwt.env"
+fi
+chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
 if [[ "${NO_START}" -eq 0 ]]; then
+  had_caddy_ca=0
+  [[ -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]] && had_caddy_ca=1
   "${DEPLOY_DIR}/start.sh"
+  if [[ -n "${PUBLIC_HOST}" ]]; then
+    MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
+      MOOX_CADDY_CHECKSUMS="${DEPLOY_DIR}/lib/caddy-v2.11.4-checksums.txt" \
+      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+  fi
+  if [[ "${had_caddy_ca}" -eq 0 && -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]]; then
+    [[ "${WITH_COLLECTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" collector
+    [[ "${WITH_FACTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" factor
+    [[ "${WITH_MONITOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" monitor
+  fi
 fi
 EOF
+  if [[ "${BOOTSTRAP_ADMIN}" -eq 1 ]]; then
+    printf '%s\n' "${ADMIN_PASSWORD}" | ssh "${TARGET}" \
+      "DEPLOY_DIR=$(shell_quote "${DEPLOY_DIR}"); if [[ \"\${DEPLOY_DIR}\" == '~' ]]; then DEPLOY_DIR=\"\${HOME}\"; elif [[ \"\${DEPLOY_DIR}\" == '~/'* ]]; then DEPLOY_DIR=\"\${HOME}/\${DEPLOY_DIR#\~/}\"; fi; \"\${DEPLOY_DIR%/}/bin/moox-admin-cli\" user ensure --db-path \"\${DEPLOY_DIR%/}/data/admin.db\" --username $(shell_quote "${ADMIN_USERNAME}") --password-stdin" >/dev/null
+    ADMIN_PASSWORD=""
+  fi
   log "deployed to ${TARGET}:${DEPLOY_DIR}"
 }
 
@@ -1603,5 +1872,73 @@ if is_local_target; then
 else
   sync_remote_stage
 fi
+
+configure_local_ca() {
+  [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${LOCAL_CA}" != skip ]] || return 0
+  local output source
+  output="${LOCAL_CA_OUTPUT:-${HOME}/.moox/certs/${PUBLIC_HOST}-root.crt}"
+  output="$(expand_local_path "${output}")"
+  mkdir -p "$(dirname "${output}")"
+  if is_local_target; then
+    source="$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt"
+    cp "${source}" "${output}"
+  else
+    scp -o BatchMode=yes "${TARGET}:$(shell_quote "${DEPLOY_DIR%/}/certs/caddy/root.crt")" "${output}"
+  fi
+  chmod 0644 "${output}"
+  FETCHED_CA_FILE="${output}"
+  "${ROOT}/skills/moox/scripts/caddy-ca.sh" inspect --ca-file "${output}"
+  if [[ "${LOCAL_CA}" == install ]]; then
+    "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}"
+  elif [[ -t 0 ]]; then
+    read -r -p "Install this MooX CA into the local trust store? [y/N] " answer
+    [[ "${answer}" =~ ^[Yy]$ ]] && "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}"
+  fi
+}
+
+configure_local_ca
+
+verify_public_https() {
+  [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 ]] || return 0
+  local browser="https://${PUBLIC_HOST}:${BROWSER_HTTPS_PORT}"
+  local service="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
+  local verify_script='set -euo pipefail
+ca=$1; browser=$2; service=$3; service_auth_file=$4
+case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
+case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
+status() { curl --silent --show-error --cacert "$ca" --output /dev/null --write-out "%{http_code}" "$@"; }
+[[ "$(status "$browser/")" == 200 ]]
+[[ "$(status "$browser/healthz")" == 404 ]]
+[[ "$(status "$browser/api/service/test/Ping")" == 404 ]]
+[[ "$(status "$service/api/admin/auth/Login")" == 404 ]]
+path=/api/service/sysdeploy/ListActiveServiceDeployments
+[[ "$(status -X POST -H "Content-Type: application/json" --data "{}" "$service$path")" == 401 ]]
+set -a; source "$service_auth_file"; set +a
+expire=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}
+timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}\nmoox-service-expire:%s" "$expire" | openssl dgst -sha256 | awk "{print \$NF}")
+canonical=$(printf "moox-request-v1\nPOST\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce")
+signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_SERVICE_AUTH_SECRET_KEY" | awk "{print \$NF}")
+auth="moox-auth-v2/$MOOX_SERVICE_AUTH_ACCESS_KEY/$timestamp/$expire/$nonce/$signature"
+[[ "$(status -X POST -H "Content-Type: application/json" -H "Auth: $auth" --data "{}" "$service$path")" == 200 ]]'
+  if is_local_target; then
+    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/service-auth.env" || {
+      "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
+      fail "public HTTPS acceptance failed"
+    }
+  elif [[ -n "${FETCHED_CA_FILE}" ]]; then
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/service-auth.env" <<<"${verify_script}" || {
+      ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
+      fail "public HTTPS acceptance failed"
+    }
+  else
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/service-auth.env" <<<"${verify_script}" || {
+      ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
+      fail "remote public HTTPS acceptance failed"
+    }
+  fi
+  log "HTTPS acceptance passed: ${browser} and ${service}"
+}
+
+verify_public_https
 
 log "done"

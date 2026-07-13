@@ -37,7 +37,7 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
 示例：
   moox-cli ops tencent lighthouse firewall open \
     --control-url http://<control-host>:11000 \
-    --service-access-key moox-service --service-secret-key moox-service-secret-change-me \
+    --service-access-key "$MOOX_SERVICE_AUTH_ACCESS_KEY" --service-secret-key "$MOOX_SERVICE_AUTH_SECRET_KEY" \
     --public-ip <lighthouse-public-ip> --ports 11000,10080,20200,20201,20202
 
   moox-cli ops tencent lighthouse firewall open \

@@ -19,10 +19,11 @@ type Service interface {
 	ListHosts(ctx context.Context, keyword string, offset, limit int) ([]model.SSHHost, int64, error)
 
 	// SSH 会话
-	CreateSession(ctx context.Context, hostID int, clientIP string) (string, error)
+	CreateSession(ctx context.Context, hostID int, clientIP, userID string) (string, error)
 	DisconnectSession(ctx context.Context, sessionID string) error
 	ResizeWindow(ctx context.Context, sessionID string, w, h int) error
 	GetSessionConn(sessionID string) (*conn.SSHConn, bool)
+	SessionBelongsToUser(sessionID, userID string) bool
 
 	// SFTP
 	SftpList(ctx context.Context, sessionID string, dirPath string) (interface{}, error)

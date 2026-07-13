@@ -158,7 +158,6 @@ func showLogo() {
 	fmt.Println()
 	fmt.Println("📖 使用帮助:")
 	fmt.Println("    📚 查看命令帮助       ./moox-cli --help")
-	fmt.Println("    🔐 用户注册          ./moox-cli auth register")
 	fmt.Println("    🧭 元数据导入        ./moox-cli metadata import --help")
 	fmt.Println("    🌐 配置示例          config/cli-example.yaml")
 	fmt.Println()

@@ -2,8 +2,56 @@ package sysdeploy
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..", "..")
+	matches, err := filepath.Glob(filepath.Join(root, "modules", "*", "config", "trpc_go*.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("no trpc configs found")
+	}
+	for _, path := range matches {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(raw), "\n")
+		for i, line := range lines {
+			if !strings.Contains(line, "- name:") || (!strings.Contains(line, ".Health") && !strings.Contains(line, "trpc.moox.infra.") && !strings.Contains(line, "trpc.moox.ops.") && !strings.Contains(line, "trpc.moox.admin.SpaceMgr")) {
+				continue
+			}
+			end := i + 7
+			if end > len(lines) {
+				end = len(lines)
+			}
+			if !strings.Contains(strings.Join(lines[i:end], "\n"), "ip: 127.0.0.1") {
+				t.Errorf("%s:%d lacks loopback ip: %s", path, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+func TestDefaultServiceGatewaysUseSplitHTTPSAndLoopbackEndpoints(t *testing.T) {
+	byName := map[string]Deployment{}
+	for _, row := range DefaultDeployments() {
+		byName[row.ServiceName] = row
+	}
+	public := byName["service_gateway"]
+	if public.Protocol != "https" || public.Port != 11001 || public.Scope != "public" {
+		t.Fatalf("service_gateway = %#v", public)
+	}
+	internal := byName["service_gateway_internal"]
+	if internal.Protocol != "http" || internal.Host != "127.0.0.1" || internal.Port != 11002 || internal.Scope != "internal" {
+		t.Fatalf("service_gateway_internal = %#v", internal)
+	}
+}
 
 func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	rows := DefaultDeployments()

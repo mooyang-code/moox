@@ -14,37 +14,56 @@ server:
     read_timeout: 3000
     write_timeout: 60000
   service:
-    - name: trpc.moox.gateway.stdhttp
+    - name: trpc.moox.gateway.control
+      ip: 127.0.0.1
       port: 11000
       network: tcp
       protocol: http_no_protocol
       timeout: 30000
+    - name: trpc.moox.gateway.service
+      ip: 127.0.0.1
+      port: 11002
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 30000
+    - name: trpc.moox.admin.Health
+      ip: 127.0.0.1
+      port: 11010
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
     - name: trpc.moox.infra.Auth
+      ip: 127.0.0.1
       port: 11100
       network: tcp
       protocol: http
       timeout: 10000
     - name: trpc.moox.infra.Dns
+      ip: 127.0.0.1
       port: 11101
       network: tcp
       protocol: http
       timeout: 10000
     - name: trpc.moox.ops.Ssh
+      ip: 127.0.0.1
       port: 11106
       network: tcp
       protocol: http
       timeout: 30000
     - name: trpc.moox.admin.SpaceMgr
+      ip: 127.0.0.1
       port: 11107
       network: tcp
       protocol: http
       timeout: 10000
     - name: trpc.moox.ops.SecretMgr
+      ip: 127.0.0.1
       port: 11108
       network: tcp
       protocol: http
       timeout: 10000
     - name: trpc.moox.ops.SysDeploy
+      ip: 127.0.0.1
       port: 11109
       network: tcp
       protocol: http

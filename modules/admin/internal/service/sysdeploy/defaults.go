@@ -6,9 +6,10 @@ const defaultPublicHost = "106.53.107.122"
 
 func DefaultDeployments() []Deployment {
 	rows := []Deployment{
-		withExtra(deployment("admin_gateway", "gateway", "http", defaultPublicHost, 11000, "/api/admin", "public", "管理台请求统一入口，前端直接访问 /api/admin/*"), `{"health_url":"http://106.53.107.122:11000/readyz","health_kind":"readiness","monitor_enabled":true}`),
-		deployment("service_gateway", "gateway", "http", defaultPublicHost, 11000, "/api/service", "public", "后台/SCF 请求统一入口，使用 HMAC 鉴权访问 /api/service/*"),
-		withExtra(deployment("web_host", "frontend", "http", defaultPublicHost, 9527, "", "public", "管理台静态资源服务，仅承载前端页面，不代理 API"), `{"health_url":"http://106.53.107.122:9527/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		deployment("service_gateway", "gateway", "https", defaultPublicHost, 11001, "/api/service", "public", "后台/SCF HTTPS 入口，使用 HMAC 鉴权访问 /api/service/*"),
+		deployment("service_gateway_internal", "gateway", "http", "127.0.0.1", 11002, "/api/service", "internal", "同机后台请求入口，使用 HMAC 鉴权访问 /api/service/*"),
+		withExtra(deployment("web_host", "frontend", "https", defaultPublicHost, 9527, "", "public", "Caddy 管理台 HTTPS 页面入口；web-host 上游仅绑定 loopback"), `{"health_url":"http://127.0.0.1:19527/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("storage_metadata", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage.Metadata", "public", "moox-storage 元数据 HTTP 服务"), `{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("storage_access", "storage", "http", defaultPublicHost, 20201, "trpc.moox.storage.Access", "public", "moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连"), `{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("storage_view", "storage", "http", defaultPublicHost, 20202, "trpc.moox.storage.DataView", "public", "moox-storage 数据视图 HTTP 服务"), `{"health_url":"http://127.0.0.1:20212/readyz","health_kind":"readiness","monitor_enabled":true}`),

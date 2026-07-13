@@ -2,12 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/stretchr/testify/assert"
 	"reflect"
 	"testing"
 	"time"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"errors"
-	"github.com/stretchr/testify/assert"
 )
 
 type syncCoordinatorStore struct {

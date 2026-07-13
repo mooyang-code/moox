@@ -16,6 +16,7 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -48,6 +49,7 @@ type Client struct {
 	storageAccessTarget   string
 	auth                  AuthConfig
 	httpClient            *http.Client
+	httpClientErr         error
 }
 
 // WakeOptions describes which Collector runtime nodes should be nudged to poll queued work.
@@ -62,12 +64,14 @@ func New(cfg Config) *Client {
 	if target == "" {
 		target = strings.TrimSpace(cfg.GatewayURL)
 	}
+	httpClient, httpClientErr := servicegateway.NewClient(8 * time.Second)
 	return &Client{
 		serviceGatewayTarget:  normalizeGatewayTarget(target),
 		storageMetadataTarget: strings.TrimSpace(cfg.StorageMetadataTarget),
 		storageAccessTarget:   strings.TrimSpace(cfg.StorageAccessTarget),
 		auth:                  cfg.Auth,
-		httpClient:            &http.Client{Timeout: 8 * time.Second},
+		httpClient:            httpClient,
+		httpClientErr:         httpClientErr,
 	}
 }
 
@@ -196,6 +200,9 @@ func (c *Client) postService(ctx context.Context, service string, method string,
 }
 
 func (c *Client) postServiceWithHeaders(ctx context.Context, service string, method string, body []byte, out proto.Message, headers map[string]string) error {
+	if c.httpClientErr != nil {
+		return c.httpClientErr
+	}
 	if c.serviceGatewayTarget == "" {
 		return fmt.Errorf("service gateway target is required")
 	}

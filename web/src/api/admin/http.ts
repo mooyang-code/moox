@@ -5,23 +5,13 @@ import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import type { ControlResponse } from './types';
 import { withSelectedSpaceHeader } from './space-header';
+import { installSignedClient } from './signed-client';
 
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
-
-function readAccessToken(): string {
-  try {
-    const raw = localStorage.getItem('user-info');
-    if (!raw) return '';
-    const parsed = JSON.parse(raw) as { token?: string };
-    return parsed.token || '';
-  } catch {
-    return '';
-  }
-}
 
 function readAccessTokenFromConfig(config?: AxiosRequestConfig): string {
   const headers = (config?.headers || {}) as Record<string, string | undefined>;
@@ -45,7 +35,7 @@ export async function callControl<TReq extends object, TRsp>(
   req: TReq,
   config?: AxiosRequestConfig,
 ): Promise<TRsp> {
-  if (!readAccessToken() && !readAccessTokenFromConfig(config)) {
+  if (!localStorage.getItem('user-info') && !readAccessTokenFromConfig(config)) {
     throw new Error('未登录或登录态已失效，请重新登录后再访问管理接口');
   }
   const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req, config);
@@ -53,15 +43,11 @@ export async function callControl<TReq extends object, TRsp>(
 }
 
 adminClient.interceptors.request.use((config) => {
-  const token = readAccessToken();
   const headers = withSelectedSpaceHeader((config.headers || {}) as Record<string, string | undefined>);
   config.headers = headers as typeof config.headers;
-  if (token) {
-    config.headers.Authorization = token;
-    config.headers['X-Access-Token'] = token;
-  }
   return config;
 });
+installSignedClient(adminClient);
 
 adminClient.interceptors.response.use(
   (rsp) => {

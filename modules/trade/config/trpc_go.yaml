@@ -16,6 +16,7 @@ server:
     write_timeout: 60000
   service:
     - name: trpc.moox.trade.Health
+      ip: 127.0.0.1
       port: 11210
       network: tcp
       protocol: http_no_protocol

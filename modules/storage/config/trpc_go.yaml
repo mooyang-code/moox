@@ -15,6 +15,7 @@ server:
     write_timeout: 60000 #ms. 处理的超时时间
   service:
     - name: trpc.moox.storage.Health
+      ip: 127.0.0.1
       port: 20210
       network: tcp
       protocol: http_no_protocol

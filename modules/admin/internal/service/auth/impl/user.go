@@ -3,7 +3,6 @@ package impl
 import (
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -11,87 +10,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
-
-// Register 用户注册
-func (s *AuthServiceImpl) Register(ctx context.Context, req *pb.RegisterReq) (*pb.RegisterRsp, error) {
-	log.InfoContextf(ctx, "[Auth] #Register called for username: %s", req.Username)
-
-	// 1. 验证输入参数
-	if req.Username == "" {
-		return &pb.RegisterRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INVALID_PARAM,
-				Msg:  "用户名不能为空",
-			},
-		}, nil
-	}
-	if req.Password == "" {
-		return &pb.RegisterRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INVALID_PARAM,
-				Msg:  "密码不能为空",
-			},
-		}, nil
-	}
-
-	// 2. 检查用户名是否已存在
-	existingUser, err := s.userDAO.GetUserByUsername(ctx, req.Username)
-	if err == nil && existingUser != nil {
-		return &pb.RegisterRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INVALID_PARAM,
-				Msg:  "用户名已存在",
-			},
-		}, nil
-	}
-
-	// 3. 生成用户ID和密码哈希
-	userID := uuid.New().String()
-	passwordHash, err := mooxcrypto.HashPassword(req.Password)
-	if err != nil {
-		return &pb.RegisterRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "用户注册失败"}}, nil
-	}
-
-	// 4. 创建用户对象
-	user := &model.User{
-		UserID:       userID,
-		Username:     req.Username,
-		Nickname:     req.Nickname,
-		Email:        req.Email,
-		PasswordHash: passwordHash,
-		Status:       int32(pb.UserStatus_USER_STATUS_ACTIVE), // 默认激活状态
-		Role:         int32(pb.UserRole_USER_ROLE_ADMIN),      // 默认管理员角色
-	}
-
-	// 如果没有提供昵称，使用用户名作为昵称
-	if user.Nickname == "" {
-		user.Nickname = req.Username
-	}
-	// 5. 保存到数据库
-	err = s.userDAO.CreateUser(ctx, user)
-	if err != nil {
-		log.ErrorContextf(ctx, "[Auth] 创建用户失败: %v", err)
-		return &pb.RegisterRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INNER_ERR,
-				Msg:  "用户注册失败",
-			},
-		}, nil
-	}
-
-	// 6. 记录操作日志
-	s.logUserAction(ctx, userID, model.ActionRegister, "", "用户注册成功", "", "", "success")
-
-	log.InfoContextf(ctx, "[Auth] 用户注册成功: %s", userID)
-	return &pb.RegisterRsp{
-		RetInfo: &pb.RetInfo{
-			Code: pb.ErrorCode_SUCCESS,
-			Msg:  "用户注册成功",
-		},
-		UserId:   userID,
-		UserInfo: authutils.BuildSafeUserInfo(user), // 构造返回的用户信息（安全转义）
-	}, nil
-}
 
 // GetUserInfo 获取用户信息
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {

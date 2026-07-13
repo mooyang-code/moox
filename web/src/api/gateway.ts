@@ -1,18 +1,11 @@
-const DEFAULT_GATEWAY_PORT = '11000';
-
-function gatewayPort(): string {
-  const port = String(import.meta.env.VITE_GATEWAY_PORT || DEFAULT_GATEWAY_PORT).trim();
-  return port || DEFAULT_GATEWAY_PORT;
-}
-
 function withLeadingSlash(path: string): string {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
 export function gatewayOrigin(): string {
-  const protocol = typeof window === 'undefined' ? 'http:' : window.location.protocol;
-  const hostname = typeof window === 'undefined' ? 'localhost' : window.location.hostname || 'localhost';
-  return `${protocol}//${hostname}:${gatewayPort()}`;
+  const developmentOverride = import.meta.env.DEV ? String(import.meta.env.VITE_ADMIN_ORIGIN || '').trim() : '';
+  if (developmentOverride) return developmentOverride.replace(/\/$/, '');
+  return typeof window === 'undefined' ? '' : window.location.origin;
 }
 
 export function gatewayURL(pathOrURL: string): string {

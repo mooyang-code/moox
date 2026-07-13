@@ -79,6 +79,8 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 
 func TestMonitorConfigEnvOverride(t *testing.T) {
 	t.Setenv("MOOX_MONITOR_DB_PATH", "/tmp/moox-monitor.db")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 
 	cfg, err := Load(writeConfig(t, `
 instance:
@@ -91,6 +93,31 @@ peer:
 	}
 	if cfg.Database.Path != "/tmp/moox-monitor.db" {
 		t.Fatalf("database path = %q", cfg.Database.Path)
+	}
+}
+
+func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	cfg, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.HealthAuth.Version != "moox-health-v1" || cfg.HealthAuth.AccessKey != "monitor" || cfg.HealthAuth.SecretKey != "secret" {
+		t.Fatalf("health auth = %+v", cfg.HealthAuth)
+	}
+}
+
+func TestMonitorConfigRequiresHealthCredentialsWhenSysDeployEnabled(t *testing.T) {
+	cfg := Default()
+	cfg.Peer.Enabled = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want health credential error")
+	}
+	cfg.SysDeploy.Enabled = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with SysDeploy disabled = %v", err)
 	}
 }
 

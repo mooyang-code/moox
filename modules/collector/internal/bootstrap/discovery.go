@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicegateway"
+
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 )
 
@@ -85,7 +87,7 @@ func defaultAdminGatewayURL(raw string) string {
 	if raw != "" {
 		return normalizeBaseURL(raw)
 	}
-	return "http://127.0.0.1:11000"
+	return "http://127.0.0.1:11002"
 }
 
 func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoint, error) {
@@ -101,7 +103,10 @@ func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoi
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client, err := servicegateway.NewClient(5 * time.Second)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

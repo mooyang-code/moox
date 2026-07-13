@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	tradeschema "github.com/mooyang-code/moox/modules/trade/schema"
-	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/trade/internal/service"
+	tradeschema "github.com/mooyang-code/moox/modules/trade/schema"
 	"gorm.io/gorm"
 )
 
@@ -27,17 +27,17 @@ func TestSyncCursorUpsertAndGet(t *testing.T) {
 	store := newSyncCursorTestStore(t)
 	ctx := context.Background()
 	cursor := &service.SyncCursor{
-		AccountID:      "acc_1",
-		ChannelID:      "ch_1",
-		Exchange:       "binance",
-		MarketType:     "spot",
-		SyncType:       service.SyncTypeTrades,
-		Symbol:         "GALAUSDT",
-		CursorStartMS:  1000,
-		CursorEndMS:    2000,
-		LastSuccessAt:  time.Unix(2, 0),
-		LastError:      "",
-		IsEnabled:      true,
+		AccountID:     "acc_1",
+		ChannelID:     "ch_1",
+		Exchange:      "binance",
+		MarketType:    "spot",
+		SyncType:      service.SyncTypeTrades,
+		Symbol:        "GALAUSDT",
+		CursorStartMS: 1000,
+		CursorEndMS:   2000,
+		LastSuccessAt: time.Unix(2, 0),
+		LastError:     "",
+		IsEnabled:     true,
 	}
 	if err := store.UpsertSyncCursor(ctx, "crypto", cursor); err != nil {
 		t.Fatalf("UpsertSyncCursor returned error: %v", err)

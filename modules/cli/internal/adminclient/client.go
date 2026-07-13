@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/servicegateway"
 )
 
 // Client calls the MooX control HTTP API used by CLI workflows.
@@ -26,9 +28,6 @@ type Client struct {
 func New(baseURL string) *Client {
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
-		HTTPClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
 	}
 }
 
@@ -62,7 +61,7 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 		finalPath = rewriteToServiceRoute(path)
 		rawBody, _ := io.ReadAll(reader)
 		reader = bytes.NewReader(rawBody)
-		header, err := c.ServiceAuth.BuildAuthHeader(rawBody, time.Now())
+		header, err := c.ServiceAuth.BuildAuthHeader(method, finalPath, rawBody, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +83,14 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 	}
 	client := c.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		if c.ServiceAuth != nil {
+			client, err = servicegateway.NewClient(30 * time.Second)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			client = http.DefaultClient
+		}
 	}
 	httpResp, err := client.Do(req)
 	if err != nil {

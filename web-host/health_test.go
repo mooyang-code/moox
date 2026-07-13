@@ -15,7 +15,7 @@ func (unavailableFS) Open(name string) (http.File, error) {
 }
 
 func TestWebHostHealthzBypassesStaticFallback(t *testing.T) {
-	handler := newHTTPHandler(unavailableFS{})
+	handler := newHealthHandler()
 
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -43,5 +43,28 @@ func TestWebHostHealthzBypassesStaticFallback(t *testing.T) {
 	}
 	if rsp.Status != "ok" {
 		t.Fatalf("status = %q, want ok", rsp.Status)
+	}
+}
+
+func TestPublicHandlerDoesNotExposeDiagnostics(t *testing.T) {
+	handler := newStaticHandler(unavailableFS{})
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/auth/Login", "/api/service/cloudnode/PollJobItems"} {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want %d", path, rr.Code, http.StatusNotFound)
+		}
+	}
+}
+
+func TestGatewayConfigDefaultsToLoopbackListeners(t *testing.T) {
+	t.Setenv("MOOX_WEB_HOST_ADDR", "")
+	t.Setenv("MOOX_WEB_HOST_HEALTH_ADDR", "")
+	cfg := loadGatewayConfig()
+	if cfg.ListenAddr != "127.0.0.1:9528" {
+		t.Fatalf("ListenAddr = %q", cfg.ListenAddr)
+	}
+	if cfg.HealthAddr != "127.0.0.1:19527" {
+		t.Fatalf("HealthAddr = %q", cfg.HealthAddr)
 	}
 }

@@ -47,7 +47,6 @@ func getDefaultRateLimitConfig() *RateLimitConfig {
 		DefaultBurst: 20,
 		MethodLimits: map[string]MethodLimit{
 			"/api/admin/auth/Login":        {QPS: 1, Burst: 2},  // 登录接口限制更严格
-			"/api/admin/auth/Register":     {QPS: 2, Burst: 4},  // 注册接口限制更严格
 			"/api/admin/auth/GetLoginSalt": {QPS: 2, Burst: 4},  // 获取盐值接口
 			"/api/admin/auth/GetUserInfo":  {QPS: 5, Burst: 10}, // 获取用户信息
 		},

@@ -3,17 +3,15 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/serviceauth"
 	"net/http"
 	"time"
 )
 
 const (
-	defaultAuthVersion = "moox-auth-v1"
-	defaultExpireSec   = int64(1800)
+	defaultAuthVersion = serviceauth.Version
+	defaultExpireSec   = int64(60)
 )
 
 // AuthConfig describes the HMAC authentication used by backend service APIs.
@@ -48,13 +46,9 @@ func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
 	return cfg
 }
 
-// GenerateAuthHeader returns moox-auth-v1/$access_key/$timestamp/$expiretime/$signature.
-func GenerateAuthHeader(cfg AuthConfig, body string) string {
+func GenerateAuthHeader(cfg AuthConfig, method, path string, body []byte) (string, error) {
 	cfg = normalizeAuthConfig(cfg)
-	prefix := fmt.Sprintf("%s/%s/%d/%d", cfg.Version, cfg.AccessKey, cfg.NowUnix, cfg.ExpireSec)
-	signKeyHex := hmacSha256Hex(cfg.SecretKey, prefix)
-	signature := hmacSha256Hex(signKeyHex, body)
-	return fmt.Sprintf("%s/%s", prefix, signature)
+	return serviceauth.BuildHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec}, serviceauth.Request{Method: method, Path: path, Body: body}, time.Unix(cfg.NowUnix, 0))
 }
 
 func NewSignedRequest(method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
@@ -71,12 +65,10 @@ func NewSignedRequestWithContext(ctx context.Context, method string, url string,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Auth", GenerateAuthHeader(cfg, string(body)))
+	header, err := GenerateAuthHeader(cfg, method, req.URL.EscapedPath(), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Auth", header)
 	return req, nil
-}
-
-func hmacSha256Hex(key string, data string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	_, _ = mac.Write([]byte(data))
-	return hex.EncodeToString(mac.Sum(nil))
 }

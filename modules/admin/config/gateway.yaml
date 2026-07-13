@@ -16,6 +16,10 @@ security:
   salt_expired: "5m"          # 登录盐值过期时间
   max_login_attempt: 5        # 最大登录尝试次数
   lock_duration: "15m"        # 账户锁定时间
+  session_ttl: "24h"
+  request_clock_skew: "60s"
+  nonce_ttl: "2m"
+  raw_ticket_ttl: "60s"
 
 # 网关服务配置
 gateway:
@@ -27,23 +31,17 @@ gateway:
   # 生产环境请直接修改 access_key / secret_key 为强随机值，并同步更新 SCF/cli 端。
   service_auth:
     enabled: true
-    version: "moox-auth-v1"
+    version: "moox-auth-v2"
     access_key: "moox-service"
     # 签名密钥。以下为开发占位符，请勿用于生产。
-    secret_key: "moox-service-secret-change-me"
-    max_expire_seconds: 1800
-    clock_skew_seconds: 300
+    secret_key: ""
+    max_expire_seconds: 60
+    clock_skew_seconds: 30
 
   # 不需要鉴权的接口列表
   no_auth_methods:
-    - "/api/admin/health"
-    - "/api/admin/auth/Register"
     - "/api/admin/auth/GetLoginSalt"
     - "/api/admin/auth/Login"
-    # SSH 直连端点由 rawhandler 内部校验 session_id，网关 authorize 放行
-    - "/api/admin/ssh/WsConnect"
-    - "/api/admin/ssh/SftpDownload"
-    - "/api/admin/ssh/SftpUpload"
   # 网关不在本地 YAML 中维护服务地址。
   # /api/admin/* 与 /api/service/* 的转发目标统一来自 t_service_deployments。
   # 缺失 active 部署记录时请求会直接失败，避免 gateway.yaml 与系统服务部署表出现双来源。
@@ -64,9 +62,6 @@ rate_limit:
     "/api/admin/auth/Login":
       qps: 1
       burst: 2
-    "/api/admin/auth/Register":
-      qps: 1
-      burst: 1
     "/api/admin/auth/GetLoginSalt":
       qps: 2
       burst: 5

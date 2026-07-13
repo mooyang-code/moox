@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicegateway"
+
 	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -101,7 +103,10 @@ func executeTaskStatusReport(ctx context.Context, spaceID string, taskID string,
 	}
 
 	// 创建 HTTP 客户端
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	httpClient, err := servicegateway.NewClient(5 * time.Second)
+	if err != nil {
+		return err
+	}
 
 	// 使用重试机制发送请求
 	err = retry.Do(

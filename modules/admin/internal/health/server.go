@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 func Handler(startedAt time.Time) http.Handler {
@@ -25,4 +26,12 @@ func Handler(startedAt time.Time) http.Handler {
 		}
 		healthz.LivenessHandler(snapshot).ServeHTTP(w, r)
 	})
+}
+
+func Register(service server.Service, startedAt time.Time) error {
+	handler, err := healthz.WrapFromEnv(Handler(startedAt))
+	if err != nil {
+		return err
+	}
+	return healthz.RegisterNoProtocolServiceMux(service, handler)
 }

@@ -2,8 +2,11 @@ package command
 
 import (
 	"context"
+	"errors"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -11,9 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
-	"errors"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 )
 
 func TestReleaseReservation_ZeroRemaining_ShouldReturnNil(t *testing.T) {

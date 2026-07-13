@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
-	domain "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	domain "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/assert"

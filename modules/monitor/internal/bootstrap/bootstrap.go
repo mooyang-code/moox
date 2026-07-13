@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
+	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -26,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -177,6 +179,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	resultHook := monitorResultHook(cfg, runtime)
+	probeRunner := buildProbeRunner(cfg)
 	syncSystem := monitorSyncFunc(runtimeCtx, cfg, runtime)
 	var hostReady func() bool
 	if hostGate != nil {
@@ -184,9 +187,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	} else {
 		hostReady = func() bool { return false }
 	}
-	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
+	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
-	runtime.Scheduler = startScheduler(runtimeCtx, cfg, runtime, resultHook)
+	runtime.Scheduler = startScheduler(runtimeCtx, cfg, runtime, probeRunner, resultHook)
 	startRetentionCleaner(runtimeCtx, cfg, runtime)
 	startPeerPuller(runtimeCtx, cfg, runtime)
 	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
@@ -392,10 +395,18 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
 	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, metricsStorage)
+	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
+		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
+		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
+	})
+	if err != nil {
+		return fmt.Errorf("monitor health authentication is invalid: %w", err)
+	}
 	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
 		Token:    cfg.Peer.Token,
-		Health:   healthz.ReadinessHandler(state.Snapshot),
-		Liveness: healthz.LivenessHandler(state.Snapshot),
+		Health:   healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)),
+		Liveness: healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)),
+		Metrics:  healthAuth.Wrap(promhttp.Handler()),
 		Snapshot: monitorSnapshot(cfg),
 	})
 	if s == nil {
@@ -407,7 +418,7 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 	return nil
 }
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
@@ -415,6 +426,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
 		InstanceID:       cfg.Instance.InstanceID,
+		Runner:           runner,
 		OnResult:         hook,
 		SyncSystem:       syncSystem,
 		MetricsQuery:     metricsQuery,
@@ -426,15 +438,29 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 	}))
 }
 
-func startScheduler(ctx context.Context, cfg *config.Config, runtime *Runtime, hook func(context.Context, domain.Check, domain.CheckResult)) *scheduler.Scheduler {
+func startScheduler(ctx context.Context, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult)) *scheduler.Scheduler {
 	s := scheduler.New(runtime.Repositories, scheduler.Options{
 		InstanceID:     cfg.Instance.InstanceID,
 		ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second,
 		MaxConcurrency: cfg.Scheduler.MaxConcurrency,
+		Runner:         runner,
 		OnResult:       hook,
 	})
 	s.Start(ctx)
 	return s
+}
+
+func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
+	runner := probe.DefaultRunner()
+	if cfg == nil {
+		return runner
+	}
+	runner.HTTP.HealthSigner = &probe.HealthSigner{
+		Version:   cfg.HealthAuth.Version,
+		AccessKey: cfg.HealthAuth.AccessKey,
+		SecretKey: cfg.HealthAuth.SecretKey,
+	}
+	return runner
 }
 
 func monitorResultHook(cfg *config.Config, runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {

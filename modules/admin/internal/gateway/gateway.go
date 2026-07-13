@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -72,11 +72,13 @@ func RegisterGatewayHTTPHandlers(s *server.Server) error {
 
 // setupRoutes 设置路由
 func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
-	router := hr.buildRouter()
-	return healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.stdhttp"), router)
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.control"), hr.buildControlRouter()); err != nil {
+		return err
+	}
+	return healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.service"), hr.buildServiceRouter())
 }
 
-func (hr *HTTPRouter) buildRouter() *mux.Router {
+func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	router := mux.NewRouter()
 
 	// 注册新控制台 API 路由: /api/admin/{service}/{method}
@@ -85,19 +87,20 @@ func (hr *HTTPRouter) buildRouter() *mux.Router {
 		hr.handleControlRequest).
 		Methods("GET", "POST", "PUT", "DELETE")
 
-	// 注册后台服务 API 路由: /api/service/{service}/{method}
+	return router
+}
+
+func (hr *HTTPRouter) buildServiceRouter() *mux.Router {
+	router := mux.NewRouter()
 	router.HandleFunc(
 		"/api/service/{service}/{method}",
 		hr.handleServiceRequest).
 		Methods("GET", "POST", "PUT", "DELETE")
-
-	// 健康检查接口
-	router.HandleFunc("/api/admin/health", hr.handleHealthCheck).Methods("GET")
-	router.HandleFunc("/healthz", hr.handleHealthCheck).Methods("GET")
-	router.HandleFunc("/readyz", hr.handleHealthCheck).Methods("GET")
-	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
 	return router
 }
+
+// buildRouter remains the control-router test helper.
+func (hr *HTTPRouter) buildRouter() *mux.Router { return hr.buildControlRouter() }
 
 // handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
 func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +122,39 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		log.ErrorContextf(ctx, "解析请求参数失败: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if !requireServiceAuth && !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
+		if _, usesTicket := rawRouteOperations[serviceID+"/"+method]; usesTicket {
+			claims, err := validateRawRouteTicket(r, serviceID, method)
+			if err != nil {
+				log.WarnContextf(ctx, "admin raw request authentication failed: %v", err)
+				writeAdminAuthFailure(w)
+				return
+			}
+			ctx = context.WithValue(ctx, authmodel.CtxUserID, claims.UserID)
+			r = r.WithContext(ctx)
+			trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(claims.UserID))
+			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
+		} else {
+			rawBody, err := readAndRestoreBody(r)
+			if err != nil {
+				writeAdminAuthFailure(w)
+				return
+			}
+			claims, err := verifyAdminRequest(r, rawBody)
+			if err != nil {
+				log.WarnContextf(ctx, "admin request authentication failed sid=%s reason=%v", sessionIDForLog(r), err)
+				writeAdminAuthFailure(w)
+				return
+			}
+			ctx = context.WithValue(ctx, authmodel.CtxUserID, claims.UserID)
+			r = r.WithContext(ctx)
+			trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(claims.UserID))
+			trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte(claims.Username))
+			trpc.SetMetaData(ctx, authmodel.CtxUserRole, []byte(fmt.Sprintf("%d", claims.Role)))
+			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
+		}
 	}
 
 	// 提取HTTP头部信息
@@ -255,7 +291,7 @@ func (h *HTTPRequestHandler) validateServiceAuth(r *http.Request, rawBody []byte
 	if err != nil {
 		return err
 	}
-	return validateServiceAuthHeader(r.Header.Get("Auth"), rawBody, time.Now(), cfg)
+	return validateServiceAuthHeader(r.Header.Get("Auth"), r.Method, r.URL.EscapedPath(), rawBody, time.Now(), cfg)
 }
 
 // extractGatewayHeaders 提取网关相关的HTTP头部信息

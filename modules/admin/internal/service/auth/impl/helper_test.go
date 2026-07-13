@@ -98,44 +98,9 @@ func newAuthServiceForRegisterTest(t *testing.T) *AuthServiceImpl {
 	}
 }
 
-func TestRegister_EmptyUsername_ShouldReturnInvalidParam(t *testing.T) {
-	svc := newAuthServiceForRegisterTest(t)
-	rsp, err := svc.Register(context.Background(), &pb.RegisterReq{Password: "pwd"})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestRegister_EmptyPassword_ShouldReturnInvalidParam(t *testing.T) {
-	svc := newAuthServiceForRegisterTest(t)
-	rsp, err := svc.Register(context.Background(), &pb.RegisterReq{Username: "new-user"})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestRegister_ValidUser_ShouldCreateUser(t *testing.T) {
-	svc := newAuthServiceForRegisterTest(t)
-	rsp, err := svc.Register(context.Background(), &pb.RegisterReq{
-		Username: "new-user",
-		Password: "secret123",
-		Email:    "new@example.com",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.NotEmpty(t, rsp.GetUserId())
-	assert.Equal(t, "new-user", rsp.GetUserInfo().GetUsername())
-}
-
-func TestRegister_DuplicateUsername_ShouldReturnInvalidParam(t *testing.T) {
-	svc := newAuthServiceForRegisterTest(t)
-	_, err := svc.Register(context.Background(), &pb.RegisterReq{Username: "dup", Password: "pwd1"})
-	require.NoError(t, err)
-	rsp, err := svc.Register(context.Background(), &pb.RegisterReq{Username: "dup", Password: "pwd2"})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
 func TestUpdateUserInfo_ValidUser_ShouldUpdateNickname(t *testing.T) {
-	svc, user := newAuthServiceForPasswordTest(t)
+	user := &model.User{UserID: "user-profile-1", Username: "alice", PasswordHash: "unused", Role: int32(pb.UserRole_USER_ROLE_ADMIN), Status: int32(pb.UserStatus_USER_STATUS_ACTIVE)}
+	svc := newAuthServiceForUserTest(t, "secret", user)
 	ctx := authCtx(user.UserID, user.Role)
 
 	rsp, err := svc.UpdateUserInfo(ctx, &pb.UpdateUserInfoReq{Nick: "new-nick"})
@@ -152,7 +117,8 @@ func TestGetUserInfo_NoAuth_ShouldReturnNoAuth(t *testing.T) {
 }
 
 func TestGetUserInfo_AdminQueryOtherUser_ShouldSucceed(t *testing.T) {
-	svc, user := newAuthServiceForPasswordTest(t)
+	user := &model.User{UserID: "user-info-1", Username: "alice", PasswordHash: "unused", Role: int32(pb.UserRole_USER_ROLE_ADMIN), Status: int32(pb.UserStatus_USER_STATUS_ACTIVE)}
+	svc := newAuthServiceForUserTest(t, "secret", user)
 	ctx := authCtx(user.UserID, user.Role)
 
 	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{})
