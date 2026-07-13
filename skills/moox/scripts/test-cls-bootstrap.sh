@@ -244,7 +244,7 @@ for fail_destination in '/storage/config/trpc_go-prod.yaml' '/secrets/cls.env'; 
 done
 
 # Render validation is structural and leaves no candidate or backup behind.
-for invalid_config_case in malformed-yaml wrong-level duplicate-writer; do
+for invalid_config_case in malformed-yaml wrong-level duplicate-writer duplicate-mapping-key duplicate-nested-key complex-duplicate-key; do
   INVALID_STAGE="${TMP}/invalid-stage-${invalid_config_case}"
   INVALID_DEPLOY="${TMP}/invalid-deploy-${invalid_config_case}"
   new_stage "${INVALID_STAGE}"
@@ -277,6 +277,46 @@ plugins:
         level: error
         remote_config:
           topic_id: unmanaged-duplicate
+YAML
+      ;;
+    duplicate-mapping-key)
+      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+plugins:
+  metrics:
+    prometheus:
+      port: 1234
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info
+YAML
+      ;;
+    duplicate-nested-key)
+      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+plugins:
+  metrics:
+    prometheus:
+      port: 1234
+    prometheus:
+      port: 5678
+  log:
+    default:
+      - writer: console
+        level: info
+YAML
+      ;;
+    complex-duplicate-key)
+      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+? [one, two]
+: first
+? [one, two]
+: second
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info
 YAML
       ;;
   esac

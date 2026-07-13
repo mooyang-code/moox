@@ -316,10 +316,59 @@ validate_rendered_config() {
   python3 - "${config}" "${topic_id}" <<'PY' >/dev/null 2>&1
 import sys
 import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
+
+def node_fingerprint(node):
+    if isinstance(node, ScalarNode):
+        return ("scalar", node.tag, node.value)
+    if isinstance(node, SequenceNode):
+        return ("sequence", node.tag, tuple(node_fingerprint(item) for item in node.value))
+    if isinstance(node, MappingNode):
+        return (
+            "mapping",
+            node.tag,
+            frozenset((node_fingerprint(key), node_fingerprint(value)) for key, value in node.value),
+        )
+    return (type(node).__name__, node.tag)
+
+
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    def construct_mapping(self, node, deep=False):
+        if not isinstance(node, MappingNode):
+            return super().construct_mapping(node, deep=deep)
+        seen_nodes = set()
+        seen_values = set()
+        for key_node, _ in node.value:
+            structural = node_fingerprint(key_node)
+            if structural in seen_nodes:
+                raise ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found duplicate mapping key",
+                    key_node.start_mark,
+                )
+            seen_nodes.add(structural)
+            try:
+                key = self.construct_object(key_node, deep=True)
+                signature = (key_node.tag, key)
+                hash(signature)
+            except TypeError:
+                continue
+            if signature in seen_values:
+                raise ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found duplicate mapping key",
+                    key_node.start_mark,
+                )
+            seen_values.add(signature)
+        return super().construct_mapping(node, deep=deep)
 
 path, expected_topic = sys.argv[1:]
 with open(path, encoding="utf-8") as stream:
-    document = yaml.safe_load(stream)
+    document = yaml.load(stream, Loader=UniqueKeySafeLoader)
 if not isinstance(document, dict):
     raise SystemExit(1)
 plugins = document.get("plugins")
