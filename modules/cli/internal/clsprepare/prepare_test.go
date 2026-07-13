@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -252,6 +253,27 @@ func TestPrepareDoesNotExposeSensitiveUpstreamErrors(t *testing.T) {
 		}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 		assertSanitized(t, err, "prepare fixed CLS resources")
 	})
+}
+
+func TestPreparePreservesContextErrorIdentityWithoutExposingUpstreamText(t *testing.T) {
+	for name, contextErr := range map[string]error{
+		"canceled": context.Canceled,
+		"deadline": context.DeadlineExceeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			upstreamErr := fmt.Errorf("sid-new skey-new Authorization: private request-body: %w", contextErr)
+			_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+				return nil, upstreamErr
+			}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
+
+			require.EqualError(t, err, "create CLS client failed")
+			require.ErrorIs(t, err, contextErr)
+			require.NotContains(t, err.Error(), "sid-new")
+			require.NotContains(t, err.Error(), "skey-new")
+			require.NotContains(t, err.Error(), "Authorization")
+			require.NotContains(t, err.Error(), "request-body")
+		})
+	}
 }
 
 func TestPrepareValidatesDependenciesAndOutput(t *testing.T) {

@@ -2,6 +2,7 @@ package clsprepare
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,10 +99,25 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	}, nil
 }
 
-// safeUpstreamError deliberately discards collaborator error text. Tencent SDK and
-// HTTP errors can contain signed headers, request bodies, or credentials.
-func safeUpstreamError(operation string, _ error) error {
-	return fmt.Errorf("%s failed", operation)
+type sanitizedUpstreamError struct {
+	operation string
+	cause     error
+}
+
+func (e sanitizedUpstreamError) Error() string { return e.operation + " failed" }
+func (e sanitizedUpstreamError) Unwrap() error { return e.cause }
+
+// safeUpstreamError deliberately discards collaborator error text because SDK and
+// HTTP errors can contain secrets. Only standard context identity is retained.
+func safeUpstreamError(operation string, err error) error {
+	var cause error
+	switch {
+	case errors.Is(err, context.Canceled):
+		cause = context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		cause = context.DeadlineExceeded
+	}
+	return sanitizedUpstreamError{operation: operation, cause: cause}
 }
 
 func selectAccount(accounts []adminclient.CloudAccount, requested string) (adminclient.CloudAccount, error) {
