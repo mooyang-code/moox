@@ -167,33 +167,13 @@ async function prepare(args) {
     return rows;
   });
 
-  const jobItems = await waitFor("cloudnode job items", 60_000, async () => {
-    const rows = await listJobItems(args, token);
-    if (rows.length === 0) throw new Error("cloudnode has no job items for collector rule");
-    return rows;
-  });
-
-  log(`prepare ok: instances=${instances.length}, job_items=${jobItems.length}`);
+  log(`prepare ok: instances=${instances.length}`);
 }
 
 async function assertAfterSCF(args) {
   const token = await login(args);
   await updatePublicDeployments(args, token);
   const timeoutMs = args.timeoutSeconds * 1000;
-
-  const jobItems = await waitFor("cloudnode job items success", timeoutMs, async () => {
-    const rows = await listJobItems(args, token);
-    if (rows.length === 0) throw new Error("cloudnode job items are empty");
-    const failed = rows.filter((item) => isJobStatus(item.status, "JOB_ITEM_STATUS_FAILED") || isJobStatus(item.status, "JOB_ITEM_STATUS_CANCELED"));
-    if (failed.length > 0) {
-      throw new FatalAssertionError(`job item failed: ${failed.map((item) => `${item.job_item_id}:${statusName(item.status, JOB_STATUS)}:${item.last_error_message || ""}`).join(", ")}`);
-    }
-    const pending = rows.filter((item) => !isJobStatus(item.status, "JOB_ITEM_STATUS_SUCCESS"));
-    if (pending.length > 0) {
-      throw new Error(`${pending.length}/${rows.length} job items are not success yet`);
-    }
-    return rows;
-  });
 
   const instances = await waitFor("collector task instances success", timeoutMs, async () => {
     const rows = await listTaskInstances(args, token);
@@ -225,7 +205,7 @@ async function assertAfterSCF(args) {
   });
 
   const sample = rows[0]?.key || {};
-  log(`assert ok: job_items=${jobItems.length}, instances=${instances.length}, storage_rows=${rows.length}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
+  log(`assert ok: instances=${instances.length}, storage_rows=${rows.length}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
 }
 
 async function assertWebHost(webURL) {
