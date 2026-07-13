@@ -28,6 +28,7 @@ import (
 	viewindexsvc "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/report"
@@ -61,6 +62,7 @@ func main() {
 
 	// 创建trpc服务器
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("storage")
 
 	frameworkConfigPath := configPathFromArgs(os.Args)
 	storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)

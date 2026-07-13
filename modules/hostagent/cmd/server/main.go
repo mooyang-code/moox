@@ -4,13 +4,14 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/app"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/rpc"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"os"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
+	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
@@ -29,6 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("hostagent")
 	if err := rpc.Register(s, a); err != nil {
 		log.Errorf("host-agent register failed: %v", err)
 		os.Exit(1)
