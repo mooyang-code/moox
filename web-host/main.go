@@ -218,7 +218,7 @@ func newHealthHandler() http.Handler {
 
 func newStaticHandler(statikFS http.FileSystem) http.Handler {
 	mux := healthz.NewMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandlePrefix("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAPIRequest(r.URL.Path) || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
 			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
 			http.NotFound(w, r)
@@ -227,7 +227,7 @@ func newStaticHandler(statikFS http.FileSystem) http.Handler {
 
 		// 否则提供静态文件服务，添加缓存和压缩
 		optimizedStaticHandler(statikFS, w, r)
-	})
+	}))
 	return mux
 }
 
