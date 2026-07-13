@@ -97,7 +97,8 @@ sequenceDiagram
 发布前初始化已接入当前实现：`moox-cli ops tencent cls prepare` 负责通过
 带 service-auth 的 CloudNode 控制面选择账户并核对固定 CLS 资源，
 `skills/moox/scripts/cls-bootstrap.sh` 负责在目标机安全安装 `0600` 的
-`secrets/cls.env` 并只修改 stage 配置，`scripts/deploy-moox.sh` 的
+`secrets/cls.env`，只把验证后的 Topic ID 写入 stage 配置；远程场景的
+临时 helper 在预检后立即清理。`scripts/deploy-moox.sh` 的
 `prepare_cls_preflight` 在 release archive 同步或停止旧服务前执行。对应的部署、Skill、CLI
 和 tRPC 配置契约测试覆盖账户选择、Topic ID/credential placeholders、
 固定 region/logset/topic、幂等更新及失败时不停止现有服务；运行时安全边界
