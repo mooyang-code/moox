@@ -149,12 +149,12 @@ assert_no_transaction_artifacts "${STAGE}" "${DEPLOY}"
 assert_no_secrets "${output}" "${STAGE}"
 
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
-  MOOX_TEST_EXPECT_ACCOUNT='explicit account' \
+  MOOX_TEST_EXPECT_ACCOUNT='explicit-account' \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
   --target localhost --deploy-dir "${DEPLOY}" --stage-dir "${STAGE}" \
-  --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit account' >>"${output}" 2>&1
+  --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit-account' >>"${output}" 2>&1
 [[ $(grep -c 'writer: cls' "${STAGE}/factor/config/trpc_go.yaml") == 1 ]]
-grep -q -- '--cloud-account-id explicit account' "${calls}"
+grep -q -- '--cloud-account-id explicit-account' "${calls}"
 [[ $(wc -l <"${calls}" | tr -d ' ') == 2 ]]
 assert_no_secrets "${output}" "${STAGE}"
 
@@ -580,17 +580,51 @@ fi
 SSH
 chmod +x "${FAKE_BIN}/scp" "${FAKE_BIN}/ssh"
 
+# Account IDs are validated before transport; shell metacharacters must never
+# reach the remote command or trigger either transport shim.
+MAL_STAGE="${TMP}/malicious-remote-stage"
+MAL_DEPLOY="${TMP}/malicious-remote-home/moox"
+MAL_BIN="${TMP}/malicious-bin"
+MAL_MARKER="${TMP}/malicious-transport-called"
+mkdir -p "${MAL_BIN}"
+for transport in ssh scp; do
+  cat >"${MAL_BIN}/${transport}" <<'TRANSPORT'
+#!/usr/bin/env bash
+set -euo pipefail
+touch "${MOOX_TEST_MAL_MARKER}"
+case "${0##*/}" in
+  ssh) exec "${MOOX_TEST_REAL_SSH}" "$@" ;;
+  scp) exec "${MOOX_TEST_REAL_SCP}" "$@" ;;
+esac
+TRANSPORT
+  chmod +x "${MAL_BIN}/${transport}"
+done
+new_stage "${MAL_STAGE}"
+new_deploy "${MAL_DEPLOY}"
+if PATH="${MAL_BIN}:${FAKE_BIN}:${PATH}" MOOX_TEST_MAL_MARKER="${MAL_MARKER}" \
+  MOOX_TEST_REAL_SSH="${FAKE_BIN}/ssh" MOOX_TEST_REAL_SCP="${FAKE_BIN}/scp" \
+  MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
+  MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
+  --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${MAL_STAGE}" \
+  --admin-url http://127.0.0.1:11002 --cloud-account-id 'acct;touch /tmp/cls-pwned' \
+  >"${TMP}/malicious-remote.out" 2>&1; then
+  echo 'malicious remote account unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${MAL_MARKER}" ]]
+
 printf 'success\n' >"${mode_file}"
 remote_output="${TMP}/remote-output"
 PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
   MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
-  MOOX_TEST_EXPECT_ACCOUNT='explicit account' \
+  MOOX_TEST_EXPECT_ACCOUNT='explicit-account' \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
   --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
-  --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit account' \
+  --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit-account' \
   >"${remote_output}" 2>&1
-grep -q -- '--cloud-account-id explicit account' "${calls}"
+grep -q -- '--cloud-account-id explicit-account' "${calls}"
 grep -q 'topic_id: topic-fixed' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
 [[ $(file_mode "${REMOTE_HOME}/moox/secrets/cls.env") == 600 ]]
 [[ ! -e "${REMOTE_HOME}/moox/secrets/cls.env.next" ]]

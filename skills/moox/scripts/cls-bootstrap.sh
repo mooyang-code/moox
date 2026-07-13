@@ -54,6 +54,10 @@ require_value() {
   [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"
 }
 
+valid_cloud_account_id() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]]
+}
+
 valid_remote_target() {
   local target=$1 user host label old_ifs
   local -a labels
@@ -95,6 +99,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "${CLOUD_ACCOUNT_ID}" ]] && ! valid_cloud_account_id "${CLOUD_ACCOUNT_ID}"; then
+  fail "cloud account ID must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
+fi
+
 STAGE_LOCK="${STAGE_DIR}/.cls-bootstrap.lock"
 
 [[ "${LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] && \
@@ -108,6 +116,7 @@ STAGE_LOCK="${STAGE_DIR}/.cls-bootstrap.lock"
 [[ -d "${STAGE_DIR}" ]] || fail "missing stage directory: ${STAGE_DIR}"
 [[ -x "${STAGE_DIR}/bin/moox-cli" ]] || fail "missing staged moox-cli: ${STAGE_DIR}/bin/moox-cli"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required to parse CLS prepare output"
+command -v base64 >/dev/null 2>&1 || fail "base64 is required for remote argument transport"
 python3 -c 'import yaml' >/dev/null 2>&1 || fail "PyYAML is required to validate staged configuration"
 
 if ! is_local; then
@@ -569,15 +578,23 @@ run_local_prepare() {
 }
 
 run_remote_prepare() {
+  local account_id_b64
+  account_id_b64=$(printf '%s' "${CLOUD_ACCOUNT_ID}" | base64 | tr -d '\n')
   scp -q -o BatchMode=yes -- "${STAGE_DIR}/bin/moox-cli" "${TARGET}:${REMOTE_CLI}"
   ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
-    "${REMOTE_CLI}" "${DEPLOY_DIR}" "${ADMIN_URL}" "${CLOUD_ACCOUNT_ID}" "${TOKEN}" <<'REMOTE'
+    "${REMOTE_CLI}" "${DEPLOY_DIR}" "${ADMIN_URL}" "${account_id_b64}" "${TOKEN}" <<'REMOTE'
 set -euo pipefail
 cli=$1
 deploy=$2
 admin_url=$3
-account_id=$4
+account_id_b64=$4
 token=$5
+account_id=
+if [[ -n "${account_id_b64}" ]]; then
+  if ! account_id=$(printf '%s' "${account_id_b64}" | base64 -d 2>/dev/null); then
+    account_id=$(printf '%s' "${account_id_b64}" | base64 -D)
+  fi
+fi
 case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
