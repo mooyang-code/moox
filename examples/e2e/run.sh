@@ -169,10 +169,14 @@ run_scf_once() {
 
 verify_phase() {
   local phase="$1"
+  local web_url="http://${PUBLIC_HOST}:9527"
+  if is_local_target; then
+    web_url="http://127.0.0.1:9528"
+  fi
   node "${ROOT}/examples/e2e/verify.mjs" \
     --phase "${phase}" \
     --gateway "http://${PUBLIC_HOST}:11000" \
-    --web "http://${PUBLIC_HOST}:9527" \
+    --web "${web_url}" \
     --host "${PUBLIC_HOST}" \
     --space "${SPACE_ID}" \
     --rule "${RULE_ID}" \
