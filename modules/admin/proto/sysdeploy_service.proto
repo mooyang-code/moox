@@ -73,6 +73,8 @@ message GetServiceDeploymentRsp {
 }
 
 message CreateServiceDeploymentReq {
+  reserved 2;
+  reserved "confirm_storage_topology_overlap";
   ServiceDeployment deployment = 1;
 }
 
@@ -83,6 +85,8 @@ message CreateServiceDeploymentRsp {
 }
 
 message UpdateServiceDeploymentReq {
+  reserved 3;
+  reserved "confirm_storage_topology_overlap";
   string service_name = 1;
   ServiceDeployment deployment = 2;
 }
@@ -94,6 +98,8 @@ message UpdateServiceDeploymentRsp {
 }
 
 message DeleteServiceDeploymentReq {
+  reserved 2;
+  reserved "confirm_storage_topology_overlap";
   string service_name = 1;
 }
 

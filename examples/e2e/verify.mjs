@@ -325,7 +325,7 @@ function deploymentInput(item) {
 }
 
 async function assertSysDeploySingleInstanceContract(args, token) {
-  const serviceName = "e2e_sysdeploy_single_instance";
+  const serviceName = `e2e_sysdeploy_${randomBytes(8).toString("hex")}`;
   const first = {
     service_name: serviceName,
     service_kind: "e2e",
@@ -338,9 +338,10 @@ async function assertSysDeploySingleInstanceContract(args, token) {
     description: "temporary SysDeploy E2E row",
     extra_config: "{}",
   };
-  await deleteDeploymentIfPresent(args, token, serviceName);
+  let created = false;
   try {
     await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
+    created = true;
     const update = {
       ...first,
       host: "127.0.0.2",
@@ -358,16 +359,26 @@ async function assertSysDeploySingleInstanceContract(args, token) {
     }
 
     await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+    created = false;
     await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
+    created = true;
     await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+    created = false;
 
     const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", {});
     if (active.deployment_map?.[serviceName]) {
       throw new Error("deleted SysDeploy E2E row remains active");
     }
     log("sysdeploy single-instance contract: ok");
-  } finally {
-    await deleteDeploymentIfPresent(args, token, serviceName);
+  } catch (err) {
+    if (created) {
+      try {
+        await deleteDeploymentIfPresent(args, token, serviceName);
+      } catch (cleanupErr) {
+        log(`sysdeploy cleanup failed: ${cleanupErr?.message || cleanupErr}`);
+      }
+    }
+    throw err;
   }
 }
 

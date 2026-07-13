@@ -155,7 +155,7 @@ import type { ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/type
 import { monitorApi } from '@/api/monitor';
 import type { CheckResult } from '@/api/monitor';
 import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/views/data/shared/metadata-utils';
-import { deploymentAccessAddress, deploymentHealthState, loadLatestHealthResults } from './health';
+import { deploymentAccessAddress, deploymentHealthState, loadLatestHealthResults, sysDeployChecksRequest } from './health';
 
 defineOptions({ name: 'SettingsServiceDeployments' });
 
@@ -250,7 +250,7 @@ function deploymentInput(record: ServiceDeployment): ServiceDeploymentInput {
 
 async function loadHealth(deployments: ServiceDeployment[]) {
   try {
-    const rsp = await monitorApi.listChecks({ space_id: 'moox-system', source: 'sysdeploy', page: { page: 1, size: 500 } });
+    const rsp = await monitorApi.listChecks(sysDeployChecksRequest());
     const visible = new Set(deployments.map((item) => item.service_name));
     const checks = (rsp.checks || []).filter((check) => !!check.check_id && visible.has(check.check_id));
     latestHealth.value = await loadLatestHealthResults(checks, async (check) => {

@@ -3,6 +3,10 @@ import type { CheckResult, MonitorCheck } from '@/api/monitor';
 
 export type DeploymentHealthState = 'healthy' | 'unhealthy' | 'unknown';
 
+export function sysDeployChecksRequest() {
+  return { source: 'sysdeploy', page: { page: 1, size: 500 } };
+}
+
 export function deploymentAccessAddress(deployment: ServiceDeployment) {
   return deployment.base_url || deployment.rpc_address || `${deployment.host}:${deployment.port}`;
 }
