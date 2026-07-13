@@ -132,6 +132,27 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	require.GreaterOrEqual(t, len(calls), 14)
 }
 
+func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
+	seed := metadataSeed{
+		Fields: []seedField{{FieldID: "close", Name: "收盘价", ValueType: "DOUBLE"}},
+		DatasetColumns: []seedDatasetColumn{{
+			SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
+			OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE",
+		}},
+	}
+	calls, err := buildMetadataImportCalls(seed)
+	require.NoError(t, err)
+	for _, call := range calls {
+		if call.Resource != "dataset_columns" {
+			continue
+		}
+		column := call.Request.(*pb.UpsertDatasetColumnReq).GetColumn()
+		assert.Equal(t, "收盘价", column.GetAttributes()["display_name"])
+		return
+	}
+	t.Fatal("dataset_columns call missing")
+}
+
 func TestMetadataContractsEqualAllResources(t *testing.T) {
 	assert.True(t, metadataContractsEqual("data_sources",
 		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange", Status: "active"},

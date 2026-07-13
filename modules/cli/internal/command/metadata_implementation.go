@@ -213,7 +213,20 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
+	displayNames := make(map[string]string, len(seed.Fields)+len(seed.Factors))
+	for _, item := range seed.Fields {
+		displayNames[item.FieldID] = item.Name
+	}
+	for _, item := range seed.Factors {
+		displayNames[item.FactorID] = item.Name
+	}
 	for _, item := range seed.DatasetColumns {
+		if strings.TrimSpace(item.Attributes["display_name"]) == "" {
+			if displayName := strings.TrimSpace(displayNames[item.OriginID]); displayName != "" {
+				item.Attributes = cloneStringMap(item.Attributes)
+				item.Attributes["display_name"] = displayName
+			}
+		}
 		column, err := item.toPB()
 		if err != nil {
 			return nil, err
@@ -568,6 +581,14 @@ func (s seedFactor) toPB() (*pb.Factor, error) {
 		return nil, err
 	}
 	return &pb.Factor{SpaceId: s.SpaceID, FactorId: s.FactorID, Name: s.Name, Description: s.Description, Algorithm: s.Algorithm, ParamsJson: s.ParamsJSON, ValueType: valueType, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src)+1)
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
