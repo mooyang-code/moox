@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
@@ -25,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -249,8 +249,8 @@ func registerReconcileSchedule(s *server.Server, sched *scheduler.Service) {
 		log.Warn("factor scheduler is nil, skip reconcile timer handler register")
 		return
 	}
-	timer.RegisterHandlerService(service, func(ctx context.Context, rawParams string) error {
-		log.InfoContextf(ctx, "factor reconcile schedule triggered params=%s", rawParams)
+	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+		log.InfoContext(ctx, "factor reconcile schedule triggered")
 		return sched.Drain(ctx)
 	})
 }

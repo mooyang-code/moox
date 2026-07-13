@@ -284,7 +284,7 @@ server:
       protocol: trpc
     - name: trpc.moox.storage.view.timer
       port: %d
-      network: "*/5 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=maintain"
+      network: "*/5 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1"
       protocol: timer
       timeout: 60000
 

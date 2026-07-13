@@ -1,5 +1,6 @@
-// Package serviceauth implements replay-resistant authentication for /api/service requests.
-package serviceauth
+// Package servicegateway provides authentication and secure HTTP transport for
+// MooX service-gateway requests.
+package servicegateway
 
 import (
 	"errors"
@@ -13,28 +14,28 @@ import (
 
 const Version = "moox-auth-v2"
 
-type Config struct {
+type AuthConfig struct {
 	AccessKey        string
 	SecretKey        string
 	ExpireSeconds    int64
 	ClockSkewSeconds int64
 }
 
-type Request struct {
+type AuthRequest struct {
 	Method  string
 	Path    string
 	Body    []byte
 	Headers map[string]string
 }
 
-type Claims struct {
+type AuthClaims struct {
 	AccessKey string
 	Nonce     string
 	Timestamp int64
 	TTL       time.Duration
 }
 
-func BuildHeader(cfg Config, req Request, now time.Time) (string, error) {
+func BuildHeader(cfg AuthConfig, req AuthRequest, now time.Time) (string, error) {
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return "", errors.New("service auth access_key and secret_key are required")
 	}
@@ -57,43 +58,43 @@ func BuildHeader(cfg Config, req Request, now time.Time) (string, error) {
 	return fmt.Sprintf("%s/%s/%d/%d/%s/%s", Version, cfg.AccessKey, now.Unix(), expire, nonce, signature), nil
 }
 
-func VerifyHeader(cfg Config, req Request, header string, now time.Time) (Claims, error) {
+func VerifyHeader(cfg AuthConfig, req AuthRequest, header string, now time.Time) (AuthClaims, error) {
 	parts := strings.Split(header, "/")
 	if len(parts) < 2 {
-		return Claims{}, errors.New("invalid auth format")
+		return AuthClaims{}, errors.New("invalid auth format")
 	}
 	if parts[0] != Version {
-		return Claims{}, errors.New("invalid auth version")
+		return AuthClaims{}, errors.New("invalid auth version")
 	}
 	if len(parts) != 6 {
-		return Claims{}, errors.New("invalid auth format")
+		return AuthClaims{}, errors.New("invalid auth format")
 	}
 	if parts[1] != cfg.AccessKey || cfg.SecretKey == "" {
-		return Claims{}, errors.New("invalid service credentials")
+		return AuthClaims{}, errors.New("invalid service credentials")
 	}
 	timestamp, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil {
-		return Claims{}, errors.New("invalid timestamp")
+		return AuthClaims{}, errors.New("invalid timestamp")
 	}
 	expire, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil || expire <= 0 || (cfg.ExpireSeconds > 0 && expire > cfg.ExpireSeconds) {
-		return Claims{}, errors.New("invalid expire time")
+		return AuthClaims{}, errors.New("invalid expire time")
 	}
 	skew := cfg.ClockSkewSeconds
 	if skew <= 0 {
 		skew = 30
 	}
 	if now.Unix()+skew < timestamp || now.Unix() > timestamp+expire+skew {
-		return Claims{}, errors.New("auth signature expired or timestamp is in the future")
+		return AuthClaims{}, errors.New("auth signature expired or timestamp is in the future")
 	}
 	material := requestauth.Material{
 		Method: req.Method, Path: normalizedPath(req.Path), Body: signingBody(req.Body, expire), Headers: req.Headers,
 		Timestamp: timestamp, Nonce: parts[4],
 	}
 	if err := requestauth.Verify(cfg.SecretKey, material, parts[5]); err != nil {
-		return Claims{}, fmt.Errorf("invalid signature: %w", err)
+		return AuthClaims{}, fmt.Errorf("invalid signature: %w", err)
 	}
-	return Claims{
+	return AuthClaims{
 		AccessKey: parts[1], Timestamp: timestamp, Nonce: parts[4],
 		TTL: time.Duration(expire+skew) * time.Second,
 	}, nil

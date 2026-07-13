@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
+	"context"
+
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
+	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -19,12 +21,16 @@ func RegisterTRPCServices() error {
 	// 注册心跳定时器
 	log.Info("注册心跳定时器...")
 	timer.RegisterScheduler("heartbeatSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.reporter.timer"), reporter.ScheduledHeartbeat)
+	timer.RegisterHandlerService(s.Service("trpc.reporter.timer"), func(ctx context.Context) error {
+		return reporter.ScheduledHeartbeat(ctx, "")
+	})
 
 	// 注册 DNS 解析定时器
 	log.Info("注册 DNS 解析定时器...")
 	timer.RegisterScheduler("dnsResolveSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.dnsresolve.timer"), httpclient.ScheduledResolveDNS)
+	timer.RegisterHandlerService(s.Service("trpc.dnsresolve.timer"), func(ctx context.Context) error {
+		return httpclient.ScheduledResolveDNS(ctx, "")
+	})
 
 	// 启动TRPC服务（用go协程包裹）
 	go func() {

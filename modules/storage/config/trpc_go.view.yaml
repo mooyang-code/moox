@@ -42,12 +42,12 @@ server:
       timeout: 30000
     - name: trpc.moox.storage.view.timer
       port: 20300
-      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1&params=op=maintain"
+      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1"
       protocol: timer
       timeout: 900000
     - name: trpc.moox.storage.view.metrics.timer
       port: 20307
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

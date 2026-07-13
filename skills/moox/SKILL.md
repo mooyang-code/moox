@@ -142,7 +142,7 @@ skills/moox/scripts/caddy-prerequisite.sh ensure --target user@host --deploy-dir
 scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host host.example
 ```
 
-The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, persists its CA, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
+The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, rejects non-loopback upstream addresses, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, persists its CA, attempts target-host trust installation, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
 
 For a CLS-enabled release, `scripts/deploy-moox.sh --enable-cls` runs the CLS
 predeploy check after stage creation and before release archive sync or service

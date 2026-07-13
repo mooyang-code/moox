@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	bootstrapeventbus "github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
@@ -32,6 +31,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-database/timer"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go"
@@ -428,7 +428,9 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, eve
 		})
 		view.SetDefaultMaintenance(maintenance)
 		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
-		registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), view.HandleSchedule)
+		registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), func(ctx context.Context) error {
+			return view.HandleSchedule(ctx, "op=maintain")
+		})
 		var err error
 		builderService, err = startViewBuilderService(trpc.BackgroundContext(), storage, events, viewMetadata, map[string]viewindex.ViewIndexEngine{
 			"duckdb": duckEngine,
@@ -557,11 +559,11 @@ func parseStorageDuration(raw string) (time.Duration, bool) {
 
 func registerNoopViewTimers(s *server.Server) {
 	timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
-	noop := func(ctx context.Context, _ string) error { return nil }
+	noop := func(context.Context) error { return nil }
 	registerTimerHandlerService("trpc.moox.storage.view.timer", s.Service("trpc.moox.storage.view.timer"), noop)
 }
 
-func registerTimerHandlerService(name string, service server.Service, handle func(context.Context, string) error) bool {
+func registerTimerHandlerService(name string, service server.Service, handle func(context.Context) error) bool {
 	if service == nil {
 		log.Warnf("timer service %s is not configured, skip register", name)
 		return false

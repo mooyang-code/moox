@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -25,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-database/timer"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"

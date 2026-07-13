@@ -13,13 +13,13 @@ server:
       ######## 定时任务 ########
     - name: trpc.heartbeat.timer
       port: 8001
-      network: "*/9 * * * * *?scheduler=heartbeatSchedule&startAtOnce=1&params="
+      network: "*/9 * * * * *?scheduler=heartbeatSchedule&startAtOnce=1"
       protocol: timer
       timeout: 5000  #请求最长处理时间 单位 毫秒
 
     - name: trpc.dnsresolve.timer
       port: 8003
-      network: "30 * * * * *?scheduler=dnsResolveSchedule&startAtOnce=1&params="
+      network: "30 * * * * *?scheduler=dnsResolveSchedule&startAtOnce=1"
       protocol: timer
       timeout: 5000  #请求最长处理时间 单位 毫秒
 

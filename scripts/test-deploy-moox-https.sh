@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HELPER="${ROOT}/scripts/lib/caddy-managed.sh"
+LOOPBACK_HELPER="${ROOT}/scripts/lib/loopback-listeners.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/moox-caddy-managed.XXXXXX")
 cleanup() { "${HELPER}" stop --deploy-dir "${TMP}/deploy" >/dev/null 2>&1 || true; rm -rf "${TMP}"; }
 trap cleanup EXIT
@@ -15,13 +16,21 @@ assert_contains "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" 'caddy_2.11.4
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'caddy-managed.sh'
 assert_contains "${ROOT}/scripts/release.sh" 'caddy-managed.sh'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_WEB_HOST_ADDR:-127.0.0.1:9528'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'require_loopback_listener'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_WEB_HOST_HEALTH_ADDR:-127.0.0.1:19527'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_ADMIN_CONTROL_ADDR:-127.0.0.1:11000'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_ADMIN_SERVICE_ADDR:-127.0.0.1:11002'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'validate_moox_loopback_listeners'
+assert_contains "${LOOPBACK_HELPER}" 'MOOX_WEB_HOST_HEALTH_ADDR-127.0.0.1:19527'
+assert_contains "${LOOPBACK_HELPER}" 'MOOX_ADMIN_CONTROL_ADDR-127.0.0.1:11000'
+assert_contains "${LOOPBACK_HELPER}" 'MOOX_ADMIN_SERVICE_ADDR-127.0.0.1:11002'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'verify_public_https'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'public HTTPS acceptance failed'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '--target-ca <auto|skip>'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'configure_target_ca'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'skills/moox/scripts/caddy-ca.sh'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'local args=(install-target'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '77)'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'target CA trust installation failed with status'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'cp "${ROOT}/scripts/install-caddy-ca.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"'
 assert_contains "${HELPER}" '${CONFIG}.rollback'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'Caddyfile.next'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" '--config "${deploy_dir}/config/caddy/Caddyfile.next"'
@@ -30,6 +39,22 @@ assert_contains "${ROOT}/scripts/deploy-moox.sh" 'mv "${DEPLOY_DIR}/data/caddy" 
 assert_contains "${HELPER}" 'rollback)'
 assert_contains "${HELPER}" 'command -v ss'
 assert_contains "${HELPER}" '/proc/net/tcp'
+
+[[ -x "${LOOPBACK_HELPER}" ]] || fail 'loopback listener validator is missing'
+"${LOOPBACK_HELPER}"
+MOOX_WEB_HOST_ADDR=127.0.0.1:08080 "${LOOPBACK_HELPER}"
+for assignment in \
+  'MOOX_WEB_HOST_ADDR=0.0.0.0:9528' \
+  'MOOX_WEB_HOST_HEALTH_ADDR=localhost:19527' \
+  'MOOX_ADMIN_CONTROL_ADDR=' \
+  'MOOX_ADMIN_SERVICE_ADDR=127.0.0.1:0' \
+  'MOOX_ADMIN_SERVICE_ADDR=127.0.0.1:65536' \
+  'MOOX_ADMIN_SERVICE_ADDR=127.0.0.1:099999' \
+  'MOOX_ADMIN_SERVICE_ADDR=127.0.0.1:99999999999999999999'; do
+  if env "${assignment}" "${LOOPBACK_HELPER}" >/dev/null 2>&1; then
+    fail "loopback validator accepted ${assignment}"
+  fi
+done
 
 mkdir -p "${TMP}/fixture" "${TMP}/deploy/config/caddy"
 cat >"${TMP}/fixture/caddy" <<'SH'

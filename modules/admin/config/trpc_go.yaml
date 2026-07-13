@@ -73,17 +73,17 @@ server:
       timeout: 10000
     - name: trpc.dnsproxy.timer
       port: 11301
-      network: "0 */5 * * * *?scheduler=dnsproxySchedule&disable=1&params="
+      network: "0 */5 * * * *?scheduler=dnsproxySchedule"
       protocol: timer
       timeout: 60000
     - name: trpc.dnsprobe.timer
       port: 11302
-      network: "0 */5 * * * *?scheduler=dnsProbeSchedule&disable=1&params="
+      network: "0 */5 * * * *?scheduler=dnsProbeSchedule"
       protocol: timer
       timeout: 60000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

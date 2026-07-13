@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/broker"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/health"
@@ -18,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/nats-io/nats.go"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )

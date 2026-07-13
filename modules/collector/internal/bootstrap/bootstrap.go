@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -15,6 +14,7 @@ import (
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -139,7 +139,9 @@ func registerCollectorSchedule(s *server.Server) {
 		log.Warn("collector schedule timer service is not configured, skip register")
 		return
 	}
-	timer.RegisterHandlerService(service, collectsvc.HandleSchedule)
+	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+		return collectsvc.HandleSchedule(ctx, "")
+	})
 }
 
 func taskpublisherAuth(cfg ServiceAuthConfig) taskpublisher.AuthConfig {

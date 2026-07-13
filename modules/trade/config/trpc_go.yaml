@@ -109,7 +109,7 @@ server:
 
     - name: trpc.moox.trade.metrics.timer
       port: 11210
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

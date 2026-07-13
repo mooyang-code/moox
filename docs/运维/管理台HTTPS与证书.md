@@ -25,7 +25,7 @@ Caddy 是唯一公开边缘。`9527` 只允许站点路由和 `/api/admin/*`，`
 
 ## 首次部署
 
-`make deploy ARGS="--target user@host --dir /home/user/moox/prod --public-host <IP-or-DNS>"` 会自动执行 Caddy 前置步骤：下载固定的 Caddy `v2.11.4`、校验官方 checksum、安装到部署目录、启动 loopback 上游、启动或 reload MooX 管理的 Caddy，然后做 HTTPS 验收。正常流程不需要也不应预先安装系统 Caddy。
+`make deploy ARGS="--target user@host --dir /home/user/moox/prod --public-host <IP-or-DNS>"` 会自动执行 Caddy 前置步骤：下载固定的 Caddy `v2.11.4`、校验官方 checksum、安装到部署目录、启动 loopback 上游、启动或 reload MooX 管理的 Caddy，然后做 HTTPS 验收。正常流程不需要也不应预先安装系统 Caddy。部署还会以 `--target-ca auto` 尝试把根 CA 安装到目标机系统信任库；只有明确识别为缺少 root 或免密 sudo 时才降级到应用级 CA，SSH、证书、helper 或 trust-store 更新错误仍会使发布失败。使用 `--target-ca skip` 可显式跳过。
 
 管理边界是部署目录下的 `bin/caddy`、`config/caddy/Caddyfile`、`run/caddy.pid` 和 `data/caddy`。端口被其他进程占用或发现非 MooX Caddy 时部署失败并保留对方进程。
 
@@ -43,6 +43,8 @@ openssl s_client -connect <host>:9527 -servername <dns-name> -CAfile ~/.moox/cer
 ```
 
 `install` 在 macOS 调用 `security add-trusted-cert`，Windows 调用 `Import-Certificate`，Debian/Ubuntu 使用 `update-ca-certificates`，RHEL/Fedora 使用 `update-ca-trust`。交互部署可一次确认后安装操作机信任；非交互流程不会静默修改工作站。每台浏览器机器都需本地安装 CA，否则浏览器显示不可信警告；不要通过跳过 TLS 验证规避警告。
+
+Skill 也可单独为 web-host 目标机安装信任：`skills/moox/scripts/caddy-ca.sh install-target --target user@host --deploy-dir /home/user/moox/prod`。该命令只读取公开根证书，不复制或导出 `root.key`。
 
 后端进程使用 `MOOX_SERVICE_GATEWAY_CA_FILE=<deploy>/certs/caddy/root.crt`，无法挂载文件的 SCF 使用等价的 `MOOX_SERVICE_GATEWAY_CA_PEM_B64`。这些只包含公开 CA，service HMAC secret 另行注入。
 

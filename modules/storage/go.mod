@@ -13,11 +13,11 @@ replace (
 )
 
 require (
+	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/blevesearch/bleve/v2 v2.5.5
 	github.com/blevesearch/bleve_index_api v1.3.11
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
-	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000

@@ -5,15 +5,14 @@ go 1.24.0
 toolchain go1.24.1
 
 require (
+	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/matoous/go-nanoid/v2 v2.1.0
-	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/serviceauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicegateway v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0
@@ -121,8 +120,6 @@ replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messag
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/servicegateway => ../../packages/servicegateway
-
-replace github.com/mooyang-code/moox/packages/serviceauth => ../../packages/serviceauth
 
 replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
 

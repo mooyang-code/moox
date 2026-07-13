@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
@@ -22,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -225,7 +225,9 @@ func registerJobHistorySchedule(s *server.Server) {
 		log.Warn("cloudnode job history timer service is not configured, skip register")
 		return
 	}
-	timer.RegisterHandlerService(service, cloudnoderpc.HandleJobHistorySchedule)
+	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+		return cloudnoderpc.HandleJobHistorySchedule(ctx, "")
+	})
 }
 
 func startDebugServer(ctx context.Context, addr string) *http.Server {

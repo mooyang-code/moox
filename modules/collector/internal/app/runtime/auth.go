@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 	"net/http"
 	"time"
 )
 
 const (
-	defaultAuthVersion = serviceauth.Version
+	defaultAuthVersion = servicegateway.Version
 	defaultExpireSec   = int64(60)
 )
 
@@ -48,7 +48,7 @@ func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
 
 func GenerateAuthHeader(cfg AuthConfig, method, path string, body []byte) (string, error) {
 	cfg = normalizeAuthConfig(cfg)
-	return serviceauth.BuildHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec}, serviceauth.Request{Method: method, Path: path, Body: body}, time.Unix(cfg.NowUnix, 0))
+	return servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec}, servicegateway.AuthRequest{Method: method, Path: path, Body: body}, time.Unix(cfg.NowUnix, 0))
 }
 
 func NewSignedRequest(method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
@@ -72,9 +72,9 @@ func NewSignedRequestWithContextAndHeaders(ctx context.Context, method string, u
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	header, err := serviceauth.BuildHeader(
-		serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec},
-		serviceauth.Request{Method: method, Path: req.URL.EscapedPath(), Body: body, Headers: headers},
+	header, err := servicegateway.BuildHeader(
+		servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec},
+		servicegateway.AuthRequest{Method: method, Path: req.URL.EscapedPath(), Body: body, Headers: headers},
 		time.Unix(cfg.NowUnix, 0),
 	)
 	if err != nil {

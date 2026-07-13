@@ -50,6 +50,34 @@ while IFS= read -r directory; do
 	violations+=("${directory}: module-level tests must live under test/, not tests/")
 done < <(find modules -mindepth 2 -maxdepth 2 -type d -name tests -print 2>/dev/null || true)
 
+while IFS= read -r match; do
+	file="${match%%:*}"
+	rest="${match#*:}"
+	line="${rest%%:*}"
+	violations+=("${file}:${line}: use the official trpc.group timer package instead of the go-commlib wrapper")
+done < <(rg -n 'github.com/mooyang-code/go-commlib/trpc-database/timer' modules --glob '*.go' --glob 'go.mod' || true)
+
+while IFS= read -r match; do
+	file="${match%%:*}"
+	rest="${match#*:}"
+	line="${rest%%:*}"
+	violations+=("${file}:${line}: official tRPC timer network does not support params, disable, or location options")
+done < <(rg -n 'network:.*[?&](params|disable|location)=' modules --glob '*.yaml' || true)
+
+required_timer_services=(
+	"modules/admin/config/trpc_go.yaml:trpc.dnsproxy.timer"
+	"modules/admin/config/trpc_go.yaml:trpc.dnsprobe.timer"
+	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.schedule.timer"
+	"modules/factor/config/trpc_go.yaml:trpc.moox.factor.reconcile.timer"
+)
+for required in "${required_timer_services[@]}"; do
+	file="${required%%:*}"
+	service="${required#*:}"
+	if ! rg -q --fixed-strings "name: ${service}" "${file}"; then
+		violations+=("${file}: required timer service ${service} is not configured")
+	fi
+done
+
 if (( ${#violations[@]} > 0 )); then
 	{
 		echo "package boundary violations:"

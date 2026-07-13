@@ -187,11 +187,11 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | ViewIndex | 20104 | - | 内部物理索引 owner |
 | admin | 20000 | - | tRPC 管理端口（`/cmds`、`/debug/pprof/*`，仅绑定本机） |
 
-后台计时器（在 `config/trpc_go.yaml` 的 `service` 段，通过 cron 串里的 `?disable=1` 开关、`*/30 * * * * *` 调频）：
+后台计时器在 `config/trpc_go.yaml` 的 `service` 段配置。启用的任务通过 cron 串调频；禁用的任务不写入 service 列表：
 
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
-| `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；参数为 `op=maintain`，只在 view_builder 注册 | 开（每 30s） |
+| `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；bootstrap 固定执行 `op=maintain`，只在 view_builder 注册 | 开（每 30s） |
 | `trpc.moox.storage.archive.timer` | Archive 角色的 Parquet 冷归档调度入口 | 关 |
 
 配置路径可被命令行参数或环境变量覆盖：

@@ -115,7 +115,7 @@ func TestHandlePublishesMooxMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Handle(context.Background(), ""); err != nil {
+	if err := h.Handle(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.messages) != 1 {
@@ -152,7 +152,7 @@ func TestHandleReportsPublisherError(t *testing.T) {
 		return nil, errors.New("eventbus down")
 	}
 
-	err = h.Handle(context.Background(), "")
+	err = h.Handle(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventbus down")

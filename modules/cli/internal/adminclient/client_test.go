@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 )
 
 func TestPostJSONSendsSpaceHeader(t *testing.T) {
@@ -70,9 +70,9 @@ func TestBuildAuthHeader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, header, "app")
 	assert.Contains(t, header, "1700000000")
-	_, err = serviceauth.VerifyHeader(
-		serviceauth.Config{AccessKey: "app", SecretKey: "key"},
-		serviceauth.Request{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
+	_, err = servicegateway.VerifyHeader(
+		servicegateway.AuthConfig{AccessKey: "app", SecretKey: "key"},
+		servicegateway.AuthRequest{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
 		header,
 		now,
 	)
