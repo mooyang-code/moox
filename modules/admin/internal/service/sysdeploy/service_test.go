@@ -7,8 +7,8 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
-	"github.com/mooyang-code/moox/modules/admin/schema"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -175,6 +175,98 @@ func TestServiceImpl_UpdateServiceDeployment_ValidInput_ShouldSucceed(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, "127.0.0.2", rsp.GetDeployment().GetHost())
+}
+
+func TestServiceImpl_UpdateDeployment_RecomputesDerivedAddresses(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{})
+	svc.dao = NewDAO(db)
+	ctx := context.Background()
+
+	require.NoError(t, svc.dao.Create(ctx, &Deployment{
+		ServiceName: "svc_update_address",
+		Protocol:    "http",
+		Host:        "127.0.0.1",
+		Port:        18081,
+		GatewayPath: "trpc.moox.test.Service",
+		Status:      "active",
+	}))
+
+	rsp, err := svc.UpdateServiceDeployment(ctx, &pb.UpdateServiceDeploymentReq{
+		ServiceName: "svc_update_address",
+		Deployment: &pb.ServiceDeployment{
+			ServiceName: "svc_update_address",
+			Protocol:    "http",
+			Host:        "127.0.0.2",
+			Port:        18082,
+			GatewayPath: "trpc.moox.test.Service",
+			Status:      "active",
+			BaseUrl:     "http://127.0.0.1:18081",
+			RpcAddress:  "127.0.0.1:18081",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	assert.Equal(t, "http://127.0.0.2:18082", rsp.GetDeployment().GetBaseUrl())
+	assert.Equal(t, "127.0.0.2:18082", rsp.GetDeployment().GetRpcAddress())
+
+	detail, ok := svc.ResolveGatewayServiceDetail(ctx, "svc_update_address")
+	require.True(t, ok)
+	assert.Equal(t, "127.0.0.2:18082", detail.Address)
+}
+
+func TestDAO_DeleteAndRecreate_CanRepeat(t *testing.T) {
+	dao := NewDAO(setupSysDeployTestDB(t))
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		require.NoError(t, dao.Create(ctx, &Deployment{
+			ServiceName: "repeatable",
+			Host:        "127.0.0.1",
+			Port:        19090,
+			Status:      "active",
+		}))
+		require.NoError(t, dao.Delete(ctx, "repeatable"))
+	}
+}
+
+func TestValidateDeployment_RejectsInvalidStaticDirectoryFields(t *testing.T) {
+	tests := []struct {
+		name string
+		item *Deployment
+	}{
+		{"port zero", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 0}},
+		{"port too large", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 65536}},
+		{"unsupported protocol", &Deployment{ServiceName: "svc", Protocol: "udp", Host: "127.0.0.1", Port: 80}},
+		{"unsupported scope", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, Scope: "global"}},
+		{"unsupported status", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, Status: "healthy"}},
+		{"invalid extra JSON", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, ExtraConfig: "{"}},
+		{"unspecified IP", &Deployment{ServiceName: "svc", Protocol: "http", Host: "0.0.0.0", Port: 80}},
+		{"link-local IP", &Deployment{ServiceName: "svc", Protocol: "http", Host: "169.254.1.1", Port: 80}},
+		{"multicast IP", &Deployment{ServiceName: "svc", Protocol: "http", Host: "224.0.0.1", Port: 80}},
+		{"hostname unsupported", &Deployment{ServiceName: "svc", Protocol: "http", Host: "service.local", Port: 80}},
+		{"rpc path starts with slash", &Deployment{ServiceName: "svc", ServiceKind: "service", Protocol: "http", Host: "127.0.0.1", Port: 80, GatewayPath: "/api/service"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Error(t, validateDeployment(tt.item))
+		})
+	}
+}
+
+func TestValidateDeployment_AllowsGatewayHTTPPath(t *testing.T) {
+	assert.NoError(t, validateDeployment(&Deployment{
+		ServiceName: "admin_gateway",
+		ServiceKind: "gateway",
+		Protocol:    "http",
+		Host:        "127.0.0.1",
+		Port:        11000,
+		GatewayPath: "/api/admin",
+		Scope:       "public",
+		Status:      "active",
+		ExtraConfig: "{}",
+	}))
 }
 
 func TestServiceImpl_GetServiceDeployments_ActiveRows_ShouldReturnMap(t *testing.T) {

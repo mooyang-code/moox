@@ -147,6 +147,7 @@ async function prepare(args) {
   await ensureUser(args);
   const token = await login(args);
   await updatePublicDeployments(args, token);
+  await assertSysDeploySingleInstanceContract(args, token);
   await ensureSpace(args, token);
 
   await assertManagementRequests(args, token);
@@ -299,14 +300,85 @@ async function updatePublicDeployments(args, token) {
   const deployments = rsp.deployments || [];
   const updates = deployments.filter((item) => PUBLIC_DEPLOYMENTS.has(item.service_name));
   for (const item of updates) {
-    const next = { ...item, host: args.host, status: "active" };
+    const next = deploymentInput({ ...item, host: args.host, status: "active" });
     await adminPost(args, token, "sysdeploy", "UpdateServiceDeployment", {
       service_name: item.service_name,
       deployment: next,
-      confirm_storage_topology_overlap: true,
     });
   }
   log(`public service deployments host=${args.host}, updated=${updates.length}`);
+}
+
+function deploymentInput(item) {
+  return {
+    service_name: item.service_name,
+    service_kind: item.service_kind,
+    protocol: item.protocol,
+    host: item.host,
+    port: item.port,
+    gateway_path: item.gateway_path || "",
+    scope: item.scope,
+    status: item.status,
+    description: item.description || "",
+    extra_config: item.extra_config || "{}",
+  };
+}
+
+async function assertSysDeploySingleInstanceContract(args, token) {
+  const serviceName = "e2e_sysdeploy_single_instance";
+  const first = {
+    service_name: serviceName,
+    service_kind: "e2e",
+    protocol: "http",
+    host: "127.0.0.1",
+    port: 19090,
+    gateway_path: "trpc.moox.e2e.SysDeploy",
+    scope: "internal",
+    status: "active",
+    description: "temporary SysDeploy E2E row",
+    extra_config: "{}",
+  };
+  await deleteDeploymentIfPresent(args, token, serviceName);
+  try {
+    await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
+    const update = {
+      ...first,
+      host: "127.0.0.2",
+      port: 19091,
+      base_url: "http://127.0.0.1:19090",
+      rpc_address: "127.0.0.1:19090",
+    };
+    await adminPost(args, token, "sysdeploy", "UpdateServiceDeployment", {
+      service_name: serviceName,
+      deployment: update,
+    });
+    const got = await adminPost(args, token, "sysdeploy", "GetServiceDeployment", { service_name: serviceName });
+    if (got.deployment?.base_url !== "http://127.0.0.2:19091" || got.deployment?.rpc_address !== "127.0.0.2:19091") {
+      throw new Error(`sysdeploy returned stale derived address: ${JSON.stringify(got.deployment)}`);
+    }
+
+    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+    await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
+    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+
+    const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", {});
+    if (active.deployment_map?.[serviceName]) {
+      throw new Error("deleted SysDeploy E2E row remains active");
+    }
+    log("sysdeploy single-instance contract: ok");
+  } finally {
+    await deleteDeploymentIfPresent(args, token, serviceName);
+  }
+}
+
+async function deleteDeploymentIfPresent(args, token, serviceName) {
+  const listed = await adminPost(args, token, "sysdeploy", "ListServiceDeployments", {
+    service_name: serviceName,
+    page: { page: 1, size: 10 },
+  });
+  if ((listed.deployments || []).some((item) => item.service_name === serviceName)) {
+    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+  }
 }
 
 async function ensureSpace(args, token) {

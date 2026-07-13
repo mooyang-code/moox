@@ -1,5 +1,5 @@
 import { callControl } from './http';
-import type { PageReq, PageResult, ServiceDeployment, ServiceDeploymentWarning } from './types';
+import type { PageReq, PageResult, ServiceDeployment, ServiceDeploymentInput, ServiceDeploymentWarning } from './types';
 
 export interface ListServiceDeploymentsReq {
   service_name?: string;
@@ -19,16 +19,16 @@ export function listServiceDeployments(req: ListServiceDeploymentsReq = {}) {
   return callControl<ListServiceDeploymentsReq, ListServiceDeploymentsRsp>('sysdeploy', 'ListServiceDeployments', req);
 }
 
-export function createServiceDeployment(deployment: ServiceDeployment) {
-  return callControl<{ deployment: ServiceDeployment }, { deployment: ServiceDeployment; warnings?: ServiceDeploymentWarning[] }>(
+export function createServiceDeployment(deployment: ServiceDeploymentInput) {
+  return callControl<{ deployment: ServiceDeploymentInput }, { deployment: ServiceDeployment; warnings?: ServiceDeploymentWarning[] }>(
     'sysdeploy',
     'CreateServiceDeployment',
     { deployment },
   );
 }
 
-export function updateServiceDeployment(serviceName: string, deployment: ServiceDeployment) {
-  return callControl<{ service_name: string; deployment: ServiceDeployment }, { deployment: ServiceDeployment; warnings?: ServiceDeploymentWarning[] }>(
+export function updateServiceDeployment(serviceName: string, deployment: ServiceDeploymentInput) {
+  return callControl<{ service_name: string; deployment: ServiceDeploymentInput }, { deployment: ServiceDeployment; warnings?: ServiceDeploymentWarning[] }>(
     'sysdeploy',
     'UpdateServiceDeployment',
     { service_name: serviceName, deployment },

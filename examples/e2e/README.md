@@ -158,6 +158,7 @@ examples/metadata-crypto-spot-kline-1m-view.seed.yaml
 - `9527` 管理台静态页面可访问；
 - `11000` admin gateway health 可访问；
 - 管理台 JWT 请求能访问 space、sysdeploy、cloudnode、collector、storage metadata；
+- SysDeploy 的地址派生、更新、删除后重建和再次删除契约通过临时服务记录验证；
 - collector 生成 task instances 且写入 `cloud_job_item_id`；
 - cloudnode JobItems 全部成功；
 - collector task instances 全部成功；

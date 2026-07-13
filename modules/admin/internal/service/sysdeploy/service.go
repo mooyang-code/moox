@@ -2,7 +2,10 @@ package sysdeploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,8 +140,8 @@ func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]int
 			"protocol":     row.Protocol,
 			"host":         row.Host,
 			"port":         row.Port,
-			"base_url":     row.BaseURL,
-			"rpc_address":  row.RPCAddress,
+			"base_url":     deploymentBaseURL(&row),
+			"rpc_address":  deploymentRPCAddress(&row),
 			"gateway_path": row.GatewayPath,
 			"scope":        row.Scope,
 			"status":       row.Status,
@@ -154,10 +157,7 @@ func (s *ServiceImpl) ResolveGatewayServiceDetail(ctx context.Context, serviceID
 	if err != nil || row == nil || row.Status != "active" {
 		return gateway.ServiceDetail{}, false
 	}
-	address := row.RPCAddress
-	if address == "" && row.Host != "" && row.Port > 0 {
-		address = fmt.Sprintf("%s:%d", row.Host, row.Port)
-	}
+	address := deploymentRPCAddress(row)
 	path := strings.TrimSpace(row.GatewayPath)
 	if address == "" || path == "" || strings.HasPrefix(path, "/") {
 		return gateway.ServiceDetail{}, false
@@ -201,8 +201,36 @@ func validateDeployment(item *Deployment) error {
 	if item.Host == "" {
 		return fmt.Errorf("host is required")
 	}
-	if item.Port <= 0 {
-		return fmt.Errorf("port must be positive")
+	ip := net.ParseIP(item.Host)
+	if ip == nil {
+		return fmt.Errorf("host must be an IP address")
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("host must be a routable unicast IP address")
+	}
+	if item.Port <= 0 || item.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	switch item.Protocol {
+	case "http", "https", "trpc":
+	default:
+		return fmt.Errorf("protocol must be http, https, or trpc")
+	}
+	if item.Scope != "public" && item.Scope != "internal" {
+		return fmt.Errorf("scope must be public or internal")
+	}
+	if item.Status != "active" && item.Status != "disabled" {
+		return fmt.Errorf("status must be active or disabled")
+	}
+	if strings.HasPrefix(item.GatewayPath, "/") && item.ServiceKind != "gateway" {
+		return fmt.Errorf("gateway_path must be a tRPC service path for non-gateway deployments")
+	}
+	if item.ServiceKind == "gateway" && item.GatewayPath != "" && !strings.HasPrefix(item.GatewayPath, "/") {
+		return fmt.Errorf("gateway gateway_path must start with /")
+	}
+	extra := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(item.ExtraConfig), &extra); err != nil || extra == nil {
+		return fmt.Errorf("extra_config must be a valid JSON object")
 	}
 	return nil
 }
@@ -245,8 +273,8 @@ func modelToPB(row *Deployment) *pb.ServiceDeployment {
 		Protocol:    row.Protocol,
 		Host:        row.Host,
 		Port:        row.Port,
-		BaseUrl:     row.BaseURL,
-		RpcAddress:  row.RPCAddress,
+		BaseUrl:     deploymentBaseURL(row),
+		RpcAddress:  deploymentRPCAddress(row),
 		GatewayPath: row.GatewayPath,
 		Scope:       row.Scope,
 		Status:      row.Status,
@@ -268,8 +296,6 @@ func pbToModel(item *pb.ServiceDeployment) *Deployment {
 		Protocol:    item.GetProtocol(),
 		Host:        item.GetHost(),
 		Port:        item.GetPort(),
-		BaseURL:     item.GetBaseUrl(),
-		RPCAddress:  item.GetRpcAddress(),
 		GatewayPath: item.GetGatewayPath(),
 		Scope:       item.GetScope(),
 		Status:      item.GetStatus(),
@@ -288,14 +314,28 @@ func endpointMap(rows []Deployment) map[string]*pb.ServiceDeploymentEndpoint {
 			Protocol:    row.Protocol,
 			Host:        row.Host,
 			Port:        row.Port,
-			BaseUrl:     row.BaseURL,
-			RpcAddress:  row.RPCAddress,
+			BaseUrl:     deploymentBaseURL(&row),
+			RpcAddress:  deploymentRPCAddress(&row),
 			GatewayPath: row.GatewayPath,
 			Scope:       row.Scope,
 			Status:      row.Status,
 		}
 	}
 	return items
+}
+
+func deploymentRPCAddress(row *Deployment) string {
+	if row == nil || row.Host == "" || row.Port <= 0 {
+		return ""
+	}
+	return net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port)))
+}
+
+func deploymentBaseURL(row *Deployment) string {
+	if row == nil || (row.Protocol != "http" && row.Protocol != "https") {
+		return ""
+	}
+	return row.Protocol + "://" + deploymentRPCAddress(row)
 }
 
 func formatTime(t time.Time) string {

@@ -48,20 +48,17 @@ CREATE TABLE IF NOT EXISTS t_service_deployments (
     c_protocol TEXT NOT NULL DEFAULT 'http',
     c_host TEXT NOT NULL DEFAULT '',
     c_port INTEGER NOT NULL DEFAULT 0,
-    c_base_url TEXT NOT NULL DEFAULT '',
-    c_rpc_address TEXT NOT NULL DEFAULT '',
     c_gateway_path TEXT NOT NULL DEFAULT '',
     c_scope TEXT NOT NULL DEFAULT 'public',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_description TEXT NOT NULL DEFAULT '',
     c_extra_config TEXT NOT NULL DEFAULT '{}',
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_name_deleted
-ON t_service_deployments(c_service_name, c_is_deleted);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_name
+ON t_service_deployments(c_service_name);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_kind
 ON t_service_deployments(c_service_kind);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_scope

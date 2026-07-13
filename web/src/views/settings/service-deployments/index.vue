@@ -57,11 +57,20 @@
         <a-table-column title="协议" data-index="protocol" :width="80" />
         <a-table-column title="Host" data-index="host" :width="150" />
         <a-table-column title="端口" data-index="port" :width="90" />
-        <a-table-column title="Base URL" data-index="base_url" :width="230" />
+        <a-table-column title="访问地址" :width="230">
+          <template #cell="{ record }">{{ deploymentAccessAddress(record) }}</template>
+        </a-table-column>
         <a-table-column title="网关/RPC Path" data-index="gateway_path" :width="230" />
-        <a-table-column title="状态" :width="90">
+        <a-table-column title="配置状态" :width="100">
           <template #cell="{ record }">
             <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+          </template>
+        </a-table-column>
+        <a-table-column title="健康状态" :width="110">
+          <template #cell="{ record }">
+            <a-tooltip :content="healthTooltip(record.service_name)">
+              <a-tag size="small" :color="healthColor(record.service_name)">{{ healthLabel(record.service_name) }}</a-tag>
+            </a-tooltip>
           </template>
         </a-table-column>
         <a-table-column title="说明" data-index="description" :width="260" />
@@ -111,19 +120,17 @@
           </a-select>
         </a-form-item>
         <a-form-item field="protocol" label="协议">
-          <a-input v-model="form.protocol" placeholder="http" />
+          <a-select v-model="form.protocol">
+            <a-option value="http">http</a-option>
+            <a-option value="https">https</a-option>
+            <a-option value="trpc">trpc</a-option>
+          </a-select>
         </a-form-item>
         <a-form-item field="host" label="Host" required>
           <a-input v-model="form.host" placeholder="例如 106.53.107.122" />
         </a-form-item>
         <a-form-item field="port" label="端口" required>
           <a-input-number v-model="form.port" :min="1" :max="65535" />
-        </a-form-item>
-        <a-form-item class="form-span-2" field="base_url" label="Base URL">
-          <a-input v-model="form.base_url" placeholder="留空时按 protocol://host:port 生成" />
-        </a-form-item>
-        <a-form-item class="form-span-2" field="rpc_address" label="RPC 地址">
-          <a-input v-model="form.rpc_address" placeholder="留空时按 host:port 生成" />
         </a-form-item>
         <a-form-item class="form-span-2" field="gateway_path" label="网关/RPC Path">
           <a-input v-model="form.gateway_path" placeholder="例如 /api/service 或 trpc.moox.storage.Access" />
@@ -144,13 +151,17 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { createServiceDeployment, deleteServiceDeployment, listServiceDeployments, updateServiceDeployment } from '@/api/admin/sysdeploy';
-import type { ServiceDeployment } from '@/api/admin/types';
+import type { ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/types';
+import { monitorApi } from '@/api/monitor';
+import type { CheckResult } from '@/api/monitor';
 import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/views/data/shared/metadata-utils';
+import { deploymentAccessAddress, deploymentHealthState, loadLatestHealthResults } from './health';
 
 defineOptions({ name: 'SettingsServiceDeployments' });
 
 const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'collector', 'cloudnode', 'trade'];
 const rows = ref<ServiceDeployment[]>([]);
+const latestHealth = ref<Record<string, CheckResult>>({});
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
@@ -160,14 +171,12 @@ const filters = reactive({ service_name: '', service_kind: '', scope: '', status
 const viewportHeight = ref(typeof window === 'undefined' ? 900 : window.innerHeight);
 const tableBodyHeight = computed(() => Math.max(320, viewportHeight.value - 440));
 
-const form = reactive<ServiceDeployment>({
+const form = reactive<ServiceDeploymentInput>({
   service_name: '',
   service_kind: 'service',
   protocol: 'http',
   host: '',
   port: 0,
-  base_url: '',
-  rpc_address: '',
   gateway_path: '',
   scope: 'public',
   status: 'active',
@@ -189,6 +198,7 @@ async function load() {
     });
     rows.value = rsp.deployments || [];
     applyPageResult(pagination, rsp.page_result);
+    await loadHealth(rows.value);
   } finally {
     loading.value = false;
   }
@@ -201,8 +211,6 @@ function resetForm() {
     protocol: 'http',
     host: '',
     port: 0,
-    base_url: '',
-    rpc_address: '',
     gateway_path: '',
     scope: 'public',
     status: 'active',
@@ -221,8 +229,52 @@ function openCreate() {
 function openEdit(record: ServiceDeployment) {
   editing.value = true;
   editingServiceName.value = record.service_name;
-  Object.assign(form, { ...record, extra_config: record.extra_config || '{}' });
+  Object.assign(form, deploymentInput(record));
   visible.value = true;
+}
+
+function deploymentInput(record: ServiceDeployment): ServiceDeploymentInput {
+  return {
+    service_name: record.service_name,
+    service_kind: record.service_kind,
+    protocol: record.protocol,
+    host: record.host,
+    port: record.port,
+    gateway_path: record.gateway_path || '',
+    scope: record.scope,
+    status: record.status,
+    description: record.description || '',
+    extra_config: record.extra_config || '{}',
+  };
+}
+
+async function loadHealth(deployments: ServiceDeployment[]) {
+  try {
+    const rsp = await monitorApi.listChecks({ space_id: 'moox-system', source: 'sysdeploy', page: { page: 1, size: 500 } });
+    const visible = new Set(deployments.map((item) => item.service_name));
+    const checks = (rsp.checks || []).filter((check) => !!check.check_id && visible.has(check.check_id));
+    latestHealth.value = await loadLatestHealthResults(checks, async (check) => {
+      const resultRsp = await monitorApi.listResults({ space_id: check.space_id, check_id: check.check_id as string, limit: 1 });
+      return resultRsp.results?.[0];
+    });
+  } catch {
+    latestHealth.value = {};
+  }
+}
+
+function healthLabel(serviceName: string) {
+  return { healthy: '正常', unhealthy: '异常', unknown: '未知' }[deploymentHealthState(latestHealth.value[serviceName])];
+}
+
+function healthColor(serviceName: string) {
+  return { healthy: 'green', unhealthy: 'red', unknown: 'gray' }[deploymentHealthState(latestHealth.value[serviceName])];
+}
+
+function healthTooltip(serviceName: string) {
+  const result = latestHealth.value[serviceName];
+  if (!result) return '暂无监控结果';
+  const checkedAt = result.checked_at ? formatTime(result.checked_at) : '未知时间';
+  return result.error_message ? `${checkedAt} · ${result.error_message}` : checkedAt;
 }
 
 async function submit() {

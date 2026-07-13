@@ -68,7 +68,7 @@ func TestAdminUpgradeRetiresLegacyMonitorAndRoutesAlias(t *testing.T) {
 		t.Fatalf("SeedDefaults: %v", err)
 	}
 	var activeLegacy int64
-	if err := db.Model(&sysdeploy.Deployment{}).Where("c_service_name = ? AND c_is_deleted = 0", "monitor").Count(&activeLegacy).Error; err != nil {
+	if err := db.Model(&sysdeploy.Deployment{}).Where("c_service_name = ?", "monitor").Count(&activeLegacy).Error; err != nil {
 		t.Fatal(err)
 	}
 	if activeLegacy != 0 {

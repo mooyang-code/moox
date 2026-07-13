@@ -55,6 +55,20 @@ export interface ServiceDeployment {
   updated_at?: string;
 }
 
+export type ServiceDeploymentInput = Pick<
+  ServiceDeployment,
+  | 'service_name'
+  | 'service_kind'
+  | 'protocol'
+  | 'host'
+  | 'port'
+  | 'gateway_path'
+  | 'scope'
+  | 'status'
+  | 'description'
+  | 'extra_config'
+>;
+
 export interface ServiceDeploymentWarning {
   code: string;
   message: string;
