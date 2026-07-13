@@ -580,6 +580,7 @@ run_local_prepare() {
 run_remote_prepare() {
   local account_id_b64
   account_id_b64=$(printf '%s' "${CLOUD_ACCOUNT_ID}" | base64 | tr -d '\n')
+  [[ -n "${account_id_b64}" ]] || account_id_b64=-
   scp -q -o BatchMode=yes -- "${STAGE_DIR}/bin/moox-cli" "${TARGET}:${REMOTE_CLI}"
   ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
     "${REMOTE_CLI}" "${DEPLOY_DIR}" "${ADMIN_URL}" "${account_id_b64}" "${TOKEN}" <<'REMOTE'
@@ -590,7 +591,7 @@ admin_url=$3
 account_id_b64=$4
 token=$5
 account_id=
-if [[ -n "${account_id_b64}" ]]; then
+if [[ "${account_id_b64}" != "-" ]]; then
   if ! account_id=$(printf '%s' "${account_id_b64}" | base64 -d 2>/dev/null); then
     account_id=$(printf '%s' "${account_id_b64}" | base64 -D)
   fi

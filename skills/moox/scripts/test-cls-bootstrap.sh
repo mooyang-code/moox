@@ -571,6 +571,10 @@ if [[ "${1:-}" == -o ]]; then shift 2; fi
 [[ "${1:-}" == -- ]]; shift
 target=$1; shift
 [[ "${target}" == deploy@example.test ]]
+if [[ "${MOOX_TEST_REQUIRE_REMOTE_ACCOUNT_ARG:-0}" == 1 && "${1:-}" == bash && "${2:-}" == -s && "${7+x}" == x && -z "${7}" ]]; then
+  echo 'remote account positional argument collapsed' >&2
+  exit 94
+fi
 if [[ "${1:-}" == bash && "${2:-}" == -s ]]; then
   shift
   HOME="${MOOX_TEST_REMOTE_HOME}" /bin/bash "$@"
@@ -619,6 +623,7 @@ remote_output="${TMP}/remote-output"
 PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
   MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
+  MOOX_TEST_REQUIRE_REMOTE_ACCOUNT_ARG=1 \
   MOOX_TEST_EXPECT_ACCOUNT='explicit-account' \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
   --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
@@ -638,6 +643,7 @@ write_lock_owner "${remote_expired_lock}.takeover" expired-remote-guard another-
 PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
   MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  MOOX_TEST_REQUIRE_REMOTE_ACCOUNT_ARG=1 \
   MOOX_CLS_LOCK_LEASE_SECONDS=1 MOOX_CLS_GUARD_LEASE_SECONDS=1 \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
   --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
