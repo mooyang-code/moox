@@ -17,6 +17,11 @@ CONFIG_PATHS=()
 CONFIG_BACKUPS=()
 COMMITTED_COUNT=0
 TOKEN="$$.${RANDOM}.${RANDOM}"
+STAGE_LOCK=""
+DEPLOY_LOCK=""
+STAGE_LOCK_HELD=0
+DEPLOY_LOCK_HELD=0
+REMOTE_DEPLOY_LOCK_HELD=0
 
 fail() {
   printf '[cls-bootstrap] ERROR: %s\n' "$*" >&2
@@ -80,6 +85,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+STAGE_LOCK="${STAGE_DIR}/.cls-bootstrap.lock"
+
 [[ -d "${STAGE_DIR}" ]] || fail "missing stage directory: ${STAGE_DIR}"
 [[ -x "${STAGE_DIR}/bin/moox-cli" ]] || fail "missing staged moox-cli: ${STAGE_DIR}/bin/moox-cli"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required to parse CLS prepare output"
@@ -106,6 +113,62 @@ rm -f "${cli}" "${deploy}/secrets/.cls.env.${token}.next" \
 REMOTE
 }
 
+acquire_owned_lock() {
+  local lock=$1
+  mkdir "${lock}" 2>/dev/null || return 1
+  if ! printf '%s\n' "${TOKEN}" >"${lock}/owner"; then
+    rmdir "${lock}" 2>/dev/null || true
+    return 1
+  fi
+}
+
+release_owned_lock() {
+  local lock=$1
+  [[ -f "${lock}/owner" ]] || return 0
+  [[ $(cat "${lock}/owner") == "${TOKEN}" ]] || return 0
+  rm -f "${lock}/owner"
+  rmdir "${lock}" 2>/dev/null || true
+}
+
+acquire_remote_deploy_lock() {
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${TOKEN}" <<'REMOTE'
+set -euo pipefail
+deploy=$1
+token=$2
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+secrets="${deploy}/secrets"
+lock="${secrets}/.cls-bootstrap.lock"
+[[ -d "${secrets}" ]]
+mkdir "${lock}" 2>/dev/null || exit 73
+if ! printf '%s\n' "${token}" >"${lock}/owner"; then
+  rmdir "${lock}" 2>/dev/null || true
+  exit 1
+fi
+REMOTE
+}
+
+release_remote_deploy_lock() {
+  (( REMOTE_DEPLOY_LOCK_HELD )) || return 0
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${TOKEN}" <<'REMOTE' >/dev/null 2>&1 || true
+set -euo pipefail
+deploy=$1
+token=$2
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+lock="${deploy}/secrets/.cls-bootstrap.lock"
+[[ -f "${lock}/owner" ]] || exit 0
+[[ $(cat "${lock}/owner") == "${token}" ]] || exit 0
+rm -f "${lock}/owner"
+rmdir "${lock}" 2>/dev/null || true
+REMOTE
+  REMOTE_DEPLOY_LOCK_HELD=0
+}
+
 cleanup() {
   local path
   if (( COMMITTED_COUNT > 0 )); then
@@ -130,6 +193,18 @@ cleanup() {
   fi
   if ! is_local; then
     cleanup_remote
+  fi
+  if is_local; then
+    if (( DEPLOY_LOCK_HELD )); then
+      release_owned_lock "${DEPLOY_LOCK}"
+      DEPLOY_LOCK_HELD=0
+    fi
+  else
+    release_remote_deploy_lock
+  fi
+  if (( STAGE_LOCK_HELD )); then
+    release_owned_lock "${STAGE_LOCK}"
+    STAGE_LOCK_HELD=0
   fi
 }
 
@@ -159,7 +234,7 @@ run_local_prepare() {
 }
 
 run_remote_prepare() {
-  scp -q -- "${STAGE_DIR}/bin/moox-cli" "${TARGET}:${REMOTE_CLI}"
+  scp -q -o BatchMode=yes -- "${STAGE_DIR}/bin/moox-cli" "${TARGET}:${REMOTE_CLI}"
   ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
     "${REMOTE_CLI}" "${DEPLOY_DIR}" "${ADMIN_URL}" "${CLOUD_ACCOUNT_ID}" "${TOKEN}" <<'REMOTE'
 set -euo pipefail
@@ -228,6 +303,22 @@ strip_managed_block() {
   ' "$1" >"$2"
 }
 
+validate_managed_markers() {
+  awk '
+    $0 == "# BEGIN MOOX MANAGED CLS" {
+      if (open) invalid=1
+      open=1
+      next
+    }
+    $0 == "# END MOOX MANAGED CLS" {
+      if (!open) invalid=1
+      open=0
+      next
+    }
+    END { exit(invalid || open ? 1 : 0) }
+  ' "$1"
+}
+
 has_log_default() {
   awk '
     /^plugins:[[:space:]]*$/ { plugins=1; next }
@@ -241,6 +332,7 @@ has_log_default() {
 
 render_config() {
   local config=$1 output=$2 topic_id=$3 cleaned=$4
+  validate_managed_markers "${config}" || return 1
   strip_managed_block "${config}" "${cleaned}"
   if has_log_default "${cleaned}"; then
     awk -v topic_id="${topic_id}" '
@@ -494,13 +586,28 @@ REMOTE
 
 trap cleanup EXIT
 
+if ! acquire_owned_lock "${STAGE_LOCK}"; then
+  fail "CLS bootstrap is already running for this stage"
+fi
+STAGE_LOCK_HELD=1
+
 if is_local; then
   deploy=$(expand_local "${DEPLOY_DIR}")
+  [[ -d "${deploy}/secrets" ]] || fail "missing deploy secrets directory"
+  DEPLOY_LOCK="${deploy}/secrets/.cls-bootstrap.lock"
+  if ! acquire_owned_lock "${DEPLOY_LOCK}"; then
+    fail "CLS bootstrap is already running for this deployment"
+  fi
+  DEPLOY_LOCK_HELD=1
   NEXT_PATH="${deploy}/secrets/.cls.env.${TOKEN}.next"
   if ! result=$(run_local_prepare "${deploy}"); then
     fail "CLS prepare failed"
   fi
 else
+  if ! acquire_remote_deploy_lock; then
+    fail "CLS bootstrap is already running for the remote deployment"
+  fi
+  REMOTE_DEPLOY_LOCK_HELD=1
   REMOTE_CLI="/tmp/moox-cli-cls-${TOKEN}"
   if ! result=$(run_remote_prepare); then
     fail "remote CLS prepare failed"

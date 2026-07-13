@@ -204,6 +204,33 @@ for hostile_target in '-oProxyCommand=touch /tmp/pwned' 'host with spaces' $'hos
 done
 [[ ! -e "${transport_marker}" ]]
 
+# A failed acquisition never removes a lock owned by another transaction.
+for foreign_lock_scope in stage deploy; do
+  LOCK_STAGE="${TMP}/lock-stage-${foreign_lock_scope}"
+  LOCK_DEPLOY="${TMP}/lock-deploy-${foreign_lock_scope}"
+  new_stage "${LOCK_STAGE}"
+  new_deploy "${LOCK_DEPLOY}"
+  if [[ "${foreign_lock_scope}" == stage ]]; then
+    foreign_lock="${LOCK_STAGE}/.cls-bootstrap.lock"
+  else
+    foreign_lock="${LOCK_DEPLOY}/secrets/.cls-bootstrap.lock"
+  fi
+  mkdir "${foreign_lock}"
+  printf 'foreign-owner\n' >"${foreign_lock}/owner"
+  if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+    MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+    "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+    --deploy-dir "${LOCK_DEPLOY}" --stage-dir "${LOCK_STAGE}" \
+    --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
+    echo "foreign ${foreign_lock_scope} lock unexpectedly acquired" >&2
+    exit 1
+  fi
+  [[ $(cat "${foreign_lock}/owner") == foreign-owner ]]
+  if [[ "${foreign_lock_scope}" == deploy ]]; then
+    [[ ! -e "${LOCK_STAGE}/.cls-bootstrap.lock" ]]
+  fi
+done
+
 # A failure during either stage or credential commit restores the whole release.
 REAL_MV=$(command -v mv)
 FAIL_BIN="${TMP}/fail-bin"
@@ -244,7 +271,7 @@ for fail_destination in '/storage/config/trpc_go-prod.yaml' '/secrets/cls.env'; 
 done
 
 # Render validation is structural and leaves no candidate or backup behind.
-for invalid_config_case in malformed-yaml wrong-level duplicate-writer duplicate-mapping-key duplicate-nested-key complex-duplicate-key; do
+for invalid_config_case in malformed-yaml wrong-level duplicate-writer duplicate-mapping-key duplicate-nested-key complex-duplicate-key orphan-begin orphan-end nested-markers; do
   INVALID_STAGE="${TMP}/invalid-stage-${invalid_config_case}"
   INVALID_DEPLOY="${TMP}/invalid-deploy-${invalid_config_case}"
   new_stage "${INVALID_STAGE}"
@@ -319,6 +346,20 @@ plugins:
         level: info
 YAML
       ;;
+    orphan-begin)
+      printf '# BEGIN MOOX MANAGED CLS\n' >>"${INVALID_STAGE}/factor/config/trpc_go.yaml"
+      ;;
+    orphan-end)
+      printf '# END MOOX MANAGED CLS\n' >>"${INVALID_STAGE}/factor/config/trpc_go.yaml"
+      ;;
+    nested-markers)
+      cat >>"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+# BEGIN MOOX MANAGED CLS
+# BEGIN MOOX MANAGED CLS
+# END MOOX MANAGED CLS
+# END MOOX MANAGED CLS
+YAML
+      ;;
   esac
   invalid_stage_before=$(tree_digest "${INVALID_STAGE}")
   invalid_env_before=$(shasum -a 256 "${INVALID_DEPLOY}/secrets/cls.env")
@@ -336,23 +377,22 @@ YAML
   assert_no_transaction_artifacts "${INVALID_STAGE}" "${INVALID_DEPLOY}"
 done
 
-# Concurrent publishers get independent credential candidates and stage output.
+# A shared stage and deploy are one transaction domain. Concurrent publishers
+# may fail fast, but topic and credentials must always come from one account.
 CONCURRENT_DEPLOY="${TMP}/concurrent-deploy"
-CONCURRENT_A="${TMP}/concurrent-a"
-CONCURRENT_B="${TMP}/concurrent-b"
+CONCURRENT_STAGE="${TMP}/concurrent-stage"
 new_deploy "${CONCURRENT_DEPLOY}"
-new_stage "${CONCURRENT_A}"
-new_stage "${CONCURRENT_B}"
+new_stage "${CONCURRENT_STAGE}"
 printf 'success\n' >"${mode_file}"
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-a \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
-  --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_A}" \
+  --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_STAGE}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-a \
   >"${TMP}/concurrent-a.out" 2>&1 &
 pid_a=$!
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-b \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
-  --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_B}" \
+  --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_STAGE}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-b \
   >"${TMP}/concurrent-b.out" 2>&1 &
 pid_b=$!
@@ -360,15 +400,22 @@ set +e
 wait "${pid_a}"; status_a=$?
 wait "${pid_b}"; status_b=$?
 set -e
-[[ ${status_a} -eq 0 && ${status_b} -eq 0 ]]
-grep -q 'topic_id: topic-a' "${CONCURRENT_A}/factor/config/trpc_go.yaml"
-grep -q 'topic_id: topic-b' "${CONCURRENT_B}/factor/config/trpc_go.yaml"
+if [[ ${status_a} -eq 0 ]]; then
+  [[ ${status_b} -ne 0 ]]
+else
+  [[ ${status_b} -eq 0 ]]
+fi
 concurrent_env=$(cat "${CONCURRENT_DEPLOY}/secrets/cls.env")
-if [[ "${concurrent_env}" != *concurrent-a-id* || "${concurrent_env}" != *concurrent-a-key* ]]; then
+if grep -q 'topic_id: topic-a' "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"; then
+  [[ "${concurrent_env}" == *concurrent-a-id* && "${concurrent_env}" == *concurrent-a-key* ]]
+else
+  grep -q 'topic_id: topic-b' "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
   [[ "${concurrent_env}" == *concurrent-b-id* && "${concurrent_env}" == *concurrent-b-key* ]]
 fi
-assert_no_transaction_artifacts "${CONCURRENT_A}" "${CONCURRENT_DEPLOY}"
-assert_no_transaction_artifacts "${CONCURRENT_B}" "${CONCURRENT_DEPLOY}"
+assert_cls_log_writer "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
+assert_no_transaction_artifacts "${CONCURRENT_STAGE}" "${CONCURRENT_DEPLOY}"
+[[ ! -e "${CONCURRENT_STAGE}/.cls-bootstrap.lock" ]]
+[[ ! -e "${CONCURRENT_DEPLOY}/secrets/.cls-bootstrap.lock" ]]
 
 # Exercise the remote branch without requiring a host. The transport shims run
 # the uploaded target-architecture CLI in an isolated HOME and record its path.
@@ -383,6 +430,8 @@ cat >"${FAKE_BIN}/scp" <<'SCP'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == -q ]]; shift
+[[ "${1:-}" == -o ]]; shift
+[[ "${1:-}" == BatchMode=yes ]]; shift
 [[ "${1:-}" == -- ]]; shift
 src=$1; destination=$2
 remote_path=${destination#*:}
@@ -422,6 +471,23 @@ grep -q 'topic_id: topic-fixed' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
 while IFS= read -r remote_path; do [[ ! -e "${remote_path}" ]]; done <"${REMOTE_PATHS}"
 assert_no_transaction_artifacts "${REMOTE_STAGE}" "${REMOTE_HOME}/moox"
 assert_no_secrets "${remote_output}" "${REMOTE_STAGE}"
+
+remote_foreign_lock="${REMOTE_HOME}/moox/secrets/.cls-bootstrap.lock"
+mkdir "${remote_foreign_lock}"
+printf 'foreign-remote-owner\n' >"${remote_foreign_lock}/owner"
+if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
+  MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
+  MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
+  --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >>"${remote_output}" 2>&1; then
+  echo 'foreign remote deploy lock unexpectedly acquired' >&2
+  exit 1
+fi
+[[ $(cat "${remote_foreign_lock}/owner") == foreign-remote-owner ]]
+[[ ! -e "${REMOTE_STAGE}/.cls-bootstrap.lock" ]]
+rm -f "${remote_foreign_lock}/owner"
+rmdir "${remote_foreign_lock}"
 
 remote_stage_before=$(tree_digest "${REMOTE_STAGE}")
 remote_env_before=$(shasum -a 256 "${REMOTE_HOME}/moox/secrets/cls.env")
