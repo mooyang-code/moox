@@ -101,7 +101,7 @@ generate_secret() {
 validate_cloud_account_id_arg() {
   [[ $# -ge 2 ]] || fail "--cloud-account-id requires a value"
   local value="$2"
-  [[ -n "${value}" && "${value}" != -* ]] || fail "--cloud-account-id requires a value"
+  [[ "${value}" != -* ]] || fail "--cloud-account-id requires a value"
   [[ -n "${value//[[:space:]]/}" ]] || fail "--cloud-account-id cannot be empty"
   [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || \
     fail "cloud account ID must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}"

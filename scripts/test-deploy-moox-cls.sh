@@ -25,7 +25,7 @@ if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "" 2>&1)
   echo 'empty cloud account id unexpectedly accepted' >&2
   exit 1
 fi
-grep -q -- '--cloud-account-id requires a value' <<<"${output}"
+grep -q 'cloud-account-id cannot be empty' <<<"${output}"
 if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "   " 2>&1); then
   echo 'whitespace-only cloud account id unexpectedly accepted' >&2
   exit 1
