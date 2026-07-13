@@ -708,7 +708,7 @@ start_archive() {
   fi
   start_service "archive" "${ROOT}/archive" \
     env "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
-      "${ROOT}/bin/moox-archive" -config=config/app.yaml
+      "${ROOT}/bin/moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
 
 start_storage_access() {
