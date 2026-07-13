@@ -463,7 +463,7 @@ async function ensureCloudNode(args, token) {
       deployment_id: args.package,
       function_name: args.node,
       supported_workloads: ["collect.kline", "collect.symbol"],
-      status: "NODE_STATUS_CODE_RUNNING",
+      status: "NODE_STATUS_ONLINE",
       metadata: {
         function_name_prefix: "e2e-scf",
       },
