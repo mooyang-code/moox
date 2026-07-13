@@ -66,7 +66,7 @@ func HandleSchedule(ctx context.Context, rawParams string) error {
 func parseScheduleParams(raw string) scheduleParams {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return scheduleParams{}
+		return scheduleParams{SpaceID: "crypto"}
 	}
 	if !strings.Contains(raw, "=") {
 		return scheduleParams{SpaceID: raw}

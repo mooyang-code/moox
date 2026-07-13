@@ -70,7 +70,10 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	if v := endpointAddress(active, "moox_cloudnode", "cloudnode"); v != "" {
 		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
 	}
-	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
+	// Prefer the loopback service gateway for co-located processes. The public
+	// gateway may resolve to the host's external address, which is intentionally
+	// rejected by the service gateway transport to prevent SSRF-style routing.
+	if v := endpointGatewayTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
 		deps.ServiceGatewayTarget = v
 	}
 	if v := endpointTRPCTarget(active, "storage_metadata_trpc", "moox_storage_metadata_trpc", "moox-storage-metadata-trpc"); v != "" {

@@ -93,6 +93,11 @@ func GetNodeDNSRecords(ctx context.Context, nodeID string) ([]*NodeDNSRecord, er
 // GetAllNodesDNSForDomain 获取所有活跃节点对指定域名的DNS记录
 // 返回: map[nodeID][]string (IP列表)
 func GetAllNodesDNSForDomain(ctx context.Context, domain string) (map[string][]string, error) {
+	if GetActiveNodeIDsFunc == nil {
+		log.WarnContextf(ctx, "[DNSProxy] Active node provider is not initialized")
+		return make(map[string][]string), nil
+	}
+
 	// 1. 获取所有活跃节点ID（通过导出的函数）
 	nodeIDs, err := GetActiveNodeIDsFunc(ctx)
 	if err != nil {

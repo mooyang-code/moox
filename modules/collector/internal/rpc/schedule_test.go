@@ -30,6 +30,13 @@ func TestParseScheduleParamsSupportsSpaceID(t *testing.T) {
 	}
 }
 
+func TestParseScheduleParamsDefaultsToCryptoSpace(t *testing.T) {
+	got := parseScheduleParams("")
+	if got.SpaceID != "crypto" {
+		t.Fatalf("empty SpaceID = %q, want crypto", got.SpaceID)
+	}
+}
+
 func TestHandleScheduleCallsDefaultService(t *testing.T) {
 	fake := &fakeScheduleService{}
 	setDefaultScheduleService(fake)

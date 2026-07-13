@@ -18,7 +18,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
-	trpc.group/trpc-go/trpc-go v1.0.3
+	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )

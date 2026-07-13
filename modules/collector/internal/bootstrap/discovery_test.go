@@ -69,6 +69,28 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	}
 }
 
+func TestResolvePrefersInternalServiceGateway(t *testing.T) {
+	items := map[string]endpoint{
+		"service_gateway": {
+			ServiceName: "service_gateway",
+			Protocol:    "http",
+			Host:        "106.53.107.122",
+			Port:        11000,
+			Scope:       "public",
+		},
+		"service_gateway_internal": {
+			ServiceName: "service_gateway_internal",
+			Protocol:    "http",
+			Host:        "127.0.0.1",
+			Port:        11002,
+			Scope:       "internal",
+		},
+	}
+
+	got := endpointGatewayTarget(items, "service_gateway_internal", "service_gateway")
+	assert.Equal(t, "http://127.0.0.1:11002", got)
+}
+
 func TestIsHTTPURL(t *testing.T) {
 	assert.True(t, isHTTPURL("http://example.com"))
 	assert.True(t, isHTTPURL("HTTPS://example.com"))

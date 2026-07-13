@@ -54,6 +54,6 @@ require (
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
-	trpc.group/trpc-go/trpc-go v1.0.3 // indirect
+	trpc.group/trpc-go/trpc-go v1.0.4 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )

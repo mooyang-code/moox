@@ -59,6 +59,16 @@ func TestGetAllNodesDNSForDomain_NoActiveNodes_ShouldReturnEmpty(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestGetAllNodesDNSForDomain_UninitializedProvider_ShouldReturnEmpty(t *testing.T) {
+	prev := GetActiveNodeIDsFunc
+	t.Cleanup(func() { GetActiveNodeIDsFunc = prev })
+	GetActiveNodeIDsFunc = nil
+
+	got, err := GetAllNodesDNSForDomain(context.Background(), "example.com")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
 func TestGetAllNodesDNSForDomain_WithNodeRecords_ShouldReturnIPs(t *testing.T) {
 	ctx := context.Background()
 	prev := GetActiveNodeIDsFunc
