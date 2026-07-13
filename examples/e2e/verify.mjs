@@ -523,10 +523,9 @@ async function listTaskInstances(args, token) {
 async function listJobItems(args, token) {
   const rsp = await adminPost(args, token, "cloudnode", "ListJobItems", {
     space_id: args.space,
-    job_id: args.rule,
     page: { page: 1, size: 200 },
   }, { spaceId: args.space });
-  return rsp.items || [];
+  return (rsp.items || []).filter((item) => item.job_id === args.rule);
 }
 
 async function storagePost(args, token, group, method, body) {
