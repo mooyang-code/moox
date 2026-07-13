@@ -2,22 +2,22 @@ package access
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
+	"fmt"
 	"time"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
+	"google.golang.org/protobuf/proto"
+	"errors"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
+	"strings"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
 )
 
 func TestMetadataMutationRefreshesCacheReader(t *testing.T) {
@@ -587,7 +587,7 @@ func TestTimeSeriesKeyAdapterRoundTrip(t *testing.T) {
 			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1m",
 			DataTime: "2026-07-10T12:00:00Z", Dimensions: map[string]string{"venue": "binance"},
 		},
-		Columns:    []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns: []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 		Attributes: map[string]string{"source": "test"},
 	}
 
