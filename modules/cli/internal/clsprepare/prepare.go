@@ -55,7 +55,7 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 
 	accounts, err := source.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
-		return Result{}, fmt.Errorf("list Tencent cloud accounts: %w", err)
+		return Result{}, safeUpstreamError("list Tencent cloud accounts", err)
 	}
 	account, err := selectAccount(accounts, opts.CloudAccountID)
 	if err != nil {
@@ -63,22 +63,28 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	}
 	secret, err := source.GetCOSAccountInfo(ctx, account.AccountID)
 	if err != nil {
-		return Result{}, fmt.Errorf("reveal cloud account %q: %w", account.AccountID, err)
+		return Result{}, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.AccountID), err)
 	}
-	if secret == nil || secret.Provider != "tencent" ||
+	if secret == nil {
+		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
+	}
+	if secret.AccountID != account.AccountID {
+		return Result{}, fmt.Errorf("cloud account %q returned credentials for a different account", account.AccountID)
+	}
+	if secret.Provider != "tencent" ||
 		strings.TrimSpace(secret.SecretID) == "" || strings.TrimSpace(secret.SecretKey) == "" {
 		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
 	}
 
 	api, err := factory(secret.SecretID, secret.SecretKey)
 	if err != nil {
-		return Result{}, fmt.Errorf("create CLS client: %w", err)
+		return Result{}, safeUpstreamError("create CLS client", err)
 	}
 	resources, err := tencentcloud.BootstrapCLS(ctx, api, tencentcloud.CLSBootstrapOptions{
 		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: 30, Partitions: 1,
 	})
 	if err != nil {
-		return Result{}, fmt.Errorf("prepare fixed CLS resources: %w", err)
+		return Result{}, safeUpstreamError("prepare fixed CLS resources", err)
 	}
 	if err := writeCredentials(opts.CredentialsOutput, secret.SecretID, secret.SecretKey); err != nil {
 		return Result{}, err
@@ -90,6 +96,12 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 		ServiceOpened: resources.ServiceOpened, LogsetCreated: resources.LogsetCreated,
 		TopicCreated: resources.TopicCreated, IndexCreated: resources.IndexCreated,
 	}, nil
+}
+
+// safeUpstreamError deliberately discards collaborator error text. Tencent SDK and
+// HTTP errors can contain signed headers, request bodies, or credentials.
+func safeUpstreamError(operation string, _ error) error {
+	return fmt.Errorf("%s failed", operation)
 }
 
 func selectAccount(accounts []adminclient.CloudAccount, requested string) (adminclient.CloudAccount, error) {
