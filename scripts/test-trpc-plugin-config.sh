@@ -93,8 +93,11 @@ for module in admin trade; do
 	require_text "modules/${module}/config/trpc_go.yaml" '    - masking' "missing masking filter for ${module}"
 done
 
-require_text modules/factor/go.mod 'trpc.group/trpc-go/trpc-filter/slime v1.0.0' 'missing bounded read retry dependency'
-require_text modules/factor/internal/storageio/client.go 'client.WithFilter(readRetryFilter)' 'slime retry must remain scoped to the read call'
+require_text packages/trpcretry/go.mod 'trpc.group/trpc-go/trpc-filter/slime v1.0.0' 'missing shared bounded read retry dependency'
+require_text modules/factor/internal/storageio/client.go 'client.WithFilter(trpcretry.ReadOnly())' 'factor retry must remain scoped to the read call'
+require_text modules/archive/internal/backfill/backfill.go 'client.WithFilter(trpcretry.ReadOnly())' 'archive retry must remain scoped to the read call'
+require_text modules/monitor/internal/hostmetrics/storage_reader.go 'client.WithFilter(trpcretry.ReadOnly())' 'host metrics retry must remain scoped to the read call'
+require_text modules/monitor/internal/metrics/storage.go 'client.WithFilter(trpcretry.ReadOnly())' 'metrics history retry must remain scoped to the read call'
 require_text modules/factor/go.mod 'trpc.group/trpc-go/trpc-filter/transinfo-blocker v1.0.0' 'missing metadata boundary dependency'
 require_text modules/factor/config/trpc_go.yaml '        mode: whitelist' 'metadata boundary must use an allowlist'
 if grep -Fq -- '          - baggage' modules/factor/config/trpc_go.yaml; then

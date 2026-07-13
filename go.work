@@ -36,5 +36,6 @@ use (
 	./packages/serviceauth
 	./packages/servicegateway
 	./packages/trpcplugintest
+	./packages/trpcretry
 	./web-host
 )

@@ -10,6 +10,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -111,7 +112,7 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
 			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
 			Page:      &commonpb.Page{Page: 1, Size: uint32(limit), Cursor: cursor},
-		})
+		}, client.WithFilter(trpcretry.ReadOnly()))
 		if err != nil {
 			return nil, fmt.Errorf("read host dataset %q: %w", dataset, err)
 		}

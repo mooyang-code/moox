@@ -373,7 +373,7 @@ git commit -m "docs: define trpc production logging baseline"
 
 | Plugin | First scope | Required proof | Exclusion |
 |---|---|---|---|
-| slime | one Storage read RPC | injected timeout proves bounded retry and no duplicate write | trade, timers, event publishing, all writes |
+| slime | reviewed idempotent Storage read RPCs in Factor, Archive, and Monitor; Strategy reads when implemented | shared filter test proves two attempts for network errors and one for business errors; every call remains method-scoped | trade, timers, event publishing, all writes |
 | transinfo-blocker | one Admin-to-Storage route | trace/space pass; JWT, auth, HMAC do not | global blacklist without inventory |
 | masking | new non-critical protobuf response field | generated proto/client compatibility tests | API keys, secrets, write fields |
 | filterextensions | one costly read method | ordering test | broad service changes |
@@ -446,4 +446,3 @@ Expected: all focused tests pass, advanced plugins remain off pending pilots, an
 6. MooX JWT/HMAC and business idempotency semantics do not change.
 7. No credential, token, raw request body, API secret, or HMAC value is committed or emitted by the logging baseline.
 8. Slime, masking, transinfo-blocker, filterextensions, OpenTelemetry, degrade, and hystrix stay disabled until their pilot proof passes.
-

@@ -4,7 +4,7 @@
 
 | 插件 | 首个范围 | 必要证据 | 禁止范围 |
 |---|---|---|---|
-| slime | Factor 到 Storage 的 `ReadTimeSeriesRows` | 注入网络错误证明最多两次，且写调用未挂 filter | trade 写入、任务创建、timer、事件发布、ack、所有写操作 |
+| slime | Factor、Archive、Monitor 到 Storage 的 `ReadTimeSeriesRows`；Strategy 后续接入的同类只读查询 | 共享策略注入网络错误证明最多两次，各调用保持方法级挂载，写调用未挂 filter | trade 写入、任务创建、timer、事件发布、ack、所有写操作 |
 | transinfo-blocker | Factor 到 Storage 客户端 | trace/space 白名单，JWT、auth、HMAC 不透传 | 未盘点前的全局启用或黑名单 |
 | masking | Admin Secret、Trade API Key 响应 | 官方 filter 与受控明文接口兼容测试 | 请求字段、写入字段、`RevealSecret` 内部响应 |
 | filterextensions | 一个成本高的读方法 | filter 顺序测试 | 大范围服务改造 |

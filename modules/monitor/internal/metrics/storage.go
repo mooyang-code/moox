@@ -13,6 +13,7 @@ import (
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -331,7 +332,7 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	if !end.IsZero() {
 		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
 	}
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: tr, Order: order, ColumnNames: []string{"value", "labels_json", "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}})
+	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: tr, Order: order, ColumnNames: []string{"value", "labels_json", "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}}, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
 		return nil, fmt.Errorf("read metrics history: %w", err)
 	}

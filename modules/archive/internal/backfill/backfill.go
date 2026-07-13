@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -72,7 +73,7 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	page := uint32(1)
 	total := 0
 	for {
-		rsp, err := b.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: []*storagepb.TimeSeriesKey{key}, TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)}, Order: storagepb.SortOrder_SORT_ORDER_ASC, Page: &commonpb.Page{Page: page, Size: 500}})
+		rsp, err := b.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: []*storagepb.TimeSeriesKey{key}, TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)}, Order: storagepb.SortOrder_SORT_ORDER_ASC, Page: &commonpb.Page{Page: page, Size: 500}}, client.WithFilter(trpcretry.ReadOnly()))
 		if err != nil {
 			return total, err
 		}

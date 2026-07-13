@@ -1,4 +1,4 @@
-package storageio
+package trpcretry
 
 import (
 	"context"
@@ -9,10 +9,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/filter"
 )
 
-func TestReadRetryFilterBoundsNetworkRetries(t *testing.T) {
-	f := mustReadRetryFilter()
+func TestReadOnlyBoundsNetworkRetries(t *testing.T) {
 	attempts := 0
-	err := f(context.Background(), nil, nil, func(context.Context, interface{}, interface{}) error {
+	err := ReadOnly()(context.Background(), nil, nil, func(context.Context, interface{}, interface{}) error {
 		attempts++
 		return errs.New(errs.RetClientNetErr, "network unavailable")
 	})
@@ -20,10 +19,9 @@ func TestReadRetryFilterBoundsNetworkRetries(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
-func TestReadRetryFilterDoesNotRetryBusinessErrors(t *testing.T) {
-	f := mustReadRetryFilter()
+func TestReadOnlyDoesNotRetryBusinessErrors(t *testing.T) {
 	attempts := 0
-	err := f(context.Background(), nil, nil, filter.ClientHandleFunc(func(context.Context, interface{}, interface{}) error {
+	err := ReadOnly()(context.Background(), nil, nil, filter.ClientHandleFunc(func(context.Context, interface{}, interface{}) error {
 		attempts++
 		return errs.New(100101, "invalid request")
 	}))

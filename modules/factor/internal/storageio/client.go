@@ -10,21 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"trpc.group/trpc-go/trpc-filter/slime/retry"
+	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/errs"
-	"trpc.group/trpc-go/trpc-go/filter"
 )
-
-var readRetryFilter = mustReadRetryFilter()
-
-func mustReadRetryFilter() filter.ClientFilter {
-	r, err := retry.New(2, []int{int(errs.RetClientNetErr), int(errs.RetClientTimeout)}, retry.WithLinearBackoff(20*time.Millisecond))
-	if err != nil {
-		panic(fmt.Sprintf("build storage read retry filter: %v", err))
-	}
-	return r.Invoke
-}
 
 // AccessClient is the Storage Access RPC subset used by factor.
 type AccessClient interface {
@@ -81,7 +69,7 @@ func (c *Client) ReadWindow(ctx context.Context, key WindowKey, lookbackBars int
 	}
 	// Retry is deliberately attached to this idempotent read call only. The
 	// shared proxy also performs writes, which must never inherit this policy.
-	rsp, err := c.access.ReadTimeSeriesRows(ctx, req, client.WithFilter(readRetryFilter))
+	rsp, err := c.access.ReadTimeSeriesRows(ctx, req, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
 		return nil, fmt.Errorf("read time-series rows: %w", err)
 	}
