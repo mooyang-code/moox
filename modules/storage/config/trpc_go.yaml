@@ -4,9 +4,11 @@ global: #全局配置
 
 server:
   filter:
-    - requestmetrics
+    - recovery
     - validation
+    - opentelemetry
     - cors
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -21,34 +23,35 @@ server:
       protocol: http_no_protocol
       timeout: 3000
     - name: trpc.moox.storage.Access.trpc
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20102
       network: tcp
       protocol: trpc
     - name: trpc.moox.storage.AccessScan.trpc
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20105
       network: tcp
       protocol: trpc
       timeout: 120000
     - name: trpc.moox.storage.DataView.trpc
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20103
       network: tcp
       protocol: trpc
       timeout: 30000
     - name: trpc.moox.storage.ViewIndex
+      ip: 127.0.0.1
       port: 20104
       network: tcp
       protocol: trpc
       timeout: 30000
     - name: trpc.moox.storage.PrimaryStore
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
       protocol: trpc
     - name: trpc.moox.storage.Metadata.trpc
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20100
       network: tcp
       protocol: trpc
@@ -64,17 +67,17 @@ server:
       timeout: 10000
 
     - name: trpc.moox.storage.Access.http
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20201
       network: tcp
       protocol: http
     - name: trpc.moox.storage.Metadata.http
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20200
       network: tcp
       protocol: http
     - name: trpc.moox.storage.DataView.http
-      #ip: 0.0.0.0
+      ip: 127.0.0.1
       port: 20202
       network: tcp
       protocol: http
@@ -82,8 +85,8 @@ server:
 
 client:
   filter:
-    - requestmetrics
     - validation
+    - opentelemetry
   service:
     - name: trpc.moox.storage.PrimaryStore
       target: ip://127.0.0.1:20101
@@ -117,12 +120,18 @@ client:
       timeout: 30000
 
 plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12960
+      path: /metrics
+      enablepush: false
   auth:
     cors:
       apply_to_all_path:
         - insecure_allow_all
     validation:
-      enable_error_log: true
+      enable_error_log: false
       server_validate_err_code: 100101
       client_validate_err_code: 100102
   log:

@@ -44,9 +44,6 @@ func isAPIRequest(path string) bool {
 
 // 优化的静态文件处理器，支持缓存和gzip压缩
 func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *http.Request) {
-	// 记录请求路径用于调试
-	log.Printf("静态文件请求: %s", r.URL.Path)
-
 	// 确定实际请求的文件路径
 	actualPath := r.URL.Path
 
@@ -61,7 +58,7 @@ func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *
 		// 对于静态资源（JS/CSS等），如果找不到就返回404
 		// 只有HTML请求才回退到index.html (SPA路由)
 		if isStaticAsset(actualPath) {
-			log.Printf("静态资源未找到: %s", actualPath)
+			log.Print("静态资源未找到")
 			http.NotFound(w, r)
 			return
 		}
@@ -104,7 +101,7 @@ func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *
 	// 对于小文件这是可接受的
 	content, err := io.ReadAll(file)
 	if err != nil {
-		log.Printf("读取文件失败: %s - %v", r.URL.Path, err)
+		log.Printf("读取静态文件失败: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -123,13 +120,13 @@ func optimizedStaticHandler(statikFS http.FileSystem, w http.ResponseWriter, r *
 
 		// 写入压缩内容
 		if _, err := gz.Write(content); err != nil {
-			log.Printf("压缩写入失败: %s - %v", r.URL.Path, err)
+			log.Printf("静态文件压缩写入失败: %v", err)
 			return
 		}
 	} else {
 		// 直接写入内容
 		if _, err := w.Write(content); err != nil {
-			log.Printf("写入响应失败: %s - %v", r.URL.Path, err)
+			log.Printf("静态文件写入失败: %v", err)
 			return
 		}
 	}
@@ -219,8 +216,17 @@ func newHealthHandler() http.Handler {
 func newStaticHandler(statikFS http.FileSystem) http.Handler {
 	mux := healthz.NewMux()
 	mux.HandlePrefix("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		if r.ContentLength > 0 || r.ContentLength == -1 {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
 		if isAPIRequest(r.URL.Path) || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
-			log.Printf("拒绝 API 请求: %s（web-host 仅提供静态资源）", r.URL.Path)
+			log.Print("拒绝非静态请求（web-host 仅提供静态资源）")
 			http.NotFound(w, r)
 			return
 		}
@@ -232,6 +238,18 @@ func newStaticHandler(statikFS http.FileSystem) http.Handler {
 }
 
 func newHTTPHandler(statikFS http.FileSystem) http.Handler { return newStaticHandler(statikFS) }
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+}
 
 // 设置正确的Content-Type
 func setContentType(w http.ResponseWriter, path string) {
@@ -286,7 +304,7 @@ func main() {
 	log.Println("静态文件服务: /")
 	log.Println("API 请求由 Caddy 转发，web-host 不处理 /api/*")
 	errCh := make(chan error, 2)
-	go func() { errCh <- http.ListenAndServe(cfg.ListenAddr, newStaticHandler(statikFS)) }()
-	go func() { errCh <- http.ListenAndServe(cfg.HealthAddr, healthHandler) }()
+	go func() { errCh <- newHTTPServer(cfg.ListenAddr, newStaticHandler(statikFS)).ListenAndServe() }()
+	go func() { errCh <- newHTTPServer(cfg.HealthAddr, healthHandler).ListenAndServe() }()
 	log.Fatal(<-errCh)
 }

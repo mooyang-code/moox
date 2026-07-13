@@ -4,8 +4,10 @@ global:
 
 server:
   filter:
-    - requestmetrics
+    - recovery
     - validation
+    - opentelemetry
+    - prometheus
   timeout: 30000
   admin:
     ip: 127.0.0.1
@@ -20,6 +22,7 @@ server:
       protocol: http_no_protocol
       timeout: 3000
     - name: trpc.moox.storage.ViewIndex
+      ip: 127.0.0.1
       port: 20104
       network: tcp
       protocol: trpc
@@ -32,13 +35,19 @@ server:
 
 client:
   filter:
-    - requestmetrics
     - validation
+    - opentelemetry
 
 plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12963
+      path: /metrics
+      enablepush: false
   auth:
     validation:
-      enable_error_log: true
+      enable_error_log: false
       server_validate_err_code: 100101
       client_validate_err_code: 100102
   log:

@@ -1,10 +1,18 @@
 package main
 
 import (
+	"context"
+	"time"
+
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	_ "github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	_ "trpc.group/trpc-go/trpc-filter/masking"
+	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/bootstrap"
 	"trpc.group/trpc-go/trpc-go"
@@ -12,6 +20,7 @@ import (
 )
 
 func main() {
+	defer shutdownTracing()
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
 
@@ -25,5 +34,13 @@ func main() {
 	log.Info("启动TRPC服务器...")
 	if err := server.Serve(); err != nil {
 		log.Fatalf("TRPC服务器出错: %v", err)
+	}
+}
+
+func shutdownTracing() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := trpcotel.Shutdown(ctx); err != nil {
+		log.Errorf("flush OpenTelemetry spans: %v", err)
 	}
 }

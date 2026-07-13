@@ -14,7 +14,7 @@ Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进
 
 ## 管理面入口
 
-MooX 的公开入口由部署内置的 Caddy 提供：浏览器使用 `https://<host>:9527`，后台/SCF 使用 `https://<host>:11001/api/service/*`。Caddy 把站点请求转发到 `127.0.0.1:9528`，把 `/api/admin/*` 转发到 `127.0.0.1:11000`，把 `/api/service/*` 转发到 `127.0.0.1:11002`。web-host 仅提供静态文件，不代理 API。
+MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供：EdgeOne 负责 CNAME、WAF、CC/Bot 和缓存；浏览器使用 `https://<host>:9527`，后台/SCF 使用 `https://<host>:11001/api/service/*`。Caddy 把站点请求转发到 `127.0.0.1:9528`，把 `/api/admin/*` 转发到 `127.0.0.1:11000`，把 `/api/service/*` 转发到 `127.0.0.1:11002`。web-host 仅提供静态文件，不代理 API；其余端口必须保持私有。接入与回滚见 [EdgeOne 运维手册](docs/运维/EdgeOne接入与应急回滚.md)。
 
 管理台登录使用 bcrypt 密码、一次性登录挑战、24 小时 JWT/session，登录后每个管理请求还必须带 nonce 防重放的会话 HMAC。后台接口使用独立 service HMAC，诊断端口使用独立 health HMAC。详见 [认证鉴权](docs/认证鉴权.md) 和 [管理台 HTTPS 与证书](docs/运维/管理台HTTPS与证书.md)。
 

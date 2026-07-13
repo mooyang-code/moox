@@ -1,8 +1,11 @@
 package main
 
 import (
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/bootstrap"
 	"trpc.group/trpc-go/trpc-go"

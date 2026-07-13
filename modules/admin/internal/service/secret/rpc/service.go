@@ -306,12 +306,15 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 	}
 }
 
-func secretModelToPlainPB(s *model.Secret) *pb.Secret {
-	p := secretModelToPB(s)
-	if p != nil {
-		p.SecretValue = s.SecretValue
+func secretModelToPlainPB(s *model.Secret) *pb.RevealedSecret {
+	if s == nil {
+		return nil
 	}
-	return p
+	return &pb.RevealedSecret{
+		SecretId: s.SecretID, Name: s.Name, Description: s.Description,
+		Provider: s.Provider, KeyId: s.KeyID, SecretValue: s.SecretValue,
+		ExtraConfig: s.ExtraConfig,
+	}
 }
 
 func isServiceAuthCall(ctx context.Context) bool {

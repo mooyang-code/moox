@@ -3,9 +3,14 @@ global:
   env_name: dev
 
 server:
+  filter:
+    - recovery
+    - validation
+    - prometheus
   timeout: 30000
   service:
     - name: trpc.moox.strategy.StrategyMgr
+      ip: 127.0.0.1
       port: 11430
       network: tcp
       protocol: http
@@ -16,3 +21,16 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+
+plugins:
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12930
+      path: /metrics
+      enablepush: false

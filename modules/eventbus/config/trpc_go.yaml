@@ -4,7 +4,9 @@ global:
 
 server:
   filter:
-    - requestmetrics
+    - recovery
+    - validation
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -13,6 +15,7 @@ server:
     write_timeout: 60000
   service:
     - name: trpc.moox.eventbus.EventBusMgr
+      ip: 127.0.0.1
       port: 11420
       network: tcp
       protocol: http
@@ -28,11 +31,18 @@ server:
       network: "*/30 * * * * *?params="
       protocol: timer
       timeout: 10000
-client:
-  filter:
-    - requestmetrics
-
 plugins:
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12970
+      path: /metrics
+      enablepush: false
   log:
     default:
       - writer: console

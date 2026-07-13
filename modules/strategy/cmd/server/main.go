@@ -2,8 +2,13 @@ package main
 
 import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/bootstrap"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	_ "trpc.group/trpc-go/trpc-filter/recovery"
+	_ "trpc.group/trpc-go/trpc-filter/validation"
+	_ "trpc.group/trpc-go/trpc-log-cls"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 func main() {

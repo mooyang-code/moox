@@ -3,6 +3,9 @@ global:
   env_name: prod
 
 server:
+  filter:
+    - recovery
+    - prometheus
   timeout: 5000
   service:
     - name: trpc.moox.archive.Health
@@ -11,3 +14,11 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+
+plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12916
+      path: /metrics
+      enablepush: false

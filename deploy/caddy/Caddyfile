@@ -2,6 +2,8 @@
 	auto_https disable_redirects
 	admin 127.0.0.1:2019
 	default_sni {$MOOX_PUBLIC_HOST}
+	# Do not trust X-Forwarded-* headers until a reviewed EdgeOne origin-pull
+	# address artifact is installed and configured as trusted_proxies.
 }
 
 https://{$MOOX_PUBLIC_HOST}:{$MOOX_BROWSER_HTTPS_PORT:9527} {

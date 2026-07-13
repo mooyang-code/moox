@@ -4,7 +4,9 @@ global:
 
 server:
   filter:
-    - requestmetrics
+    - recovery
+    - validation
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -13,6 +15,7 @@ server:
     write_timeout: 60000
   service:
     - name: trpc.moox.monitor.MonitorMgr
+      ip: 127.0.0.1
       port: 11410
       network: tcp
       protocol: http
@@ -29,11 +32,18 @@ server:
       protocol: timer
       timeout: 10000
 
-client:
-  filter:
-    - requestmetrics
-
 plugins:
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12950
+      path: /metrics
+      enablepush: false
   log:
     default:
       - writer: console

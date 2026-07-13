@@ -4,10 +4,12 @@ global: #全局配置
 
 server:
   filter:
-    - requestmetrics
+    - recovery
     - validation
+    - masking
     - cors
     - spacectx
+    - prometheus
   timeout: 10000
   admin:
     ip: 127.0.0.1
@@ -23,6 +25,7 @@ server:
       timeout: 3000
       ######## 账户域 RPC 服务（http 协议，经 admin 网关透传 /api/trade/account/{method}） ########
     - name: trpc.moox.trade.AccountSvc
+      ip: 127.0.0.1
       port: 11200
       network: tcp
       protocol: http
@@ -30,6 +33,7 @@ server:
 
       ######## 余额服务 /api/trade/balance/{method} ########
     - name: trpc.moox.trade.BalanceSvc
+      ip: 127.0.0.1
       port: 11201
       network: tcp
       protocol: http
@@ -37,6 +41,7 @@ server:
 
       ######## 资金流水服务 /api/trade/fund/{method} ########
     - name: trpc.moox.trade.FundSvc
+      ip: 127.0.0.1
       port: 11202
       network: tcp
       protocol: http
@@ -44,6 +49,7 @@ server:
 
       ######## API 凭证服务 /api/trade/apikey/{method} ########
     - name: trpc.moox.trade.ApiKeySvc
+      ip: 127.0.0.1
       port: 11203
       network: tcp
       protocol: http
@@ -51,6 +57,7 @@ server:
 
       ######## 交易通道服务 /api/trade/channel/{method} ########
     - name: trpc.moox.trade.ChannelSvc
+      ip: 127.0.0.1
       port: 11204
       network: tcp
       protocol: http
@@ -58,6 +65,7 @@ server:
 
       ######## 交易操作服务 /api/trade/tradeop/{method} ########
     - name: trpc.moox.trade.TradeOpSvc
+      ip: 127.0.0.1
       port: 11205
       network: tcp
       protocol: http
@@ -65,6 +73,7 @@ server:
 
       ######## 订单查询服务 /api/trade/order/{method} ########
     - name: trpc.moox.trade.OrderSvc
+      ip: 127.0.0.1
       port: 11206
       network: tcp
       protocol: http
@@ -72,6 +81,7 @@ server:
 
       ######## 成交查询服务 /api/trade/tradeq/{method} ########
     - name: trpc.moox.trade.TradeQuerySvc
+      ip: 127.0.0.1
       port: 11207
       network: tcp
       protocol: http
@@ -79,16 +89,19 @@ server:
 
       ######## 持仓查询服务 /api/trade/position/{method} ########
     - name: trpc.moox.trade.PositionSvc
+      ip: 127.0.0.1
       port: 11208
       network: tcp
       protocol: http
       timeout: 5000
     - name: trpc.moox.trade.RebalanceSvc
+      ip: 127.0.0.1
       port: 11211
       network: tcp
       protocol: http
       timeout: 15000
     - name: trpc.moox.trade.TradeOpsSvc
+      ip: 127.0.0.1
       port: 11212
       network: tcp
       protocol: http
@@ -102,16 +115,21 @@ server:
 
 client:
   filter:
-    - requestmetrics
     - validation
 
 plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12920
+      path: /metrics
+      enablepush: false
   auth:
     cors:
       apply_to_all_path:
         - insecure_allow_all
     validation:
-      enable_error_log: true
+      enable_error_log: false
       server_validate_err_code: 100101
       client_validate_err_code: 100102
   log:

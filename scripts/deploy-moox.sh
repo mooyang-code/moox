@@ -34,6 +34,7 @@ ADMIN_USERNAME="admin"
 ADMIN_PASSWORD_FILE=""
 ADMIN_PASSWORD=""
 BOOTSTRAP_ADMIN=0
+ENABLE_CLS=0
 
 usage() {
   cat <<'EOF'
@@ -67,6 +68,7 @@ Options:
   --local-ca <auto|install|skip>  Operator CA workflow. Default: auto.
   --local-ca-output <path>        Fetched root CA path. Default: ~/.moox/certs/<public-host>-root.crt.
   --caddy-conflict <fail>         Refuse unrelated listeners (the only supported policy).
+  --enable-cls                    Add production CLS writers; target must provide secrets/cls.env.
   -h, --help                      Show this help.
 
 Examples:
@@ -176,6 +178,7 @@ while [[ $# -gt 0 ]]; do
     --local-ca) LOCAL_CA="${2:-}"; shift 2 ;;
     --local-ca-output) LOCAL_CA_OUTPUT="${2:-}"; shift 2 ;;
     --caddy-conflict) [[ "${2:-}" == fail ]] || fail 'only --caddy-conflict fail is supported'; shift 2 ;;
+    --enable-cls) ENABLE_CLS=1; shift ;;
     -h|--help)
       usage
       exit 0
@@ -440,6 +443,36 @@ patch_configs() {
       "${STAGE_DIR}/eventbus/config/app.yaml"
   fi
 
+  if [[ "${ENABLE_CLS}" -eq 1 ]]; then
+    while IFS= read -r config; do
+      if grep -q '^  log:' "${config}"; then
+        cat >>"${config}" <<'EOF'
+      - writer: cls
+        level: warn
+        remote_config:
+          topic_id: ${MOOX_CLS_TOPIC_ID}
+          host: ${MOOX_CLS_HOST}
+          secret_id: ${MOOX_CLS_SECRET_ID}
+          secret_key: ${MOOX_CLS_SECRET_KEY}
+          max_block_sec: 0
+EOF
+      else
+        cat >>"${config}" <<'EOF'
+  log:
+    default:
+      - writer: cls
+        level: warn
+        remote_config:
+          topic_id: ${MOOX_CLS_TOPIC_ID}
+          host: ${MOOX_CLS_HOST}
+          secret_id: ${MOOX_CLS_SECRET_ID}
+          secret_key: ${MOOX_CLS_SECRET_KEY}
+          max_block_sec: 0
+EOF
+      fi
+    done < <(find "${STAGE_DIR}" -path '*/config/trpc_go*.yaml' -type f -print)
+  fi
+
   if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
@@ -488,6 +521,12 @@ set -a
 source "${ROOT}/secrets/health-auth.env"
 source "${ROOT}/secrets/service-auth.env"
 source "${ROOT}/secrets/admin-jwt.env"
+if [[ -r "${ROOT}/secrets/cls.env" ]]; then
+  source "${ROOT}/secrets/cls.env"
+fi
+if [[ -r "${ROOT}/secrets/otel.env" ]]; then
+  source "${ROOT}/secrets/otel.env"
+fi
 if [[ -r "${ROOT}/certs/caddy/root.crt" ]]; then
   MOOX_SERVICE_GATEWAY_CA_FILE="${ROOT}/certs/caddy/root.crt"
   MOOX_SERVICE_GATEWAY_CA_PEM_B64=$(base64 <"${ROOT}/certs/caddy/root.crt" | tr -d '\r\n')
@@ -504,6 +543,29 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
 mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
+
+bootstrap_cls() {
+  local output topic_id region
+  grep -Rqs -- '- writer: cls' "${ROOT}"/*/config/trpc_go*.yaml 2>/dev/null || return 0
+  : "${MOOX_CLS_SECRET_ID:?missing MOOX_CLS_SECRET_ID in secrets/cls.env}"
+  : "${MOOX_CLS_SECRET_KEY:?missing MOOX_CLS_SECRET_KEY in secrets/cls.env}"
+  export TENCENTCLOUD_SECRET_ID="${MOOX_CLS_SECRET_ID}"
+  export TENCENTCLOUD_SECRET_KEY="${MOOX_CLS_SECRET_KEY}"
+  region="${MOOX_CLS_REGION:-ap-guangzhou}"
+  if [[ "${MOOX_CLS_AUTO_BOOTSTRAP:-1}" == "1" ]]; then
+    output=$("${ROOT}/bin/moox-cli" ops tencent cls bootstrap \
+      --region "${region}" \
+      --logset-name "${MOOX_CLS_LOGSET_NAME:-moox}" \
+      --topic-name "${MOOX_CLS_TOPIC_NAME:-moox-application}" \
+      --retention-days "${MOOX_CLS_RETENTION_DAYS:-30}" \
+      --partitions "${MOOX_CLS_PARTITIONS:-1}")
+    topic_id=$(printf '%s' "${output}" | sed -n 's/.*"topic_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tail -1)
+    [[ -n "${topic_id}" ]] || { echo "CLS bootstrap returned no topic_id" >&2; exit 1; }
+    export MOOX_CLS_TOPIC_ID="${topic_id}"
+  fi
+  : "${MOOX_CLS_TOPIC_ID:?set MOOX_CLS_TOPIC_ID or enable automatic bootstrap}"
+  export MOOX_CLS_HOST="${MOOX_CLS_HOST:-${region}.cls.tencentyun.com}"
+}
 
 stop_if_running() {
   local name="$1"
@@ -814,6 +876,7 @@ start_storage_process() {
   local storage_conf="$4"
   start_service "${name}" "${ROOT}/storage" \
     env \
+      "MOOX_OTEL_SERVICE_NAME=moox-${name}" \
       "STORAGE_CONFIG_PATH=${ROOT}/storage/config" \
       "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/${storage_conf}" \
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
@@ -891,7 +954,7 @@ start_admin() {
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   start_service "admin" "${ROOT}/admin" \
-    env "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" \
+    env "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }
 
@@ -956,6 +1019,7 @@ start_web_host() {
 }
 
 SERVICE="${1:-}"
+bootstrap_cls
 case "${SERVICE}" in
   "")
     start_admin

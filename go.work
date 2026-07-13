@@ -3,6 +3,7 @@ go 1.24.0
 use (
 	./modules/admin
 	./modules/admin/proto/admingen
+	./modules/archive
 	./modules/cli
 	./modules/cloudnode
 	./modules/cloudnode/proto/cloudnodegen
@@ -16,7 +17,6 @@ use (
 	./modules/hostagent/proto/hostagentgen
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
-	./modules/archive
 	./modules/storage
 	./modules/storage/proto/storagegen
 	./modules/strategy
@@ -33,7 +33,8 @@ use (
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
-	./packages/servicegateway
 	./packages/serviceauth
+	./packages/servicegateway
+	./packages/trpcplugintest
 	./web-host
 )

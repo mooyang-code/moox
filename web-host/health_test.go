@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -86,5 +87,35 @@ func TestGatewayConfigDefaultsToLoopbackListeners(t *testing.T) {
 	}
 	if cfg.HealthAddr != "127.0.0.1:19527" {
 		t.Fatalf("HealthAddr = %q", cfg.HealthAddr)
+	}
+}
+
+func TestStaticHandlerRejectsNonReadMethods(t *testing.T) {
+	handler := newStaticHandler(unavailableFS{})
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodTrace} {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(method, "/", nil))
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s status = %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
+		}
+		if got := rr.Header().Get("Allow"); got != "GET, HEAD" {
+			t.Fatalf("%s Allow = %q, want GET, HEAD", method, got)
+		}
+	}
+}
+
+func TestStaticHandlerRejectsRequestBodies(t *testing.T) {
+	handler := newStaticHandler(unavailableFS{})
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", bytes.NewBufferString("unexpected")))
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestHTTPServerConfigHasFiniteTimeouts(t *testing.T) {
+	server := newHTTPServer("127.0.0.1:9528", newStaticHandler(unavailableFS{}))
+	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.WriteTimeout <= 0 || server.IdleTimeout <= 0 || server.MaxHeaderBytes <= 0 {
+		t.Fatalf("unsafe server limits: %+v", server)
 	}
 }

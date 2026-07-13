@@ -7,7 +7,10 @@ import (
 	"os"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/bootstrap"
-	"trpc.group/trpc-go/trpc-go"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	_ "trpc.group/trpc-go/trpc-filter/recovery"
+	_ "trpc.group/trpc-go/trpc-log-cls"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 var Version = "dev"
@@ -16,11 +19,8 @@ var GitCommit = "unknown"
 
 func main() {
 	configPath := "config/app.yaml"
-	frameworkConfigPath := "config/trpc_go.yaml"
 	flag.StringVar(&configPath, "config", configPath, "archive config path")
-	flag.StringVar(&frameworkConfigPath, "conf", frameworkConfigPath, "tRPC framework config path")
 	flag.Parse()
-	trpc.ServerConfigPath = frameworkConfigPath
 	if err := bootstrap.RunFromConfig(context.Background(), configPath, Version, GitCommit); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

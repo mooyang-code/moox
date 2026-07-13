@@ -6,7 +6,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostagent/internal/app"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	_ "trpc.group/trpc-go/trpc-filter/validation"
 	"trpc.group/trpc-go/trpc-go/server"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 const HostAgentMgrServiceName = "trpc.moox.hostagent.HostAgentMgr"

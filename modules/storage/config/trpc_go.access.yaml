@@ -4,9 +4,11 @@ global:
 
 server:
   filter:
-    - requestmetrics
+    - recovery
     - validation
+    - opentelemetry
     - cors
+    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -21,27 +23,33 @@ server:
       protocol: http_no_protocol
       timeout: 3000
     - name: trpc.moox.storage.Access.trpc
+      ip: 127.0.0.1
       port: 20102
       network: tcp
       protocol: trpc
     - name: trpc.moox.storage.AccessScan.trpc
+      ip: 127.0.0.1
       port: 20105
       network: tcp
       protocol: trpc
       timeout: 120000
     - name: trpc.moox.storage.PrimaryStore
+      ip: 127.0.0.1
       port: 20101
       network: tcp
       protocol: trpc
     - name: trpc.moox.storage.Metadata.trpc
+      ip: 127.0.0.1
       port: 20100
       network: tcp
       protocol: trpc
     - name: trpc.moox.storage.Access.http
+      ip: 127.0.0.1
       port: 20201
       network: tcp
       protocol: http
     - name: trpc.moox.storage.Metadata.http
+      ip: 127.0.0.1
       port: 20200
       network: tcp
       protocol: http
@@ -51,17 +59,19 @@ server:
       protocol: timer
       timeout: 10000
 
-client:
-  filter:
-    - requestmetrics
-
 plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12960
+      path: /metrics
+      enablepush: false
   auth:
     cors:
       apply_to_all_path:
         - insecure_allow_all
     validation:
-      enable_error_log: true
+      enable_error_log: false
       server_validate_err_code: 100101
       client_validate_err_code: 100102
   log:
