@@ -338,10 +338,8 @@ async function assertSysDeploySingleInstanceContract(args, token) {
     description: "temporary SysDeploy E2E row",
     extra_config: "{}",
   };
-  let created = false;
   try {
     await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
-    created = true;
     const update = {
       ...first,
       host: "127.0.0.2",
@@ -359,11 +357,8 @@ async function assertSysDeploySingleInstanceContract(args, token) {
     }
 
     await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
-    created = false;
     await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
-    created = true;
     await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
-    created = false;
 
     const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", {});
     if (active.deployment_map?.[serviceName]) {
@@ -371,12 +366,10 @@ async function assertSysDeploySingleInstanceContract(args, token) {
     }
     log("sysdeploy single-instance contract: ok");
   } catch (err) {
-    if (created) {
-      try {
-        await deleteDeploymentIfPresent(args, token, serviceName);
-      } catch (cleanupErr) {
-        log(`sysdeploy cleanup failed: ${cleanupErr?.message || cleanupErr}`);
-      }
+    try {
+      await deleteDeploymentIfPresent(args, token, serviceName);
+    } catch (cleanupErr) {
+      log(`sysdeploy cleanup failed: ${cleanupErr?.message || cleanupErr}`);
     }
     throw err;
   }
