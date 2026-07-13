@@ -152,4 +152,11 @@ func (c *Config) applyEnv() {
 			c.Broker.MaxPayloadBytes = n
 		}
 	}
+	if v := os.Getenv("MOOX_EVENTBUS_STREAM_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			for i := range c.Streams {
+				c.Streams[i].MaxBytes = n
+			}
+		}
+	}
 }

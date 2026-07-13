@@ -14,6 +14,9 @@ NODE_ID="e2e-scf-node"
 PACKAGE_ID="moox-collector_dev"
 DATASET_ID="binance_spot_kline"
 
+export MOOX_ADMIN_JWT_SECRET_KEY="${MOOX_ADMIN_JWT_SECRET_KEY:-moox-e2e-jwt-secret-key-20260713-safe}"
+export MOOX_EVENTBUS_STREAM_MAX_BYTES="${MOOX_EVENTBUS_STREAM_MAX_BYTES:-104857600}"
+
 usage() {
   cat <<'EOF'
 Usage:

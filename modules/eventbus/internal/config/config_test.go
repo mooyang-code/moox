@@ -45,12 +45,18 @@ func TestLoadYAMLAndEnvironmentOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_EVENTBUS_PORT", "4333")
+	t.Setenv("MOOX_EVENTBUS_STREAM_MAX_BYTES", "104857600")
 	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Broker.Port != 4333 || c.Broker.StoreDir != "./data/test" {
 		t.Fatalf("overrides not applied: %#v", c.Broker)
+	}
+	for _, stream := range c.Streams {
+		if stream.MaxBytes != 104857600 {
+			t.Fatalf("stream %s max bytes = %d", stream.Name, stream.MaxBytes)
+		}
 	}
 }
 

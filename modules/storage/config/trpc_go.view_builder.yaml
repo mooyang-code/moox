@@ -56,11 +56,12 @@ client:
       timeout: 30000
 
 plugins:
-  prometheus:
-    ip: 127.0.0.1
-    port: 12962
-    path: /metrics
-    enablepush: false
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12962
+      path: /metrics
+      enablepush: false
   auth:
     cors:
       apply_to_all_path:
