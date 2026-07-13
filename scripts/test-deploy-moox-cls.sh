@@ -109,11 +109,12 @@ fi
 }
 
 rm -f "${PREFLIGHT_READY}" "${PREFLIGHT_RELEASE}" "${STAGE_DIR}/sentinel"
+LOCK_STAGE_ARG="${STAGE_DIR}//"
 MOOX_TEST_PREFLIGHT_GATE=1 \
 MOOX_TEST_PREFLIGHT_READY="${PREFLIGHT_READY}" \
 MOOX_TEST_PREFLIGHT_RELEASE="${PREFLIGHT_RELEASE}" \
   "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
-    --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
+    --target localhost --dir "${DEPLOY_DIR}" --stage "${LOCK_STAGE_ARG}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
     --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
     >"${TMP_ROOT}/preflight-first.out" 2>&1 &
@@ -128,7 +129,7 @@ done
 }
 printf 'first stage must survive the competing deployment\n' >"${STAGE_DIR}/sentinel"
 if "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
-    --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
+    --target localhost --dir "${DEPLOY_DIR}" --stage "${LOCK_STAGE_ARG}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
     --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
     >"${TMP_ROOT}/preflight-second.out" 2>&1; then
@@ -145,7 +146,7 @@ grep -q -- '--cloud-account-id' "${SCRIPT}"
 grep -q 'skills/moox/scripts/cls-bootstrap.sh' "${SCRIPT}"
 grep -q 'prepare_cls_preflight' "${SCRIPT}"
 grep -q 'acquire_stage_deploy_lock' "${SCRIPT}"
-grep -q 'STAGE_DIR%/' "${SCRIPT}"
+grep -q 'lock_base%/' "${SCRIPT}"
 if grep -q '^bootstrap_cls()' "${SCRIPT}"; then
   echo 'runtime start script still provisions CLS' >&2
   exit 1

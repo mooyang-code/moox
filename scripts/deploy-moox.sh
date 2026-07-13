@@ -112,7 +112,10 @@ trap cleanup_stage_deploy_lock EXIT
 
 acquire_stage_deploy_lock() {
   [[ "${ENABLE_CLS}" -eq 1 ]] || return 0
-  local lock_base="${STAGE_DIR%/}"
+  local lock_base="${STAGE_DIR}"
+  while [[ "${lock_base}" != "/" && "${lock_base}" == */ ]]; do
+    lock_base="${lock_base%/}"
+  done
   [[ -n "${lock_base}" ]] || lock_base="/"
   STAGE_DEPLOY_LOCK="${lock_base}.deploy.lock"
   mkdir -p "$(dirname "${STAGE_DEPLOY_LOCK}")"
