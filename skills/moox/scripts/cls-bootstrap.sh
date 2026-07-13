@@ -132,13 +132,14 @@ REMOTE
 }
 
 acquire_owned_lock() {
-  local lock=$1 acquired=1
+  local lock=$1 acquired=1 observed
   acquire_takeover_guard "${lock}.takeover" || return 1
   ACTIVE_GUARD="${lock}.takeover"
   if mkdir "${lock}" 2>/dev/null; then
     write_owned_lock_metadata "${lock}" && acquired=0
-  elif lock_is_stale_local "${lock}" "${LOCK_LEASE_SECONDS}" && steal_owned_lock "${lock}"; then
-    acquired=0
+  elif lock_is_stale_local "${lock}" "${LOCK_LEASE_SECONDS}"; then
+    observed=${OWNER_TOKEN}
+    steal_owned_lock "${lock}" "${observed}" && acquired=0
   fi
   release_owned_lock "${ACTIVE_GUARD}"
   ACTIVE_GUARD=""
@@ -165,22 +166,27 @@ write_owned_lock_metadata() {
 }
 
 replace_owned_lock_metadata() {
-  local lock=$1 expected=$2 created_at next
-  read_lock_metadata "${lock}/owner" || return 1
-  [[ "${OWNER_TOKEN}" == "${expected}" ]] || return 1
+  local lock=$1 expected=$2 created_at next moved
+  moved="${lock}/owner.steal.${TOKEN}"
+  mv "${lock}/owner" "${moved}" 2>/dev/null || return 1
+  if ! read_lock_metadata "${moved}" || [[ "${OWNER_TOKEN}" != "${expected}" ]]; then
+    mv -n "${moved}" "${lock}/owner" 2>/dev/null || true
+    return 1
+  fi
   created_at=$(date +%s)
   next="${lock}/owner.next.${TOKEN}"
   if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
     "${TOKEN}" "${LOCK_HOST}" "$$" "${created_at}" >"${next}"); then
     rm -f "${next}"
+    mv -n "${moved}" "${lock}/owner" 2>/dev/null || true
     return 1
   fi
-  read_lock_metadata "${lock}/owner" || { rm -f "${next}"; return 1; }
-  if [[ "${OWNER_TOKEN}" != "${expected}" ]]; then
+  if ! mv "${next}" "${lock}/owner"; then
     rm -f "${next}"
+    mv -n "${moved}" "${lock}/owner" 2>/dev/null || true
     return 1
   fi
-  mv "${next}" "${lock}/owner"
+  rm -f "${moved}"
 }
 
 read_lock_metadata() {
@@ -221,7 +227,7 @@ lock_is_stale_local() {
 }
 
 acquire_takeover_guard() {
-  local guard=$1 observed claim acquired=1
+  local guard=$1 observed claim claim_observed acquired=1
   if mkdir "${guard}" 2>/dev/null; then
     write_owned_lock_metadata "${guard}"
     return
@@ -233,7 +239,8 @@ acquire_takeover_guard() {
     write_owned_lock_metadata "${claim}" || return 1
   else
     lock_is_stale_local "${claim}" "${GUARD_LEASE_SECONDS}" || return 1
-    steal_owned_lock "${claim}" || return 1
+    claim_observed=${OWNER_TOKEN}
+    steal_owned_lock "${claim}" "${claim_observed}" || return 1
   fi
   ACTIVE_GUARD_CLAIM=${claim}
   read_lock_metadata "${guard}/owner" || return 1
@@ -251,10 +258,26 @@ remove_owned_steal() {
   rmdir "${steal}" 2>/dev/null || true
 }
 
+restore_owned_steal() {
+  local lock=$1 steal=$2
+  mkdir "${lock}" 2>/dev/null || return 1
+  if ! mv "${steal}/owner" "${lock}/owner" 2>/dev/null; then
+    rmdir "${lock}" 2>/dev/null || true
+    return 1
+  fi
+  rmdir "${steal}" 2>/dev/null || true
+}
+
 steal_owned_lock() {
-  local lock=$1 steal="${lock}.steal.${TOKEN}"
+  local lock=$1 expected=$2 steal="${lock}.steal.${TOKEN}" steal_index
   LOCK_STEALS+=("${steal}")
+  steal_index=$((${#LOCK_STEALS[@]} - 1))
   mv "${lock}" "${steal}" 2>/dev/null || return 1
+  if ! read_lock_metadata "${steal}/owner" || [[ "${OWNER_TOKEN}" != "${expected}" ]]; then
+    restore_owned_steal "${lock}" "${steal}" || true
+    LOCK_STEALS[${steal_index}]=""
+    return 1
+  fi
   if ! mkdir "${lock}" 2>/dev/null; then
     remove_owned_steal "${steal}"
     return 1
@@ -291,6 +314,8 @@ guard="${main_lock}.takeover"
 guard_steal="${guard}.steal.${token}"
 claim=
 claim_steal=
+main_steal_owned=0
+claim_steal_owned=0
 
 write_owner() {
   if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
@@ -302,9 +327,9 @@ write_owner() {
 }
 
 read_owner() {
-  local key value token_count=0 host_count=0 pid_count=0 created_count=0
+  local owner=${1:-${lock}/owner} key value token_count=0 host_count=0 pid_count=0 created_count=0
   owner_token= owner_host= owner_pid= owner_created=
-  [[ -f "${lock}/owner" ]] || return 1
+  [[ -f "${owner}" ]] || return 1
   while IFS='=' read -r key value; do
     case "${key}" in
       token) owner_token=${value}; token_count=$((token_count + 1)) ;;
@@ -313,7 +338,7 @@ read_owner() {
       created_at) owner_created=${value}; created_count=$((created_count + 1)) ;;
       *) return 1 ;;
     esac
-  done <"${lock}/owner"
+  done <"${owner}"
   [[ ${token_count} -eq 1 && ${host_count} -eq 1 && ${pid_count} -eq 1 && ${created_count} -eq 1 ]] || return 1
   [[ "${owner_token}" =~ ^[A-Za-z0-9._-]+$ && "${owner_host}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
   [[ "${owner_pid}" =~ ^[0-9]+$ && "${owner_created}" =~ ^[0-9]+$ ]] || return 1
@@ -327,6 +352,16 @@ remove_steal() {
   rmdir "${path}" 2>/dev/null || true
 }
 
+restore_steal() {
+  local path=$1 steal_path=$2
+  mkdir "${path}" 2>/dev/null || return 1
+  if ! mv "${steal_path}/owner" "${path}/owner" 2>/dev/null; then
+    rmdir "${path}" 2>/dev/null || true
+    return 1
+  fi
+  rmdir "${steal_path}" 2>/dev/null || true
+}
+
 release_owned() {
   local path=$1
   [[ -f "${path}/owner" ]] || return 0
@@ -337,27 +372,30 @@ release_owned() {
 }
 
 replace_owner() {
-  local path=$1 expected=$2 next="${path}/owner.next.${token}"
-  lock=${path}
-  read_owner || return 1
-  [[ "${owner_token}" == "${expected}" ]] || return 1
+  local path=$1 expected=$2 next="${path}/owner.next.${token}" moved="${path}/owner.steal.${token}"
+  mv "${path}/owner" "${moved}" 2>/dev/null || return 1
+  if ! read_owner "${moved}" || [[ "${owner_token}" != "${expected}" ]]; then
+    mv -n "${moved}" "${path}/owner" 2>/dev/null || true
+    return 1
+  fi
   if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
     "${token}" "${controller_host}" "${controller_pid}" "${created_at}" >"${next}"); then
     rm -f "${next}"
+    mv -n "${moved}" "${path}/owner" 2>/dev/null || true
     return 1
   fi
-  read_owner || { rm -f "${next}"; return 1; }
-  if [[ "${owner_token}" != "${expected}" ]]; then
+  if ! mv "${next}" "${path}/owner"; then
     rm -f "${next}"
+    mv -n "${moved}" "${path}/owner" 2>/dev/null || true
     return 1
   fi
-  mv "${next}" "${path}/owner"
+  rm -f "${moved}"
 }
 
 cleanup_acquire() {
-  remove_steal "${main_steal}"
+  (( main_steal_owned == 0 )) || remove_steal "${main_steal}"
   remove_steal "${guard_steal}"
-  [[ -z "${claim_steal}" ]] || remove_steal "${claim_steal}"
+  (( claim_steal_owned == 0 )) || remove_steal "${claim_steal}"
   [[ -z "${claim}" ]] || release_owned "${claim}"
   release_owned "${guard}"
 }
@@ -384,6 +422,11 @@ else
     read_owner || exit 73
     [[ "${owner_token}" == "${claim_observed}" ]] || exit 73
     mv "${claim}" "${claim_steal}" 2>/dev/null || exit 73
+    if ! read_owner "${claim_steal}/owner" || [[ "${owner_token}" != "${claim_observed}" ]]; then
+      restore_steal "${claim}" "${claim_steal}" || true
+      exit 73
+    fi
+    claim_steal_owned=1
     mkdir "${claim}" 2>/dev/null || exit 73
     write_owner
   fi
@@ -405,6 +448,11 @@ observed=${owner_token}
 read_owner || exit 73
 [[ "${owner_token}" == "${observed}" ]] || exit 73
 mv "${main_lock}" "${main_steal}" 2>/dev/null || exit 73
+if ! read_owner "${main_steal}/owner" || [[ "${owner_token}" != "${observed}" ]]; then
+  restore_steal "${main_lock}" "${main_steal}" || true
+  exit 73
+fi
+main_steal_owned=1
 mkdir "${main_lock}" 2>/dev/null || exit 73
 write_owner
 REMOTE
@@ -489,6 +537,7 @@ cleanup() {
   fi
   if (( ${#LOCK_STEALS[@]} > 0 )); then
     for path in "${LOCK_STEALS[@]}"; do
+      [[ -n "${path}" ]] || continue
       remove_owned_steal "${path}"
     done
   fi

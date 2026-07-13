@@ -432,6 +432,8 @@ new_deploy "${CONCURRENT_DEPLOY}"
 new_stage "${CONCURRENT_STAGE}"
 write_lock_owner "${CONCURRENT_STAGE}/.cls-bootstrap.lock" stale-race "${local_host}" 99999999 "${now}"
 write_lock_owner "${CONCURRENT_STAGE}/.cls-bootstrap.lock.takeover" stale-guard-race "${local_host}" 99999999 "${now}"
+write_lock_owner "${CONCURRENT_STAGE}/.cls-bootstrap.lock.takeover.claim.stale-guard-race" \
+  stale-claim-race "${local_host}" 99999999 "${now}"
 REAL_MKDIR=$(command -v mkdir)
 RACE_BIN="${TMP}/race-bin"
 RACE_BARRIER="${TMP}/race-barrier"
@@ -451,8 +453,23 @@ fi
 exec "${MOOX_TEST_REAL_MKDIR}" "$@"
 MKDIR
 chmod +x "${RACE_BIN}/mkdir"
+cat >"${RACE_BIN}/mv" <<'MV'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=$1
+if [[ "${source_path}" == *.takeover.claim.stale-guard-race ]]; then
+  : >"${MOOX_TEST_RACE_BARRIER}/mv.$$"
+  deadline=$((SECONDS + 10))
+  while [[ $(find "${MOOX_TEST_RACE_BARRIER}" -name 'mv.*' -type f | wc -l | tr -d ' ') -lt 2 ]]; do
+    (( SECONDS < deadline )) || exit 91
+    sleep 0.01
+  done
+fi
+exec "${MOOX_TEST_REAL_MV}" "$@"
+MV
+chmod +x "${RACE_BIN}/mv"
 printf 'success\n' >"${mode_file}"
-PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" \
+PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" MOOX_TEST_REAL_MV="${REAL_MV}" \
   MOOX_TEST_RACE_BARRIER="${RACE_BARRIER}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-a \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
@@ -460,7 +477,7 @@ PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-a \
   >"${TMP}/concurrent-a.out" 2>&1 &
 pid_a=$!
-PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" \
+PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" MOOX_TEST_REAL_MV="${REAL_MV}" \
   MOOX_TEST_RACE_BARRIER="${RACE_BARRIER}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-b \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
@@ -488,6 +505,43 @@ assert_cls_log_writer "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
 assert_no_transaction_artifacts "${CONCURRENT_STAGE}" "${CONCURRENT_DEPLOY}"
 [[ ! -e "${CONCURRENT_STAGE}/.cls-bootstrap.lock" ]]
 [[ ! -e "${CONCURRENT_DEPLOY}/secrets/.cls-bootstrap.lock" ]]
+
+# If a stale claim is replaced after inspection but before mv, the contender
+# restores the moved live generation without overwriting it and fails.
+INTERLEAVE_STAGE="${TMP}/interleave-stage"
+INTERLEAVE_DEPLOY="${TMP}/interleave-deploy"
+INTERLEAVE_BIN="${TMP}/interleave-bin"
+new_stage "${INTERLEAVE_STAGE}"
+new_deploy "${INTERLEAVE_DEPLOY}"
+interleave_guard="${INTERLEAVE_STAGE}/.cls-bootstrap.lock.takeover"
+interleave_claim="${interleave_guard}.claim.interleave-guard"
+write_lock_owner "${interleave_guard}" interleave-guard "${local_host}" 99999999 "${now}"
+write_lock_owner "${interleave_claim}" stale-interleave-claim "${local_host}" 99999999 "${now}"
+mkdir -p "${INTERLEAVE_BIN}"
+cat >"${INTERLEAVE_BIN}/mv" <<'MV'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=$1
+if [[ "${source_path}" == "${MOOX_TEST_INTERLEAVE_CLAIM}" ]]; then
+  printf 'token=new-claim-owner\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${MOOX_TEST_LOCAL_HOST}" "${PPID}" "$(date +%s)" >"${source_path}/owner"
+fi
+exec "${MOOX_TEST_REAL_MV}" "$@"
+MV
+chmod +x "${INTERLEAVE_BIN}/mv"
+if PATH="${INTERLEAVE_BIN}:${PATH}" MOOX_TEST_REAL_MV="${REAL_MV}" \
+  MOOX_TEST_INTERLEAVE_CLAIM="${interleave_claim}" MOOX_TEST_LOCAL_HOST="${local_host}" \
+  MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${INTERLEAVE_DEPLOY}" --stage-dir "${INTERLEAVE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/interleave.out" 2>&1; then
+  echo 'claim generation interleave unexpectedly succeeded' >&2
+  exit 1
+fi
+grep -Fqx 'token=new-claim-owner' "${interleave_claim}/owner"
+grep -Fqx 'token=interleave-guard' "${interleave_guard}/owner"
+[[ -z "$(find "${INTERLEAVE_STAGE}" -name '*.steal.*' -print -quit)" ]]
 
 # Exercise the remote branch without requiring a host. The transport shims run
 # the uploaded target-architecture CLI in an isolated HOME and record its path.
