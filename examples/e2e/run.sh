@@ -126,6 +126,9 @@ done
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
 [[ "${TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || fail "--timeout-seconds must be an integer"
 infer_public_host
+if [[ "${SYSDEPLOY_ONLY}" -eq 1 ]] && ! is_local_target; then
+  fail "--sysdeploy-only currently supports localhost targets only"
+fi
 
 run_remote() {
   local quoted_dir
