@@ -5,9 +5,9 @@ go 1.24.0
 toolchain go1.24.10
 
 require (
+	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/glebarez/sqlite v1.11.0
-	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000

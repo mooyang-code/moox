@@ -50,6 +50,20 @@ while IFS= read -r directory; do
 	violations+=("${directory}: module-level tests must live under test/, not tests/")
 done < <(find modules -mindepth 2 -maxdepth 2 -type d -name tests -print 2>/dev/null || true)
 
+while IFS= read -r match; do
+	file="${match%%:*}"
+	rest="${match#*:}"
+	line="${rest%%:*}"
+	violations+=("${file}:${line}: use the official trpc.group timer package instead of the go-commlib wrapper")
+done < <(rg -n 'github.com/mooyang-code/go-commlib/trpc-database/timer' modules --glob '*.go' --glob 'go.mod' || true)
+
+while IFS= read -r match; do
+	file="${match%%:*}"
+	rest="${match#*:}"
+	line="${rest%%:*}"
+	violations+=("${file}:${line}: official tRPC timer network does not support params, disable, or location options")
+done < <(rg -n 'network:.*[?&](params|disable|location)=' modules --glob '*.yaml' || true)
+
 if (( ${#violations[@]} > 0 )); then
 	{
 		echo "package boundary violations:"

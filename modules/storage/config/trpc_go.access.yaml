@@ -55,7 +55,7 @@ server:
       protocol: http
     - name: trpc.moox.storage.access.metrics.timer
       port: 20303
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

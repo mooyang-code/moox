@@ -28,7 +28,7 @@ server:
       timeout: 3000
     - name: trpc.moox.eventbus.metrics.timer
       port: 11421
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 plugins:

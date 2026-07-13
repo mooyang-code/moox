@@ -36,7 +36,7 @@ server:
       timeout: 30000
     - name: trpc.moox.storage.view_query.metrics.timer
       port: 20306
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

@@ -26,14 +26,9 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.factor.reconcile.timer
-      port: 11405
-      network: "0 */10 * * * *?scheduler=factorReconcileSchedule&disable=1&params="
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.factor.metrics.timer
       port: 11414
-      network: "*/30 * * * * *?params="
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

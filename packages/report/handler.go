@@ -78,7 +78,7 @@ func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gather
 	return h, nil
 }
 
-func (h *Handler) Handle(ctx context.Context, _ string) error {
+func (h *Handler) Handle(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
