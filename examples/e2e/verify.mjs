@@ -450,27 +450,25 @@ async function assertManagementRequests(args, token) {
 }
 
 async function ensureCloudNode(args, token) {
-  const rsp = await adminPost(args, token, "cloudnode", "BatchCreateNodes", {
-    nodes: [{
+  await adminPost(args, token, "cloudnode", "UpdateNode", {
+    node: {
+      space_id: args.space,
+      node_id: args.node,
       cloud_account_id: "e2e-local",
       node_type: "scf-event",
-      runtime: "go1",
-      handler: "main",
+      provider: "local",
       region: "local",
       namespace: "e2e",
       package_id: args.package,
       deployment_id: args.package,
+      function_name: args.node,
+      supported_workloads: ["collect.kline", "collect.symbol"],
+      status: "NODE_STATUS_CODE_RUNNING",
       metadata: {
-        node_id: args.node,
-        function_name: args.node,
         function_name_prefix: "e2e-scf",
-        supported_workloads: ["collect.kline", "collect.symbol"],
       },
-    }],
+    },
   }, { spaceId: args.space });
-  if ((rsp.processed_count || 0) < 1) {
-    throw new Error("BatchCreateNodes did not process the e2e node");
-  }
   log(`cloudnode runtime node ready: ${args.node}`);
 }
 
