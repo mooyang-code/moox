@@ -12,10 +12,13 @@ printf 'success\n' >"${mode_file}"
 new_stage() {
   local stage=$1
   mkdir -p "${stage}/bin" "${stage}/factor/config" "${stage}/storage/config" \
-    "${stage}/ignored/config"
+    "${stage}/nolog/config" "${stage}/bare/config" "${stage}/ignored/config"
   cp "${ROOT}/modules/factor/config/trpc_go.yaml" "${stage}/factor/config/trpc_go.yaml"
   cp "${ROOT}/modules/storage/config/trpc_go.yaml" "${stage}/storage/config/trpc_go-prod.yaml"
   printf 'leave me alone\n' >"${stage}/ignored/config/not-trpc.yaml"
+  printf 'plugins:\n  metrics:\n    prometheus:\n      port: 1234\n' \
+    >"${stage}/nolog/config/trpc_go.yaml"
+  printf 'global:\n  namespace: Development\n' >"${stage}/bare/config/trpc_go-test.yaml"
   cat >"${stage}/bin/moox-cli" <<'CLI'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -34,16 +37,29 @@ done
 [[ -n "${output}" ]]
 [[ "${cloud_account}" == "${MOOX_TEST_EXPECT_ACCOUNT}" ]]
 secret_prefix=secret
+topic=topic-fixed
+case "${cloud_account}" in
+  concurrent-a) secret_prefix=concurrent-a; topic=topic-a; sleep 1 ;;
+  concurrent-b) secret_prefix=concurrent-b; topic=topic-b; sleep 1 ;;
+esac
 printf "MOOX_CLS_SECRET_ID='%s-id'\nMOOX_CLS_SECRET_KEY='%s-key'\nMOOX_CLS_REGION='ap-guangzhou'\nMOOX_CLS_HOST='ap-guangzhou.cls.tencentyun.com'\nMOOX_CLS_AUTO_BOOTSTRAP=0\n" \
   "${secret_prefix}" "${secret_prefix}" >"${output}"
 chmod 0600 "${output}"
 case "$(cat "${MOOX_TEST_MODE}")" in
   success)
-    printf '{"status":"configured","resources":{"account_id":"acct-first","topic_id":"topic-fixed"}}\n'
+    printf '{"status":"configured","resources":{"account_id":"acct-first","topic_id":"%s"}}\n' "${topic}"
     ;;
   missing-topic)
     printf '{"status":"configured","resources":{"account_id":"acct-first"}}\n'
     ;;
+  malformed) printf '{not-json}\n' ;;
+  leading-garbage) printf 'garbage {"status":"configured","resources":{"topic_id":"topic-fixed"}}\n' ;;
+  trailing-garbage) printf '{"status":"configured","resources":{"topic_id":"topic-fixed"}} garbage\n' ;;
+  multiple-json) printf '{"status":"configured","resources":{"topic_id":"topic-fixed"}}\n{}\n' ;;
+  wrong-status) printf '{"status":"dry-run","resources":{"topic_id":"topic-fixed"}}\n' ;;
+  wrong-topic-type) printf '{"status":"configured","resources":{"topic_id":123}}\n' ;;
+  empty-topic) printf '{"status":"configured","resources":{"topic_id":""}}\n' ;;
+  unsafe-topic) printf '{"status":"configured","resources":{"topic_id":"topic unsafe"}}\n' ;;
   failure)
     printf 'sanitized prepare failure\n' >&2
     exit 42
@@ -70,6 +86,12 @@ tree_digest() {
   local dir=$1
   find "${dir}" -type f ! -path '*/bin/moox-cli' -print0 | LC_ALL=C sort -z | \
     xargs -0 shasum -a 256
+}
+
+assert_no_transaction_artifacts() {
+  local stage=$1 deploy=$2
+  [[ -z "$(find "${stage}" -type f \( -name '*.cls.*.tmp' -o -name '*.cls.*.backup' \) -print -quit)" ]]
+  [[ -z "$(find "${deploy}/secrets" -type f \( -name '.cls.env.*.next' -o -name '.cls.env.*.backup' \) -print -quit)" ]]
 }
 
 assert_no_secrets() {
@@ -111,9 +133,12 @@ grep -q 'topic_id: topic-fixed' "${STAGE}/factor/config/trpc_go.yaml"
 grep -q 'topic_id: topic-fixed' "${STAGE}/storage/config/trpc_go-prod.yaml"
 assert_cls_log_writer "${STAGE}/factor/config/trpc_go.yaml"
 assert_cls_log_writer "${STAGE}/storage/config/trpc_go-prod.yaml"
+assert_cls_log_writer "${STAGE}/nolog/config/trpc_go.yaml"
+assert_cls_log_writer "${STAGE}/bare/config/trpc_go-test.yaml"
 grep -q '^leave me alone$' "${STAGE}/ignored/config/not-trpc.yaml"
 [[ $(file_mode "${DEPLOY}/secrets/cls.env") == 600 ]]
 [[ ! -e "${DEPLOY}/secrets/cls.env.next" ]]
+assert_no_transaction_artifacts "${STAGE}" "${DEPLOY}"
 assert_no_secrets "${output}" "${STAGE}"
 
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
@@ -128,18 +153,20 @@ assert_no_secrets "${output}" "${STAGE}"
 
 before_stage=$(tree_digest "${STAGE}")
 before_env=$(shasum -a 256 "${DEPLOY}/secrets/cls.env")
-printf 'missing-topic\n' >"${mode_file}"
-if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
-  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
-  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
-  --target localhost --deploy-dir "${DEPLOY}" --stage-dir "${STAGE}" \
-  --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
-  echo 'missing topic unexpectedly succeeded' >&2
-  exit 1
-fi
-[[ "${before_stage}" == "$(tree_digest "${STAGE}")" ]]
-[[ "${before_env}" == "$(shasum -a 256 "${DEPLOY}/secrets/cls.env")" ]]
-[[ ! -e "${DEPLOY}/secrets/cls.env.next" ]]
+for invalid_json_mode in missing-topic malformed leading-garbage trailing-garbage multiple-json wrong-status wrong-topic-type empty-topic unsafe-topic; do
+  printf '%s\n' "${invalid_json_mode}" >"${mode_file}"
+  if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+    MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+    "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
+    --target localhost --deploy-dir "${DEPLOY}" --stage-dir "${STAGE}" \
+    --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
+    echo "${invalid_json_mode} unexpectedly succeeded" >&2
+    exit 1
+  fi
+  [[ "${before_stage}" == "$(tree_digest "${STAGE}")" ]]
+  [[ "${before_env}" == "$(shasum -a 256 "${DEPLOY}/secrets/cls.env")" ]]
+  assert_no_transaction_artifacts "${STAGE}" "${DEPLOY}"
+done
 
 printf 'failure\n' >"${mode_file}"
 if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
@@ -155,6 +182,101 @@ fi
 [[ ! -e "${DEPLOY}/secrets/cls.env.next" ]]
 assert_no_secrets "${output}" "${STAGE}"
 
+# Host strings are data, never OpenSSH options or shell syntax.
+transport_marker="${TMP}/transport-called"
+cat >"${TMP}/reject-scp" <<'EOF'
+#!/usr/bin/env bash
+touch "${MOOX_TEST_TRANSPORT_MARKER}"
+exit 97
+EOF
+chmod +x "${TMP}/reject-scp"
+mkdir -p "${TMP}/reject-bin"
+ln -s "${TMP}/reject-scp" "${TMP}/reject-bin/scp"
+ln -s "${TMP}/reject-scp" "${TMP}/reject-bin/ssh"
+for hostile_target in '-oProxyCommand=touch /tmp/pwned' 'host with spaces' $'host\nnewline' 'user@@host' 'host..invalid'; do
+  if PATH="${TMP}/reject-bin:${PATH}" MOOX_TEST_TRANSPORT_MARKER="${transport_marker}" \
+    "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target "${hostile_target}" \
+    --deploy-dir "${DEPLOY}" --stage-dir "${STAGE}" \
+    --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
+    echo "hostile target unexpectedly succeeded: ${hostile_target}" >&2
+    exit 1
+  fi
+done
+[[ ! -e "${transport_marker}" ]]
+
+# A failure during either stage or credential commit restores the whole release.
+REAL_MV=$(command -v mv)
+FAIL_BIN="${TMP}/fail-bin"
+mkdir -p "${FAIL_BIN}"
+cat >"${FAIL_BIN}/mv" <<'MV'
+#!/usr/bin/env bash
+set -euo pipefail
+destination=${!#}
+if [[ "${destination}" == *"${MOOX_TEST_FAIL_MV_DEST}" && ! -e "${MOOX_TEST_FAIL_MV_ONCE}" ]]; then
+  : >"${MOOX_TEST_FAIL_MV_ONCE}"
+  exit 88
+fi
+exec "${MOOX_TEST_REAL_MV}" "$@"
+MV
+chmod +x "${FAIL_BIN}/mv"
+for fail_destination in '/storage/config/trpc_go-prod.yaml' '/secrets/cls.env'; do
+  TX_STAGE="${TMP}/tx-stage-${fail_destination##*/}"
+  TX_DEPLOY="${TMP}/tx-deploy-${fail_destination##*/}"
+  new_stage "${TX_STAGE}"
+  new_deploy "${TX_DEPLOY}"
+  tx_stage_before=$(tree_digest "${TX_STAGE}")
+  tx_env_before=$(shasum -a 256 "${TX_DEPLOY}/secrets/cls.env")
+  fail_once="${TMP}/fail-once-${fail_destination##*/}"
+  printf 'success\n' >"${mode_file}"
+  if PATH="${FAIL_BIN}:${PATH}" MOOX_TEST_REAL_MV="${REAL_MV}" \
+    MOOX_TEST_FAIL_MV_DEST="${fail_destination}" MOOX_TEST_FAIL_MV_ONCE="${fail_once}" \
+    MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+    MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+    "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+    --deploy-dir "${TX_DEPLOY}" --stage-dir "${TX_STAGE}" \
+    --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
+    echo "commit failure unexpectedly succeeded: ${fail_destination}" >&2
+    exit 1
+  fi
+  [[ "${tx_stage_before}" == "$(tree_digest "${TX_STAGE}")" ]]
+  [[ "${tx_env_before}" == "$(shasum -a 256 "${TX_DEPLOY}/secrets/cls.env")" ]]
+  assert_no_transaction_artifacts "${TX_STAGE}" "${TX_DEPLOY}"
+done
+
+# Concurrent publishers get independent credential candidates and stage output.
+CONCURRENT_DEPLOY="${TMP}/concurrent-deploy"
+CONCURRENT_A="${TMP}/concurrent-a"
+CONCURRENT_B="${TMP}/concurrent-b"
+new_deploy "${CONCURRENT_DEPLOY}"
+new_stage "${CONCURRENT_A}"
+new_stage "${CONCURRENT_B}"
+printf 'success\n' >"${mode_file}"
+MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-a \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_A}" \
+  --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-a \
+  >"${TMP}/concurrent-a.out" 2>&1 &
+pid_a=$!
+MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-b \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_B}" \
+  --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-b \
+  >"${TMP}/concurrent-b.out" 2>&1 &
+pid_b=$!
+set +e
+wait "${pid_a}"; status_a=$?
+wait "${pid_b}"; status_b=$?
+set -e
+[[ ${status_a} -eq 0 && ${status_b} -eq 0 ]]
+grep -q 'topic_id: topic-a' "${CONCURRENT_A}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: topic-b' "${CONCURRENT_B}/factor/config/trpc_go.yaml"
+concurrent_env=$(cat "${CONCURRENT_DEPLOY}/secrets/cls.env")
+if [[ "${concurrent_env}" != *concurrent-a-id* || "${concurrent_env}" != *concurrent-a-key* ]]; then
+  [[ "${concurrent_env}" == *concurrent-b-id* && "${concurrent_env}" == *concurrent-b-key* ]]
+fi
+assert_no_transaction_artifacts "${CONCURRENT_A}" "${CONCURRENT_DEPLOY}"
+assert_no_transaction_artifacts "${CONCURRENT_B}" "${CONCURRENT_DEPLOY}"
+
 # Exercise the remote branch without requiring a host. The transport shims run
 # the uploaded target-architecture CLI in an isolated HOME and record its path.
 REMOTE_STAGE="${TMP}/remote-stage"
@@ -168,6 +290,7 @@ cat >"${FAKE_BIN}/scp" <<'SCP'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == -q ]]; shift
+[[ "${1:-}" == -- ]]; shift
 src=$1; destination=$2
 remote_path=${destination#*:}
 printf '%s\n' "${remote_path}" >>"${MOOX_TEST_REMOTE_PATHS}"
@@ -177,6 +300,7 @@ cat >"${FAKE_BIN}/ssh" <<'SSH'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == -o ]]; then shift 2; fi
+[[ "${1:-}" == -- ]]; shift
 target=$1; shift
 [[ "${target}" == deploy@example.test ]]
 if [[ "${1:-}" == bash && "${2:-}" == -s ]]; then
@@ -203,10 +327,29 @@ grep -q 'topic_id: topic-fixed' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
 [[ $(file_mode "${REMOTE_HOME}/moox/secrets/cls.env") == 600 ]]
 [[ ! -e "${REMOTE_HOME}/moox/secrets/cls.env.next" ]]
 while IFS= read -r remote_path; do [[ ! -e "${remote_path}" ]]; done <"${REMOTE_PATHS}"
+assert_no_transaction_artifacts "${REMOTE_STAGE}" "${REMOTE_HOME}/moox"
 assert_no_secrets "${remote_output}" "${REMOTE_STAGE}"
 
 remote_stage_before=$(tree_digest "${REMOTE_STAGE}")
 remote_env_before=$(shasum -a 256 "${REMOTE_HOME}/moox/secrets/cls.env")
+
+printf 'success\n' >"${mode_file}"
+remote_fail_once="${TMP}/remote-fail-once"
+if PATH="${FAIL_BIN}:${FAKE_BIN}:${PATH}" MOOX_TEST_REAL_MV="${REAL_MV}" \
+  MOOX_TEST_FAIL_MV_DEST='/secrets/cls.env' MOOX_TEST_FAIL_MV_ONCE="${remote_fail_once}" \
+  MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
+  --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >>"${remote_output}" 2>&1; then
+  echo 'remote credential commit failure unexpectedly succeeded' >&2
+  exit 1
+fi
+[[ "${remote_stage_before}" == "$(tree_digest "${REMOTE_STAGE}")" ]]
+[[ "${remote_env_before}" == "$(shasum -a 256 "${REMOTE_HOME}/moox/secrets/cls.env")" ]]
+assert_no_transaction_artifacts "${REMOTE_STAGE}" "${REMOTE_HOME}/moox"
+
 for failing_mode in missing-topic failure; do
   printf '%s\n' "${failing_mode}" >"${mode_file}"
   if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
@@ -224,6 +367,8 @@ for failing_mode in missing-topic failure; do
   [[ ! -e "${REMOTE_HOME}/moox/secrets/cls.env.next" ]]
 done
 while IFS= read -r remote_path; do [[ ! -e "${remote_path}" ]]; done <"${REMOTE_PATHS}"
+[[ $(wc -l <"${REMOTE_PATHS}" | tr -d ' ') == $(sort -u "${REMOTE_PATHS}" | wc -l | tr -d ' ') ]]
+assert_no_transaction_artifacts "${REMOTE_STAGE}" "${REMOTE_HOME}/moox"
 assert_no_secrets "${remote_output}" "${REMOTE_STAGE}"
 
 echo 'CLS Skill bootstrap contract passed'

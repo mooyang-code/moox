@@ -8,9 +8,14 @@ STAGE_DIR="${ROOT}/release/deploy-stage/moox"
 ADMIN_URL=http://127.0.0.1:11002
 CLOUD_ACCOUNT_ID=""
 NEXT_PATH=""
+CREDENTIAL_BACKUP=""
+CREDENTIAL_HAD_OLD=0
 REMOTE_CLI=""
 CONFIG_TEMPS=()
 CONFIG_PATHS=()
+CONFIG_BACKUPS=()
+COMMITTED_COUNT=0
+TOKEN="$$.${RANDOM}.${RANDOM}"
 
 fail() {
   printf '[cls-bootstrap] ERROR: %s\n' "$*" >&2
@@ -33,6 +38,36 @@ require_value() {
   [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"
 }
 
+valid_remote_target() {
+  local target=$1 user host label old_ifs
+  local -a labels
+  [[ "${target}" != -* ]] || return 1
+  case "${target}" in
+    *@*)
+      user=${target%%@*}
+      host=${target#*@}
+      [[ "${host}" != *@* && "${user}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || return 1
+      ;;
+    *) host=${target} ;;
+  esac
+  if [[ "${host}" == \[*\] ]]; then
+    [[ "${host}" =~ ^\[[0-9A-Fa-f:]*:[0-9A-Fa-f:]*\]$ ]]
+    return
+  fi
+  [[ ${#host} -le 253 ]] || return 1
+  case "${host}" in
+    .*|*.|*..*) return 1 ;;
+  esac
+  old_ifs=${IFS}
+  IFS=.
+  read -r -a labels <<<"${host}"
+  IFS=${old_ifs}
+  (( ${#labels[@]} > 0 )) || return 1
+  for label in "${labels[@]}"; do
+    [[ ${#label} -le 63 && "${label}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+  done
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) require_value "$@"; TARGET=$2; shift 2 ;;
@@ -46,26 +81,43 @@ done
 
 [[ -d "${STAGE_DIR}" ]] || fail "missing stage directory: ${STAGE_DIR}"
 [[ -x "${STAGE_DIR}/bin/moox-cli" ]] || fail "missing staged moox-cli: ${STAGE_DIR}/bin/moox-cli"
+command -v python3 >/dev/null 2>&1 || fail "python3 is required to parse CLS prepare output"
+
+if ! is_local; then
+  valid_remote_target "${TARGET}" || fail "invalid remote target"
+fi
 
 cleanup_remote() {
   [[ -n "${REMOTE_CLI}" ]] || return 0
-  ssh -o BatchMode=yes "${TARGET}" bash -s -- "${REMOTE_CLI}" "${DEPLOY_DIR}" <<'REMOTE' >/dev/null 2>&1 || true
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
+    "${REMOTE_CLI}" "${DEPLOY_DIR}" "${TOKEN}" <<'REMOTE' >/dev/null 2>&1 || true
 set -euo pipefail
 cli=$1
 deploy=$2
+token=$3
 case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
 esac
-rm -f "${cli}" "${deploy}/secrets/cls.env.next"
+rm -f "${cli}" "${deploy}/secrets/.cls.env.${token}.next" \
+  "${deploy}/secrets/.cls.env.${token}.backup"
 REMOTE
 }
 
 cleanup() {
   local path
+  if (( COMMITTED_COUNT > 0 )); then
+    rollback_stage || true
+  fi
   [[ -z "${NEXT_PATH}" ]] || rm -f "${NEXT_PATH}"
+  [[ -z "${CREDENTIAL_BACKUP}" ]] || rm -f "${CREDENTIAL_BACKUP}"
   if (( ${#CONFIG_TEMPS[@]} > 0 )); then
     for path in "${CONFIG_TEMPS[@]}"; do
+      rm -f "${path}"
+    done
+  fi
+  if (( ${#CONFIG_BACKUPS[@]} > 0 )); then
+    for path in "${CONFIG_BACKUPS[@]}"; do
       rm -f "${path}"
     done
   fi
@@ -73,7 +125,6 @@ cleanup() {
     cleanup_remote
   fi
 }
-trap cleanup EXIT
 
 run_local_prepare() {
   local deploy=$1
@@ -85,30 +136,37 @@ run_local_prepare() {
   source "${deploy}/secrets/service-auth.env"
   set +a
   if [[ -n "${CLOUD_ACCOUNT_ID}" ]]; then
-    "${STAGE_DIR}/bin/moox-cli" ops tencent cls prepare \
+    if ! "${STAGE_DIR}/bin/moox-cli" ops tencent cls prepare \
       --control-url "${ADMIN_URL}" --credentials-output "${NEXT_PATH}" \
-      --cloud-account-id "${CLOUD_ACCOUNT_ID}"
+      --cloud-account-id "${CLOUD_ACCOUNT_ID}"; then
+      return 1
+    fi
   else
-    "${STAGE_DIR}/bin/moox-cli" ops tencent cls prepare \
-      --control-url "${ADMIN_URL}" --credentials-output "${NEXT_PATH}"
+    if ! "${STAGE_DIR}/bin/moox-cli" ops tencent cls prepare \
+      --control-url "${ADMIN_URL}" --credentials-output "${NEXT_PATH}"; then
+      return 1
+    fi
   fi
+  [[ -f "${NEXT_PATH}" ]] || return 1
+  chmod 0600 "${NEXT_PATH}"
 }
 
 run_remote_prepare() {
-  scp -q "${STAGE_DIR}/bin/moox-cli" "${TARGET}:${REMOTE_CLI}"
-  ssh -o BatchMode=yes "${TARGET}" bash -s -- \
-    "${REMOTE_CLI}" "${DEPLOY_DIR}" "${ADMIN_URL}" "${CLOUD_ACCOUNT_ID}" <<'REMOTE'
+  scp -q -- "${STAGE_DIR}/bin/moox-cli" "${TARGET}:${REMOTE_CLI}"
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
+    "${REMOTE_CLI}" "${DEPLOY_DIR}" "${ADMIN_URL}" "${CLOUD_ACCOUNT_ID}" "${TOKEN}" <<'REMOTE'
 set -euo pipefail
 cli=$1
 deploy=$2
 admin_url=$3
 account_id=$4
+token=$5
 case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
 esac
 mkdir -p "${deploy}/secrets"
-next="${deploy}/secrets/cls.env.next"
+next="${deploy}/secrets/.cls.env.${token}.next"
 trap 'status=$?; if [[ ${status} -ne 0 ]]; then rm -f "${next}"; fi; exit ${status}' EXIT
 [[ -r "${deploy}/secrets/service-auth.env" ]]
 set -a
@@ -123,13 +181,31 @@ else
   "${cli}" ops tencent cls prepare --control-url "${admin_url}" \
     --credentials-output "${next}"
 fi
+[[ -f "${next}" ]]
+chmod 0600 "${next}"
 REMOTE
 }
 
 extract_topic_id() {
   local result=$1 topic
-  topic=$(printf '%s\n' "${result}" | \
-    sed -n 's/.*"topic_id"[[:space:]]*:[[:space:]]*"\([^"[:space:]]*\)".*/\1/p' | tail -n 1)
+  topic=$(printf '%s' "${result}" | python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except (ValueError, UnicodeDecodeError):
+    raise SystemExit(1)
+if not isinstance(data, dict) or data.get("status") != "configured":
+    raise SystemExit(1)
+resources = data.get("resources")
+if not isinstance(resources, dict):
+    raise SystemExit(1)
+topic = resources.get("topic_id")
+if not isinstance(topic, str) or not topic:
+    raise SystemExit(1)
+print(topic)
+') || return 1
   [[ -n "${topic}" ]] || return 1
   case "${topic}" in
     *[!A-Za-z0-9._:-]*) return 1 ;;
@@ -226,14 +302,119 @@ EOF
   rm -f "${cleaned}"
 }
 
+validate_rendered_config() {
+  local config=$1 topic_id=$2
+  [[ -s "${config}" ]] || return 1
+  [[ $(grep -c '^# BEGIN MOOX MANAGED CLS$' "${config}") == 1 ]] || return 1
+  [[ $(grep -c '^# END MOOX MANAGED CLS$' "${config}") == 1 ]] || return 1
+  grep -q "^          topic_id: ${topic_id}$" "${config}" || return 1
+  awk '
+    /^plugins:[[:space:]]*$/ { plugins=1; next }
+    plugins && /^[^[:space:]#]/ { plugins=0; in_log=0 }
+    plugins && /^  log:[[:space:]]*$/ { in_log=1; next }
+    in_log && /^  [^[:space:]#][^:]*:/ { in_log=0 }
+    in_log && /^      - writer: cls[[:space:]]*$/ { found++ }
+    END { exit(found == 1 ? 0 : 1) }
+  ' "${config}"
+}
+
+rollback_stage() {
+  local index
+  while (( COMMITTED_COUNT > 0 )); do
+    index=$((COMMITTED_COUNT - 1))
+    if ! mv -f "${CONFIG_BACKUPS[$index]}" "${CONFIG_PATHS[$index]}"; then
+      cp -p "${CONFIG_BACKUPS[$index]}" "${CONFIG_PATHS[$index]}" || return 1
+      rm -f "${CONFIG_BACKUPS[$index]}"
+    fi
+    COMMITTED_COUNT=$index
+  done
+}
+
+commit_stage() {
+  local index
+  for ((index = 0; index < ${#CONFIG_PATHS[@]}; index++)); do
+    if ! mv -f "${CONFIG_TEMPS[$index]}" "${CONFIG_PATHS[$index]}"; then
+      rollback_stage || true
+      return 1
+    fi
+    COMMITTED_COUNT=$((COMMITTED_COUNT + 1))
+  done
+}
+
+prepare_local_credential_backup() {
+  local destination
+  destination="$(dirname "${NEXT_PATH}")/cls.env"
+  CREDENTIAL_BACKUP="$(dirname "${NEXT_PATH}")/.cls.env.${TOKEN}.backup"
+  rm -f "${CREDENTIAL_BACKUP}"
+  if [[ -e "${destination}" ]]; then
+    cp -p "${destination}" "${CREDENTIAL_BACKUP}"
+    CREDENTIAL_HAD_OLD=1
+  else
+    CREDENTIAL_HAD_OLD=0
+  fi
+}
+
+commit_local_credentials() {
+  local destination
+  destination="$(dirname "${NEXT_PATH}")/cls.env"
+  chmod 0600 "${NEXT_PATH}" || return 1
+  if mv -f "${NEXT_PATH}" "${destination}"; then
+    NEXT_PATH=""
+    rm -f "${CREDENTIAL_BACKUP}"
+    CREDENTIAL_BACKUP=""
+    return 0
+  fi
+  if (( CREDENTIAL_HAD_OLD )); then
+    mv -f "${CREDENTIAL_BACKUP}" "${destination}" || \
+      cp -p "${CREDENTIAL_BACKUP}" "${destination}" || true
+  else
+    rm -f "${destination}"
+  fi
+  return 1
+}
+
+commit_remote_credentials() {
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${TOKEN}" <<'REMOTE'
+set -euo pipefail
+deploy=$1
+token=$2
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+next="${deploy}/secrets/.cls.env.${token}.next"
+destination="${deploy}/secrets/cls.env"
+backup="${deploy}/secrets/.cls.env.${token}.backup"
+had_old=0
+trap 'rm -f "${next}" "${backup}"' EXIT
+[[ -f "${next}" ]]
+chmod 0600 "${next}"
+if [[ -e "${destination}" ]]; then
+  cp -p "${destination}" "${backup}"
+  had_old=1
+fi
+if mv -f "${next}" "${destination}"; then
+  exit 0
+fi
+if (( had_old )); then
+  mv -f "${backup}" "${destination}" || cp -p "${backup}" "${destination}"
+else
+  rm -f "${destination}"
+fi
+exit 1
+REMOTE
+}
+
+trap cleanup EXIT
+
 if is_local; then
   deploy=$(expand_local "${DEPLOY_DIR}")
-  NEXT_PATH="${deploy}/secrets/cls.env.next"
+  NEXT_PATH="${deploy}/secrets/.cls.env.${TOKEN}.next"
   if ! result=$(run_local_prepare "${deploy}"); then
     fail "CLS prepare failed"
   fi
 else
-  REMOTE_CLI="/tmp/moox-cli-cls-${RANDOM}.$$"
+  REMOTE_CLI="/tmp/moox-cli-cls-${TOKEN}"
   if ! result=$(run_remote_prepare); then
     fail "remote CLS prepare failed"
   fi
@@ -242,34 +423,39 @@ fi
 topic_id=$(extract_topic_id "${result}") || fail "CLS prepare returned invalid sanitized JSON or no topic_id"
 
 while IFS= read -r -d '' config; do
-  tmp="${config}.cls.${RANDOM}.$$.tmp"
+  tmp="${config}.cls.${TOKEN}.tmp"
+  backup="${config}.cls.${TOKEN}.backup"
   render_config "${config}" "${tmp}" "${topic_id}"
+  validate_rendered_config "${tmp}" "${topic_id}" || fail "invalid rendered CLS config: ${config}"
+  cp -p "${config}" "${backup}"
   CONFIG_PATHS+=("${config}")
   CONFIG_TEMPS+=("${tmp}")
+  CONFIG_BACKUPS+=("${backup}")
 done < <(find "${STAGE_DIR}" -path '*/config/trpc_go*.yaml' -type f -print0)
 
 if is_local; then
   [[ -f "${NEXT_PATH}" ]] || fail "CLS prepare did not write credentials"
-  chmod 0600 "${NEXT_PATH}"
-  mv -f "${NEXT_PATH}" "$(dirname "${NEXT_PATH}")/cls.env"
-  NEXT_PATH=""
-else
-  ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR}" <<'REMOTE'
-set -euo pipefail
-deploy=$1
-case "${deploy}" in
-  "~") deploy="${HOME}" ;;
-  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
-esac
-next="${deploy}/secrets/cls.env.next"
-[[ -f "${next}" ]]
-chmod 0600 "${next}"
-mv -f "${next}" "${deploy}/secrets/cls.env"
-REMOTE
+  prepare_local_credential_backup
 fi
 
-for ((i = 0; i < ${#CONFIG_PATHS[@]}; i++)); do
-  mv -f "${CONFIG_TEMPS[$i]}" "${CONFIG_PATHS[$i]}"
-done
+commit_stage || fail "failed to commit staged CLS configuration"
+if is_local; then
+  if ! commit_local_credentials; then
+    rollback_stage || true
+    fail "failed to commit CLS credentials"
+  fi
+else
+  if ! commit_remote_credentials; then
+    rollback_stage || true
+    fail "failed to commit remote CLS credentials"
+  fi
+fi
+
+COMMITTED_COUNT=0
+if (( ${#CONFIG_BACKUPS[@]} > 0 )); then
+  for backup in "${CONFIG_BACKUPS[@]}"; do
+    rm -f "${backup}"
+  done
+fi
 
 printf '[cls-bootstrap] account and CLS resource verified; topic_id=%s\n' "${topic_id}"
