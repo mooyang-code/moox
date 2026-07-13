@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,8 +27,19 @@ type prepareRunner interface {
 type realPrepareRunner struct{}
 
 func (realPrepareRunner) Prepare(ctx context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
-	return clsprepare.Prepare(ctx, source, factory, opts)
+	result, err := clsprepare.Prepare(ctx, source, factory, opts)
+	if err != nil {
+		return clsprepare.Result{}, trustedCLSPrepareError{err: err}
+	}
+	return result, nil
 }
+
+// trustedCLSPrepareError marks diagnostics produced by clsprepare, whose public
+// contract guarantees that collaborator errors and credentials are sanitized.
+type trustedCLSPrepareError struct{ err error }
+
+func (e trustedCLSPrepareError) Error() string { return e.err.Error() }
+func (e trustedCLSPrepareError) Unwrap() error { return e.err }
 
 var clsPrepareRunner prepareRunner = realPrepareRunner{}
 
@@ -78,9 +90,20 @@ func runCLSPrepare(cmd *cobra.Command, opts clsPrepareOptions) error {
 		CredentialsOutput: opts.CredentialsOutput,
 	})
 	if err != nil {
-		// Collaborator errors may contain decrypted credentials. Keep the command
-		// boundary deliberately opaque rather than forwarding their text.
-		return fmt.Errorf("prepare CLS resources failed")
+		return sanitizeCLSPrepareCommandError(err)
 	}
 	return writeJSON(cmd, map[string]any{"status": "configured", "resources": result})
+}
+
+func sanitizeCLSPrepareCommandError(err error) error {
+	var trusted trustedCLSPrepareError
+	if errors.As(err, &trusted) {
+		return trusted
+	}
+	for _, sentinel := range []error{context.Canceled, context.DeadlineExceeded} {
+		if errors.Is(err, sentinel) {
+			return fmt.Errorf("prepare CLS resources failed: %w", sentinel)
+		}
+	}
+	return errors.New("prepare CLS resources failed")
 }

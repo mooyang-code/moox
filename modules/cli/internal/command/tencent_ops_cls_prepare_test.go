@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,7 +84,7 @@ func TestCLSPrepareRequiresSignedServiceAuthentication(t *testing.T) {
 }
 
 func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
-	const credential = "secret-from-account"
+	const credential = "sid=account-id key=account-key Auth=signature body=credential-payload"
 	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
 	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
@@ -96,5 +97,47 @@ func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), credential)
+	for _, fragment := range []string{"account-id", "account-key", "signature", "credential-payload"} {
+		require.NotContains(t, err.Error(), fragment)
+	}
 	require.NotContains(t, err.Error(), "svc-sk")
+}
+
+func TestCLSPreparePreservesKnownSafeRunnerDiagnostics(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
+	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	cmd := newCLSPrepareCommand()
+	oldRunner := clsPrepareRunner
+	t.Cleanup(func() { clsPrepareRunner = oldRunner })
+	clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
+		return clsprepare.Result{}, trustedCLSPrepareError{err: errors.New(`cloud account "missing" not found`)}
+	})
+	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, `cloud account "missing" not found`)
+}
+
+func TestCLSPrepareUnknownContextErrorsKeepIdentityWithoutLeakingText(t *testing.T) {
+	for name, sentinel := range map[string]error{
+		"canceled": context.Canceled,
+		"deadline": context.DeadlineExceeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
+			t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+			cmd := newCLSPrepareCommand()
+			oldRunner := clsPrepareRunner
+			t.Cleanup(func() { clsPrepareRunner = oldRunner })
+			clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
+				return clsprepare.Result{}, fmt.Errorf("sid=account-id key=account-key Auth=signature body=payload: %w", sentinel)
+			})
+			cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+			err := cmd.Execute()
+			require.Error(t, err)
+			require.ErrorIs(t, err, sentinel)
+			for _, fragment := range []string{"account-id", "account-key", "signature", "payload"} {
+				require.NotContains(t, err.Error(), fragment)
+			}
+		})
+	}
 }
