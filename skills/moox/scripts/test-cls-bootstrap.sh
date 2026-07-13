@@ -90,7 +90,7 @@ tree_digest() {
 
 assert_no_transaction_artifacts() {
   local stage=$1 deploy=$2
-  [[ -z "$(find "${stage}" -type f \( -name '*.cls.*.tmp' -o -name '*.cls.*.backup' \) -print -quit)" ]]
+  [[ -z "$(find "${stage}" -type f -name '*.cls.*' -print -quit)" ]]
   [[ -z "$(find "${deploy}/secrets" -type f \( -name '.cls.env.*.next' -o -name '.cls.env.*.backup' \) -print -quit)" ]]
 }
 
@@ -241,6 +241,59 @@ for fail_destination in '/storage/config/trpc_go-prod.yaml' '/secrets/cls.env'; 
   [[ "${tx_stage_before}" == "$(tree_digest "${TX_STAGE}")" ]]
   [[ "${tx_env_before}" == "$(shasum -a 256 "${TX_DEPLOY}/secrets/cls.env")" ]]
   assert_no_transaction_artifacts "${TX_STAGE}" "${TX_DEPLOY}"
+done
+
+# Render validation is structural and leaves no candidate or backup behind.
+for invalid_config_case in malformed-yaml wrong-level duplicate-writer; do
+  INVALID_STAGE="${TMP}/invalid-stage-${invalid_config_case}"
+  INVALID_DEPLOY="${TMP}/invalid-deploy-${invalid_config_case}"
+  new_stage "${INVALID_STAGE}"
+  new_deploy "${INVALID_DEPLOY}"
+  case "${invalid_config_case}" in
+    malformed-yaml)
+      printf 'broken: [\n' >>"${INVALID_STAGE}/factor/config/trpc_go.yaml"
+      ;;
+    wrong-level)
+      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info
+    audit:
+      - writer: cls
+        remote_config:
+          topic_id: unmanaged-wrong-level
+YAML
+      ;;
+    duplicate-writer)
+      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info
+      - writer: cls
+        level: error
+        remote_config:
+          topic_id: unmanaged-duplicate
+YAML
+      ;;
+  esac
+  invalid_stage_before=$(tree_digest "${INVALID_STAGE}")
+  invalid_env_before=$(shasum -a 256 "${INVALID_DEPLOY}/secrets/cls.env")
+  printf 'success\n' >"${mode_file}"
+  if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+    MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+    "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+    --deploy-dir "${INVALID_DEPLOY}" --stage-dir "${INVALID_STAGE}" \
+    --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
+    echo "invalid rendered config unexpectedly succeeded: ${invalid_config_case}" >&2
+    exit 1
+  fi
+  [[ "${invalid_stage_before}" == "$(tree_digest "${INVALID_STAGE}")" ]]
+  [[ "${invalid_env_before}" == "$(shasum -a 256 "${INVALID_DEPLOY}/secrets/cls.env")" ]]
+  assert_no_transaction_artifacts "${INVALID_STAGE}" "${INVALID_DEPLOY}"
 done
 
 # Concurrent publishers get independent credential candidates and stage output.

@@ -12,6 +12,7 @@ CREDENTIAL_BACKUP=""
 CREDENTIAL_HAD_OLD=0
 REMOTE_CLI=""
 CONFIG_TEMPS=()
+CONFIG_CLEANS=()
 CONFIG_PATHS=()
 CONFIG_BACKUPS=()
 COMMITTED_COUNT=0
@@ -82,6 +83,7 @@ done
 [[ -d "${STAGE_DIR}" ]] || fail "missing stage directory: ${STAGE_DIR}"
 [[ -x "${STAGE_DIR}/bin/moox-cli" ]] || fail "missing staged moox-cli: ${STAGE_DIR}/bin/moox-cli"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required to parse CLS prepare output"
+python3 -c 'import yaml' >/dev/null 2>&1 || fail "PyYAML is required to validate staged configuration"
 
 if ! is_local; then
   valid_remote_target "${TARGET}" || fail "invalid remote target"
@@ -113,6 +115,11 @@ cleanup() {
   [[ -z "${CREDENTIAL_BACKUP}" ]] || rm -f "${CREDENTIAL_BACKUP}"
   if (( ${#CONFIG_TEMPS[@]} > 0 )); then
     for path in "${CONFIG_TEMPS[@]}"; do
+      rm -f "${path}"
+    done
+  fi
+  if (( ${#CONFIG_CLEANS[@]} > 0 )); then
+    for path in "${CONFIG_CLEANS[@]}"; do
       rm -f "${path}"
     done
   fi
@@ -233,8 +240,7 @@ has_log_default() {
 }
 
 render_config() {
-  local config=$1 output=$2 topic_id=$3 cleaned
-  cleaned="${output}.clean"
+  local config=$1 output=$2 topic_id=$3 cleaned=$4
   strip_managed_block "${config}" "${cleaned}"
   if has_log_default "${cleaned}"; then
     awk -v topic_id="${topic_id}" '
@@ -307,15 +313,47 @@ validate_rendered_config() {
   [[ -s "${config}" ]] || return 1
   [[ $(grep -c '^# BEGIN MOOX MANAGED CLS$' "${config}") == 1 ]] || return 1
   [[ $(grep -c '^# END MOOX MANAGED CLS$' "${config}") == 1 ]] || return 1
-  grep -q "^          topic_id: ${topic_id}$" "${config}" || return 1
-  awk '
-    /^plugins:[[:space:]]*$/ { plugins=1; next }
-    plugins && /^[^[:space:]#]/ { plugins=0; in_log=0 }
-    plugins && /^  log:[[:space:]]*$/ { in_log=1; next }
-    in_log && /^  [^[:space:]#][^:]*:/ { in_log=0 }
-    in_log && /^      - writer: cls[[:space:]]*$/ { found++ }
-    END { exit(found == 1 ? 0 : 1) }
-  ' "${config}"
+  python3 - "${config}" "${topic_id}" <<'PY' >/dev/null 2>&1
+import sys
+import yaml
+
+path, expected_topic = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    document = yaml.safe_load(stream)
+if not isinstance(document, dict):
+    raise SystemExit(1)
+plugins = document.get("plugins")
+log = plugins.get("log") if isinstance(plugins, dict) else None
+default = log.get("default") if isinstance(log, dict) else None
+if not isinstance(default, list):
+    raise SystemExit(1)
+managed = [item for item in default if isinstance(item, dict) and item.get("writer") == "cls"]
+if len(managed) != 1:
+    raise SystemExit(1)
+writer = managed[0]
+remote = writer.get("remote_config")
+if writer.get("level") != "warn" or not isinstance(remote, dict):
+    raise SystemExit(1)
+expected_remote = {
+    "topic_id": expected_topic,
+    "host": "${MOOX_CLS_HOST}",
+    "secret_id": "${MOOX_CLS_SECRET_ID}",
+    "secret_key": "${MOOX_CLS_SECRET_KEY}",
+    "max_block_sec": 0,
+}
+if any(remote.get(key) != value for key, value in expected_remote.items()):
+    raise SystemExit(1)
+
+def cls_writers(value):
+    if isinstance(value, dict):
+        return (1 if value.get("writer") == "cls" else 0) + sum(cls_writers(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(cls_writers(item) for item in value)
+    return 0
+
+if cls_writers(document) != 1:
+    raise SystemExit(1)
+PY
 }
 
 rollback_stage() {
@@ -424,13 +462,15 @@ topic_id=$(extract_topic_id "${result}") || fail "CLS prepare returned invalid s
 
 while IFS= read -r -d '' config; do
   tmp="${config}.cls.${TOKEN}.tmp"
+  clean="${tmp}.clean"
   backup="${config}.cls.${TOKEN}.backup"
-  render_config "${config}" "${tmp}" "${topic_id}"
-  validate_rendered_config "${tmp}" "${topic_id}" || fail "invalid rendered CLS config: ${config}"
-  cp -p "${config}" "${backup}"
   CONFIG_PATHS+=("${config}")
   CONFIG_TEMPS+=("${tmp}")
+  CONFIG_CLEANS+=("${clean}")
   CONFIG_BACKUPS+=("${backup}")
+  render_config "${config}" "${tmp}" "${topic_id}" "${clean}"
+  validate_rendered_config "${tmp}" "${topic_id}" || fail "invalid rendered CLS config: ${config}"
+  cp -p "${config}" "${backup}"
 done < <(find "${STAGE_DIR}" -path '*/config/trpc_go*.yaml' -type f -print0)
 
 if is_local; then
