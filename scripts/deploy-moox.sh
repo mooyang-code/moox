@@ -361,10 +361,25 @@ patch_configs() {
       "${STAGE_DIR}/eventbus/config/app.yaml"
   fi
 
+  if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+    [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
+    [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
+    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
+  else
+    [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
+    [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
+    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
+  fi
+
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
   for conf in "${STAGE_DIR}"/storage/config/storage*.yaml; do
     perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage#g; s#path:\s*\./var/storage/metadata/storage_metadata\.db#path: ../data/storage/metadata/storage_metadata.db#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage/pebble#g; s#view_index_root:\s*\./var/storage/view-indexes#view_index_root: ../data/storage/view-indexes#g; s#parquet_path:\s*\./var/storage/archive#parquet_path: ../data/storage/archive#g' \
       "${conf}"
+    if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+      perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml#' "${conf}"
+    else
+      perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${conf}"
+    fi
   done
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"

@@ -14,7 +14,7 @@ storage:
     urls:
       - nats://127.0.0.1:4222
     nats_url: nats://127.0.0.1:4222
-    credential_file: ""
+    credential_file: ~/.config/moox/storage/eventbus.yaml
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_view_builder

@@ -42,6 +42,9 @@ func TestValidateColumnDisplayNameAllowsInternalOperationalLabels(t *testing.T) 
 	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name": "Producer node ID",
 	}))
+	require.Error(t, validateColumnDisplayName("display_name", "moox_fake", map[string]string{
+		"display_name": "Producer node ID",
+	}))
 }
 
 func TestNormalizeViewDatasetIDsDedupesAndPrefixesPrimary(t *testing.T) {

@@ -14,7 +14,7 @@ nats:
   urls:
     - nats://127.0.0.1:4222
   url: nats://127.0.0.1:4222
-  credential_file: ""
+  credential_file: ~/.config/moox/factor/eventbus.yaml
   stream: MOOX_STORAGE
   consumer: factor_calc
   subject: moox.storage.time_series.rows_updated.v1
@@ -44,12 +44,12 @@ instance:
   heartbeat_interval_ms: 5000
 
 sysdeploy:
-  admin_gateway_url: http://127.0.0.1:11000
+  admin_gateway_url: http://127.0.0.1:11002
   service_auth:
-    version: moox-auth-v1
+    version: moox-auth-v2
     access_key: moox-service
-    secret_key: moox-service-secret-change-me
-    expire_seconds: 1800
+    secret_key: ""
+    expire_seconds: 60
 
 health:
   addr: ":11414"

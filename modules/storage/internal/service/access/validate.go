@@ -66,7 +66,7 @@ func validateColumnDisplayName(field string, spaceID string, attrs map[string]st
 	if attrs == nil {
 		return validateChineseDisplayName(field, "")
 	}
-	if strings.HasPrefix(spaceID, "moox_") {
+	if spaceID == "moox_system" {
 		if strings.TrimSpace(attrs["display_name"]) == "" {
 			return fmt.Errorf("%s is required", field)
 		}

@@ -11,6 +11,9 @@ database:
 health:
   addr: ":11409"
 
+health_auth:
+  version: "moox-health-v1"
+
 instance:
   instance_id: ""
   base_url: "http://127.0.0.1:11409"
@@ -25,10 +28,10 @@ sysdeploy:
   target: "ip://127.0.0.1:11109"
   sync_interval_seconds: 60
   service_auth:
-    version: "moox-auth-v1"
+    version: "moox-auth-v2"
     access_key: "moox-service"
-    secret_key: "moox-service-secret-change-me"
-    expire_seconds: 1800
+    secret_key: ""
+    expire_seconds: 60
 
 peer:
   enabled: true
@@ -43,7 +46,7 @@ alert:
 metrics:
   enabled: true
   eventbus_url: nats://127.0.0.1:4222
-  eventbus_credential_file: ""
+  eventbus_credential_file: ~/.config/moox/monitor/eventbus.yaml
   stream: MOOX_METRICS
   topic: moox.metrics.snapshot.reported.v1
   consumer: monitor_metrics_ingest_v1
