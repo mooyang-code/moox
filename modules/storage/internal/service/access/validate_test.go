@@ -35,6 +35,15 @@ func TestValidateChineseDisplayNameRequiresHanCharacters(t *testing.T) {
 	require.Error(t, validateChineseDisplayName("display_name", "news-only"))
 }
 
+func TestValidateColumnDisplayNameAllowsInternalOperationalLabels(t *testing.T) {
+	require.NoError(t, validateColumnDisplayName("display_name", "moox_system", map[string]string{
+		"display_name": "Producer node ID",
+	}))
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
+		"display_name": "Producer node ID",
+	}))
+}
+
 func TestNormalizeViewDatasetIDsDedupesAndPrefixesPrimary(t *testing.T) {
 	got := normalizeViewDatasetIDs("kline", []string{"news", "kline", "", "news"})
 	assert.Equal(t, []string{"kline", "news"}, got)

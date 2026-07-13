@@ -242,7 +242,7 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
 	}
-	if err := validateColumnDisplayName("view column display_name", column.GetAttributes()); err != nil {
+	if err := validateColumnDisplayName("view column display_name", column.GetSpaceId(), column.GetAttributes()); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {

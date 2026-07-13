@@ -62,9 +62,15 @@ func validateChineseDisplayName(field string, value string) error {
 	return fmt.Errorf("%s must contain Chinese characters", field)
 }
 
-func validateColumnDisplayName(field string, attrs map[string]string) error {
+func validateColumnDisplayName(field string, spaceID string, attrs map[string]string) error {
 	if attrs == nil {
 		return validateChineseDisplayName(field, "")
+	}
+	if strings.HasPrefix(spaceID, "moox_") {
+		if strings.TrimSpace(attrs["display_name"]) == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+		return nil
 	}
 	return validateChineseDisplayName(field, attrs["display_name"])
 }
