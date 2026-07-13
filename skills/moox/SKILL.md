@@ -86,10 +86,13 @@ Runtime data can be deleted and rebuilt from `examples/` and service flows. Do n
 
 ### Tencent CLS Before Deployment
 
-When CLS is enabled, prepare it before uploading the release or stopping any
-existing service. The Admin and CloudNode control plane must already be
-running and reachable through the service-authenticated gateway, and the
-selected account must be a Tencent cloud account:
+When CLS is enabled, prepare it before syncing the release archive or stopping
+any existing service. On remote targets this may upload a temporary,
+architecture-matched `moox-cli` helper solely for preflight; the helper is
+removed immediately and is not the release archive. The Admin and CloudNode
+control plane must already be running and reachable through the
+service-authenticated gateway, and the selected account must be a Tencent
+cloud account:
 
 ```bash
 skills/moox/scripts/cls-bootstrap.sh \
@@ -142,7 +145,8 @@ scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host ho
 The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, persists its CA, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
 
 For a CLS-enabled release, `scripts/deploy-moox.sh --enable-cls` runs the CLS
-predeploy check after stage creation and before either local or remote sync.
+predeploy check after stage creation and before release archive sync or service
+shutdown.
 That check requires the already-running Admin/CloudNode control plane and at
 least one Tencent cloud account; a failed check must not stop the current
 deployment.

@@ -41,7 +41,7 @@ MooX 的 11 个 tRPC 服务已经注册 `trpc-log-cls`，但仓库中的 `trpc_g
 --deploy-dir <path>
 ```
 
-`skills/moox/SKILL.md` 的系统初始化和发布流程必须在上传或停止服务前调用该脚本。`deploy-moox.sh --enable-cls` 复用脚本生成的结果，不再把云资源发现推迟到服务启动阶段。
+`skills/moox/SKILL.md` 的系统初始化和发布流程必须在 release archive 同步或停止服务前调用该脚本。远程 Skill 可先上传仅用于预检的临时架构匹配 `moox-cli` helper；预检完成后立即删除，不属于 release archive。`deploy-moox.sh --enable-cls` 复用脚本生成的结果，不再把云资源发现推迟到服务启动阶段。
 
 ### moox-cli 编排命令
 
@@ -98,14 +98,14 @@ sequenceDiagram
 带 service-auth 的 CloudNode 控制面选择账户并核对固定 CLS 资源，
 `skills/moox/scripts/cls-bootstrap.sh` 负责在目标机安全安装 `0600` 的
 `secrets/cls.env` 并只修改 stage 配置，`scripts/deploy-moox.sh` 的
-`prepare_cls_preflight` 在同步或停止旧服务前执行。对应的部署、Skill、CLI
+`prepare_cls_preflight` 在 release archive 同步或停止旧服务前执行。对应的部署、Skill、CLI
 和 tRPC 配置契约测试覆盖账户选择、Topic ID/credential placeholders、
 固定 region/logset/topic、幂等更新及失败时不停止现有服务；运行时安全边界
 仍以本设计的“安全边界”一节为准。
 
 ## 错误处理
 
-以下情况必须在上传、停止旧服务或切换配置之前终止发布：
+以下情况必须在 release archive 同步、停止旧服务或切换配置之前终止发布：
 
 - Admin 或 CloudNode 管理面不可达。
 - 没有腾讯云账户，或指定账户不存在。
