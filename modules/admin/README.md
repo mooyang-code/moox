@@ -67,6 +67,18 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 
 转发映射以 `t_service_deployments` 中的 active 部署记录为准，`config/gateway.yaml` 不再维护服务地址。
 
+### SysDeploy 定位与限制
+
+SysDeploy 是面向 MooX 单机部署的静态服务目录，不是类似 Polaris、Consul 或 etcd 的动态注册中心：
+
+- 每个 `service_name` 只保存一个当前入口地址，适合一台主机上按模块拆分多个进程。
+- `active` 表示配置已启用，不等价于服务健康；实际可用性由 Monitor 独立探测。
+- 服务不会自行注册或续约，地址变化由部署脚本或管理员显式更新。
+- 当前不支持同一服务多实例、实例心跳、自动摘除和负载均衡。
+- Admin 网关和 SCF keepalive 都读取同一份 active 部署记录，避免在多个配置文件中重复维护地址。
+
+如果未来需要同服务多实例，应单独引入服务实例模型和明确的负载均衡策略，不在当前表中用重复 `service_name` 模拟。
+
 ## 配置与数据
 
 - 主配置：`config/trpc_go.yaml`、`config/gateway.yaml`
