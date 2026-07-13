@@ -2,6 +2,8 @@
 
 MooX pins Caddy `v2.11.4` and installs it without root privileges below the deployment root. The normal deployment flow runs the managed prerequisite automatically; do not install package-manager Caddy as a prerequisite.
 
+On a clean target, `caddy-prerequisite.sh ensure` installs and verifies the binary but does not start an edge without a Caddyfile or upstreams. `deploy-moox.sh` supplies `Caddyfile.next`, validates it before replacing the active configuration, starts the upstreams, and then starts or reloads Caddy.
+
 ```bash
 skills/moox/scripts/caddy-prerequisite.sh ensure --target user@host --deploy-dir /home/user/moox
 skills/moox/scripts/caddy-prerequisite.sh status --target user@host --deploy-dir /home/user/moox

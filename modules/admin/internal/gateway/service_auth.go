@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -13,8 +14,6 @@ const (
 	defaultServiceAuthExpireSeconds = int64(60)
 	defaultServiceAuthClockSkewSecs = int64(30)
 )
-
-var serviceNonceCache = serviceauth.NewNonceCache(65536)
 
 func normalizeServiceAuthConfig(cfg ServiceAuthConfig) ServiceAuthConfig {
 	if cfg.Version == "" {
@@ -53,13 +52,21 @@ func currentServiceAuthConfig() (ServiceAuthConfig, error) {
 	return cfg, nil
 }
 
-func validateServiceAuthHeader(header, method, path string, body []byte, now time.Time, cfg ServiceAuthConfig) error {
+func validateServiceAuthHeader(ctx context.Context, header, method, path string, body []byte, headers map[string]string, now time.Time, cfg ServiceAuthConfig) error {
 	cfg = normalizeServiceAuthConfig(cfg)
-	claims, err := serviceauth.VerifyHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.MaxExpireSecs, ClockSkewSeconds: cfg.ClockSkewSecs}, serviceauth.Request{Method: method, Path: path, Body: body}, header, now)
+	claims, err := serviceauth.VerifyHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.MaxExpireSecs, ClockSkewSeconds: cfg.ClockSkewSecs}, serviceauth.Request{Method: method, Path: path, Body: body, Headers: headers}, header, now)
 	if err != nil {
 		return err
 	}
-	if !serviceNonceCache.Consume(claims.AccessKey, claims.Nonce, claims.TTL, now) {
+	store := getRequestAuthStore()
+	if store == nil {
+		return fmt.Errorf("service auth nonce store is unavailable")
+	}
+	consumed, err := store.ConsumeServiceNonce(ctx, claims.AccessKey, claims.Nonce, claims.TTL)
+	if err != nil {
+		return fmt.Errorf("consume service auth nonce: %w", err)
+	}
+	if !consumed {
 		return fmt.Errorf("service auth nonce was already used")
 	}
 	return nil

@@ -1,5 +1,6 @@
 import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from '@/utils/request-signing';
+import { readSelectedSpaceId } from './space-header';
 
 interface PersistedAuth {
   token?: string;
@@ -34,7 +35,18 @@ async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalA
   const url = new URL(config.url || '/', window.location.origin);
   const timestamp = now;
   const nonce = createNonce();
-  const signature = await signRequest(session.key, { method: config.method || 'GET', path: url.pathname, body, timestamp, nonce });
+  const signature = await signRequest(session.key, {
+    method: config.method || 'GET',
+    path: url.pathname,
+    body,
+    headers: {
+      'X-App-Id': config.headers.get('X-App-Id'),
+      'X-App-Key': config.headers.get('X-App-Key'),
+      'X-Space-Id': config.headers.get('X-Space-Id'),
+    },
+    timestamp,
+    nonce,
+  });
   config.headers.Authorization = auth.token;
   config.headers['X-Access-Token'] = auth.token;
   config.headers['X-Moox-Timestamp'] = String(timestamp);
@@ -51,5 +63,17 @@ export function installSignedClient(client: AxiosInstance): void {
       if (window.location.hash !== '#/login') window.location.hash = '#/login';
     }
     return Promise.reject(error);
+  });
+}
+
+export function installSpaceAwareSignedClient(client: AxiosInstance): void {
+  // Axios executes request interceptors in reverse registration order.
+  installSignedClient(client);
+  client.interceptors.request.use((config) => {
+    const spaceId = readSelectedSpaceId();
+    if (spaceId && !config.headers.get('X-Space-Id')) {
+      config.headers.set('X-Space-Id', spaceId);
+    }
+    return config;
   });
 }

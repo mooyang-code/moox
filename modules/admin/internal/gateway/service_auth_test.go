@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -47,6 +48,8 @@ func buildValidServiceAuthHeader(t *testing.T, cfg ServiceAuthConfig, body strin
 }
 
 func TestValidateServiceAuthHeader_ValidSignature_ShouldPass(t *testing.T) {
+	SetRequestAuthStore(&fakeRequestAuthStore{nonces: map[string]bool{}})
+	t.Cleanup(func() { SetRequestAuthStore(nil) })
 	cfg := ServiceAuthConfig{
 		Enabled: true, Version: "moox-auth-v2",
 		AccessKey: "ak", SecretKey: "sk",
@@ -55,13 +58,13 @@ func TestValidateServiceAuthHeader_ValidSignature_ShouldPass(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	body := `{"ok":true}`
 	auth := buildValidServiceAuthHeader(t, cfg, body, now)
-	require.NoError(t, validateServiceAuthHeader(auth, http.MethodPost, "/api/service/x/Do", []byte(body), now, cfg))
-	require.Error(t, validateServiceAuthHeader(auth, http.MethodPost, "/api/service/x/Do", []byte(body), now, cfg))
+	require.NoError(t, validateServiceAuthHeader(context.Background(), auth, http.MethodPost, "/api/service/x/Do", []byte(body), nil, now, cfg))
+	require.Error(t, validateServiceAuthHeader(context.Background(), auth, http.MethodPost, "/api/service/x/Do", []byte(body), nil, now, cfg))
 }
 
 func TestValidateServiceAuthHeader_InvalidFormat_ShouldError(t *testing.T) {
 	cfg := ServiceAuthConfig{Enabled: true, Version: "moox-auth-v2", AccessKey: "ak", SecretKey: "sk"}
-	err := validateServiceAuthHeader("bad-format", http.MethodPost, "/api/service/x/Do", nil, time.Now(), cfg)
+	err := validateServiceAuthHeader(context.Background(), "bad-format", http.MethodPost, "/api/service/x/Do", nil, nil, time.Now(), cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid auth format")
 }
@@ -69,7 +72,7 @@ func TestValidateServiceAuthHeader_InvalidFormat_ShouldError(t *testing.T) {
 func TestValidateServiceAuthHeader_InvalidVersion_ShouldError(t *testing.T) {
 	cfg := ServiceAuthConfig{Enabled: true, Version: "moox-auth-v2", AccessKey: "ak", SecretKey: "sk"}
 	auth := "other-v1/ak/1/300/sig"
-	err := validateServiceAuthHeader(auth, http.MethodPost, "/api/service/x/Do", nil, time.Now(), cfg)
+	err := validateServiceAuthHeader(context.Background(), auth, http.MethodPost, "/api/service/x/Do", nil, nil, time.Now(), cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid auth version")
 }
@@ -83,7 +86,7 @@ func TestValidateServiceAuthHeader_ExpiredSignature_ShouldError(t *testing.T) {
 	past := time.Unix(1_600_000_000, 0)
 	body := `{}`
 	auth := buildValidServiceAuthHeader(t, cfg, body, past)
-	err := validateServiceAuthHeader(auth, http.MethodPost, "/api/service/x/Do", []byte(body), time.Unix(1_600_001_000, 0), cfg)
+	err := validateServiceAuthHeader(context.Background(), auth, http.MethodPost, "/api/service/x/Do", []byte(body), nil, time.Unix(1_600_001_000, 0), cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
 }
@@ -97,5 +100,19 @@ func TestHTTPRequestHandler_ValidateServiceAuth_InvalidHeader_ShouldError(t *tes
 	req, _ := http.NewRequest(http.MethodPost, "/", nil)
 	req.Header.Set("Auth", "invalid")
 	err := h.validateServiceAuth(req, []byte(`{}`))
+	require.Error(t, err)
+}
+
+func TestValidateServiceAuthHeader_ChangedSpaceHeader_ShouldError(t *testing.T) {
+	now := time.Now()
+	cfg := ServiceAuthConfig{Enabled: true, AccessKey: "ak", SecretKey: "sk", MaxExpireSecs: 60, ClockSkewSecs: 30}
+	auth, err := serviceauth.BuildHeader(
+		serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: 60},
+		serviceauth.Request{Method: http.MethodPost, Path: "/api/service/x/Do", Headers: map[string]string{"X-Space-Id": "space-1"}},
+		now,
+	)
+	require.NoError(t, err)
+
+	err = validateServiceAuthHeader(context.Background(), auth, http.MethodPost, "/api/service/x/Do", nil, map[string]string{"X-Space-Id": "space-2"}, now, cfg)
 	require.Error(t, err)
 }

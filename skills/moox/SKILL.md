@@ -116,7 +116,7 @@ skills/moox/scripts/caddy-prerequisite.sh ensure --target user@host --deploy-dir
 scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host host.example
 ```
 
-This installs checksum-verified Caddy `v2.11.4` below the deployment root, starts loopback upstreams, starts or reloads only the MooX-owned Caddy process, persists its CA, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
+The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, persists its CA, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
 
 When initializing a fresh MooX system, use a strict two-stage deployment flow. Do not ask for every service placement up front.
 

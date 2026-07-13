@@ -4,7 +4,6 @@ import (
 	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
-	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/bootstrap"
 	"trpc.group/trpc-go/trpc-go"

@@ -5,7 +5,6 @@ import (
 	_ "github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
-	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/bootstrap"
 	"trpc.group/trpc-go/trpc-go"

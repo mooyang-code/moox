@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +44,22 @@ func TestNewSignedRequestWithContext_RequiresCredentials(t *testing.T) {
 	_, err := NewSignedRequestWithContext(context.Background(), "POST", "http://127.0.0.1:8080", nil, AuthConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
+}
+
+func TestNewSignedRequestWithContextAndHeaders_BindsSpaceHeader(t *testing.T) {
+	now := time.Now()
+	req, err := NewSignedRequestWithContextAndHeaders(
+		context.Background(), http.MethodPost, "http://127.0.0.1:8080/api/service/x/Do", []byte(`{}`),
+		map[string]string{"X-Space-Id": "space-1"},
+		AuthConfig{AccessKey: "ak", SecretKey: "sk", NowUnix: now.Unix(), ExpireSec: 60},
+	)
+	require.NoError(t, err)
+	_, err = serviceauth.VerifyHeader(
+		serviceauth.Config{AccessKey: "ak", SecretKey: "sk", ExpireSeconds: 60},
+		serviceauth.Request{Method: http.MethodPost, Path: req.URL.EscapedPath(), Body: []byte(`{}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
+		req.Header.Get("Auth"), now,
+	)
+	require.Error(t, err)
 }
 
 func TestDefaultAuthConfig_UsesGlobalConfig(t *testing.T) {

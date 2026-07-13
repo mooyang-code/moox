@@ -2,9 +2,8 @@ import axios from 'axios';
 import { Message } from '@arco-design/web-vue';
 import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
-import { withSelectedSpaceHeader } from '../admin/space-header';
 import type { RetInfo } from './types';
-import { installSignedClient } from '../admin/signed-client';
+import { installSpaceAwareSignedClient } from '../admin/signed-client';
 
 // trade 服务 ID → 网关路径映射（与 admin/config/gateway.yaml 对齐）
 const tradeServiceMap: Record<string, string> = {
@@ -51,12 +50,7 @@ export async function callTrade<TReq extends object, TRsp extends { ret_info: Re
   return rsp.data;
 }
 
-tradeClient.interceptors.request.use((config) => {
-  const headers = withSelectedSpaceHeader((config.headers || {}) as Record<string, string | undefined>);
-  config.headers = headers as typeof config.headers;
-  return config;
-});
-installSignedClient(tradeClient);
+installSpaceAwareSignedClient(tradeClient);
 
 tradeClient.interceptors.response.use(
   (rsp) => {

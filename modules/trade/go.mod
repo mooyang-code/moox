@@ -27,7 +27,6 @@ require (
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
-	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
 require (

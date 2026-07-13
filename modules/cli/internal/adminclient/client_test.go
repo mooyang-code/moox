@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/serviceauth"
 )
 
 func TestPostJSONSendsSpaceHeader(t *testing.T) {
@@ -62,8 +64,17 @@ func TestParseBatchChangeResponse(t *testing.T) {
 
 func TestBuildAuthHeader(t *testing.T) {
 	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key"}
-	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), time.Unix(1700000000, 0))
+	now := time.Unix(1700000000, 0)
+	headers := map[string]string{"X-Space-Id": "space-1"}
+	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), headers, now)
 	require.NoError(t, err)
 	assert.Contains(t, header, "app")
 	assert.Contains(t, header, "1700000000")
+	_, err = serviceauth.VerifyHeader(
+		serviceauth.Config{AccessKey: "app", SecretKey: "key"},
+		serviceauth.Request{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
+		header,
+		now,
+	)
+	require.Error(t, err)
 }

@@ -60,4 +60,19 @@ describe('request signing', () => {
     expect(first).toMatch(/^[0-9a-f]{64}$/);
     expect(second).not.toBe(first);
   });
+
+  it('binds tenant and application headers in a stable order', async () => {
+    const canonical = await canonicalRequest({
+      method: 'post',
+      path: '/api/admin/x',
+      body: '{}',
+      timestamp: 1_700_000_000,
+      nonce,
+      headers: {
+        'x-space-id': ' space-1 ',
+        'X-App-Id': 'frontend',
+      },
+    });
+    expect(canonical).toContain('x-app-id:frontend\nx-app-key:\nx-space-id:space-1');
+  });
 });

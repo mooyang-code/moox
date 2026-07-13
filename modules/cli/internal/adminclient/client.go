@@ -61,7 +61,8 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 		finalPath = rewriteToServiceRoute(path)
 		rawBody, _ := io.ReadAll(reader)
 		reader = bytes.NewReader(rawBody)
-		header, err := c.ServiceAuth.BuildAuthHeader(method, finalPath, rawBody, time.Now())
+		signedHeaders := map[string]string{"X-Space-Id": c.SpaceID}
+		header, err := c.ServiceAuth.BuildAuthHeader(method, finalPath, rawBody, signedHeaders, time.Now())
 		if err != nil {
 			return nil, err
 		}

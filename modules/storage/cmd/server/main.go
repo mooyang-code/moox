@@ -34,7 +34,6 @@ import (
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
-	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 var storageStartedAt = time.Now()

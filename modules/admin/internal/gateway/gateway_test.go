@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +34,7 @@ func TestHTTPRequestHandler_ParseRequestParams_MissingService_ShouldError(t *tes
 	require.Error(t, err)
 }
 
-func TestHTTPRequestHandler_ReadRequestBodyWithRaw_QueryOnly_ShouldMarshalQuery(t *testing.T) {
+func TestHTTPRequestHandler_ReadRequestBodyWithRaw_QueryDoesNotBecomeRPCBody(t *testing.T) {
 	h := NewHTTPRequestHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/auth/login?foo=bar&baz=1", nil)
 
@@ -43,13 +42,10 @@ func TestHTTPRequestHandler_ReadRequestBodyWithRaw_QueryOnly_ShouldMarshalQuery(
 	require.NoError(t, err)
 	assert.Empty(t, raw)
 
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &payload))
-	assert.Equal(t, "bar", payload["foo"])
-	assert.Equal(t, "1", payload["baz"])
+	assert.Empty(t, body)
 }
 
-func TestHTTPRequestHandler_ReadRequestBodyWithRaw_BodyOverridesQuery_ShouldPreferBody(t *testing.T) {
+func TestHTTPRequestHandler_ReadRequestBodyWithRaw_ReturnsExactBodyAndIgnoresQuery(t *testing.T) {
 	h := NewHTTPRequestHandler()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/login?foo=query", strings.NewReader(`{"foo":"body"}`))
 
@@ -57,9 +53,7 @@ func TestHTTPRequestHandler_ReadRequestBodyWithRaw_BodyOverridesQuery_ShouldPref
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"foo":"body"}`, string(raw))
 
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &payload))
-	assert.Equal(t, "body", payload["foo"])
+	assert.Equal(t, raw, body)
 }
 
 func TestHTTPRequestHandler_ExtractGatewayHeaders_ShouldCollectHeaders(t *testing.T) {

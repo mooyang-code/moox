@@ -182,9 +182,11 @@ case "${COMMAND}" in
       if pid_owned; then
         pid=$(cat "${PIDFILE}")
         kill "${pid}" 2>/dev/null || true
+        for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
       fi
       rm -f "${PIDFILE}"
-      log 'stopped first-install Caddy after failed acceptance'
+      rm -f "${CONFIG}" "${CONFIG}.candidate"
+      log 'removed first-install Caddy configuration after failed acceptance'
     fi
     ;;
   status)

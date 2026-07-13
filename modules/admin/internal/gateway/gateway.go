@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/requestauth"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -237,53 +237,16 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 	return serviceID, method, nil
 }
 
-// readRequestBodyWithRaw 读取原始请求体，同时返回合并 URL query 参数后的转发请求体。
-// 优先级：body 中的参数 > URL query 参数。
+// readRequestBodyWithRaw reads the exact RPC body. Query parameters are not
+// converted into RPC fields because doing so would create unsigned input.
 func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
-	// 读取 body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("读取请求体失败: %v", err)
 	}
 	defer r.Body.Close()
 	rawBody := append([]byte(nil), body...)
-
-	// 解析 URL query 参数
-	queryParams := r.URL.Query()
-	if len(queryParams) == 0 {
-		return rawBody, body, nil
-	}
-
-	// 将 query 参数转为 map
-	queryMap := make(map[string]interface{})
-	for key, values := range queryParams {
-		if len(values) == 1 {
-			queryMap[key] = values[0]
-		} else {
-			queryMap[key] = values
-		}
-	}
-
-	// 如果 body 为空，直接使用 query 参数
-	if len(body) == 0 {
-		mergedBody, err := json.Marshal(queryMap)
-		return rawBody, mergedBody, err
-	}
-
-	// 如果 body 不为空，尝试合并
-	var bodyMap map[string]interface{}
-	if err := json.Unmarshal(body, &bodyMap); err != nil {
-		// body 不是有效 JSON，直接返回 body
-		return rawBody, body, nil
-	}
-
-	// 合并：body 参数优先（覆盖 query 参数）
-	for key, value := range bodyMap {
-		queryMap[key] = value
-	}
-
-	mergedBody, err := json.Marshal(queryMap)
-	return rawBody, mergedBody, err
+	return rawBody, body, nil
 }
 
 func (h *HTTPRequestHandler) validateServiceAuth(r *http.Request, rawBody []byte) error {
@@ -291,7 +254,17 @@ func (h *HTTPRequestHandler) validateServiceAuth(r *http.Request, rawBody []byte
 	if err != nil {
 		return err
 	}
-	return validateServiceAuthHeader(r.Header.Get("Auth"), r.Method, r.URL.EscapedPath(), rawBody, time.Now(), cfg)
+	return validateServiceAuthHeader(r.Context(), r.Header.Get("Auth"), r.Method, r.URL.EscapedPath(), rawBody, signedGatewayHeaders(r), time.Now(), cfg)
+}
+
+func signedGatewayHeaders(r *http.Request) map[string]string {
+	headers := make(map[string]string)
+	for _, name := range []string{requestauth.HeaderAppID, requestauth.HeaderAppKey, requestauth.HeaderSpaceID} {
+		if value := r.Header.Get(name); value != "" {
+			headers[name] = value
+		}
+	}
+	return headers
 }
 
 // extractGatewayHeaders 提取网关相关的HTTP头部信息

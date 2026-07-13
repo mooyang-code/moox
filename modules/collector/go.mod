@@ -29,7 +29,6 @@ require (
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.3
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
-	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
 require (

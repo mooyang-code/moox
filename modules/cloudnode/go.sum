@@ -364,10 +364,6 @@ trpc.group/trpc-go/trpc-go v1.0.3 h1:X4RhPmJOkVoK6EGKoV241dvEpB6EagBeyu3ZrqkYZQY
 trpc.group/trpc-go/trpc-go v1.0.3/go.mod h1:82O+G2rD5ST+JAPuPPSqvsr6UI59UxV27iAILSkAIlQ=
 trpc.group/trpc-go/trpc-log-cls v1.0.0 h1:zJ7NnE7khFmxN+jxkZkJd5qTUj4ERJ+2DJXAWyP/akc=
 trpc.group/trpc-go/trpc-log-cls v1.0.0/go.mod h1:ws/wxx51jkd1CClG6+n82rZvRWxczmzbve3tapK61D0=
-trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0 h1:KOWoPoowE/pNDgFQKidfgU7t+avhLmCDMD6nwgG1Y+g=
-trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0/go.mod h1:rGmXHWtX8+Spt7fNxlPwG00DCWVlgBDsIX8yv7oFOFo=
-trpc.group/trpc-go/trpc-metrics-runtime v1.0.0 h1:KHrlvzlzaGP4F2hcUQrtaeq3hM9cHyz2q1wXQmUnlII=
-trpc.group/trpc-go/trpc-metrics-runtime v1.0.0/go.mod h1:IjJWQfdTnQfLDK50bgK+ZMMqZqlN3C7OVZIeQ8YLrG4=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.0/go.mod h1:K+a1K/Gnlcg9BFHWx30vLBIEDhxODhl25gi1JjA54CQ=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 h1:xSqncQDYiUeNQSCz8RMdF7pVJWZImJ/RK+FgtSMFjss=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1/go.mod h1:BasNP/F0p0Y/fcbQMMw4TJzhYKv+dVPlnxiQaWZUpWs=

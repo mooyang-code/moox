@@ -61,12 +61,26 @@ export function createNonce(): string {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
-export async function canonicalRequest(input: { method: string; path: string; body: string; timestamp: number; nonce: string }): Promise<string> {
-  const bodyHash = bytesToHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.body)));
-  return [VERSION, input.method.toUpperCase(), input.path, bodyHash, String(input.timestamp), input.nonce].join('\n');
+type SigningHeaders = Record<string, unknown>;
+
+const SIGNED_HEADERS = ['x-app-id', 'x-app-key', 'x-space-id'];
+
+function canonicalHeaders(headers?: SigningHeaders): string[] {
+  const normalized = new Map(
+    Object.entries(headers || {})
+      .filter(([, value]) => value != null && String(value).trim() !== '')
+      .map(([name, value]) => [name.toLowerCase(), String(value).trim()]),
+  );
+  if (!SIGNED_HEADERS.some((name) => normalized.has(name))) return [];
+  return SIGNED_HEADERS.map((name) => `${name}:${normalized.get(name) || ''}`);
 }
 
-export async function signRequest(key: CryptoKey, input: { method: string; path: string; body: string; timestamp: number; nonce: string }): Promise<string> {
+export async function canonicalRequest(input: { method: string; path: string; body: string; headers?: SigningHeaders; timestamp: number; nonce: string }): Promise<string> {
+  const bodyHash = bytesToHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.body)));
+  return [VERSION, input.method.toUpperCase(), input.path, ...canonicalHeaders(input.headers), bodyHash, String(input.timestamp), input.nonce].join('\n');
+}
+
+export async function signRequest(key: CryptoKey, input: { method: string; path: string; body: string; headers?: SigningHeaders; timestamp: number; nonce: string }): Promise<string> {
   const canonical = await canonicalRequest(input);
   return bytesToHex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(canonical)));
 }

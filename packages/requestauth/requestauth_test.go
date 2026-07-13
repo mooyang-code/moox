@@ -68,6 +68,72 @@ func TestVerifyRejectsBodyPathTimestampAndNonceChanges(t *testing.T) {
 	}
 }
 
+func TestVerifyRejectsSignedHeaderChanges(t *testing.T) {
+	original := testMaterial()
+	original.Headers = map[string]string{
+		"X-App-Id":   "frontend",
+		"X-App-Key":  "app-secret",
+		"X-Space-Id": "space-1",
+	}
+	signature, err := Sign("secret", original)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range signedHeaderNames {
+		changed := original
+		changed.Headers = map[string]string{
+			"X-App-Id":   original.Headers["X-App-Id"],
+			"X-App-Key":  original.Headers["X-App-Key"],
+			"X-Space-Id": original.Headers["X-Space-Id"],
+		}
+		changed.Headers[name] += "-tampered"
+		if err := Verify("secret", changed, signature); err == nil {
+			t.Fatalf("Verify() accepted changed %s", name)
+		}
+	}
+}
+
+func TestCanonicalSignedHeadersAreCaseInsensitiveAndOrdered(t *testing.T) {
+	first := testMaterial()
+	first.Headers = map[string]string{"x-space-id": " space-1 ", "X-App-Id": "frontend"}
+	second := testMaterial()
+	second.Headers = map[string]string{"x-app-id": "frontend", "X-SPACE-ID": "space-1"}
+
+	gotFirst, err := Canonical(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSecond, err := Canonical(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotFirst) != string(gotSecond) {
+		t.Fatalf("canonical headers differ:\n%s\n---\n%s", gotFirst, gotSecond)
+	}
+	if !strings.Contains(string(gotFirst), "x-app-id:frontend\nx-app-key:\nx-space-id:space-1") {
+		t.Fatalf("canonical headers missing or unordered: %q", gotFirst)
+	}
+}
+
+func TestCanonicalIgnoresEmptySignedHeaders(t *testing.T) {
+	withoutHeaders := testMaterial()
+	withEmptyHeader := testMaterial()
+	withEmptyHeader.Headers = map[string]string{"X-Space-Id": "  "}
+
+	first, err := Canonical(withoutHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Canonical(withEmptyHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("empty header changed canonical material: %q != %q", first, second)
+	}
+}
+
 func TestNewNonceReturns64LowercaseHexCharacters(t *testing.T) {
 	first, err := NewNonce()
 	if err != nil {

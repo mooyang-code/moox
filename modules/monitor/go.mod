@@ -25,7 +25,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-go v1.0.3
-	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
 require (

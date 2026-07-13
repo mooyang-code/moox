@@ -8,7 +8,7 @@ cleanup() { "${HELPER}" stop --deploy-dir "${TMP}/deploy" >/dev/null 2>&1 || tru
 trap cleanup EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
-assert_contains() { grep -Fq "$2" "$1" || fail "$1 does not contain $2"; }
+assert_contains() { grep -Fq -- "$2" "$1" || fail "$1 does not contain $2"; }
 
 [[ -x "${HELPER}" ]] || fail "managed Caddy helper is missing"
 assert_contains "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" 'caddy_2.11.4_linux_amd64.tar.gz'
@@ -17,7 +17,9 @@ assert_contains "${ROOT}/scripts/release.sh" 'caddy-managed.sh'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_WEB_HOST_ADDR:-127.0.0.1:9528'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'verify_public_https'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'public HTTPS acceptance failed'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'Caddyfile.rollback'
+assert_contains "${HELPER}" '${CONFIG}.rollback'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'Caddyfile.next'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '--config "${deploy_dir}/config/caddy/Caddyfile.next"'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-caddy-data.XXXXXX'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'mv "${DEPLOY_DIR}/data/caddy" "${CADDY_DATA_TMP}/caddy"'
 assert_contains "${HELPER}" 'rollback)'
@@ -53,6 +55,14 @@ MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
   "${HELPER}" install --deploy-dir "${TMP}/deploy" --os linux --arch amd64
 [[ $("${TMP}/deploy/bin/caddy" version) == v2.11.4* ]] || fail 'exact managed version was not installed'
 
+cp "${TMP}/candidate.Caddyfile" "${TMP}/first.Caddyfile"
+MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" \
+MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
+  "${HELPER}" ensure --deploy-dir "${TMP}/first-deploy" --os linux --arch amd64 --config "${TMP}/first.Caddyfile" \
+  >/dev/null 2>&1 || fail 'first candidate did not start'
+"${HELPER}" rollback --deploy-dir "${TMP}/first-deploy"
+[[ ! -e "${TMP}/first-deploy/config/caddy/Caddyfile" ]] || fail 'failed first-install config remained active after rollback'
+
 cp "${TMP}/candidate.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile"
 "${HELPER}" check --deploy-dir "${TMP}/deploy" >/dev/null
 "${HELPER}" start --deploy-dir "${TMP}/deploy"
@@ -75,6 +85,13 @@ MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT="${EDGE_PORT}" MOOX_SERVICE_H
 assert_contains "${FAKE_LOG}" reload
 assert_contains "${TMP}/deploy/config/caddy/edge.env" 'MOOX_PUBLIC_HOST=127.0.0.1'
 "${HELPER}" stop --deploy-dir "${TMP}/deploy"
+
+cp "${TMP}/candidate.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile"
+printf ':broken {\n' >"${TMP}/invalid.Caddyfile"
+if FAKE_VALIDATE_EXIT=1 "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 --config "${TMP}/invalid.Caddyfile" >/dev/null 2>&1; then
+  fail 'invalid candidate configuration was accepted'
+fi
+cmp -s "${TMP}/candidate.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'invalid candidate replaced the active Caddyfile'
 
 printf '999999\n' >"${TMP}/deploy/run/caddy.pid"
 "${HELPER}" stop --deploy-dir "${TMP}/deploy"

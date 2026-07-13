@@ -36,6 +36,15 @@ func (s *fakeRequestAuthStore) ConsumeSessionNonce(_ context.Context, sid, nonce
 	s.nonces[k] = true
 	return true, nil
 }
+
+func (s *fakeRequestAuthStore) ConsumeServiceNonce(_ context.Context, accessKey, nonce string, _ time.Duration) (bool, error) {
+	k := "service:" + accessKey + ":" + nonce
+	if s.nonces[k] {
+		return false, nil
+	}
+	s.nonces[k] = true
+	return true, nil
+}
 func (s *fakeRequestAuthStore) ConsumeRawSessionTicket(_ context.Context, id string) (*authmodel.RawSessionTicket, error) {
 	v, ok := s.tickets[id]
 	if !ok {
@@ -100,6 +109,28 @@ func TestAdminRequestRejectsChangedBodyOrPath(t *testing.T) {
 	nonce := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	r := signedAdminRequest(t, secret, key, sid, "/api/admin/auth/GetUserInfo", []byte(`{"a":1}`), time.Now().Unix(), nonce)
 	_, err := verifyAdminRequest(r, []byte(`{"a":2}`))
+	require.Error(t, err)
+}
+
+func TestAdminRequestRejectsChangedSpaceHeader(t *testing.T) {
+	_, secret, key, sid := setupRequestAuthTest(t)
+	timestamp := time.Now().Unix()
+	nonce := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	path := "/api/admin/auth/GetUserInfo"
+	token, err := mooxcrypto.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": 2, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
+	require.NoError(t, err)
+	sig, err := requestauth.Sign(key, requestauth.Material{
+		Method: http.MethodPost, Path: path, Headers: map[string]string{"X-Space-Id": "space-1"}, Timestamp: timestamp, Nonce: nonce,
+	})
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, path, nil)
+	r.Header.Set("Authorization", token)
+	r.Header.Set("X-Moox-Timestamp", fmt.Sprint(timestamp))
+	r.Header.Set("X-Moox-Nonce", nonce)
+	r.Header.Set("X-Moox-Signature", sig)
+	r.Header.Set("X-Space-Id", "space-2")
+
+	_, err = verifyAdminRequest(r, nil)
 	require.Error(t, err)
 }
 

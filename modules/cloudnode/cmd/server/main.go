@@ -3,7 +3,6 @@ package main
 import (
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	_ "trpc.group/trpc-go/trpc-log-cls"
-	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/bootstrap"
 	"trpc.group/trpc-go/trpc-go"

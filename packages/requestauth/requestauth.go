@@ -13,12 +13,20 @@ import (
 	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 )
 
-const Version = "moox-request-v1"
+const (
+	Version       = "moox-request-v1"
+	HeaderAppID   = "X-App-Id"
+	HeaderAppKey  = "X-App-Key"
+	HeaderSpaceID = "X-Space-Id"
+)
+
+var signedHeaderNames = []string{HeaderAppID, HeaderAppKey, HeaderSpaceID}
 
 type Material struct {
 	Method    string
 	Path      string
 	Body      []byte
+	Headers   map[string]string
 	Timestamp int64
 	Nonce     string
 }
@@ -41,15 +49,50 @@ func Canonical(m Material) ([]byte, error) {
 	if !isLowerHex(m.Nonce, 32) {
 		return nil, errors.New("nonce must be 64 lowercase hex characters")
 	}
-	canonical := strings.Join([]string{
+	parts := []string{
 		Version,
 		strings.ToUpper(m.Method),
 		m.Path,
+	}
+	if headers, ok, err := canonicalHeaders(m.Headers); err != nil {
+		return nil, err
+	} else if ok {
+		parts = append(parts, headers...)
+	}
+	parts = append(parts,
 		mooxcrypto.SHA256Hex(m.Body),
 		strconv.FormatInt(m.Timestamp, 10),
 		m.Nonce,
-	}, "\n")
+	)
+	canonical := strings.Join(parts, "\n")
 	return []byte(canonical), nil
+}
+
+func canonicalHeaders(headers map[string]string) ([]string, bool, error) {
+	values := make(map[string]string, len(headers))
+	for name, value := range headers {
+		lowerName := strings.ToLower(strings.TrimSpace(name))
+		for _, signedName := range signedHeaderNames {
+			if lowerName == strings.ToLower(signedName) {
+				value = strings.TrimSpace(value)
+				if strings.ContainsAny(value, "\r\n") {
+					return nil, false, errors.New("signed header values cannot contain newlines")
+				}
+				if value != "" {
+					values[lowerName] = value
+				}
+			}
+		}
+	}
+	if len(values) == 0 {
+		return nil, false, nil
+	}
+	lines := make([]string, 0, len(signedHeaderNames))
+	for _, name := range signedHeaderNames {
+		lowerName := strings.ToLower(name)
+		lines = append(lines, lowerName+":"+values[lowerName])
+	}
+	return lines, true, nil
 }
 
 func Sign(secret string, m Material) (string, error) {

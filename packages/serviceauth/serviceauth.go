@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/requestauth"
@@ -22,9 +21,10 @@ type Config struct {
 }
 
 type Request struct {
-	Method string
-	Path   string
-	Body   []byte
+	Method  string
+	Path    string
+	Body    []byte
+	Headers map[string]string
 }
 
 type Claims struct {
@@ -47,7 +47,7 @@ func BuildHeader(cfg Config, req Request, now time.Time) (string, error) {
 		return "", err
 	}
 	material := requestauth.Material{
-		Method: req.Method, Path: normalizedPath(req.Path), Body: signingBody(req.Body, expire),
+		Method: req.Method, Path: normalizedPath(req.Path), Body: signingBody(req.Body, expire), Headers: req.Headers,
 		Timestamp: now.Unix(), Nonce: nonce,
 	}
 	signature, err := requestauth.Sign(cfg.SecretKey, material)
@@ -87,7 +87,7 @@ func VerifyHeader(cfg Config, req Request, header string, now time.Time) (Claims
 		return Claims{}, errors.New("auth signature expired or timestamp is in the future")
 	}
 	material := requestauth.Material{
-		Method: req.Method, Path: normalizedPath(req.Path), Body: signingBody(req.Body, expire),
+		Method: req.Method, Path: normalizedPath(req.Path), Body: signingBody(req.Body, expire), Headers: req.Headers,
 		Timestamp: timestamp, Nonce: parts[4],
 	}
 	if err := requestauth.Verify(cfg.SecretKey, material, parts[5]); err != nil {
@@ -111,49 +111,4 @@ func signingBody(body []byte, expire int64) []byte {
 	result = append(result, body...)
 	result = append(result, "\nmoox-service-expire:"...)
 	return strconv.AppendInt(result, expire, 10)
-}
-
-type nonceEntry struct {
-	expires time.Time
-}
-
-type NonceCache struct {
-	mu      sync.Mutex
-	max     int
-	entries map[string]nonceEntry
-}
-
-func NewNonceCache(max int) *NonceCache {
-	if max <= 0 {
-		max = 65536
-	}
-	return &NonceCache{max: max, entries: make(map[string]nonceEntry)}
-}
-
-// Consume atomically records a nonce. A full cache fails closed rather than
-// evicting a live nonce and making an earlier request replayable again.
-func (c *NonceCache) Consume(accessKey, nonce string, ttl time.Duration, now time.Time) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	key := accessKey + ":" + nonce
-	if entry, ok := c.entries[key]; ok && now.Before(entry.expires) {
-		return false
-	}
-	for existingKey, entry := range c.entries {
-		if !now.Before(entry.expires) {
-			delete(c.entries, existingKey)
-		}
-	}
-	if len(c.entries) >= c.max {
-		return false
-	}
-	c.entries[key] = nonceEntry{expires: now.Add(ttl)}
-	return true
-}
-
-func (c *NonceCache) Len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.entries)
 }

@@ -56,6 +56,10 @@ func NewSignedRequest(method string, url string, body []byte, cfg AuthConfig) (*
 }
 
 func NewSignedRequestWithContext(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
+	return NewSignedRequestWithContextAndHeaders(ctx, method, url, body, nil, cfg)
+}
+
+func NewSignedRequestWithContextAndHeaders(ctx context.Context, method string, url string, body []byte, headers map[string]string, cfg AuthConfig) (*http.Request, error) {
 	cfg = normalizeAuthConfig(cfg)
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return nil, fmt.Errorf("control service auth access_key and secret_key are required")
@@ -65,7 +69,14 @@ func NewSignedRequestWithContext(ctx context.Context, method string, url string,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	header, err := GenerateAuthHeader(cfg, method, req.URL.EscapedPath(), body)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	header, err := serviceauth.BuildHeader(
+		serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec},
+		serviceauth.Request{Method: method, Path: req.URL.EscapedPath(), Body: body, Headers: headers},
+		time.Unix(cfg.NowUnix, 0),
+	)
 	if err != nil {
 		return nil, err
 	}

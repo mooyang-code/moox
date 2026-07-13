@@ -2,7 +2,7 @@
 
 ## 架构和依赖
 
-每个 tRPC 服务继续提供本地 `/metrics`，同时由自身的 tRPC timer 每 30 秒从 Prometheus 默认 registry 生成有界快照，压缩后发布到 `MOOX_METRICS`。Monitor 不抓取 HTTP `/metrics`，也不需要部署 Prometheus Server、Pushgateway 或手工维护 target：
+每个 tRPC 服务通过专用 health listener 提供带 HMAC 的 `/metrics`，同时由自身的 tRPC timer 每 30 秒从 Prometheus 默认 registry 生成有界快照，压缩后发布到 `MOOX_METRICS`。Monitor 不抓取 HTTP `/metrics`，也不需要部署 Prometheus Server、Pushgateway 或手工维护 target：
 
 ```text
 服务 registry -> 本地 timer -> MetricSnapshot -> moox-eventbus
@@ -10,7 +10,7 @@
     -> 看板查询 -> 结构化 AND/OR 规则 -> webhook
 ```
 
-`/metrics` 仅保留作本机调试和兼容入口。EventBus 不可用时业务服务继续启动，timer 记录错误并等待下一次快照；Monitor 消费失败时消息按至少一次语义重投递。
+`/metrics` 仅保留作带 health HMAC 的本机调试入口，不再存在独立的未鉴权 Prometheus plugin listener。共享 `requestmetrics` filter 继续采集 tRPC 客户端/服务端请求量和耗时，写入同一个默认 registry。EventBus 不可用时业务服务继续启动，timer 记录错误并等待下一次快照；Monitor 消费失败时消息按至少一次语义重投递。
 
 ## 元数据预检和启动顺序
 
@@ -65,7 +65,7 @@ Counter 保留绝对值，RATE/INCREASE 在 Monitor 使用按时间排序的历�
 | --- | --- |
 | 所有服务无最新值 | `moox-eventbus /readyz`、`MOOX_METRICS` consumer pending、服务 reporter error counter |
 | Monitor 启动但没有 ingest | `monitor` 日志中的 metadata schema status；确认 Space/Dataset/columns/route 已通过 `metadata apply` |
-| 单个服务 stale | 服务 `/metrics`、timer 日志、`MOOX_BOOT_ID`、EventBus 连接和 producer 注册 |
+| 单个服务 stale | 使用 health HMAC 请求服务 `/metrics`、检查 timer 日志、`MOOX_BOOT_ID`、EventBus 连接和 producer 注册 |
 | DLQ 增长 | `moox.dlq.message.rejected.v1` consumer、原始 message_id、rejection_reason；修复 schema 或 producer 后重新发布新 message_id |
 | 看板历史缺口 | Storage PrimaryStore 路由、WriteTimeSeriesRows 错误、series dimensions 是否完整；不要只按 subject_id 查询 |
 

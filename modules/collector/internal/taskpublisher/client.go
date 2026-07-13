@@ -207,7 +207,7 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 		return fmt.Errorf("service gateway target is required")
 	}
 	url := fmt.Sprintf("%s/api/service/%s/%s", c.serviceGatewayTarget, service, method)
-	req, err := runtimeapp.NewSignedRequestWithContext(ctx, http.MethodPost, url, body, runtimeapp.AuthConfig{
+	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, url, body, headers, runtimeapp.AuthConfig{
 		Version:   c.auth.Version,
 		AccessKey: c.auth.AccessKey,
 		SecretKey: c.auth.SecretKey,
@@ -215,11 +215,6 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 	})
 	if err != nil {
 		return err
-	}
-	for key, value := range headers {
-		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
-			req.Header.Set(key, value)
-		}
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

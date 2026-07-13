@@ -4,8 +4,7 @@ import { Message } from '@arco-design/web-vue';
 import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import type { ControlResponse } from './types';
-import { withSelectedSpaceHeader } from './space-header';
-import { installSignedClient } from './signed-client';
+import { installSpaceAwareSignedClient } from './signed-client';
 
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -42,12 +41,7 @@ export async function callControl<TReq extends object, TRsp>(
   return assertControlSuccess<TRsp>(rsp.data);
 }
 
-adminClient.interceptors.request.use((config) => {
-  const headers = withSelectedSpaceHeader((config.headers || {}) as Record<string, string | undefined>);
-  config.headers = headers as typeof config.headers;
-  return config;
-});
-installSignedClient(adminClient);
+installSpaceAwareSignedClient(adminClient);
 
 adminClient.interceptors.response.use(
   (rsp) => {

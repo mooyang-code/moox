@@ -23,6 +23,7 @@ import (
 type requestAuthStore interface {
 	GetSigningSession(context.Context, string) (*authmodel.RequestSigningSession, error)
 	ConsumeSessionNonce(context.Context, string, string, time.Duration) (bool, error)
+	ConsumeServiceNonce(context.Context, string, string, time.Duration) (bool, error)
 	ConsumeRawSessionTicket(context.Context, string) (*authmodel.RawSessionTicket, error)
 }
 
@@ -93,7 +94,7 @@ func verifyAdminRequest(r *http.Request, body []byte) (*accessClaims, error) {
 		return nil, errors.New("request timestamp outside allowed window")
 	}
 	nonce := r.Header.Get("X-Moox-Nonce")
-	material := requestauth.Material{Method: r.Method, Path: r.URL.EscapedPath(), Body: body, Timestamp: timestamp, Nonce: nonce}
+	material := requestauth.Material{Method: r.Method, Path: r.URL.EscapedPath(), Body: body, Headers: signedGatewayHeaders(r), Timestamp: timestamp, Nonce: nonce}
 	encryptionKey, err := adminsecurity.GetEncryptionKey()
 	if err != nil {
 		return nil, errors.New("encryption key unavailable")

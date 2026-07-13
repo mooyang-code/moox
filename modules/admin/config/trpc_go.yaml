@@ -4,9 +4,9 @@ global:
 
 server:
   filter:
+    - requestmetrics
     - validation
     - cors
-    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -84,13 +84,11 @@ server:
       protocol: timer
       timeout: 10000
 
+client:
+  filter:
+    - requestmetrics
+
 plugins:
-  metrics:
-    prometheus:
-      ip: 127.0.0.1
-      port: 12900
-      path: /metrics
-      enablepush: false
   auth:
     cors:
       apply_to_all_path:

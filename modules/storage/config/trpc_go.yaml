@@ -4,9 +4,9 @@ global: #全局配置
 
 server:
   filter:
+    - requestmetrics
     - validation
     - cors
-    - prometheus
   timeout: 5000
   admin:
     ip: 127.0.0.1
@@ -82,6 +82,7 @@ server:
 
 client:
   filter:
+    - requestmetrics
     - validation
   service:
     - name: trpc.moox.storage.PrimaryStore
@@ -116,12 +117,6 @@ client:
       timeout: 30000
 
 plugins:
-  metrics:
-    prometheus:
-      ip: 127.0.0.1
-      port: 12960
-      path: /metrics
-      enablepush: false
   auth:
     cors:
       apply_to_all_path:

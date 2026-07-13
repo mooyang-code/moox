@@ -118,6 +118,19 @@ secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'sign_health_request' "${DEPLOY_DIR}/healthcheck.sh"
+for mapping in \
+  'admin.*127\.0\.0\.1:11010/readyz' \
+  'collector.*127\.0\.0\.1:11412/readyz' \
+  'factor.*127\.0\.0\.1:11414/readyz' \
+  'monitor.*127\.0\.0\.1:11409/readyz' \
+  'cloudnode.*127\.0\.0\.1:11411/readyz' \
+  'archive.*127\.0\.0\.1:11416/readyz' \
+  'eventbus.*127\.0\.0\.1:11419/readyz' \
+  'web-host.*127\.0\.0\.1:19527/readyz'; do
+  assert_grep "${mapping}" "${DEPLOY_DIR}/healthcheck.sh"
+done
+assert_grep 'health probe failed' "${DEPLOY_DIR}/healthcheck.sh"
+assert_grep '"\$\{ROOT\}/stop\.sh" "\$\{name\}"' "${DEPLOY_DIR}/healthcheck.sh"
 
 assert_grep 'start_storage_process "storage-access" "moox-storage-access"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'storage\.access\.yaml' "${DEPLOY_DIR}/start.sh"

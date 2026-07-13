@@ -681,14 +681,21 @@ sign_health_request() {
 probe_service() {
   local name="$1" url=""
   case "${name}" in
-    eventbus) url=http://127.0.0.1:11419/healthz ;;
-    storage-access) url=http://127.0.0.1:20210/healthz ;;
-    storage-view-builder) url=http://127.0.0.1:20211/healthz ;;
-    storage-view-query) url=http://127.0.0.1:20212/healthz ;;
-    storage-view-index) url=http://127.0.0.1:20213/healthz ;;
-    *) return 0 ;;
+    admin) url=http://127.0.0.1:11010/readyz ;;
+    archive) url=http://127.0.0.1:11416/readyz ;;
+    cloudnode) url=http://127.0.0.1:11411/readyz ;;
+    collector) url=http://127.0.0.1:11412/readyz ;;
+    eventbus) url=http://127.0.0.1:11419/readyz ;;
+    factor) url=http://127.0.0.1:11414/readyz ;;
+    monitor) url=http://127.0.0.1:11409/readyz ;;
+    web-host) url=http://127.0.0.1:19527/readyz ;;
+    storage-access) url=http://127.0.0.1:20210/readyz ;;
+    storage-view-builder) url=http://127.0.0.1:20211/readyz ;;
+    storage-view-query) url=http://127.0.0.1:20212/readyz ;;
+    storage-view-index) url=http://127.0.0.1:20213/readyz ;;
+    *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
-  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
 }
 
 wait_http_reachable() {
@@ -1300,14 +1307,21 @@ sign_health_request() {
 probe_service() {
   local name="$1" url=""
   case "${name}" in
-    eventbus) url=http://127.0.0.1:11419/healthz ;;
-    storage-access) url=http://127.0.0.1:20210/healthz ;;
-    storage-view-builder) url=http://127.0.0.1:20211/healthz ;;
-    storage-view-query) url=http://127.0.0.1:20212/healthz ;;
-    storage-view-index) url=http://127.0.0.1:20213/healthz ;;
-    *) return 0 ;;
+    admin) url=http://127.0.0.1:11010/readyz ;;
+    archive) url=http://127.0.0.1:11416/readyz ;;
+    cloudnode) url=http://127.0.0.1:11411/readyz ;;
+    collector) url=http://127.0.0.1:11412/readyz ;;
+    eventbus) url=http://127.0.0.1:11419/readyz ;;
+    factor) url=http://127.0.0.1:11414/readyz ;;
+    monitor) url=http://127.0.0.1:11409/readyz ;;
+    web-host) url=http://127.0.0.1:19527/readyz ;;
+    storage-access) url=http://127.0.0.1:20210/readyz ;;
+    storage-view-builder) url=http://127.0.0.1:20211/readyz ;;
+    storage-view-query) url=http://127.0.0.1:20212/readyz ;;
+    storage-view-index) url=http://127.0.0.1:20213/readyz ;;
+    *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
-  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
 }
 
 default_services=()
@@ -1355,15 +1369,18 @@ ensure_service() {
   fi
 
   if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
-    echo "${name}: running pid=${pid}"
-    probe_service "${name}"
-    return
+    if probe_service "${name}"; then
+      echo "${name}: running pid=${pid} ready"
+      return 0
+    fi
+    log_line "${name}: health probe failed pid=${pid}; restarting"
+    echo "${name}: health probe failed; restarting"
+    "${ROOT}/stop.sh" "${name}" >> "${LOG_FILE}" 2>&1 || true
   fi
 
   log_line "${name}: stopped or stale pid=${pid:-none}; restarting"
   echo "${name}: stopped; restarting"
-  if STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}" "${ROOT}/start.sh" "${name}" >> "${LOG_FILE}" 2>&1; then
-    probe_service "${name}"
+  if STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}" "${ROOT}/start.sh" "${name}" >> "${LOG_FILE}" 2>&1 && probe_service "${name}"; then
     log_line "${name}: restart success"
     return 0
   fi
@@ -1420,7 +1437,7 @@ prepare_stage() {
     curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
       -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
   fi
-  cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile"
+  cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile.next"
   chmod +x "${STAGE_DIR}/lib/caddy-managed.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/storage/config" "${STAGE_DIR}/storage/schema"
@@ -1505,14 +1522,9 @@ prepare_stage() {
 }
 
 sync_local_stage() {
-  local deploy_dir caddy_rollback_tmp="" caddy_data_tmp=""
+  local deploy_dir caddy_data_tmp=""
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
-
-  if [[ -s "${deploy_dir}/config/caddy/Caddyfile" ]]; then
-    caddy_rollback_tmp=$(mktemp "${TMPDIR:-/tmp}/moox-caddy-config.XXXXXX")
-    cp "${deploy_dir}/config/caddy/Caddyfile" "${caddy_rollback_tmp}"
-  fi
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -1557,7 +1569,7 @@ sync_local_stage() {
   fi
 
   if command -v rsync >/dev/null 2>&1; then
-    local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/' --exclude '/secrets/' --exclude '/certs/')
+    local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/' --exclude '/secrets/' --exclude '/certs/' --exclude '/config/caddy/Caddyfile' --exclude '/config/caddy/Caddyfile.rollback')
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/storage/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-access' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-view-builder' --exclude '/bin/moox-storage-view-query')
     fi
@@ -1628,11 +1640,6 @@ sync_local_stage() {
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
 
-  if [[ -n "${caddy_rollback_tmp}" ]]; then
-    cp "${caddy_rollback_tmp}" "${deploy_dir}/config/caddy/Caddyfile.rollback"
-    rm -f "${caddy_rollback_tmp}"
-  fi
-
   chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
   mkdir -p "${deploy_dir}/secrets"
   if [[ ! -s "${deploy_dir}/secrets/health-auth.env" ]]; then
@@ -1677,7 +1684,7 @@ sync_local_stage() {
       MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
         MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
         MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
-        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}" --config "${deploy_dir}/config/caddy/Caddyfile.next"
     fi
     if [[ "${had_caddy_ca}" -eq 0 && -s "${deploy_dir}/certs/caddy/root.crt" ]]; then
       [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector
@@ -1740,12 +1747,7 @@ fi
 
 mkdir -p "${DEPLOY_DIR}"
 mkdir -p "${HOME}/.config/moox/credentials"
-CADDY_ROLLBACK_TMP=""
 CADDY_DATA_TMP=""
-if [[ -s "${DEPLOY_DIR}/config/caddy/Caddyfile" ]]; then
-  CADDY_ROLLBACK_TMP=$(mktemp /tmp/moox-caddy-config.XXXXXX)
-  cp "${DEPLOY_DIR}/config/caddy/Caddyfile" "${CADDY_ROLLBACK_TMP}"
-fi
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
 if [[ ! -f "${KEY_FILE}" ]]; then
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
@@ -1831,10 +1833,6 @@ if [[ "${WITH_STORAGE}" == "1" ]]; then
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
-if [[ -n "${CADDY_ROLLBACK_TMP}" ]]; then
-  cp "${CADDY_ROLLBACK_TMP}" "${DEPLOY_DIR}/config/caddy/Caddyfile.rollback"
-  rm -f "${CADDY_ROLLBACK_TMP}"
-fi
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
 mkdir -p "${DEPLOY_DIR}/secrets"
 if [[ ! -s "${DEPLOY_DIR}/secrets/health-auth.env" ]]; then
@@ -1865,7 +1863,7 @@ chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/admin
     MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
       MOOX_CADDY_CHECKSUMS="${DEPLOY_DIR}/lib/caddy-v2.11.4-checksums.txt" \
       MOOX_CADDY_ARCHIVE="${DEPLOY_DIR}/lib/caddy_2.11.4_${CADDY_OS_NAME}_${TARGET_GOARCH}.tar.gz" \
-      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}" --config "${DEPLOY_DIR}/config/caddy/Caddyfile.next"
   fi
   if [[ "${had_caddy_ca}" -eq 0 && -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]]; then
     [[ "${WITH_COLLECTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" collector
