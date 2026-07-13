@@ -12,16 +12,30 @@
 | production | console；warn/error 追加 CLS | 同上加 deployment version | 同上 |
 | incident debug | 有时限、仅指定 method | trace ID 与批准的标识 | 未经脱敏测试的敏感字段 |
 
-CLS 仅由 `scripts/deploy-moox.sh --enable-cls` 写入 production 配置。仓库和 release tree 中只保留 `${MOOX_CLS_*}` 占位符；目标机的 `secrets/cls.env` 必须为 `0600`，至少包含 `MOOX_CLS_SECRET_ID` 和 `MOOX_CLS_SECRET_KEY`。`start.sh` 默认执行幂等初始化：检查/开通 CLS，创建或复用 Logset、Topic 和索引，然后把 Topic ID 注入本次服务进程。设置 `MOOX_CLS_AUTO_BOOTSTRAP=0` 时必须显式提供 `MOOX_CLS_TOPIC_ID`。初始远程级别为 `warn`。
+CLS-enabled releases run a predeploy check before service shutdown. The check
+uses the selected cloud account, or the first Tencent account when no ID is
+supplied, and queries fixed `ap-guangzhou` resources: Logset `moox` and Topic
+`moox-application`. It creates only missing resources and writes the verified
+Topic ID into staged `trpc_go*.yaml` files. Writer credentials remain in the
+target `secrets/cls.env` with mode `0600`; repository and release configs keep
+`${MOOX_CLS_*}` placeholders. A failed Admin/CloudNode service-auth check,
+account lookup, credential reveal, or CLS API call stops the release before
+upload or service shutdown. The initial remote level remains `warn`.
 
-直接执行初始化与预检：
+直接执行发布前初始化与预检：
 
 ```bash
-moox-cli ops tencent cls bootstrap --region ap-guangzhou --dry-run
-moox-cli ops tencent cls bootstrap --region ap-guangzhou
+skills/moox/scripts/cls-bootstrap.sh \
+  --target user@host \
+  --deploy-dir /home/user/moox \
+  --stage-dir release/deploy-stage/moox \
+  --admin-url http://127.0.0.1:11002
 ```
 
-初始化命令使用腾讯云 SDK 默认凭据链，支持标准环境变量和 CVM 实例角色；生产日志 writer 受上游 `trpc-log-cls v1.0.0` 限制，仍需通过目标机环境文件注入短期或轮换后的 `SecretId/SecretKey`，不会把凭据写入仓库或日志。
+脚本通过带 service-auth 的 Admin/CloudNode 控制面调用
+`moox-cli ops tencent cls prepare`；生产日志 writer 受上游
+`trpc-log-cls v1.0.0` 限制，短期或轮换后的 `SecretId/SecretKey` 仅通过
+目标机 `0600` 环境文件注入，不会写入仓库、stage、release archive 或日志。
 
 ## 链路、重试与元数据边界
 

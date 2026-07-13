@@ -92,6 +92,17 @@ sequenceDiagram
 
 每次发布都重新调用腾讯云查询接口。脚本不把上次 Topic ID 当作事实来源；本地缓存只能用于诊断，不能跳过云端核对。
 
+## 实施状态（2026-07-13）
+
+发布前初始化已接入当前实现：`moox-cli ops tencent cls prepare` 负责通过
+带 service-auth 的 CloudNode 控制面选择账户并核对固定 CLS 资源，
+`skills/moox/scripts/cls-bootstrap.sh` 负责在目标机安全安装 `0600` 的
+`secrets/cls.env` 并只修改 stage 配置，`scripts/deploy-moox.sh` 的
+`prepare_cls_preflight` 在同步或停止旧服务前执行。对应的部署、Skill、CLI
+和 tRPC 配置契约测试覆盖账户选择、Topic ID/credential placeholders、
+固定 region/logset/topic、幂等更新及失败时不停止现有服务；运行时安全边界
+仍以本设计的“安全边界”一节为准。
+
 ## 错误处理
 
 以下情况必须在上传、停止旧服务或切换配置之前终止发布：

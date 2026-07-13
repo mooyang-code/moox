@@ -129,9 +129,10 @@ if rg -n -g '*.yaml' -g '*.yml' -g '*.env' '^\s*(secret_id|secret_key|authorizat
 fi
 
 require_text scripts/deploy-moox.sh '--enable-cls' 'deployment must expose explicit CLS activation'
-require_text scripts/deploy-moox.sh 'ops tencent cls bootstrap' 'deployment must provision CLS resources before startup'
-require_text scripts/deploy-moox.sh 'source "${ROOT}/secrets/cls.env"' 'CLS credentials must come from target runtime environment'
-require_text scripts/deploy-moox.sh 'source "${ROOT}/secrets/otel.env"' 'OTel endpoint must come from target runtime environment'
-require_text scripts/deploy-moox.sh 'topic_id: ${MOOX_CLS_TOPIC_ID}' 'generated CLS writer must retain environment placeholders'
+require_text scripts/deploy-moox.sh '--cloud-account-id' 'deployment must allow explicit CLS cloud account selection'
+require_text scripts/deploy-moox.sh 'prepare_cls_preflight' 'deployment must prepare CLS before sync'
+require_text skills/moox/scripts/cls-bootstrap.sh 'ops tencent cls prepare' 'MooX Skill must prepare CLS through moox-cli'
+require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${topic_id}' 'staged CLS writer must contain the verified Topic ID'
+require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
 
 printf 'PASS: tRPC plugin configuration and registration matrix\n'

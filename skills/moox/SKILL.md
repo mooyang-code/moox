@@ -84,6 +84,29 @@ The script calls `bin/moox-cli` from the repository when present, or `moox-cli` 
 
 Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
 
+### Tencent CLS Before Deployment
+
+When CLS is enabled, prepare it before uploading the release or stopping any
+existing service. The Admin and CloudNode control plane must already be
+running and reachable through the service-authenticated gateway, and the
+selected account must be a Tencent cloud account:
+
+```bash
+skills/moox/scripts/cls-bootstrap.sh \
+  --target user@host \
+  --deploy-dir /home/user/moox \
+  --stage-dir release/deploy-stage/moox \
+  --admin-url http://127.0.0.1:11002
+```
+
+The script selects the first Tencent cloud account unless
+`--cloud-account-id` is set. It always queries the fixed `ap-guangzhou` CLS
+resources: Logset `moox` and Topic `moox-application`. Missing resources are
+created; existing resources are reused. The verified Topic ID is written only
+to staged `trpc_go*.yaml` files. Writer credentials are installed only in the
+target's `secrets/cls.env`, with mode `0600`, and remain placeholders in the
+staged configuration.
+
 ## Development Rules
 
 - Prefer the new protocol under `modules/storage/proto/*.proto`, `modules/admin/proto/*.proto`, `modules/collector/proto/*.proto`, and `modules/cloudnode/proto/*.proto`; shared response/auth/page types live in `packages/commonpb`.
@@ -117,6 +140,12 @@ scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host ho
 ```
 
 The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, persists its CA, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
+
+For a CLS-enabled release, `scripts/deploy-moox.sh --enable-cls` runs the CLS
+predeploy check after stage creation and before either local or remote sync.
+That check requires the already-running Admin/CloudNode control plane and at
+least one Tencent cloud account; a failed check must not stop the current
+deployment.
 
 When initializing a fresh MooX system, use a strict two-stage deployment flow. Do not ask for every service placement up front.
 
