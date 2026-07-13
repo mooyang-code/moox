@@ -13,6 +13,7 @@ RULE_ID="binance_spot_kline_1m"
 NODE_ID="e2e-scf-node"
 PACKAGE_ID="moox-collector_dev"
 DATASET_ID="binance_spot_kline"
+SYSDEPLOY_ONLY=0
 
 export MOOX_ADMIN_JWT_SECRET_KEY="${MOOX_ADMIN_JWT_SECRET_KEY:-moox-e2e-jwt-secret-key-20260713-safe}"
 export MOOX_EVENTBUS_STREAM_MAX_BYTES="${MOOX_EVENTBUS_STREAM_MAX_BYTES:-104857600}"
@@ -29,6 +30,7 @@ Options:
   --skip-deploy                   Reuse an already running deployment.
   --preserve-data                 Do not pass --reset-data to deploy-moox.sh.
   --timeout-seconds <n>           SCF/assert timeout. Default: 180.
+  --sysdeploy-only                Stop after the service-directory browser/API lifecycle.
   -h, --help                      Show this help.
 
 Examples:
@@ -102,6 +104,10 @@ while [[ $# -gt 0 ]]; do
     --timeout-seconds)
       TIMEOUT_SECONDS="${2:-}"
       shift 2
+      ;;
+    --sysdeploy-only)
+      SYSDEPLOY_ONLY=1
+      shift
       ;;
     -h|--help)
       usage
@@ -186,6 +192,11 @@ else
 fi
 
 log "import storage metadata seeds"
+if [[ "${SYSDEPLOY_ONLY}" -eq 1 ]]; then
+  verify_phase "sysdeploy"
+  log "end-to-end test passed"
+  exit 0
+fi
 import_seed "platform-local.seed.yaml"
 import_seed "metadata-crypto.seed.yaml"
 import_seed "metadata-crypto-spot-kline-1m-view.seed.yaml"

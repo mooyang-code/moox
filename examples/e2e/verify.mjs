@@ -96,7 +96,7 @@ function parseArgs(argv) {
 
 function usage() {
   console.log(`Usage:
-  node examples/e2e/verify.mjs --phase prepare|assert [options]
+  node examples/e2e/verify.mjs --phase sysdeploy|prepare|assert [options]
 
 Options:
   --gateway <url>          Admin gateway URL. Default: http://127.0.0.1:11000
@@ -122,7 +122,7 @@ function log(message) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.phase === "prepare") {
+  if (args.phase === "sysdeploy" || args.phase === "prepare") {
     await prepare(args);
     return;
   }
@@ -148,6 +148,10 @@ async function prepare(args) {
   const token = await login(args);
   await updatePublicDeployments(args, token);
   await assertSysDeploySingleInstanceContract(args, token);
+  if (args.phase === "sysdeploy") {
+    log("sysdeploy end-to-end test passed");
+    return;
+  }
   await ensureSpace(args, token);
 
   await assertManagementRequests(args, token);
@@ -167,13 +171,33 @@ async function prepare(args) {
     return rows;
   });
 
-  log(`prepare ok: instances=${instances.length}`);
+  const jobItems = await waitFor("cloudnode job items", 60_000, async () => {
+    const rows = await listJobItems(args, token);
+    if (rows.length === 0) throw new Error("cloudnode has no job items for collector rule");
+    return rows;
+  });
+
+  log(`prepare ok: instances=${instances.length}, job_items=${jobItems.length}`);
 }
 
 async function assertAfterSCF(args) {
   const token = await login(args);
   await updatePublicDeployments(args, token);
   const timeoutMs = args.timeoutSeconds * 1000;
+
+  const jobItems = await waitFor("cloudnode job items success", timeoutMs, async () => {
+    const rows = await listJobItems(args, token);
+    if (rows.length === 0) throw new Error("cloudnode job items are empty");
+    const failed = rows.filter((item) => isJobStatus(item.status, "JOB_ITEM_STATUS_FAILED") || isJobStatus(item.status, "JOB_ITEM_STATUS_CANCELED"));
+    if (failed.length > 0) {
+      throw new FatalAssertionError(`job item failed: ${failed.map((item) => `${item.job_item_id}:${statusName(item.status, JOB_STATUS)}:${item.last_error_message || ""}`).join(", ")}`);
+    }
+    const pending = rows.filter((item) => !isJobStatus(item.status, "JOB_ITEM_STATUS_SUCCESS"));
+    if (pending.length > 0) {
+      throw new Error(`${pending.length}/${rows.length} job items are not success yet`);
+    }
+    return rows;
+  });
 
   const instances = await waitFor("collector task instances success", timeoutMs, async () => {
     const rows = await listTaskInstances(args, token);
@@ -205,7 +229,7 @@ async function assertAfterSCF(args) {
   });
 
   const sample = rows[0]?.key || {};
-  log(`assert ok: instances=${instances.length}, storage_rows=${rows.length}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
+  log(`assert ok: job_items=${jobItems.length}, instances=${instances.length}, storage_rows=${rows.length}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
 }
 
 async function assertWebHost(webURL) {
@@ -430,25 +454,27 @@ async function assertManagementRequests(args, token) {
 }
 
 async function ensureCloudNode(args, token) {
-  await adminPost(args, token, "cloudnode", "UpdateNode", {
-    node: {
-      space_id: args.space,
-      node_id: args.node,
+  const rsp = await adminPost(args, token, "cloudnode", "BatchCreateNodes", {
+    nodes: [{
       cloud_account_id: "e2e-local",
       node_type: "scf-event",
-      provider: "local",
+      runtime: "go1",
+      handler: "main",
       region: "local",
       namespace: "e2e",
       package_id: args.package,
       deployment_id: args.package,
-      function_name: args.node,
-      supported_workloads: ["collect.kline", "collect.symbol"],
-      status: "NODE_STATUS_ONLINE",
       metadata: {
+        node_id: args.node,
+        function_name: args.node,
         function_name_prefix: "e2e-scf",
+        supported_workloads: ["collect.kline", "collect.symbol"],
       },
-    },
+    }],
   }, { spaceId: args.space });
+  if ((rsp.processed_count || 0) < 1) {
+    throw new Error("BatchCreateNodes did not process the e2e node");
+  }
   log(`cloudnode runtime node ready: ${args.node}`);
 }
 
@@ -503,9 +529,10 @@ async function listTaskInstances(args, token) {
 async function listJobItems(args, token) {
   const rsp = await adminPost(args, token, "cloudnode", "ListJobItems", {
     space_id: args.space,
+    job_id: args.rule,
     page: { page: 1, size: 200 },
   }, { spaceId: args.space });
-  return (rsp.items || []).filter((item) => item.job_id === args.rule);
+  return rsp.items || [];
 }
 
 async function storagePost(args, token, group, method, body) {
