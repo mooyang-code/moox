@@ -5,6 +5,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -17,6 +18,7 @@ func RegisterTRPCServices() error {
 
 	// 创建TRPC服务器
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("collector")
 
 	// 注册心跳定时器
 	log.Info("注册心跳定时器...")

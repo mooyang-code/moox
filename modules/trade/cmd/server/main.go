@@ -11,6 +11,7 @@ import (
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/bootstrap"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -18,6 +19,7 @@ import (
 func main() {
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("trade")
 
 	server, err := bootstrap.Initialize(ctx, s)
 	if err != nil {

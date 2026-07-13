@@ -4,18 +4,20 @@ import (
 	"os"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/bootstrap"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
+	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 func main() {
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("eventbus")
 	server, err := bootstrap.Initialize(ctx, s)
 	if err != nil {
 		log.Errorf("eventbus bootstrap failed: %v", err)

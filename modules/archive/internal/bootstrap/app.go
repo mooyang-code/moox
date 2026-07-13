@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go"
@@ -193,6 +194,7 @@ func RunFromConfig(ctx context.Context, path, version, commit string) error {
 		return err
 	}
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("archive")
 	app := &App{Config: cfg, Version: version, GitCommit: commit}
 	if err := app.RegisterHealth(s); err != nil {
 		return err

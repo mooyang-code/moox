@@ -42,6 +42,10 @@ skills/moox/scripts/cls-bootstrap.sh \
 `trpc-log-cls v1.0.0` 限制，短期或轮换后的 `SecretId/SecretKey` 仅通过
 目标机 `0600` 环境文件注入，不会写入仓库、stage、release archive 或日志。
 
+所有启用 CLS 的 tRPC 进程在 `trpc.NewServer()` 完成插件初始化后，都会在入口处为默认 logger
+追加固定的 `service_name` 属性；属性值使用部署模块名（如 `admin`、`factor`、`storage`）。
+该属性随 console 和 CLS writer 一起输出，便于在固定 Topic 中按服务筛选；业务日志不能覆盖该字段。
+
 ## 链路、重试与元数据边界
 
 - OpenTelemetry 第一阶段只覆盖 Admin 和 Storage 的 server/client filter。目标机可通过 `secrets/otel.env`（`0600`）设置 `MOOX_OTEL_ENDPOINT`、`MOOX_OTEL_INSECURE` 和可选采样率；未设置 endpoint 时使用 no-op provider。默认采样率 1%，不记录请求/响应 body，不重复导出 metrics 或 logs，部署脚本会为 Admin 和各 Storage 进程设置独立 `service.name`。由于官方 `oteltrpc v1.0.2` 与 Storage 使用的 OpenTelemetry 1.35 不兼容，MooX 使用同名本地兼容适配器；扩展其他模块前先完成 Admin 到 Storage 的端到端 trace 验证。

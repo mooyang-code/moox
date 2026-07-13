@@ -64,6 +64,13 @@ for module in "${modules[@]}"; do
 	require_text "${main}" 'trpc.group/trpc-go/trpc-metrics-prometheus' "missing prometheus registration for ${module}"
 	require_text "${modfile}" 'trpc.group/trpc-go/trpc-log-cls v1.0.0' "missing CLS dependency for ${module}"
 	require_text "${main}" 'trpc.group/trpc-go/trpc-log-cls' "missing CLS registration for ${module}"
+	if [[ "${module}" == archive ]]; then
+		require_text "modules/archive/internal/bootstrap/app.go" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
+		require_text "modules/archive/internal/bootstrap/app.go" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
+	else
+		require_text "${main}" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
+		require_text "${main}" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
+	fi
 
 	for config in "${configs[@]}"; do
 		[[ -f "${config}" ]] || fail "missing tRPC config for ${module}"
@@ -139,6 +146,7 @@ require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET
 require_text 'docs/运维/tRPC插件运行基线.md' 'literal Topic ID' 'operations baseline must distinguish literal Topic IDs from credential placeholders'
 require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_ID}' 'operations baseline must name the CLS secret-id placeholder'
 require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_KEY}' 'operations baseline must name the CLS secret-key placeholder'
+require_text 'docs/运维/tRPC插件运行基线.md' 'service_name' 'operations baseline must document the CLS service identity field'
 require_text 'docs/运维/tRPC插件运行基线.md' 'release archive sync or service shutdown' 'operations baseline must distinguish helper upload from release sync'
 require_text skills/moox/SKILL.md 'architecture-matched `moox-cli` helper solely for preflight' 'MooX Skill must document temporary preflight helper cleanup'
 if grep -Fq -- '${MOOX_CLS_*}' 'docs/运维/tRPC插件运行基线.md'; then

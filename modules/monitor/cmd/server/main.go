@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/bootstrap"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
@@ -16,6 +17,7 @@ import (
 func main() {
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("monitor")
 	server, err := bootstrap.Initialize(ctx, s)
 	if err != nil {
 		log.Errorf("monitor bootstrap failed: %v", err)

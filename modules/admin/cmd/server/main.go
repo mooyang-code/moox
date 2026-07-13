@@ -15,6 +15,7 @@ import (
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/bootstrap"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -23,6 +24,7 @@ func main() {
 	defer shutdownTracing()
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
+	trpclog.InstallServiceName("admin")
 
 	// 初始化应用（加载配置、启动后台服务、注册 trpc 服务）
 	server, err := bootstrap.Initialize(ctx, s)
