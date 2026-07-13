@@ -151,6 +151,27 @@ That check requires the already-running Admin/CloudNode control plane and at
 least one Tencent cloud account; a failed check must not stop the current
 deployment.
 
+### Tencent CLS Log Query And Verification
+
+When the user asks to query, verify, or troubleshoot CLS logs, use the bundled
+`skills/moox/scripts/cls_search.py` script. Read
+[`references/cls-query.md`](references/cls-query.md) for the query workflow and
+[`references/cls-api.md`](references/cls-api.md) for the signed API contract.
+The script supports CQL, relative time ranges, raw/JSON output, field
+selection, and pagination. It uses `cls.internal.tencentcloudapi.com` by
+default and loads credentials only from CLI arguments, `CLS_*` environment
+variables, or an untracked `.env` file.
+If the bundled script reports a missing SDK, install `tencentcloud-sdk-python-cls`
+in the active Python environment; do not add Tencent credentials to the repo.
+
+For a MooX CLS check, first query `--query '*'` with a narrow time range and
+inspect the returned structured records. Verify `service_name` in the record
+before trying a CQL predicate on that field; the fixed Topic may not have a
+`service_name` index yet, in which case the API returns an explicit
+`field ... is not indexed` error and client-side filtering is required. Report
+the Topic ID, time range, result count, RequestId, service name values, and any
+indexing or delivery errors, but never print CLS credentials.
+
 When initializing a fresh MooX system, use a strict two-stage deployment flow. Do not ask for every service placement up front.
 
 1. Stage 1 starts with admin only.
