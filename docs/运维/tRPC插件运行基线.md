@@ -17,8 +17,9 @@ uses the selected cloud account, or the first Tencent account when no ID is
 supplied, and queries fixed `ap-guangzhou` resources: Logset `moox` and Topic
 `moox-application`. It creates only missing resources and writes the verified
 Topic ID into staged `trpc_go*.yaml` files. Writer credentials remain in the
-target `secrets/cls.env` with mode `0600`; repository and release configs keep
-`${MOOX_CLS_*}` placeholders. A failed Admin/CloudNode service-auth check,
+target `secrets/cls.env` with mode `0600`; staged configs contain the verified
+literal Topic ID and only `${MOOX_CLS_SECRET_ID}` and
+`${MOOX_CLS_SECRET_KEY}` credential placeholders. A failed Admin/CloudNode service-auth check,
 account lookup, credential reveal, or CLS API call stops the release before
 upload or service shutdown. The initial remote level remains `warn`.
 

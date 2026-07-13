@@ -134,5 +134,10 @@ require_text scripts/deploy-moox.sh 'prepare_cls_preflight' 'deployment must pre
 require_text skills/moox/scripts/cls-bootstrap.sh 'ops tencent cls prepare' 'MooX Skill must prepare CLS through moox-cli'
 require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${topic_id}' 'staged CLS writer must contain the verified Topic ID'
 require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
+require_text 'docs/运维/tRPC插件运行基线.md' 'literal Topic ID and only `${MOOX_CLS_SECRET_ID}` and' 'operations baseline must distinguish literal Topic IDs from credential placeholders'
+require_text 'docs/运维/tRPC插件运行基线.md' '`${MOOX_CLS_SECRET_KEY}` credential placeholders' 'operations baseline must name the CLS secret-key placeholder'
+if grep -Fq -- '${MOOX_CLS_*}' 'docs/运维/tRPC插件运行基线.md'; then
+  fail 'operations baseline must not imply a Topic ID placeholder remains in staged configs'
+fi
 
 printf 'PASS: tRPC plugin configuration and registration matrix\n'
