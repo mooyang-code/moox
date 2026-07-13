@@ -42,6 +42,7 @@ function parseArgs(argv) {
   const args = {
     phase: "prepare",
     gateway: "http://127.0.0.1:11000",
+    health: "http://127.0.0.1:11010/healthz",
     web: "http://127.0.0.1:9527",
     host: "127.0.0.1",
     space: "crypto",
@@ -59,6 +60,7 @@ function parseArgs(argv) {
     switch (key) {
       case "--phase":
       case "--gateway":
+      case "--health":
       case "--web":
       case "--host":
       case "--space":
@@ -140,11 +142,10 @@ async function prepare(args) {
     return true;
   });
   await waitFor("admin gateway health", 60_000, async () => {
-    await assertGatewayHealth(args.gateway);
+    await assertGatewayHealth(args.health);
     return true;
   });
 
-  await ensureUser(args);
   const token = await login(args);
   await updatePublicDeployments(args, token);
   await assertSysDeploySingleInstanceContract(args, token);
@@ -239,9 +240,9 @@ async function assertWebHost(webURL) {
   }
 }
 
-async function assertGatewayHealth(gatewayURL) {
-  const rsp = await fetchJSON(`${gatewayURL}/api/admin/health`, { method: "GET" }, "admin health");
-  if (rsp.data?.status !== "ok") {
+async function assertGatewayHealth(healthURL) {
+  const rsp = await fetchJSON(healthURL, { method: "GET" }, "admin health");
+  if (rsp.status !== "ok" && rsp.data?.status !== "ok") {
     throw new Error(`admin health failed: ${JSON.stringify(rsp.data)}`);
   }
 }

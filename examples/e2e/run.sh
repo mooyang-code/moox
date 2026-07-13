@@ -170,12 +170,15 @@ run_scf_once() {
 verify_phase() {
   local phase="$1"
   local web_url="http://${PUBLIC_HOST}:9527"
+  local health_url="http://${PUBLIC_HOST}:11000/api/admin/health"
   if is_local_target; then
     web_url="http://127.0.0.1:9528"
+    health_url="http://127.0.0.1:11010/healthz"
   fi
   node "${ROOT}/examples/e2e/verify.mjs" \
     --phase "${phase}" \
     --gateway "http://${PUBLIC_HOST}:11000" \
+    --health "${health_url}" \
     --web "${web_url}" \
     --host "${PUBLIC_HOST}" \
     --space "${SPACE_ID}" \
