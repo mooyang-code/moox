@@ -416,6 +416,9 @@ patch_configs() {
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_cloudnode\.db#path: ../data/cloudnode/moox_cloudnode.db#g' \
       "${STAGE_DIR}/cloudnode/config/app.yaml"
+    local cloudnode_eventbus_url="${EVENTBUS_URL_ENV:-nats://127.0.0.1:4222}"
+    perl -0pi -e 's#nats://127\.0\.0\.1:4322#'"${cloudnode_eventbus_url}"'#g' \
+      "${STAGE_DIR}/cloudnode/config/app.yaml"
   fi
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
