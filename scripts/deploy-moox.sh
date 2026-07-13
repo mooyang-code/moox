@@ -35,6 +35,7 @@ ADMIN_PASSWORD_FILE=""
 ADMIN_PASSWORD=""
 BOOTSTRAP_ADMIN=0
 ENABLE_CLS=0
+CLOUD_ACCOUNT_ID=""
 
 usage() {
   cat <<'EOF'
@@ -68,7 +69,8 @@ Options:
   --local-ca <auto|install|skip>  Operator CA workflow. Default: auto.
   --local-ca-output <path>        Fetched root CA path. Default: ~/.moox/certs/<public-host>-root.crt.
   --caddy-conflict <fail>         Refuse unrelated listeners (the only supported policy).
-  --enable-cls                    Add production CLS writers; target must provide secrets/cls.env.
+  --enable-cls                    Prepare fixed CLS resources and add production CLS writers.
+  --cloud-account-id <id>         Tencent cloud account for CLS; default is the first account.
   -h, --help                      Show this help.
 
 Examples:
@@ -179,6 +181,7 @@ while [[ $# -gt 0 ]]; do
     --local-ca-output) LOCAL_CA_OUTPUT="${2:-}"; shift 2 ;;
     --caddy-conflict) [[ "${2:-}" == fail ]] || fail 'only --caddy-conflict fail is supported'; shift 2 ;;
     --enable-cls) ENABLE_CLS=1; shift ;;
+    --cloud-account-id) CLOUD_ACCOUNT_ID="${2:-}"; shift 2 ;;
     -h|--help)
       usage
       exit 0
@@ -443,36 +446,6 @@ patch_configs() {
       "${STAGE_DIR}/eventbus/config/app.yaml"
   fi
 
-  if [[ "${ENABLE_CLS}" -eq 1 ]]; then
-    while IFS= read -r config; do
-      if grep -q '^  log:' "${config}"; then
-        cat >>"${config}" <<'EOF'
-      - writer: cls
-        level: warn
-        remote_config:
-          topic_id: ${MOOX_CLS_TOPIC_ID}
-          host: ${MOOX_CLS_HOST}
-          secret_id: ${MOOX_CLS_SECRET_ID}
-          secret_key: ${MOOX_CLS_SECRET_KEY}
-          max_block_sec: 0
-EOF
-      else
-        cat >>"${config}" <<'EOF'
-  log:
-    default:
-      - writer: cls
-        level: warn
-        remote_config:
-          topic_id: ${MOOX_CLS_TOPIC_ID}
-          host: ${MOOX_CLS_HOST}
-          secret_id: ${MOOX_CLS_SECRET_ID}
-          secret_key: ${MOOX_CLS_SECRET_KEY}
-          max_block_sec: 0
-EOF
-      fi
-    done < <(find "${STAGE_DIR}" -path '*/config/trpc_go*.yaml' -type f -print)
-  fi
-
   if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
@@ -543,29 +516,6 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
 mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
-
-bootstrap_cls() {
-  local output topic_id region
-  grep -Rqs -- '- writer: cls' "${ROOT}"/*/config/trpc_go*.yaml 2>/dev/null || return 0
-  : "${MOOX_CLS_SECRET_ID:?missing MOOX_CLS_SECRET_ID in secrets/cls.env}"
-  : "${MOOX_CLS_SECRET_KEY:?missing MOOX_CLS_SECRET_KEY in secrets/cls.env}"
-  export TENCENTCLOUD_SECRET_ID="${MOOX_CLS_SECRET_ID}"
-  export TENCENTCLOUD_SECRET_KEY="${MOOX_CLS_SECRET_KEY}"
-  region="${MOOX_CLS_REGION:-ap-guangzhou}"
-  if [[ "${MOOX_CLS_AUTO_BOOTSTRAP:-1}" == "1" ]]; then
-    output=$("${ROOT}/bin/moox-cli" ops tencent cls bootstrap \
-      --region "${region}" \
-      --logset-name "${MOOX_CLS_LOGSET_NAME:-moox}" \
-      --topic-name "${MOOX_CLS_TOPIC_NAME:-moox-application}" \
-      --retention-days "${MOOX_CLS_RETENTION_DAYS:-30}" \
-      --partitions "${MOOX_CLS_PARTITIONS:-1}")
-    topic_id=$(printf '%s' "${output}" | sed -n 's/.*"topic_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tail -1)
-    [[ -n "${topic_id}" ]] || { echo "CLS bootstrap returned no topic_id" >&2; exit 1; }
-    export MOOX_CLS_TOPIC_ID="${topic_id}"
-  fi
-  : "${MOOX_CLS_TOPIC_ID:?set MOOX_CLS_TOPIC_ID or enable automatic bootstrap}"
-  export MOOX_CLS_HOST="${MOOX_CLS_HOST:-${region}.cls.tencentyun.com}"
-}
 
 stop_if_running() {
   local name="$1"
@@ -1019,7 +969,6 @@ start_web_host() {
 }
 
 SERVICE="${1:-}"
-bootstrap_cls
 case "${SERVICE}" in
   "")
     start_admin
@@ -1585,6 +1534,18 @@ prepare_stage() {
   fi
 }
 
+prepare_cls_preflight() {
+  [[ "${ENABLE_CLS}" -eq 1 ]] || return 0
+  local args=(
+    --target "${TARGET}"
+    --deploy-dir "${DEPLOY_DIR}"
+    --stage-dir "${STAGE_DIR}"
+    --admin-url http://127.0.0.1:11002
+  )
+  [[ -z "${CLOUD_ACCOUNT_ID}" ]] || args+=(--cloud-account-id "${CLOUD_ACCOUNT_ID}")
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" "${args[@]}"
+}
+
 sync_local_stage() {
   local deploy_dir caddy_data_tmp=""
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
@@ -1948,6 +1909,7 @@ log "target=${TARGET} dir=${DEPLOY_DIR} platform=${TARGET_GOOS}/${TARGET_GOARCH}
 build_core_binaries
 build_web_host_binary
 prepare_stage
+prepare_cls_preflight
 
 if is_local_target; then
   sync_local_stage
