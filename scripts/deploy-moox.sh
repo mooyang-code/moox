@@ -36,6 +36,9 @@ ADMIN_PASSWORD=""
 BOOTSTRAP_ADMIN=0
 ENABLE_CLS=0
 CLOUD_ACCOUNT_ID=""
+STAGE_DEPLOY_LOCK=""
+STAGE_DEPLOY_LOCK_TOKEN="$$.${RANDOM}.${RANDOM}"
+STAGE_DEPLOY_LOCK_HELD=0
 
 usage() {
   cat <<'EOF'
@@ -87,6 +90,43 @@ log() {
 fail() {
   printf '[deploy-moox] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+cleanup_stage_deploy_lock() {
+  [[ "${STAGE_DEPLOY_LOCK_HELD}" -eq 1 && -n "${STAGE_DEPLOY_LOCK}" ]] || return 0
+  local owner_token=""
+  if [[ -f "${STAGE_DEPLOY_LOCK}/owner" ]]; then
+    owner_token="$(sed -n 's/^token=//p' "${STAGE_DEPLOY_LOCK}/owner" | head -1)"
+  fi
+  if [[ "${owner_token}" == "${STAGE_DEPLOY_LOCK_TOKEN}" ]]; then
+    rm -f "${STAGE_DEPLOY_LOCK}/owner"
+    rmdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null || true
+  fi
+  STAGE_DEPLOY_LOCK_HELD=0
+}
+
+# The lock lives beside (not inside) STAGE_DIR, so prepare_stage cannot remove
+# it. Normal exits remove only the matching owner token; interrupted deploys
+# leave a stale lock that operators must remove after confirming no owner runs.
+trap cleanup_stage_deploy_lock EXIT
+
+acquire_stage_deploy_lock() {
+  [[ "${ENABLE_CLS}" -eq 1 ]] || return 0
+  local lock_base="${STAGE_DIR%/}"
+  [[ -n "${lock_base}" ]] || lock_base="/"
+  STAGE_DEPLOY_LOCK="${lock_base}.deploy.lock"
+  mkdir -p "$(dirname "${STAGE_DEPLOY_LOCK}")"
+  if ! mkdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null; then
+    fail "CLS stage deployment lock already held: ${STAGE_DEPLOY_LOCK}; remove it only after confirming no deployment is running"
+  fi
+  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${STAGE_DEPLOY_LOCK_TOKEN}" "$(hostname)" "$$" "$(date +%s)" \
+    >"${STAGE_DEPLOY_LOCK}/owner"); then
+    rm -f "${STAGE_DEPLOY_LOCK}/owner"
+    rmdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null || true
+    fail "failed to initialize CLS stage deployment lock: ${STAGE_DEPLOY_LOCK}"
+  fi
+  STAGE_DEPLOY_LOCK_HELD=1
 }
 
 generate_secret() {
@@ -1921,6 +1961,7 @@ EOF
 log "target=${TARGET} dir=${DEPLOY_DIR} platform=${TARGET_GOOS}/${TARGET_GOARCH}"
 build_core_binaries
 build_web_host_binary
+acquire_stage_deploy_lock
 prepare_stage
 prepare_cls_preflight
 

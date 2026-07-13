@@ -48,6 +48,17 @@ FIXTURE_ROOT="${TMP_ROOT}/repo"
 DEPLOY_DIR="${TMP_ROOT}/existing-deploy"
 STAGE_DIR="${TMP_ROOT}/fixture-stage"
 STOP_MARKER="${TMP_ROOT}/stop.marker"
+PREFLIGHT_READY="${TMP_ROOT}/preflight.ready"
+PREFLIGHT_RELEASE="${TMP_ROOT}/preflight.release"
+FIRST_PID=""
+cleanup_fixture() {
+  : >"${PREFLIGHT_RELEASE}"
+  if [[ -n "${FIRST_PID}" ]]; then
+    wait "${FIRST_PID}" 2>/dev/null || true
+  fi
+  rm -rf "${TMP_ROOT}"
+}
+trap cleanup_fixture EXIT
 mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
   "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/bin" \
   "${FIXTURE_ROOT}/skills/moox/scripts"
@@ -60,6 +71,12 @@ ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 cat >"${FIXTURE_ROOT}/skills/moox/scripts/cls-bootstrap.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${MOOX_TEST_PREFLIGHT_GATE:-0}" == "1" ]]; then
+  : >"${MOOX_TEST_PREFLIGHT_READY}"
+  while [[ ! -e "${MOOX_TEST_PREFLIGHT_RELEASE}" ]]; do
+    sleep 0.05
+  done
+fi
 echo 'fake CLS preflight failure' >&2
 exit 1
 EOF
@@ -91,9 +108,44 @@ fi
   exit 1
 }
 
+rm -f "${PREFLIGHT_READY}" "${PREFLIGHT_RELEASE}" "${STAGE_DIR}/sentinel"
+MOOX_TEST_PREFLIGHT_GATE=1 \
+MOOX_TEST_PREFLIGHT_READY="${PREFLIGHT_READY}" \
+MOOX_TEST_PREFLIGHT_RELEASE="${PREFLIGHT_RELEASE}" \
+  "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+    --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
+    --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    >"${TMP_ROOT}/preflight-first.out" 2>&1 &
+FIRST_PID=$!
+for _ in $(seq 1 100); do
+  [[ -e "${PREFLIGHT_READY}" ]] && break
+  sleep 0.05
+done
+[[ -e "${PREFLIGHT_READY}" ]] || {
+  echo 'first deployment did not reach CLS preflight' >&2
+  exit 1
+}
+printf 'first stage must survive the competing deployment\n' >"${STAGE_DIR}/sentinel"
+if "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+    --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
+    --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    >"${TMP_ROOT}/preflight-second.out" 2>&1; then
+  echo 'competing deployment unexpectedly succeeded while stage lock was held' >&2
+  exit 1
+fi
+grep -q 'stage deployment lock' "${TMP_ROOT}/preflight-second.out"
+grep -q 'first stage must survive' "${STAGE_DIR}/sentinel"
+: >"${PREFLIGHT_RELEASE}"
+wait "${FIRST_PID}" 2>/dev/null || true
+FIRST_PID=""
+
 grep -q -- '--cloud-account-id' "${SCRIPT}"
 grep -q 'skills/moox/scripts/cls-bootstrap.sh' "${SCRIPT}"
 grep -q 'prepare_cls_preflight' "${SCRIPT}"
+grep -q 'acquire_stage_deploy_lock' "${SCRIPT}"
+grep -q 'STAGE_DIR%/' "${SCRIPT}"
 if grep -q '^bootstrap_cls()' "${SCRIPT}"; then
   echo 'runtime start script still provisions CLS' >&2
   exit 1
