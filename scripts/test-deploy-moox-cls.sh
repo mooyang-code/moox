@@ -64,6 +64,8 @@ mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
   "${FIXTURE_ROOT}/skills/moox/scripts"
 cp "${SCRIPT}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
+ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
+ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
@@ -125,6 +127,7 @@ for _ in $(seq 1 100); do
 done
 [[ -e "${PREFLIGHT_READY}" ]] || {
   echo 'first deployment did not reach CLS preflight' >&2
+  cat "${TMP_ROOT}/preflight-first.out" >&2 || true
   exit 1
 }
 printf 'first stage must survive the competing deployment\n' >"${STAGE_DIR}/sentinel"
