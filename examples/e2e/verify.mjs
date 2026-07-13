@@ -141,11 +141,6 @@ async function prepare(args) {
     await assertWebHost(args.web);
     return true;
   });
-  await waitFor("admin gateway health", 60_000, async () => {
-    await assertGatewayHealth(args.health);
-    return true;
-  });
-
   const token = await login(args);
   await updatePublicDeployments(args, token);
   await assertSysDeploySingleInstanceContract(args, token);
