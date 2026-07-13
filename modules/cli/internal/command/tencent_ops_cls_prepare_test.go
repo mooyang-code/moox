@@ -1,0 +1,100 @@
+package command
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
+	"github.com/stretchr/testify/require"
+)
+
+type prepareRunnerFunc func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error)
+
+func (f prepareRunnerFunc) Prepare(ctx context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
+	return f(ctx, source, factory, opts)
+}
+
+func TestRunCLSPrepareUsesSignedControlClientAndExplicitAccount(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
+	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	cmd := newCLSPrepareCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	credentialPath := filepath.Join(t.TempDir(), "cls.env")
+	oldRunner := clsPrepareRunner
+	t.Cleanup(func() { clsPrepareRunner = oldRunner })
+	clsPrepareRunner = prepareRunnerFunc(func(_ context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
+		client := source.(*adminclient.Client)
+		require.NotNil(t, client.ServiceAuth)
+		require.Equal(t, "svc-ak", client.ServiceAuth.AccessKey)
+		require.NotNil(t, factory)
+		require.Equal(t, "chosen", opts.CloudAccountID)
+		require.Equal(t, credentialPath, opts.CredentialsOutput)
+		return clsprepare.Result{AccountID: "chosen", Region: clsprepare.Region, LogsetID: "logset-1", TopicID: "topic-1"}, nil
+	})
+	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--cloud-account-id", "chosen", "--credentials-output", credentialPath})
+	require.NoError(t, cmd.Execute())
+	require.Contains(t, out.String(), `"topic_id": "topic-1"`)
+	require.NotContains(t, out.String(), "svc-ak")
+	require.NotContains(t, out.String(), "svc-sk")
+}
+
+func TestRunCLSPreparePassesEmptyAccountForDefaultSelection(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
+	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	cmd := newCLSPrepareCommand()
+	oldRunner := clsPrepareRunner
+	t.Cleanup(func() { clsPrepareRunner = oldRunner })
+	clsPrepareRunner = prepareRunnerFunc(func(_ context.Context, _ clsprepare.AccountSource, _ clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
+		require.Empty(t, opts.CloudAccountID)
+		return clsprepare.Result{AccountID: "first", Region: clsprepare.Region}, nil
+	})
+	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	require.NoError(t, cmd.Execute())
+}
+
+func TestCLSPrepareHasNoFixedResourceOverrideFlags(t *testing.T) {
+	cmd := newCLSPrepareCommand()
+	for _, name := range []string{"region", "logset-name", "topic-name"} {
+		require.Nil(t, cmd.Flags().Lookup(name), "fixed CLS setting must not be configurable: %s", name)
+	}
+}
+
+func TestCLSPrepareRequiresControlURLAndCredentialOutput(t *testing.T) {
+	cmd := newCLSPrepareCommand()
+	cmd.SetArgs(nil)
+	err := cmd.Execute()
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "control-url") || strings.Contains(err.Error(), "credentials-output"))
+}
+
+func TestCLSPrepareRequiresSignedServiceAuthentication(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "")
+	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "")
+	cmd := newCLSPrepareCommand()
+	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, "service authentication is required")
+}
+
+func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
+	const credential = "secret-from-account"
+	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
+	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	cmd := newCLSPrepareCommand()
+	oldRunner := clsPrepareRunner
+	t.Cleanup(func() { clsPrepareRunner = oldRunner })
+	clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
+		return clsprepare.Result{}, errors.New("upstream included " + credential)
+	})
+	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	err := cmd.Execute()
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), credential)
+	require.NotContains(t, err.Error(), "svc-sk")
+}

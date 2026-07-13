@@ -203,6 +203,9 @@ func parseBatchChangeResponse(raw []byte, method string) (*BatchChangeResponse, 
 
 // GetCOSAccountInfo 调 cloudnode/GetCOSAccountInfo（reveal=true），返回明文凭证。
 func (c *Client) GetCOSAccountInfo(ctx context.Context, accountID string) (*COSAccountInfo, error) {
+	if c.ServiceAuth == nil {
+		return nil, fmt.Errorf("service authentication is required to reveal cloud account credentials")
+	}
 	body := map[string]any{"account_id": accountID, "reveal": true}
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetCOSAccountInfo", body)
 	if err != nil {
