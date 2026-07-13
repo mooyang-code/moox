@@ -36,7 +36,6 @@ ADMIN_PASSWORD=""
 BOOTSTRAP_ADMIN=0
 ENABLE_CLS=0
 CLOUD_ACCOUNT_ID=""
-CLOUD_ACCOUNT_ID_SET=0
 
 usage() {
   cat <<'EOF'
@@ -97,6 +96,15 @@ generate_secret() {
   [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
   [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || fail "moox-admin-cli returned an invalid ${purpose} secret"
   printf '%s' "${secret}"
+}
+
+validate_cloud_account_id_arg() {
+  [[ $# -ge 2 ]] || fail "--cloud-account-id requires a value"
+  local value="$2"
+  [[ -n "${value}" && "${value}" != -* ]] || fail "--cloud-account-id requires a value"
+  [[ -n "${value//[[:space:]]/}" ]] || fail "--cloud-account-id cannot be empty"
+  [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || \
+    fail "cloud account ID must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -182,7 +190,11 @@ while [[ $# -gt 0 ]]; do
     --local-ca-output) LOCAL_CA_OUTPUT="${2:-}"; shift 2 ;;
     --caddy-conflict) [[ "${2:-}" == fail ]] || fail 'only --caddy-conflict fail is supported'; shift 2 ;;
     --enable-cls) ENABLE_CLS=1; shift ;;
-    --cloud-account-id) CLOUD_ACCOUNT_ID="${2:-}"; CLOUD_ACCOUNT_ID_SET=1; shift 2 ;;
+    --cloud-account-id)
+      validate_cloud_account_id_arg "$@"
+      CLOUD_ACCOUNT_ID="${2}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -193,9 +205,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${CLOUD_ACCOUNT_ID_SET}" -eq 1 && -z "${CLOUD_ACCOUNT_ID//[[:space:]]/}" ]]; then
-  fail "--cloud-account-id cannot be empty"
-fi
 [[ -n "${TARGET}" ]] || fail "--target cannot be empty"
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
 [[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"

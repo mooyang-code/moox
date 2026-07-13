@@ -21,13 +21,28 @@ invalid_account_args=(
   --no-factor
   --no-monitor
 )
-for account_id in "" "   "; do
-  if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "${account_id}" 2>&1); then
-    echo "empty cloud account id unexpectedly accepted: ${account_id@Q}" >&2
+if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "" 2>&1); then
+  echo 'empty cloud account id unexpectedly accepted' >&2
+  exit 1
+fi
+grep -q -- '--cloud-account-id requires a value' <<<"${output}"
+if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "   " 2>&1); then
+  echo 'whitespace-only cloud account id unexpectedly accepted' >&2
+  exit 1
+fi
+grep -q 'cloud-account-id cannot be empty' <<<"${output}"
+for option_like in --enable-cls --no-start; do
+  if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "${option_like}" 2>&1); then
+    echo "option-like cloud account id unexpectedly accepted: ${option_like}" >&2
     exit 1
   fi
-  grep -q 'cloud-account-id cannot be empty' <<<"${output}"
+  grep -q -- '--cloud-account-id requires a value' <<<"${output}"
 done
+if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id 'acct;touch' 2>&1); then
+  echo 'cloud account id with unsafe characters unexpectedly accepted' >&2
+  exit 1
+fi
+grep -q 'cloud account ID must match' <<<"${output}"
 
 grep -q -- '--cloud-account-id' "${SCRIPT}"
 grep -q 'skills/moox/scripts/cls-bootstrap.sh' "${SCRIPT}"
