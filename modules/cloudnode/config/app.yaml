@@ -16,7 +16,7 @@ jetstream:
   urls:
     - nats://127.0.0.1:4222
   nats_url: nats://127.0.0.1:4222
-  credential_file: ~/.config/moox/cloudnode/eventbus.yaml
+  credential_file: ""
   subject_prefix: moox.cloudnode
   exec_stream: MOOX_CLOUDNODE_EXEC
   ack_wait_millis: 120000
