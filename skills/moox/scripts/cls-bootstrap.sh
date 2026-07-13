@@ -22,9 +22,12 @@ DEPLOY_LOCK=""
 STAGE_LOCK_HELD=0
 DEPLOY_LOCK_HELD=0
 REMOTE_DEPLOY_LOCK_HELD=0
-LOCK_LEASE_SECONDS="${MOOX_CLS_LOCK_LEASE_SECONDS:-600}"
+LOCK_LEASE_SECONDS="${MOOX_CLS_LOCK_LEASE_SECONDS:-3600}"
+GUARD_LEASE_SECONDS="${MOOX_CLS_GUARD_LEASE_SECONDS:-60}"
 LOCK_HOST="$(hostname)"
 LOCK_STEALS=()
+ACTIVE_GUARD=""
+ACTIVE_GUARD_CLAIM=""
 OWNER_TOKEN=""
 OWNER_HOST=""
 OWNER_PID=""
@@ -97,6 +100,9 @@ STAGE_LOCK="${STAGE_DIR}/.cls-bootstrap.lock"
 [[ "${LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] && \
   (( LOCK_LEASE_SECONDS >= 1 && LOCK_LEASE_SECONDS <= 86400 )) || \
   fail "MOOX_CLS_LOCK_LEASE_SECONDS must be 1..86400"
+[[ "${GUARD_LEASE_SECONDS}" =~ ^[0-9]+$ ]] && \
+  (( GUARD_LEASE_SECONDS >= 1 && GUARD_LEASE_SECONDS <= 600 )) || \
+  fail "MOOX_CLS_GUARD_LEASE_SECONDS must be 1..600"
 [[ "${LOCK_HOST}" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "hostname is not safe for lock metadata"
 
 [[ -d "${STAGE_DIR}" ]] || fail "missing stage directory: ${STAGE_DIR}"
@@ -126,13 +132,17 @@ REMOTE
 }
 
 acquire_owned_lock() {
-  local lock=$1
+  local lock=$1 acquired=1
+  acquire_takeover_guard "${lock}.takeover" || return 1
+  ACTIVE_GUARD="${lock}.takeover"
   if mkdir "${lock}" 2>/dev/null; then
-    write_owned_lock_metadata "${lock}" || return 1
-    return 0
+    write_owned_lock_metadata "${lock}" && acquired=0
+  elif lock_is_stale_local "${lock}" "${LOCK_LEASE_SECONDS}" && steal_owned_lock "${lock}"; then
+    acquired=0
   fi
-  lock_is_stale_local "${lock}" || return 1
-  steal_owned_lock "${lock}"
+  release_owned_lock "${ACTIVE_GUARD}"
+  ACTIVE_GUARD=""
+  return "${acquired}"
 }
 
 release_owned_lock() {
@@ -152,6 +162,25 @@ write_owned_lock_metadata() {
     rmdir "${lock}" 2>/dev/null || true
     return 1
   fi
+}
+
+replace_owned_lock_metadata() {
+  local lock=$1 expected=$2 created_at next
+  read_lock_metadata "${lock}/owner" || return 1
+  [[ "${OWNER_TOKEN}" == "${expected}" ]] || return 1
+  created_at=$(date +%s)
+  next="${lock}/owner.next.${TOKEN}"
+  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${TOKEN}" "${LOCK_HOST}" "$$" "${created_at}" >"${next}"); then
+    rm -f "${next}"
+    return 1
+  fi
+  read_lock_metadata "${lock}/owner" || { rm -f "${next}"; return 1; }
+  if [[ "${OWNER_TOKEN}" != "${expected}" ]]; then
+    rm -f "${next}"
+    return 1
+  fi
+  mv "${next}" "${lock}/owner"
 }
 
 read_lock_metadata() {
@@ -179,7 +208,7 @@ read_lock_metadata() {
 }
 
 lock_is_stale_local() {
-  local lock=$1 now age
+  local lock=$1 lease=${2:-${LOCK_LEASE_SECONDS}} now age
   read_lock_metadata "${lock}/owner" || return 1
   if [[ "${OWNER_HOST}" == "${LOCK_HOST}" ]]; then
     kill -0 "${OWNER_PID}" 2>/dev/null && return 1
@@ -188,7 +217,32 @@ lock_is_stale_local() {
   now=$(date +%s)
   (( OWNER_CREATED_AT <= now )) || return 1
   age=$((now - OWNER_CREATED_AT))
-  (( age >= LOCK_LEASE_SECONDS ))
+  (( age >= lease ))
+}
+
+acquire_takeover_guard() {
+  local guard=$1 observed claim acquired=1
+  if mkdir "${guard}" 2>/dev/null; then
+    write_owned_lock_metadata "${guard}"
+    return
+  fi
+  lock_is_stale_local "${guard}" "${GUARD_LEASE_SECONDS}" || return 1
+  observed=${OWNER_TOKEN}
+  claim="${guard}.claim.${observed}"
+  if mkdir "${claim}" 2>/dev/null; then
+    write_owned_lock_metadata "${claim}" || return 1
+  else
+    lock_is_stale_local "${claim}" "${GUARD_LEASE_SECONDS}" || return 1
+    steal_owned_lock "${claim}" || return 1
+  fi
+  ACTIVE_GUARD_CLAIM=${claim}
+  read_lock_metadata "${guard}/owner" || return 1
+  if [[ "${OWNER_TOKEN}" == "${observed}" ]] && replace_owned_lock_metadata "${guard}" "${observed}"; then
+    acquired=0
+  fi
+  release_owned_lock "${claim}"
+  ACTIVE_GUARD_CLAIM=""
+  return "${acquired}"
 }
 
 remove_owned_steal() {
@@ -214,7 +268,8 @@ steal_owned_lock() {
 
 acquire_remote_deploy_lock() {
   ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
-    "${DEPLOY_DIR}" "${TOKEN}" "${LOCK_HOST}" "$$" "$(date +%s)" "${LOCK_LEASE_SECONDS}" <<'REMOTE'
+    "${DEPLOY_DIR}" "${TOKEN}" "${LOCK_HOST}" "$$" "$(date +%s)" \
+    "${LOCK_LEASE_SECONDS}" "${GUARD_LEASE_SECONDS}" <<'REMOTE'
 set -euo pipefail
 deploy=$1
 token=$2
@@ -222,6 +277,7 @@ controller_host=$3
 controller_pid=$4
 created_at=$5
 lease_seconds=$6
+guard_lease_seconds=$7
 case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
@@ -229,7 +285,12 @@ esac
 secrets="${deploy}/secrets"
 lock="${secrets}/.cls-bootstrap.lock"
 [[ -d "${secrets}" ]]
-steal="${lock}.steal.${token}"
+main_lock=${lock}
+main_steal="${main_lock}.steal.${token}"
+guard="${main_lock}.takeover"
+guard_steal="${guard}.steal.${token}"
+claim=
+claim_steal=
 
 write_owner() {
   if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
@@ -261,20 +322,90 @@ read_owner() {
 }
 
 remove_steal() {
-  rm -f "${steal}/owner"
-  rmdir "${steal}" 2>/dev/null || true
+  local path=$1
+  rm -f "${path}/owner"
+  rmdir "${path}" 2>/dev/null || true
 }
 
-if mkdir "${lock}" 2>/dev/null; then
+release_owned() {
+  local path=$1
+  [[ -f "${path}/owner" ]] || return 0
+  [[ $(grep -c '^token=' "${path}/owner") -eq 1 ]] || return 0
+  grep -Fqx "token=${token}" "${path}/owner" || return 0
+  rm -f "${path}/owner"
+  rmdir "${path}" 2>/dev/null || true
+}
+
+replace_owner() {
+  local path=$1 expected=$2 next="${path}/owner.next.${token}"
+  lock=${path}
+  read_owner || return 1
+  [[ "${owner_token}" == "${expected}" ]] || return 1
+  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${token}" "${controller_host}" "${controller_pid}" "${created_at}" >"${next}"); then
+    rm -f "${next}"
+    return 1
+  fi
+  read_owner || { rm -f "${next}"; return 1; }
+  if [[ "${owner_token}" != "${expected}" ]]; then
+    rm -f "${next}"
+    return 1
+  fi
+  mv "${next}" "${path}/owner"
+}
+
+cleanup_acquire() {
+  remove_steal "${main_steal}"
+  remove_steal "${guard_steal}"
+  [[ -z "${claim_steal}" ]] || remove_steal "${claim_steal}"
+  [[ -z "${claim}" ]] || release_owned "${claim}"
+  release_owned "${guard}"
+}
+trap cleanup_acquire EXIT
+
+lock=${guard}
+if mkdir "${guard}" 2>/dev/null; then
+  write_owner
+else
+  read_owner || exit 73
+  now=$(date +%s)
+  (( owner_created <= now && now - owner_created >= guard_lease_seconds )) || exit 73
+  observed=${owner_token}
+  claim="${guard}.claim.${observed}"
+  claim_steal="${claim}.steal.${token}"
+  lock=${claim}
+  if mkdir "${claim}" 2>/dev/null; then
+    write_owner
+  else
+    read_owner || exit 73
+    now=$(date +%s)
+    (( owner_created <= now && now - owner_created >= guard_lease_seconds )) || exit 73
+    claim_observed=${owner_token}
+    read_owner || exit 73
+    [[ "${owner_token}" == "${claim_observed}" ]] || exit 73
+    mv "${claim}" "${claim_steal}" 2>/dev/null || exit 73
+    mkdir "${claim}" 2>/dev/null || exit 73
+    write_owner
+  fi
+  lock=${guard}
+  read_owner || exit 73
+  [[ "${owner_token}" == "${observed}" ]] || exit 73
+  replace_owner "${guard}" "${observed}" || exit 73
+fi
+
+lock=${main_lock}
+if mkdir "${main_lock}" 2>/dev/null; then
   write_owner
   exit 0
 fi
 read_owner || exit 73
 now=$(date +%s)
 (( owner_created <= now && now - owner_created >= lease_seconds )) || exit 73
-trap remove_steal EXIT
-mv "${lock}" "${steal}" 2>/dev/null || exit 73
-mkdir "${lock}" 2>/dev/null || exit 73
+observed=${owner_token}
+read_owner || exit 73
+[[ "${owner_token}" == "${observed}" ]] || exit 73
+mv "${main_lock}" "${main_steal}" 2>/dev/null || exit 73
+mkdir "${main_lock}" 2>/dev/null || exit 73
 write_owner
 REMOTE
 }
@@ -293,6 +424,15 @@ lock="${deploy}/secrets/.cls-bootstrap.lock"
 steal="${lock}.steal.${token}"
 rm -f "${steal}/owner"
 rmdir "${steal}" 2>/dev/null || true
+guard="${lock}.takeover"
+guard_steal="${guard}.steal.${token}"
+rm -f "${guard_steal}/owner"
+rmdir "${guard_steal}" 2>/dev/null || true
+if [[ -f "${guard}/owner" && $(grep -c '^token=' "${guard}/owner") -eq 1 ]] && \
+  grep -Fqx "token=${token}" "${guard}/owner"; then
+  rm -f "${guard}/owner"
+  rmdir "${guard}" 2>/dev/null || true
+fi
 [[ -f "${lock}/owner" ]] || exit 0
 [[ $(grep -c '^token=' "${lock}/owner") -eq 1 ]] || exit 0
 grep -Fqx "token=${token}" "${lock}/owner" || exit 0
@@ -326,6 +466,14 @@ cleanup() {
   fi
   if ! is_local; then
     cleanup_remote
+  fi
+  if [[ -n "${ACTIVE_GUARD_CLAIM}" ]]; then
+    release_owned_lock "${ACTIVE_GUARD_CLAIM}"
+    ACTIVE_GUARD_CLAIM=""
+  fi
+  if [[ -n "${ACTIVE_GUARD}" ]]; then
+    release_owned_lock "${ACTIVE_GUARD}"
+    ACTIVE_GUARD=""
   fi
   if is_local; then
     if (( DEPLOY_LOCK_HELD )); then

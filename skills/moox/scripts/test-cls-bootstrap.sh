@@ -268,6 +268,7 @@ DEAD_DEPLOY="${TMP}/dead-deploy"
 new_stage "${DEAD_STAGE}"
 new_deploy "${DEAD_DEPLOY}"
 write_lock_owner "${DEAD_STAGE}/.cls-bootstrap.lock" dead-token "${local_host}" 99999999 "${now}"
+write_lock_owner "${DEAD_STAGE}/.cls-bootstrap.lock.takeover" dead-guard "${local_host}" 99999999 "${now}"
 printf 'success\n' >"${mode_file}"
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
@@ -430,14 +431,38 @@ CONCURRENT_STAGE="${TMP}/concurrent-stage"
 new_deploy "${CONCURRENT_DEPLOY}"
 new_stage "${CONCURRENT_STAGE}"
 write_lock_owner "${CONCURRENT_STAGE}/.cls-bootstrap.lock" stale-race "${local_host}" 99999999 "${now}"
+write_lock_owner "${CONCURRENT_STAGE}/.cls-bootstrap.lock.takeover" stale-guard-race "${local_host}" 99999999 "${now}"
+REAL_MKDIR=$(command -v mkdir)
+RACE_BIN="${TMP}/race-bin"
+RACE_BARRIER="${TMP}/race-barrier"
+mkdir -p "${RACE_BIN}" "${RACE_BARRIER}"
+cat >"${RACE_BIN}/mkdir" <<'MKDIR'
+#!/usr/bin/env bash
+set -euo pipefail
+target=${!#}
+if [[ "${target}" == *.takeover.claim.stale-guard-race ]]; then
+  : >"${MOOX_TEST_RACE_BARRIER}/$$"
+  deadline=$((SECONDS + 10))
+  while [[ $(find "${MOOX_TEST_RACE_BARRIER}" -type f | wc -l | tr -d ' ') -lt 2 ]]; do
+    (( SECONDS < deadline )) || exit 91
+    sleep 0.01
+  done
+fi
+exec "${MOOX_TEST_REAL_MKDIR}" "$@"
+MKDIR
+chmod +x "${RACE_BIN}/mkdir"
 printf 'success\n' >"${mode_file}"
-MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-a \
+PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" \
+  MOOX_TEST_RACE_BARRIER="${RACE_BARRIER}" MOOX_TEST_CALLS="${calls}" \
+  MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-a \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
   --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_STAGE}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-a \
   >"${TMP}/concurrent-a.out" 2>&1 &
 pid_a=$!
-MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-b \
+PATH="${RACE_BIN}:${PATH}" MOOX_TEST_REAL_MKDIR="${REAL_MKDIR}" \
+  MOOX_TEST_RACE_BARRIER="${RACE_BARRIER}" MOOX_TEST_CALLS="${calls}" \
+  MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-b \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
   --deploy-dir "${CONCURRENT_DEPLOY}" --stage-dir "${CONCURRENT_STAGE}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id concurrent-b \
@@ -521,14 +546,16 @@ assert_no_secrets "${remote_output}" "${REMOTE_STAGE}"
 
 remote_expired_lock="${REMOTE_HOME}/moox/secrets/.cls-bootstrap.lock"
 write_lock_owner "${remote_expired_lock}" expired-remote another-controller 12345 "$((now - 2))"
+write_lock_owner "${remote_expired_lock}.takeover" expired-remote-guard another-controller 12345 "$((now - 2))"
 PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
   MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
-  MOOX_CLS_LOCK_LEASE_SECONDS=1 \
+  MOOX_CLS_LOCK_LEASE_SECONDS=1 MOOX_CLS_GUARD_LEASE_SECONDS=1 \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
   --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
   --admin-url http://127.0.0.1:11002 >>"${remote_output}" 2>&1
 [[ ! -e "${remote_expired_lock}" ]]
+[[ ! -e "${remote_expired_lock}.takeover" ]]
 
 remote_foreign_lock="${REMOTE_HOME}/moox/secrets/.cls-bootstrap.lock"
 write_lock_owner "${remote_foreign_lock}" fresh-remote another-controller 12345 "${now}"
