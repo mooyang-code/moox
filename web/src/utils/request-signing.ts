@@ -17,9 +17,11 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function hexToBytes(value: string): Uint8Array {
+function signingKeyBytes(value: string): Uint8Array {
   if (!/^[0-9a-f]{64}$/.test(value)) throw new Error('request signing key must be 32-byte lowercase hex');
-  return Uint8Array.from(value.match(/.{2}/g)!, (byte) => Number.parseInt(byte, 16));
+  // Go requestauth treats the lowercase hexadecimal representation itself as
+  // the HMAC secret, so Web Crypto must import the same 64 UTF-8 bytes.
+  return new TextEncoder().encode(value);
 }
 
 function bytesToHex(value: ArrayBuffer | Uint8Array): string {
@@ -38,7 +40,7 @@ async function transaction<T>(mode: IDBTransactionMode, operation: (store: IDBOb
 }
 
 export async function saveSigningSession(input: { sessionId: string; rawKeyHex: string; expiresAt: number }): Promise<void> {
-  const key = await crypto.subtle.importKey('raw', hexToBytes(input.rawKeyHex), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const key = await crypto.subtle.importKey('raw', signingKeyBytes(input.rawKeyHex), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   await transaction('readwrite', (store) => store.put({ sessionId: input.sessionId, key, expiresAt: input.expiresAt }));
 }
 

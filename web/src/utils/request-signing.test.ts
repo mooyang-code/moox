@@ -61,6 +61,20 @@ describe('request signing', () => {
     expect(second).not.toBe(first);
   });
 
+  it('uses the same hexadecimal signing-key bytes as the Go verifier', async () => {
+    await saveSigningSession({ sessionId: 'sid-vector', rawKeyHex, expiresAt: 2_000_000_000 });
+    const key = (await loadSigningSession('sid-vector'))!.key;
+    const signature = await signRequest(key, {
+      method: 'POST',
+      path: '/api/admin/items/a%2Fb',
+      body: '{"a":1}\n',
+      timestamp: 1_700_000_000,
+      nonce,
+    });
+
+    expect(signature).toBe('e4d0467d78c431898b10a666fbe6fc68a677d810e4dfeeba77ece7ffe8f29ef8');
+  });
+
   it('binds tenant and application headers in a stable order', async () => {
     const canonical = await canonicalRequest({
       method: 'post',
