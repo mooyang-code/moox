@@ -1908,7 +1908,12 @@ verify_public_https() {
 ca=$1; browser=$2; service=$3; service_auth_file=$4
 case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
 case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
-status() { curl --silent --show-error --cacert "$ca" --output /dev/null --write-out "%{http_code}" "$@"; }
+browser_authority=${browser#https://}; service_authority=${service#https://}
+status() {
+  curl --silent --show-error --max-time 5 --cacert "$ca" \
+    --resolve "$browser_authority:127.0.0.1" --resolve "$service_authority:127.0.0.1" \
+    --output /dev/null --write-out "%{http_code}" "$@"
+}
 expect_status() {
   expected=$1; shift
   for _ in $(seq 1 30); do
