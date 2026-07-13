@@ -142,7 +142,10 @@ read_stage_deploy_lock_owner() {
 stage_deploy_lock_is_stale() {
   read_stage_deploy_lock_owner "${STAGE_DEPLOY_LOCK}/owner" || return 1
   if [[ "${STAGE_DEPLOY_LOCK_OWNER_HOST}" == "$(hostname)" ]]; then
-    kill -0 "${STAGE_DEPLOY_LOCK_OWNER_PID}" 2>/dev/null && return 1
+    if kill -0 "${STAGE_DEPLOY_LOCK_OWNER_PID}" 2>/dev/null || \
+      ps -p "${STAGE_DEPLOY_LOCK_OWNER_PID}" >/dev/null 2>&1; then
+      return 1
+    fi
     return 0
   fi
   local now age
