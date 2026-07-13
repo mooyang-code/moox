@@ -111,6 +111,13 @@ assert_cls_log_writer() {
   ' "$1"
 }
 
+write_lock_owner() {
+  local lock=$1 token=$2 host=$3 pid=$4 created_at=$5
+  mkdir -p "${lock}"
+  printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${token}" "${host}" "${pid}" "${created_at}" >"${lock}/owner"
+}
+
 STAGE="${TMP}/stage"
 DEPLOY="${TMP}/deploy"
 new_stage "${STAGE}"
@@ -230,6 +237,45 @@ for foreign_lock_scope in stage deploy; do
     [[ ! -e "${LOCK_STAGE}/.cls-bootstrap.lock" ]]
   fi
 done
+
+local_host=$(hostname)
+now=$(date +%s)
+for owner_case in active-local fresh-foreign; do
+  OWNER_STAGE="${TMP}/owner-stage-${owner_case}"
+  OWNER_DEPLOY="${TMP}/owner-deploy-${owner_case}"
+  new_stage "${OWNER_STAGE}"
+  new_deploy "${OWNER_DEPLOY}"
+  owner_lock="${OWNER_STAGE}/.cls-bootstrap.lock"
+  if [[ "${owner_case}" == active-local ]]; then
+    write_lock_owner "${owner_lock}" active-token "${local_host}" "$$" 1
+  else
+    write_lock_owner "${owner_lock}" fresh-token another-host 12345 "${now}"
+  fi
+  owner_before=$(shasum -a 256 "${owner_lock}/owner")
+  if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+    MOOX_TEST_EXPECT_ACCOUNT=__not_set__ MOOX_CLS_LOCK_LEASE_SECONDS=600 \
+    "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+    --deploy-dir "${OWNER_DEPLOY}" --stage-dir "${OWNER_STAGE}" \
+    --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1; then
+    echo "${owner_case} lock unexpectedly acquired" >&2
+    exit 1
+  fi
+  [[ "${owner_before}" == "$(shasum -a 256 "${owner_lock}/owner")" ]]
+done
+
+DEAD_STAGE="${TMP}/dead-stage"
+DEAD_DEPLOY="${TMP}/dead-deploy"
+new_stage "${DEAD_STAGE}"
+new_deploy "${DEAD_DEPLOY}"
+write_lock_owner "${DEAD_STAGE}/.cls-bootstrap.lock" dead-token "${local_host}" 99999999 "${now}"
+printf 'success\n' >"${mode_file}"
+MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${DEAD_DEPLOY}" --stage-dir "${DEAD_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1
+grep -q 'topic_id: topic-fixed' "${DEAD_STAGE}/factor/config/trpc_go.yaml"
+[[ ! -e "${DEAD_STAGE}/.cls-bootstrap.lock" ]]
 
 # A failure during either stage or credential commit restores the whole release.
 REAL_MV=$(command -v mv)
@@ -383,6 +429,7 @@ CONCURRENT_DEPLOY="${TMP}/concurrent-deploy"
 CONCURRENT_STAGE="${TMP}/concurrent-stage"
 new_deploy "${CONCURRENT_DEPLOY}"
 new_stage "${CONCURRENT_STAGE}"
+write_lock_owner "${CONCURRENT_STAGE}/.cls-bootstrap.lock" stale-race "${local_host}" 99999999 "${now}"
 printf 'success\n' >"${mode_file}"
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=concurrent-a \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
@@ -472,9 +519,20 @@ while IFS= read -r remote_path; do [[ ! -e "${remote_path}" ]]; done <"${REMOTE_
 assert_no_transaction_artifacts "${REMOTE_STAGE}" "${REMOTE_HOME}/moox"
 assert_no_secrets "${remote_output}" "${REMOTE_STAGE}"
 
+remote_expired_lock="${REMOTE_HOME}/moox/secrets/.cls-bootstrap.lock"
+write_lock_owner "${remote_expired_lock}" expired-remote another-controller 12345 "$((now - 2))"
+PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
+  MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
+  MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  MOOX_CLS_LOCK_LEASE_SECONDS=1 \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
+  --target deploy@example.test --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >>"${remote_output}" 2>&1
+[[ ! -e "${remote_expired_lock}" ]]
+
 remote_foreign_lock="${REMOTE_HOME}/moox/secrets/.cls-bootstrap.lock"
-mkdir "${remote_foreign_lock}"
-printf 'foreign-remote-owner\n' >"${remote_foreign_lock}/owner"
+write_lock_owner "${remote_foreign_lock}" fresh-remote another-controller 12345 "${now}"
+remote_fresh_before=$(shasum -a 256 "${remote_foreign_lock}/owner")
 if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   MOOX_TEST_MODE="${mode_file}" MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" \
   MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
@@ -484,7 +542,7 @@ if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   echo 'foreign remote deploy lock unexpectedly acquired' >&2
   exit 1
 fi
-[[ $(cat "${remote_foreign_lock}/owner") == foreign-remote-owner ]]
+[[ "${remote_fresh_before}" == "$(shasum -a 256 "${remote_foreign_lock}/owner")" ]]
 [[ ! -e "${REMOTE_STAGE}/.cls-bootstrap.lock" ]]
 rm -f "${remote_foreign_lock}/owner"
 rmdir "${remote_foreign_lock}"

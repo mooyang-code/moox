@@ -22,6 +22,13 @@ DEPLOY_LOCK=""
 STAGE_LOCK_HELD=0
 DEPLOY_LOCK_HELD=0
 REMOTE_DEPLOY_LOCK_HELD=0
+LOCK_LEASE_SECONDS="${MOOX_CLS_LOCK_LEASE_SECONDS:-600}"
+LOCK_HOST="$(hostname)"
+LOCK_STEALS=()
+OWNER_TOKEN=""
+OWNER_HOST=""
+OWNER_PID=""
+OWNER_CREATED_AT=""
 
 fail() {
   printf '[cls-bootstrap] ERROR: %s\n' "$*" >&2
@@ -87,6 +94,11 @@ done
 
 STAGE_LOCK="${STAGE_DIR}/.cls-bootstrap.lock"
 
+[[ "${LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] && \
+  (( LOCK_LEASE_SECONDS >= 1 && LOCK_LEASE_SECONDS <= 86400 )) || \
+  fail "MOOX_CLS_LOCK_LEASE_SECONDS must be 1..86400"
+[[ "${LOCK_HOST}" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "hostname is not safe for lock metadata"
+
 [[ -d "${STAGE_DIR}" ]] || fail "missing stage directory: ${STAGE_DIR}"
 [[ -x "${STAGE_DIR}/bin/moox-cli" ]] || fail "missing staged moox-cli: ${STAGE_DIR}/bin/moox-cli"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required to parse CLS prepare output"
@@ -115,26 +127,101 @@ REMOTE
 
 acquire_owned_lock() {
   local lock=$1
-  mkdir "${lock}" 2>/dev/null || return 1
-  if ! printf '%s\n' "${TOKEN}" >"${lock}/owner"; then
+  if mkdir "${lock}" 2>/dev/null; then
+    write_owned_lock_metadata "${lock}" || return 1
+    return 0
+  fi
+  lock_is_stale_local "${lock}" || return 1
+  steal_owned_lock "${lock}"
+}
+
+release_owned_lock() {
+  local lock=$1
+  read_lock_metadata "${lock}/owner" || return 0
+  [[ "${OWNER_TOKEN}" == "${TOKEN}" ]] || return 0
+  rm -f "${lock}/owner"
+  rmdir "${lock}" 2>/dev/null || true
+}
+
+write_owned_lock_metadata() {
+  local lock=$1 created_at
+  created_at=$(date +%s)
+  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${TOKEN}" "${LOCK_HOST}" "$$" "${created_at}" >"${lock}/owner"); then
+    rm -f "${lock}/owner"
     rmdir "${lock}" 2>/dev/null || true
     return 1
   fi
 }
 
-release_owned_lock() {
-  local lock=$1
-  [[ -f "${lock}/owner" ]] || return 0
-  [[ $(cat "${lock}/owner") == "${TOKEN}" ]] || return 0
-  rm -f "${lock}/owner"
-  rmdir "${lock}" 2>/dev/null || true
+read_lock_metadata() {
+  local owner=$1 key value token_count=0 host_count=0 pid_count=0 created_count=0
+  OWNER_TOKEN=""
+  OWNER_HOST=""
+  OWNER_PID=""
+  OWNER_CREATED_AT=""
+  [[ -f "${owner}" ]] || return 1
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      token) OWNER_TOKEN=${value}; token_count=$((token_count + 1)) ;;
+      host) OWNER_HOST=${value}; host_count=$((host_count + 1)) ;;
+      pid) OWNER_PID=${value}; pid_count=$((pid_count + 1)) ;;
+      created_at) OWNER_CREATED_AT=${value}; created_count=$((created_count + 1)) ;;
+      *) return 1 ;;
+    esac
+  done <"${owner}"
+  [[ ${token_count} -eq 1 && ${host_count} -eq 1 && ${pid_count} -eq 1 && ${created_count} -eq 1 ]] || return 1
+  [[ "${OWNER_TOKEN}" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "${OWNER_HOST}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "${OWNER_PID}" =~ ^[0-9]+$ && "${OWNER_CREATED_AT}" =~ ^[0-9]+$ ]] || return 1
+  [[ ${#OWNER_TOKEN} -le 128 && ${#OWNER_HOST} -le 255 && ${#OWNER_PID} -le 10 && ${#OWNER_CREATED_AT} -le 10 ]] || return 1
+  (( OWNER_PID > 0 )) || return 1
+}
+
+lock_is_stale_local() {
+  local lock=$1 now age
+  read_lock_metadata "${lock}/owner" || return 1
+  if [[ "${OWNER_HOST}" == "${LOCK_HOST}" ]]; then
+    kill -0 "${OWNER_PID}" 2>/dev/null && return 1
+    return 0
+  fi
+  now=$(date +%s)
+  (( OWNER_CREATED_AT <= now )) || return 1
+  age=$((now - OWNER_CREATED_AT))
+  (( age >= LOCK_LEASE_SECONDS ))
+}
+
+remove_owned_steal() {
+  local steal=$1
+  rm -f "${steal}/owner"
+  rmdir "${steal}" 2>/dev/null || true
+}
+
+steal_owned_lock() {
+  local lock=$1 steal="${lock}.steal.${TOKEN}"
+  LOCK_STEALS+=("${steal}")
+  mv "${lock}" "${steal}" 2>/dev/null || return 1
+  if ! mkdir "${lock}" 2>/dev/null; then
+    remove_owned_steal "${steal}"
+    return 1
+  fi
+  if ! write_owned_lock_metadata "${lock}"; then
+    remove_owned_steal "${steal}"
+    return 1
+  fi
+  remove_owned_steal "${steal}"
 }
 
 acquire_remote_deploy_lock() {
-  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${TOKEN}" <<'REMOTE'
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
+    "${DEPLOY_DIR}" "${TOKEN}" "${LOCK_HOST}" "$$" "$(date +%s)" "${LOCK_LEASE_SECONDS}" <<'REMOTE'
 set -euo pipefail
 deploy=$1
 token=$2
+controller_host=$3
+controller_pid=$4
+created_at=$5
+lease_seconds=$6
 case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
@@ -142,11 +229,53 @@ esac
 secrets="${deploy}/secrets"
 lock="${secrets}/.cls-bootstrap.lock"
 [[ -d "${secrets}" ]]
-mkdir "${lock}" 2>/dev/null || exit 73
-if ! printf '%s\n' "${token}" >"${lock}/owner"; then
-  rmdir "${lock}" 2>/dev/null || true
-  exit 1
+steal="${lock}.steal.${token}"
+
+write_owner() {
+  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${token}" "${controller_host}" "${controller_pid}" "${created_at}" >"${lock}/owner"); then
+    rm -f "${lock}/owner"
+    rmdir "${lock}" 2>/dev/null || true
+    return 1
+  fi
+}
+
+read_owner() {
+  local key value token_count=0 host_count=0 pid_count=0 created_count=0
+  owner_token= owner_host= owner_pid= owner_created=
+  [[ -f "${lock}/owner" ]] || return 1
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      token) owner_token=${value}; token_count=$((token_count + 1)) ;;
+      host) owner_host=${value}; host_count=$((host_count + 1)) ;;
+      pid) owner_pid=${value}; pid_count=$((pid_count + 1)) ;;
+      created_at) owner_created=${value}; created_count=$((created_count + 1)) ;;
+      *) return 1 ;;
+    esac
+  done <"${lock}/owner"
+  [[ ${token_count} -eq 1 && ${host_count} -eq 1 && ${pid_count} -eq 1 && ${created_count} -eq 1 ]] || return 1
+  [[ "${owner_token}" =~ ^[A-Za-z0-9._-]+$ && "${owner_host}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "${owner_pid}" =~ ^[0-9]+$ && "${owner_created}" =~ ^[0-9]+$ ]] || return 1
+  [[ ${#owner_token} -le 128 && ${#owner_host} -le 255 && ${#owner_pid} -le 10 && ${#owner_created} -le 10 ]] || return 1
+  (( owner_pid > 0 ))
+}
+
+remove_steal() {
+  rm -f "${steal}/owner"
+  rmdir "${steal}" 2>/dev/null || true
+}
+
+if mkdir "${lock}" 2>/dev/null; then
+  write_owner
+  exit 0
 fi
+read_owner || exit 73
+now=$(date +%s)
+(( owner_created <= now && now - owner_created >= lease_seconds )) || exit 73
+trap remove_steal EXIT
+mv "${lock}" "${steal}" 2>/dev/null || exit 73
+mkdir "${lock}" 2>/dev/null || exit 73
+write_owner
 REMOTE
 }
 
@@ -161,8 +290,12 @@ case "${deploy}" in
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
 esac
 lock="${deploy}/secrets/.cls-bootstrap.lock"
+steal="${lock}.steal.${token}"
+rm -f "${steal}/owner"
+rmdir "${steal}" 2>/dev/null || true
 [[ -f "${lock}/owner" ]] || exit 0
-[[ $(cat "${lock}/owner") == "${token}" ]] || exit 0
+[[ $(grep -c '^token=' "${lock}/owner") -eq 1 ]] || exit 0
+grep -Fqx "token=${token}" "${lock}/owner" || exit 0
 rm -f "${lock}/owner"
 rmdir "${lock}" 2>/dev/null || true
 REMOTE
@@ -205,6 +338,11 @@ cleanup() {
   if (( STAGE_LOCK_HELD )); then
     release_owned_lock "${STAGE_LOCK}"
     STAGE_LOCK_HELD=0
+  fi
+  if (( ${#LOCK_STEALS[@]} > 0 )); then
+    for path in "${LOCK_STEALS[@]}"; do
+      remove_owned_steal "${path}"
+    done
   fi
 }
 
