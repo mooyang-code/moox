@@ -3,6 +3,31 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/scripts/deploy-moox.sh"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-deploy-cls-contract.XXXXXX")"
+trap 'rm -rf "${TMP_ROOT}"' EXIT
+
+invalid_account_args=(
+  --target localhost
+  --dir "${TMP_ROOT}/deploy"
+  --stage "${TMP_ROOT}/stage"
+  --skip-build
+  --no-start
+  --no-storage
+  --no-archive
+  --no-eventbus
+  --no-web-host
+  --no-cloudnode
+  --no-collector
+  --no-factor
+  --no-monitor
+)
+for account_id in "" "   "; do
+  if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "${account_id}" 2>&1); then
+    echo "empty cloud account id unexpectedly accepted: ${account_id@Q}" >&2
+    exit 1
+  fi
+  grep -q 'cloud-account-id cannot be empty' <<<"${output}"
+done
 
 grep -q -- '--cloud-account-id' "${SCRIPT}"
 grep -q 'skills/moox/scripts/cls-bootstrap.sh' "${SCRIPT}"
