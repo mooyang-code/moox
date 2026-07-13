@@ -14,6 +14,15 @@ func (unavailableFS) Open(name string) (http.File, error) {
 	return nil, errors.New("static fs should not be touched for healthz")
 }
 
+type recordingFS struct {
+	opened string
+}
+
+func (f *recordingFS) Open(name string) (http.File, error) {
+	f.opened = name
+	return nil, errors.New("fixture asset unavailable")
+}
+
 func TestWebHostHealthzBypassesStaticFallback(t *testing.T) {
 	handler := newHealthHandler()
 
@@ -54,6 +63,17 @@ func TestPublicHandlerDoesNotExposeDiagnostics(t *testing.T) {
 		if rr.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want %d", path, rr.Code, http.StatusNotFound)
 		}
+	}
+}
+
+func TestPublicHandlerRoutesStaticAssetPathsToStaticFilesystem(t *testing.T) {
+	staticFS := &recordingFS{}
+	handler := newStaticHandler(staticFS)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/static/app.js", nil))
+
+	if staticFS.opened != "/static/app.js" {
+		t.Fatalf("opened = %q, want /static/app.js", staticFS.opened)
 	}
 }
 

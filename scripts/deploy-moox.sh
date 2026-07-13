@@ -1404,6 +1404,19 @@ prepare_stage() {
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${STAGE_DIR}/lib/caddy-v2.11.4-checksums.txt"
+  if [[ -n "${PUBLIC_HOST}" ]]; then
+    local caddy_os caddy_asset caddy_archive
+    case "${TARGET_GOOS}" in
+      linux) caddy_os=linux ;;
+      darwin) caddy_os=mac ;;
+      *) fail "managed Caddy does not support target OS ${TARGET_GOOS}" ;;
+    esac
+    caddy_asset="caddy_2.11.4_${caddy_os}_${TARGET_GOARCH}.tar.gz"
+    caddy_archive="${STAGE_DIR}/lib/${caddy_asset}"
+    log "download pinned Caddy ${caddy_asset} for deployment bundle"
+    curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
+      -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
+  fi
   cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile"
   chmod +x "${STAGE_DIR}/lib/caddy-managed.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -1660,6 +1673,7 @@ sync_local_stage() {
     if [[ -n "${PUBLIC_HOST}" ]]; then
       MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
         MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
+        MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
         "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
     fi
     if [[ "${had_caddy_ca}" -eq 0 && -s "${deploy_dir}/certs/caddy/root.crt" ]]; then
@@ -1838,13 +1852,16 @@ if [[ ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; then
 fi
 chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
-if [[ "${NO_START}" -eq 0 ]]; then
+  if [[ "${NO_START}" -eq 0 ]]; then
   had_caddy_ca=0
   [[ -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]] && had_caddy_ca=1
   "${DEPLOY_DIR}/start.sh"
   if [[ -n "${PUBLIC_HOST}" ]]; then
+    CADDY_OS_NAME="${TARGET_GOOS}"
+    [[ "${CADDY_OS_NAME}" != darwin ]] || CADDY_OS_NAME=mac
     MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
       MOOX_CADDY_CHECKSUMS="${DEPLOY_DIR}/lib/caddy-v2.11.4-checksums.txt" \
+      MOOX_CADDY_ARCHIVE="${DEPLOY_DIR}/lib/caddy_2.11.4_${CADDY_OS_NAME}_${TARGET_GOARCH}.tar.gz" \
       "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
   fi
   if [[ "${had_caddy_ca}" -eq 0 && -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]]; then
@@ -1906,20 +1923,35 @@ verify_public_https() {
 ca=$1; browser=$2; service=$3; service_auth_file=$4
 case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
 case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
-status() { curl --silent --show-error --cacert "$ca" --output /dev/null --write-out "%{http_code}" "$@"; }
-[[ "$(status "$browser/")" == 200 ]]
-[[ "$(status "$browser/healthz")" == 404 ]]
-[[ "$(status "$browser/api/service/test/Ping")" == 404 ]]
-[[ "$(status "$service/api/admin/auth/Login")" == 404 ]]
+browser_authority=${browser#https://}; service_authority=${service#https://}
+status() {
+  curl --silent --show-error --max-time 5 --cacert "$ca" \
+    --resolve "$browser_authority:127.0.0.1" --resolve "$service_authority:127.0.0.1" \
+    --output /dev/null --write-out "%{http_code}" "$@"
+}
+expect_status() {
+  expected=$1; shift
+  for _ in $(seq 1 30); do
+    actual=$(status "$@" 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]] && return 0
+    sleep 1
+  done
+  printf "expected HTTP %s, got %s for %s\n" "$expected" "${actual:-curl-error}" "$*" >&2
+  return 1
+}
+expect_status 200 "$browser/"
+expect_status 404 "$browser/healthz"
+expect_status 404 "$browser/api/service/test/Ping"
+expect_status 404 "$service/api/admin/auth/Login"
 path=/api/service/sysdeploy/ListActiveServiceDeployments
-[[ "$(status -X POST -H "Content-Type: application/json" --data "{}" "$service$path")" == 401 ]]
+expect_status 401 -X POST -H "Content-Type: application/json" --data "{}" "$service$path"
 set -a; source "$service_auth_file"; set +a
 expire=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}
 timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}\nmoox-service-expire:%s" "$expire" | openssl dgst -sha256 | awk "{print \$NF}")
 canonical=$(printf "moox-request-v1\nPOST\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce")
 signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_SERVICE_AUTH_SECRET_KEY" | awk "{print \$NF}")
 auth="moox-auth-v2/$MOOX_SERVICE_AUTH_ACCESS_KEY/$timestamp/$expire/$nonce/$signature"
-[[ "$(status -X POST -H "Content-Type: application/json" -H "Auth: $auth" --data "{}" "$service$path")" == 200 ]]'
+expect_status 200 -X POST -H "Content-Type: application/json" -H "Auth: $auth" --data "{}" "$service$path"'
   if is_local_target; then
     bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/service-auth.env" || {
       "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
