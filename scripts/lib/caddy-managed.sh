@@ -91,7 +91,7 @@ install_binary() {
   asset="caddy_2.11.4_${OS}_${ARCH}.tar.gz"
   archive=${MOOX_CADDY_ARCHIVE:-}
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/moox-caddy-install.XXXXXX"); trap 'rm -rf "${tmp}"' RETURN
-  if [[ -z "${archive}" ]]; then archive="${tmp}/${asset}"; curl -fL --retry 3 -o "${archive}" "${RELEASE_URL}/${asset}"; fi
+  if [[ -z "${archive}" ]]; then archive="${tmp}/${asset}"; curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "${archive}" "${RELEASE_URL}/${asset}"; fi
   [[ $(basename "${archive}") == "${asset}" ]] || fail "archive mismatch: expected ${asset}"
   expected=$(awk -v n="${asset}" '$2==n {print $1}' "${MOOX_CADDY_CHECKSUMS:-${CHECKSUMS_DEFAULT}}")
   [[ -n "${expected}" ]] || fail "official checksum missing for ${asset}"

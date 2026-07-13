@@ -1389,6 +1389,19 @@ prepare_stage() {
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${STAGE_DIR}/lib/caddy-v2.11.4-checksums.txt"
+  if [[ -n "${PUBLIC_HOST}" ]]; then
+    local caddy_os caddy_asset caddy_archive
+    case "${TARGET_GOOS}" in
+      linux) caddy_os=linux ;;
+      darwin) caddy_os=mac ;;
+      *) fail "managed Caddy does not support target OS ${TARGET_GOOS}" ;;
+    esac
+    caddy_asset="caddy_2.11.4_${caddy_os}_${TARGET_GOARCH}.tar.gz"
+    caddy_archive="${STAGE_DIR}/lib/${caddy_asset}"
+    log "download pinned Caddy ${caddy_asset} for deployment bundle"
+    curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
+      -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
+  fi
   cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile"
   chmod +x "${STAGE_DIR}/lib/caddy-managed.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -1645,6 +1658,7 @@ sync_local_stage() {
     if [[ -n "${PUBLIC_HOST}" ]]; then
       MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
         MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
+        MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
         "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
     fi
     if [[ "${had_caddy_ca}" -eq 0 && -s "${deploy_dir}/certs/caddy/root.crt" ]]; then
@@ -1823,13 +1837,16 @@ if [[ ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; then
 fi
 chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
-if [[ "${NO_START}" -eq 0 ]]; then
+  if [[ "${NO_START}" -eq 0 ]]; then
   had_caddy_ca=0
   [[ -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]] && had_caddy_ca=1
   "${DEPLOY_DIR}/start.sh"
   if [[ -n "${PUBLIC_HOST}" ]]; then
+    CADDY_OS_NAME="${TARGET_GOOS}"
+    [[ "${CADDY_OS_NAME}" != darwin ]] || CADDY_OS_NAME=mac
     MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
       MOOX_CADDY_CHECKSUMS="${DEPLOY_DIR}/lib/caddy-v2.11.4-checksums.txt" \
+      MOOX_CADDY_ARCHIVE="${DEPLOY_DIR}/lib/caddy_2.11.4_${CADDY_OS_NAME}_${TARGET_GOARCH}.tar.gz" \
       "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
   fi
   if [[ "${had_caddy_ca}" -eq 0 && -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]]; then
