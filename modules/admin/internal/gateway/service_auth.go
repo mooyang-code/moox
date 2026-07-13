@@ -6,11 +6,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 )
 
 const (
-	defaultServiceAuthVersion       = serviceauth.Version
+	defaultServiceAuthVersion       = servicegateway.Version
 	defaultServiceAuthExpireSeconds = int64(60)
 	defaultServiceAuthClockSkewSecs = int64(30)
 )
@@ -43,8 +43,8 @@ func currentServiceAuthConfig() (ServiceAuthConfig, error) {
 	if !cfg.Enabled {
 		return cfg, fmt.Errorf("service auth is disabled")
 	}
-	if cfg.Version != serviceauth.Version {
-		return cfg, fmt.Errorf("service auth version must be %s", serviceauth.Version)
+	if cfg.Version != servicegateway.Version {
+		return cfg, fmt.Errorf("service auth version must be %s", servicegateway.Version)
 	}
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return cfg, fmt.Errorf("service auth access_key and secret_key are required")
@@ -54,7 +54,7 @@ func currentServiceAuthConfig() (ServiceAuthConfig, error) {
 
 func validateServiceAuthHeader(ctx context.Context, header, method, path string, body []byte, headers map[string]string, now time.Time, cfg ServiceAuthConfig) error {
 	cfg = normalizeServiceAuthConfig(cfg)
-	claims, err := serviceauth.VerifyHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.MaxExpireSecs, ClockSkewSeconds: cfg.ClockSkewSecs}, serviceauth.Request{Method: method, Path: path, Body: body, Headers: headers}, header, now)
+	claims, err := servicegateway.VerifyHeader(servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.MaxExpireSecs, ClockSkewSeconds: cfg.ClockSkewSecs}, servicegateway.AuthRequest{Method: method, Path: path, Body: body, Headers: headers}, header, now)
 	if err != nil {
 		return err
 	}

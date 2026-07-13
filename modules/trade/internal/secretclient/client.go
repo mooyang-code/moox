@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	"github.com/mooyang-code/moox/packages/serviceauth"
 	"github.com/mooyang-code/moox/packages/servicegateway"
 )
 
@@ -136,7 +135,7 @@ func (c *Client) post(ctx context.Context, method string, req any, rsp responseW
 
 func (c ServiceAuthConfig) normalized() ServiceAuthConfig {
 	if c.Version == "" {
-		c.Version = serviceauth.Version
+		c.Version = servicegateway.Version
 	}
 	if c.ExpireSecs <= 0 {
 		c.ExpireSecs = 60
@@ -149,7 +148,7 @@ func (c *Client) authHeader(method, path string, body []byte, now time.Time) (st
 	if auth.AccessKey == "" || auth.SecretKey == "" {
 		return "", fmt.Errorf("service auth access_key and secret_key are required")
 	}
-	return serviceauth.BuildHeader(serviceauth.Config{AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, ExpireSeconds: auth.ExpireSecs}, serviceauth.Request{Method: method, Path: path, Body: body}, now)
+	return servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, ExpireSeconds: auth.ExpireSecs}, servicegateway.AuthRequest{Method: method, Path: path, Body: body}, now)
 }
 
 type responseWithRetInfo interface {

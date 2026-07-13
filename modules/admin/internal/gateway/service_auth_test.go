@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +42,7 @@ func TestCurrentServiceAuthConfig_MissingKeys_ShouldError(t *testing.T) {
 func buildValidServiceAuthHeader(t *testing.T, cfg ServiceAuthConfig, body string, now time.Time) string {
 	t.Helper()
 	cfg = normalizeServiceAuthConfig(cfg)
-	header, err := serviceauth.BuildHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: 300}, serviceauth.Request{Method: http.MethodPost, Path: "/api/service/x/Do", Body: []byte(body)}, now)
+	header, err := servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: 300}, servicegateway.AuthRequest{Method: http.MethodPost, Path: "/api/service/x/Do", Body: []byte(body)}, now)
 	require.NoError(t, err)
 	return header
 }
@@ -106,9 +106,9 @@ func TestHTTPRequestHandler_ValidateServiceAuth_InvalidHeader_ShouldError(t *tes
 func TestValidateServiceAuthHeader_ChangedSpaceHeader_ShouldError(t *testing.T) {
 	now := time.Now()
 	cfg := ServiceAuthConfig{Enabled: true, AccessKey: "ak", SecretKey: "sk", MaxExpireSecs: 60, ClockSkewSecs: 30}
-	auth, err := serviceauth.BuildHeader(
-		serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: 60},
-		serviceauth.Request{Method: http.MethodPost, Path: "/api/service/x/Do", Headers: map[string]string{"X-Space-Id": "space-1"}},
+	auth, err := servicegateway.BuildHeader(
+		servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: 60},
+		servicegateway.AuthRequest{Method: http.MethodPost, Path: "/api/service/x/Do", Headers: map[string]string{"X-Space-Id": "space-1"}},
 		now,
 	)
 	require.NoError(t, err)

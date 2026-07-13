@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,9 +54,9 @@ func TestNewSignedRequestWithContextAndHeaders_BindsSpaceHeader(t *testing.T) {
 		AuthConfig{AccessKey: "ak", SecretKey: "sk", NowUnix: now.Unix(), ExpireSec: 60},
 	)
 	require.NoError(t, err)
-	_, err = serviceauth.VerifyHeader(
-		serviceauth.Config{AccessKey: "ak", SecretKey: "sk", ExpireSeconds: 60},
-		serviceauth.Request{Method: http.MethodPost, Path: req.URL.EscapedPath(), Body: []byte(`{}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
+	_, err = servicegateway.VerifyHeader(
+		servicegateway.AuthConfig{AccessKey: "ak", SecretKey: "sk", ExpireSeconds: 60},
+		servicegateway.AuthRequest{Method: http.MethodPost, Path: req.URL.EscapedPath(), Body: []byte(`{}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
 		req.Header.Get("Auth"), now,
 	)
 	require.Error(t, err)

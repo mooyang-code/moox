@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 	"net/http"
 	"net/url"
 	"time"
 )
 
 const (
-	defaultAuthVersion = serviceauth.Version
+	defaultAuthVersion = servicegateway.Version
 	defaultExpireSec   = int64(60)
 )
 
@@ -60,5 +60,5 @@ func generateAuthHeader(cfg AuthConfig, method, path string, body []byte) (strin
 	if _, err := url.Parse(path); err != nil {
 		return "", err
 	}
-	return serviceauth.BuildHeader(serviceauth.Config{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec}, serviceauth.Request{Method: method, Path: path, Body: body}, time.Unix(cfg.NowUnix, 0))
+	return servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec}, servicegateway.AuthRequest{Method: method, Path: path, Body: body}, time.Unix(cfg.NowUnix, 0))
 }

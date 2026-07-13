@@ -33,7 +33,6 @@ use (
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
-	./packages/serviceauth
 	./packages/servicegateway
 	./packages/trpcplugintest
 	./packages/trpcretry

@@ -15,7 +15,6 @@ require (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/serviceauth v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.47.0
@@ -62,7 +61,6 @@ replace (
 	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
-	github.com/mooyang-code/moox/packages/serviceauth => ../../packages/serviceauth
 )
 
 require (
@@ -97,6 +95,7 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/servicegateway v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats.go v1.47.0 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -140,3 +139,5 @@ require (
 replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/servicegateway => ../../packages/servicegateway

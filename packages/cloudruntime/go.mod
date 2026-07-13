@@ -8,11 +8,7 @@ require trpc.group/trpc-go/trpc-go v1.0.3
 
 require github.com/mooyang-code/moox/packages/servicegateway v0.0.0-00010101000000-000000000000
 
-require github.com/mooyang-code/moox/packages/serviceauth v0.0.0-00010101000000-000000000000
-
 replace github.com/mooyang-code/moox/packages/servicegateway => ../servicegateway
-
-replace github.com/mooyang-code/moox/packages/serviceauth => ../serviceauth
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
