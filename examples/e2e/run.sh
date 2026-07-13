@@ -14,6 +14,9 @@ NODE_ID="e2e-scf-node"
 PACKAGE_ID="moox-collector_dev"
 DATASET_ID="binance_spot_kline"
 SYSDEPLOY_ONLY=0
+E2E_ADMIN_USERNAME="mooxe2eadmin"
+E2E_ADMIN_PASSWORD="MooxE2E#20260704!"
+ADMIN_PASSWORD_FILE=""
 
 export MOOX_ADMIN_JWT_SECRET_KEY="${MOOX_ADMIN_JWT_SECRET_KEY:-moox-e2e-jwt-secret-key-20260713-safe}"
 export MOOX_EVENTBUS_STREAM_MAX_BYTES="${MOOX_EVENTBUS_STREAM_MAX_BYTES:-104857600}"
@@ -184,7 +187,11 @@ log "target=${TARGET} dir=${DEPLOY_DIR} public_host=${PUBLIC_HOST} reset_data=${
 if [[ "${DEPLOY}" -eq 1 ]]; then
   deploy_args=(--target "${TARGET}" --dir "${DEPLOY_DIR}")
   if [[ "${RESET_DATA}" -eq 1 ]]; then
-    deploy_args+=(--reset-data)
+    ADMIN_PASSWORD_FILE="$(mktemp "${TMPDIR:-/tmp}/moox-e2e-admin-password.XXXXXX")"
+    chmod 600 "${ADMIN_PASSWORD_FILE}"
+    printf '%s\n' "${E2E_ADMIN_PASSWORD}" >"${ADMIN_PASSWORD_FILE}"
+    trap 'rm -f "${ADMIN_PASSWORD_FILE}"' EXIT
+    deploy_args+=(--reset-data --admin-username "${E2E_ADMIN_USERNAME}" --admin-password-file "${ADMIN_PASSWORD_FILE}")
   fi
   "${ROOT}/scripts/deploy-moox.sh" "${deploy_args[@]}"
 else
