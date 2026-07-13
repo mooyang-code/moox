@@ -1,5 +1,6 @@
 import { callControl } from '@/api/admin/http';
 import { gatewayURL, gatewayWebSocketURL } from '@/api/gateway';
+import { issueRawSessionTicketAPI } from '@/api/modules/user';
 
 // ========== 类型定义 ==========
 
@@ -100,15 +101,20 @@ export const sftpDelete = (sessionId: string, path: string) =>
   callControl<{ session_id: string; path: string }, Record<string, never>>('ssh', 'SftpDelete', { session_id: sessionId, path });
 
 // 文件下载/上传走统一网关 rawhandler（/api/admin/ssh/SftpDownload|SftpUpload）
-export const getSftpDownloadUrl = (sessionId: string, path: string) =>
-  gatewayURL(`/api/admin/ssh/SftpDownload?session_id=${sessionId}&path=${encodeURIComponent(path)}`);
+export const getSftpDownloadUrl = async (sessionId: string, path: string) => {
+  const { ticket } = await issueRawSessionTicketAPI('sftp_download', sessionId);
+  return gatewayURL(`/api/admin/ssh/SftpDownload?ticket=${encodeURIComponent(ticket)}&session_id=${sessionId}&path=${encodeURIComponent(path)}`);
+};
 
-export const getSftpUploadUrl = () =>
-  gatewayURL('/api/admin/ssh/SftpUpload');
+export const getSftpUploadUrl = async (sessionId: string) => {
+  const { ticket } = await issueRawSessionTicketAPI('sftp_upload', sessionId);
+  return gatewayURL(`/api/admin/ssh/SftpUpload?ticket=${encodeURIComponent(ticket)}&session_id=${encodeURIComponent(sessionId)}`);
+};
 
 // WebSocket 连接地址（统一网关 rawhandler，ws 协议使用固定网关端口）
-export const getSSHWebSocketUrl = (sessionId: string, w: number, h: number) => {
-  return gatewayWebSocketURL(`/api/admin/ssh/WsConnect?session_id=${sessionId}&w=${w}&h=${h}`);
+export const getSSHWebSocketUrl = async (sessionId: string, w: number, h: number) => {
+  const { ticket } = await issueRawSessionTicketAPI('ssh_ws', sessionId);
+  return gatewayWebSocketURL(`/api/admin/ssh/WsConnect?ticket=${encodeURIComponent(ticket)}&session_id=${sessionId}&w=${w}&h=${h}`);
 };
 
 // ========== 会话管理 ==========

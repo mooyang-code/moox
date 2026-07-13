@@ -89,9 +89,9 @@ func (s *service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.Li
 		spaces = append(spaces, modelToPBSpace(&rows[i]))
 	}
 	return &pb.ListSpacesRsp{
-		RetInfo:     &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"},
-		Spaces:      spaces,
-		PageResult:  makePageResult(pageNo, limit, total),
+		RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"},
+		Spaces:     spaces,
+		PageResult: makePageResult(pageNo, limit, total),
 	}, nil
 }
 

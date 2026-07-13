@@ -35,6 +35,7 @@ type HTTPOptions struct {
 	Token    string
 	Health   http.Handler
 	Liveness http.Handler
+	Metrics  http.Handler
 	Snapshot func(context.Context) Snapshot
 }
 
@@ -48,7 +49,11 @@ func NewHTTPHandler(opts HTTPOptions) http.Handler {
 		mux.Handle("/healthz", liveness)
 		mux.Handle("/readyz", opts.Health)
 	}
-	mux.Handle("/metrics", promhttp.Handler())
+	metrics := opts.Metrics
+	if metrics == nil {
+		metrics = promhttp.Handler()
+	}
+	mux.Handle("/metrics", metrics)
 	mux.HandleFunc("/internal/monitor/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		if opts.Token == "" || r.Header.Get(PeerTokenHeader) != opts.Token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

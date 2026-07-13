@@ -139,10 +139,10 @@ run_scf_once() {
   local timeout="${TIMEOUT_SECONDS}s"
   local envs=(
     "MOOX_SPACE_ID=${SPACE_ID}"
-    "MOOX_SERVICE_AUTH_VERSION=moox-auth-v1"
+    "MOOX_SERVICE_AUTH_VERSION=moox-auth-v2"
     "MOOX_SERVICE_AUTH_ACCESS_KEY=moox-service"
-    "MOOX_SERVICE_AUTH_SECRET_KEY=moox-service-secret-change-me"
-    "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=1800"
+    "MOOX_SERVICE_AUTH_SECRET_KEY="
+    "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60"
   )
   local cmd
   cmd="env ${envs[*]} ./bin/moox-collector-scf -once -service-gateway-target http://127.0.0.1:11000 -node-id ${NODE_ID} -storage-metadata-target 127.0.0.1:20100 -storage-access-target 127.0.0.1:20102 -timeout ${timeout}"

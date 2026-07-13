@@ -7,12 +7,11 @@
 package adminpb
 
 import (
-	reflect "reflect"
-	sync "sync"
-
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	reflect "reflect"
+	sync "sync"
 )
 
 const (
@@ -312,148 +311,6 @@ func (x *UserInfo) GetLastLoginIp() string {
 	return ""
 }
 
-type RegisterReq struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	AppInfo  *AppInfo `protobuf:"bytes,1,opt,name=app_info,json=appInfo,proto3" json:"app_info,omitempty"`
-	Username string   `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
-	Password string   `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"` // 明文密码（服务端会进行哈希处理）
-	Nickname string   `protobuf:"bytes,4,opt,name=nickname,proto3" json:"nickname,omitempty"` // 昵称（可选）
-	Email    string   `protobuf:"bytes,5,opt,name=email,proto3" json:"email,omitempty"`       // 邮箱（可选）
-}
-
-func (x *RegisterReq) Reset() {
-	*x = RegisterReq{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[2]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *RegisterReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterReq) ProtoMessage() {}
-
-func (x *RegisterReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[2]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterReq.ProtoReflect.Descriptor instead.
-func (*RegisterReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *RegisterReq) GetAppInfo() *AppInfo {
-	if x != nil {
-		return x.AppInfo
-	}
-	return nil
-}
-
-func (x *RegisterReq) GetUsername() string {
-	if x != nil {
-		return x.Username
-	}
-	return ""
-}
-
-func (x *RegisterReq) GetPassword() string {
-	if x != nil {
-		return x.Password
-	}
-	return ""
-}
-
-func (x *RegisterReq) GetNickname() string {
-	if x != nil {
-		return x.Nickname
-	}
-	return ""
-}
-
-func (x *RegisterReq) GetEmail() string {
-	if x != nil {
-		return x.Email
-	}
-	return ""
-}
-
-type RegisterRsp struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	RetInfo  *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	UserId   string            `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	UserInfo *UserInfo         `protobuf:"bytes,3,opt,name=user_info,json=userInfo,proto3" json:"user_info,omitempty"`
-}
-
-func (x *RegisterRsp) Reset() {
-	*x = RegisterRsp{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[3]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *RegisterRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterRsp) ProtoMessage() {}
-
-func (x *RegisterRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[3]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterRsp.ProtoReflect.Descriptor instead.
-func (*RegisterRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *RegisterRsp) GetRetInfo() *commonpb.RetInfo {
-	if x != nil {
-		return x.RetInfo
-	}
-	return nil
-}
-
-func (x *RegisterRsp) GetUserId() string {
-	if x != nil {
-		return x.UserId
-	}
-	return ""
-}
-
-func (x *RegisterRsp) GetUserInfo() *UserInfo {
-	if x != nil {
-		return x.UserInfo
-	}
-	return nil
-}
-
 type GetLoginSaltReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -466,7 +323,7 @@ type GetLoginSaltReq struct {
 func (x *GetLoginSaltReq) Reset() {
 	*x = GetLoginSaltReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[4]
+		mi := &file_infra_service_proto_msgTypes[2]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -479,7 +336,7 @@ func (x *GetLoginSaltReq) String() string {
 func (*GetLoginSaltReq) ProtoMessage() {}
 
 func (x *GetLoginSaltReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[4]
+	mi := &file_infra_service_proto_msgTypes[2]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +349,7 @@ func (x *GetLoginSaltReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLoginSaltReq.ProtoReflect.Descriptor instead.
 func (*GetLoginSaltReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{4}
+	return file_infra_service_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetLoginSaltReq) GetAppInfo() *AppInfo {
@@ -523,7 +380,7 @@ type GetLoginSaltRsp struct {
 func (x *GetLoginSaltRsp) Reset() {
 	*x = GetLoginSaltRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[5]
+		mi := &file_infra_service_proto_msgTypes[3]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -536,7 +393,7 @@ func (x *GetLoginSaltRsp) String() string {
 func (*GetLoginSaltRsp) ProtoMessage() {}
 
 func (x *GetLoginSaltRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[5]
+	mi := &file_infra_service_proto_msgTypes[3]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -549,7 +406,7 @@ func (x *GetLoginSaltRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLoginSaltRsp.ProtoReflect.Descriptor instead.
 func (*GetLoginSaltRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{5}
+	return file_infra_service_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetLoginSaltRsp) GetRetInfo() *commonpb.RetInfo {
@@ -598,7 +455,7 @@ type LoginReq struct {
 func (x *LoginReq) Reset() {
 	*x = LoginReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[6]
+		mi := &file_infra_service_proto_msgTypes[4]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -611,7 +468,7 @@ func (x *LoginReq) String() string {
 func (*LoginReq) ProtoMessage() {}
 
 func (x *LoginReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[6]
+	mi := &file_infra_service_proto_msgTypes[4]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -624,7 +481,7 @@ func (x *LoginReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginReq.ProtoReflect.Descriptor instead.
 func (*LoginReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{6}
+	return file_infra_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *LoginReq) GetAppInfo() *AppInfo {
@@ -688,16 +545,19 @@ type LoginRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo     *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	AccessToken string            `protobuf:"bytes,2,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"` // 访问令牌
-	ExpiresIn   int64             `protobuf:"varint,3,opt,name=expires_in,json=expiresIn,proto3" json:"expires_in,omitempty"`      // 过期时间（秒）
-	UserInfo    *UserInfo         `protobuf:"bytes,4,opt,name=user_info,json=userInfo,proto3" json:"user_info,omitempty"`
+	RetInfo           *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	AccessToken       string            `protobuf:"bytes,2,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"` // 访问令牌
+	ExpiresIn         int64             `protobuf:"varint,3,opt,name=expires_in,json=expiresIn,proto3" json:"expires_in,omitempty"`      // 过期时间（秒）
+	UserInfo          *UserInfo         `protobuf:"bytes,4,opt,name=user_info,json=userInfo,proto3" json:"user_info,omitempty"`
+	SessionId         string            `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RequestSigningKey string            `protobuf:"bytes,6,opt,name=request_signing_key,json=requestSigningKey,proto3" json:"request_signing_key,omitempty"`
+	ExpiresAt         int64             `protobuf:"varint,7,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 }
 
 func (x *LoginRsp) Reset() {
 	*x = LoginRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[7]
+		mi := &file_infra_service_proto_msgTypes[5]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -710,7 +570,7 @@ func (x *LoginRsp) String() string {
 func (*LoginRsp) ProtoMessage() {}
 
 func (x *LoginRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[7]
+	mi := &file_infra_service_proto_msgTypes[5]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -723,7 +583,7 @@ func (x *LoginRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginRsp.ProtoReflect.Descriptor instead.
 func (*LoginRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{7}
+	return file_infra_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *LoginRsp) GetRetInfo() *commonpb.RetInfo {
@@ -754,17 +614,123 @@ func (x *LoginRsp) GetUserInfo() *UserInfo {
 	return nil
 }
 
-type GetChangePasswordSaltReq struct {
+func (x *LoginRsp) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *LoginRsp) GetRequestSigningKey() string {
+	if x != nil {
+		return x.RequestSigningKey
+	}
+	return ""
+}
+
+func (x *LoginRsp) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+type LogoutReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *LogoutReq) Reset() {
+	*x = LogoutReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_infra_service_proto_msgTypes[6]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *LogoutReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogoutReq) ProtoMessage() {}
+
+func (x *LogoutReq) ProtoReflect() protoreflect.Message {
+	mi := &file_infra_service_proto_msgTypes[6]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogoutReq.ProtoReflect.Descriptor instead.
+func (*LogoutReq) Descriptor() ([]byte, []int) {
+	return file_infra_service_proto_rawDescGZIP(), []int{6}
+}
+
+type LogoutRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AppInfo     *AppInfo `protobuf:"bytes,1,opt,name=app_info,json=appInfo,proto3" json:"app_info,omitempty"`
-	AccessToken string   `protobuf:"bytes,2,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 }
 
-func (x *GetChangePasswordSaltReq) Reset() {
-	*x = GetChangePasswordSaltReq{}
+func (x *LogoutRsp) Reset() {
+	*x = LogoutRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_infra_service_proto_msgTypes[7]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *LogoutRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogoutRsp) ProtoMessage() {}
+
+func (x *LogoutRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_infra_service_proto_msgTypes[7]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogoutRsp.ProtoReflect.Descriptor instead.
+func (*LogoutRsp) Descriptor() ([]byte, []int) {
+	return file_infra_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *LogoutRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+type IssueRawSessionTicketReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Operation string `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
+	SessionId string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+}
+
+func (x *IssueRawSessionTicketReq) Reset() {
+	*x = IssueRawSessionTicketReq{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_infra_service_proto_msgTypes[8]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -772,13 +738,13 @@ func (x *GetChangePasswordSaltReq) Reset() {
 	}
 }
 
-func (x *GetChangePasswordSaltReq) String() string {
+func (x *IssueRawSessionTicketReq) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetChangePasswordSaltReq) ProtoMessage() {}
+func (*IssueRawSessionTicketReq) ProtoMessage() {}
 
-func (x *GetChangePasswordSaltReq) ProtoReflect() protoreflect.Message {
+func (x *IssueRawSessionTicketReq) ProtoReflect() protoreflect.Message {
 	mi := &file_infra_service_proto_msgTypes[8]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -790,38 +756,37 @@ func (x *GetChangePasswordSaltReq) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetChangePasswordSaltReq.ProtoReflect.Descriptor instead.
-func (*GetChangePasswordSaltReq) Descriptor() ([]byte, []int) {
+// Deprecated: Use IssueRawSessionTicketReq.ProtoReflect.Descriptor instead.
+func (*IssueRawSessionTicketReq) Descriptor() ([]byte, []int) {
 	return file_infra_service_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *GetChangePasswordSaltReq) GetAppInfo() *AppInfo {
+func (x *IssueRawSessionTicketReq) GetOperation() string {
 	if x != nil {
-		return x.AppInfo
-	}
-	return nil
-}
-
-func (x *GetChangePasswordSaltReq) GetAccessToken() string {
-	if x != nil {
-		return x.AccessToken
+		return x.Operation
 	}
 	return ""
 }
 
-type GetChangePasswordSaltRsp struct {
+func (x *IssueRawSessionTicketReq) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type IssueRawSessionTicketRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
 	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Salt      string            `protobuf:"bytes,2,opt,name=salt,proto3" json:"salt,omitempty"`
-	Timestamp int64             `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	ExpiresIn int64             `protobuf:"varint,4,opt,name=expires_in,json=expiresIn,proto3" json:"expires_in,omitempty"`
+	Ticket    string            `protobuf:"bytes,2,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	ExpiresAt int64             `protobuf:"varint,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 }
 
-func (x *GetChangePasswordSaltRsp) Reset() {
-	*x = GetChangePasswordSaltRsp{}
+func (x *IssueRawSessionTicketRsp) Reset() {
+	*x = IssueRawSessionTicketRsp{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_infra_service_proto_msgTypes[9]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -829,13 +794,13 @@ func (x *GetChangePasswordSaltRsp) Reset() {
 	}
 }
 
-func (x *GetChangePasswordSaltRsp) String() string {
+func (x *IssueRawSessionTicketRsp) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetChangePasswordSaltRsp) ProtoMessage() {}
+func (*IssueRawSessionTicketRsp) ProtoMessage() {}
 
-func (x *GetChangePasswordSaltRsp) ProtoReflect() protoreflect.Message {
+func (x *IssueRawSessionTicketRsp) ProtoReflect() protoreflect.Message {
 	mi := &file_infra_service_proto_msgTypes[9]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -847,171 +812,30 @@ func (x *GetChangePasswordSaltRsp) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetChangePasswordSaltRsp.ProtoReflect.Descriptor instead.
-func (*GetChangePasswordSaltRsp) Descriptor() ([]byte, []int) {
+// Deprecated: Use IssueRawSessionTicketRsp.ProtoReflect.Descriptor instead.
+func (*IssueRawSessionTicketRsp) Descriptor() ([]byte, []int) {
 	return file_infra_service_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *GetChangePasswordSaltRsp) GetRetInfo() *commonpb.RetInfo {
+func (x *IssueRawSessionTicketRsp) GetRetInfo() *commonpb.RetInfo {
 	if x != nil {
 		return x.RetInfo
 	}
 	return nil
 }
 
-func (x *GetChangePasswordSaltRsp) GetSalt() string {
+func (x *IssueRawSessionTicketRsp) GetTicket() string {
 	if x != nil {
-		return x.Salt
+		return x.Ticket
 	}
 	return ""
 }
 
-func (x *GetChangePasswordSaltRsp) GetTimestamp() int64 {
+func (x *IssueRawSessionTicketRsp) GetExpiresAt() int64 {
 	if x != nil {
-		return x.Timestamp
+		return x.ExpiresAt
 	}
 	return 0
-}
-
-func (x *GetChangePasswordSaltRsp) GetExpiresIn() int64 {
-	if x != nil {
-		return x.ExpiresIn
-	}
-	return 0
-}
-
-type ChangePasswordReq struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	AppInfo         *AppInfo `protobuf:"bytes,1,opt,name=app_info,json=appInfo,proto3" json:"app_info,omitempty"`
-	AccessToken     string   `protobuf:"bytes,2,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
-	OldPasswordHash string   `protobuf:"bytes,3,opt,name=old_password_hash,json=oldPasswordHash,proto3" json:"old_password_hash,omitempty"` // 旧密码哈希值
-	NewPasswordHash string   `protobuf:"bytes,4,opt,name=new_password_hash,json=newPasswordHash,proto3" json:"new_password_hash,omitempty"` // 新密码哈希值
-	Salt            string   `protobuf:"bytes,5,opt,name=salt,proto3" json:"salt,omitempty"`
-	Timestamp       int64    `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-}
-
-func (x *ChangePasswordReq) Reset() {
-	*x = ChangePasswordReq{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[10]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *ChangePasswordReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ChangePasswordReq) ProtoMessage() {}
-
-func (x *ChangePasswordReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[10]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ChangePasswordReq.ProtoReflect.Descriptor instead.
-func (*ChangePasswordReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *ChangePasswordReq) GetAppInfo() *AppInfo {
-	if x != nil {
-		return x.AppInfo
-	}
-	return nil
-}
-
-func (x *ChangePasswordReq) GetAccessToken() string {
-	if x != nil {
-		return x.AccessToken
-	}
-	return ""
-}
-
-func (x *ChangePasswordReq) GetOldPasswordHash() string {
-	if x != nil {
-		return x.OldPasswordHash
-	}
-	return ""
-}
-
-func (x *ChangePasswordReq) GetNewPasswordHash() string {
-	if x != nil {
-		return x.NewPasswordHash
-	}
-	return ""
-}
-
-func (x *ChangePasswordReq) GetSalt() string {
-	if x != nil {
-		return x.Salt
-	}
-	return ""
-}
-
-func (x *ChangePasswordReq) GetTimestamp() int64 {
-	if x != nil {
-		return x.Timestamp
-	}
-	return 0
-}
-
-type ChangePasswordRsp struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-}
-
-func (x *ChangePasswordRsp) Reset() {
-	*x = ChangePasswordRsp{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[11]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *ChangePasswordRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ChangePasswordRsp) ProtoMessage() {}
-
-func (x *ChangePasswordRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[11]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ChangePasswordRsp.ProtoReflect.Descriptor instead.
-func (*ChangePasswordRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{11}
-}
-
-func (x *ChangePasswordRsp) GetRetInfo() *commonpb.RetInfo {
-	if x != nil {
-		return x.RetInfo
-	}
-	return nil
 }
 
 type GetUserInfoReq struct {
@@ -1027,7 +851,7 @@ type GetUserInfoReq struct {
 func (x *GetUserInfoReq) Reset() {
 	*x = GetUserInfoReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[12]
+		mi := &file_infra_service_proto_msgTypes[10]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1040,7 +864,7 @@ func (x *GetUserInfoReq) String() string {
 func (*GetUserInfoReq) ProtoMessage() {}
 
 func (x *GetUserInfoReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[12]
+	mi := &file_infra_service_proto_msgTypes[10]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1053,7 +877,7 @@ func (x *GetUserInfoReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserInfoReq.ProtoReflect.Descriptor instead.
 func (*GetUserInfoReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{12}
+	return file_infra_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetUserInfoReq) GetAppInfo() *AppInfo {
@@ -1089,7 +913,7 @@ type GetUserInfoRsp struct {
 func (x *GetUserInfoRsp) Reset() {
 	*x = GetUserInfoRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[13]
+		mi := &file_infra_service_proto_msgTypes[11]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1102,7 +926,7 @@ func (x *GetUserInfoRsp) String() string {
 func (*GetUserInfoRsp) ProtoMessage() {}
 
 func (x *GetUserInfoRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[13]
+	mi := &file_infra_service_proto_msgTypes[11]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1115,7 +939,7 @@ func (x *GetUserInfoRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserInfoRsp.ProtoReflect.Descriptor instead.
 func (*GetUserInfoRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{13}
+	return file_infra_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetUserInfoRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1147,7 +971,7 @@ type UpdateUserInfoReq struct {
 func (x *UpdateUserInfoReq) Reset() {
 	*x = UpdateUserInfoReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[14]
+		mi := &file_infra_service_proto_msgTypes[12]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1160,7 +984,7 @@ func (x *UpdateUserInfoReq) String() string {
 func (*UpdateUserInfoReq) ProtoMessage() {}
 
 func (x *UpdateUserInfoReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[14]
+	mi := &file_infra_service_proto_msgTypes[12]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1173,7 +997,7 @@ func (x *UpdateUserInfoReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserInfoReq.ProtoReflect.Descriptor instead.
 func (*UpdateUserInfoReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{14}
+	return file_infra_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *UpdateUserInfoReq) GetAppInfo() *AppInfo {
@@ -1223,7 +1047,7 @@ type UpdateUserInfoRsp struct {
 func (x *UpdateUserInfoRsp) Reset() {
 	*x = UpdateUserInfoRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[15]
+		mi := &file_infra_service_proto_msgTypes[13]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1236,7 +1060,7 @@ func (x *UpdateUserInfoRsp) String() string {
 func (*UpdateUserInfoRsp) ProtoMessage() {}
 
 func (x *UpdateUserInfoRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[15]
+	mi := &file_infra_service_proto_msgTypes[13]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1249,7 +1073,7 @@ func (x *UpdateUserInfoRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserInfoRsp.ProtoReflect.Descriptor instead.
 func (*UpdateUserInfoRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{15}
+	return file_infra_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UpdateUserInfoRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1280,7 +1104,7 @@ type IPInfo struct {
 func (x *IPInfo) Reset() {
 	*x = IPInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[16]
+		mi := &file_infra_service_proto_msgTypes[14]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1293,7 +1117,7 @@ func (x *IPInfo) String() string {
 func (*IPInfo) ProtoMessage() {}
 
 func (x *IPInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[16]
+	mi := &file_infra_service_proto_msgTypes[14]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1306,7 +1130,7 @@ func (x *IPInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IPInfo.ProtoReflect.Descriptor instead.
 func (*IPInfo) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{16}
+	return file_infra_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *IPInfo) GetIp() string {
@@ -1346,7 +1170,7 @@ type DNSRecord struct {
 func (x *DNSRecord) Reset() {
 	*x = DNSRecord{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[17]
+		mi := &file_infra_service_proto_msgTypes[15]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1359,7 +1183,7 @@ func (x *DNSRecord) String() string {
 func (*DNSRecord) ProtoMessage() {}
 
 func (x *DNSRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[17]
+	mi := &file_infra_service_proto_msgTypes[15]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1372,7 +1196,7 @@ func (x *DNSRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DNSRecord.ProtoReflect.Descriptor instead.
 func (*DNSRecord) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{17}
+	return file_infra_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DNSRecord) GetDomain() string {
@@ -1419,7 +1243,7 @@ type ListDNSRecordsReq struct {
 func (x *ListDNSRecordsReq) Reset() {
 	*x = ListDNSRecordsReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[18]
+		mi := &file_infra_service_proto_msgTypes[16]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1432,7 +1256,7 @@ func (x *ListDNSRecordsReq) String() string {
 func (*ListDNSRecordsReq) ProtoMessage() {}
 
 func (x *ListDNSRecordsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[18]
+	mi := &file_infra_service_proto_msgTypes[16]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1445,7 +1269,7 @@ func (x *ListDNSRecordsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDNSRecordsReq.ProtoReflect.Descriptor instead.
 func (*ListDNSRecordsReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{18}
+	return file_infra_service_proto_rawDescGZIP(), []int{16}
 }
 
 // ListDNSRecordsRsp 列出所有 DNS 解析记录响应。
@@ -1462,7 +1286,7 @@ type ListDNSRecordsRsp struct {
 func (x *ListDNSRecordsRsp) Reset() {
 	*x = ListDNSRecordsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[19]
+		mi := &file_infra_service_proto_msgTypes[17]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1475,7 +1299,7 @@ func (x *ListDNSRecordsRsp) String() string {
 func (*ListDNSRecordsRsp) ProtoMessage() {}
 
 func (x *ListDNSRecordsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[19]
+	mi := &file_infra_service_proto_msgTypes[17]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1488,7 +1312,7 @@ func (x *ListDNSRecordsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDNSRecordsRsp.ProtoReflect.Descriptor instead.
 func (*ListDNSRecordsRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{19}
+	return file_infra_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ListDNSRecordsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1523,7 +1347,7 @@ type GetDNSRecordReq struct {
 func (x *GetDNSRecordReq) Reset() {
 	*x = GetDNSRecordReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[20]
+		mi := &file_infra_service_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1536,7 +1360,7 @@ func (x *GetDNSRecordReq) String() string {
 func (*GetDNSRecordReq) ProtoMessage() {}
 
 func (x *GetDNSRecordReq) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[20]
+	mi := &file_infra_service_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1549,7 +1373,7 @@ func (x *GetDNSRecordReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDNSRecordReq.ProtoReflect.Descriptor instead.
 func (*GetDNSRecordReq) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{20}
+	return file_infra_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetDNSRecordReq) GetDomain() string {
@@ -1572,7 +1396,7 @@ type GetDNSRecordRsp struct {
 func (x *GetDNSRecordRsp) Reset() {
 	*x = GetDNSRecordRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_infra_service_proto_msgTypes[21]
+		mi := &file_infra_service_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1585,7 +1409,7 @@ func (x *GetDNSRecordRsp) String() string {
 func (*GetDNSRecordRsp) ProtoMessage() {}
 
 func (x *GetDNSRecordRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_infra_service_proto_msgTypes[21]
+	mi := &file_infra_service_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1598,7 +1422,7 @@ func (x *GetDNSRecordRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDNSRecordRsp.ProtoReflect.Descriptor instead.
 func (*GetDNSRecordRsp) Descriptor() ([]byte, []int) {
-	return file_infra_service_proto_rawDescGZIP(), []int{21}
+	return file_infra_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetDNSRecordRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1648,109 +1472,77 @@ var file_infra_service_proto_rawDesc = []byte{
 	0x52, 0x0b, 0x6c, 0x61, 0x73, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x41, 0x74, 0x12, 0x22, 0x0a,
 	0x0d, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x6c, 0x6f, 0x67, 0x69, 0x6e, 0x5f, 0x69, 0x70, 0x18, 0x0b,
 	0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x6c, 0x61, 0x73, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x49,
-	0x70, 0x22, 0xac, 0x01, 0x0a, 0x0b, 0x52, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x52, 0x65,
-	0x71, 0x12, 0x33, 0x0a, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x0b, 0x32, 0x18, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x41, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x61,
-	0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61,
-	0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61,
-	0x6d, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x18, 0x03,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x12, 0x1a,
-	0x0a, 0x08, 0x6e, 0x69, 0x63, 0x6b, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x08, 0x6e, 0x69, 0x63, 0x6b, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x65, 0x6d,
-	0x61, 0x69, 0x6c, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x65, 0x6d, 0x61, 0x69, 0x6c,
-	0x22, 0x94, 0x01, 0x0a, 0x0b, 0x52, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x52, 0x73, 0x70,
-	0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01,
-	0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
-	0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72,
-	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x17, 0x0a, 0x07, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x69,
-	0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x75, 0x73, 0x65, 0x72, 0x49, 0x64, 0x12,
-	0x36, 0x0a, 0x09, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x03, 0x20, 0x01,
-	0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69,
-	0x6e, 0x66, 0x72, 0x61, 0x2e, 0x55, 0x73, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x08, 0x75,
-	0x73, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x22, 0x62, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x4c, 0x6f,
-	0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x65, 0x71, 0x12, 0x33, 0x0a, 0x08, 0x61, 0x70,
-	0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x18, 0x2e, 0x74,
-	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x41,
-	0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x61, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x12,
-	0x1a, 0x0a, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x98, 0x01, 0x0a, 0x0f,
-	0x47, 0x65, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x73, 0x70, 0x12,
-	0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28,
-	0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
-	0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65,
-	0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x18, 0x02, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x69, 0x6d,
-	0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x74, 0x69,
-	0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x78, 0x70, 0x69, 0x72,
-	0x65, 0x73, 0x5f, 0x69, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x65, 0x78, 0x70,
-	0x69, 0x72, 0x65, 0x73, 0x49, 0x6e, 0x22, 0x8b, 0x02, 0x0a, 0x08, 0x4c, 0x6f, 0x67, 0x69, 0x6e,
-	0x52, 0x65, 0x71, 0x12, 0x33, 0x0a, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18,
-	0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x18, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
-	0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x41, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x52,
-	0x07, 0x61, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x75, 0x73, 0x65, 0x72,
-	0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72,
-	0x6e, 0x61, 0x6d, 0x65, 0x12, 0x23, 0x0a, 0x0d, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64,
-	0x5f, 0x68, 0x61, 0x73, 0x68, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x70, 0x61, 0x73,
-	0x73, 0x77, 0x6f, 0x72, 0x64, 0x48, 0x61, 0x73, 0x68, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x61, 0x6c,
-	0x74, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x12, 0x1c, 0x0a,
-	0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x18, 0x05, 0x20, 0x01, 0x28, 0x03,
-	0x52, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x12, 0x1b, 0x0a, 0x09, 0x64,
-	0x65, 0x76, 0x69, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08,
-	0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x75, 0x73, 0x65, 0x72,
-	0x5f, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x73,
-	0x65, 0x72, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x6c, 0x69, 0x65, 0x6e,
-	0x74, 0x5f, 0x69, 0x70, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x63, 0x6c, 0x69, 0x65,
-	0x6e, 0x74, 0x49, 0x70, 0x22, 0xba, 0x01, 0x0a, 0x08, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x73,
-	0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07,
-	0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x21, 0x0a, 0x0c, 0x61, 0x63, 0x63, 0x65, 0x73,
-	0x73, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x61,
-	0x63, 0x63, 0x65, 0x73, 0x73, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x78,
-	0x70, 0x69, 0x72, 0x65, 0x73, 0x5f, 0x69, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09,
-	0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x49, 0x6e, 0x12, 0x36, 0x0a, 0x09, 0x75, 0x73, 0x65,
-	0x72, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74,
-	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x55,
-	0x73, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72, 0x49, 0x6e, 0x66,
-	0x6f, 0x22, 0x72, 0x0a, 0x18, 0x47, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61,
-	0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x65, 0x71, 0x12, 0x33, 0x0a,
+	0x70, 0x22, 0x62, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c,
+	0x74, 0x52, 0x65, 0x71, 0x12, 0x33, 0x0a, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x18, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x41, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f,
+	0x52, 0x07, 0x61, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x75, 0x73, 0x65,
+	0x72, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x75, 0x73, 0x65,
+	0x72, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x98, 0x01, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x4c, 0x6f, 0x67,
+	0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74,
+	0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52,
+	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12,
+	0x12, 0x0a, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x73,
+	0x61, 0x6c, 0x74, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70,
+	0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
+	0x70, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x5f, 0x69, 0x6e, 0x18,
+	0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x49, 0x6e,
+	0x22, 0x8b, 0x02, 0x0a, 0x08, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65, 0x71, 0x12, 0x33, 0x0a,
 	0x08, 0x61, 0x70, 0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
 	0x18, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72,
 	0x61, 0x2e, 0x41, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x61, 0x70, 0x70, 0x49, 0x6e,
-	0x66, 0x6f, 0x12, 0x21, 0x0a, 0x0c, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x5f, 0x74, 0x6f, 0x6b,
-	0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73,
-	0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0xa1, 0x01, 0x0a, 0x18, 0x47, 0x65, 0x74, 0x43, 0x68, 0x61,
-	0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x53, 0x61, 0x6c, 0x74, 0x52,
-	0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52,
-	0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x61, 0x6c, 0x74,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x12, 0x1c, 0x0a, 0x09,
-	0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52,
-	0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x78,
-	0x70, 0x69, 0x72, 0x65, 0x73, 0x5f, 0x69, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09,
-	0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x49, 0x6e, 0x22, 0xf5, 0x01, 0x0a, 0x11, 0x43, 0x68,
-	0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x52, 0x65, 0x71, 0x12,
-	0x33, 0x0a, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28,
-	0x0b, 0x32, 0x18, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e,
-	0x66, 0x72, 0x61, 0x2e, 0x41, 0x70, 0x70, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x61, 0x70, 0x70,
-	0x49, 0x6e, 0x66, 0x6f, 0x12, 0x21, 0x0a, 0x0c, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x5f, 0x74,
-	0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x61, 0x63, 0x63, 0x65,
-	0x73, 0x73, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x2a, 0x0a, 0x11, 0x6f, 0x6c, 0x64, 0x5f, 0x70,
-	0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x5f, 0x68, 0x61, 0x73, 0x68, 0x18, 0x03, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x0f, 0x6f, 0x6c, 0x64, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x48,
-	0x61, 0x73, 0x68, 0x12, 0x2a, 0x0a, 0x11, 0x6e, 0x65, 0x77, 0x5f, 0x70, 0x61, 0x73, 0x73, 0x77,
-	0x6f, 0x72, 0x64, 0x5f, 0x68, 0x61, 0x73, 0x68, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0f,
-	0x6e, 0x65, 0x77, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x48, 0x61, 0x73, 0x68, 0x12,
-	0x12, 0x0a, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x73,
-	0x61, 0x6c, 0x74, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70,
-	0x18, 0x06, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
-	0x70, 0x22, 0x49, 0x0a, 0x11, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77,
-	0x6f, 0x72, 0x64, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e,
-	0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
-	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49,
-	0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x22, 0x81, 0x01, 0x0a,
+	0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x23,
+	0x0a, 0x0d, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x5f, 0x68, 0x61, 0x73, 0x68, 0x18,
+	0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x48,
+	0x61, 0x73, 0x68, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x18, 0x04, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x04, 0x73, 0x61, 0x6c, 0x74, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73,
+	0x74, 0x61, 0x6d, 0x70, 0x18, 0x05, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x74, 0x69, 0x6d, 0x65,
+	0x73, 0x74, 0x61, 0x6d, 0x70, 0x12, 0x1b, 0x0a, 0x09, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x5f,
+	0x69, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65,
+	0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x61, 0x67, 0x65, 0x6e, 0x74,
+	0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x73, 0x65, 0x72, 0x41, 0x67, 0x65, 0x6e,
+	0x74, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x70, 0x18, 0x08,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x49, 0x70, 0x22, 0xa8,
+	0x02, 0x0a, 0x08, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72,
+	0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e,
+	0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66,
+	0x6f, 0x12, 0x21, 0x0a, 0x0c, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x5f, 0x74, 0x6f, 0x6b, 0x65,
+	0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x54,
+	0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x5f,
+	0x69, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x65, 0x78, 0x70, 0x69, 0x72, 0x65,
+	0x73, 0x49, 0x6e, 0x12, 0x36, 0x0a, 0x09, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x69, 0x6e, 0x66, 0x6f,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x55, 0x73, 0x65, 0x72, 0x49, 0x6e, 0x66,
+	0x6f, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1d, 0x0a, 0x0a, 0x73,
+	0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x09, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x49, 0x64, 0x12, 0x2e, 0x0a, 0x13, 0x72, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x5f, 0x73, 0x69, 0x67, 0x6e, 0x69, 0x6e, 0x67, 0x5f, 0x6b, 0x65,
+	0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x11, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x53, 0x69, 0x67, 0x6e, 0x69, 0x6e, 0x67, 0x4b, 0x65, 0x79, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x78,
+	0x70, 0x69, 0x72, 0x65, 0x73, 0x5f, 0x61, 0x74, 0x18, 0x07, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09,
+	0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x41, 0x74, 0x22, 0x0b, 0x0a, 0x09, 0x4c, 0x6f, 0x67,
+	0x6f, 0x75, 0x74, 0x52, 0x65, 0x71, 0x22, 0x41, 0x0a, 0x09, 0x4c, 0x6f, 0x67, 0x6f, 0x75, 0x74,
+	0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f,
+	0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x22, 0x57, 0x0a, 0x18, 0x49, 0x73, 0x73,
+	0x75, 0x65, 0x52, 0x61, 0x77, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x54, 0x69, 0x63, 0x6b,
+	0x65, 0x74, 0x52, 0x65, 0x71, 0x12, 0x1c, 0x0a, 0x09, 0x6f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x69,
+	0x6f, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6f, 0x70, 0x65, 0x72, 0x61, 0x74,
+	0x69, 0x6f, 0x6e, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x5f, 0x69,
+	0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e,
+	0x49, 0x64, 0x22, 0x87, 0x01, 0x0a, 0x18, 0x49, 0x73, 0x73, 0x75, 0x65, 0x52, 0x61, 0x77, 0x53,
+	0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x54, 0x69, 0x63, 0x6b, 0x65, 0x74, 0x52, 0x73, 0x70, 0x12,
+	0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
+	0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65,
+	0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x16, 0x0a, 0x06, 0x74, 0x69, 0x63, 0x6b, 0x65, 0x74, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x74, 0x69, 0x63, 0x6b, 0x65, 0x74, 0x12, 0x1d, 0x0a,
+	0x0a, 0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x5f, 0x61, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28,
+	0x03, 0x52, 0x09, 0x65, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x41, 0x74, 0x22, 0x81, 0x01, 0x0a,
 	0x0e, 0x47, 0x65, 0x74, 0x55, 0x73, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x65, 0x71, 0x12,
 	0x33, 0x0a, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28,
 	0x0b, 0x32, 0x18, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e,
@@ -1839,34 +1631,28 @@ var file_infra_service_proto_rawDesc = []byte{
 	0x45, 0x5f, 0x55, 0x53, 0x45, 0x52, 0x10, 0x01, 0x12, 0x13, 0x0a, 0x0f, 0x55, 0x53, 0x45, 0x52,
 	0x5f, 0x52, 0x4f, 0x4c, 0x45, 0x5f, 0x41, 0x44, 0x4d, 0x49, 0x4e, 0x10, 0x02, 0x12, 0x19, 0x0a,
 	0x15, 0x55, 0x53, 0x45, 0x52, 0x5f, 0x52, 0x4f, 0x4c, 0x45, 0x5f, 0x53, 0x55, 0x50, 0x45, 0x52,
-	0x5f, 0x41, 0x44, 0x4d, 0x49, 0x4e, 0x10, 0x03, 0x32, 0xd5, 0x04, 0x0a, 0x04, 0x41, 0x75, 0x74,
-	0x68, 0x12, 0x46, 0x0a, 0x08, 0x52, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x12, 0x1c, 0x2e,
-	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e,
-	0x52, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x52, 0x65, 0x71, 0x1a, 0x1c, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x52, 0x65,
-	0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x52, 0x73, 0x70, 0x12, 0x52, 0x0a, 0x0c, 0x47, 0x65, 0x74,
-	0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74, 0x12, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63,
-	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x47, 0x65, 0x74, 0x4c,
-	0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x20, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x47, 0x65,
-	0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x73, 0x70, 0x12, 0x3d, 0x0a,
-	0x05, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x12, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65,
-	0x71, 0x1a, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e,
-	0x66, 0x72, 0x61, 0x2e, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x73, 0x70, 0x12, 0x6d, 0x0a, 0x15,
-	0x47, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72,
-	0x64, 0x53, 0x61, 0x6c, 0x74, 0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
-	0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67,
-	0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x65, 0x71,
-	0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66,
-	0x72, 0x61, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73,
-	0x77, 0x6f, 0x72, 0x64, 0x53, 0x61, 0x6c, 0x74, 0x52, 0x73, 0x70, 0x12, 0x58, 0x0a, 0x0e, 0x43,
-	0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x12, 0x22, 0x2e,
-	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e,
-	0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x52, 0x65,
-	0x71, 0x1a, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e,
-	0x66, 0x72, 0x61, 0x2e, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x61, 0x73, 0x73, 0x77, 0x6f,
-	0x72, 0x64, 0x52, 0x73, 0x70, 0x12, 0x4f, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x55, 0x73, 0x65, 0x72,
+	0x5f, 0x41, 0x44, 0x4d, 0x49, 0x4e, 0x10, 0x03, 0x32, 0xf5, 0x03, 0x0a, 0x04, 0x41, 0x75, 0x74,
+	0x68, 0x12, 0x52, 0x0a, 0x0c, 0x47, 0x65, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c,
+	0x74, 0x12, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e,
+	0x66, 0x72, 0x61, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61, 0x6c, 0x74,
+	0x52, 0x65, 0x71, 0x1a, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x53, 0x61,
+	0x6c, 0x74, 0x52, 0x73, 0x70, 0x12, 0x3d, 0x0a, 0x05, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x12, 0x19,
+	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61,
+	0x2e, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65, 0x71, 0x1a, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x4c, 0x6f, 0x67, 0x69,
+	0x6e, 0x52, 0x73, 0x70, 0x12, 0x40, 0x0a, 0x06, 0x4c, 0x6f, 0x67, 0x6f, 0x75, 0x74, 0x12, 0x1a,
+	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61,
+	0x2e, 0x4c, 0x6f, 0x67, 0x6f, 0x75, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x1a, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x4c, 0x6f, 0x67,
+	0x6f, 0x75, 0x74, 0x52, 0x73, 0x70, 0x12, 0x6d, 0x0a, 0x15, 0x49, 0x73, 0x73, 0x75, 0x65, 0x52,
+	0x61, 0x77, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x54, 0x69, 0x63, 0x6b, 0x65, 0x74, 0x12,
+	0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72,
+	0x61, 0x2e, 0x49, 0x73, 0x73, 0x75, 0x65, 0x52, 0x61, 0x77, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f,
+	0x6e, 0x54, 0x69, 0x63, 0x6b, 0x65, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x49, 0x73, 0x73,
+	0x75, 0x65, 0x52, 0x61, 0x77, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x54, 0x69, 0x63, 0x6b,
+	0x65, 0x74, 0x52, 0x73, 0x70, 0x12, 0x4f, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x55, 0x73, 0x65, 0x72,
 	0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
 	0x2e, 0x69, 0x6e, 0x66, 0x72, 0x61, 0x2e, 0x47, 0x65, 0x74, 0x55, 0x73, 0x65, 0x72, 0x49, 0x6e,
 	0x66, 0x6f, 0x52, 0x65, 0x71, 0x1a, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
@@ -1909,85 +1695,76 @@ func file_infra_service_proto_rawDescGZIP() []byte {
 }
 
 var file_infra_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_infra_service_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_infra_service_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_infra_service_proto_goTypes = []interface{}{
 	(UserStatus)(0),                  // 0: trpc.moox.infra.UserStatus
 	(UserRole)(0),                    // 1: trpc.moox.infra.UserRole
 	(*AppInfo)(nil),                  // 2: trpc.moox.infra.AppInfo
 	(*UserInfo)(nil),                 // 3: trpc.moox.infra.UserInfo
-	(*RegisterReq)(nil),              // 4: trpc.moox.infra.RegisterReq
-	(*RegisterRsp)(nil),              // 5: trpc.moox.infra.RegisterRsp
-	(*GetLoginSaltReq)(nil),          // 6: trpc.moox.infra.GetLoginSaltReq
-	(*GetLoginSaltRsp)(nil),          // 7: trpc.moox.infra.GetLoginSaltRsp
-	(*LoginReq)(nil),                 // 8: trpc.moox.infra.LoginReq
-	(*LoginRsp)(nil),                 // 9: trpc.moox.infra.LoginRsp
-	(*GetChangePasswordSaltReq)(nil), // 10: trpc.moox.infra.GetChangePasswordSaltReq
-	(*GetChangePasswordSaltRsp)(nil), // 11: trpc.moox.infra.GetChangePasswordSaltRsp
-	(*ChangePasswordReq)(nil),        // 12: trpc.moox.infra.ChangePasswordReq
-	(*ChangePasswordRsp)(nil),        // 13: trpc.moox.infra.ChangePasswordRsp
-	(*GetUserInfoReq)(nil),           // 14: trpc.moox.infra.GetUserInfoReq
-	(*GetUserInfoRsp)(nil),           // 15: trpc.moox.infra.GetUserInfoRsp
-	(*UpdateUserInfoReq)(nil),        // 16: trpc.moox.infra.UpdateUserInfoReq
-	(*UpdateUserInfoRsp)(nil),        // 17: trpc.moox.infra.UpdateUserInfoRsp
-	(*IPInfo)(nil),                   // 18: trpc.moox.infra.IPInfo
-	(*DNSRecord)(nil),                // 19: trpc.moox.infra.DNSRecord
-	(*ListDNSRecordsReq)(nil),        // 20: trpc.moox.infra.ListDNSRecordsReq
-	(*ListDNSRecordsRsp)(nil),        // 21: trpc.moox.infra.ListDNSRecordsRsp
-	(*GetDNSRecordReq)(nil),          // 22: trpc.moox.infra.GetDNSRecordReq
-	(*GetDNSRecordRsp)(nil),          // 23: trpc.moox.infra.GetDNSRecordRsp
-	(*commonpb.RetInfo)(nil),         // 24: trpc.moox.common.RetInfo
-	(*commonpb.PageResult)(nil),      // 25: trpc.moox.common.PageResult
+	(*GetLoginSaltReq)(nil),          // 4: trpc.moox.infra.GetLoginSaltReq
+	(*GetLoginSaltRsp)(nil),          // 5: trpc.moox.infra.GetLoginSaltRsp
+	(*LoginReq)(nil),                 // 6: trpc.moox.infra.LoginReq
+	(*LoginRsp)(nil),                 // 7: trpc.moox.infra.LoginRsp
+	(*LogoutReq)(nil),                // 8: trpc.moox.infra.LogoutReq
+	(*LogoutRsp)(nil),                // 9: trpc.moox.infra.LogoutRsp
+	(*IssueRawSessionTicketReq)(nil), // 10: trpc.moox.infra.IssueRawSessionTicketReq
+	(*IssueRawSessionTicketRsp)(nil), // 11: trpc.moox.infra.IssueRawSessionTicketRsp
+	(*GetUserInfoReq)(nil),           // 12: trpc.moox.infra.GetUserInfoReq
+	(*GetUserInfoRsp)(nil),           // 13: trpc.moox.infra.GetUserInfoRsp
+	(*UpdateUserInfoReq)(nil),        // 14: trpc.moox.infra.UpdateUserInfoReq
+	(*UpdateUserInfoRsp)(nil),        // 15: trpc.moox.infra.UpdateUserInfoRsp
+	(*IPInfo)(nil),                   // 16: trpc.moox.infra.IPInfo
+	(*DNSRecord)(nil),                // 17: trpc.moox.infra.DNSRecord
+	(*ListDNSRecordsReq)(nil),        // 18: trpc.moox.infra.ListDNSRecordsReq
+	(*ListDNSRecordsRsp)(nil),        // 19: trpc.moox.infra.ListDNSRecordsRsp
+	(*GetDNSRecordReq)(nil),          // 20: trpc.moox.infra.GetDNSRecordReq
+	(*GetDNSRecordRsp)(nil),          // 21: trpc.moox.infra.GetDNSRecordRsp
+	(*commonpb.RetInfo)(nil),         // 22: trpc.moox.common.RetInfo
+	(*commonpb.PageResult)(nil),      // 23: trpc.moox.common.PageResult
 }
 var file_infra_service_proto_depIdxs = []int32{
 	0,  // 0: trpc.moox.infra.UserInfo.status:type_name -> trpc.moox.infra.UserStatus
 	1,  // 1: trpc.moox.infra.UserInfo.role:type_name -> trpc.moox.infra.UserRole
-	2,  // 2: trpc.moox.infra.RegisterReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 3: trpc.moox.infra.RegisterRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,  // 4: trpc.moox.infra.RegisterRsp.user_info:type_name -> trpc.moox.infra.UserInfo
-	2,  // 5: trpc.moox.infra.GetLoginSaltReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 6: trpc.moox.infra.GetLoginSaltRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,  // 7: trpc.moox.infra.LoginReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 8: trpc.moox.infra.LoginRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,  // 9: trpc.moox.infra.LoginRsp.user_info:type_name -> trpc.moox.infra.UserInfo
-	2,  // 10: trpc.moox.infra.GetChangePasswordSaltReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 11: trpc.moox.infra.GetChangePasswordSaltRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,  // 12: trpc.moox.infra.ChangePasswordReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 13: trpc.moox.infra.ChangePasswordRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,  // 14: trpc.moox.infra.GetUserInfoReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 15: trpc.moox.infra.GetUserInfoRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,  // 16: trpc.moox.infra.GetUserInfoRsp.user_info:type_name -> trpc.moox.infra.UserInfo
-	2,  // 17: trpc.moox.infra.UpdateUserInfoReq.app_info:type_name -> trpc.moox.infra.AppInfo
-	24, // 18: trpc.moox.infra.UpdateUserInfoRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,  // 19: trpc.moox.infra.UpdateUserInfoRsp.user_info:type_name -> trpc.moox.infra.UserInfo
-	18, // 20: trpc.moox.infra.DNSRecord.ip_list:type_name -> trpc.moox.infra.IPInfo
-	24, // 21: trpc.moox.infra.ListDNSRecordsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	19, // 22: trpc.moox.infra.ListDNSRecordsRsp.records:type_name -> trpc.moox.infra.DNSRecord
-	25, // 23: trpc.moox.infra.ListDNSRecordsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	24, // 24: trpc.moox.infra.GetDNSRecordRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	19, // 25: trpc.moox.infra.GetDNSRecordRsp.record:type_name -> trpc.moox.infra.DNSRecord
-	4,  // 26: trpc.moox.infra.Auth.Register:input_type -> trpc.moox.infra.RegisterReq
-	6,  // 27: trpc.moox.infra.Auth.GetLoginSalt:input_type -> trpc.moox.infra.GetLoginSaltReq
-	8,  // 28: trpc.moox.infra.Auth.Login:input_type -> trpc.moox.infra.LoginReq
-	10, // 29: trpc.moox.infra.Auth.GetChangePasswordSalt:input_type -> trpc.moox.infra.GetChangePasswordSaltReq
-	12, // 30: trpc.moox.infra.Auth.ChangePassword:input_type -> trpc.moox.infra.ChangePasswordReq
-	14, // 31: trpc.moox.infra.Auth.GetUserInfo:input_type -> trpc.moox.infra.GetUserInfoReq
-	16, // 32: trpc.moox.infra.Auth.UpdateUserInfo:input_type -> trpc.moox.infra.UpdateUserInfoReq
-	20, // 33: trpc.moox.infra.Dns.ListDNSRecords:input_type -> trpc.moox.infra.ListDNSRecordsReq
-	22, // 34: trpc.moox.infra.Dns.GetDNSRecord:input_type -> trpc.moox.infra.GetDNSRecordReq
-	5,  // 35: trpc.moox.infra.Auth.Register:output_type -> trpc.moox.infra.RegisterRsp
-	7,  // 36: trpc.moox.infra.Auth.GetLoginSalt:output_type -> trpc.moox.infra.GetLoginSaltRsp
-	9,  // 37: trpc.moox.infra.Auth.Login:output_type -> trpc.moox.infra.LoginRsp
-	11, // 38: trpc.moox.infra.Auth.GetChangePasswordSalt:output_type -> trpc.moox.infra.GetChangePasswordSaltRsp
-	13, // 39: trpc.moox.infra.Auth.ChangePassword:output_type -> trpc.moox.infra.ChangePasswordRsp
-	15, // 40: trpc.moox.infra.Auth.GetUserInfo:output_type -> trpc.moox.infra.GetUserInfoRsp
-	17, // 41: trpc.moox.infra.Auth.UpdateUserInfo:output_type -> trpc.moox.infra.UpdateUserInfoRsp
-	21, // 42: trpc.moox.infra.Dns.ListDNSRecords:output_type -> trpc.moox.infra.ListDNSRecordsRsp
-	23, // 43: trpc.moox.infra.Dns.GetDNSRecord:output_type -> trpc.moox.infra.GetDNSRecordRsp
-	35, // [35:44] is the sub-list for method output_type
-	26, // [26:35] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	2,  // 2: trpc.moox.infra.GetLoginSaltReq.app_info:type_name -> trpc.moox.infra.AppInfo
+	22, // 3: trpc.moox.infra.GetLoginSaltRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,  // 4: trpc.moox.infra.LoginReq.app_info:type_name -> trpc.moox.infra.AppInfo
+	22, // 5: trpc.moox.infra.LoginRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,  // 6: trpc.moox.infra.LoginRsp.user_info:type_name -> trpc.moox.infra.UserInfo
+	22, // 7: trpc.moox.infra.LogoutRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	22, // 8: trpc.moox.infra.IssueRawSessionTicketRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,  // 9: trpc.moox.infra.GetUserInfoReq.app_info:type_name -> trpc.moox.infra.AppInfo
+	22, // 10: trpc.moox.infra.GetUserInfoRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,  // 11: trpc.moox.infra.GetUserInfoRsp.user_info:type_name -> trpc.moox.infra.UserInfo
+	2,  // 12: trpc.moox.infra.UpdateUserInfoReq.app_info:type_name -> trpc.moox.infra.AppInfo
+	22, // 13: trpc.moox.infra.UpdateUserInfoRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,  // 14: trpc.moox.infra.UpdateUserInfoRsp.user_info:type_name -> trpc.moox.infra.UserInfo
+	16, // 15: trpc.moox.infra.DNSRecord.ip_list:type_name -> trpc.moox.infra.IPInfo
+	22, // 16: trpc.moox.infra.ListDNSRecordsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	17, // 17: trpc.moox.infra.ListDNSRecordsRsp.records:type_name -> trpc.moox.infra.DNSRecord
+	23, // 18: trpc.moox.infra.ListDNSRecordsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	22, // 19: trpc.moox.infra.GetDNSRecordRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	17, // 20: trpc.moox.infra.GetDNSRecordRsp.record:type_name -> trpc.moox.infra.DNSRecord
+	4,  // 21: trpc.moox.infra.Auth.GetLoginSalt:input_type -> trpc.moox.infra.GetLoginSaltReq
+	6,  // 22: trpc.moox.infra.Auth.Login:input_type -> trpc.moox.infra.LoginReq
+	8,  // 23: trpc.moox.infra.Auth.Logout:input_type -> trpc.moox.infra.LogoutReq
+	10, // 24: trpc.moox.infra.Auth.IssueRawSessionTicket:input_type -> trpc.moox.infra.IssueRawSessionTicketReq
+	12, // 25: trpc.moox.infra.Auth.GetUserInfo:input_type -> trpc.moox.infra.GetUserInfoReq
+	14, // 26: trpc.moox.infra.Auth.UpdateUserInfo:input_type -> trpc.moox.infra.UpdateUserInfoReq
+	18, // 27: trpc.moox.infra.Dns.ListDNSRecords:input_type -> trpc.moox.infra.ListDNSRecordsReq
+	20, // 28: trpc.moox.infra.Dns.GetDNSRecord:input_type -> trpc.moox.infra.GetDNSRecordReq
+	5,  // 29: trpc.moox.infra.Auth.GetLoginSalt:output_type -> trpc.moox.infra.GetLoginSaltRsp
+	7,  // 30: trpc.moox.infra.Auth.Login:output_type -> trpc.moox.infra.LoginRsp
+	9,  // 31: trpc.moox.infra.Auth.Logout:output_type -> trpc.moox.infra.LogoutRsp
+	11, // 32: trpc.moox.infra.Auth.IssueRawSessionTicket:output_type -> trpc.moox.infra.IssueRawSessionTicketRsp
+	13, // 33: trpc.moox.infra.Auth.GetUserInfo:output_type -> trpc.moox.infra.GetUserInfoRsp
+	15, // 34: trpc.moox.infra.Auth.UpdateUserInfo:output_type -> trpc.moox.infra.UpdateUserInfoRsp
+	19, // 35: trpc.moox.infra.Dns.ListDNSRecords:output_type -> trpc.moox.infra.ListDNSRecordsRsp
+	21, // 36: trpc.moox.infra.Dns.GetDNSRecord:output_type -> trpc.moox.infra.GetDNSRecordRsp
+	29, // [29:37] is the sub-list for method output_type
+	21, // [21:29] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_infra_service_proto_init() }
@@ -2021,30 +1798,6 @@ func file_infra_service_proto_init() {
 			}
 		}
 		file_infra_service_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RegisterReq); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_infra_service_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RegisterRsp); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_infra_service_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetLoginSaltReq); i {
 			case 0:
 				return &v.state
@@ -2056,7 +1809,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetLoginSaltRsp); i {
 			case 0:
 				return &v.state
@@ -2068,7 +1821,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*LoginReq); i {
 			case 0:
 				return &v.state
@@ -2080,7 +1833,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*LoginRsp); i {
 			case 0:
 				return &v.state
@@ -2092,8 +1845,32 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
+		file_infra_service_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*LogoutReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_infra_service_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*LogoutRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 		file_infra_service_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetChangePasswordSaltReq); i {
+			switch v := v.(*IssueRawSessionTicketReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2105,7 +1882,7 @@ func file_infra_service_proto_init() {
 			}
 		}
 		file_infra_service_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetChangePasswordSaltRsp); i {
+			switch v := v.(*IssueRawSessionTicketRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2117,30 +1894,6 @@ func file_infra_service_proto_init() {
 			}
 		}
 		file_infra_service_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ChangePasswordReq); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_infra_service_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ChangePasswordRsp); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_infra_service_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetUserInfoReq); i {
 			case 0:
 				return &v.state
@@ -2152,7 +1905,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetUserInfoRsp); i {
 			case 0:
 				return &v.state
@@ -2164,7 +1917,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*UpdateUserInfoReq); i {
 			case 0:
 				return &v.state
@@ -2176,7 +1929,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*UpdateUserInfoRsp); i {
 			case 0:
 				return &v.state
@@ -2188,7 +1941,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*IPInfo); i {
 			case 0:
 				return &v.state
@@ -2200,7 +1953,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*DNSRecord); i {
 			case 0:
 				return &v.state
@@ -2212,7 +1965,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ListDNSRecordsReq); i {
 			case 0:
 				return &v.state
@@ -2224,7 +1977,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ListDNSRecordsRsp); i {
 			case 0:
 				return &v.state
@@ -2236,7 +1989,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetDNSRecordReq); i {
 			case 0:
 				return &v.state
@@ -2248,7 +2001,7 @@ func file_infra_service_proto_init() {
 				return nil
 			}
 		}
-		file_infra_service_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
+		file_infra_service_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetDNSRecordRsp); i {
 			case 0:
 				return &v.state
@@ -2267,7 +2020,7 @@ func file_infra_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_infra_service_proto_rawDesc,
 			NumEnums:      2,
-			NumMessages:   22,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

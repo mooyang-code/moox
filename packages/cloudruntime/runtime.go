@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicegateway"
+
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -433,7 +435,10 @@ func postService(ctx context.Context, cfg Config, module string, method string, 
 	if err != nil {
 		return err
 	}
-	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	httpClient, err := servicegateway.NewClient(cfg.HTTPTimeout)
+	if err != nil {
+		return err
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err

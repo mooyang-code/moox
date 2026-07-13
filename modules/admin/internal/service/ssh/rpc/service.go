@@ -12,11 +12,13 @@ import (
 	"strings"
 	"time"
 
+	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -110,7 +112,11 @@ func (s *Service) CreateSession(ctx context.Context, req *pb.CreateSessionReq) (
 		return &pb.CreateSessionRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id不能为空")}, nil
 	}
 	clientIP := extractClientIP(ctx)
-	sessionID, err := s.svc.CreateSession(ctx, int(req.GetHostId()), clientIP)
+	userID := string(trpc.GetMetaData(ctx, authmodel.CtxUserID))
+	if userID == "" {
+		return &pb.CreateSessionRsp{RetInfo: retErr(pb.ErrorCode_NO_AUTH, "用户身份验证失败")}, nil
+	}
+	sessionID, err := s.svc.CreateSession(ctx, int(req.GetHostId()), clientIP, userID)
 	if err != nil {
 		log.ErrorContextf(ctx, "[SSH] CreateSession failed: %v", err)
 		return &pb.CreateSessionRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "创建会话失败")}, nil

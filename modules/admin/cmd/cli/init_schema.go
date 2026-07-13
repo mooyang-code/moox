@@ -90,6 +90,10 @@ func applySchema(dbPath string, rawSQL string) error {
 	return nil
 }
 
+func ensureAdminSchema(dbPath string) error {
+	return applySchema(dbPath, adminschema.AdminSQL())
+}
+
 func initSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",

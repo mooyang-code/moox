@@ -4,6 +4,7 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -25,7 +26,9 @@ var (
 )
 
 // Encrypt encrypts plaintext with AES-256-GCM. The key is derived from secret
-// with SHA-256, so callers do not need to coordinate AES key lengths.
+// with SHA-256, so callers do not need to coordinate AES key lengths. Secret
+// must already contain high-entropy key material; this function is not a
+// password-based key derivation function.
 func Encrypt(plaintext, secret string) (string, error) {
 	if plaintext == "" {
 		return "", ErrEmptyPlaintext
@@ -84,6 +87,31 @@ func Decrypt(ciphertext, secret string) (string, error) {
 func deriveKey(secret string) []byte {
 	hash := sha256.Sum256([]byte(secret))
 	return hash[:]
+}
+
+// SHA256Hex returns the lowercase hexadecimal SHA-256 digest of data.
+func SHA256Hex(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+// HMACSHA256Hex returns the lowercase hexadecimal HMAC-SHA256 of data.
+func HMACSHA256Hex(secret string, data []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// RandomHex returns size cryptographically random bytes as lowercase hex.
+func RandomHex(size int) (string, error) {
+	if size <= 0 {
+		return "", errors.New("random byte size must be positive")
+	}
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+		return "", fmt.Errorf("generate random bytes: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // HashPassword hashes a password with bcrypt. The encoded result contains the

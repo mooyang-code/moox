@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	dnsproxyrpc "github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy/rpc"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
@@ -9,6 +10,7 @@ import (
 	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
+	"time"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -30,6 +32,9 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err := gateway.InitGatewayServices(s); err != nil {
 		return err
 	}
+	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
+		return err
+	}
 
 	// 3. 注册各模块 RPC 服务（本进程有协议 http，经统一网关透传 /api/admin/{service}/{method}）
 	// 3.0 Space 管理服务
@@ -46,8 +51,9 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	// 3.5 SSH 管理服务（直连端点走 rawhandler）
 	sshSvc := sshrpc.NewService(services.SSHService)
 	adminpb.RegisterSshService(s.Service("trpc.moox.ops.Ssh"), sshSvc)
-	// 注册 SSH 直连端点裸 HTTP 处理器（WebSocket 终端 + SFTP 流式上传/下载，经统一网关 rawhandler 分派）
-	// 鉴权由 session_id 完成（session 创建时已校验登录态），网关 authorize 对这些路径放行（no_auth_methods）
+	gateway.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
+	// 注册 SSH 裸 HTTP 处理器。每次连接/传输必须先通过已签名的管理 RPC
+	// 获取与操作类型绑定的一次性 ticket；session_id 本身不承担鉴权。
 	gateway.RegisterRawHandler("ssh", "WsConnect", gateway.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
 	gateway.RegisterRawHandler("ssh", "SftpDownload", gateway.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
 	gateway.RegisterRawHandler("ssh", "SftpUpload", gateway.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))

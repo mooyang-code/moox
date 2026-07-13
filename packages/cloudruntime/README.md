@@ -33,7 +33,7 @@ err := cloudruntime.Run(ctx, cloudruntime.Config{
     RuntimeVersion:       "dev",
     Auth: cloudruntime.AuthConfig{
         AccessKey: "moox-service",
-        SecretKey: "moox-service-secret-change-me",
+        SecretKey: os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"),
     },
 })
 ```

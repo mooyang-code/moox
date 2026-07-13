@@ -14,6 +14,7 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0
 	github.com/prometheus/client_golang v1.20.4
@@ -29,6 +30,8 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 )
 
@@ -100,6 +103,8 @@ replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../stor
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
+replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
+
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
@@ -111,3 +116,5 @@ replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messag
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth

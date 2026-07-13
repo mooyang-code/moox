@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicegateway"
+
 	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"trpc.group/trpc-go/trpc-go"
@@ -166,10 +168,13 @@ func fetchSingleDomainFromRemote(ctx context.Context, domain string) *DNSRecord 
 
 // fetchFromServer 从服务端获取数据
 func fetchFromServer(ctx context.Context, url string) ([]byte, error) {
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	httpClient, err := servicegateway.NewClient(5 * time.Second)
+	if err != nil {
+		return nil, err
+	}
 
 	var respData []byte
-	err := retry.Do(
+	err = retry.Do(
 		func() error {
 			return sendSingleRequest(ctx, url, httpClient, &respData)
 		},

@@ -110,6 +110,55 @@ func TestUserDAO_SetGetLoginSalt_RoundTrip_ShouldWork(t *testing.T) {
 	assert.Equal(t, "random-salt", got.Salt)
 }
 
+func TestConsumeLoginSaltReturnsValueOnlyOnce(t *testing.T) {
+	db, cache := setupUserTestDB(t)
+	d := NewUserDAO(db, cache)
+	ctx := context.Background()
+	salt := model.LoginSalt{Username: "alice", Salt: "one-time", ExpiresAt: time.Now().Add(time.Minute)}
+	require.NoError(t, d.SetLoginSalt(ctx, "alice", salt))
+
+	got, err := d.ConsumeLoginSalt(ctx, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, salt.Salt, got.Salt)
+	_, err = d.ConsumeLoginSalt(ctx, "alice")
+	require.ErrorIs(t, err, ErrKeyNotFound)
+}
+
+func TestConsumeSessionNonceRejectsReplay(t *testing.T) {
+	db, cache := setupUserTestDB(t)
+	d := NewUserDAO(db, cache)
+	ctx := context.Background()
+
+	consumed, err := d.ConsumeSessionNonce(ctx, "session-1", "nonce-1", 2*time.Minute)
+	require.NoError(t, err)
+	assert.True(t, consumed)
+	consumed, err = d.ConsumeSessionNonce(ctx, "session-1", "nonce-1", 2*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, consumed)
+}
+
+func TestUserDAOSigningSessionAndRawTicketLifecycle(t *testing.T) {
+	db, cache := setupUserTestDB(t)
+	d := NewUserDAO(db, cache)
+	ctx := context.Background()
+	session := model.RequestSigningSession{SessionID: "sid", UserID: "uid", EncryptedSecret: "encrypted", ExpiresAt: time.Now().Add(time.Hour)}
+	require.NoError(t, d.SetSigningSession(ctx, session))
+	gotSession, err := d.GetSigningSession(ctx, "sid")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionID, gotSession.SessionID)
+	require.NoError(t, d.DeleteSigningSession(ctx, "sid"))
+	_, err = d.GetSigningSession(ctx, "sid")
+	require.ErrorIs(t, err, ErrKeyNotFound)
+
+	ticket := model.RawSessionTicket{TicketID: "ticket", SessionID: "sid", UserID: "uid", Operation: "ssh_ws", ExpiresAt: time.Now().Add(time.Minute)}
+	require.NoError(t, d.SetRawSessionTicket(ctx, ticket))
+	gotTicket, err := d.ConsumeRawSessionTicket(ctx, "ticket")
+	require.NoError(t, err)
+	assert.Equal(t, ticket.TicketID, gotTicket.TicketID)
+	_, err = d.ConsumeRawSessionTicket(ctx, "ticket")
+	require.ErrorIs(t, err, ErrKeyNotFound)
+}
+
 func TestUserDAO_SetGetLoginAttempt_RoundTrip_ShouldWork(t *testing.T) {
 	db, cache := setupUserTestDB(t)
 	d := NewUserDAO(db, cache)

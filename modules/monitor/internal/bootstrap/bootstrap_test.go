@@ -18,6 +18,14 @@ import (
 	"time"
 )
 
+func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
+	cfg := config.Default()
+	cfg.HealthAuth = config.HealthAuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}
+	runner := buildProbeRunner(cfg)
+	require.NotNil(t, runner.HTTP.HealthSigner)
+	assert.Equal(t, "monitor", runner.HTTP.HealthSigner.AccessKey)
+}
+
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

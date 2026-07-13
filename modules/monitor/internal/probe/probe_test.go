@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -13,6 +14,40 @@ import (
 	"testing"
 	"time"
 )
+
+func TestHTTPProbeSignsSysDeployHealthPathsWithFreshNonce(t *testing.T) {
+	authenticator, err := healthz.NewAuthenticator(healthz.AuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"})
+	require.NoError(t, err)
+	var headers []string
+	handler := authenticator.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers = append(headers, r.Header.Get("X-Moox-Health-Auth"))
+		require.Equal(t, "keep", r.Header.Get("X-Custom"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
+
+	for i := 0; i < 2; i++ {
+		result := runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/readyz?full=1", Headers: `{"X-Custom":"keep"}`})
+		require.True(t, result.Success, result.ErrorMessage)
+	}
+	require.Len(t, headers, 2)
+	require.NotEqual(t, headers[0], headers[1])
+}
+
+func TestHTTPProbeLeavesManualAndNonHealthChecksUnsigned(t *testing.T) {
+	var headers []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers = append(headers, r.Header.Get("X-Moox-Health-Auth"))
+	}))
+	defer srv.Close()
+	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
+
+	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceManual, URL: srv.URL + "/readyz"})
+	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/status"})
+	require.Equal(t, []string{"", ""}, headers)
+}
 
 func TestHTTPProbe(t *testing.T) {
 	t.Run("success", func(t *testing.T) {

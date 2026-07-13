@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -40,6 +41,11 @@ func Authorize() filter.ServerFilter {
 			log.DebugContextf(ctx, "接口 [%s] 跳过鉴权", rpcName)
 			return next(ctx, req)
 		}
+		if isRawTicketPath(rpcName) {
+			// Raw SSH routes authenticate by consuming a route-bound one-time ticket
+			// in the HTTP router, where the exact URL is available.
+			return next(ctx, req)
+		}
 
 		header := thttp.Head(ctx)
 		if header == nil {
@@ -65,6 +71,7 @@ func Authorize() filter.ServerFilter {
 		trpc.SetMetaData(ctx, model.CtxUserID, []byte(claims.UserID))
 		trpc.SetMetaData(ctx, model.CtxUsername, []byte(claims.Username))
 		trpc.SetMetaData(ctx, model.CtxUserRole, []byte(fmt.Sprintf("%d", claims.Role)))
+		trpc.SetMetaData(ctx, model.CtxSessionID, []byte(claims.SessionID))
 
 		traceID := getTokenFromHeader(header, model.CtxTraceID)
 		trpc.SetMetaData(ctx, model.CtxTraceID, []byte(traceID))
@@ -129,9 +136,11 @@ func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req in
 
 // validateAccessToken 验证访问令牌并返回用户信息
 type accessClaims struct {
-	UserID   string
-	Username string
-	Role     int32
+	UserID    string
+	Username  string
+	Role      int32
+	SessionID string
+	ExpiresAt time.Time
 }
 
 func validateAccessToken(ctx context.Context, accessToken string) (*accessClaims, bool) {
@@ -157,7 +166,16 @@ func validateAccessToken(ctx context.Context, accessToken string) (*accessClaims
 	}
 	username, _ := claims["username"].(string)
 	role, _ := claims["role"].(float64)
-	return &accessClaims{UserID: userID, Username: username, Role: int32(role)}, true
+	sessionID, _ := claims["sid"].(string)
+	expiresUnix, ok := claims["exp"].(float64)
+	if sessionID == "" || !ok {
+		return nil, false
+	}
+	expiresAt := time.Unix(int64(expiresUnix), 0)
+	if !time.Now().Before(expiresAt) {
+		return nil, false
+	}
+	return &accessClaims{UserID: userID, Username: username, Role: int32(role), SessionID: sessionID, ExpiresAt: expiresAt}, true
 }
 
 // createAuthFailResponse 创建鉴权失败响应

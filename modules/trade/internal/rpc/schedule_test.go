@@ -1,11 +1,11 @@
 package rpc
 
 import (
-	"testing"
-	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"context"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 func TestParseSyncScheduleParams(t *testing.T) {

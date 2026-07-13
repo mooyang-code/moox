@@ -6,6 +6,20 @@ import (
 )
 
 func main() {
+	if isAdminUserCommand(os.Args) {
+		if err := runAdminUserCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isRandomSecretCommand(os.Args) {
+		if err := runRandomSecretCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if isEventBusCredentialsCommand(os.Args) {
 		if err := runEventBusCredentialsCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -14,7 +28,7 @@ func main() {
 		return
 	}
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use init"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use init, user, random-secret, or eventbus-credentials"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

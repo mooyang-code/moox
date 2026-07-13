@@ -290,7 +290,7 @@ const connectToHost = async (hostId: number) => {
   initTerminal(tab);
 };
 
-const initTerminal = (tab: TerminalTab) => {
+const initTerminal = async (tab: TerminalTab) => {
   const container = terminalRefs[tab.id];
   if (!container) {
     Message.error('终端容器未就绪');
@@ -327,7 +327,7 @@ const initTerminal = (tab: TerminalTab) => {
   tab.fitAddon = fitAddon;
 
   // Build WebSocket URL and connect
-  const wsUrl = getSSHWebSocketUrl(tab.id, term.cols, term.rows);
+  const wsUrl = await getSSHWebSocketUrl(tab.id, term.cols, term.rows);
   const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go"
 )
 
 func TestGetUserInfoAcceptsRequestAccessTokenWhenContextMetadataMissing(t *testing.T) {
@@ -50,6 +51,13 @@ func TestGetUserInfoAcceptsRequestAccessTokenWhenContextMetadataMissing(t *testi
 	if rsp.GetUserInfo().GetUserId() != user.UserID {
 		t.Fatalf("user_id = %q, want %q", rsp.GetUserInfo().GetUserId(), user.UserID)
 	}
+}
+
+func authCtx(userID string, role int32) context.Context {
+	ctx := trpc.BackgroundContext()
+	trpc.SetMetaData(ctx, model.CtxUserID, []byte(userID))
+	trpc.SetMetaData(ctx, model.CtxUserRole, []byte("2"))
+	return ctx
 }
 
 func newAuthServiceForUserTest(t *testing.T, secretKey string, users ...*model.User) *AuthServiceImpl {

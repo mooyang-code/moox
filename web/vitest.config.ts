@@ -5,5 +5,5 @@ import path from 'node:path';
 export default defineConfig({
   plugins: [vue()],
   resolve: { alias: { '@': path.resolve(__dirname, './src') } },
-  test: { environment: 'jsdom', globals: true, include: ['src/**/*.test.ts'] },
+  test: { environment: 'jsdom', globals: true, include: ['src/**/*.test.ts', 'tests/**/*.test.ts'] },
 });

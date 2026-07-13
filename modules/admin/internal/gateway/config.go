@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -25,6 +26,12 @@ type Config struct {
 	Gateway   GatewayConfig   `yaml:"gateway"`    // 网关配置
 	RateLimit RateLimitConfig `yaml:"rate_limit"` // 限流配置
 	CORS      CORSConfig      `yaml:"cors"`       // 跨域配置
+	Security  SecurityConfig  `yaml:"security"`
+}
+
+type SecurityConfig struct {
+	RequestClockSkew time.Duration `yaml:"request_clock_skew"`
+	NonceTTL         time.Duration `yaml:"nonce_ttl"`
 }
 
 // JWTConfig JWT配置

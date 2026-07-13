@@ -6,6 +6,7 @@ server:
   timeout: 5000
   service:
     - name: trpc.moox.archive.Health
+      ip: 127.0.0.1
       port: 11416
       network: tcp
       protocol: http_no_protocol

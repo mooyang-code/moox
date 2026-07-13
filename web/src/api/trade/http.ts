@@ -4,6 +4,7 @@ import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import { withSelectedSpaceHeader } from '../admin/space-header';
 import type { RetInfo } from './types';
+import { installSignedClient } from '../admin/signed-client';
 
 // trade 服务 ID → 网关路径映射（与 admin/config/gateway.yaml 对齐）
 const tradeServiceMap: Record<string, string> = {
@@ -23,17 +24,6 @@ const tradeClient = axios.create({
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
-
-function readAccessToken(): string {
-  try {
-    const raw = localStorage.getItem('user-info');
-    if (!raw) return '';
-    const parsed = JSON.parse(raw) as { token?: string };
-    return parsed.token || '';
-  } catch {
-    return '';
-  }
-}
 
 function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
@@ -62,15 +52,11 @@ export async function callTrade<TReq extends object, TRsp extends { ret_info: Re
 }
 
 tradeClient.interceptors.request.use((config) => {
-  const token = readAccessToken();
   const headers = withSelectedSpaceHeader((config.headers || {}) as Record<string, string | undefined>);
   config.headers = headers as typeof config.headers;
-  if (token) {
-    config.headers.Authorization = token;
-    config.headers['X-Access-Token'] = token;
-  }
   return config;
 });
+installSignedClient(tradeClient);
 
 tradeClient.interceptors.response.use(
   (rsp) => {

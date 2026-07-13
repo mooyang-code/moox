@@ -12,14 +12,15 @@ import (
 )
 
 type Config struct {
-	Database  DatabaseConfig  `yaml:"database"`
-	Health    HealthConfig    `yaml:"health"`
-	Instance  InstanceConfig  `yaml:"instance"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
-	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
-	Peer      PeerConfig      `yaml:"peer"`
-	Alert     AlertConfig     `yaml:"alert"`
-	Metrics   MetricsConfig   `yaml:"metrics"`
+	Database   DatabaseConfig   `yaml:"database"`
+	Health     HealthConfig     `yaml:"health"`
+	HealthAuth HealthAuthConfig `yaml:"health_auth"`
+	Instance   InstanceConfig   `yaml:"instance"`
+	Scheduler  SchedulerConfig  `yaml:"scheduler"`
+	SysDeploy  SysDeployConfig  `yaml:"sysdeploy"`
+	Peer       PeerConfig       `yaml:"peer"`
+	Alert      AlertConfig      `yaml:"alert"`
+	Metrics    MetricsConfig    `yaml:"metrics"`
 }
 
 type DatabaseConfig struct {
@@ -33,6 +34,12 @@ type DatabaseConfig struct {
 
 type HealthConfig struct {
 	Addr string `yaml:"addr"`
+}
+
+type HealthAuthConfig struct {
+	Version   string `yaml:"version"`
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"secret_key"`
 }
 
 type InstanceConfig struct {
@@ -152,6 +159,7 @@ func Default() *Config {
 		Health: HealthConfig{
 			Addr: ":11409",
 		},
+		HealthAuth: HealthAuthConfig{Version: "moox-health-v1"},
 		Instance: InstanceConfig{
 			InstanceID: defaultInstanceID(),
 			BaseURL:    "http://127.0.0.1:11409",
@@ -166,8 +174,8 @@ func Default() *Config {
 			Target:              "ip://127.0.0.1:11109",
 			SyncIntervalSeconds: 60,
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v1",
-				ExpireSeconds: 1800,
+				Version:       "moox-auth-v2",
+				ExpireSeconds: 60,
 			},
 		},
 		Peer: PeerConfig{
@@ -204,6 +212,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = defaults.Health.Addr
+	}
+	if c.HealthAuth.Version == "" {
+		c.HealthAuth.Version = defaults.HealthAuth.Version
 	}
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
@@ -338,6 +349,15 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION")); v != "" {
+		c.HealthAuth.Version = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY")); v != "" {
+		c.HealthAuth.AccessKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")); v != "" {
+		c.HealthAuth.SecretKey = v
+	}
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
 	}
@@ -378,6 +398,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Peer.Enabled && strings.TrimSpace(c.Peer.Token) == "" {
 		return fmt.Errorf("peer.token must not be empty when peer monitoring is enabled")
+	}
+	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
+		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage

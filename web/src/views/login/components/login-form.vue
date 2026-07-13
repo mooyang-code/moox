@@ -210,12 +210,16 @@ const onLogin = async () => {
       throw new Error(res.ret_info.msg || "登录失败");
     }
     
-    // 存储token - 适配真实后台响应格式
-    if (!res.access_token) {
-      throw new Error("登录响应中缺少访问令牌");
+    if (!res.access_token || !res.session_id || !res.request_signing_key || !res.expires_at) {
+      throw new Error("登录响应中缺少安全会话信息");
     }
-    
-    await userStores.setToken(res.access_token);
+
+    await userStores.setLoginSession({
+      token: res.access_token,
+      sessionId: res.session_id,
+      signingKey: res.request_signing_key,
+      expiresAt: res.expires_at,
+    });
     
     // 加载用户信息
     await userStores.setAccount();
@@ -239,7 +243,7 @@ const onLogin = async () => {
     console.error('❌ 登录失败:', error);
 
     // 清理可能设置的无效token
-    await userStores.setToken("");
+    await userStores.logOut();
 
     const loginErrorMessage = getErrorMessage(error, "登录失败");
     Message.error(loginErrorMessage);

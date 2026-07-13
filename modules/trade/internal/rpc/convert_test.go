@@ -2,14 +2,14 @@ package rpc
 
 import (
 	"errors"
-	"testing"
-	"time"
+	domainorder "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/stretchr/testify/assert"
-	domainorder "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"testing"
+	"time"
 )
 
 func TestErrToRetInfo_ServiceErrors_ShouldMapCodes(t *testing.T) {

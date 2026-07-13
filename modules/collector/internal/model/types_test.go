@@ -21,14 +21,14 @@ func TestEventAction_Constants_ShouldMatchExpectedValues(t *testing.T) {
 func TestHeartbeatPayload_JSONRoundTrip_ShouldPreserveFields(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	payload := HeartbeatPayload{
-		SpaceID:  "space-1",
-		NodeID:   "node-1",
-		NodeType: "collector",
-		Timestamp: now,
-		RunningTasks: []*TaskSummary{{ID: "task-1", Type: "kline", Status: "running"}},
-		Metrics: &NodeMetrics{CPUUsage: 0.5, TaskCount: 1, Timestamp: now},
+		SpaceID:             "space-1",
+		NodeID:              "node-1",
+		NodeType:            "collector",
+		Timestamp:           now,
+		RunningTasks:        []*TaskSummary{{ID: "task-1", Type: "kline", Status: "running"}},
+		Metrics:             &NodeMetrics{CPUUsage: 0.5, TaskCount: 1, Timestamp: now},
 		SupportedCollectors: []string{"kline"},
-		LocalDNSRecords: []*LocalDNSReportItem{{Domain: "api.binance.com", IPList: []string{"1.1.1.1"}, ResolveAt: now}},
+		LocalDNSRecords:     []*LocalDNSReportItem{{Domain: "api.binance.com", IPList: []string{"1.1.1.1"}, ResolveAt: now}},
 	}
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)

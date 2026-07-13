@@ -163,10 +163,10 @@ func Default() *Config {
 			HeartbeatIntervalMS: 5000,
 		},
 		SysDeploy: SysDeployConfig{
-			AdminGatewayURL: "http://127.0.0.1:11000",
+			AdminGatewayURL: "http://127.0.0.1:11002",
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v1",
-				ExpireSeconds: 1800,
+				Version:       "moox-auth-v2",
+				ExpireSeconds: 60,
 			},
 		},
 		Health: HealthConfig{
@@ -264,13 +264,13 @@ func (c *Config) applyDefaults() {
 		c.Instance.HeartbeatIntervalMS = 5000
 	}
 	if c.SysDeploy.AdminGatewayURL == "" {
-		c.SysDeploy.AdminGatewayURL = "http://127.0.0.1:11000"
+		c.SysDeploy.AdminGatewayURL = "http://127.0.0.1:11002"
 	}
 	if c.SysDeploy.ServiceAuth.Version == "" {
-		c.SysDeploy.ServiceAuth.Version = "moox-auth-v1"
+		c.SysDeploy.ServiceAuth.Version = "moox-auth-v2"
 	}
 	if c.SysDeploy.ServiceAuth.ExpireSeconds == 0 {
-		c.SysDeploy.ServiceAuth.ExpireSeconds = 1800
+		c.SysDeploy.ServiceAuth.ExpireSeconds = 60
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":11414"

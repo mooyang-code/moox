@@ -1,4 +1,4 @@
-.PHONY: build check-boundaries release deploy package-skill clean proto
+.PHONY: build check-boundaries release deploy test-caddy package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -11,6 +11,12 @@ release:
 
 deploy:
 	./scripts/deploy-moox.sh $(ARGS)
+
+test-caddy:
+	bash scripts/test-deploy-moox-https.sh
+	bash scripts/test-install-caddy-ca.sh
+	bash skills/moox/scripts/test-caddy-prerequisite.sh
+	bash skills/moox/scripts/test-caddy-ca.sh
 
 package-skill:
 	./scripts/package-skill.sh

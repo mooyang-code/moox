@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -15,7 +16,7 @@ import (
 
 // Login 用户登录
 func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
-	log.InfoContextf(ctx, "[Auth] ***** Login username: %s; req: %+v *****", req.Username, req)
+	log.InfoContextf(ctx, "[Auth] Login username=%s", req.Username)
 
 	// 从HTTP头中获取真实客户端IP（优先级：X-Client-Ip > X-Forwarded-For > X-Real-IP > req.ClientIp）
 	req.ClientIp = s.extractClientIPFromContext(ctx, req.ClientIp)
@@ -31,8 +32,10 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 		}, nil
 	}
 
-	// 1. 验证盐值和时间戳
-	if !s.validateLoginSalt(ctx, req.Username, req.Salt, req.Timestamp) {
+	// Consume before password decryption so every login salt is one-time,
+	// including failed password attempts.
+	loginSalt, err := s.userDAO.ConsumeLoginSalt(ctx, req.Username)
+	if err != nil || loginSalt.Salt != req.Salt || loginSalt.Timestamp != req.Timestamp || !time.Now().Before(loginSalt.ExpiresAt) {
 		return &pb.LoginRsp{
 			RetInfo: &pb.RetInfo{
 				Code: pb.ErrorCode_INVALID_PARAM,
@@ -84,14 +87,39 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 记录登录历史
 	s.recordLoginHistory(ctx, user, req, model.LoginResultSuccess, "")
 
+	sessionID, err := mooxcrypto.RandomHex(16)
+	if err != nil {
+		return loginInternalError(), nil
+	}
+	signingKey, err := mooxcrypto.RandomHex(32)
+	if err != nil {
+		return loginInternalError(), nil
+	}
+	encryptionKey, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return loginInternalError(), nil
+	}
+	encryptedSigningKey, err := mooxcrypto.Encrypt(signingKey, encryptionKey)
+	if err != nil {
+		return loginInternalError(), nil
+	}
+	expiresAt := time.Now().Add(s.cfg.Security.SessionTTL)
+	if err := s.userDAO.SetSigningSession(ctx, model.RequestSigningSession{
+		SessionID: sessionID, UserID: user.UserID, EncryptedSecret: encryptedSigningKey, ExpiresAt: expiresAt,
+	}); err != nil {
+		return loginInternalError(), nil
+	}
+
 	// 生成API访问令牌
 	accessToken, err := mooxcrypto.SignToken(map[string]any{
 		"user_id":    user.UserID,
 		"username":   user.Username,
 		"role":       user.Role,
 		"token_type": "access",
-	}, s.cfg.JWT.SecretKey, "moox-admin", s.cfg.JWT.AccessExpired)
+		"sid":        sessionID,
+	}, s.cfg.JWT.SecretKey, "moox-admin", time.Until(expiresAt))
 	if err != nil {
+		_ = s.userDAO.DeleteSigningSession(ctx, sessionID)
 		log.ErrorContextf(ctx, "[Auth] 生成JWT令牌失败: %v", err)
 		return &pb.LoginRsp{
 			RetInfo: &pb.RetInfo{
@@ -109,10 +137,17 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 			Code: pb.ErrorCode_SUCCESS,
 			Msg:  "登录成功",
 		},
-		AccessToken: accessToken,
-		ExpiresIn:   int64(s.cfg.JWT.AccessExpired.Seconds()),
-		UserInfo:    userInfo,
+		AccessToken:       accessToken,
+		ExpiresIn:         int64(s.cfg.Security.SessionTTL.Seconds()),
+		UserInfo:          userInfo,
+		SessionId:         sessionID,
+		RequestSigningKey: signingKey,
+		ExpiresAt:         expiresAt.Unix(),
 	}, nil
+}
+
+func loginInternalError() *pb.LoginRsp {
+	return &pb.LoginRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "登录失败"}}
 }
 
 // GetLoginSalt 获取登录盐值（前端在请求Login接口前调用本接口）
@@ -169,8 +204,8 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 		}, nil
 	}
 
-	log.InfoContextf(ctx, "[Auth] 生成新盐值 for username: %s; loginSalt: %+v; SaltExpired:%d",
-		req.Username, loginSalt, int64(s.cfg.Security.SaltExpired.Seconds()))
+	log.InfoContextf(ctx, "[Auth] 生成新登录盐值 username=%s expires_in=%d",
+		req.Username, int64(s.cfg.Security.SaltExpired.Seconds()))
 	return &pb.GetLoginSaltRsp{
 		RetInfo: &pb.RetInfo{
 			Code: pb.ErrorCode_SUCCESS,

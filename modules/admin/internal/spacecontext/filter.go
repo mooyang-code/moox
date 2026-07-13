@@ -3,8 +3,8 @@ package spacecontext
 import (
 	"context"
 
-	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/filter"
+	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 // SpaceFilterName 是 space_id 注入 filter 在 trpc_go.yaml server.filter 中的注册名。

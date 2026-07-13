@@ -109,13 +109,22 @@ See `references/` for more detailed notes.
 
 ## System Initialization Deployment Flow
 
+Before uploading or starting web-host, run the automatic managed edge prerequisite:
+
+```bash
+skills/moox/scripts/caddy-prerequisite.sh ensure --target user@host --deploy-dir /home/user/moox
+scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host host.example
+```
+
+This installs checksum-verified Caddy `v2.11.4` below the deployment root, starts loopback upstreams, starts or reloads only the MooX-owned Caddy process, persists its CA, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
+
 When initializing a fresh MooX system, use a strict two-stage deployment flow. Do not ask for every service placement up front.
 
 1. Stage 1 starts with admin only.
    Ask the user where to deploy the admin management plane. Collect only the target SSH host, admin gateway public IP, fixed admin gateway port, and admin frontend/web-host port needed to publish the management console.
 
 2. Deploy the admin backend and frontend before anything else.
-   Build and deploy the admin backend/gateway first, then deploy the admin frontend/web-host. The frontend must call the gateway directly through `/api/admin/*`; web-host only serves static files and must not proxy `/api/admin`, `/api/service`, or storage APIs.
+   Build and deploy the Admin loopback upstreams and frontend/web-host before starting or reloading managed Caddy. Browser calls use same-origin `/api/admin/*` through Caddy `:9527`; web-host serves static files at `127.0.0.1:9528` and does not proxy API traffic. Backend `/api/service/*` calls use the separate Caddy `:11001` edge.
 
 3. Stop if the admin management plane is not reachable.
    Confirm that the admin page can be opened and that the gateway health endpoint answers from the expected gateway port. If either check fails, fix admin deployment first and do not ask about other services yet.

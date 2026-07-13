@@ -2,9 +2,13 @@ package crypto
 
 import (
 	"encoding/base64"
+	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
@@ -95,6 +99,13 @@ func TestPasswordHashAndVerify(t *testing.T) {
 	}
 }
 
+func TestHashPasswordRejectsMoreThan72Bytes(t *testing.T) {
+	_, err := HashPassword(strings.Repeat("a", 73))
+	if !errors.Is(err, bcrypt.ErrPasswordTooLong) {
+		t.Fatalf("HashPassword error = %v, want bcrypt.ErrPasswordTooLong", err)
+	}
+}
+
 func TestTokenSignAndParse(t *testing.T) {
 	token, err := SignToken(map[string]any{"user_id": "u1", "token_type": "access"}, "jwt-secret", "moox-admin", time.Hour)
 	if err != nil {
@@ -136,5 +147,37 @@ func TestNewSaltAndMaskSecret(t *testing.T) {
 	}
 	if got := MaskSecret("short", 4, 4); got != "****" {
 		t.Fatalf("short MaskSecret=%q", got)
+	}
+}
+
+func TestSHA256Hex(t *testing.T) {
+	if got := SHA256Hex([]byte("abc")); got != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+		t.Fatalf("SHA256Hex() = %q", got)
+	}
+}
+
+func TestHMACSHA256Hex(t *testing.T) {
+	if got := HMACSHA256Hex("key", []byte("The quick brown fox jumps over the lazy dog")); got != "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8" {
+		t.Fatalf("HMACSHA256Hex() = %q", got)
+	}
+}
+
+func TestRandomHexShapeAndUniqueness(t *testing.T) {
+	first, err := RandomHex(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := RandomHex(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(first) {
+		t.Fatalf("RandomHex() = %q", first)
+	}
+	if first == second {
+		t.Fatal("RandomHex() returned a duplicate")
+	}
+	if _, err := RandomHex(0); err == nil {
+		t.Fatal("RandomHex() accepted a non-positive size")
 	}
 }

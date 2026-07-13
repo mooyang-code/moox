@@ -1,11 +1,11 @@
 package config
 
 import (
-	"testing"
-	"os"
-	"path/filepath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
 func TestDefaultConfigIncludesSyncDefaults(t *testing.T) {

@@ -11,6 +11,7 @@ server:
       protocol: http
       timeout: 30000
     - name: trpc.moox.strategy.Health
+      ip: 127.0.0.1
       port: 11431
       network: tcp
       protocol: http_no_protocol

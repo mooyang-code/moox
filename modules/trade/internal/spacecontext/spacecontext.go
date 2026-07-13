@@ -11,8 +11,8 @@ import (
 	"context"
 	"fmt"
 
-	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/filter"
+	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 // SpaceIDHeader HTTP 头名，网关向 trade 透传 space_id 用。

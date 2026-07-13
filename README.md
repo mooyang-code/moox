@@ -12,6 +12,12 @@
 
 Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
+## 管理面入口
+
+MooX 的公开入口由部署内置的 Caddy 提供：浏览器使用 `https://<host>:9527`，后台/SCF 使用 `https://<host>:11001/api/service/*`。Caddy 把站点请求转发到 `127.0.0.1:9528`，把 `/api/admin/*` 转发到 `127.0.0.1:11000`，把 `/api/service/*` 转发到 `127.0.0.1:11002`。web-host 仅提供静态文件，不代理 API。
+
+管理台登录使用 bcrypt 密码、一次性登录挑战、24 小时 JWT/session，登录后每个管理请求还必须带 nonce 防重放的会话 HMAC。后台接口使用独立 service HMAC，诊断端口使用独立 health HMAC。详见 [认证鉴权](docs/认证鉴权.md) 和 [管理台 HTTPS 与证书](docs/运维/管理台HTTPS与证书.md)。
+
 ## EventBus 与指标监控
 
 `moox-eventbus` 是唯一的生产 NATS JetStream 所有者。Storage、CloudNode、Factor
@@ -29,7 +35,7 @@ Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指
 
 ## 服务监控
 
-`moox-monitor` 是独立 HTTP/TCP 可用性监控模块，和 Admin 内原有主机资源监控并存。它通过 SysDeploy 同步内置 `moox-system` 检查，也支持手动检查、webhook 告警和多 monitor 实例 peer 去重。所有独立部署进程提供标准 `/healthz`，monitor 自身也提供 `/healthz` 与 peer snapshot API。
+`moox-monitor` 是独立 HTTP/TCP 可用性监控模块，和 Admin 内原有主机资源监控并存。它通过 SysDeploy 同步内置 `moox-system` 检查，也支持手动检查、webhook 告警和多 monitor 实例 peer 去重。所有独立部署进程的 `/healthz`、`/readyz` 和 `/metrics` 都是内部诊断面，需要独立 health HMAC；公开 Caddy 端口对诊断路由返回 `404`。
 
 `moox-host-agent` 是独立的 Linux amd64/arm64 用户进程，只读取 CPU、内存、文件系统、磁盘 I/O 和网络 ABI，通过私有 CA TLS 的 EventBus best-effort 上报到 Monitor；Agent 不持久化样本。发布和 rootless 部署入口位于 `skills/moox/scripts/hostagent-release.sh` 与 `hostagent-deploy.sh`，EventBus 凭据由 Admin `t_secrets` CLI 统一生成和轮换。
 
@@ -50,6 +56,8 @@ make deploy ARGS="--target localhost --dir /tmp/moox --skip-build --no-start"
 ```bash
 make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd64"
 ```
+
+公开部署应加 `--public-host <IP-or-DNS>`。部署会自动安装 checksum 校验的固定版本 Caddy、创建私有 CA、配置同机后端信任并做 HTTPS 验收；浏览器所在机器仍需使用 `skills/moox/scripts/caddy-ca.sh` 显式安装 CA 信任。
 
 发布目录中的数据、日志、运行态文件固定放在：
 

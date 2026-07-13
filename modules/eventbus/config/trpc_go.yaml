@@ -18,6 +18,7 @@ server:
       protocol: http
       timeout: 30000
     - name: trpc.moox.eventbus.Health
+      ip: 127.0.0.1
       port: 11419
       network: tcp
       protocol: http_no_protocol

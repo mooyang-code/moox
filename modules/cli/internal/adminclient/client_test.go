@@ -33,6 +33,13 @@ func TestRewriteToServiceRoute(t *testing.T) {
 	assert.Equal(t, "/ListAccounts", rewriteToServiceRoute("/ListAccounts"))
 }
 
+func TestServiceAuthRejectsRemotePlainHTTP(t *testing.T) {
+	c := New("http://example.com")
+	c.ServiceAuth = &ServiceAuthConfig{Version: "v1", AccessKey: "ak", SecretKey: "sk", ExpireSecs: 60}
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
+	require.ErrorContains(t, err, "non-loopback HTTP")
+}
+
 func TestIsRetInfoSuccess(t *testing.T) {
 	assert.True(t, isRetInfoSuccess(0))
 	assert.False(t, isRetInfoSuccess(1))
@@ -55,14 +62,8 @@ func TestParseBatchChangeResponse(t *testing.T) {
 
 func TestBuildAuthHeader(t *testing.T) {
 	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key"}
-	header, err := cfg.BuildAuthHeader([]byte(`{"a":1}`), time.Unix(1700000000, 0))
+	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), time.Unix(1700000000, 0))
 	require.NoError(t, err)
 	assert.Contains(t, header, "app")
 	assert.Contains(t, header, "1700000000")
-}
-
-func TestHmacSha256Hex(t *testing.T) {
-	got := hmacSha256Hex("secret", "payload")
-	assert.Len(t, got, 64)
-	assert.Equal(t, got, hmacSha256Hex("secret", "payload"))
 }

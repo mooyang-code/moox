@@ -12,8 +12,8 @@ type fakeCollector struct {
 	source, dataType string
 }
 
-func (f *fakeCollector) Source() string   { return f.source }
-func (f *fakeCollector) DataType() string { return f.dataType }
+func (f *fakeCollector) Source() string                                { return f.source }
+func (f *fakeCollector) DataType() string                              { return f.dataType }
 func (f *fakeCollector) Collect(context.Context, *CollectParams) error { return nil }
 
 func TestCollectorRegistry_RegisterAndGet_ShouldReturnCollector(t *testing.T) {

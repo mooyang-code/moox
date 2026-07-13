@@ -4,9 +4,6 @@ package secretclient
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +11,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
+	"github.com/mooyang-code/moox/packages/serviceauth"
+	"github.com/mooyang-code/moox/packages/servicegateway"
 )
 
 // Config 是 SecretMgr 后台服务调用配置。
@@ -33,9 +32,10 @@ type ServiceAuthConfig struct {
 
 // Client 调用 admin SecretMgr。
 type Client struct {
-	baseURL string
-	auth    ServiceAuthConfig
-	client  *http.Client
+	baseURL   string
+	auth      ServiceAuthConfig
+	client    *http.Client
+	clientErr error
 }
 
 // New 创建 SecretMgr client。
@@ -44,11 +44,13 @@ func New(cfg Config) *Client {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	client, clientErr := servicegateway.NewClient(timeout)
 	return &Client{
 		baseURL: strings.TrimRight(cfg.GatewayBaseURL, "/"),
 		auth:    cfg.ServiceAuth,
 		// 目标网关来自本服务可信配置，不接受用户输入；这里使用固定超时 HTTP client。
-		client: &http.Client{Timeout: timeout},
+		client:    client,
+		clientErr: clientErr,
 	}
 }
 
@@ -95,6 +97,9 @@ func (c *Client) ListExchangeSecrets(ctx context.Context, provider string) ([]se
 }
 
 func (c *Client) post(ctx context.Context, method string, req any, rsp responseWithRetInfo) error {
+	if c.clientErr != nil {
+		return c.clientErr
+	}
 	if c.baseURL == "" {
 		return fmt.Errorf("secret client gateway base url is empty")
 	}
@@ -107,7 +112,7 @@ func (c *Client) post(ctx context.Context, method string, req any, rsp responseW
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	auth, err := c.authHeader(body, time.Now())
+	auth, err := c.authHeader(http.MethodPost, httpReq.URL.EscapedPath(), body, time.Now())
 	if err != nil {
 		return err
 	}
@@ -131,29 +136,20 @@ func (c *Client) post(ctx context.Context, method string, req any, rsp responseW
 
 func (c ServiceAuthConfig) normalized() ServiceAuthConfig {
 	if c.Version == "" {
-		c.Version = "moox-auth-v1"
+		c.Version = serviceauth.Version
 	}
 	if c.ExpireSecs <= 0 {
-		c.ExpireSecs = 1800
+		c.ExpireSecs = 60
 	}
 	return c
 }
 
-func (c *Client) authHeader(body []byte, now time.Time) (string, error) {
+func (c *Client) authHeader(method, path string, body []byte, now time.Time) (string, error) {
 	auth := c.auth.normalized()
 	if auth.AccessKey == "" || auth.SecretKey == "" {
 		return "", fmt.Errorf("service auth access_key and secret_key are required")
 	}
-	prefix := fmt.Sprintf("%s/%s/%d/%d", auth.Version, auth.AccessKey, now.Unix(), auth.ExpireSecs)
-	signKeyHex := hmacSHA256Hex(auth.SecretKey, prefix)
-	signature := hmacSHA256Hex(signKeyHex, string(body))
-	return fmt.Sprintf("%s/%s", prefix, signature), nil
-}
-
-func hmacSHA256Hex(key, data string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	_, _ = mac.Write([]byte(data))
-	return hex.EncodeToString(mac.Sum(nil))
+	return serviceauth.BuildHeader(serviceauth.Config{AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, ExpireSeconds: auth.ExpireSecs}, serviceauth.Request{Method: method, Path: path, Body: body}, now)
 }
 
 type responseWithRetInfo interface {

@@ -35,7 +35,7 @@ web-host/
 
 4. 运行服务器：
    ```bash
-   MOOX_WEB_HOST_ADDR=:10080 ../bin/moox-web-host
+   MOOX_WEB_HOST_ADDR=127.0.0.1:9528 MOOX_WEB_HOST_HEALTH_ADDR=127.0.0.1:19527 ../bin/moox-web-host
    ```
 
 ## Makefile 命令
@@ -64,10 +64,9 @@ cd ..
 
 ## API 访问方式
 
-Web Host 只负责提供前端静态资源，不再代理 API 请求。浏览器访问管理台时，前端会从当前 URL 读取 hostname，并使用固定网关端口请求后台：
+Web Host 只负责提供前端静态资源，不代理 API 请求。浏览器只访问 Caddy `https://{当前hostname}:9527`：站点路由由 Caddy 转发到 web-host `127.0.0.1:9528`，`/api/admin/*` 由 Caddy 转发到 Admin control `127.0.0.1:11000`。浏览器不直连 Admin，前端代码禁止调用 `/api/service/*`。
 
-- 管理台请求：`http(s)://{当前hostname}:11000/api/admin/{service}/{method}`
-- 后台服务请求：`/api/service/{service}/{method}`，由 SCF / collector 等后台组件调用
+后台/SCF 使用独立 Caddy service edge `https://<host>:11001/api/service/*`，携带 service HMAC 并验证 Caddy CA；流量不经过 web-host 或 browser edge。
 
 `web-host` 收到 `/api/*` 请求会返回 404，用于暴露错误的代理依赖。
 
@@ -75,10 +74,13 @@ Web Host 只负责提供前端静态资源，不再代理 API 请求。浏览器
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `MOOX_WEB_HOST_ADDR` | `:10080` | Web Host 监听地址 |
+| `MOOX_WEB_HOST_ADDR` | `127.0.0.1:9528` | Caddy 静态上游，只绑定 loopback |
+| `MOOX_WEB_HOST_HEALTH_ADDR` | `127.0.0.1:19527` | 独立诊断监听，需 health HMAC |
 
 仓库根目录运行示例：
 
 ```bash
-MOOX_WEB_HOST_ADDR=:10080 ./bin/moox-web-host
+MOOX_WEB_HOST_ADDR=127.0.0.1:9528 MOOX_WEB_HOST_HEALTH_ADDR=127.0.0.1:19527 ./bin/moox-web-host
 ```
+
+`/healthz`、`/readyz`、`/metrics` 不在静态监听上暴露；诊断监听缺少有效 `X-Moox-Health-Auth` 时返回 `401`。完整证书流程见 `docs/运维/管理台HTTPS与证书.md`。

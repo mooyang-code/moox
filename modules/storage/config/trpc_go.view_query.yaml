@@ -15,6 +15,7 @@ server:
     write_timeout: 60000
   service:
     - name: trpc.moox.storage.Health
+      ip: 127.0.0.1
       port: 20212
       network: tcp
       protocol: http_no_protocol

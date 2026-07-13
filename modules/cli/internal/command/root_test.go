@@ -149,17 +149,6 @@ func (b *bytesBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestCollectUserInfoUsesPresetFlags(t *testing.T) {
-	username = "alice"
-	password = "secret"
-	nickname = "Ali"
-	email = "a@example.com"
-	t.Cleanup(func() {
-		username, password, nickname, email = "", "", "", ""
-	})
-	require.NoError(t, collectUserInfo())
-}
-
 func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 	got := parseCollectorOverrides([]string{" A = 1 ", "bad", "B=2"})
 	assert.Equal(t, map[string]string{"A": "1", "B": "2"}, got)
@@ -167,6 +156,12 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 	setDefaultEnv(env, "K", "v")
 	setDefaultEnv(env, "EMPTY", " ")
 	assert.Equal(t, "v", env["K"])
+}
+
+func TestCollectorFunctionEnvironmentIncludesServiceGatewayCA(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "Y2E=")
+	env := collectorFunctionEnvironment(collectorPublishOptions{})
+	assert.Equal(t, "Y2E=", env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 }
 
 func TestNewControlClientSetsServiceAuth(t *testing.T) {

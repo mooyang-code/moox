@@ -4,23 +4,13 @@ import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import { getStorageAuthInfo } from './auth';
 import type { RetInfo } from './types';
+import { installSignedClient } from '../admin/signed-client';
 
 const storageClient = axios.create({
   baseURL: gatewayOrigin(),
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
-
-function readAccessToken(): string {
-  try {
-    const raw = localStorage.getItem('user-info');
-    if (!raw) return '';
-    const parsed = JSON.parse(raw) as { token?: string };
-    return parsed.token || '';
-  } catch {
-    return '';
-  }
-}
 
 function storageServiceID(group: 'metadata' | 'access' | 'view') {
   const serviceIDs = {
@@ -68,14 +58,7 @@ export const callView = <TReq extends object, TRsp extends { ret_info: RetInfo }
   req: TReq,
 ) => callStorage<TReq, TRsp>('view', method, req);
 
-storageClient.interceptors.request.use((config) => {
-  const token = readAccessToken();
-  if (token) {
-    config.headers.Authorization = token;
-    config.headers['X-Access-Token'] = token;
-  }
-  return config;
-});
+installSignedClient(storageClient);
 
 storageClient.interceptors.response.use(
   (rsp) => {

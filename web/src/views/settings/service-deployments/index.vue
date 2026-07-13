@@ -126,7 +126,7 @@
           <a-input v-model="form.rpc_address" placeholder="留空时按 host:port 生成" />
         </a-form-item>
         <a-form-item class="form-span-2" field="gateway_path" label="网关/RPC Path">
-          <a-input v-model="form.gateway_path" placeholder="例如 /api/service 或 trpc.moox.storage.Access" />
+          <a-input v-model="form.gateway_path" placeholder="例如 /api/admin/storage 或 trpc.moox.storage.Access" />
         </a-form-item>
         <a-form-item class="form-span-2" field="description" label="说明">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 2, maxRows: 4 }" />

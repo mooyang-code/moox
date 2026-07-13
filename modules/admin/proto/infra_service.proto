@@ -12,7 +12,7 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
 //
-// 未鉴权接口（auth 的 Register/GetLoginSalt/Login）由网关 no_auth_methods 配置放行；
+// 未鉴权接口（auth 的 GetLoginSalt/Login）由网关 no_auth_methods 配置放行；
 // 其余接口由网关 authorize filter 校验 JWT 并将 user_id/username/role 注入 ctx metadata。
 
 // ========== 认证（Auth）==========
@@ -54,22 +54,6 @@ message UserInfo {
   string last_login_ip = 11;
 }
 
-// ========== 注册 ==========
-
-message RegisterReq {
-  AppInfo app_info = 1;
-  string username = 2;
-  string password = 3;  // 明文密码（服务端会进行哈希处理）
-  string nickname = 4;  // 昵称（可选）
-  string email = 5;     // 邮箱（可选）
-}
-
-message RegisterRsp {
-  common.RetInfo ret_info = 1;
-  string user_id = 2;
-  UserInfo user_info = 3;
-}
-
 // ========== 登录盐值 ==========
 
 message GetLoginSaltReq {
@@ -102,35 +86,24 @@ message LoginRsp {
   string access_token = 2;  // 访问令牌
   int64 expires_in = 3;     // 过期时间（秒）
   UserInfo user_info = 4;
+  string session_id = 5;
+  string request_signing_key = 6;
+  int64 expires_at = 7;
 }
 
-// ========== 修改密码盐值 ==========
-
-message GetChangePasswordSaltReq {
-  AppInfo app_info = 1;
-  string access_token = 2;
-}
-
-message GetChangePasswordSaltRsp {
+message LogoutReq {}
+message LogoutRsp {
   common.RetInfo ret_info = 1;
-  string salt = 2;
-  int64 timestamp = 3;
-  int64 expires_in = 4;
 }
 
-// ========== 修改密码 ==========
-
-message ChangePasswordReq {
-  AppInfo app_info = 1;
-  string access_token = 2;
-  string old_password_hash = 3;  // 旧密码哈希值
-  string new_password_hash = 4;  // 新密码哈希值
-  string salt = 5;
-  int64 timestamp = 6;
+message IssueRawSessionTicketReq {
+  string operation = 1;
+  string session_id = 2;
 }
-
-message ChangePasswordRsp {
+message IssueRawSessionTicketRsp {
   common.RetInfo ret_info = 1;
+  string ticket = 2;
+  int64 expires_at = 3;
 }
 
 // ========== 用户信息 ==========
@@ -199,16 +172,12 @@ message GetDNSRecordRsp {
 // ========== Services ==========
 
 service Auth {
-  // 用户注册
-  rpc Register(RegisterReq) returns (RegisterRsp);
   // 获取登录盐值
   rpc GetLoginSalt(GetLoginSaltReq) returns (GetLoginSaltRsp);
   // 用户登录
   rpc Login(LoginReq) returns (LoginRsp);
-  // 获取修改密码盐值
-  rpc GetChangePasswordSalt(GetChangePasswordSaltReq) returns (GetChangePasswordSaltRsp);
-  // 修改密码
-  rpc ChangePassword(ChangePasswordReq) returns (ChangePasswordRsp);
+  rpc Logout(LogoutReq) returns (LogoutRsp);
+  rpc IssueRawSessionTicket(IssueRawSessionTicketReq) returns (IssueRawSessionTicketRsp);
   // 获取用户信息
   rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
   // 更新用户信息

@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,4 +49,17 @@ func TestRawAndServe_Hit_ShouldInvokeHandler(t *testing.T) {
 	})
 	assert.True(t, ok)
 	assert.Equal(t, "echo", rr.Body.String())
+}
+
+func TestRawRouteRequiresMatchingOneTimeTicket(t *testing.T) {
+	store, _, _, sid := setupRequestAuthTest(t)
+	SetRawSessionOwnerVerifier(func(sessionID, userID string) bool { return sessionID == "ssh-1" && userID == "u1" })
+	t.Cleanup(func() { SetRawSessionOwnerVerifier(nil) })
+	store.tickets["ticket-1"] = authmodel.RawSessionTicket{TicketID: "ticket-1", SessionID: sid, ResourceSessionID: "ssh-1", UserID: "u1", Operation: "sftp_download", ExpiresAt: time.Now().Add(time.Minute)}
+	r := httptest.NewRequest(http.MethodGet, "/api/admin/ssh/SftpDownload?ticket=ticket-1&session_id=ssh-1", nil)
+	claims, err := validateRawRouteTicket(r, "ssh", "SftpDownload")
+	require.NoError(t, err)
+	assert.Equal(t, "u1", claims.UserID)
+	_, err = validateRawRouteTicket(r, "ssh", "SftpDownload")
+	require.Error(t, err)
 }

@@ -14,8 +14,8 @@ import (
 
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 
-	"trpc.group/trpc-go/trpc-go/log"
 	"golang.org/x/net/websocket"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // WebSocketConnectHandler 返回 SSH 终端 WebSocket 处理器。

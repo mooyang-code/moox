@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
 	"trpc.group/trpc-go/trpc-go"
 )
 
@@ -111,6 +111,7 @@ func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T)
 }
 
 func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing.T) {
+	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/demo/Ping"}}})
 	called := false
 	RegisterRawHandler("demo", "Ping", func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -135,8 +136,9 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 
 func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t *testing.T) {
 	SetConfig(&Config{
-		JWT:  JWTConfig{SecretKey: "secret"},
-		CORS: CORSConfig{AllowedOrigins: []string{"*"}},
+		JWT:     JWTConfig{SecretKey: "secret"},
+		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
 	SetServiceDetailResolver(nil)
 
@@ -158,8 +160,9 @@ func TestGetGatewayHandleInstance_ShouldReturnSingleton(t *testing.T) {
 
 func TestHandleGatewayRequest_UserIDFromContext_ShouldInjectHeader(t *testing.T) {
 	SetConfig(&Config{
-		JWT:  JWTConfig{SecretKey: "secret"},
-		CORS: CORSConfig{AllowedOrigins: []string{"*"}},
+		JWT:     JWTConfig{SecretKey: "secret"},
+		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
 	SetServiceDetailResolver(func(ctx context.Context, serviceID string) (ServiceDetail, bool) {
 		return ServiceDetail{}, false

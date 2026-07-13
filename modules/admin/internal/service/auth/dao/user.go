@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -143,33 +143,68 @@ func (d *UserDAO) GetLoginSalt(ctx context.Context, username string) (*model.Log
 	return &salt, nil
 }
 
-// SetChangePasswordSalt 设置修改密码盐值
-func (d *UserDAO) SetChangePasswordSalt(ctx context.Context, userID string, salt model.ChangePasswordSalt) error {
-	key := fmt.Sprintf("change_pwd_salt:%s", userID)
-	data, err := json.Marshal(salt)
+func (d *UserDAO) ConsumeLoginSalt(ctx context.Context, username string) (*model.LoginSalt, error) {
+	data, err := d.cache.consume(ctx, fmt.Sprintf("login_salt:%s", username))
+	if err != nil {
+		return nil, err
+	}
+	var salt model.LoginSalt
+	if err := json.Unmarshal([]byte(data), &salt); err != nil {
+		return nil, err
+	}
+	return &salt, nil
+}
+
+func (d *UserDAO) SetSigningSession(ctx context.Context, session model.RequestSigningSession) error {
+	return d.setExpiringJSON(ctx, "signing_session:"+session.SessionID, session, session.ExpiresAt)
+}
+
+func (d *UserDAO) GetSigningSession(ctx context.Context, sessionID string) (*model.RequestSigningSession, error) {
+	data, err := d.cache.Get(ctx, "signing_session:"+sessionID)
+	if err != nil {
+		return nil, err
+	}
+	var session model.RequestSigningSession
+	if err := json.Unmarshal([]byte(data), &session); err != nil {
+		return nil, err
+	}
+	return &session, nil
+}
+
+func (d *UserDAO) DeleteSigningSession(ctx context.Context, sessionID string) error {
+	return d.cache.Delete(ctx, "signing_session:"+sessionID)
+}
+
+func (d *UserDAO) ConsumeSessionNonce(ctx context.Context, sessionID, nonce string, ttl time.Duration) (bool, error) {
+	return d.cache.SetIfAbsent(ctx, fmt.Sprintf("session_nonce:%s:%s", sessionID, nonce), "1", ttl)
+}
+
+func (d *UserDAO) SetRawSessionTicket(ctx context.Context, ticket model.RawSessionTicket) error {
+	return d.setExpiringJSON(ctx, "raw_ticket:"+ticket.TicketID, ticket, ticket.ExpiresAt)
+}
+
+func (d *UserDAO) ConsumeRawSessionTicket(ctx context.Context, ticketID string) (*model.RawSessionTicket, error) {
+	data, err := d.cache.consume(ctx, "raw_ticket:"+ticketID)
+	if err != nil {
+		return nil, err
+	}
+	var ticket model.RawSessionTicket
+	if err := json.Unmarshal([]byte(data), &ticket); err != nil {
+		return nil, err
+	}
+	return &ticket, nil
+}
+
+func (d *UserDAO) setExpiringJSON(ctx context.Context, key string, value any, expiresAt time.Time) error {
+	ttl := time.Until(expiresAt)
+	if ttl <= 0 {
+		return fmt.Errorf("cache value expiration must be in the future")
+	}
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-
-	ttl := salt.ExpiresAt.Sub(time.Now())
 	return d.cache.Set(ctx, key, string(data), ttl)
-}
-
-// GetChangePasswordSalt 获取修改密码盐值
-func (d *UserDAO) GetChangePasswordSalt(ctx context.Context, userID string) (*model.ChangePasswordSalt, error) {
-	key := fmt.Sprintf("change_pwd_salt:%s", userID)
-	data, err := d.cache.Get(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-
-	var salt model.ChangePasswordSalt
-	err = json.Unmarshal([]byte(data), &salt)
-	if err != nil {
-		return nil, err
-	}
-
-	return &salt, nil
 }
 
 // SetLoginAttempt 设置登录尝试记录

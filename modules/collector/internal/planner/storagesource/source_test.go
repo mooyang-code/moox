@@ -17,9 +17,9 @@ type fakeMetadataClient struct {
 
 func (f *fakeMetadataClient) ListDatasetSubjects(_ context.Context, _ *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
 	return &storagepb.ListDatasetSubjectsRsp{
-		RetInfo:          &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
-		DatasetSubjects:  f.subjects,
-		PageResult:       &storagepb.PageResult{HasMore: false},
+		RetInfo:         &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		DatasetSubjects: f.subjects,
+		PageResult:      &storagepb.PageResult{HasMore: false},
 	}, nil
 }
 

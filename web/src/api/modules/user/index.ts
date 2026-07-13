@@ -34,3 +34,9 @@ export const getUserInfoAPI = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const logoutAPI = () =>
+  callControl<Record<string, never>, Record<string, never>>('auth', 'Logout', {});
+
+export const issueRawSessionTicketAPI = (operation: 'ssh_ws' | 'sftp_download' | 'sftp_upload', sessionId: string) =>
+  callControl<{ operation: string; session_id: string }, { ticket: string; expires_at: number }>('auth', 'IssueRawSessionTicket', { operation, session_id: sessionId });

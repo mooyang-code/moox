@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,50 @@ func TestCacheDB_Del_ExistingKey_ShouldRemove(t *testing.T) {
 	require.NoError(t, cdb.Del(ctx, "k2"))
 	_, err := cdb.Get(ctx, "k2")
 	require.ErrorIs(t, err, ErrKeyNotFound)
+}
+
+func TestCacheDBDeleteRemovesValue(t *testing.T) {
+	cdb := setupCacheDB(t)
+	ctx := context.Background()
+	require.NoError(t, cdb.Set(ctx, "delete-me", "value", time.Minute))
+	require.NoError(t, cdb.Delete(ctx, "delete-me"))
+	_, err := cdb.Get(ctx, "delete-me")
+	require.ErrorIs(t, err, ErrKeyNotFound)
+}
+
+func TestCacheDBSetIfAbsentAllowsOnlyOneConcurrentWriter(t *testing.T) {
+	cdb := setupCacheDB(t)
+	ctx := context.Background()
+	const writers = 20
+	start := make(chan struct{})
+	results := make(chan bool, writers)
+	errors := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			ok, err := cdb.SetIfAbsent(ctx, "winner", "value", time.Minute)
+			results <- ok
+			errors <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	winners := 0
+	for ok := range results {
+		if ok {
+			winners++
+		}
+	}
+	assert.Equal(t, 1, winners)
 }
 
 func TestCacheDB_Exists_ExistingKey_ShouldReturnTrue(t *testing.T) {
