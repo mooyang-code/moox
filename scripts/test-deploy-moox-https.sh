@@ -70,8 +70,10 @@ grep -Fq '"admin_healthy":true' <<<"${status_json}" || fail 'managed admin endpo
 if MOOX_CADDY_ADMIN_ENDPOINT=127.0.0.1:1 "${HELPER}" check --deploy-dir "${TMP}/deploy" >/dev/null 2>&1; then
   fail 'managed Caddy with an unverified admin endpoint was accepted'
 fi
-"${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT="${EDGE_PORT}" MOOX_SERVICE_HTTPS_PORT=11001 \
+  "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64
 assert_contains "${FAKE_LOG}" reload
+assert_contains "${TMP}/deploy/config/caddy/edge.env" 'MOOX_PUBLIC_HOST=127.0.0.1'
 "${HELPER}" stop --deploy-dir "${TMP}/deploy"
 
 printf '999999\n' >"${TMP}/deploy/run/caddy.pid"

@@ -1,6 +1,7 @@
 {
 	auto_https disable_redirects
 	admin 127.0.0.1:2019
+	default_sni {$MOOX_PUBLIC_HOST}
 }
 
 https://{$MOOX_PUBLIC_HOST}:{$MOOX_BROWSER_HTTPS_PORT:9527} {

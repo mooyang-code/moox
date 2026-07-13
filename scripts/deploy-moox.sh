@@ -1909,19 +1909,29 @@ ca=$1; browser=$2; service=$3; service_auth_file=$4
 case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
 case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
 status() { curl --silent --show-error --cacert "$ca" --output /dev/null --write-out "%{http_code}" "$@"; }
-[[ "$(status "$browser/")" == 200 ]]
-[[ "$(status "$browser/healthz")" == 404 ]]
-[[ "$(status "$browser/api/service/test/Ping")" == 404 ]]
-[[ "$(status "$service/api/admin/auth/Login")" == 404 ]]
+expect_status() {
+  expected=$1; shift
+  for _ in $(seq 1 30); do
+    actual=$(status "$@" 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]] && return 0
+    sleep 1
+  done
+  printf "expected HTTP %s, got %s for %s\n" "$expected" "${actual:-curl-error}" "$*" >&2
+  return 1
+}
+expect_status 200 "$browser/"
+expect_status 404 "$browser/healthz"
+expect_status 404 "$browser/api/service/test/Ping"
+expect_status 404 "$service/api/admin/auth/Login"
 path=/api/service/sysdeploy/ListActiveServiceDeployments
-[[ "$(status -X POST -H "Content-Type: application/json" --data "{}" "$service$path")" == 401 ]]
+expect_status 401 -X POST -H "Content-Type: application/json" --data "{}" "$service$path"
 set -a; source "$service_auth_file"; set +a
 expire=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}
 timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}\nmoox-service-expire:%s" "$expire" | openssl dgst -sha256 | awk "{print \$NF}")
 canonical=$(printf "moox-request-v1\nPOST\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce")
 signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_SERVICE_AUTH_SECRET_KEY" | awk "{print \$NF}")
 auth="moox-auth-v2/$MOOX_SERVICE_AUTH_ACCESS_KEY/$timestamp/$expire/$nonce/$signature"
-[[ "$(status -X POST -H "Content-Type: application/json" -H "Auth: $auth" --data "{}" "$service$path")" == 200 ]]'
+expect_status 200 -X POST -H "Content-Type: application/json" -H "Auth: $auth" --data "{}" "$service$path"'
   if is_local_target; then
     bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/service-auth.env" || {
       "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true

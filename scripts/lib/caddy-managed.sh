@@ -34,6 +34,13 @@ while [[ $# -gt 0 ]]; do
 done
 OS=$(normalize_os "${OS}"); ARCH=$(normalize_arch "${ARCH}")
 BIN="${DEPLOY_DIR}/bin/caddy"; CONFIG="${DEPLOY_DIR}/config/caddy/Caddyfile"; PIDFILE="${DEPLOY_DIR}/run/caddy.pid"
+ENV_FILE="${DEPLOY_DIR}/config/caddy/edge.env"
+if [[ -s "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
 export XDG_DATA_HOME="${DEPLOY_DIR}/data/caddy" XDG_CONFIG_HOME="${DEPLOY_DIR}/config/caddy/runtime"
 
 version_ok() { [[ -x "${BIN}" ]] && [[ $("${BIN}" version 2>/dev/null | awk '{print $1}') == "${CADDY_VERSION}" ]]; }
@@ -144,6 +151,12 @@ case "${COMMAND}" in
   check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
+    if [[ -n "${MOOX_PUBLIC_HOST:-}" ]]; then
+      umask 077
+      printf 'MOOX_PUBLIC_HOST=%q\nMOOX_BROWSER_HTTPS_PORT=%q\nMOOX_SERVICE_HTTPS_PORT=%q\n' \
+        "${MOOX_PUBLIC_HOST}" "${MOOX_BROWSER_HTTPS_PORT:-9527}" "${MOOX_SERVICE_HTTPS_PORT:-11001}" >"${ENV_FILE}"
+      export MOOX_PUBLIC_HOST MOOX_BROWSER_HTTPS_PORT MOOX_SERVICE_HTTPS_PORT
+    fi
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
     version_ok || install_binary
     [[ ! -e "${CONFIG}.candidate" ]] || { "${BIN}" validate --config "${CONFIG}.candidate" --adapter caddyfile >/dev/null; [[ ! -e "${CONFIG}" ]] || cp -p "${CONFIG}" "${CONFIG}.rollback"; mv "${CONFIG}.candidate" "${CONFIG}"; }
