@@ -2,8 +2,8 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 COMMAND=${1:-}; shift || true
-TARGET= DEPLOY_DIR= OUTPUT= CA_FILE= EXPECTED=
-while [[ $# -gt 0 ]]; do case "$1" in --target) TARGET=${2:?}; shift 2;; --deploy-dir) DEPLOY_DIR=${2:?}; shift 2;; --output) OUTPUT=${2:?}; shift 2;; --ca-file) CA_FILE=${2:?}; shift 2;; --expected-fingerprint) EXPECTED=${2:?}; shift 2;; *) echo "unknown option: $1" >&2; exit 2;; esac; done
+TARGET= DEPLOY_DIR= OUTPUT= CA_FILE= EXPECTED= NON_INTERACTIVE=0
+while [[ $# -gt 0 ]]; do case "$1" in --target) TARGET=${2:?}; shift 2;; --deploy-dir) DEPLOY_DIR=${2:?}; shift 2;; --output) OUTPUT=${2:?}; shift 2;; --ca-file) CA_FILE=${2:?}; shift 2;; --expected-fingerprint) EXPECTED=${2:?}; shift 2;; --non-interactive) NON_INTERACTIVE=1; shift;; *) echo "unknown option: $1" >&2; exit 2;; esac; done
 reject_key_path() { [[ "$1" != *.key && "$1" != *root.key* ]] || { echo 'private-key paths are forbidden' >&2; exit 1; }; }
 inspect() { grep -q -- 'PRIVATE KEY' "$1" && { echo 'private keys are forbidden' >&2; exit 1; }; openssl x509 -in "$1" -noout -subject -dates -fingerprint -sha256; openssl x509 -in "$1" -noout -text | grep -Eq 'CA:TRUE' || { echo 'certificate is not a CA' >&2; exit 1; }; }
 case "${COMMAND}" in
@@ -18,6 +18,24 @@ case "${COMMAND}" in
     printf '%s\n' "${actual}";;
   inspect) [[ -n "${CA_FILE}" ]] || exit 2; inspect "${CA_FILE}";;
   install) [[ -n "${CA_FILE}" ]] || exit 2; inspect "${CA_FILE}"; exec "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${CA_FILE}";;
+  install-target)
+    [[ -n "${TARGET}" && -n "${DEPLOY_DIR}" ]] || { echo 'install-target requires --target and --deploy-dir' >&2; exit 2; }
+    if [[ "${TARGET}" == localhost || "${TARGET}" == 127.0.0.1 || "${TARGET}" == ::1 ]]; then
+      local_deploy_dir="${DEPLOY_DIR}"
+      case "${local_deploy_dir}" in '~') local_deploy_dir="${HOME}";; '~/'*) local_deploy_dir="${HOME}/${local_deploy_dir#\~/}";; esac
+      if [[ "${NON_INTERACTIVE}" == 1 ]]; then export MOOX_CA_SUDO_NONINTERACTIVE=1; fi
+      exec "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${local_deploy_dir%/}/certs/caddy/root.crt"
+    fi
+    remote_script='deploy_dir=$1
+case "$deploy_dir" in "~") deploy_dir=$HOME;; "~/"*) deploy_dir="$HOME/${deploy_dir#\~/}";; esac
+exec "$deploy_dir/lib/install-caddy-ca.sh" --ca-file "$deploy_dir/certs/caddy/root.crt"'
+    printf -v remote_command 'bash -c %q _ %q' "${remote_script}" "${DEPLOY_DIR}"
+    if [[ "${NON_INTERACTIVE}" == 1 ]]; then
+      remote_command="MOOX_CA_SUDO_NONINTERACTIVE=1 ${remote_command}"
+      exec ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "${remote_command}"
+    fi
+    exec ssh -t -o ConnectTimeout=10 "${TARGET}" "${remote_command}"
+    ;;
   status)
     [[ -n "${CA_FILE}" ]] || exit 2
     inspect "${CA_FILE}" >/dev/null
@@ -34,5 +52,5 @@ case "${COMMAND}" in
     printf 'RHEL/Fedora: sudo cp %q /etc/pki/ca-trust/source/anchors/moox.crt && sudo update-ca-trust\n' "${CA_FILE}"
     printf 'curl --cacert %q https://HOST:9527/\n' "${CA_FILE}"
     printf 'Applications: set MOOX_SERVICE_GATEWAY_CA_FILE=%q; never disable TLS verification.\n' "${CA_FILE}";;
-  *) echo 'command required: fetch|inspect|install|status|trust-help' >&2; exit 2;;
+  *) echo 'command required: fetch|inspect|install|install-target|status|trust-help' >&2; exit 2;;
 esac

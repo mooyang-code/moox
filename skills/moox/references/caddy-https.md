@@ -21,4 +21,12 @@ skills/moox/scripts/caddy-ca.sh inspect --ca-file ~/.moox/certs/moox-root.crt
 skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-root.crt
 ```
 
+Install the published CA directly on the web-host target when preparing it outside the normal deploy command:
+
+```bash
+skills/moox/scripts/caddy-ca.sh install-target --target user@host --deploy-dir /home/user/moox
+```
+
+Normal deployment uses `--target-ca auto`: it installs automatically when the target user is root or has passwordless sudo, otherwise it keeps application-level CA trust and prints a warning. Only the explicit permission-denied result is downgraded; SSH, certificate, helper, and trust-store update failures stop deployment. Use `--target-ca skip` to opt out explicitly. The manual `install-target` command remains strict.
+
 Interactive deployment may offer to install trust on the operator machine once. Other browser machines must run the helper locally. Backend processes receive `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF configuration uses the equivalent base64 PEM. Never use insecure TLS verification. Caddy renews leaf certificates automatically while its data directory persists.

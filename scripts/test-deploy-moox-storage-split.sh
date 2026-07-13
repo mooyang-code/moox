@@ -174,7 +174,11 @@ assert_grep 'log_path: \.\./logs/storage-view-index' "${DEPLOY_DIR}/storage/conf
 assert_grep 'log_path: \.\./logs/storage-view-builder' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
 assert_grep 'log_path: \.\./logs/storage-view-query' "${DEPLOY_DIR}/storage/config/trpc_go.view_query.yaml"
 assert_grep 'port: 20104' "${DEPLOY_DIR}/storage/config/trpc_go.view_index.yaml"
-assert_grep 'op=maintain' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
+assert_grep 'scheduler=viewBuilderSchedule&startAtOnce=1' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
+if grep -Eq '[?&](params|disable|location)=' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"; then
+  echo "view builder timer contains options unsupported by the official tRPC timer" >&2
+  exit 1
+fi
 assert_grep 'timeout: 900000' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
 
 assert_file "${DEPLOY_DIR}/reset-storage-view-indexes.sh"

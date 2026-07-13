@@ -30,6 +30,7 @@ SERVICE_HTTPS_PORT=11001
 LOCAL_CA=auto
 LOCAL_CA_OUTPUT=""
 FETCHED_CA_FILE=""
+TARGET_CA=auto
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD_FILE=""
 ADMIN_PASSWORD=""
@@ -67,6 +68,7 @@ Options:
   --service-https-port <port>     Service HTTPS edge. Default: 11001.
   --local-ca <auto|install|skip>  Operator CA workflow. Default: auto.
   --local-ca-output <path>        Fetched root CA path. Default: ~/.moox/certs/<public-host>-root.crt.
+  --target-ca <auto|skip>         Install the CA in the target trust store when permitted. Default: auto.
   --caddy-conflict <fail>         Refuse unrelated listeners (the only supported policy).
   --enable-cls                    Add production CLS writers; target must provide secrets/cls.env.
   -h, --help                      Show this help.
@@ -177,6 +179,7 @@ while [[ $# -gt 0 ]]; do
     --service-https-port) SERVICE_HTTPS_PORT="${2:-}"; shift 2 ;;
     --local-ca) LOCAL_CA="${2:-}"; shift 2 ;;
     --local-ca-output) LOCAL_CA_OUTPUT="${2:-}"; shift 2 ;;
+    --target-ca) TARGET_CA="${2:-}"; shift 2 ;;
     --caddy-conflict) [[ "${2:-}" == fail ]] || fail 'only --caddy-conflict fail is supported'; shift 2 ;;
     --enable-cls) ENABLE_CLS=1; shift ;;
     -h|--help)
@@ -193,6 +196,7 @@ done
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
 [[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
+[[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
 
 is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
@@ -543,6 +547,9 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
 mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
+
+source "${ROOT}/lib/loopback-listeners.sh"
+validate_moox_loopback_listeners
 
 bootstrap_cls() {
   local output topic_id region
@@ -1015,6 +1022,7 @@ start_web_host() {
   start_service "web-host" "${ROOT}" \
     env \
       "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-127.0.0.1:9528}" \
+      "MOOX_WEB_HOST_HEALTH_ADDR=${MOOX_WEB_HOST_HEALTH_ADDR:-127.0.0.1:19527}" \
       "${ROOT}/bin/moox-web-host"
 }
 
@@ -1487,6 +1495,8 @@ prepare_stage() {
     "${STAGE_DIR}/run"
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
+  cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"
+  cp "${ROOT}/scripts/install-caddy-ca.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"
   cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${STAGE_DIR}/lib/caddy-v2.11.4-checksums.txt"
   if [[ -n "${PUBLIC_HOST}" ]]; then
     local caddy_os caddy_asset caddy_archive
@@ -1502,7 +1512,7 @@ prepare_stage() {
       -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
   fi
   cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile.next"
-  chmod +x "${STAGE_DIR}/lib/caddy-managed.sh"
+  chmod +x "${STAGE_DIR}/lib/caddy-managed.sh" "${STAGE_DIR}/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/storage/config" "${STAGE_DIR}/storage/schema"
   fi
@@ -1954,6 +1964,27 @@ if is_local_target; then
 else
   sync_remote_stage
 fi
+
+configure_target_ca() {
+  [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${TARGET_CA}" != skip ]] || return 0
+  local args=(install-target --target "${TARGET}" --deploy-dir "${DEPLOY_DIR}")
+  local status
+  args+=(--non-interactive)
+  set +e
+  "${ROOT}/skills/moox/scripts/caddy-ca.sh" "${args[@]}"
+  status=$?
+  set -e
+  case "${status}" in
+    0) return 0 ;;
+    77)
+      log "target CA trust installation needs elevated permission; backend clients still use the deployed CA file"
+      return 0
+      ;;
+    *) fail "target CA trust installation failed with status ${status}" ;;
+  esac
+}
+
+configure_target_ca
 
 configure_local_ca() {
   [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${LOCAL_CA}" != skip ]] || return 0

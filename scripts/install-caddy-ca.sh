@@ -30,21 +30,30 @@ run_privileged() {
   if [[ ${EUID} -eq 0 ]]; then
     run "$@"
   elif command -v sudo >/dev/null 2>&1; then
-    run sudo "$@"
+    if [[ "${MOOX_CA_SUDO_NONINTERACTIVE:-0}" == 1 ]]; then
+      if ! sudo -n -l -- "$@" >/dev/null 2>&1; then
+        echo "permission denied: passwordless sudo permission for the requested CA operation is required" >&2
+        return 77
+      fi
+      run sudo -n -- "$@"
+    else
+      run sudo "$@"
+    fi
   else
     echo "permission denied: root privileges are required to run $1" >&2
+    [[ "${MOOX_CA_SUDO_NONINTERACTIVE:-0}" != 1 ]] || return 77
     return 1
   fi
 }
 
-file_store_contains() {
-  local directory=$1 candidate actual
-  [[ -d "${directory}" ]] || return 1
-  while IFS= read -r -d '' candidate; do
-    actual=$(openssl x509 -in "${candidate}" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2) || continue
-    [[ "${actual}" == "${fingerprint}" ]] && return 0
-  done < <(find "${directory}" -type f \( -name '*.crt' -o -name '*.pem' \) -print0 2>/dev/null)
-  return 1
+ca_path_verifies() {
+  local directory=$1
+  [[ -d "${directory}" ]] && openssl verify -CApath "${directory}" "${CA_FILE}" >/dev/null 2>&1
+}
+
+ca_bundle_verifies() {
+  local bundle=$1
+  [[ -f "${bundle}" ]] && openssl verify -CAfile "${bundle}" "${CA_FILE}" >/dev/null 2>&1
 }
 
 is_trusted() {
@@ -56,11 +65,10 @@ is_trusted() {
       } | grep -Eiq "SHA-256 hash:[[:space:]]*${fingerprint_hex}"
       ;;
     Linux)
-      file_store_contains "${MOOX_CA_DEBIAN_DIR:-/usr/local/share/ca-certificates}" ||
-        file_store_contains "${MOOX_CA_RHEL_DIR:-/etc/pki/ca-trust/source/anchors}" ||
-        file_store_contains /etc/ssl/certs ||
-        file_store_contains /etc/pki/tls/certs ||
-        file_store_contains "${HOME}/.local/share/ca-certificates"
+      ca_path_verifies "${MOOX_CA_SYSTEM_DIR:-/etc/ssl/certs}" ||
+        ca_bundle_verifies "${MOOX_CA_SYSTEM_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}" ||
+        ca_bundle_verifies /etc/pki/tls/certs/ca-bundle.crt ||
+        ca_bundle_verifies /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
       ;;
     MINGW*|MSYS*|CYGWIN*)
       powershell.exe -NoProfile -NonInteractive -Command \
@@ -88,12 +96,24 @@ case "${platform}" in
       dest="${MOOX_CA_DEBIAN_DIR:-/usr/local/share/ca-certificates}/moox-${fingerprint_hex}.crt"
       run_privileged mkdir -p "$(dirname "${dest}")"
       run_privileged cp "${CA_FILE}" "${dest}"
-      run_privileged update-ca-certificates
+      if run_privileged update-ca-certificates; then
+        :
+      else
+        status=$?
+        run_privileged rm -f "${dest}" || true
+        exit "${status}"
+      fi
     elif command -v update-ca-trust >/dev/null 2>&1; then
       dest="${MOOX_CA_RHEL_DIR:-/etc/pki/ca-trust/source/anchors}/moox-${fingerprint_hex}.crt"
       run_privileged mkdir -p "$(dirname "${dest}")"
       run_privileged cp "${CA_FILE}" "${dest}"
-      run_privileged update-ca-trust
+      if run_privileged update-ca-trust; then
+        :
+      else
+        status=$?
+        run_privileged rm -f "${dest}" || true
+        exit "${status}"
+      fi
     else
       echo 'no supported Linux CA trust command found (update-ca-certificates or update-ca-trust)' >&2
       exit 1
