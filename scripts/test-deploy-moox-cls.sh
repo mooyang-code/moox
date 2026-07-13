@@ -142,6 +142,73 @@ grep -q 'first stage must survive' "${STAGE_DIR}/sentinel"
 wait "${FIRST_PID}" 2>/dev/null || true
 FIRST_PID=""
 
+LOCK_PATH="${STAGE_DIR}.deploy.lock"
+write_lock_owner() {
+  local token="$1" host="$2" pid="$3" created_at="$4"
+  rm -rf "${LOCK_PATH}"
+  mkdir -p "${LOCK_PATH}"
+  printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${token}" "${host}" "${pid}" "${created_at}" >"${LOCK_PATH}/owner"
+}
+fixture_deploy() {
+  "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+    --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
+    --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    "$@"
+}
+
+dead_pid=999999
+while kill -0 "${dead_pid}" 2>/dev/null; do
+  dead_pid=$((dead_pid + 1))
+done
+write_lock_owner stale-local "$(hostname)" "${dead_pid}" "$(date +%s)"
+if fixture_deploy >"${TMP_ROOT}/stale-local.out" 2>&1; then
+  echo 'deployment unexpectedly succeeded with stale-local preflight fixture' >&2
+  exit 1
+fi
+if grep -q 'stage deployment lock' "${TMP_ROOT}/stale-local.out"; then
+  echo 'dead local lock was not recovered' >&2
+  exit 1
+fi
+if [[ -e "${LOCK_PATH}" ]]; then
+  echo 'dead local lock remained after takeover' >&2
+  exit 1
+fi
+
+write_lock_owner fresh-foreign foreign-controller "${dead_pid}" "$(date +%s)"
+if fixture_deploy >"${TMP_ROOT}/fresh-foreign.out" 2>&1; then
+  echo 'deployment unexpectedly succeeded with fresh foreign lock' >&2
+  exit 1
+fi
+grep -q 'stage deployment lock' "${TMP_ROOT}/fresh-foreign.out"
+[[ -e "${LOCK_PATH}/owner" ]]
+rm -rf "${LOCK_PATH}"
+
+write_lock_owner expired-foreign foreign-controller "${dead_pid}" "$(( $(date +%s) - 7200 ))"
+if fixture_deploy >"${TMP_ROOT}/expired-foreign.out" 2>&1; then
+  echo 'deployment unexpectedly succeeded with expired-foreign preflight fixture' >&2
+  exit 1
+fi
+if grep -q 'stage deployment lock' "${TMP_ROOT}/expired-foreign.out"; then
+  echo 'expired foreign lock was not recovered' >&2
+  exit 1
+fi
+if [[ -e "${LOCK_PATH}" ]]; then
+  echo 'expired foreign lock remained after takeover' >&2
+  exit 1
+fi
+
+mkdir -p "${LOCK_PATH}"
+printf 'malformed lock metadata\n' >"${LOCK_PATH}/owner"
+if fixture_deploy >"${TMP_ROOT}/malformed.out" 2>&1; then
+  echo 'deployment unexpectedly succeeded with malformed lock' >&2
+  exit 1
+fi
+grep -q 'stage deployment lock' "${TMP_ROOT}/malformed.out"
+[[ -e "${LOCK_PATH}/owner" ]]
+rm -rf "${LOCK_PATH}"
+
 grep -q -- '--cloud-account-id' "${SCRIPT}"
 grep -q 'skills/moox/scripts/cls-bootstrap.sh' "${SCRIPT}"
 grep -q 'prepare_cls_preflight' "${SCRIPT}"

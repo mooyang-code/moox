@@ -39,6 +39,11 @@ CLOUD_ACCOUNT_ID=""
 STAGE_DEPLOY_LOCK=""
 STAGE_DEPLOY_LOCK_TOKEN="$$.${RANDOM}.${RANDOM}"
 STAGE_DEPLOY_LOCK_HELD=0
+STAGE_DEPLOY_LOCK_LEASE_SECONDS="${MOOX_DEPLOY_STAGE_LOCK_LEASE_SECONDS:-3600}"
+STAGE_DEPLOY_LOCK_OWNER_TOKEN=""
+STAGE_DEPLOY_LOCK_OWNER_HOST=""
+STAGE_DEPLOY_LOCK_OWNER_PID=""
+STAGE_DEPLOY_LOCK_OWNER_CREATED_AT=""
 
 usage() {
   cat <<'EOF'
@@ -110,8 +115,79 @@ cleanup_stage_deploy_lock() {
 # leave a stale lock that operators must remove after confirming no owner runs.
 trap cleanup_stage_deploy_lock EXIT
 
+read_stage_deploy_lock_owner() {
+  local owner="$1" key value token_count=0 host_count=0 pid_count=0 created_count=0
+  STAGE_DEPLOY_LOCK_OWNER_TOKEN=""
+  STAGE_DEPLOY_LOCK_OWNER_HOST=""
+  STAGE_DEPLOY_LOCK_OWNER_PID=""
+  STAGE_DEPLOY_LOCK_OWNER_CREATED_AT=""
+  [[ -f "${owner}" ]] || return 1
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      token) STAGE_DEPLOY_LOCK_OWNER_TOKEN="${value}"; token_count=$((token_count + 1)) ;;
+      host) STAGE_DEPLOY_LOCK_OWNER_HOST="${value}"; host_count=$((host_count + 1)) ;;
+      pid) STAGE_DEPLOY_LOCK_OWNER_PID="${value}"; pid_count=$((pid_count + 1)) ;;
+      created_at) STAGE_DEPLOY_LOCK_OWNER_CREATED_AT="${value}"; created_count=$((created_count + 1)) ;;
+      *) return 1 ;;
+    esac
+  done <"${owner}"
+  [[ "${token_count}" -eq 1 && "${host_count}" -eq 1 && "${pid_count}" -eq 1 && "${created_count}" -eq 1 ]] || return 1
+  [[ "${STAGE_DEPLOY_LOCK_OWNER_TOKEN}" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "${STAGE_DEPLOY_LOCK_OWNER_HOST}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "${STAGE_DEPLOY_LOCK_OWNER_PID}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${STAGE_DEPLOY_LOCK_OWNER_CREATED_AT}" =~ ^[0-9]+$ ]] || return 1
+  (( STAGE_DEPLOY_LOCK_OWNER_PID > 0 )) || return 1
+}
+
+stage_deploy_lock_is_stale() {
+  read_stage_deploy_lock_owner "${STAGE_DEPLOY_LOCK}/owner" || return 1
+  if [[ "${STAGE_DEPLOY_LOCK_OWNER_HOST}" == "$(hostname)" ]]; then
+    kill -0 "${STAGE_DEPLOY_LOCK_OWNER_PID}" 2>/dev/null && return 1
+    return 0
+  fi
+  local now age
+  now="$(date +%s)"
+  (( STAGE_DEPLOY_LOCK_OWNER_CREATED_AT <= now )) || return 1
+  age=$((now - STAGE_DEPLOY_LOCK_OWNER_CREATED_AT))
+  (( age >= STAGE_DEPLOY_LOCK_LEASE_SECONDS ))
+}
+
+write_stage_deploy_lock_owner() {
+  local owner_tmp="${STAGE_DEPLOY_LOCK}/owner.next.${STAGE_DEPLOY_LOCK_TOKEN}"
+  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
+    "${STAGE_DEPLOY_LOCK_TOKEN}" "$(hostname)" "$$" "$(date +%s)" >"${owner_tmp}"); then
+    rm -f "${owner_tmp}"
+    return 1
+  fi
+  mv -f "${owner_tmp}" "${STAGE_DEPLOY_LOCK}/owner"
+}
+
+takeover_stage_deploy_lock() {
+  local stale_lock="${STAGE_DEPLOY_LOCK}.stale.${STAGE_DEPLOY_LOCK_TOKEN}"
+  rm -rf "${stale_lock}"
+  mv "${STAGE_DEPLOY_LOCK}" "${stale_lock}" 2>/dev/null || return 1
+  if ! mkdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null; then
+    if [[ ! -e "${STAGE_DEPLOY_LOCK}" ]]; then
+      mv "${stale_lock}" "${STAGE_DEPLOY_LOCK}" 2>/dev/null || true
+    else
+      rm -rf "${stale_lock}"
+    fi
+    return 1
+  fi
+  if ! write_stage_deploy_lock_owner; then
+    rm -rf "${STAGE_DEPLOY_LOCK}"
+    mv "${stale_lock}" "${STAGE_DEPLOY_LOCK}" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "${stale_lock}"
+  STAGE_DEPLOY_LOCK_HELD=1
+}
+
 acquire_stage_deploy_lock() {
   [[ "${ENABLE_CLS}" -eq 1 ]] || return 0
+  [[ "${STAGE_DEPLOY_LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] && \
+    (( STAGE_DEPLOY_LOCK_LEASE_SECONDS >= 3600 && STAGE_DEPLOY_LOCK_LEASE_SECONDS <= 86400 )) || \
+    fail "MOOX_DEPLOY_STAGE_LOCK_LEASE_SECONDS must be 3600..86400"
   local lock_base="${STAGE_DIR}"
   while [[ "${lock_base}" != "/" && "${lock_base}" == */ ]]; do
     lock_base="${lock_base%/}"
@@ -119,17 +195,18 @@ acquire_stage_deploy_lock() {
   [[ -n "${lock_base}" ]] || lock_base="/"
   STAGE_DEPLOY_LOCK="${lock_base}.deploy.lock"
   mkdir -p "$(dirname "${STAGE_DEPLOY_LOCK}")"
-  if ! mkdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null; then
-    fail "CLS stage deployment lock already held: ${STAGE_DEPLOY_LOCK}; remove it only after confirming no deployment is running"
+  if mkdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null; then
+    if ! write_stage_deploy_lock_owner; then
+      rm -rf "${STAGE_DEPLOY_LOCK}"
+      fail "failed to initialize CLS stage deployment lock: ${STAGE_DEPLOY_LOCK}"
+    fi
+    STAGE_DEPLOY_LOCK_HELD=1
+    return 0
   fi
-  if ! (umask 077; printf 'token=%s\nhost=%s\npid=%s\ncreated_at=%s\n' \
-    "${STAGE_DEPLOY_LOCK_TOKEN}" "$(hostname)" "$$" "$(date +%s)" \
-    >"${STAGE_DEPLOY_LOCK}/owner"); then
-    rm -f "${STAGE_DEPLOY_LOCK}/owner"
-    rmdir "${STAGE_DEPLOY_LOCK}" 2>/dev/null || true
-    fail "failed to initialize CLS stage deployment lock: ${STAGE_DEPLOY_LOCK}"
+  if stage_deploy_lock_is_stale && takeover_stage_deploy_lock; then
+    return 0
   fi
-  STAGE_DEPLOY_LOCK_HELD=1
+  fail "CLS stage deployment lock already held: ${STAGE_DEPLOY_LOCK}; remove it only after confirming no deployment is running"
 }
 
 generate_secret() {
