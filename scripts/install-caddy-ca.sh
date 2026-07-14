@@ -59,10 +59,12 @@ ca_bundle_verifies() {
 is_trusted() {
   case "${platform}" in
     Darwin)
-      {
-        security find-certificate -a -Z /Library/Keychains/System.keychain 2>/dev/null || true
-        security find-certificate -a -Z "${HOME}/Library/Keychains/login.keychain-db" 2>/dev/null || true
-      } | grep -Eiq "SHA-256 hash:[[:space:]]*${fingerprint_hex}"
+      # Chrome/Safari's normal macOS trust path is the system keychain. A
+      # certificate merely imported into the login keychain can still produce
+      # ERR_CERT_AUTHORITY_INVALID, so do not treat presence there as proof of
+      # browser trust.
+      security find-certificate -a -Z /Library/Keychains/System.keychain 2>/dev/null |
+        grep -Eiq "SHA-256 hash:[[:space:]]*${fingerprint_hex}"
       ;;
     Linux)
       ca_path_verifies "${MOOX_CA_SYSTEM_DIR:-/etc/ssl/certs}" ||
