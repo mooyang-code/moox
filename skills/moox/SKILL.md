@@ -144,6 +144,63 @@ scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host ho
 
 The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, rejects non-loopback upstream addresses, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, persists its CA, attempts target-host trust installation, configures backend trust, and performs HTTPS acceptance. See `references/caddy-https.md` for CA retrieval, browser trust, rotation, and conflict recovery.
 
+### 本机浏览器 Caddy 根证书
+
+当浏览器打开 `https://<public-host>:9527` 报 `ERR_CERT_AUTHORITY_INVALID` 时，不要关闭 TLS 校验。先按当前操作系统选择本机证书路径并获取目标 CA：
+
+```bash
+case "$(uname -s)" in
+  Darwin*) PLATFORM=macos ;;
+  Linux*) PLATFORM=linux ;;
+  MINGW*|MSYS*|CYGWIN*) PLATFORM=windows ;;
+  *) echo "unsupported OS" >&2; exit 2 ;;
+esac
+
+PUBLIC_HOST=106.53.107.122
+CA_FILE="$HOME/.moox/certs/moox-caddy-root-${PUBLIC_HOST}.crt"
+mkdir -p "$(dirname "$CA_FILE")"
+skills/moox/scripts/caddy-ca.sh fetch \
+  --target ubuntu@106.53.107.122 \
+  --deploy-dir /home/ubuntu/moox/prod \
+  --output "$CA_FILE"
+skills/moox/scripts/caddy-ca.sh inspect --ca-file "$CA_FILE"
+```
+
+根据 `PLATFORM` 安装到浏览器实际使用的系统信任库：
+
+```bash
+case "$PLATFORM" in
+  macos)
+    sudo security add-trusted-cert -d -r trustRoot -p ssl \
+      -k /Library/Keychains/System.keychain "$CA_FILE"
+    ;;
+  linux)
+    if command -v update-ca-certificates >/dev/null 2>&1; then
+      sudo cp "$CA_FILE" /usr/local/share/ca-certificates/moox-caddy-root.crt
+      sudo update-ca-certificates
+    elif command -v update-ca-trust >/dev/null 2>&1; then
+      sudo cp "$CA_FILE" /etc/pki/ca-trust/source/anchors/moox-caddy-root.crt
+      sudo update-ca-trust
+    else
+      echo "no supported Linux trust-store command" >&2; exit 1
+    fi
+    ;;
+  windows)
+    powershell.exe -NoProfile -NonInteractive -Command \
+      'Import-Certificate -FilePath $args[0] -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null' \
+      "$CA_FILE"
+    ;;
+esac
+```
+
+安装后必须按指纹检查，而不是只检查 `.crt` 文件是否存在：
+
+```bash
+skills/moox/scripts/caddy-ca.sh status --ca-file "$CA_FILE"
+```
+
+结果应包含 `"valid_ca":true,"trusted":true`。macOS Chrome/Safari 使用系统钥匙串；因此仅放入登录钥匙串不作为浏览器信任成功的依据。完全退出并重新打开浏览器后再访问页面。公开部署默认执行同样的检查和安装；只有明确不需要浏览器访问时才使用 `--local-ca skip`。
+
 For a CLS-enabled release, `scripts/deploy-moox.sh --enable-cls` runs the CLS
 predeploy check after stage creation and before release archive sync or service
 shutdown.

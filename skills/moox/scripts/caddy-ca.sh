@@ -46,10 +46,24 @@ exec "$deploy_dir/lib/install-caddy-ca.sh" --ca-file "$deploy_dir/certs/caddy/ro
     ;;
   trust-help)
     [[ -n "${CA_FILE}" ]] || exit 2; inspect "${CA_FILE}" >/dev/null
-    printf 'macOS: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %q\n' "${CA_FILE}"
-    printf 'Windows: Import-Certificate -FilePath %q -CertStoreLocation Cert:\\CurrentUser\\Root\n' "${CA_FILE}"
-    printf 'Debian/Ubuntu: sudo cp %q /usr/local/share/ca-certificates/moox.crt && sudo update-ca-certificates\n' "${CA_FILE}"
-    printf 'RHEL/Fedora: sudo cp %q /etc/pki/ca-trust/source/anchors/moox.crt && sudo update-ca-trust\n' "${CA_FILE}"
+    platform=$(uname -s)
+    case "${platform}" in
+      Darwin*)
+        printf 'macOS: sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain %q\n' "${CA_FILE}" ;;
+      Linux*)
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+          printf 'Debian/Ubuntu: sudo cp %q /usr/local/share/ca-certificates/moox-caddy-root.crt && sudo update-ca-certificates\n' "${CA_FILE}"
+        elif command -v update-ca-trust >/dev/null 2>&1; then
+          printf 'RHEL/Fedora: sudo cp %q /etc/pki/ca-trust/source/anchors/moox-caddy-root.crt && sudo update-ca-trust\n' "${CA_FILE}"
+        else
+          printf 'Linux: no supported trust-store command found\n'
+        fi ;;
+      MINGW*|MSYS*|CYGWIN*)
+        printf 'Windows: powershell.exe -NoProfile -NonInteractive -Command %q %q\n' \
+          'Import-Certificate -FilePath $args[0] -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null' "${CA_FILE}" ;;
+      *) printf 'Unsupported OS %q; install this CA in the browser system trust store\n' "${platform}" ;;
+    esac
+    printf 'Check: %q status --ca-file %q\n' "${ROOT}/skills/moox/scripts/caddy-ca.sh" "${CA_FILE}"
     printf 'curl --cacert %q https://HOST:9527/\n' "${CA_FILE}"
     printf 'Applications: set MOOX_SERVICE_GATEWAY_CA_FILE=%q; never disable TLS verification.\n' "${CA_FILE}";;
   *) echo 'command required: fetch|inspect|install|install-target|status|trust-help' >&2; exit 2;;
