@@ -16,9 +16,9 @@ Caddy state lives under `data/caddy` and survives ordinary deploys and data rese
 Fetch and install trust on each browser machine:
 
 ```bash
-skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox --output ~/.moox/certs/moox-root.crt
-skills/moox/scripts/caddy-ca.sh inspect --ca-file ~/.moox/certs/moox-root.crt
-skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-root.crt
+skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox --output ~/.moox/certs/moox-caddy-root-<public-host>.crt
+skills/moox/scripts/caddy-ca.sh inspect --ca-file ~/.moox/certs/moox-caddy-root-<public-host>.crt
+skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-<public-host>.crt
 ```
 
 Install the published CA directly on the web-host target when preparing it outside the normal deploy command:
@@ -27,6 +27,6 @@ Install the published CA directly on the web-host target when preparing it outsi
 skills/moox/scripts/caddy-ca.sh install-target --target user@host --deploy-dir /home/user/moox
 ```
 
-Normal deployment uses `--target-ca auto`: it installs automatically when the target user is root or has passwordless sudo, otherwise it keeps application-level CA trust and prints a warning. Only the explicit permission-denied result is downgraded; SSH, certificate, helper, and trust-store update failures stop deployment. Use `--target-ca skip` to opt out explicitly. The manual `install-target` command remains strict.
+Normal deployment uses `--target-ca auto` for the target and `--local-ca auto` for the operator machine. After each public deployment it fetches the root CA into `~/.moox/certs/moox-caddy-root-<public-host>.crt`, checks the local trust store by fingerprint, and installs it when missing. The filename contains the public IP/DNS so certificates from different servers can be identified safely. If local administrator permission is unavailable, deployment stops with an explicit command; use `--local-ca skip` only for an intentional non-browser deployment. The manual `install-target` command remains strict.
 
 Interactive deployment may offer to install trust on the operator machine once. Other browser machines must run the helper locally. Backend processes receive `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF configuration uses the equivalent base64 PEM. Never use insecure TLS verification. Caddy renews leaf certificates automatically while its data directory persists.

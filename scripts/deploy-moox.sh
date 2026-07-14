@@ -75,8 +75,8 @@ Options:
   --public-host <ip-or-dns>       Certificate SAN and public HTTPS host; enables managed Caddy.
   --browser-https-port <port>     Browser HTTPS edge. Default: 9527.
   --service-https-port <port>     Service HTTPS edge. Default: 11001.
-  --local-ca <auto|install|skip>  Operator CA workflow. Default: auto.
-  --local-ca-output <path>        Fetched root CA path. Default: ~/.moox/certs/<public-host>-root.crt.
+  --local-ca <auto|install|skip>  Operator CA workflow. Default: auto (check and install).
+  --local-ca-output <path>        Fetched root CA path. Default: ~/.moox/certs/moox-caddy-root-<public-host>.crt.
   --target-ca <auto|skip>         Install the CA in the target trust store when permitted. Default: auto.
   --caddy-conflict <fail>         Refuse unrelated listeners (the only supported policy).
   --enable-cls                    Prepare fixed CLS resources and add production CLS writers.
@@ -394,6 +394,12 @@ expand_local_path() {
 shell_quote() {
   local value="$1"
   printf "'%s'" "$(printf '%s' "${value}" | sed "s/'/'\\\\''/g")"
+}
+
+default_local_ca_output() {
+  local host_id
+  host_id="$(printf '%s' "${PUBLIC_HOST}" | tr ':/' '__' | tr -c 'A-Za-z0-9._-' '_')"
+  printf '%s/.moox/certs/moox-caddy-root-%s.crt\n' "${HOME}" "${host_id}"
 }
 
 local_file_mode() {
@@ -2086,8 +2092,8 @@ configure_target_ca
 
 configure_local_ca() {
   [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${LOCAL_CA}" != skip ]] || return 0
-  local output source
-  output="${LOCAL_CA_OUTPUT:-${HOME}/.moox/certs/${PUBLIC_HOST}-root.crt}"
+  local output source status
+  output="${LOCAL_CA_OUTPUT:-$(default_local_ca_output)}"
   output="$(expand_local_path "${output}")"
   mkdir -p "$(dirname "${output}")"
   if is_local_target; then
@@ -2099,12 +2105,25 @@ configure_local_ca() {
   chmod 0644 "${output}"
   FETCHED_CA_FILE="${output}"
   "${ROOT}/skills/moox/scripts/caddy-ca.sh" inspect --ca-file "${output}"
-  if [[ "${LOCAL_CA}" == install ]]; then
-    "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}"
-  elif [[ -t 0 ]]; then
-    read -r -p "Install this MooX CA into the local trust store? [y/N] " answer
-    [[ "${answer}" =~ ^[Yy]$ ]] && "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}"
+  if "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}" --check >/dev/null 2>&1; then
+    log "local CA already trusted: ${output}"
+    return 0
   fi
+
+  log "local CA is not trusted; installing: ${output}"
+  set +e
+  if [[ -t 0 ]]; then
+    "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}"
+  else
+    MOOX_CA_SUDO_NONINTERACTIVE=1 "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${output}"
+  fi
+  status=$?
+  set -e
+  case "${status}" in
+    0) log "local CA trust installed: ${output}" ;;
+    77) fail "local CA is not trusted and automatic installation needs local administrator permission; run scripts/moox/scripts/caddy-ca.sh install --ca-file ${output}, or use --local-ca skip explicitly" ;;
+    *) fail "local CA installation failed with status ${status}" ;;
+  esac
 }
 
 configure_local_ca
