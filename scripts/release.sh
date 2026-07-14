@@ -11,13 +11,11 @@ ARCHIVE="${RELEASE_ROOT}.tar.gz"
 build_web_assets() {
   (
     cd "${ROOT}/web"
-    if [[ ! -d node_modules ]]; then
-      CI=true pnpm install --no-frozen-lockfile --config.confirmModulesPurge=false
-    fi
-    npm run build:prod
+    CI=true pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+    pnpm run build:prod
   )
   if ! command -v statik >/dev/null 2>&1; then
-    go install github.com/rakyll/statik@latest
+    go install github.com/rakyll/statik@v0.1.7
   fi
   (cd "${ROOT}/web-host" && statik -src=../web/dist -dest=./internal)
 }
@@ -75,6 +73,7 @@ mkdir -p \
   "${RELEASE_ROOT}/factor/factors" \
   "${RELEASE_ROOT}/factor/sections" \
   "${RELEASE_ROOT}/trade/bin" \
+  "${RELEASE_ROOT}/trade/config" \
   "${RELEASE_ROOT}/monitor/bin" \
   "${RELEASE_ROOT}/monitor/config" \
   "${RELEASE_ROOT}/storage/bin" \
@@ -130,6 +129,7 @@ cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/collector/config/"
 cp -R "${ROOT}/modules/factor/config/." "${RELEASE_ROOT}/factor/config/"
 cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/factor/factors/"
 cp -R "${ROOT}/modules/factor/sections/." "${RELEASE_ROOT}/factor/sections/"
+cp -R "${ROOT}/modules/trade/config/." "${RELEASE_ROOT}/trade/config/"
 cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/factor/pyworker"
 find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
 cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"

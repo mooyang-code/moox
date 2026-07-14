@@ -509,15 +509,11 @@ build_web_host_binary() {
     log "build web assets and web-host (${TARGET_GOOS}/${TARGET_GOARCH})"
     (
       cd "${ROOT}/web"
-      if [[ ! -d node_modules ]]; then
-        CI=true pnpm install --no-frozen-lockfile --config.confirmModulesPurge=false
-      else
-        log "reuse existing web/node_modules"
-      fi
-      npm run build:prod
+      CI=true pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+      pnpm run build:prod
     )
     if ! command -v statik >/dev/null 2>&1; then
-      go install github.com/rakyll/statik@latest
+      go install github.com/rakyll/statik@v0.1.7
     fi
     (cd "${ROOT}/web-host" && statik -src=../web/dist -dest=./internal)
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \

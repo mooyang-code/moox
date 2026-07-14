@@ -1,14 +1,27 @@
 # moox
 一站式量化平台（web端/命令行）
 
+MooX 当前定位为个人单用户系统。唯一登录用户拥有全部管理能力，不建设
+`SUPER_ADMIN` 角色表或 RBAC；安全边界仍由登录、24 小时会话、请求签名、
+nonce 防重放和密钥保护组成，单用户不等于取消认证。
+
+仓库采用 Go Workspace 大仓组织，业务模块包括 Admin、Storage、Collector、
+CloudNode、Trade、Factor、Strategy、Archive、Monitor、EventBus 和 HostAgent；
+`packages/` 放置跨模块协议、鉴权、消息总线、运行时和健康检查等共享能力。
+Factor 已包含定义导入、任务调度、Python worker 执行、Storage 读写和单次计算
+CLI，不再是占位模块。
+
 ## 打包与部署
 
 仓库有两个入口：
 
-- `make release`：生成二进制归档包，包含核心二进制、admin/eventbus/cloudnode/collector/storage 配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
+- `make release`：生成二进制归档包，包含核心二进制、admin/eventbus/cloudnode/collector/factor/trade/monitor/storage 配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
 - `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端，包含 admin/cli/web-host/eventbus 以及按开关启用的 cloudnode/collector/storage，附带配置、Storage schema、`examples` 示例元数据，以及 `start.sh`、`stop.sh`、`status.sh`。
 
-`make release` 会打包 `cli/admin/web-host/eventbus/cloudnode/collector/collector-scf/factor/trade/monitor/storage` 二进制；配置目录随包包含 admin、eventbus、cloudnode、collector、factor、monitor、storage。`make deploy` 默认负责 admin、web-host、eventbus、cloudnode、collector、factor、monitor、storage 的可运行部署，可用 `--no-monitor`、`--no-eventbus` 等开关关闭独立模块。
+`make release` 会打包 `cli/admin/web-host/eventbus/cloudnode/collector/collector-scf/factor/trade/monitor/storage/archive` 二进制；配置目录随包包含 admin、eventbus、cloudnode、collector、factor、trade、monitor、storage、archive。`make deploy` 默认负责 admin、web-host、eventbus、cloudnode、collector、factor、monitor、storage、archive 的可运行部署，可用 `--no-monitor`、`--no-eventbus` 等开关关闭独立模块。Trade 当前通过 release 制品或模块构建单独部署，不在 `make deploy` 的默认进程编排中。
+
+提交前统一运行 `make verify`，它会检查模块边界，遍历 `go.work` 执行所有
+Go 测试和 vet，并完成管理台测试、生产构建、文档构建及发布契约检查。
 
 Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
