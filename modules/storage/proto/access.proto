@@ -75,6 +75,8 @@ message WriteTimeSeriesRowsReq {
 message WriteTimeSeriesRowsRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
+  // written_keys 是已经成功提交的幂等键；部分目标写入失败时仍会返回先前已提交的键。
+  repeated string written_keys = 2;
 }
 
 // ReadTimeSeriesRowsReq 表示读取时序事实数据。

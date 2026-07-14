@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -31,21 +31,40 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	if err != nil {
 		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
+	written := make([]string, 0, len(req.GetRows()))
 	for _, group := range groups {
 		message, event, err := timeSeriesUpdateMessage(group)
 		if err != nil {
-			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err), WrittenKeys: written}, nil
 		}
 		if err := s.writeRoutedRows(ctx, group, message); err != nil {
-			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), WrittenKeys: written}, nil
 		}
+		written = append(written, timeSeriesWrittenKeys(group.timeSeriesKeys)...)
 		if event != nil && !s.hasMessageWriter() && s.events != nil {
 			if err := s.events.PublishTimeSeriesRowsUpdated(ctx, event); err != nil {
 				s.reportViewError(ctx, "time_series_rows_updated", err)
 			}
 		}
 	}
-	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success")}, nil
+	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success"), WrittenKeys: written}, nil
+}
+
+func timeSeriesWrittenKeys(keys []*pb.TimeSeriesKey) []string {
+	written := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key == nil {
+			continue
+		}
+		written = append(written, strings.Join([]string{
+			factkey.EscapePart(key.GetSpaceId()),
+			factkey.EscapePart(key.GetDatasetId()),
+			factkey.EscapePart(key.GetSubjectId()),
+			factkey.EscapePart(key.GetFreq()),
+			factkey.EscapePart(key.GetDataTime()),
+		}, "|"))
+	}
+	return written
 }
 
 func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error) {
@@ -337,23 +356,21 @@ func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsRe
 	if err != nil {
 		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
+	var written []*pb.RecordKey
 	for _, group := range groups {
 		message, event, err := recordUpdateMessage(group)
 		if err != nil {
-			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err), Keys: cloneRecordKeys(written)}, nil
 		}
 		if err := s.writeRoutedRows(ctx, group, message); err != nil {
-			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), Keys: cloneRecordKeys(written)}, nil
 		}
+		written = append(written, group.recordKeys...)
 		if event != nil && !s.hasMessageWriter() && s.events != nil {
 			if err := s.events.PublishRecordRowsUpdated(ctx, event); err != nil {
 				s.reportViewError(ctx, "record_rows_updated", err)
 			}
 		}
-	}
-	var written []*pb.RecordKey
-	for _, group := range groups {
-		written = append(written, group.recordKeys...)
 	}
 	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
