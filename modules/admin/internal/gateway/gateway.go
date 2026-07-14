@@ -241,7 +241,7 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
 	body, err := readBoundedBody(r.Body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取请求体失败: %v", err)
+		return nil, nil, fmt.Errorf("读取请求体失败: %w", err)
 	}
 	defer r.Body.Close()
 	rawBody := append([]byte(nil), body...)
