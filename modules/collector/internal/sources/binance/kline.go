@@ -23,19 +23,21 @@ const (
 	InstTypeSWAP = "SWAP" // 永续合约
 )
 
-const (
-	klineFetchLimit         = 5
-	klineCloseRetryDelay    = 200 * time.Millisecond
-	klineCloseRetryAttempts = 3
-)
-
 var errKlineNotClosed = errors.New("K线尚未闭合")
 
 // KlineCollector K线数据采集器
 type KlineCollector struct {
-	client  *binanceapi.Client
-	spotAPI *binanceapi.SpotAPI
-	swapAPI *binanceapi.SwapAPI
+	client         *binanceapi.Client
+	spotAPI        *binanceapi.SpotAPI
+	swapAPI        *binanceapi.SwapAPI
+	storage        klineStorage
+	fetchKlinePage func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error)
+	now            func() time.Time
+}
+
+type klineStorage interface {
+	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error)
+	WriteTimeSeriesRows(context.Context, []*storagepb.TimeSeriesRow) error
 }
 
 // init 自注册到采集器注册中心
@@ -80,79 +82,93 @@ func (c *KlineCollector) DataType() string {
 
 // Collect 执行一次K线采集
 func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
+	if params == nil {
+		return fmt.Errorf("K线采集参数不能为空")
+	}
 	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
 		params.InstType, params.Symbol, params.Interval)
 
-	log.DebugContextf(ctx, "K线拉取开始: inst_type=%s, symbol=%s, interval=%s, spot_domain=%s, swap_domain=%s",
-		params.InstType, params.Symbol, params.Interval, c.client.SpotDomain(), c.client.SwapDomain())
-	klines, err := c.fetchKlines(ctx, params)
+	freq, err := normalizeFreq(params.Interval)
 	if err != nil {
-		log.ErrorContextf(ctx, "K线采集失败: inst_type=%s, symbol=%s, interval=%s, error=%v",
-			params.InstType, params.Symbol, params.Interval, err)
 		return err
 	}
-
-	if len(klines) > 0 {
-		log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d, latest=%+v",
-			params.InstType, params.Symbol, params.Interval, len(klines), klines[len(klines)-1])
-	}
-
-	log.DebugContextf(ctx, "K线写入存储开始: inst_type=%s, symbol=%s, interval=%s, count=%d, storage_access_target=%s",
-		params.InstType, params.Symbol, params.Interval, len(klines), runtimeapp.GetStorageAccessTarget())
-	if err := c.reportKlines(ctx, params, klines); err != nil {
-		log.ErrorContextf(ctx, "K线写入存储失败: inst_type=%s, symbol=%s, interval=%s, error=%v",
-			params.InstType, params.Symbol, params.Interval, err)
+	binding, err := ResolveStorageBinding(params.InstType)
+	if err != nil {
 		return err
 	}
-	log.InfoContextf(ctx, "K线写入存储完成: inst_type=%s, symbol=%s, interval=%s, count=%d",
-		params.InstType, params.Symbol, params.Interval, len(klines))
+	storageSubjectID := strings.TrimSpace(params.SubjectID)
+	if storageSubjectID == "" {
+		storageSubjectID = params.Symbol
+	}
+	writer := c.storage
+	if writer == nil {
+		accessTarget := runtimeapp.GetStorageAccessTarget()
+		if accessTarget == "" {
+			return fmt.Errorf("未配置存储 access tRPC 地址")
+		}
+		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding))
+	}
+	watermark, found, err := writer.LatestTimeSeriesTime(ctx, &storagepb.TimeSeriesKey{
+		SpaceId: binding.SpaceID, DatasetId: binding.KlineDatasetID, SubjectId: storageSubjectID, Freq: freq,
+	})
+	if err != nil {
+		return fmt.Errorf("读取K线水位线失败: %w", err)
+	}
+	var watermarkPtr *time.Time
+	if found {
+		watermarkPtr = &watermark
+	}
+	cursor := newKlineCursor(watermarkPtr)
+	total := 0
+	for {
+		req, ok := cursor.NextRequest(params.Symbol, params.Interval)
+		if !ok {
+			break
+		}
+		exchangeKlines, err := c.fetchKlines(ctx, params, req)
+		if err != nil {
+			return err
+		}
+		klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
+		closed, skipped := filterClosedKlines(klines, c.currentTime())
+		if skipped > 0 {
+			log.InfoContextf(ctx, "跳过未闭合K线: inst_type=%s, symbol=%s, interval=%s, skipped=%d", params.InstType, params.Symbol, params.Interval, skipped)
+		}
+		if len(closed) > 0 {
+			rows, buildErr := buildKlineRows(closed, storageSubjectID, binding, freq)
+			if buildErr != nil {
+				return buildErr
+			}
+			if err := writer.WriteTimeSeriesRows(ctx, rows); err != nil {
+				return fmt.Errorf("K线写入存储失败: %w", err)
+			}
+			total += len(rows)
+		}
+		more, advanceErr := cursor.Advance(exchangeKlines)
+		if advanceErr != nil {
+			return advanceErr
+		}
+		if !more {
+			break
+		}
+	}
+	log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d", params.InstType, params.Symbol, params.Interval, total)
 	return nil
 }
 
-// fetchKlines 从币安 API 获取 K 线数据
-func (c *KlineCollector) fetchKlines(ctx context.Context, params *sources.CollectParams) ([]*market.Kline, error) {
-	req := &exchange.KlineRequest{
-		Symbol:   params.Symbol,
-		Interval: params.Interval,
-		Limit:    klineFetchLimit, // 只获取最新的5根K线
+func (c *KlineCollector) currentTime() time.Time {
+	if c != nil && c.now != nil {
+		return c.now()
 	}
+	return time.Now()
+}
 
-	var closedKlines []*market.Kline
-	err := retry.Do(
-		func() error {
-			exchangeKlines, err := c.fetchExchangeKlines(ctx, params, req)
-			if err != nil {
-				return err
-			}
-			klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
-			closed, skipped := filterClosedKlines(klines, time.Now())
-			if skipped > 0 {
-				log.InfoContextf(ctx, "跳过未闭合K线: inst_type=%s, symbol=%s, interval=%s, skipped=%d",
-					params.InstType, params.Symbol, params.Interval, skipped)
-			}
-			if len(klines) > 0 && len(closed) == 0 {
-				return fmt.Errorf("%w: inst_type=%s, symbol=%s, interval=%s, latest_close_time=%s",
-					errKlineNotClosed, params.InstType, params.Symbol, params.Interval, latestCloseTime(klines))
-			}
-			closedKlines = closed
-			return nil
-		},
-		retry.Attempts(klineCloseRetryAttempts),
-		retry.Delay(klineCloseRetryDelay),
-		retry.LastErrorOnly(true),
-		retry.RetryIf(func(err error) bool {
-			return errors.Is(err, errKlineNotClosed)
-		}),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "K线尚未闭合，重新请求 #%d: inst_type=%s, symbol=%s, interval=%s, err=%v",
-				n+1, params.InstType, params.Symbol, params.Interval, err)
-		}),
-		retry.Context(ctx),
-	)
-	if err != nil {
-		return nil, err
+// fetchKlines 从币安 API 获取一页 K 线数据。
+func (c *KlineCollector) fetchKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	if c.fetchKlinePage != nil {
+		return c.fetchKlinePage(ctx, params, req)
 	}
-	return closedKlines, nil
+	return c.fetchExchangeKlines(ctx, params, req)
 }
 
 func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {

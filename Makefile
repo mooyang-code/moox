@@ -1,4 +1,4 @@
-.PHONY: build check-boundaries release deploy test-caddy package-skill clean proto
+.PHONY: build check-boundaries release deploy test test-go test-web test-release verify test-caddy package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -11,6 +11,23 @@ release:
 
 deploy:
 	./scripts/deploy-moox.sh $(ARGS)
+
+test: test-go test-web
+
+test-go:
+	./scripts/test-go-workspace.sh
+
+test-web:
+	CI=true pnpm --dir web install --frozen-lockfile
+	pnpm --dir web test
+	pnpm --dir web build:prod
+
+test-release:
+	./scripts/test-release-contract.sh
+
+verify: check-boundaries test test-release
+	CI=true pnpm install --frozen-lockfile
+	pnpm docs:build
 
 test-caddy:
 	bash scripts/test-deploy-moox-https.sh

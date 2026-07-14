@@ -74,15 +74,6 @@ func TestOrderSideAndTypeMappings_ShouldMapKnownValues(t *testing.T) {
 	assert.Equal(t, "ioc", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_IOC))
 	assert.Equal(t, "fok", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_FOK))
 	assert.Equal(t, "limit", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_LIMIT))
-	assert.Equal(t, int32(tradepb.OrderSide_ORDER_SIDE_SELL), orderSidePB("sell"))
-	assert.Equal(t, int32(tradepb.OrderSide_ORDER_SIDE_BUY), orderSidePB("buy"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_MARKET), orderTypePB("market"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_STOP), orderTypePB("stop"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_STOP_LIMIT), orderTypePB("stop_limit"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_POST_ONLY), orderTypePB("post_only"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_IOC), orderTypePB("ioc"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_FOK), orderTypePB("fok"))
-	assert.Equal(t, int32(tradepb.OrderType_ORDER_TYPE_LIMIT), orderTypePB("limit"))
 }
 
 func TestStatusMappings_ShouldCastDomainValues(t *testing.T) {
@@ -100,9 +91,6 @@ func TestModelToPB_NilInputs_ShouldReturnNil(t *testing.T) {
 	assert.Nil(t, fundFlowToPB(nil))
 	assert.Nil(t, apiKeyToPB(nil))
 	assert.Nil(t, channelToPB(nil))
-	assert.Nil(t, orderToPB(nil))
-	assert.Nil(t, tradeToPB(nil))
-	assert.Nil(t, positionToPB(nil))
 }
 
 func TestModelToPB_ValidAccount_ShouldPopulateFields(t *testing.T) {
@@ -138,18 +126,6 @@ func TestModelToPB_ValidModels_ShouldPopulateFields(t *testing.T) {
 	assert.Equal(t, tradepb.MarketType_MARKET_TYPE_SWAP, channel.MarketType)
 	assert.True(t, channel.IsSimulated)
 
-	order := orderToPB(&service.Order{OrderID: "ord-1", ClientOrderID: "cli-1", ExchangeOrderID: "ex-1", AccountID: "acc-1", ChannelID: "ch-1", Exchange: "binance", Symbol: "BTCUSDT", MarketType: "spot", Side: "sell", PosSide: "net", OrderType: "ioc", TimeInForce: "IOC", Price: "100", Quantity: "2", Amount: "200", FilledQty: "1", FilledAmount: "100", AvgPrice: "100", Fee: "0.1", FeeCurrency: "USDT", Status: int(tradepb.OrderStatus_ORDER_STATUS_PARTIALLY_FILLED), ReduceOnly: true, TriggerPrice: "90", Source: "manual", StrategyID: "st-1", RejectReason: "none", SubmittedAt: now, FinishedAt: now, CreatedAt: now, UpdatedAt: now})
-	assert.Equal(t, tradepb.OrderSide_ORDER_SIDE_SELL, order.Side)
-	assert.Equal(t, tradepb.OrderType_ORDER_TYPE_IOC, order.OrderType)
-	assert.True(t, order.ReduceOnly)
-
-	trade := tradeToPB(&service.Trade{TradeID: "tr-1", ExchangeTradeID: "ex-tr-1", OrderID: "ord-1", ExchangeOrderID: "ex-1", AccountID: "acc-1", ChannelID: "ch-1", Exchange: "okx", Symbol: "ETH-USDT", Side: "buy", Price: "10", Quantity: "3", Amount: "30", Fee: "0.01", FeeCurrency: "USDT", Role: "maker", TradedAt: now})
-	assert.Equal(t, tradepb.OrderSide_ORDER_SIDE_BUY, trade.Side)
-	assert.Equal(t, int64(200), trade.TradedAt)
-
-	position := positionToPB(&service.Position{PositionID: "pos-1", AccountID: "acc-1", ChannelID: "ch-1", Exchange: "okx", Symbol: "BTC-USDT-SWAP", PosSide: "long", Quantity: "1", AvgPrice: "50000", Leverage: "10", Margin: "5000", LiqPrice: "40000", UnrealizedPnl: "12", RealizedPnl: "3", UpdatedAt: now})
-	assert.Equal(t, "BTC-USDT-SWAP", position.Symbol)
-	assert.Equal(t, "12", position.UnrealizedPnl)
 }
 
 func TestInstrumentAndDustToPB_ShouldPopulateFields(t *testing.T) {
@@ -183,6 +159,22 @@ func TestKernelStatusToPB_AllStates_ShouldMap(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, kernelStatusToPB(tc.state), "state=%s", tc.state)
 	}
+}
+
+func TestKernelSubmittedFilterMatchesAllSubmittedResponseStates(t *testing.T) {
+	states := kernelStatusFilter(tradepb.OrderStatus_ORDER_STATUS_SUBMITTED)
+	assert.ElementsMatch(t, []string{
+		string(domainorder.Open), string(domainorder.Submitting), string(domainorder.SubmitUnknown),
+		string(domainorder.Canceling), string(domainorder.CancelUnknown),
+	}, states)
+	for _, state := range states {
+		assert.Equal(t, tradepb.OrderStatus_ORDER_STATUS_SUBMITTED, kernelStatusToPB(domainorder.State(state)))
+	}
+}
+
+func TestKernelFillToPBUsesExchangeTradeTime(t *testing.T) {
+	got := kernelFillToPB(store.FillRecord{TradedAtMS: 1_700_000_000_123})
+	assert.Equal(t, int64(1_700_000_000), got.GetTradedAt())
 }
 
 func TestKernelOrderToPB_BuyAndSell_ShouldPopulateFields(t *testing.T) {

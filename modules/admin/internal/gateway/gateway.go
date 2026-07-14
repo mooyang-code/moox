@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -139,7 +138,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		} else {
 			rawBody, err := readAndRestoreBody(r)
 			if err != nil {
-				writeAdminAuthFailure(w)
+				writeRequestBodyError(w, err)
 				return
 			}
 			claims, err := verifyAdminRequest(r, rawBody)
@@ -181,7 +180,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 	rawBody, body, err := handler.readRequestBodyWithRaw(r)
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeRequestBodyError(w, err)
 		return
 	}
 	if requireServiceAuth {
@@ -240,9 +239,9 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 // readRequestBodyWithRaw reads the exact RPC body. Query parameters are not
 // converted into RPC fields because doing so would create unsigned input.
 func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
-	body, err := io.ReadAll(r.Body)
+	body, err := readBoundedBody(r.Body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取请求体失败: %v", err)
+		return nil, nil, fmt.Errorf("读取请求体失败: %w", err)
 	}
 	defer r.Body.Close()
 	rawBody := append([]byte(nil), body...)

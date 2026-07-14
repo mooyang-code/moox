@@ -1,15 +1,75 @@
 package binance
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	exchange "github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestKlineCollectorCollectStartsAfterStorageWatermark(t *testing.T) {
+	watermark := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	store := &fakeKlineStorage{latest: watermark, found: true}
+	var requests []*exchange.KlineRequest
+	c := &KlineCollector{
+		storage: store,
+		fetchKlinePage: func(_ context.Context, _ *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+			requests = append(requests, req)
+			return []*exchange.Kline{{
+				OpenTime: watermark.Add(time.Minute), CloseTime: watermark.Add(2 * time.Minute),
+				Open: common.NewDecimal("1"), High: common.NewDecimal("2"), Low: common.NewDecimal("0.5"), Close: common.NewDecimal("1.5"),
+				Volume: common.NewDecimal("10"), QuoteVolume: common.NewDecimal("15"), TradeCount: 3,
+			}}, nil
+		},
+		now: func() time.Time { return watermark.Add(time.Hour) },
+	}
+
+	err := c.Collect(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT, Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m"})
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+	assert.True(t, requests[0].StartTime.After(watermark))
+	require.Len(t, store.writes, 1)
+	require.Len(t, store.writes[0], 1)
+	assert.Equal(t, "BTC-USDT", store.writes[0][0].GetKey().GetSubjectId())
+}
+
+func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
+	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	store := &fakeKlineStorage{}
+	c := &KlineCollector{
+		storage: store,
+		fetchKlinePage: func(_ context.Context, _ *sources.CollectParams, _ *exchange.KlineRequest) ([]*exchange.Kline, error) {
+			return []*exchange.Kline{{OpenTime: now, CloseTime: now.Add(time.Minute)}}, nil
+		},
+		now: func() time.Time { return now },
+	}
+
+	err := c.Collect(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT, Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m"})
+	require.NoError(t, err)
+	assert.Empty(t, store.writes)
+}
+
+type fakeKlineStorage struct {
+	latest time.Time
+	found  bool
+	writes [][]*storagepb.TimeSeriesRow
+}
+
+func (s *fakeKlineStorage) LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+	return s.latest, s.found, nil
+}
+
+func (s *fakeKlineStorage) WriteTimeSeriesRows(_ context.Context, rows []*storagepb.TimeSeriesRow) error {
+	s.writes = append(s.writes, rows)
+	return nil
+}
 
 func TestFilterSymbols_KeepsActiveUSDTPairs(t *testing.T) {
 	c := &SymbolCollector{}

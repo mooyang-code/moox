@@ -1,12 +1,15 @@
 package binance
 
 import (
+	"context"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestResolveBinanceSourceConfigPathFindsDeployedCollectorConfigs(t *testing.T) {
@@ -72,4 +75,33 @@ func TestNormalizeStorageTarget(t *testing.T) {
 	assert.Equal(t, "ip://10.0.0.1:20102", normalizeStorageTarget("10.0.0.1:20102", "20102"))
 	assert.Equal(t, "ip://host:20100", normalizeStorageTarget("ip://host:20100", "20100"))
 	assert.Equal(t, "http://svc:8080", normalizeStorageTarget("http://svc:8080", "20102"))
+}
+
+func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
+	proxy := &latestTimeSeriesProxy{rsp: &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		Rows:    []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{DataTime: "2026-07-10T12:00:00Z"}}},
+	}}
+	writer := &storageWriter{access: proxy}
+
+	got, found, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesKey{
+		SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m",
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC), got)
+	require.NotNil(t, proxy.req)
+	assert.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, proxy.req.GetOrder())
+	assert.Equal(t, uint32(1), proxy.req.GetPage().GetSize())
+}
+
+type latestTimeSeriesProxy struct {
+	storagepb.AccessClientProxy
+	req *storagepb.ReadTimeSeriesRowsReq
+	rsp *storagepb.ReadTimeSeriesRowsRsp
+}
+
+func (p *latestTimeSeriesProxy) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	p.req = req
+	return p.rsp, nil
 }

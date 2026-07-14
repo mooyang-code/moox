@@ -55,11 +55,11 @@ func TestInboxAndFillIdempotency(t *testing.T) {
 		if e != nil || b {
 			t.Fatal("duplicate inbox applied")
 		}
-		a, e = tx.InsertFill("s", "f", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "")
+		a, e = tx.InsertFill("s", "f", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "", 0)
 		if e != nil || !a {
 			return e
 		}
-		b, e = tx.InsertFill("s", "f2", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "")
+		b, e = tx.InsertFill("s", "f2", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "", 0)
 		if e != nil || b {
 			t.Fatal("duplicate exchange fill applied")
 		}
@@ -67,6 +67,29 @@ func TestInboxAndFillIdempotency(t *testing.T) {
 	}); e != nil {
 		t.Fatal(e)
 	}
+}
+
+func TestEpochTimeAcceptsSecondsAndMilliseconds(t *testing.T) {
+	seconds := int64(1_700_000_000)
+	assert.Equal(t, seconds*1000, epochMillis(seconds))
+	assert.Equal(t, seconds*1000, epochMillis(seconds*1000))
+	assert.Equal(t, time.Unix(seconds, 0).UTC(), epochTime(seconds))
+}
+
+func TestListFillsPageUsesExchangeTradeTime(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	tradeTime := int64(1_700_000_000_000)
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		_, err := tx.InsertFill("s", "f", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "", tradeTime)
+		return err
+	}))
+
+	rows, total, err := s.ListFillsPage(ctx, "s", FillQuery{StartTimeMS: tradeTime / 1000, EndTimeMS: tradeTime, Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, tradeTime, rows[0].TradedAtMS)
 }
 
 func openTestStore(t *testing.T) *Store {

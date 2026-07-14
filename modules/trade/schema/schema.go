@@ -1,5 +1,4 @@
 // Package schema embeds the Trade module SQLite schema for explicit initialization flows.
-// Trade 模块统一承载账户域（account.sql）与交易域（order.sql）两套表。
 package schema
 
 import _ "embed"
@@ -9,7 +8,7 @@ import _ "embed"
 //go:embed account.sql
 var accountSQL string
 
-// orderSQL 是 Trade 模块交易域的 SQLite schema。
+// orderSQL 保留交易通道和操作审计表；订单、成交和持仓事实由 Kernel schema 承载。
 //
 //go:embed order.sql
 var orderSQL string
@@ -36,7 +35,7 @@ func AccountSQL() string {
 	return accountSQL
 }
 
-// OrderSQL 返回交易域（通道/订单/成交/持仓/操作）的 SQLite schema。
+// OrderSQL 返回交易通道和操作审计 DDL。
 func OrderSQL() string {
 	return orderSQL
 }

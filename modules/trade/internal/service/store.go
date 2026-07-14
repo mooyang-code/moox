@@ -37,19 +37,6 @@ type Store interface {
 	GetChannel(ctx context.Context, spaceID, channelID string) (*TradeChannel, error)
 	ListChannels(ctx context.Context, spaceID string, f ChannelFilter, page Page) ([]*TradeChannel, int, error)
 
-	SaveOrder(ctx context.Context, spaceID string, o *Order) error
-	UpsertOrders(ctx context.Context, spaceID string, orders []*Order) error
-	UpdateOrder(ctx context.Context, spaceID string, o *Order) error
-	GetOrder(ctx context.Context, spaceID, orderID, clientOrderID string) (*Order, error)
-	ListOrders(ctx context.Context, spaceID string, f OrderFilter, page Page) ([]*Order, int, error)
-
-	AppendTrades(ctx context.Context, spaceID string, trades []*Trade) error
-	ListTrades(ctx context.Context, spaceID string, f TradeFilter, page Page) ([]*Trade, int, error)
-
-	UpsertPositions(ctx context.Context, spaceID string, positions []*Position) error
-	ReplacePositions(ctx context.Context, spaceID, accountID, symbol string, positions []*Position) error
-	ListPositions(ctx context.Context, spaceID, accountID, symbol string) ([]*Position, error)
-
 	// ---- 操作审计 ----
 
 	// AppendOrderOperation 追加一次通道操作审计（下单/撤单/改单/查询等）。
@@ -84,24 +71,4 @@ type FundFlowFilter struct {
 type ChannelFilter struct {
 	AccountID string
 	Exchange  string
-}
-
-// OrderFilter 订单查询过滤。
-type OrderFilter struct {
-	AccountID string
-	ChannelID string
-	Symbol    string
-	Status    int
-	OnlyOpen  bool
-	StartTime int64
-	EndTime   int64
-}
-
-// TradeFilter 成交查询过滤。
-type TradeFilter struct {
-	AccountID string
-	OrderID   string
-	Symbol    string
-	StartTime int64
-	EndTime   int64
 }

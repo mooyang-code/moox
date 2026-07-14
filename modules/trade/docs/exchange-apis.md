@@ -187,7 +187,7 @@ type ExchangeAdapter interface {
 // PrivateStream 私有 WebSocket 回报（订单/成交/持仓/余额变更），用于实时回填本地表。
 // 推荐 ws 为主、REST 查询为兜底。
 type PrivateStream interface {
-    // Subscribe 订阅账户私有频道；事件经 handler 回调写入 t_orders/t_trades/t_positions/t_account_balances。
+    // Subscribe 订阅账户私有频道；事件经 handler 写入 Trade Kernel 聚合与投影。
     Subscribe(ctx context.Context, cred Credential, market MarketType, handler StreamHandler) error
     Close() error
 }

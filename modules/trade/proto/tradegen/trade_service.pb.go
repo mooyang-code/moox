@@ -290,7 +290,7 @@ func (OrderType) EnumDescriptor() ([]byte, []int) {
 	return file_trade_service_proto_rawDescGZIP(), []int{4}
 }
 
-// OrderStatus 订单状态（与 t_orders.c_status 对齐）。
+// OrderStatus 订单状态（由 Trade Kernel 聚合状态映射）。
 type OrderStatus int32
 
 const (
@@ -2673,7 +2673,7 @@ func (x *Instrument) GetLastPrice() string {
 	return ""
 }
 
-// Order 订单（对应 t_orders）。
+// Order 订单（由 Trade Kernel 订单聚合返回）。
 type Order struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -2953,7 +2953,7 @@ func (x *Order) GetUpdatedAt() int64 {
 	return 0
 }
 
-// Trade 成交明细（对应 t_trades）。
+// Trade 成交明细（由 Trade Kernel Fill 事实返回）。
 type Trade struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -3121,7 +3121,7 @@ func (x *Trade) GetTradedAt() int64 {
 	return 0
 }
 
-// Position 持仓（对应 t_positions）。
+// Position 持仓（由 Trade Kernel 成交事实投影）。
 type Position struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

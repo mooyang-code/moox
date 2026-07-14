@@ -28,7 +28,7 @@ func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, 
 			return err
 		}
 		canonicalID := account + ":" + r.ChannelID + ":" + r.Symbol + ":" + f.ExchangeTradeID
-		fresh, err := tx.InsertFill(space, canonicalID, f.ExchangeTradeID, account, r.ChannelID, r.Symbol, orderID, f.Quantity.String(), f.Price.String(), f.Fee.String(), f.FeeCurrency)
+		fresh, err := tx.InsertFill(space, canonicalID, f.ExchangeTradeID, account, r.ChannelID, r.Symbol, orderID, f.Quantity.String(), f.Price.String(), f.Fee.String(), f.FeeCurrency, normalizeEpochMillis(f.TradedAt))
 		if err != nil || !fresh {
 			return err
 		}
@@ -121,4 +121,11 @@ func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, 
 	}
 	telemetry.Fills.WithLabelValues(source, result).Inc()
 	return applied, err
+}
+
+func normalizeEpochMillis(value int64) int64 {
+	if value > 0 && value < 1_000_000_000_000 {
+		return value * 1000
+	}
+	return value
 }

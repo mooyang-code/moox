@@ -20,7 +20,7 @@ func TestInitializeDoesNotCreateSchema(t *testing.T) {
 SELECT count(*)
 FROM sqlite_master
 WHERE type = 'table'
-  AND (name LIKE 't_trade_%' OR name IN ('t_accounts', 't_orders', 't_trades', 't_positions'))
+  AND (name LIKE 't_trade_%' OR name = 't_accounts')
 `).Scan(&count).Error; err != nil {
 		t.Fatalf("query table count: %v", err)
 	}

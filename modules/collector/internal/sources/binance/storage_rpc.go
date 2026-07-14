@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -33,6 +34,33 @@ func (w *storageWriter) WriteTimeSeriesRows(ctx context.Context, rows []*storage
 		return fmt.Errorf("write time-series rows: %w", err)
 	}
 	return ensureStorageOK("write time-series rows", rsp.GetRetInfo())
+}
+
+func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, key *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+	rsp, err := w.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		AuthInfo: w.authInfo,
+		Keys:     []*storagepb.TimeSeriesKey{key},
+		Order:    storagepb.SortOrder_SORT_ORDER_DESC,
+		Page:     &storagepb.Page{Page: 1, Size: 1},
+	})
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read latest time-series row: %w", err)
+	}
+	if err := ensureStorageOK("read latest time-series row", rsp.GetRetInfo()); err != nil {
+		return time.Time{}, false, err
+	}
+	if len(rsp.GetRows()) == 0 || rsp.GetRows()[0].GetKey() == nil {
+		return time.Time{}, false, nil
+	}
+	dataTime := strings.TrimSpace(rsp.GetRows()[0].GetKey().GetDataTime())
+	if dataTime == "" {
+		return time.Time{}, false, fmt.Errorf("read latest time-series row: empty data_time")
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, dataTime)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read latest time-series row: parse data_time %q: %w", dataTime, err)
+	}
+	return parsed.UTC(), true, nil
 }
 
 func (w *storageWriter) WriteRecordRows(ctx context.Context, rows []*storagepb.RecordRow) error {

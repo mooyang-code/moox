@@ -19,7 +19,7 @@ jetstream:
   credential_file: ~/.config/moox/cloudnode/eventbus.yaml
   subject_prefix: moox.cloudnode
   exec_stream: MOOX_CLOUDNODE_EXEC
-  ack_wait_millis: 120000
+  ack_wait_millis: 720000
   max_deliver: 3
   fetch_max_wait_ms: 500
 

@@ -63,7 +63,25 @@ type PositionRecord struct {
 	AccountID, Symbol, Quantity, AveragePrice, RealizedPnL string
 	Version                                                uint64
 }
-type FillRecord struct{ FillID, ExchangeTradeID, OrderID, Quantity, Price, Fee, FeeAsset string }
+type FillRecord struct {
+	FillID, ExchangeTradeID, AccountID, ChannelID, Symbol, OrderID, Quantity, Price, Fee, FeeAsset string
+	TradedAtMS                                                                                     int64
+	CreatedAt                                                                                      time.Time
+}
+
+type OrderQuery struct {
+	AccountID, ChannelID, Symbol string
+	States                       []string
+	OpenOnly                     bool
+	StartTimeMS, EndTimeMS       int64
+	Offset, Limit                int
+}
+
+type FillQuery struct {
+	AccountID, OrderID, Symbol string
+	StartTimeMS, EndTimeMS     int64
+	Offset, Limit              int
+}
 
 var claimSequence atomic.Uint64
 
@@ -79,6 +97,11 @@ func Open(path string) (*Store, error) {
 	for _, stmt := range splitSQL(schema.AllSQL()) {
 		if _, err = sqlDB.Exec(stmt); err != nil {
 			return nil, fmt.Errorf("apply trade schema: %w", err)
+		}
+	}
+	if !db.Migrator().HasColumn("t_trade_fill_events", "c_traded_at_ms") {
+		if err = db.Exec("ALTER TABLE t_trade_fill_events ADD COLUMN c_traded_at_ms INTEGER NOT NULL DEFAULT 0").Error; err != nil {
+			return nil, fmt.Errorf("migrate trade fill time: %w", err)
 		}
 	}
 	return &Store{db: db}, nil
@@ -353,6 +376,102 @@ func (s *Store) ListOrders(ctx context.Context, space, account, channel, symbol 
 	}
 	return out, nil
 }
+
+func (s *Store) ListOrdersPage(ctx context.Context, space string, filter OrderQuery) ([]OrderRecord, int, error) {
+	query := s.db.WithContext(ctx).Table("t_trade_order_aggregates")
+	if space != "" {
+		query = query.Where("c_space_id=?", space)
+	}
+	if filter.AccountID != "" {
+		query = query.Where("c_account_id=?", filter.AccountID)
+	}
+	if filter.ChannelID != "" {
+		query = query.Where("c_channel_id=?", filter.ChannelID)
+	}
+	if filter.Symbol != "" {
+		query = query.Where("c_symbol=?", filter.Symbol)
+	}
+	if len(filter.States) > 0 {
+		query = query.Where("c_state IN ?", filter.States)
+	}
+	if filter.OpenOnly {
+		query = query.Where("c_state NOT IN ?", []string{"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"})
+	}
+	if filter.StartTimeMS > 0 {
+		query = query.Where("c_ctime>=?", epochTime(filter.StartTimeMS))
+	}
+	if filter.EndTimeMS > 0 {
+		query = query.Where("c_ctime<=?", epochTime(filter.EndTimeMS))
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 20
+	}
+	var refs []struct {
+		OrderID string `gorm:"column:c_order_id"`
+	}
+	if err := query.Select("c_order_id").Order("c_id DESC").Offset(filter.Offset).Limit(limit).Scan(&refs).Error; err != nil {
+		return nil, 0, err
+	}
+	out := make([]OrderRecord, 0, len(refs))
+	for _, ref := range refs {
+		row, err := s.GetOrder(ctx, space, ref.OrderID)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, row)
+	}
+	return out, int(total), nil
+}
+
+func (s *Store) ListOrdersForReconciliation(ctx context.Context, space, account, channel, symbol, orderID string, startTimeMS, endTimeMS int64, limit int) ([]OrderRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	query := s.db.WithContext(ctx).Table("t_trade_order_aggregates")
+	if space != "" {
+		query = query.Where("c_space_id=?", space)
+	}
+	query = query.Where("c_state NOT IN ?", []string{"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"})
+	if account != "" {
+		query = query.Where("c_account_id=?", account)
+	}
+	if channel != "" {
+		query = query.Where("c_channel_id=?", channel)
+	}
+	if symbol != "" {
+		query = query.Where("c_symbol=?", symbol)
+	}
+	if orderID != "" {
+		query = query.Where("c_order_id=?", orderID)
+	}
+	if startTimeMS > 0 {
+		query = query.Where("c_ctime>=?", epochTime(startTimeMS))
+	}
+	if endTimeMS > 0 {
+		query = query.Where("c_ctime<=?", epochTime(endTimeMS))
+	}
+	var refs []struct {
+		SpaceID string `gorm:"column:c_space_id"`
+		OrderID string `gorm:"column:c_order_id"`
+	}
+	if err := query.Select("c_space_id,c_order_id").Order("c_id DESC").Limit(limit).Scan(&refs).Error; err != nil {
+		return nil, err
+	}
+	out := make([]OrderRecord, 0, len(refs))
+	for _, ref := range refs {
+		row, err := s.GetOrder(ctx, ref.SpaceID, ref.OrderID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
 func (s *Store) ListBalances(ctx context.Context, space, account string) ([]BalanceRecord, error) {
 	var rows []struct {
 		AccountID string `gorm:"column:c_account_id"`
@@ -446,27 +565,56 @@ func (s *Store) ListPositions(ctx context.Context, space, account, symbol string
 	return out, e
 }
 func (s *Store) ListFills(ctx context.Context, space, orderID string) ([]FillRecord, error) {
-	q := "SELECT c_fill_id,c_exchange_trade_id,c_order_id,c_quantity,c_price,c_fee,c_fee_asset FROM t_trade_fill_events WHERE c_space_id=?"
-	args := []any{space}
-	if orderID != "" {
-		q += " AND c_order_id=?"
-		args = append(args, orderID)
+	rows, _, err := s.ListFillsPage(ctx, space, FillQuery{OrderID: orderID, Limit: 1000})
+	return rows, err
+}
+
+func (s *Store) ListFillsPage(ctx context.Context, space string, filter FillQuery) ([]FillRecord, int, error) {
+	query := s.db.WithContext(ctx).Table("t_trade_fill_events").Where("c_space_id=?", space)
+	tradeTimeExpr := "CASE WHEN c_traded_at_ms > 0 THEN c_traded_at_ms ELSE CAST(strftime('%s', c_ctime) AS INTEGER) * 1000 END"
+	if filter.AccountID != "" {
+		query = query.Where("c_account_id=?", filter.AccountID)
+	}
+	if filter.OrderID != "" {
+		query = query.Where("c_order_id=?", filter.OrderID)
+	}
+	if filter.Symbol != "" {
+		query = query.Where("c_symbol=?", filter.Symbol)
+	}
+	if filter.StartTimeMS > 0 {
+		query = query.Where(tradeTimeExpr+">=?", epochMillis(filter.StartTimeMS))
+	}
+	if filter.EndTimeMS > 0 {
+		query = query.Where(tradeTimeExpr+"<=?", epochMillis(filter.EndTimeMS))
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 20
 	}
 	var rows []struct {
-		FillID          string `gorm:"column:c_fill_id"`
-		ExchangeTradeID string `gorm:"column:c_exchange_trade_id"`
-		OrderID         string `gorm:"column:c_order_id"`
-		Quantity        string `gorm:"column:c_quantity"`
-		Price           string `gorm:"column:c_price"`
-		Fee             string `gorm:"column:c_fee"`
-		FeeAsset        string `gorm:"column:c_fee_asset"`
+		FillID          string    `gorm:"column:c_fill_id"`
+		ExchangeTradeID string    `gorm:"column:c_exchange_trade_id"`
+		AccountID       string    `gorm:"column:c_account_id"`
+		ChannelID       string    `gorm:"column:c_channel_id"`
+		Symbol          string    `gorm:"column:c_symbol"`
+		OrderID         string    `gorm:"column:c_order_id"`
+		Quantity        string    `gorm:"column:c_quantity"`
+		Price           string    `gorm:"column:c_price"`
+		Fee             string    `gorm:"column:c_fee"`
+		FeeAsset        string    `gorm:"column:c_fee_asset"`
+		TradedAtMS      int64     `gorm:"column:c_traded_at_ms"`
+		CreatedAt       time.Time `gorm:"column:c_ctime"`
 	}
-	e := s.db.WithContext(ctx).Raw(q, args...).Scan(&rows).Error
+	e := query.Select("c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset,c_traded_at_ms,c_ctime").Order(tradeTimeExpr + " DESC, c_id DESC").Offset(filter.Offset).Limit(limit).Scan(&rows).Error
 	out := make([]FillRecord, len(rows))
 	for i, r := range rows {
-		out[i] = FillRecord{r.FillID, r.ExchangeTradeID, r.OrderID, r.Quantity, r.Price, r.Fee, r.FeeAsset}
+		out[i] = FillRecord{FillID: r.FillID, ExchangeTradeID: r.ExchangeTradeID, AccountID: r.AccountID, ChannelID: r.ChannelID, Symbol: r.Symbol, OrderID: r.OrderID, Quantity: r.Quantity, Price: r.Price, Fee: r.Fee, FeeAsset: r.FeeAsset, TradedAtMS: r.TradedAtMS, CreatedAt: r.CreatedAt}
 	}
-	return out, e
+	return out, int(total), e
 }
 func (t *Tx) UpdateOrder(v OrderRecord, expected uint64) error {
 	res := t.db.Table("t_trade_order_aggregates").Where("c_space_id=? AND c_order_id=? AND c_version=?", v.SpaceID, v.OrderID, expected).Updates(map[string]any{"c_filled_quantity": v.FilledQuantity, "c_consumed_reserved": v.ConsumedReserved, "c_state": v.State, "c_exchange_order_id": v.ExchangeOrderID, "c_version": v.Version, "c_mtime": time.Now().UTC()})
@@ -653,10 +801,19 @@ func (s *Store) MarkOutboxPublished(ctx context.Context, id int64) error {
 func (s *Store) ReleaseOutbox(ctx context.Context, id int64, msg string) error {
 	return s.db.WithContext(ctx).Exec("UPDATE t_trade_outbox SET c_lease_until=NULL,c_claim_token='',c_last_error=? WHERE c_id=?", msg, id).Error
 }
-func (t *Tx) InsertFill(space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset string) (bool, error) {
-	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_fill_events(c_space_id,c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset) VALUES(?,?,?,?,?,?,?,?,?,?,?)", space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset)
+func (t *Tx) InsertFill(space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset string, tradedAtMS int64) (bool, error) {
+	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_fill_events(c_space_id,c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset,c_traded_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset, tradedAtMS)
 	return res.RowsAffected == 1, res.Error
 }
+
+func epochMillis(value int64) int64 {
+	if value > 0 && value < 1_000_000_000_000 {
+		return value * 1000
+	}
+	return value
+}
+
+func epochTime(value int64) time.Time { return time.UnixMilli(epochMillis(value)).UTC() }
 func (t *Tx) PostLedger(space string, posting ledger.Transaction) error {
 	if err := posting.Validate(); err != nil {
 		return err

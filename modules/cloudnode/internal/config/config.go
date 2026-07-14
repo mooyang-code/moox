@@ -98,7 +98,28 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyEnv()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate config %s: %w", path, err)
+	}
 	return cfg, nil
+}
+
+// Validate rejects configurations where JetStream can redeliver a job while
+// CloudNode still considers the previous attempt recoverable.
+func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config is required")
+	}
+	if c.Queue.Backend != "jetstream" || !c.JetStream.Enabled {
+		return nil
+	}
+	const recoveryGrace = 2 * time.Minute
+	ackWait := time.Duration(c.JetStream.AckWaitMillis) * time.Millisecond
+	recoverAfter := time.Duration(c.JobItem.RecoverAfterMillis) * time.Millisecond
+	if ackWait < recoverAfter+recoveryGrace {
+		return fmt.Errorf("jetstream.ack_wait_millis must be at least job_item.recover_after_millis plus %s", recoveryGrace)
+	}
+	return nil
 }
 
 func (c *Config) applyEnv() {
@@ -133,7 +154,7 @@ func Default() *Config {
 			NATSURL:        "nats://127.0.0.1:4222",
 			SubjectPrefix:  "moox.cloudnode",
 			ExecStream:     "MOOX_CLOUDNODE_EXEC",
-			AckWaitMillis:  int64(2 * time.Minute / time.Millisecond),
+			AckWaitMillis:  int64(12 * time.Minute / time.Millisecond),
 			MaxDeliver:     3,
 			FetchMaxWaitMs: 500,
 			Embedded:       EmbeddedJetStreamConfig{},

@@ -32,9 +32,6 @@ func TestTableNames_ShouldMatchSchemaTables(t *testing.T) {
 	assert.Equal(t, AccountFundFlowTableName, (FundFlow{}).TableName())
 	assert.Equal(t, AccountAPIKeyTableName, (APIKey{}).TableName())
 	assert.Equal(t, TradeChannelTableName, (TradeChannel{}).TableName())
-	assert.Equal(t, OrderTableName, (Order{}).TableName())
-	assert.Equal(t, TradeTableName, (Trade{}).TableName())
-	assert.Equal(t, PositionTableName, (Position{}).TableName())
 	assert.Equal(t, OrderOperationTableName, (OrderOperation{}).TableName())
 	assert.Equal(t, SyncCursorTableName, (SyncCursor{}).TableName())
 }

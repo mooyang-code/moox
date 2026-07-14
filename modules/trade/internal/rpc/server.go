@@ -7,6 +7,7 @@ import (
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	rebalanceapp "github.com/mooyang-code/moox/modules/trade/internal/application/rebalance"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/reconciliation"
 	domainorder "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	domainrebalance "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -495,42 +496,23 @@ func (h *Server) ListInstruments(ctx context.Context, req *tradepb.ListInstrumen
 func (h *Server) PlaceOrder(ctx context.Context, req *tradepb.PlaceOrderReq) (*tradepb.PlaceOrderRsp, error) {
 	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		orderID, _ := gonanoid.New()
-		clientID := req.GetClientOrderId()
-		if clientID == "" {
-			clientID = orderID
-		}
-		side := "BUY"
-		if req.GetSide() == tradepb.OrderSide_ORDER_SIDE_SELL {
-			side = "SELL"
-		}
-		o, err := h.kernel.Place(ctx, command.PlaceInput{SpaceID: sid, OrderID: orderID, ClientOrderID: clientID, AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Symbol: req.GetSymbol(), MarketType: marketTypeToDomain(req.GetMarketType()), Side: side, Quantity: req.GetQuantity(), Price: req.GetPrice(), ReduceOnly: req.GetReduceOnly()})
-		if err != nil {
-			return &tradepb.PlaceOrderRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		return &tradepb.PlaceOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), OrderId: o.OrderID, ExchangeOrderId: o.ExchangeOrderID, Status: kernelStatusToPB(domainorder.State(o.State))}, nil
+	if h.kernel == nil {
+		return &tradepb.PlaceOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
-	ctx = service.WithOperator(ctx, userID(ctx))
-	xreq := &exchange.PlaceOrderReq{
-		Market:        exchange.MarketType(marketTypeToDomain(req.GetMarketType())),
-		Symbol:        req.GetSymbol(),
-		Side:          exchange.OrderSide(orderSideToDomain(req.GetSide())),
-		PosSide:       req.GetPosSide(),
-		Type:          exchange.OrderType(orderTypeToDomain(req.GetOrderType())),
-		TimeInForce:   req.GetTimeInForce(),
-		Price:         req.GetPrice(),
-		Quantity:      req.GetQuantity(),
-		Amount:        req.GetAmount(),
-		ClientOrderID: req.GetClientOrderId(),
-		ReduceOnly:    req.GetReduceOnly(),
-		TriggerPrice:  req.GetTriggerPrice(),
+	orderID, _ := gonanoid.New()
+	clientID := req.GetClientOrderId()
+	if clientID == "" {
+		clientID = orderID
 	}
-	o, err := h.svc.Order.PlaceOrder(ctx, sid, req.GetChannelId(), xreq)
+	side := "BUY"
+	if req.GetSide() == tradepb.OrderSide_ORDER_SIDE_SELL {
+		side = "SELL"
+	}
+	o, err := h.kernel.Place(ctx, command.PlaceInput{SpaceID: sid, OrderID: orderID, ClientOrderID: clientID, AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Symbol: req.GetSymbol(), MarketType: marketTypeToDomain(req.GetMarketType()), Side: side, Quantity: req.GetQuantity(), Price: req.GetPrice(), ReduceOnly: req.GetReduceOnly()})
 	if err != nil {
 		return &tradepb.PlaceOrderRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	return &tradepb.PlaceOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), OrderId: o.OrderID, ExchangeOrderId: o.ExchangeOrderID, Status: orderStatusToPB(o.Status)}, nil
+	return &tradepb.PlaceOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), OrderId: o.OrderID, ExchangeOrderId: o.ExchangeOrderID, Status: kernelStatusToPB(domainorder.State(o.State))}, nil
 }
 
 func kernelStatusToPB(s domainorder.State) tradepb.OrderStatus {
@@ -561,87 +543,101 @@ func kernelOrderToPB(o store.OrderRecord) *tradepb.Order {
 	return &tradepb.Order{OrderId: o.OrderID, ClientOrderId: o.ClientOrderID, ExchangeOrderId: o.ExchangeOrderID, AccountId: o.AccountID, ChannelId: o.ChannelID, Symbol: o.Symbol, Side: side, OrderType: tradepb.OrderType_ORDER_TYPE_LIMIT, TimeInForce: "IOC", Price: o.Price, Quantity: o.Quantity, FilledQty: o.FilledQuantity, Status: kernelStatusToPB(domainorder.State(o.State)), ReduceOnly: o.ReduceOnly}
 }
 
+func kernelStatusFilter(status tradepb.OrderStatus) []string {
+	switch status {
+	case tradepb.OrderStatus_ORDER_STATUS_SUBMITTED:
+		return []string{string(domainorder.Open), string(domainorder.Submitting), string(domainorder.SubmitUnknown), string(domainorder.Canceling), string(domainorder.CancelUnknown)}
+	case tradepb.OrderStatus_ORDER_STATUS_PARTIALLY_FILLED:
+		return []string{string(domainorder.PartiallyFilled)}
+	case tradepb.OrderStatus_ORDER_STATUS_FILLED:
+		return []string{string(domainorder.Filled)}
+	case tradepb.OrderStatus_ORDER_STATUS_CANCELED:
+		return []string{string(domainorder.Canceled)}
+	case tradepb.OrderStatus_ORDER_STATUS_PARTIAL_CANCELED:
+		return []string{string(domainorder.PartiallyCanceled)}
+	case tradepb.OrderStatus_ORDER_STATUS_REJECTED:
+		return []string{string(domainorder.Rejected)}
+	case tradepb.OrderStatus_ORDER_STATUS_EXPIRED:
+		return []string{string(domainorder.Expired)}
+	default:
+		return nil
+	}
+}
+
+func kernelFillToPB(fill store.FillRecord) *tradepb.Trade {
+	var tradedAt int64
+	if fill.TradedAtMS > 0 {
+		tradedAt = fill.TradedAtMS / 1000
+	} else if !fill.CreatedAt.IsZero() {
+		tradedAt = fill.CreatedAt.Unix()
+	}
+	return &tradepb.Trade{
+		TradeId: fill.FillID, ExchangeTradeId: fill.ExchangeTradeID, OrderId: fill.OrderID,
+		AccountId: fill.AccountID, ChannelId: fill.ChannelID, Symbol: fill.Symbol,
+		Price: fill.Price, Quantity: fill.Quantity, Fee: fill.Fee, FeeCurrency: fill.FeeAsset, TradedAt: tradedAt,
+	}
+}
+
 func (h *Server) CancelOrder(ctx context.Context, req *tradepb.CancelOrderReq) (*tradepb.CancelOrderRsp, error) {
 	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		o, err := h.kernel.Cancel(ctx, sid, req.GetOrderId())
-		if err != nil {
-			return &tradepb.CancelOrderRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		return &tradepb.CancelOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Status: kernelStatusToPB(domainorder.State(o.State))}, nil
+	if h.kernel == nil {
+		return &tradepb.CancelOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
-	ctx = service.WithOperator(ctx, userID(ctx))
-	xreq := &exchange.CancelOrderReq{
-		OrderID:       req.GetOrderId(),
-		ClientOrderID: req.GetClientOrderId(),
-	}
-	o, err := h.svc.Order.CancelOrder(ctx, sid, req.GetChannelId(), xreq)
+	o, err := h.kernel.Cancel(ctx, sid, req.GetOrderId())
 	if err != nil {
 		return &tradepb.CancelOrderRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	return &tradepb.CancelOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Status: orderStatusToPB(o.Status)}, nil
+	return &tradepb.CancelOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Status: kernelStatusToPB(domainorder.State(o.State))}, nil
 }
 
 func (h *Server) CancelAllOrders(ctx context.Context, req *tradepb.CancelAllOrdersReq) (*tradepb.CancelAllOrdersRsp, error) {
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		orders, err := h.kernel.Store.ListOrders(ctx, sid, "", req.GetChannelId(), req.GetSymbol(), true)
-		if err != nil {
-			return &tradepb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		var n int32
-		for _, o := range orders {
-			if _, err = h.kernel.Cancel(ctx, sid, o.OrderID); err != nil {
-				return &tradepb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err), CanceledCount: n}, nil
-			}
-			n++
-		}
-		return &tradepb.CancelAllOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), CanceledCount: n}, nil
+	if h.kernel == nil {
+		return &tradepb.CancelAllOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
-	n, err := h.svc.Order.CancelAllOrders(ctx, sid, req.GetChannelId(), req.GetSymbol())
+	orders, err := h.kernel.Store.ListOrders(ctx, sid, "", req.GetChannelId(), req.GetSymbol(), true)
 	if err != nil {
 		return &tradepb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	return &tradepb.CancelAllOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), CanceledCount: int32(n)}, nil
+	var n int32
+	for _, order := range orders {
+		if _, err = h.kernel.Cancel(ctx, sid, order.OrderID); err != nil {
+			return &tradepb.CancelAllOrdersRsp{RetInfo: errToRetInfo(err), CanceledCount: n}, nil
+		}
+		n++
+	}
+	return &tradepb.CancelAllOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), CanceledCount: n}, nil
 }
 
 func (h *Server) AmendOrder(ctx context.Context, req *tradepb.AmendOrderReq) (*tradepb.AmendOrderRsp, error) {
 	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		old, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())
-		if err != nil {
-			return &tradepb.AmendOrderRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		price, qty := req.GetNewPrice(), req.GetNewQuantity()
-		if price == "" {
-			price = old.Price
-		}
-		if qty == "" {
-			qty = old.Quantity
-		}
-		replacementID, _ := gonanoid.New()
-		clientID, _ := gonanoid.New()
-		sagaID, _ := gonanoid.New()
-		saga, err := h.kernel.Replace(ctx, sagaID, old.OrderID, command.PlaceInput{SpaceID: sid, OrderID: replacementID, ClientOrderID: clientID, AccountID: old.AccountID, ChannelID: old.ChannelID, Symbol: old.Symbol, MarketType: old.MarketType, BaseAsset: old.BaseAsset, QuoteAsset: old.QuoteAsset, Side: old.Side, Quantity: qty, Price: price, ReduceOnly: old.ReduceOnly})
-		if err != nil {
-			return &tradepb.AmendOrderRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		_ = saga
-		return &tradepb.AmendOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Status: tradepb.OrderStatus_ORDER_STATUS_PENDING}, nil
+	if req.GetOrderId() == "" {
+		return &tradepb.AmendOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INVALID_PARAM, "order_id is required")}, nil
 	}
-	ctx = service.WithOperator(ctx, userID(ctx))
-	xreq := &exchange.AmendOrderReq{
-		OrderID:     req.GetOrderId(),
-		NewPrice:    req.GetNewPrice(),
-		NewQuantity: req.GetNewQuantity(),
+	if h.kernel == nil {
+		return &tradepb.AmendOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
-	o, err := h.svc.Order.AmendOrder(ctx, sid, req.GetChannelId(), xreq)
+	old, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())
 	if err != nil {
 		return &tradepb.AmendOrderRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	return &tradepb.AmendOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Status: orderStatusToPB(o.Status)}, nil
+	price, qty := req.GetNewPrice(), req.GetNewQuantity()
+	if price == "" {
+		price = old.Price
+	}
+	if qty == "" {
+		qty = old.Quantity
+	}
+	replacementID, _ := gonanoid.New()
+	clientID, _ := gonanoid.New()
+	sagaID, _ := gonanoid.New()
+	_, err = h.kernel.Replace(ctx, sagaID, old.OrderID, command.PlaceInput{SpaceID: sid, OrderID: replacementID, ClientOrderID: clientID, AccountID: old.AccountID, ChannelID: old.ChannelID, Symbol: old.Symbol, MarketType: old.MarketType, BaseAsset: old.BaseAsset, QuoteAsset: old.QuoteAsset, Side: old.Side, Quantity: qty, Price: price, ReduceOnly: old.ReduceOnly})
+	if err != nil {
+		return &tradepb.AmendOrderRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	return &tradepb.AmendOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Status: tradepb.OrderStatus_ORDER_STATUS_PENDING}, nil
 }
 
 func (h *Server) SetLeverage(ctx context.Context, req *tradepb.SetLeverageReq) (*tradepb.SetLeverageRsp, error) {
@@ -682,68 +678,63 @@ func (h *Server) ConvertDust(ctx context.Context, req *tradepb.ConvertDustReq) (
 
 func (h *Server) GetOrder(ctx context.Context, req *tradepb.GetOrderReq) (*tradepb.GetOrderRsp, error) {
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		o, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())
-		if err != nil && req.GetClientOrderId() != "" {
-			o, err = h.kernel.Store.GetOrderByClientID(ctx, sid, req.GetClientOrderId())
-		}
-		if err != nil {
-			return &tradepb.GetOrderRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		return &tradepb.GetOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Order: kernelOrderToPB(o)}, nil
+	if h.kernel == nil {
+		return &tradepb.GetOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
-	o, err := h.svc.Order.GetOrder(ctx, sid, req.GetOrderId(), req.GetClientOrderId())
+	o, err := h.kernel.Store.GetOrder(ctx, sid, req.GetOrderId())
+	if err != nil && req.GetClientOrderId() != "" {
+		o, err = h.kernel.Store.GetOrderByClientID(ctx, sid, req.GetClientOrderId())
+	}
 	if err != nil {
 		return &tradepb.GetOrderRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	return &tradepb.GetOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Order: orderToPB(o)}, nil
+	return &tradepb.GetOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Order: kernelOrderToPB(o)}, nil
 }
 
 func (h *Server) ListOrders(ctx context.Context, req *tradepb.ListOrdersReq) (*tradepb.ListOrdersRsp, error) {
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		rows, err := h.kernel.Store.ListOrders(ctx, sid, req.GetAccountId(), req.GetChannelId(), req.GetSymbol(), req.GetOnlyOpen())
-		if err != nil {
-			return &tradepb.ListOrdersRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		out := make([]*tradepb.Order, len(rows))
-		for i, r := range rows {
-			out[i] = kernelOrderToPB(r)
-		}
-		page := pageFromPB(req.GetPage()).Normalize()
-		return &tradepb.ListOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Orders: out, PageResult: pageResult(page, len(out))}, nil
-	}
-	f := service.OrderFilter{
-		AccountID: req.GetAccountId(),
-		ChannelID: req.GetChannelId(),
-		Symbol:    req.GetSymbol(),
-		Status:    int(req.GetStatus()),
-		OnlyOpen:  req.GetOnlyOpen(),
-		StartTime: req.GetStartTime(),
-		EndTime:   req.GetEndTime(),
+	if h.kernel == nil {
+		return &tradepb.ListOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
 	page := pageFromPB(req.GetPage()).Normalize()
-	list, total, err := h.svc.Order.ListOrders(ctx, sid, f, page)
+	rows, total, err := h.kernel.Store.ListOrdersPage(ctx, sid, store.OrderQuery{
+		AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Symbol: req.GetSymbol(), States: kernelStatusFilter(req.GetStatus()),
+		OpenOnly: req.GetOnlyOpen(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Offset: page.Offset(), Limit: page.PageSize,
+	})
 	if err != nil {
 		return &tradepb.ListOrdersRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	out := make([]*tradepb.Order, 0, len(list))
-	for _, o := range list {
-		out = append(out, orderToPB(o))
+	out := make([]*tradepb.Order, len(rows))
+	for i, row := range rows {
+		out[i] = kernelOrderToPB(row)
 	}
 	return &tradepb.ListOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Orders: out, PageResult: pageResult(page, total)}, nil
 }
 
 func (h *Server) SyncOrders(ctx context.Context, req *tradepb.SyncOrdersReq) (*tradepb.SyncOrdersRsp, error) {
 	sid := spaceID(ctx)
+	if req.GetAccountId() == "" {
+		return &tradepb.SyncOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_INVALID_PARAM, "account_id is required")}, nil
+	}
+	if h.kernel == nil {
+		return &tradepb.SyncOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
 	page := pageFromPB(req.GetPage()).Normalize()
-	list, total, err := h.svc.Order.SyncOrders(ctx, sid, req.GetAccountId(), req.GetSymbol(), req.GetOnlyOpen(), req.GetStartTime(), req.GetEndTime(), page)
+	_, err := (reconciliation.Reconciler{Store: h.kernel.Store, Engine: h.kernel}).Scope(ctx, reconciliation.Scope{
+		SpaceID: sid, AccountID: req.GetAccountId(), Symbol: req.GetSymbol(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Limit: min(page.PageSize, 500),
+	})
 	if err != nil {
 		return &tradepb.SyncOrdersRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	out := make([]*tradepb.Order, 0, len(list))
-	for _, o := range list {
-		out = append(out, orderToPB(o))
+	rows, total, err := h.kernel.Store.ListOrdersPage(ctx, sid, store.OrderQuery{
+		AccountID: req.GetAccountId(), Symbol: req.GetSymbol(), OpenOnly: req.GetOnlyOpen(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Offset: page.Offset(), Limit: page.PageSize,
+	})
+	if err != nil {
+		return &tradepb.SyncOrdersRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*tradepb.Order, len(rows))
+	for i, row := range rows {
+		out[i] = kernelOrderToPB(row)
 	}
 	return &tradepb.SyncOrdersRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Orders: out, PageResult: pageResult(page, total)}, nil
 }
@@ -752,47 +743,47 @@ func (h *Server) SyncOrders(ctx context.Context, req *tradepb.SyncOrdersReq) (*t
 
 func (h *Server) ListTrades(ctx context.Context, req *tradepb.ListTradesReq) (*tradepb.ListTradesRsp, error) {
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		rows, err := h.kernel.Store.ListFills(ctx, sid, req.GetOrderId())
-		if err != nil {
-			return &tradepb.ListTradesRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		out := make([]*tradepb.Trade, len(rows))
-		for i, r := range rows {
-			out[i] = &tradepb.Trade{TradeId: r.FillID, ExchangeTradeId: r.ExchangeTradeID, OrderId: r.OrderID, Price: r.Price, Quantity: r.Quantity, Fee: r.Fee, FeeCurrency: r.FeeAsset}
-		}
-		page := pageFromPB(req.GetPage()).Normalize()
-		return &tradepb.ListTradesRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Trades: out, PageResult: pageResult(page, len(out))}, nil
-	}
-	f := service.TradeFilter{
-		AccountID: req.GetAccountId(),
-		OrderID:   req.GetOrderId(),
-		Symbol:    req.GetSymbol(),
-		StartTime: req.GetStartTime(),
-		EndTime:   req.GetEndTime(),
+	if h.kernel == nil {
+		return &tradepb.ListTradesRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
 	page := pageFromPB(req.GetPage()).Normalize()
-	list, total, err := h.svc.Order.ListTrades(ctx, sid, f, page)
+	rows, total, err := h.kernel.Store.ListFillsPage(ctx, sid, store.FillQuery{
+		AccountID: req.GetAccountId(), OrderID: req.GetOrderId(), Symbol: req.GetSymbol(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Offset: page.Offset(), Limit: page.PageSize,
+	})
 	if err != nil {
 		return &tradepb.ListTradesRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	out := make([]*tradepb.Trade, 0, len(list))
-	for _, t := range list {
-		out = append(out, tradeToPB(t))
+	out := make([]*tradepb.Trade, len(rows))
+	for i, row := range rows {
+		out[i] = kernelFillToPB(row)
 	}
 	return &tradepb.ListTradesRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Trades: out, PageResult: pageResult(page, total)}, nil
 }
 
 func (h *Server) SyncTrades(ctx context.Context, req *tradepb.SyncTradesReq) (*tradepb.SyncTradesRsp, error) {
 	sid := spaceID(ctx)
+	if req.GetAccountId() == "" {
+		return &tradepb.SyncTradesRsp{RetInfo: retInfo(tradepb.ErrorCode_INVALID_PARAM, "account_id is required")}, nil
+	}
+	if h.kernel == nil {
+		return &tradepb.SyncTradesRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
 	page := pageFromPB(req.GetPage()).Normalize()
-	list, total, err := h.svc.Order.SyncTrades(ctx, sid, req.GetAccountId(), req.GetSymbol(), req.GetOrderId(), req.GetStartTime(), req.GetEndTime(), page)
+	_, err := (reconciliation.Reconciler{Store: h.kernel.Store, Engine: h.kernel}).Scope(ctx, reconciliation.Scope{
+		SpaceID: sid, AccountID: req.GetAccountId(), Symbol: req.GetSymbol(), OrderID: req.GetOrderId(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Limit: min(page.PageSize, 500),
+	})
 	if err != nil {
 		return &tradepb.SyncTradesRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	out := make([]*tradepb.Trade, 0, len(list))
-	for _, tr := range list {
-		out = append(out, tradeToPB(tr))
+	rows, total, err := h.kernel.Store.ListFillsPage(ctx, sid, store.FillQuery{
+		AccountID: req.GetAccountId(), OrderID: req.GetOrderId(), Symbol: req.GetSymbol(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Offset: page.Offset(), Limit: page.PageSize,
+	})
+	if err != nil {
+		return &tradepb.SyncTradesRsp{RetInfo: errToRetInfo(err)}, nil
+	}
+	out := make([]*tradepb.Trade, len(rows))
+	for i, row := range rows {
+		out[i] = kernelFillToPB(row)
 	}
 	return &tradepb.SyncTradesRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Trades: out, PageResult: pageResult(page, total)}, nil
 }
@@ -801,37 +792,32 @@ func (h *Server) SyncTrades(ctx context.Context, req *tradepb.SyncTradesReq) (*t
 
 func (h *Server) ListPositions(ctx context.Context, req *tradepb.ListPositionsReq) (*tradepb.ListPositionsRsp, error) {
 	sid := spaceID(ctx)
-	if h.kernel != nil {
-		rows, err := h.kernel.Store.ListPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
-		if err != nil {
-			return &tradepb.ListPositionsRsp{RetInfo: errToRetInfo(err)}, nil
-		}
-		out := make([]*tradepb.Position, len(rows))
-		for i, r := range rows {
-			out[i] = &tradepb.Position{AccountId: r.AccountID, Symbol: r.Symbol, Quantity: r.Quantity, AvgPrice: r.AveragePrice, RealizedPnl: r.RealizedPnL}
-		}
-		return &tradepb.ListPositionsRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Positions: out}, nil
+	if h.kernel == nil {
+		return &tradepb.ListPositionsRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
-	list, err := h.svc.Order.ListPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
+	rows, err := h.kernel.Store.ListPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
 	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	out := make([]*tradepb.Position, 0, len(list))
-	for _, p := range list {
-		out = append(out, positionToPB(p))
+	out := make([]*tradepb.Position, len(rows))
+	for i, row := range rows {
+		out[i] = &tradepb.Position{AccountId: row.AccountID, Symbol: row.Symbol, Quantity: row.Quantity, AvgPrice: row.AveragePrice, RealizedPnl: row.RealizedPnL}
 	}
 	return &tradepb.ListPositionsRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Positions: out}, nil
 }
 
 func (h *Server) SyncPositions(ctx context.Context, req *tradepb.SyncPositionsReq) (*tradepb.SyncPositionsRsp, error) {
 	sid := spaceID(ctx)
-	list, err := h.svc.Order.SyncPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
+	if h.kernel == nil {
+		return &tradepb.SyncPositionsRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
+	}
+	rows, err := h.kernel.Store.ListPositions(ctx, sid, req.GetAccountId(), req.GetSymbol())
 	if err != nil {
 		return &tradepb.SyncPositionsRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	out := make([]*tradepb.Position, 0, len(list))
-	for _, p := range list {
-		out = append(out, positionToPB(p))
+	out := make([]*tradepb.Position, len(rows))
+	for i, row := range rows {
+		out[i] = &tradepb.Position{AccountId: row.AccountID, Symbol: row.Symbol, Quantity: row.Quantity, AvgPrice: row.AveragePrice, RealizedPnl: row.RealizedPnL}
 	}
 	return &tradepb.SyncPositionsRsp{RetInfo: retInfo(tradepb.ErrorCode_SUCCESS, ""), Positions: out}, nil
 }

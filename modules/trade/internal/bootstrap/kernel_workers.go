@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	rebalanceapp "github.com/mooyang-code/moox/modules/trade/internal/application/rebalance"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/reconciliation"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
@@ -319,36 +320,8 @@ func runFillReconciliation(ctx context.Context, s *store.Store, e *command.Engin
 }
 
 func reconcileOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine, space, account, channel string) error {
-	handler := consumer.FillHandler{Store: s}
-	orders, err := s.ListOpenOrdersScoped(ctx, space, account, channel, 200)
-	if err != nil {
-		return err
-	}
-	for _, o := range orders {
-		adapter, resolveErr := e.AdapterFor(ctx, o)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		fills, listErr := adapter.ListFills(ctx, o.Symbol, o.ExchangeOrderID)
-		if listErr != nil {
-			return listErr
-		}
-		for _, f := range fills {
-			if f.ExchangeTradeID == "" {
-				continue
-			}
-			if _, err := handler.HandleSource(ctx, o.SpaceID, o.AccountID, o.OrderID, f.ExchangeTradeID, f, "reconciliation"); err != nil {
-				return err
-			}
-		}
-		state, stateErr := adapter.QueryByClientOrderID(ctx, o.Symbol, o.ClientOrderID)
-		if stateErr == nil && (state.Status == "CANCELED" || state.Status == "REJECTED" || state.Status == "EXPIRED") {
-			if _, err := e.ReconcileExchangeTerminal(ctx, o.SpaceID, o.OrderID, state.Status); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	_, err := (reconciliation.Reconciler{Store: s, Engine: e}).Scope(ctx, reconciliation.Scope{SpaceID: space, AccountID: account, ChannelID: channel, Limit: 200})
+	return err
 }
 
 func runRecoveryLoop(ctx context.Context, s *store.Store, e *command.Engine) {
