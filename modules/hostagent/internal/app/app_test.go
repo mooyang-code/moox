@@ -54,6 +54,15 @@ func testSnapshot() *hostmetricpb.HostSnapshot {
 	}
 }
 
+type fakeSnapshotCollector struct {
+	snapshot *hostmetricpb.HostSnapshot
+	err      error
+}
+
+func (f fakeSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
+	return f.snapshot, nil, f.err
+}
+
 func TestNew_NilConfig_ShouldReturnError(t *testing.T) {
 	_, err := New(context.Background(), nil, "dev")
 	assert.Error(t, err)
@@ -163,15 +172,13 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	mock := mocker.Create()
 	defer mock.Reset()
 
-	coll := &collector.Collector{}
 	snapshot := testSnapshot()
-	mock.Struct(coll).Method("Collect").Return(snapshot, nil, nil)
 
 	client := &jetstream.Client{}
 	mock.Struct(client).Method("Publish").Return(&jetstream.PublishAck{Stream: "MOOX", Sequence: 1}, nil)
 
 	a := testAgent(t)
-	a.collector = coll
+	a.collector = fakeSnapshotCollector{snapshot: snapshot}
 	a.client = client
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
@@ -187,14 +194,11 @@ func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
 	mock := mocker.Create()
 	defer mock.Reset()
 
-	coll := &collector.Collector{}
-	mock.Struct(coll).Method("Collect").Return(testSnapshot(), nil, nil)
-
 	client := &jetstream.Client{}
 	mock.Struct(client).Method("Publish").Return(nil, errors.New("publish failed"))
 
 	a := testAgent(t)
-	a.collector = coll
+	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 	a.client = client
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
@@ -242,11 +246,8 @@ func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
 	mock := mocker.Create()
 	defer mock.Reset()
 
-	coll := &collector.Collector{}
-	mock.Struct(coll).Method("Collect").Return(testSnapshot(), nil, nil)
-
 	a := testAgent(t)
-	a.collector = coll
+	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})

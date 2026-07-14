@@ -27,7 +27,7 @@ const hostTopic = "moox.metrics.host.reported.v1"
 type Agent struct {
 	cfg                                    *config.Config
 	id                                     identity.File
-	collector                              *collector.Collector
+	collector                              snapshotCollector
 	clientMu                               sync.Mutex
 	client                                 *jetstream.Client
 	hostname, bootID, version              string
@@ -37,6 +37,10 @@ type Agent struct {
 	lastErr                                string
 	collected, published, dropped, skipped atomic.Uint64
 	running                                atomic.Bool
+}
+
+type snapshotCollector interface {
+	Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error)
 }
 
 func New(ctx context.Context, cfg *config.Config, version string) (*Agent, error) {
