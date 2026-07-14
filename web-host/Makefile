@@ -20,8 +20,7 @@ statik:
 		echo "../web/dist not found; run frontend build first, or use scripts/deploy-moox.sh --build-web-assets"; \
 		exit 1; \
 	fi
-	@command -v statik >/dev/null 2>&1 || { echo "statik not found; run: go install github.com/rakyll/statik@$(STATIK_VERSION)"; exit 1; }
-	@statik -src=$(ROOT)/web/dist -dest=./internal
+	@go run github.com/rakyll/statik@$(STATIK_VERSION) -src=$(ROOT)/web/dist -dest=./internal
 
 build:
 	@cd $(ROOT) && ./scripts/build.sh web-host

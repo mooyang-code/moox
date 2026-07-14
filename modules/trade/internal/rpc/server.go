@@ -543,30 +543,32 @@ func kernelOrderToPB(o store.OrderRecord) *tradepb.Order {
 	return &tradepb.Order{OrderId: o.OrderID, ClientOrderId: o.ClientOrderID, ExchangeOrderId: o.ExchangeOrderID, AccountId: o.AccountID, ChannelId: o.ChannelID, Symbol: o.Symbol, Side: side, OrderType: tradepb.OrderType_ORDER_TYPE_LIMIT, TimeInForce: "IOC", Price: o.Price, Quantity: o.Quantity, FilledQty: o.FilledQuantity, Status: kernelStatusToPB(domainorder.State(o.State)), ReduceOnly: o.ReduceOnly}
 }
 
-func kernelStatusFilter(status tradepb.OrderStatus) string {
+func kernelStatusFilter(status tradepb.OrderStatus) []string {
 	switch status {
 	case tradepb.OrderStatus_ORDER_STATUS_SUBMITTED:
-		return string(domainorder.Open)
+		return []string{string(domainorder.Open), string(domainorder.Submitting), string(domainorder.SubmitUnknown), string(domainorder.Canceling), string(domainorder.CancelUnknown)}
 	case tradepb.OrderStatus_ORDER_STATUS_PARTIALLY_FILLED:
-		return string(domainorder.PartiallyFilled)
+		return []string{string(domainorder.PartiallyFilled)}
 	case tradepb.OrderStatus_ORDER_STATUS_FILLED:
-		return string(domainorder.Filled)
+		return []string{string(domainorder.Filled)}
 	case tradepb.OrderStatus_ORDER_STATUS_CANCELED:
-		return string(domainorder.Canceled)
+		return []string{string(domainorder.Canceled)}
 	case tradepb.OrderStatus_ORDER_STATUS_PARTIAL_CANCELED:
-		return string(domainorder.PartiallyCanceled)
+		return []string{string(domainorder.PartiallyCanceled)}
 	case tradepb.OrderStatus_ORDER_STATUS_REJECTED:
-		return string(domainorder.Rejected)
+		return []string{string(domainorder.Rejected)}
 	case tradepb.OrderStatus_ORDER_STATUS_EXPIRED:
-		return string(domainorder.Expired)
+		return []string{string(domainorder.Expired)}
 	default:
-		return ""
+		return nil
 	}
 }
 
 func kernelFillToPB(fill store.FillRecord) *tradepb.Trade {
 	var tradedAt int64
-	if !fill.CreatedAt.IsZero() {
+	if fill.TradedAtMS > 0 {
+		tradedAt = fill.TradedAtMS / 1000
+	} else if !fill.CreatedAt.IsZero() {
 		tradedAt = fill.CreatedAt.Unix()
 	}
 	return &tradepb.Trade{
@@ -696,7 +698,7 @@ func (h *Server) ListOrders(ctx context.Context, req *tradepb.ListOrdersReq) (*t
 	}
 	page := pageFromPB(req.GetPage()).Normalize()
 	rows, total, err := h.kernel.Store.ListOrdersPage(ctx, sid, store.OrderQuery{
-		AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Symbol: req.GetSymbol(), State: kernelStatusFilter(req.GetStatus()),
+		AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Symbol: req.GetSymbol(), States: kernelStatusFilter(req.GetStatus()),
 		OpenOnly: req.GetOnlyOpen(), StartTimeMS: req.GetStartTime(), EndTimeMS: req.GetEndTime(), Offset: page.Offset(), Limit: page.PageSize,
 	})
 	if err != nil {

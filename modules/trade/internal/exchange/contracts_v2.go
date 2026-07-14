@@ -59,6 +59,7 @@ type FillEvent struct {
 	ExchangeTradeID, ExchangeOrderID, ClientOrderID, Symbol, Side, BaseAsset, QuoteAsset string
 	Quantity, Price, Fee                                                                 shared.Decimal
 	FeeCurrency                                                                          string
+	TradedAt                                                                             int64
 }
 type PrivateEventHandler func(context.Context, FillEvent) error
 

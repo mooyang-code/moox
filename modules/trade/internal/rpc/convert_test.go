@@ -161,6 +161,22 @@ func TestKernelStatusToPB_AllStates_ShouldMap(t *testing.T) {
 	}
 }
 
+func TestKernelSubmittedFilterMatchesAllSubmittedResponseStates(t *testing.T) {
+	states := kernelStatusFilter(tradepb.OrderStatus_ORDER_STATUS_SUBMITTED)
+	assert.ElementsMatch(t, []string{
+		string(domainorder.Open), string(domainorder.Submitting), string(domainorder.SubmitUnknown),
+		string(domainorder.Canceling), string(domainorder.CancelUnknown),
+	}, states)
+	for _, state := range states {
+		assert.Equal(t, tradepb.OrderStatus_ORDER_STATUS_SUBMITTED, kernelStatusToPB(domainorder.State(state)))
+	}
+}
+
+func TestKernelFillToPBUsesExchangeTradeTime(t *testing.T) {
+	got := kernelFillToPB(store.FillRecord{TradedAtMS: 1_700_000_000_123})
+	assert.Equal(t, int64(1_700_000_000), got.GetTradedAt())
+}
+
 func TestKernelOrderToPB_BuyAndSell_ShouldPopulateFields(t *testing.T) {
 	buy := kernelOrderToPB(store.OrderRecord{
 		OrderID: "ord-1", ClientOrderID: "cli-1", ExchangeOrderID: "ex-1",

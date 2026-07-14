@@ -12,5 +12,6 @@ fi
 
 grep -q 'set -euo pipefail' "${ROOT}/scripts/release.sh"
 grep -q 'github.com/rakyll/statik@v0.1.7' "${ROOT}/scripts/release.sh"
+grep -q 'go run github.com/rakyll/statik@v0.1.7' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'modules/trade/config/.' "${ROOT}/scripts/release.sh"
 grep -q 'RELEASE_ROOT}/trade/config' "${ROOT}/scripts/release.sh"

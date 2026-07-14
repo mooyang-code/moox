@@ -145,7 +145,7 @@ func (h *privateHandler) OnTrade(event *legacy.TradeEvent) {
 			return
 		}
 	}
-	err = h.handler(h.ctx, legacy.FillEvent{ExchangeTradeID: trade.ExchangeTradeID, ExchangeOrderID: trade.OrderID, ClientOrderID: trade.ClientOrderID, Symbol: trade.Symbol, Side: strings.ToUpper(string(trade.Side)), Quantity: quantity, Price: price, Fee: fee, FeeCurrency: trade.FeeCurrency})
+	err = h.handler(h.ctx, legacy.FillEvent{ExchangeTradeID: trade.ExchangeTradeID, ExchangeOrderID: trade.OrderID, ClientOrderID: trade.ClientOrderID, Symbol: trade.Symbol, Side: strings.ToUpper(string(trade.Side)), Quantity: quantity, Price: price, Fee: fee, FeeCurrency: trade.FeeCurrency, TradedAt: trade.TradedAt})
 	if err != nil {
 		h.err = err
 		h.cancel()
@@ -177,7 +177,7 @@ func (b *bound) ListFills(ctx context.Context, symbol, orderID string) ([]legacy
 				return nil, e
 			}
 		}
-		out = append(out, legacy.FillEvent{ExchangeTradeID: r.ExchangeTradeID, ExchangeOrderID: r.OrderID, Symbol: r.Symbol, Side: strings.ToUpper(string(r.Side)), BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Quantity: q, Price: p, Fee: fee, FeeCurrency: r.FeeCurrency})
+		out = append(out, legacy.FillEvent{ExchangeTradeID: r.ExchangeTradeID, ExchangeOrderID: r.OrderID, Symbol: r.Symbol, Side: strings.ToUpper(string(r.Side)), BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Quantity: q, Price: p, Fee: fee, FeeCurrency: r.FeeCurrency, TradedAt: r.TradedAt})
 	}
 	return out, nil
 }
