@@ -38,9 +38,8 @@ export const staticRoutes = [
       },
       {
         path: "/settings/service-deployments",
-        name: "settings-service-deployments",
-        component: () => import("@/views/settings/service-deployments/index.vue"),
-        meta: { title: "settings-service-deployments" }
+        redirect: { path: "/ops/services", query: { tab: "deployments" } },
+        meta: { title: "settings-service-deployments", hide: true }
       },
       {
         path: "/data/sources",
@@ -197,40 +196,46 @@ export const staticRoutes = [
         meta: { title: "trading-orders" }
       },
       {
+        path: "/ops/services",
+        name: "ops-services",
+        component: () => import("@/views/ops/service-management/index.vue"),
+        meta: { title: "ops-services" }
+      },
+      {
+        path: "/ops/hosts",
+        name: "ops-hosts",
+        component: () => import("@/views/ops/host-workbench/index.vue"),
+        meta: { title: "ops-hosts" }
+      },
+      {
         path: "/ops/service-monitor",
-        name: "ops-service-monitor",
-        component: () => import("@/views/ops/service-monitor/index.vue"),
-        meta: { title: "ops-service-monitor" }
+        redirect: { path: "/ops/services", query: { tab: "availability" } },
+        meta: { title: "ops-service-monitor", hide: true }
       },
       {
         path: "/ops/metric-monitor",
-        name: "ops-metric-monitor",
-        component: () => import("@/views/ops/metric-monitor/index.vue"),
-        meta: { title: "ops-metric-monitor" }
+        redirect: { path: "/ops/services", query: { tab: "metrics" } },
+        meta: { title: "ops-metric-monitor", hide: true }
       },
       {
         path: "/ops/resource-monitor",
-        name: "ops-resource-monitor",
-        component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),
-        meta: { title: "ops-resource-monitor" }
+        redirect: { path: "/ops/hosts", query: { tab: "hosts" } },
+        meta: { title: "ops-resource-monitor", hide: true }
       },
       {
         path: "/ops/ssh-hosts",
-        name: "ops-ssh-hosts",
-        component: () => import("@/views/container/ssh-hosts/ssh-hosts.vue"),
-        meta: { title: "ops-ssh-hosts" }
+        redirect: { path: "/ops/hosts", query: { tab: "hosts" } },
+        meta: { title: "ops-ssh-hosts", hide: true }
       },
       {
         path: "/ops/ssh-terminal",
-        name: "ops-ssh-terminal",
-        component: () => import("@/views/container/ssh-terminal/ssh-terminal.vue"),
-        meta: { title: "ops-ssh-terminal" }
+        redirect: (to: any) => ({ path: "/ops/hosts", query: { tab: "hosts", ...(to.query.hostId ? { hostId: to.query.hostId } : {}) } }),
+        meta: { title: "ops-ssh-terminal", hide: true }
       },
       {
         path: "/ops/ssh-sessions",
-        name: "ops-ssh-sessions",
-        component: () => import("@/views/container/ssh-sessions/ssh-sessions.vue"),
-        meta: { title: "ops-ssh-sessions" }
+        redirect: { path: "/ops/hosts", query: { tab: "sessions" } },
+        meta: { title: "ops-ssh-sessions", hide: true }
       },
       {
         path: "/ops/storage/nodes",

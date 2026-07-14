@@ -2,7 +2,7 @@
   <div class="moox-page">
     <div class="moox-inner">
     <div class="page-head">
-      <div>
+      <div v-if="!embedded">
         <h2>服务部署</h2>
         <span>统一维护 admin、service、storage、trade 等服务的访问地址；SCF 运行时由 keepalive 动态获取。</span>
       </div>
@@ -158,6 +158,8 @@ import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/v
 import { deploymentAccessAddress, deploymentHealthState, loadLatestHealthResults, sysDeployChecksRequest } from './health';
 
 defineOptions({ name: 'SettingsServiceDeployments' });
+const props = defineProps<{ embedded?: boolean }>();
+const embedded = computed(() => props.embedded === true);
 
 const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'collector', 'cloudnode', 'trade'];
 const rows = ref<ServiceDeployment[]>([]);
@@ -332,6 +334,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.moox-page {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .page-head {
   display: flex;
   align-items: center;

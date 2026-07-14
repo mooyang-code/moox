@@ -143,6 +143,7 @@ import {
 import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
 
 const route = useRoute();
+const props = defineProps<{ initialHostId?: number; disconnectOnUnmount?: boolean }>();
 
 // ---------- Host list ----------
 
@@ -518,7 +519,7 @@ onMounted(async () => {
   window.addEventListener('resize', handleWindowResize);
 
   // Priority 1: Auto-connect if hostId is provided in query
-  const hostIdQuery = route.query.hostId;
+  const hostIdQuery = props.initialHostId || route.query.hostId;
   if (hostIdQuery) {
     const hostId = Number(hostIdQuery);
     if (!isNaN(hostId) && hostId > 0) {
@@ -566,6 +567,9 @@ onUnmounted(() => {
     }
     if (tab.terminal) {
       tab.terminal.dispose();
+    }
+    if (props.disconnectOnUnmount) {
+      void disconnectSSHSession(tab.id).catch(() => undefined);
     }
   }
   tabs.value = [];
