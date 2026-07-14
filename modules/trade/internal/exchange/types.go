@@ -37,7 +37,7 @@ const (
 	TypeFOK       OrderType = "fok"
 )
 
-// OrderStatus 订单状态（与 t_orders.c_status / proto OrderStatus 对齐）。
+// OrderStatus 交易所订单状态（由 RPC 映射为 proto OrderStatus）。
 type OrderStatus int
 
 const (

@@ -155,98 +155,6 @@ type TradeChannel struct {
 	UpdatedAt     time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }
 
-// OrderTableName 表名常量。
-const OrderTableName = "t_orders"
-
-// Order 订单（对应 t_orders）。
-type Order struct {
-	ID              int64     `gorm:"primaryKey;column:c_id;autoIncrement" json:"-"`
-	SpaceID         string    `gorm:"column:c_space_id;not null;default:''" json:"-"`
-	OrderID         string    `gorm:"column:c_order_id;not null" json:"order_id"`
-	ClientOrderID   string    `gorm:"column:c_client_order_id;not null;default:''" json:"client_order_id"`
-	ExchangeOrderID string    `gorm:"column:c_exchange_order_id;not null;default:''" json:"exchange_order_id"`
-	AccountID       string    `gorm:"column:c_account_id;not null" json:"account_id"`
-	ChannelID       string    `gorm:"column:c_channel_id;not null" json:"channel_id"`
-	Exchange        string    `gorm:"column:c_exchange;not null" json:"exchange"`
-	Symbol          string    `gorm:"column:c_symbol;not null" json:"symbol"`
-	MarketType      string    `gorm:"column:c_market_type;not null;default:'spot'" json:"market_type"`
-	Side            string    `gorm:"column:c_side;not null" json:"side"`
-	PosSide         string    `gorm:"column:c_pos_side;not null;default:''" json:"pos_side"`
-	OrderType       string    `gorm:"column:c_order_type;not null" json:"order_type"`
-	TimeInForce     string    `gorm:"column:c_time_in_force;not null;default:'GTC'" json:"time_in_force"`
-	Price           string    `gorm:"column:c_price;not null;default:'0'" json:"price"`
-	Quantity        string    `gorm:"column:c_quantity;not null;default:'0'" json:"quantity"`
-	Amount          string    `gorm:"column:c_amount;not null;default:'0'" json:"amount"`
-	FilledQty       string    `gorm:"column:c_filled_qty;not null;default:'0'" json:"filled_qty"`
-	FilledAmount    string    `gorm:"column:c_filled_amount;not null;default:'0'" json:"filled_amount"`
-	AvgPrice        string    `gorm:"column:c_avg_price;not null;default:'0'" json:"avg_price"`
-	Fee             string    `gorm:"column:c_fee;not null;default:'0'" json:"fee"`
-	FeeCurrency     string    `gorm:"column:c_fee_currency;not null;default:''" json:"fee_currency"`
-	Status          int       `gorm:"column:c_status;not null;default:0" json:"status"`
-	ReduceOnly      bool      `gorm:"column:c_reduce_only;not null;default:false" json:"reduce_only"`
-	TriggerPrice    string    `gorm:"column:c_trigger_price;not null;default:'0'" json:"trigger_price"`
-	Source          string    `gorm:"column:c_source;not null;default:'manual'" json:"source"`
-	StrategyID      string    `gorm:"column:c_strategy_id;not null;default:''" json:"strategy_id"`
-	RejectReason    string    `gorm:"column:c_reject_reason;not null;default:''" json:"reject_reason"`
-	SubmittedAt     time.Time `gorm:"column:c_submitted_at;type:datetime" json:"submitted_at"`
-	FinishedAt      time.Time `gorm:"column:c_finished_at;type:datetime" json:"finished_at"`
-	Extra           string    `gorm:"column:c_extra;not null;default:'{}'" json:"-"`
-	IsDeleted       bool      `gorm:"column:c_is_deleted;not null;default:false" json:"-"`
-	CreatedAt       time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"created_at"`
-	UpdatedAt       time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"updated_at"`
-}
-
-// TradeTableName 表名常量。
-const TradeTableName = "t_trades"
-
-// Trade 成交明细（对应 t_trades，不可变）。
-type Trade struct {
-	ID              int64     `gorm:"primaryKey;column:c_id;autoIncrement" json:"-"`
-	SpaceID         string    `gorm:"column:c_space_id;not null;default:''" json:"-"`
-	TradeID         string    `gorm:"column:c_trade_id;not null" json:"trade_id"`
-	ExchangeTradeID string    `gorm:"column:c_exchange_trade_id;not null;default:''" json:"exchange_trade_id"`
-	OrderID         string    `gorm:"column:c_order_id;not null" json:"order_id"`
-	ExchangeOrderID string    `gorm:"column:c_exchange_order_id;not null;default:''" json:"exchange_order_id"`
-	AccountID       string    `gorm:"column:c_account_id;not null" json:"account_id"`
-	ChannelID       string    `gorm:"column:c_channel_id;not null;default:''" json:"channel_id"`
-	Exchange        string    `gorm:"column:c_exchange;not null" json:"exchange"`
-	Symbol          string    `gorm:"column:c_symbol;not null" json:"symbol"`
-	Side            string    `gorm:"column:c_side;not null" json:"side"`
-	Price           string    `gorm:"column:c_price;not null;default:'0'" json:"price"`
-	Quantity        string    `gorm:"column:c_quantity;not null;default:'0'" json:"quantity"`
-	Amount          string    `gorm:"column:c_amount;not null;default:'0'" json:"amount"`
-	Fee             string    `gorm:"column:c_fee;not null;default:'0'" json:"fee"`
-	FeeCurrency     string    `gorm:"column:c_fee_currency;not null;default:''" json:"fee_currency"`
-	Role            string    `gorm:"column:c_role;not null;default:''" json:"role"`
-	TradedAt        time.Time `gorm:"column:c_traded_at;type:datetime" json:"traded_at"`
-	CreatedAt       time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"created_at"`
-}
-
-// PositionTableName 表名常量。
-const PositionTableName = "t_positions"
-
-// Position 持仓（对应 t_positions）。
-type Position struct {
-	ID            int64     `gorm:"primaryKey;column:c_id;autoIncrement" json:"-"`
-	SpaceID       string    `gorm:"column:c_space_id;not null;default:''" json:"-"`
-	PositionID    string    `gorm:"column:c_position_id;not null" json:"position_id"`
-	AccountID     string    `gorm:"column:c_account_id;not null" json:"account_id"`
-	ChannelID     string    `gorm:"column:c_channel_id;not null;default:''" json:"channel_id"`
-	Exchange      string    `gorm:"column:c_exchange;not null" json:"exchange"`
-	Symbol        string    `gorm:"column:c_symbol;not null" json:"symbol"`
-	PosSide       string    `gorm:"column:c_pos_side;not null;default:'net'" json:"pos_side"`
-	Quantity      string    `gorm:"column:c_quantity;not null;default:'0'" json:"quantity"`
-	AvgPrice      string    `gorm:"column:c_avg_price;not null;default:'0'" json:"avg_price"`
-	Leverage      string    `gorm:"column:c_leverage;not null;default:'1'" json:"leverage"`
-	Margin        string    `gorm:"column:c_margin;not null;default:'0'" json:"margin"`
-	LiqPrice      string    `gorm:"column:c_liq_price;not null;default:'0'" json:"liq_price"`
-	UnrealizedPnl string    `gorm:"column:c_unrealized_pnl;not null;default:'0'" json:"unrealized_pnl"`
-	RealizedPnl   string    `gorm:"column:c_realized_pnl;not null;default:'0'" json:"realized_pnl"`
-	IsDeleted     bool      `gorm:"column:c_is_deleted;not null;default:false" json:"-"`
-	CreatedAt     time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"-"`
-	UpdatedAt     time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"updated_at"`
-}
-
 // OrderOperationTableName 表名常量。
 const OrderOperationTableName = "t_order_operations"
 
@@ -353,8 +261,5 @@ func (Balance) TableName() string        { return AccountBalanceTableName }
 func (FundFlow) TableName() string       { return AccountFundFlowTableName }
 func (APIKey) TableName() string         { return AccountAPIKeyTableName }
 func (TradeChannel) TableName() string   { return TradeChannelTableName }
-func (Order) TableName() string          { return OrderTableName }
-func (Trade) TableName() string          { return TradeTableName }
-func (Position) TableName() string       { return PositionTableName }
 func (OrderOperation) TableName() string { return OrderOperationTableName }
 func (SyncCursor) TableName() string     { return SyncCursorTableName }

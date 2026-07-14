@@ -53,19 +53,3 @@ func TestAPIKeyCRUD_ShouldPersist(t *testing.T) {
 	_, err = store.GetAPIKey(ctx, "crypto", "key_1")
 	assert.ErrorIs(t, err, service.ErrNotFound)
 }
-
-func TestPositionUpsertAndList_ShouldPersist(t *testing.T) {
-	store := newSyncCursorTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, store.CreateAccount(ctx, "crypto", &service.Account{
-		AccountID: "acc_1", UserID: "user_1", AccountName: "main", AccountType: service.AccountSwap,
-	}))
-	positions := []*service.Position{{
-		PositionID: "pos_1", AccountID: "acc_1", Symbol: "BTCUSDT", Quantity: "1", AvgPrice: "50000",
-	}}
-	require.NoError(t, store.UpsertPositions(ctx, "crypto", positions))
-	got, err := store.ListPositions(ctx, "crypto", "acc_1", "BTCUSDT")
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "1", got[0].Quantity)
-}

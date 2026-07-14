@@ -62,7 +62,8 @@ func (s *Service) Health() Health {
 	return Health{Module: s.module, Ready: true}
 }
 
-// SyncExchangeAccountsWithSnapshots 导入后台秘钥账户，并刷新账户余额与合约持仓快照。
+// SyncExchangeAccountsWithSnapshots 导入后台秘钥账户并刷新账户余额。
+// 持仓由交易内核基于成交事实投影，不再维护独立快照表。
 func (s *Service) SyncExchangeAccountsWithSnapshots(ctx context.Context, spaceID string, opts SyncExchangeAccountsOptions) ([]*Account, error) {
 	accounts, err := s.Account.SyncExchangeAccounts(ctx, spaceID, opts)
 	if err != nil {
@@ -71,11 +72,6 @@ func (s *Service) SyncExchangeAccountsWithSnapshots(ctx context.Context, spaceID
 	for _, account := range accounts {
 		if _, err := s.Account.SyncBalances(ctx, spaceID, account.AccountID); err != nil {
 			return nil, err
-		}
-		if account.AccountType == AccountSwap {
-			if _, err := s.Order.SyncPositions(ctx, spaceID, account.AccountID, ""); err != nil {
-				return nil, err
-			}
 		}
 	}
 	return accounts, nil

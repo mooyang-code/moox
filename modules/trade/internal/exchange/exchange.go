@@ -55,7 +55,7 @@ type ExchangeAdapter interface {
 // 推荐 ws 为主、REST 查询为兜底。
 type PrivateStream interface {
 	// Subscribe 订阅账户私有频道；事件经 handler 回调写入
-	// t_orders / t_trades / t_positions / t_account_balances。
+	// Trade Kernel 的订单聚合、Fill 事实、持仓和余额投影。
 	Subscribe(ctx context.Context, cred Credential, market MarketType, handler StreamHandler) error
 	// Close 关闭连接。
 	Close() error
