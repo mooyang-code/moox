@@ -93,10 +93,9 @@ func (s *Store) InitSchema(ctx context.Context) error {
 const metadataSchemaVersion = "3"
 
 func metadataSchemaVersionCompatible(version string) bool {
-	// Version 3 is a forward-compatible production metadata schema. Its
-	// existing tables remain usable by the version-2 storage contract, and the
-	// schema script only creates missing objects without downgrading metadata.
-	return version == metadataSchemaVersion || version == "3"
+	// Versions 2 and 3 share the additive metadata contract. The schema script
+	// only creates missing objects without downgrading an existing database.
+	return version == metadataSchemaVersion || version == "2"
 }
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
