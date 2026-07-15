@@ -14,7 +14,10 @@ import type { ServiceDeploymentInput } from '@/api/admin/types';
 import {
   gatewayHashState,
   gatewayNodeOnlineState,
+  createLatestRequestGuard,
+  runModalSubmission,
   serviceDeploymentRowKey,
+  validateGatewayControlURL,
   validateGatewayDeployment,
 } from '@/views/settings/service-deployments/health';
 
@@ -90,5 +93,47 @@ describe('gateway node and service instance contracts', () => {
     expect(validateGatewayDeployment({ ...valid, gateway_path: '' })).toContain('tRPC');
     expect(validateGatewayDeployment({ ...valid, gateway_service_id: '' })).toContain('service ID');
     expect(validateGatewayDeployment({ ...valid, gateway_enabled: false, host: '10.0.0.8', gateway_path: '' })).toBe('');
+  });
+
+  it('accepts HTTPS and loopback HTTP gateway URLs but rejects unsafe origins', () => {
+    expect(validateGatewayControlURL('https://gateway.example.com:9527')).toBe('');
+    expect(validateGatewayControlURL('http://127.0.0.1:11002')).toBe('');
+    expect(validateGatewayControlURL('http://[::1]:11002')).toBe('');
+    expect(validateGatewayControlURL('http://localhost:11002')).toBe('');
+    expect(validateGatewayControlURL('http://10.0.0.8:11002')).not.toBe('');
+    expect(validateGatewayControlURL('https://user:secret@gateway.example.com')).not.toBe('');
+    expect(validateGatewayControlURL('https://gateway.example.com/path?token=secret')).not.toBe('');
+    expect(validateGatewayControlURL('not a url')).not.toBe('');
+  });
+
+  it('keeps modal editors open for validation and API failures', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    expect(await runModalSubmission(() => '请补全字段', submit)).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+
+    const onError = vi.fn();
+    expect(await runModalSubmission(() => '', vi.fn().mockRejectedValue(new Error('unavailable')), onError)).toBe(false);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(await runModalSubmission(() => '', submit)).toBe(true);
+  });
+
+  it('rejects stale list responses after a newer filter generation starts', () => {
+    const guard = createLatestRequestGuard();
+    const first = guard.begin();
+    const second = guard.begin();
+    expect(guard.isCurrent(first)).toBe(false);
+    expect(guard.isCurrent(second)).toBe(true);
+    guard.invalidate();
+    expect(guard.isCurrent(second)).toBe(false);
+  });
+
+  it('uses activated refresh with bounded ticker cleanup and no per-instance health mapping', () => {
+    const nodesSource = fs.readFileSync(path.resolve(__dirname, 'gateway-nodes.vue'), 'utf8');
+    const instancesSource = fs.readFileSync(path.resolve(__dirname, '../../settings/service-deployments/index.vue'), 'utf8');
+    expect(nodesSource).toContain('onActivated');
+    expect(nodesSource).toContain('onDeactivated');
+    expect(nodesSource).toContain('stopRefreshTimer');
+    expect(instancesSource).not.toContain('healthLabel');
+    expect(instancesSource).not.toContain('monitorApi');
   });
 });

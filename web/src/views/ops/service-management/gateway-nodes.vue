@@ -95,7 +95,15 @@
       </template>
     </a-table>
 
-    <a-modal v-model:visible="editorVisible" width="620px" :title="editing ? '编辑网关节点' : '新增网关节点'" @ok="submit">
+    <a-modal
+      v-model:visible="editorVisible"
+      width="620px"
+      :title="editing ? '编辑网关节点' : '新增网关节点'"
+      :modal-style="{ maxWidth: 'calc(100vw - 32px)' }"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto' }"
+      :ok-loading="submitting"
+      @before-ok="submit"
+    >
       <a-form :model="form" layout="vertical" class="node-form">
         <a-form-item field="node_id" label="节点 ID" required>
           <a-input v-model="form.node_id" :disabled="editing" placeholder="例如 gateway-gz-122" />
@@ -109,19 +117,26 @@
         <a-form-item field="status" label="配置状态">
           <a-select v-model="form.status"><a-option value="enabled">enabled</a-option><a-option value="disabled">disabled</a-option></a-select>
         </a-form-item>
-        <a-form-item class="form-span-2" field="public_address" label="Gateway HTTPS 地址" required>
+        <a-form-item class="form-span-2" field="public_address" label="Gateway 公开地址" required>
           <a-input v-model="form.public_address" placeholder="https://gateway.example.com" />
         </a-form-item>
       </a-form>
     </a-modal>
 
-    <a-modal v-model:visible="routesVisible" width="900px" title="节点路由" :footer="false">
+    <a-modal
+      v-model:visible="routesVisible"
+      width="900px"
+      title="节点路由"
+      :footer="false"
+      :modal-style="{ maxWidth: 'calc(100vw - 32px)' }"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflow: 'auto' }"
+    >
       <div class="routes-meta">
         <span>节点：<strong>{{ routeSnapshot.node_id }}</strong></span>
         <span>生成时间：{{ formatTime(routeSnapshot.generated_at) }}</span>
         <a-tag v-if="routeSnapshot.disabled" size="small" color="gray">节点已停用</a-tag>
       </div>
-      <a-table row-key="service_id" size="small" :bordered="{ cell: true }" :data="routeSnapshot.routes" :pagination="false">
+      <a-table row-key="service_id" size="small" :bordered="{ cell: true }" :data="routeSnapshot.routes" :pagination="false" :scroll="{ x: 760 }">
         <template #columns>
           <a-table-column title="Service ID" data-index="service_id" :width="150" />
           <a-table-column title="本机地址" data-index="address" :width="170" />
@@ -136,17 +151,24 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { createGatewayNode, deleteGatewayNode, getGatewayNodeRoutes, listGatewayNodes, updateGatewayNode } from '@/api/admin/sysdeploy';
 import type { GatewayNode, GatewayNodeInput, GatewayRoute } from '@/api/admin/types';
 import { listSSHHosts, type SSHHost } from '@/api/modules/ssh';
 import { applyPageResult, defaultPagination, formatTime } from '@/views/data/shared/metadata-utils';
-import { gatewayHashState, gatewayNodeOnlineState } from '@/views/settings/service-deployments/health';
+import {
+  createLatestRequestGuard,
+  gatewayHashState,
+  gatewayNodeOnlineState,
+  runModalSubmission,
+  validateGatewayControlURL,
+} from '@/views/settings/service-deployments/health';
 
 const rows = ref<GatewayNode[]>([]);
 const hosts = ref<SSHHost[]>([]);
 const loading = ref(false);
+const submitting = ref(false);
 const editorVisible = ref(false);
 const routesVisible = ref(false);
 const editing = ref(false);
@@ -157,19 +179,25 @@ const form = reactive<GatewayNodeInput>({ node_id: '', host_id: 0, name: '', pub
 const routeSnapshot = reactive<{ node_id: string; generated_at: string; disabled: boolean; routes: GatewayRoute[] }>({
   node_id: '', generated_at: '', disabled: false, routes: [],
 });
+const loadGuard = createLatestRequestGuard();
+let refreshTimer: number | undefined;
 
 async function load() {
+  const generation = loadGuard.begin();
   loading.value = true;
   try {
     const [nodeRsp, hostRsp] = await Promise.all([
       listGatewayNodes({ node_id: filters.node_id || undefined, status: filters.status || undefined, page: { page: pagination.current, size: pagination.pageSize } }),
       listSSHHosts({ limit: 500 }),
     ]);
+    if (!loadGuard.isCurrent(generation)) return;
     rows.value = nodeRsp.nodes || [];
     hosts.value = hostRsp.hosts || [];
     applyPageResult(pagination, nodeRsp.page_result);
+  } catch {
+    // The shared API client reports the error; keep the last valid snapshot visible.
   } finally {
-    loading.value = false;
+    if (loadGuard.isCurrent(generation)) loading.value = false;
   }
 }
 
@@ -182,13 +210,21 @@ function openEdit(node: GatewayNode) {
   editorVisible.value = true;
 }
 async function submit() {
-  if (!form.node_id.trim() || !form.name.trim() || !form.host_id || !form.public_address.trim()) {
-    Message.warning('请补全节点 ID、名称、关联主机和公开地址'); return;
-  }
-  if (!/^https:\/\//i.test(form.public_address)) { Message.warning('Gateway 公开地址必须使用 HTTPS'); return; }
-  if (editing.value) await updateGatewayNode(editingNodeID.value, { ...form });
-  else await createGatewayNode({ ...form });
-  Message.success('网关节点已保存'); editorVisible.value = false; await load();
+  submitting.value = true;
+  const result = await runModalSubmission(() => {
+    const error = !form.node_id.trim() || !form.name.trim() || !form.host_id || !form.public_address.trim()
+      ? '请补全节点 ID、名称、关联主机和公开地址'
+      : validateGatewayControlURL(form.public_address);
+    if (error) Message.warning(error);
+    return error;
+  }, async () => {
+    if (editing.value) await updateGatewayNode(editingNodeID.value, { ...form });
+    else await createGatewayNode({ ...form });
+    Message.success('网关节点已保存');
+    await load();
+  });
+  submitting.value = false;
+  return result;
 }
 async function remove(node: GatewayNode) { await deleteGatewayNode(node.node_id); Message.success('网关节点已删除'); await load(); }
 async function openRoutes(node: GatewayNode) {
@@ -207,7 +243,22 @@ function hashColor(node: GatewayNode) { return gatewayHashState(node.route_hash,
 function hashTooltip(node: GatewayNode) { return `预期：${node.route_hash || '--'}\n已应用：${node.applied_route_hash || '--'}`; }
 function shortHash(hash?: string) { return hash ? hash.slice(0, 10) : '--'; }
 
-onMounted(load);
+function startRefreshTimer() {
+  if (refreshTimer !== undefined) return;
+  refreshTimer = window.setInterval(() => { void load(); }, 30_000);
+}
+function stopRefreshTimer() {
+  if (refreshTimer === undefined) return;
+  window.clearInterval(refreshTimer);
+  refreshTimer = undefined;
+}
+
+onMounted(() => { void load(); startRefreshTimer(); });
+onActivated(() => {
+  if (refreshTimer === undefined) { void load(); startRefreshTimer(); }
+});
+onDeactivated(stopRefreshTimer);
+onUnmounted(() => { stopRefreshTimer(); loadGuard.invalidate(); });
 </script>
 
 <style scoped>
@@ -224,7 +275,7 @@ onMounted(load);
 .node-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
 .node-form :deep(.arco-form-item) { margin-bottom: 0; }
 .form-span-2 { grid-column: 1 / -1; }
-.routes-meta { display: flex; align-items: center; gap: 20px; margin-bottom: 14px; color: var(--color-text-2); }
+.routes-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 14px; color: var(--color-text-2); }
 @media (max-width: 768px) {
   .toolbar { align-items: stretch; flex-direction: column; }
   .node-form { grid-template-columns: 1fr; }
@@ -243,5 +294,13 @@ onMounted(load);
   .gateway-nodes :deep(td:nth-child(3)),
   .gateway-nodes :deep(th:nth-child(6)),
   .gateway-nodes :deep(td:nth-child(6)) { display: none; }
+}
+@media (max-width: 600px) {
+  .gateway-nodes :deep(th:nth-child(7)),
+  .gateway-nodes :deep(td:nth-child(7)) { display: none; }
+}
+@media (max-width: 420px) {
+  .gateway-nodes :deep(th:nth-child(4)),
+  .gateway-nodes :deep(td:nth-child(4)) { display: none; }
 }
 </style>

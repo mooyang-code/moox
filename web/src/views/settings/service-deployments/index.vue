@@ -80,13 +80,6 @@
             <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
           </template>
         </a-table-column>
-        <a-table-column title="健康状态" :width="110">
-          <template #cell="{ record }">
-            <a-tooltip :content="healthTooltip(record.service_name)">
-              <a-tag size="small" :color="healthColor(record.service_name)">{{ healthLabel(record.service_name) }}</a-tag>
-            </a-tooltip>
-          </template>
-        </a-table-column>
         <a-table-column class="low-priority-column" title="更新时间" :width="165">
           <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
         </a-table-column>
@@ -111,7 +104,8 @@
       :top="'48px'"
       :modal-style="{ maxWidth: 'calc(100vw - 32px)' }"
       :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '18px 24px 14px' }"
-      @ok="submit"
+      :ok-loading="submitting"
+      @before-ok="submit"
     >
       <a-form class="deployment-form" :model="form" layout="vertical">
         <a-form-item field="node_id" label="网关节点" required>
@@ -176,10 +170,8 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { createServiceDeployment, deleteServiceDeployment, listGatewayNodes, listServiceDeployments, updateServiceDeployment } from '@/api/admin/sysdeploy';
 import type { GatewayNode, ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/types';
-import { monitorApi } from '@/api/monitor';
-import type { CheckResult } from '@/api/monitor';
 import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/views/data/shared/metadata-utils';
-import { deploymentHealthState, loadLatestHealthResults, serviceDeploymentRowKey, sysDeployChecksRequest, validateGatewayDeployment } from './health';
+import { createLatestRequestGuard, runModalSubmission, serviceDeploymentRowKey, validateGatewayDeployment } from './health';
 
 defineOptions({ name: 'SettingsServiceDeployments' });
 const props = defineProps<{ embedded?: boolean }>();
@@ -188,8 +180,8 @@ const embedded = computed(() => props.embedded === true);
 const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'collector', 'cloudnode', 'trade'];
 const rows = ref<ServiceDeployment[]>([]);
 const nodes = ref<GatewayNode[]>([]);
-const latestHealth = ref<Record<string, CheckResult>>({});
 const loading = ref(false);
+const submitting = ref(false);
 const visible = ref(false);
 const editing = ref(false);
 const editingServiceName = ref('');
@@ -200,6 +192,7 @@ const filters = reactive<{ service_name: string; service_kind: string; scope: st
 });
 const viewportHeight = ref(typeof window === 'undefined' ? 900 : window.innerHeight);
 const tableBodyHeight = computed(() => Math.max(320, viewportHeight.value - 440));
+const loadGuard = createLatestRequestGuard();
 
 const form = reactive<ServiceDeploymentInput>({
   service_name: '',
@@ -220,6 +213,7 @@ const form = reactive<ServiceDeploymentInput>({
 const modalTitle = computed(() => (editing.value ? '编辑服务实例' : '新增服务实例'));
 
 async function load() {
+  const generation = loadGuard.begin();
   loading.value = true;
   try {
     const [rsp, nodesRsp] = await Promise.all([listServiceDeployments({
@@ -231,12 +225,14 @@ async function load() {
       gateway_enabled: filters.gateway_enabled,
       page: { page: pagination.current, size: pagination.pageSize },
     }), listGatewayNodes({ page: { page: 1, size: 500 } })]);
+    if (!loadGuard.isCurrent(generation)) return;
     rows.value = rsp.deployments || [];
     nodes.value = nodesRsp.nodes || [];
     applyPageResult(pagination, rsp.page_result);
-    await loadHealth(rows.value);
+  } catch {
+    // The shared API client reports the error; keep the last valid snapshot visible.
   } finally {
-    loading.value = false;
+    if (loadGuard.isCurrent(generation)) loading.value = false;
   }
 }
 
@@ -292,52 +288,24 @@ function deploymentInput(record: ServiceDeployment): ServiceDeploymentInput {
   };
 }
 
-async function loadHealth(deployments: ServiceDeployment[]) {
-  try {
-    const rsp = await monitorApi.listChecks(sysDeployChecksRequest());
-    const visible = new Set(deployments.map((item) => item.service_name));
-    const checks = (rsp.checks || []).filter((check) => !!check.check_id && visible.has(check.check_id));
-    latestHealth.value = await loadLatestHealthResults(checks, async (check) => {
-      const resultRsp = await monitorApi.listResults({ space_id: check.space_id, check_id: check.check_id as string, limit: 1 });
-      return resultRsp.results?.[0];
-    });
-  } catch {
-    latestHealth.value = {};
-  }
-}
-
-function healthLabel(serviceName: string) {
-  return { healthy: '正常', unhealthy: '异常', unknown: '未知' }[deploymentHealthState(latestHealth.value[serviceName])];
-}
-
-function healthColor(serviceName: string) {
-  return { healthy: 'green', unhealthy: 'red', unknown: 'gray' }[deploymentHealthState(latestHealth.value[serviceName])];
-}
-
-function healthTooltip(serviceName: string) {
-  const result = latestHealth.value[serviceName];
-  if (!result) return '暂无监控结果';
-  const checkedAt = result.checked_at ? formatTime(result.checked_at) : '未知时间';
-  return result.error_message ? `${checkedAt} · ${result.error_message}` : checkedAt;
-}
-
 async function submit() {
-  if (!form.node_id || !form.service_name || !form.host || !form.port) {
-    Message.warning('请补全网关节点、服务名、Host 和端口');
-    return;
-  }
-  const gatewayError = validateGatewayDeployment(form);
-  if (gatewayError) { Message.warning(gatewayError); return; }
-  const payload = { ...form, extra_config: form.extra_config || '{}' };
-  if (editing.value) await updateServiceDeployment(editingNodeID.value, editingServiceName.value, payload);
-  else await createServiceDeployment(payload);
-  if (payload.service_name.startsWith('storage_')) {
-    Message.warning('服务部署已保存；storage 变更后请同步检查主存节点拓扑');
-  } else {
-    Message.success('服务部署信息已保存');
-  }
-  visible.value = false;
-  await load();
+  submitting.value = true;
+  const result = await runModalSubmission(() => {
+    const error = !form.node_id || !form.service_name || !form.host || !form.port
+      ? '请补全网关节点、服务名、Host 和端口'
+      : validateGatewayDeployment(form);
+    if (error) Message.warning(error);
+    return error;
+  }, async () => {
+    const payload = { ...form, extra_config: form.extra_config || '{}' };
+    if (editing.value) await updateServiceDeployment(editingNodeID.value, editingServiceName.value, payload);
+    else await createServiceDeployment(payload);
+    if (payload.service_name.startsWith('storage_')) Message.warning('服务部署已保存；storage 变更后请同步检查主存节点拓扑');
+    else Message.success('服务部署信息已保存');
+    await load();
+  });
+  submitting.value = false;
+  return result;
 }
 
 async function remove(record: ServiceDeployment) {
@@ -378,6 +346,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  loadGuard.invalidate();
   window.removeEventListener('resize', updateViewportHeight);
 });
 </script>
@@ -491,8 +460,19 @@ onUnmounted(() => {
 
   .service-deployments-table :deep(th:nth-child(1)),
   .service-deployments-table :deep(td:nth-child(1)),
-  .service-deployments-table :deep(th:nth-child(7)),
-  .service-deployments-table :deep(td:nth-child(7)) {
+  .service-deployments-table :deep(th:nth-child(3)),
+  .service-deployments-table :deep(td:nth-child(3)),
+  .service-deployments-table :deep(th:nth-child(5)),
+  .service-deployments-table :deep(td:nth-child(5)),
+  .service-deployments-table :deep(th:nth-child(6)),
+  .service-deployments-table :deep(td:nth-child(6)) {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .service-deployments-table :deep(th:nth-child(4)),
+  .service-deployments-table :deep(td:nth-child(4)) {
     display: none;
   }
 }

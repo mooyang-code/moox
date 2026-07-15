@@ -1,20 +1,4 @@
 import type { ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/types';
-import type { CheckResult, MonitorCheck } from '@/api/monitor';
-
-export type DeploymentHealthState = 'healthy' | 'unhealthy' | 'unknown';
-
-export function sysDeployChecksRequest() {
-  return { source: 'sysdeploy', page: { page: 1, size: 500 } };
-}
-
-export function deploymentAccessAddress(deployment: ServiceDeployment) {
-  return deployment.base_url || deployment.rpc_address || `${deployment.host}:${deployment.port}`;
-}
-
-export function deploymentHealthState(result?: CheckResult): DeploymentHealthState {
-  if (!result) return 'unknown';
-  return result.success ? 'healthy' : 'unhealthy';
-}
 
 export function serviceDeploymentRowKey(deployment: Pick<ServiceDeployment, 'node_id' | 'service_name'>) {
   return `${deployment.node_id}:${deployment.service_name}`;
@@ -42,20 +26,39 @@ export function gatewayHashState(expected?: string, applied?: string) {
   return { state: 'synced' as const, label: '已同步' };
 }
 
-export async function loadLatestHealthResults(
-  checks: MonitorCheck[],
-  fetchLatest: (check: MonitorCheck) => Promise<CheckResult | undefined>,
-) {
-  const settled = await Promise.allSettled(
-    checks.map(async (check) => {
-      if (!check.check_id) return undefined;
-      const result = await fetchLatest(check);
-      return result ? ([check.check_id, result] as const) : undefined;
-    }),
-  );
-  const results: Record<string, CheckResult> = {};
-  settled.forEach((item) => {
-    if (item.status === 'fulfilled' && item.value) results[item.value[0]] = item.value[1];
-  });
-  return results;
+export function validateGatewayControlURL(value: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return '请填写有效的 Gateway URL';
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.pathname && parsed.pathname !== '/')) {
+    return 'Gateway URL 只能包含协议、主机和端口';
+  }
+  const loopback = parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]' || parsed.hostname === '::1' || parsed.hostname === 'localhost';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    return 'Gateway URL 必须使用 HTTPS，仅本机开发地址可使用 HTTP';
+  }
+  return '';
+}
+
+export async function runModalSubmission(validate: () => string, submit: () => Promise<unknown>, onError?: (error: unknown) => void) {
+  if (validate()) return false;
+  try {
+    await submit();
+    return true;
+  } catch (error) {
+    onError?.(error);
+    return false;
+  }
+}
+
+export function createLatestRequestGuard() {
+  let generation = 0;
+  return {
+    begin: () => ++generation,
+    isCurrent: (value: number) => value === generation,
+    invalidate: () => { generation += 1; },
+  };
 }
