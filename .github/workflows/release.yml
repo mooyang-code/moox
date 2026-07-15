@@ -20,6 +20,11 @@ on:
         required: true
         default: true
         type: boolean
+      use_local_source_cache:
+        description: Load the tagged source archive preloaded on the self-hosted runner
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -43,8 +48,16 @@ jobs:
       PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish_release }}
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'push' || !inputs.use_local_source_cache
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Load tagged source from runner cache
+        if: github.event_name == 'workflow_dispatch' && inputs.use_local_source_cache
+        run: |
+          archive="/home/ubuntu/ci-cache/moox-${RELEASE_TAG}-src.tar.gz"
+          test -s "$archive"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          tar -xzf "$archive" -C "$GITHUB_WORKSPACE" --strip-components=1
       - name: Add preinstalled tools to PATH
         run: |
           echo /home/ubuntu/go-sdk/bin >> "$GITHUB_PATH"
