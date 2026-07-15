@@ -319,9 +319,16 @@ func validateDeployment(item *Deployment) error {
 		if item.Protocol != "http" {
 			return fmt.Errorf("gateway-enabled protocol must be http")
 		}
-		route := gatewayproxy.Route{ServiceID: item.GatewayServiceID, Address: deploymentRPCAddress(item), ServicePath: item.GatewayPath}
-		if err := gatewayproxy.ValidateRoute(route); err != nil {
-			return err
+		extra, err := parseRouteExtraConfig(item.ExtraConfig)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
+		}
+		if requiresMethodAllowlist(item.GatewayServiceID) && len(extra.GatewayMethods) == 0 {
+			return fmt.Errorf("%w: %s requires nonempty gateway_methods", ErrInvalidGatewayRoute, item.GatewayServiceID)
+		}
+		route := gatewayproxy.Route{ServiceID: item.GatewayServiceID, Address: deploymentRPCAddress(item), ServicePath: item.GatewayPath, AllowedMethods: extra.GatewayMethods}
+		if _, err := gatewayproxy.NormalizeAndHash("validation", []gatewayproxy.Route{route}); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
 		}
 	}
 	return nil

@@ -3,6 +3,7 @@ package gatewayproxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 )
 
 var methodPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var ErrMethodNotAllowed = errors.New("gateway method not allowed")
 
 var (
 	loopbackDialer     = &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
@@ -52,6 +54,9 @@ func Forward(ctx context.Context, _ *http.Client, route Route, method string, bo
 	}
 	if !methodPattern.MatchString(method) {
 		return nil, fmt.Errorf("method %q must be a single URL-safe segment", method)
+	}
+	if !route.AllowsMethod(method) {
+		return nil, fmt.Errorf("%w: %s", ErrMethodNotAllowed, method)
 	}
 	if int64(len(body)) > route.MaxBodyBytes {
 		return nil, fmt.Errorf("request body is %d bytes, limit is %d", len(body), route.MaxBodyBytes)

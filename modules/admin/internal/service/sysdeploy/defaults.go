@@ -50,7 +50,7 @@ func DefaultDeployments(nodeIDs ...string) []Deployment {
 		deployment("trade_ops", "trade", "http", "127.0.0.1", 11212, "trpc.moox.trade.TradeOpsSvc", "internal", "交易暂停、对账与 Saga 运维服务"),
 	}
 	canonical := map[string]string{
-		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy",
+		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",
 	}
 	for i := range rows {
 		rows[i].NodeID = nodeID
@@ -59,6 +59,9 @@ func DefaultDeployments(nodeIDs ...string) []Deployment {
 		}
 		if rows[i].ServiceName == "sysdeploy" {
 			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments"]}`
+		}
+		if rows[i].ServiceName == "secret" {
+			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"]}`
 		}
 	}
 	return rows

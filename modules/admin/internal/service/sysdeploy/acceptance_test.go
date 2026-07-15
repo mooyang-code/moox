@@ -165,10 +165,10 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 					enabledIDs[row.GatewayServiceID] = true
 				}
 			}
-			for _, serviceID := range []string{"collectmgr", "cloudnode", "factormgr", "strategymgr", "monitor", "hostagent", "sysdeploy"} {
+			for _, serviceID := range []string{"collectmgr", "cloudnode", "factormgr", "strategymgr", "monitor", "hostagent", "sysdeploy", "secret"} {
 				assert.True(t, enabledIDs[serviceID], "canonical gateway service %s missing", serviceID)
 			}
-			for _, serviceID := range []string{"secret", "trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
+			for _, serviceID := range []string{"trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
 				assert.False(t, enabledIDs[serviceID], "sensitive gateway service %s exposed", serviceID)
 			}
 		})
@@ -253,7 +253,7 @@ func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
 	for _, route := range snapshot.Routes {
 		ids[route.ServiceID] = true
 	}
-	for _, id := range []string{"secret", "trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
+	for _, id := range []string{"trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
 		assert.False(t, ids[id], "sensitive route %s compiled", id)
 	}
 }
@@ -272,8 +272,8 @@ func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
 }
 
 func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
-	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy"}
-	sensitive := map[string]bool{"secret": true, "trade_account": true, "trade_apikey": true, "trade_order": true, "trade_tradeop": true}
+	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret"}
+	sensitive := map[string]bool{"trade_account": true, "trade_apikey": true, "trade_order": true, "trade_tradeop": true}
 	for _, row := range DefaultDeployments("node-a") {
 		if serviceID, ok := allowed[row.ServiceName]; ok {
 			assert.True(t, row.GatewayEnabled)
@@ -312,6 +312,44 @@ func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
 			assert.Equal(t, []string{"ListActiveServiceDeployments"}, route.GetAllowedMethods())
 		}
 	}
+	var secretRoute gatewayproxy.Route
+	for _, route := range snapshot.Routes {
+		if route.ServiceID == "secret" {
+			secretRoute = route
+		}
+	}
+	require.Equal(t, "secret", secretRoute.ServiceID)
+	assert.Equal(t, []string{"ListSecrets", "RevealSecret"}, secretRoute.AllowedMethods)
+	assert.True(t, secretRoute.AllowsMethod("ListSecrets"))
+	assert.True(t, secretRoute.AllowsMethod("RevealSecret"))
+	assert.False(t, secretRoute.AllowsMethod("DeleteSecret"))
+	assert.False(t, secretRoute.AllowsMethod("CreateSecret"))
+}
+
+func TestSensitiveGatewayDeploymentsRequireNonemptyMethodsOnCreateUpdateAndCompile(t *testing.T) {
+	db := setupEmptySysDeployTestDB(t)
+	svc := newTestService(db)
+	ctx := context.Background()
+	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
+	makePB := func(extra string) *pb.ServiceDeployment {
+		return &pb.ServiceDeployment{NodeId: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceId: "sysdeploy", GatewayEnabled: true, Status: "active", ExtraConfig: extra}
+	}
+	for _, extra := range []string{`{}`, `{"gateway_methods":[]}`} {
+		rsp, err := svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(extra)})
+		require.NoError(t, err)
+		assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	}
+	created, err := svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{"gateway_methods":["ListActiveServiceDeployments"]}`)})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
+	updated, err := svc.UpdateServiceDeployment(ctx, &pb.UpdateServiceDeploymentReq{NodeId: "node-a", ServiceName: "sysdeploy", Deployment: makePB(`{}`)})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, updated.GetRetInfo().GetCode())
+	require.NoError(t, db.Model(&Deployment{}).Where("c_node_id = ? AND c_service_name = ?", "node-a", "sysdeploy").Update("c_extra_config", `{}`).Error)
+	_, err = svc.CompileGatewaySnapshot(ctx, "node-a")
+	var configErr *RouteConfigError
+	assert.ErrorAs(t, err, &configErr)
+	assert.ErrorIs(t, err, ErrInvalidGatewayRoute)
 }
 
 func TestCompileGatewaySnapshotGatewayMethodsStrictAndNormalized(t *testing.T) {

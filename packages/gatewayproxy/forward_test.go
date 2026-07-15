@@ -110,6 +110,26 @@ func TestForwardRejectsInvalidMethodAndOversizedBodyBeforeNetwork(t *testing.T) 
 	}
 }
 
+func TestForwardRejectsDisallowedMethodBeforeNetworkOrCustomTransport(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+	defer server.Close()
+	var customCalls atomic.Int32
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		customCalls.Add(1)
+		return nil, errors.New("must not run")
+	})}
+	route := routeForServer(t, server)
+	route.AllowedMethods = []string{"ListActiveServiceDeployments"}
+	_, err := Forward(context.Background(), client, route, "CreateGatewayNode", nil, nil)
+	if !errors.Is(err, ErrMethodNotAllowed) {
+		t.Fatalf("error = %v, want ErrMethodNotAllowed", err)
+	}
+	if requests.Load() != 0 || customCalls.Load() != 0 {
+		t.Fatalf("network work occurred: requests=%d custom=%d", requests.Load(), customCalls.Load())
+	}
+}
+
 func TestForwardRejectsOversizedResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "12345") }))
 	defer server.Close()
