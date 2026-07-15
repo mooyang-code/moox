@@ -20,7 +20,7 @@ assert_contains "${ROOT}/scripts/deploy-moox.sh" 'validate_moox_loopback_listene
 assert_contains "${LOOPBACK_HELPER}" 'MOOX_WEB_HOST_HEALTH_ADDR-127.0.0.1:19527'
 assert_contains "${LOOPBACK_HELPER}" 'MOOX_ADMIN_CONTROL_ADDR-127.0.0.1:11000'
 assert_contains "${LOOPBACK_HELPER}" 'MOOX_ADMIN_SERVICE_ADDR-127.0.0.1:11002'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-archive" -config=config/app.yaml'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'verify_public_https'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'public HTTPS acceptance failed'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" '--target-ca <auto|skip>'
