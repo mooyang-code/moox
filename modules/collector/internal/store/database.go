@@ -75,6 +75,9 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("collector schema sql is empty")
 	}
+	if err := s.migrateTaskInstanceSchema(); err != nil {
+		return fmt.Errorf("migrate collector schema: %w", err)
+	}
 	return s.db.Exec(sql).Error
 }
 
