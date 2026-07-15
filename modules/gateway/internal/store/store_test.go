@@ -150,3 +150,31 @@ func TestNonceConsumePersistsAndRejectsConcurrentDuplicates(t *testing.T) {
 		t.Fatalf("persistent consume = %v, %v", ok, err)
 	}
 }
+
+func TestPersistentStoreHealthChecks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := gatewayproxy.NormalizeAndHash("node-a", nil)
+	routes := NewRoutes(dir)
+	if err := routes.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := routes.Check(); err != nil {
+		t.Fatalf("routes Check() = %v", err)
+	}
+	nonces, err := OpenNonces(filepath.Join(dir, "nonces"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nonces.Check(); err != nil {
+		t.Fatalf("nonces Check() = %v", err)
+	}
+	if err := nonces.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := nonces.Check(); err == nil {
+		t.Fatal("closed nonce store remained healthy")
+	}
+}

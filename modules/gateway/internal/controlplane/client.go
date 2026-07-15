@@ -21,6 +21,8 @@ import (
 const DefaultControlKeyID = "moox-gateway-control"
 const maxSnapshotBytes = 16 << 20
 
+var ErrInvalidSnapshot = errors.New("invalid gateway route snapshot")
+
 type Options struct {
 	NodeID, BaseURL, HMACKeyFile, CAFile, KeyID string
 	Now                                         func() time.Time
@@ -108,11 +110,11 @@ func (client *Client) Pull(ctx context.Context, currentHash string) (gatewayprox
 		return gatewayproxy.Snapshot{}, errors.New("gateway route snapshot contains trailing JSON")
 	}
 	if snapshot.NodeID != client.nodeID {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("gateway route snapshot targets %q, want %q", snapshot.NodeID, client.nodeID)
+		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: targets %q, want %q", ErrInvalidSnapshot, snapshot.NodeID, client.nodeID)
 	}
 	var table gatewayproxy.Table
 	if err := table.Replace(snapshot); err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("validate gateway routes: %w", err)
+		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: %v", ErrInvalidSnapshot, err)
 	}
 	return snapshot, nil
 }

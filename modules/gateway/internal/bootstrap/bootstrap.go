@@ -66,6 +66,9 @@ func (runtime *Runtime) Initialize(ctx context.Context) error {
 	snapshot, err := runtime.control.Pull(ctx, hash)
 	if err != nil {
 		runtime.health.RouteSyncFailed()
+		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
+			runtime.health.RouteValidationFailed()
+		}
 		if hasCache {
 			runtime.report(ctx, err.Error())
 			return nil
@@ -94,6 +97,9 @@ func (runtime *Runtime) Refresh(ctx context.Context) error {
 	}
 	if err != nil {
 		runtime.health.RouteSyncFailed()
+		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
+			runtime.health.RouteValidationFailed()
+		}
 		runtime.report(ctx, err.Error())
 		return err
 	}
@@ -103,13 +109,20 @@ func (runtime *Runtime) Refresh(ctx context.Context) error {
 
 func (runtime *Runtime) apply(snapshot gatewayproxy.Snapshot, persist bool) error {
 	if snapshot.NodeID != runtime.nodeID {
+		runtime.health.RouteValidationFailed()
 		return fmt.Errorf("route snapshot targets %q, want %q", snapshot.NodeID, runtime.nodeID)
 	}
 	var validated gatewayproxy.Table
 	if err := validated.Replace(snapshot); err != nil {
+		runtime.health.RouteValidationFailed()
 		return err
 	}
 	if persist {
+		currentHash, _ := runtime.health.Current()
+		if snapshot.RouteHash == currentHash {
+			runtime.health.RouteSyncSucceeded(time.Now())
+			return nil
+		}
 		if err := runtime.routes.Save(snapshot); err != nil {
 			return fmt.Errorf("save route snapshot: %w", err)
 		}
@@ -118,6 +131,9 @@ func (runtime *Runtime) apply(snapshot gatewayproxy.Snapshot, persist bool) erro
 		return err
 	}
 	runtime.health.ApplyRoutes(snapshot.RouteHash, len(snapshot.Routes), snapshot.Disabled)
+	if persist {
+		runtime.health.RouteSyncSucceeded(time.Now())
+	}
 	return nil
 }
 
@@ -141,14 +157,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	defer nonces.Close()
 	state := health.NewState()
-	runtime := New(Options{NodeID: cfg.Node.ID, Routes: store.NewRoutes(cfg.Store.Path), Control: control, Health: state})
+	routeStore := store.NewRoutes(cfg.Store.Path)
+	runtime := New(Options{NodeID: cfg.Node.ID, Routes: routeStore, Control: control, Health: state})
 	if err := runtime.Initialize(ctx); err != nil {
 		return err
 	}
+	state.SetStorageCheck(func() error {
+		if err := routeStore.Check(); err != nil {
+			return err
+		}
+		return nonces.Check()
+	})
 
 	serviceHandler := router.New(router.Options{
 		NodeID: cfg.Node.ID, Credentials: gatewayauth.Credentials{KeyID: "moox-gateway-service", Secret: credentialsSecret},
-		MaxBodyBytes: cfg.Proxy.MaxBodyBytes, Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled,
+		MaxBodyBytes: cfg.Proxy.MaxBodyBytes, Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled, Metrics: state,
 	})
 	serviceListener, err := net.Listen("tcp", cfg.Server.ServiceAddr)
 	if err != nil {

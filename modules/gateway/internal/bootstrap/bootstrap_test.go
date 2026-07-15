@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/gateway/internal/controlplane"
 	"github.com/mooyang-code/moox/modules/gateway/internal/health"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
 )
@@ -59,6 +60,46 @@ func TestRefreshFailureKeepsReadinessAndIncrementsMetric(t *testing.T) {
 	}
 	if _, ok := runtime.Table().Resolve("cached"); !ok {
 		t.Fatal("failed refresh discarded cached route")
+	}
+}
+
+func TestRefreshUnchangedHashSkipsSaveAndTableReplacement(t *testing.T) {
+	snapshot := testSnapshot(t, "node-a", "monitor")
+	events := []string{}
+	routes := &fakeRoutes{load: snapshot, events: &events}
+	control := &fakeControl{pull: snapshot, events: &events}
+	runtime := New(Options{NodeID: "node-a", Routes: routes, Control: control, Health: health.NewState()})
+	if err := runtime.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(events, ","); got != "load,pull:"+snapshot.RouteHash+",report:"+snapshot.RouteHash {
+		t.Fatalf("unchanged initialization events = %s", got)
+	}
+	events = events[:0]
+	if err := runtime.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(events, ","); got != "pull:"+snapshot.RouteHash+",report:"+snapshot.RouteHash {
+		t.Fatalf("unchanged refresh events = %s", got)
+	}
+}
+
+func TestRefreshCountsControlPlaneRouteValidationFailures(t *testing.T) {
+	snapshot := testSnapshot(t, "node-a", "monitor")
+	state := health.NewState()
+	control := &fakeControl{pull: snapshot}
+	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{load: snapshot}, Control: control, Health: state})
+	if err := runtime.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	control.pullErr = controlplane.ErrInvalidSnapshot
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("Refresh() succeeded")
+	}
+	recorder := httptest.NewRecorder()
+	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(recorder.Body.String(), "gateway_route_validation_failures_total 1") {
+		t.Fatalf("metrics = %q", recorder.Body.String())
 	}
 }
 

@@ -32,6 +32,10 @@ func OpenNonces(path string) (*Nonces, error) {
 
 func (nonces *Nonces) Close() error { return nonces.db.Close() }
 
+func (nonces *Nonces) Check() error {
+	return nonces.db.View(func(_ *badger.Txn) error { return nil })
+}
+
 func (nonces *Nonces) Consume(ctx context.Context, namespace, nonce string, ttl time.Duration) (bool, error) {
 	if namespace == "" || nonce == "" {
 		return false, errors.New("nonce namespace and value are required")

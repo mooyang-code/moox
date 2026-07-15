@@ -20,6 +20,20 @@ func NewRoutes(directory string) *Routes { return &Routes{directory: directory} 
 
 func (routes *Routes) Path() string { return filepath.Join(routes.directory, "routes.json") }
 
+func (routes *Routes) Check() error {
+	if err := ensureSecureRouteDirectory(routes.directory, false); err != nil {
+		return err
+	}
+	if err := ensureSecureCacheFile(routes.Path(), false); err != nil {
+		return err
+	}
+	file, err := os.Open(routes.Path())
+	if err != nil {
+		return fmt.Errorf("open route cache health check: %w", err)
+	}
+	return file.Close()
+}
+
 func (routes *Routes) Save(snapshot gatewayproxy.Snapshot) (resultErr error) {
 	if err := validateSnapshot(snapshot); err != nil {
 		return err

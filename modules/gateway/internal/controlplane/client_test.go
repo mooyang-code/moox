@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,7 +93,7 @@ func TestPullRejectsWrongNodeAndInvalidRouteHash(t *testing.T) {
 			defer server.Close()
 			client := newTestClient(t, server.URL, "control-secret")
 			got, err := client.Pull(context.Background(), "old")
-			if err == nil || got.RouteHash != "" {
+			if err == nil || got.RouteHash != "" || !errors.Is(err, ErrInvalidSnapshot) {
 				t.Fatalf("Pull() = %+v, %v", got, err)
 			}
 		})

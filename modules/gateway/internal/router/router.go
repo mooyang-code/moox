@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -23,6 +24,13 @@ type routeTable interface {
 	Resolve(string) (gatewayproxy.Route, bool)
 }
 
+type Metrics interface {
+	AuthFailed()
+	ReplayFailed()
+	UpstreamFailed(string)
+	ObserveRequest(string, string, int, time.Duration)
+}
+
 type Options struct {
 	NodeID       string
 	Credentials  gatewayauth.Credentials
@@ -31,6 +39,7 @@ type Options struct {
 	Nonces       nonceConsumer
 	Disabled     func() bool
 	Now          func() time.Time
+	Metrics      Metrics
 }
 
 type Handler struct {
@@ -55,8 +64,15 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 }
 
 func (handler *Handler) HandleService(response http.ResponseWriter, request *http.Request) {
+	started := time.Now()
+	serviceID, method := request.PathValue("service"), request.PathValue("method")
+	status := http.StatusInternalServerError
+	if handler.options.Metrics != nil {
+		defer func() { handler.options.Metrics.ObserveRequest(serviceID, method, status, time.Since(started)) }()
+	}
 	body, err := readBoundedBody(request.Body, handler.options.MaxBodyBytes)
 	if err != nil {
+		status = http.StatusRequestEntityTooLarge
 		writeError(response, http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -64,28 +80,40 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		Method: request.Method, Path: request.URL.EscapedPath(), TargetNode: handler.options.NodeID, Body: body,
 	}, request.Header, handler.options.Now())
 	if err != nil {
+		status = http.StatusUnauthorized
+		if handler.options.Metrics != nil {
+			handler.options.Metrics.AuthFailed()
+		}
 		writeError(response, http.StatusUnauthorized)
 		return
 	}
 	consumed, err := handler.options.Nonces.Consume(request.Context(), serviceNonceNamespace, claims.Nonce, claims.TTL)
 	if err != nil {
+		status = http.StatusInternalServerError
 		writeError(response, http.StatusInternalServerError)
 		return
 	}
 	if !consumed {
+		status = http.StatusUnauthorized
+		if handler.options.Metrics != nil {
+			handler.options.Metrics.ReplayFailed()
+		}
 		writeError(response, http.StatusUnauthorized)
 		return
 	}
 	if handler.options.Disabled() {
+		status = http.StatusServiceUnavailable
 		writeError(response, http.StatusServiceUnavailable)
 		return
 	}
 	route, ok := handler.options.Table.Resolve(request.PathValue("service"))
 	if !ok {
+		status = http.StatusNotFound
 		writeError(response, http.StatusNotFound)
 		return
 	}
 	if int64(len(body)) > route.MaxBodyBytes && route.MaxBodyBytes > 0 {
+		status = http.StatusRequestEntityTooLarge
 		writeError(response, http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -93,12 +121,16 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 	if err != nil {
 		switch {
 		case errors.Is(err, gatewayproxy.ErrMethodNotAllowed):
+			status = http.StatusMethodNotAllowed
 			writeError(response, http.StatusMethodNotAllowed)
 		default:
+			status = http.StatusBadGateway
+			handler.recordUpstreamFailure(err)
 			writeError(response, http.StatusBadGateway)
 		}
 		return
 	}
+	status = upstream.StatusCode
 	for name, values := range upstream.Header {
 		for _, value := range values {
 			response.Header().Add(name, value)
@@ -106,6 +138,24 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 	}
 	response.WriteHeader(upstream.StatusCode)
 	_, _ = response.Write(upstream.Body)
+}
+
+func (handler *Handler) recordUpstreamFailure(err error) {
+	if handler.options.Metrics == nil {
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		handler.options.Metrics.UpstreamFailed("timeout")
+		return
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		if networkError.Timeout() {
+			handler.options.Metrics.UpstreamFailed("timeout")
+		} else {
+			handler.options.Metrics.UpstreamFailed("connection")
+		}
+	}
 }
 
 func readBoundedBody(body io.ReadCloser, limit int64) ([]byte, error) {

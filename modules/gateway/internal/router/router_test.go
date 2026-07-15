@@ -114,13 +114,61 @@ func TestServiceRouterStatusMapping(t *testing.T) {
 	}
 }
 
+func TestServiceRouterRecordsRequestAuthReplayAndUpstreamMetrics(t *testing.T) {
+	metrics := &metricRecorder{}
+	handler, closeHandler := newHandlerWithMetrics(t, nil, false, 1024, metrics)
+	defer closeHandler()
+	bad := signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, "wrong-secret")
+	handler.ServeHTTP(httptest.NewRecorder(), bad)
+	valid := signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, testSecret)
+	handler.ServeHTTP(httptest.NewRecorder(), valid)
+	handler.ServeHTTP(httptest.NewRecorder(), valid.Clone(context.Background()))
+	if metrics.auth != 1 || metrics.replay != 1 || metrics.upstream["connection"] != 1 {
+		t.Fatalf("metrics = %+v", metrics)
+	}
+	if metrics.status[http.StatusUnauthorized] != 2 || metrics.status[http.StatusBadGateway] != 1 {
+		t.Fatalf("request statuses = %+v", metrics.status)
+	}
+}
+
+func TestServiceRouterRecordsUpstreamTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { time.Sleep(50 * time.Millisecond) }))
+	upstream.Listener = listener
+	upstream.Start()
+	defer upstream.Close()
+	metrics := &metricRecorder{}
+	handler, closeHandler := newHandlerWithRouteTimeout(t, upstream, 1, metrics)
+	defer closeHandler()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, testSecret))
+	if recorder.Code != http.StatusBadGateway || metrics.upstream["timeout"] != 1 {
+		t.Fatalf("response=%d metrics=%+v", recorder.Code, metrics)
+	}
+}
+
 func newHandler(t *testing.T, upstream *httptest.Server, disabled bool, maxBody int64) (http.Handler, func()) {
+	return newHandlerWithMetrics(t, upstream, disabled, maxBody, nil)
+}
+
+func newHandlerWithMetrics(t *testing.T, upstream *httptest.Server, disabled bool, maxBody int64, metrics Metrics) (http.Handler, func()) {
+	return newHandlerWithOptions(t, upstream, disabled, maxBody, 0, metrics)
+}
+
+func newHandlerWithRouteTimeout(t *testing.T, upstream *httptest.Server, timeoutMS int64, metrics Metrics) (http.Handler, func()) {
+	return newHandlerWithOptions(t, upstream, false, 1024, timeoutMS, metrics)
+}
+
+func newHandlerWithOptions(t *testing.T, upstream *httptest.Server, disabled bool, maxBody, timeoutMS int64, metrics Metrics) (http.Handler, func()) {
 	t.Helper()
 	address := "127.0.0.1:1"
 	if upstream != nil {
 		address = upstream.Listener.Addr().String()
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, disabled, []gatewayproxy.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024}})
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, disabled, []gatewayproxy.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024, TimeoutMS: timeoutMS}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,8 +180,29 @@ func newHandler(t *testing.T, upstream *httptest.Server, disabled bool, maxBody 
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := New(Options{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, MaxBodyBytes: maxBody, Table: &table, Nonces: nonces, Disabled: func() bool { return disabled }})
+	handler := New(Options{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, MaxBodyBytes: maxBody, Table: &table, Nonces: nonces, Disabled: func() bool { return disabled }, Metrics: metrics})
 	return handler, func() { _ = nonces.Close() }
+}
+
+type metricRecorder struct {
+	auth, replay int
+	upstream     map[string]int
+	status       map[int]int
+}
+
+func (metrics *metricRecorder) AuthFailed()   { metrics.auth++ }
+func (metrics *metricRecorder) ReplayFailed() { metrics.replay++ }
+func (metrics *metricRecorder) UpstreamFailed(kind string) {
+	if metrics.upstream == nil {
+		metrics.upstream = map[string]int{}
+	}
+	metrics.upstream[kind]++
+}
+func (metrics *metricRecorder) ObserveRequest(_ string, _ string, status int, _ time.Duration) {
+	if metrics.status == nil {
+		metrics.status = map[int]int{}
+	}
+	metrics.status[status]++
 }
 
 func signedRequest(t *testing.T, method, path string, body []byte, nodeID, secret string) *http.Request {
