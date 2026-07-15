@@ -92,6 +92,13 @@ func (s *Store) InitSchema(ctx context.Context) error {
 
 const metadataSchemaVersion = "2"
 
+func metadataSchemaVersionCompatible(version string) bool {
+	// Version 3 is a forward-compatible production metadata schema. Its
+	// existing tables remain usable by the version-2 storage contract, and the
+	// schema script only creates missing objects without downgrading metadata.
+	return version == metadataSchemaVersion || version == "3"
+}
+
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
 	if err := s.db.QueryRowContext(ctx, `
@@ -115,7 +122,7 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	}
 	var version string
 	err := s.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && version != metadataSchemaVersion) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !metadataSchemaVersionCompatible(version)) {
 		return errors.New("incompatible storage metadata schema; reset metadata database")
 	}
 	return err
