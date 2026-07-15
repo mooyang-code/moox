@@ -15,6 +15,8 @@ WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
 WITH_FACTOR=1
 WITH_MONITOR=1
+WITH_ADMIN=1
+WITH_GATEWAY=1
 BUILD_WEB_ASSETS=1
 RESET_DATA=0
 TARGET_GOOS=""
@@ -37,6 +39,11 @@ ADMIN_PASSWORD=""
 BOOTSTRAP_ADMIN=0
 ENABLE_CLS=0
 CLOUD_ACCOUNT_ID=""
+NODE_ID=""
+GATEWAY_CONTROL_URL=""
+GATEWAY_CA_BUNDLE=""
+GATEWAY_CONTROL_KEY_FILE=""
+GATEWAY_SERVICE_KEY_FILE=""
 STAGE_DEPLOY_LOCK=""
 STAGE_DEPLOY_LOCK_TOKEN="$$.${RANDOM}.${RANDOM}"
 STAGE_DEPLOY_LOCK_HELD=0
@@ -67,6 +74,7 @@ Options:
   --no-collector                  Do not package/start moox-collector.
   --no-factor                     Do not package/start moox-factor.
   --no-monitor                    Do not package/start moox-monitor.
+  --no-admin                      Build a data-plane node without Admin, browser assets, schema, or credentials.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
   --reset-data                    Remove target data directory before deploying. Use when rebuilding from examples.
@@ -81,6 +89,11 @@ Options:
   --caddy-conflict <fail>         Refuse unrelated listeners (the only supported policy).
   --enable-cls                    Prepare fixed CLS resources and add production CLS writers.
   --cloud-account-id <id>         Tencent cloud account for CLS; default is the first account.
+  --node-id <id>                  Stable Gateway node ID (required).
+  --gateway-control-url <url>     Central Admin browser origin used by Gateway (required).
+  --gateway-ca-bundle <path>      Public PEM bundle containing peer Caddy roots (required).
+  --gateway-control-key-file <p>  Local 0600 raw cluster control key file (required).
+  --gateway-service-key-file <p>  Local 0600 raw cluster service key file (required).
   -h, --help                      Show this help.
 
 Examples:
@@ -216,6 +229,10 @@ acquire_stage_deploy_lock() {
 
 generate_secret() {
   local cli="$1" purpose="$2" output secret
+  if [[ ! -x "${cli}" ]]; then
+    openssl rand -hex 32
+    return
+  fi
   output=$("${cli}" random-secret --bytes 32)
   secret=$(printf '%s' "${output}" | sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
   [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
@@ -294,6 +311,11 @@ while [[ $# -gt 0 ]]; do
       WITH_MONITOR=0
       shift
       ;;
+    --no-admin)
+      WITH_ADMIN=0
+      WITH_WEB_HOST=0
+      shift
+      ;;
     --build-web-assets)
       BUILD_WEB_ASSETS=1
       shift
@@ -321,6 +343,11 @@ while [[ $# -gt 0 ]]; do
       CLOUD_ACCOUNT_ID="${2}"
       shift 2
       ;;
+    --node-id) NODE_ID="${2:-}"; shift 2 ;;
+    --gateway-control-url) GATEWAY_CONTROL_URL="${2:-}"; shift 2 ;;
+    --gateway-ca-bundle) GATEWAY_CA_BUNDLE="${2:-}"; shift 2 ;;
+    --gateway-control-key-file) GATEWAY_CONTROL_KEY_FILE="${2:-}"; shift 2 ;;
+    --gateway-service-key-file) GATEWAY_SERVICE_KEY_FILE="${2:-}"; shift 2 ;;
     -h|--help)
       usage
       exit 0
@@ -334,6 +361,8 @@ done
 [[ -n "${TARGET}" ]] || fail "--target cannot be empty"
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
 [[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"
+[[ "${NODE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail "--node-id is required and must be a stable identifier"
+[[ "${GATEWAY_CONTROL_URL}" =~ ^https?://[^/]+/?$ ]] || fail "--gateway-control-url must be an HTTP(S) origin"
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 [[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
 
@@ -416,6 +445,7 @@ target_admin_db_exists() {
 }
 
 read_admin_password() {
+  [[ "${WITH_ADMIN}" -eq 1 ]] || return 0
   target_admin_db_exists && return 0
   BOOTSTRAP_ADMIN=1
   if [[ -n "${ADMIN_PASSWORD_FILE}" ]]; then
@@ -440,6 +470,22 @@ TARGET_GOOS="${TARGET_GOOS:-$(detect_os)}"
 TARGET_GOARCH="${TARGET_GOARCH:-$(detect_arch)}"
 TARGET_GOOS="$(normalize_os "${TARGET_GOOS}")"
 TARGET_GOARCH="$(normalize_arch "${TARGET_GOARCH}")"
+
+require_gateway_input_file() {
+  local option="$1" path="$2" require_mode="${3:-1}"
+  [[ -n "${path}" ]] || fail "${option} is required"
+  path="$(expand_local_path "${path}")"
+  [[ -f "${path}" && ! -L "${path}" ]] || fail "${option} must name a local regular file"
+  if [[ "${require_mode}" == 1 && "$(local_file_mode "${path}")" != 600 ]]; then
+    fail "${option} must have mode 0600"
+  fi
+}
+require_gateway_input_file --gateway-control-key-file "${GATEWAY_CONTROL_KEY_FILE}"
+require_gateway_input_file --gateway-service-key-file "${GATEWAY_SERVICE_KEY_FILE}"
+require_gateway_input_file --gateway-ca-bundle "${GATEWAY_CA_BUNDLE}" 0
+GATEWAY_CONTROL_KEY_FILE="$(expand_local_path "${GATEWAY_CONTROL_KEY_FILE}")"
+GATEWAY_SERVICE_KEY_FILE="$(expand_local_path "${GATEWAY_SERVICE_KEY_FILE}")"
+GATEWAY_CA_BUNDLE="$(expand_local_path "${GATEWAY_CA_BUNDLE}")"
 read_admin_password
 
 HOST_GOOS="$(go env GOOS)"
@@ -454,10 +500,14 @@ build_core_binaries() {
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
   if [[ "${WITH_STORAGE}" -eq 0 ]]; then
+    if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+        "${ROOT}/scripts/build.sh" cli
+      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+        "${ROOT}/scripts/build.sh" admin
+    fi
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build.sh" cli
-    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build.sh" admin
+      "${ROOT}/scripts/build.sh" gateway
     if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" cloudnode
@@ -556,13 +606,21 @@ copy_optional_web_host() {
 }
 
 patch_configs() {
-  perl -0pi -e 's#path:\s*\./data/admin\.db#path: ../data/admin.db#g' \
-    "${STAGE_DIR}/admin/config/app.yaml"
-  perl -0pi -e 's#data_dir:\s*"\./data/badger"#data_dir: "../data/badger"#g' \
-    "${STAGE_DIR}/admin/config/gateway.yaml"
-  if [[ -f "${STAGE_DIR}/admin/config/trpc_go.yaml" ]]; then
+  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    perl -0pi -e 's#path:\s*\./data/admin\.db#path: ../data/admin.db#g' \
+      "${STAGE_DIR}/admin/config/app.yaml"
+    perl -0pi -e 's#data_dir:\s*"\./data/badger"#data_dir: "../data/badger"#g' \
+      "${STAGE_DIR}/admin/config/gateway.yaml"
     perl -0pi -e 's#log_path:\s*\./log#log_path: ../logs/admin#g' \
       "${STAGE_DIR}/admin/config/trpc_go.yaml"
+  fi
+
+  perl -0pi -e 's#id:\s*gateway-gz-122#id: '"${NODE_ID}"'#; s#base_url:\s*https://admin\.example\.com#base_url: '"${GATEWAY_CONTROL_URL}"'#; s#hmac_key_file:\s*\./secrets/gateway-control\.key#hmac_key_file: ../../secrets/gateway-control.key#; s#hmac_key_file:\s*\./secrets/gateway-service\.key#hmac_key_file: ../../secrets/gateway-service.key#; s#path:\s*\./data/gateway#path: ../../data/gateway#' \
+    "${STAGE_DIR}/gateway/config/app.yaml"
+  if grep -q '^  ca_file:' "${STAGE_DIR}/gateway/config/app.yaml"; then
+    perl -0pi -e 's#^  ca_file:.*#  ca_file: ../../certs/gateway/peers.pem#m' "${STAGE_DIR}/gateway/config/app.yaml"
+  else
+    perl -0pi -e 's#(  hmac_key_file: ../../secrets/gateway-control\.key\n)#$1  ca_file: ../../certs/gateway/peers.pem\n#' "${STAGE_DIR}/gateway/config/app.yaml"
   fi
 
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
@@ -635,11 +693,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/service-auth.env" ]] || { echo "missing service credentials" >&2; exit 1; }
-[[ -r "${ROOT}/secrets/admin-jwt.env" ]] || { echo "missing Admin JWT credentials" >&2; exit 1; }
+[[ -r "${ROOT}/secrets/gateway-control.env" ]] || { echo "missing Gateway control credentials" >&2; exit 1; }
+[[ -r "${ROOT}/secrets/gateway-service.env" ]] || { echo "missing Gateway service credentials" >&2; exit 1; }
 set -a
 source "${ROOT}/secrets/health-auth.env"
 source "${ROOT}/secrets/service-auth.env"
-source "${ROOT}/secrets/admin-jwt.env"
+source "${ROOT}/secrets/gateway-control.env"
+source "${ROOT}/secrets/gateway-service.env"
+if [[ -r "${ROOT}/secrets/admin-jwt.env" ]]; then
+  source "${ROOT}/secrets/admin-jwt.env"
+fi
 if [[ -r "${ROOT}/secrets/cls.env" ]]; then
   source "${ROOT}/secrets/cls.env"
 fi
@@ -650,7 +713,8 @@ if [[ -r "${ROOT}/certs/caddy/root.crt" ]]; then
   MOOX_SERVICE_GATEWAY_CA_FILE="${ROOT}/certs/caddy/root.crt"
   MOOX_SERVICE_GATEWAY_CA_PEM_B64=$(base64 <"${ROOT}/certs/caddy/root.crt" | tr -d '\r\n')
 fi
-export MOOX_SERVICE_GATEWAY_CA_FILE MOOX_SERVICE_GATEWAY_CA_PEM_B64
+MOOX_GATEWAY_CA_FILE="${ROOT}/certs/gateway/peers.pem"
+export MOOX_SERVICE_GATEWAY_CA_FILE MOOX_SERVICE_GATEWAY_CA_PEM_B64 MOOX_GATEWAY_CA_FILE
 set +a
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
@@ -660,8 +724,15 @@ WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-__NODE_ID__}"
+export MOOX_GATEWAY_NODE_ID
+if [[ "${WITH_ADMIN}" == "1" ]]; then
+  MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-__NODE_ID__}"
+fi
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
 
 source "${ROOT}/lib/loopback-listeners.sh"
 validate_moox_loopback_listeners
@@ -842,6 +913,7 @@ probe_service() {
   local name="$1" url=""
   case "${name}" in
     admin) url=http://127.0.0.1:11010/readyz ;;
+    gateway) url=http://127.0.0.1:11012/readyz ;;
     archive) url=http://127.0.0.1:11416/readyz ;;
     cloudnode) url=http://127.0.0.1:11411/readyz ;;
     collector) url=http://127.0.0.1:11412/readyz ;;
@@ -1043,6 +1115,7 @@ start_storage() {
 }
 
 start_admin() {
+  [[ "${WITH_ADMIN}" == "1" ]] || { echo "admin is disabled in this deployment package" >&2; exit 2; }
   local encryption_key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
   [[ -f "${encryption_key_file}" ]] || { echo "missing Admin encryption key: ${encryption_key_file}" >&2; exit 1; }
   init_admin_schema
@@ -1052,8 +1125,15 @@ start_admin() {
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   start_service "admin" "${ROOT}/admin" \
-    env "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
+    env "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
+}
+
+start_gateway() {
+  [[ "${WITH_GATEWAY}" == "1" ]] || { echo "gateway is disabled in this deployment package" >&2; exit 2; }
+  start_service "gateway" "${ROOT}/gateway" \
+    env "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
+      "${ROOT}/bin/moox-gateway" -config=config/app.yaml
 }
 
 start_cloudnode() {
@@ -1120,7 +1200,10 @@ start_web_host() {
 SERVICE="${1:-}"
 case "${SERVICE}" in
   "")
-    start_admin
+    if [[ "${WITH_ADMIN}" == "1" ]]; then
+      start_admin
+    fi
+    start_gateway
     if [[ "${WITH_EVENTBUS}" == "1" ]]; then
       start_eventbus
     fi
@@ -1193,10 +1276,11 @@ case "${SERVICE}" in
   collector) start_collector ;;
   factor) start_factor ;;
   monitor) start_monitor ;;
+  gateway) start_gateway ;;
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1221,6 +1305,8 @@ WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 
 stop_service() {
   local name="$1"
@@ -1273,7 +1359,10 @@ case "${SERVICE}" in
     if [[ "${WITH_MONITOR}" == "1" ]]; then
       stop_service "monitor"
     fi
-    stop_service "admin"
+    stop_service "gateway"
+    if [[ "${WITH_ADMIN}" == "1" ]]; then
+      stop_service "admin"
+    fi
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
       stop_service "collector"
     fi
@@ -1325,7 +1414,11 @@ case "${SERVICE}" in
     fi
     stop_service "${SERVICE}"
     ;;
-  admin) stop_service "${SERVICE}" ;;
+  admin)
+    [[ "${WITH_ADMIN}" == "1" ]] || { echo "admin is disabled in this deployment package" >&2; exit 2; }
+    stop_service "${SERVICE}"
+    ;;
+  gateway) stop_service "gateway" ;;
   web-host)
     if [[ "${WITH_WEB_HOST}" != "1" ]]; then
       echo "web-host is disabled in this deployment package" >&2
@@ -1362,7 +1455,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1398,8 +1491,16 @@ WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 
-services=(admin)
+services=()
+if [[ "${WITH_ADMIN}" == "1" ]]; then
+  services+=(admin)
+fi
+if [[ "${WITH_GATEWAY}" == "1" ]]; then
+  services+=(gateway)
+fi
 if [[ "${WITH_ARCHIVE}" == "1" ]]; then
   services=(archive "${services[@]}" )
 fi
@@ -1456,6 +1557,8 @@ WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 LOG_FILE="${ROOT}/logs/healthcheck.log"
 
 mkdir -p "${ROOT}/run" "$(dirname "${LOG_FILE}")"
@@ -1473,6 +1576,7 @@ probe_service() {
   local name="$1" url=""
   case "${name}" in
     admin) url=http://127.0.0.1:11010/readyz ;;
+    gateway) url=http://127.0.0.1:11012/readyz ;;
     archive) url=http://127.0.0.1:11416/readyz ;;
     cloudnode) url=http://127.0.0.1:11411/readyz ;;
     collector) url=http://127.0.0.1:11412/readyz ;;
@@ -1502,7 +1606,12 @@ fi
 if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
   default_services+=(cloudnode)
 fi
-default_services+=(admin)
+if [[ "${WITH_ADMIN}" == "1" ]]; then
+  default_services+=(admin)
+fi
+if [[ "${WITH_GATEWAY}" == "1" ]]; then
+  default_services+=(gateway)
+fi
 if [[ "${WITH_MONITOR}" == "1" ]]; then
   default_services+=(monitor)
 fi
@@ -1563,7 +1672,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -1572,7 +1681,7 @@ prepare_stage() {
   rm -rf "${STAGE_DIR}"
   mkdir -p \
     "${STAGE_DIR}/bin" \
-    "${STAGE_DIR}/admin/config" \
+    "${STAGE_DIR}/gateway/config" \
     "${STAGE_DIR}/archive/config" \
     "${STAGE_DIR}/eventbus/config" \
     "${STAGE_DIR}/cloudnode/config" \
@@ -1586,6 +1695,31 @@ prepare_stage() {
     "${STAGE_DIR}/data" \
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
+  mkdir -p "${STAGE_DIR}/secrets" "${STAGE_DIR}/certs/gateway"
+  local gateway_control_secret gateway_service_secret
+  gateway_control_secret="$(cat "${GATEWAY_CONTROL_KEY_FILE}")"
+  gateway_service_secret="$(cat "${GATEWAY_SERVICE_KEY_FILE}")"
+  [[ -n "${gateway_control_secret}" && -n "${gateway_service_secret}" ]] || fail "Gateway key files cannot be empty"
+  [[ "${gateway_control_secret}" != *$'\n'* && "${gateway_control_secret}" != *$'\r'* && \
+     "${gateway_service_secret}" != *$'\n'* && "${gateway_service_secret}" != *$'\r'* ]] || \
+    fail "Gateway key files must contain exactly one line"
+  [[ "${gateway_control_secret}" == "$(printf '%s' "${gateway_control_secret}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" && \
+     "${gateway_service_secret}" == "$(printf '%s' "${gateway_service_secret}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" ]] || \
+    fail "Gateway keys cannot have leading or trailing whitespace"
+  [[ "$(grep -c -- 'BEGIN CERTIFICATE' "${GATEWAY_CA_BUNDLE}")" -ge 2 ]] || fail "--gateway-ca-bundle must contain both nodes' public Caddy roots"
+  ! grep -q -- 'PRIVATE KEY' "${GATEWAY_CA_BUNDLE}" || fail "--gateway-ca-bundle must never contain private keys"
+  (umask 077; printf '%s\n' "${gateway_control_secret}" >"${STAGE_DIR}/secrets/gateway-control.key")
+  (umask 077; printf '%s\n' "${gateway_service_secret}" >"${STAGE_DIR}/secrets/gateway-service.key")
+  {
+    printf 'MOOX_GATEWAY_CONTROL_KEY_ID=moox-gateway-control\n'
+    printf 'MOOX_GATEWAY_CONTROL_SECRET_KEY=%q\n' "${gateway_control_secret}"
+  } >"${STAGE_DIR}/secrets/gateway-control.env"
+  {
+    printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\n'
+    printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
+  } >"${STAGE_DIR}/secrets/gateway-service.env"
+  chmod 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${STAGE_DIR}/secrets/gateway-service.env"
+  install -m 0644 "${GATEWAY_CA_BUNDLE}" "${STAGE_DIR}/certs/gateway/peers.pem"
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"
@@ -1604,15 +1738,24 @@ prepare_stage() {
     curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
       -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
   fi
-  cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    mkdir -p "${STAGE_DIR}/admin/config"
+    cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+  else
+    cp "${ROOT}/deploy/caddy/Caddyfile.no-admin" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+  fi
   chmod +x "${STAGE_DIR}/lib/caddy-managed.sh" "${STAGE_DIR}/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/storage/config" "${STAGE_DIR}/storage/schema"
   fi
 
-  copy_required_binary "moox-admin"
-  copy_required_binary "moox-admin-cli"
-  copy_required_binary "moox-cli"
+  copy_required_binary "moox-gateway"
+  copy_required_binary "moox-gateway-cli"
+  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    copy_required_binary "moox-admin"
+    copy_required_binary "moox-admin-cli"
+    copy_required_binary "moox-cli"
+  fi
   if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
     copy_required_binary "moox-archive"
     copy_required_binary "moox-archive-cli"
@@ -1647,7 +1790,10 @@ prepare_stage() {
   fi
   copy_optional_web_host
 
-  cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
+  cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
+  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
+  fi
   if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/archive/config/." "${STAGE_DIR}/archive/config/"
   fi
@@ -1819,6 +1965,15 @@ sync_local_stage() {
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
 
+  mkdir -p "${deploy_dir}/secrets" "${deploy_dir}/certs/gateway"
+  install -m 0600 "${STAGE_DIR}/secrets/gateway-control.key" "${deploy_dir}/secrets/gateway-control.key"
+  install -m 0600 "${STAGE_DIR}/secrets/gateway-service.key" "${deploy_dir}/secrets/gateway-service.key"
+  install -m 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${deploy_dir}/secrets/gateway-control.env"
+  install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
+  install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
+  if [[ "${WITH_ADMIN}" -eq 0 ]]; then
+    rm -f "${deploy_dir}/secrets/admin-jwt.env"
+  fi
   chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
   mkdir -p "${deploy_dir}/secrets"
   if [[ ! -s "${deploy_dir}/secrets/health-auth.env" ]]; then
@@ -1833,16 +1988,17 @@ sync_local_stage() {
   fi
   sed -i.bak 's/^MOOX_SERVICE_AUTH_EXPIRE_SECONDS=.*/MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60/' "${deploy_dir}/secrets/service-auth.env"
   rm -f "${deploy_dir}/secrets/service-auth.env.bak"
-  if [[ ! -s "${deploy_dir}/secrets/admin-jwt.env" ]]; then
+  if [[ "${WITH_ADMIN}" -eq 1 && ! -s "${deploy_dir}/secrets/admin-jwt.env" ]]; then
     umask 077
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret "${MOOX_SECURITY_SECRET_CLI:-${MOOX_HEALTH_SECRET_CLI:-${deploy_dir}/bin/moox-admin-cli}}" admin-jwt)" >"${deploy_dir}/secrets/admin-jwt.env"
   fi
-  chmod 0600 "${deploy_dir}/secrets/service-auth.env" "${deploy_dir}/secrets/admin-jwt.env"
+  chmod 0600 "${deploy_dir}/secrets/service-auth.env"
+  [[ "${WITH_ADMIN}" -eq 0 ]] || chmod 0600 "${deploy_dir}/secrets/admin-jwt.env"
   log "deployed to ${deploy_dir}"
 
-  mkdir -p "${HOME}/.config/moox/credentials"
   local key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
-  if [[ ! -f "${key_file}" ]]; then
+  if [[ "${WITH_ADMIN}" -eq 1 && ! -f "${key_file}" ]]; then
+    mkdir -p "${HOME}/.config/moox/credentials"
     if [[ -f "${deploy_dir}/data/admin.db" ]]; then
       fail "Admin DB exists but ${key_file} is missing"
     fi
@@ -1856,20 +2012,15 @@ sync_local_stage() {
   fi
 
   if [[ "${NO_START}" -eq 0 ]]; then
-    local had_caddy_ca=0
-    [[ -s "${deploy_dir}/certs/caddy/root.crt" ]] && had_caddy_ca=1
-    "${deploy_dir}/start.sh"
     if [[ -n "${PUBLIC_HOST}" ]]; then
+      local caddy_ports="${SERVICE_HTTPS_PORT}"
+      [[ "${WITH_ADMIN}" -eq 0 ]] || caddy_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
       MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
         MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
         MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
-        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}" --config "${deploy_dir}/config/caddy/Caddyfile.next"
+        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${caddy_ports}" --config "${deploy_dir}/config/caddy/Caddyfile.next"
     fi
-    if [[ "${had_caddy_ca}" -eq 0 && -s "${deploy_dir}/certs/caddy/root.crt" ]]; then
-      [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector
-      [[ "${WITH_FACTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" factor
-      [[ "${WITH_MONITOR}" -eq 0 ]] || "${deploy_dir}/start.sh" monitor
-    fi
+    "${deploy_dir}/start.sh"
   fi
 }
 
@@ -1882,7 +2033,7 @@ sync_remote_stage() {
   log "upload ${archive} to ${TARGET}:${remote_archive}"
   scp "${archive}" "${TARGET}:${remote_archive}"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -1894,6 +2045,7 @@ sync_remote_stage() {
   quoted_with_factor="$(shell_quote "${WITH_FACTOR}")"
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
+  quoted_with_admin="$(shell_quote "${WITH_ADMIN}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
   quoted_metrics_route_seed="$(shell_quote "${METRICS_ROUTE_SEED}")"
@@ -1906,11 +2058,15 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
   local purpose="$1" output secret
+  if [[ ! -x "${DEPLOY_DIR}/bin/moox-admin-cli" ]]; then
+    openssl rand -hex 32
+    return
+  fi
   output=$("${DEPLOY_DIR}/bin/moox-admin-cli" random-secret --bytes 32)
   secret=$(printf '%s' "${output}" | sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
   [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
@@ -1925,10 +2081,10 @@ elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
 fi
 
 mkdir -p "${DEPLOY_DIR}"
-mkdir -p "${HOME}/.config/moox/credentials"
 CADDY_DATA_TMP=""
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
-if [[ ! -f "${KEY_FILE}" ]]; then
+if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
+  mkdir -p "${HOME}/.config/moox/credentials"
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
   umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${KEY_FILE}"; chmod 600 "${KEY_FILE}"
 fi
@@ -1971,10 +2127,10 @@ if [[ "${RESET_DATA}" == "1" ]]; then
   fi
 fi
 
-rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/examples" \
+rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/gateway" "${DEPLOY_DIR}/examples" \
   "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
 rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
-  "${DEPLOY_DIR}/bin/moox-cli"
+  "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
 if [[ "${WITH_ARCHIVE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/archive"
   rm -f "${DEPLOY_DIR}/bin/moox-archive" "${DEPLOY_DIR}/bin/moox-archive-cli"
@@ -2012,6 +2168,9 @@ if [[ "${WITH_STORAGE}" == "1" ]]; then
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
+if [[ "${WITH_ADMIN}" == "0" ]]; then
+  rm -f "${DEPLOY_DIR}/secrets/admin-jwt.env"
+fi
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
 mkdir -p "${DEPLOY_DIR}/secrets"
 if [[ ! -s "${DEPLOY_DIR}/secrets/health-auth.env" ]]; then
@@ -2026,29 +2185,25 @@ if [[ ! -s "${DEPLOY_DIR}/secrets/service-auth.env" ]]; then
 fi
 sed -i.bak 's/^MOOX_SERVICE_AUTH_EXPIRE_SECONDS=.*/MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60/' "${DEPLOY_DIR}/secrets/service-auth.env"
 rm -f "${DEPLOY_DIR}/secrets/service-auth.env.bak"
-if [[ ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; then
+if [[ "${WITH_ADMIN}" == "1" && ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; then
   umask 077
   printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret admin-jwt)" >"${DEPLOY_DIR}/secrets/admin-jwt.env"
 fi
-chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/admin-jwt.env"
+chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/gateway-service.env" "${DEPLOY_DIR}/secrets/gateway-control.key" "${DEPLOY_DIR}/secrets/gateway-service.key"
+[[ "${WITH_ADMIN}" == "0" ]] || chmod 0600 "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
   if [[ "${NO_START}" -eq 0 ]]; then
-  had_caddy_ca=0
-  [[ -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]] && had_caddy_ca=1
-  "${DEPLOY_DIR}/start.sh"
   if [[ -n "${PUBLIC_HOST}" ]]; then
     CADDY_OS_NAME="${TARGET_GOOS}"
     [[ "${CADDY_OS_NAME}" != darwin ]] || CADDY_OS_NAME=mac
+    CADDY_PORTS="${SERVICE_HTTPS_PORT}"
+    [[ "${WITH_ADMIN}" == "0" ]] || CADDY_PORTS="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
     MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
       MOOX_CADDY_CHECKSUMS="${DEPLOY_DIR}/lib/caddy-v2.11.4-checksums.txt" \
       MOOX_CADDY_ARCHIVE="${DEPLOY_DIR}/lib/caddy_2.11.4_${CADDY_OS_NAME}_${TARGET_GOARCH}.tar.gz" \
-      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}" --config "${DEPLOY_DIR}/config/caddy/Caddyfile.next"
+      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${CADDY_PORTS}" --config "${DEPLOY_DIR}/config/caddy/Caddyfile.next"
   fi
-  if [[ "${had_caddy_ca}" -eq 0 && -s "${DEPLOY_DIR}/certs/caddy/root.crt" ]]; then
-    [[ "${WITH_COLLECTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" collector
-    [[ "${WITH_FACTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" factor
-    [[ "${WITH_MONITOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" monitor
-  fi
+  "${DEPLOY_DIR}/start.sh"
 fi
 EOF
   if [[ "${BOOTSTRAP_ADMIN}" -eq 1 ]]; then
@@ -2136,7 +2291,7 @@ verify_public_https() {
   local browser="https://${PUBLIC_HOST}:${BROWSER_HTTPS_PORT}"
   local service="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
   local verify_script='set -euo pipefail
-ca=$1; browser=$2; service=$3; service_auth_file=$4
+ca=$1; browser=$2; service=$3; service_auth_file=$4; with_admin=$5; node_id=$6
 case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
 case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
 browser_authority=${browser#https://}; service_authority=${service#https://}
@@ -2155,31 +2310,35 @@ expect_status() {
   printf "expected HTTP %s, got %s for %s\n" "$expected" "${actual:-curl-error}" "$*" >&2
   return 1
 }
-expect_status 200 "$browser/"
-expect_status 404 "$browser/healthz"
-expect_status 404 "$browser/api/service/test/Ping"
+if [[ "$with_admin" == 1 ]]; then
+  expect_status 200 "$browser/"
+  expect_status 404 "$browser/healthz"
+  expect_status 404 "$browser/api/service/test/Ping"
+fi
 expect_status 404 "$service/api/admin/auth/Login"
 path=/api/service/sysdeploy/ListActiveServiceDeployments
 expect_status 401 -X POST -H "Content-Type: application/json" --data "{}" "$service$path"
 set -a; source "$service_auth_file"; set +a
-expire=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}
-timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}\nmoox-service-expire:%s" "$expire" | openssl dgst -sha256 | awk "{print \$NF}")
-canonical=$(printf "moox-request-v1\nPOST\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce")
-signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_SERVICE_AUTH_SECRET_KEY" | awk "{print \$NF}")
-auth="moox-auth-v2/$MOOX_SERVICE_AUTH_ACCESS_KEY/$timestamp/$expire/$nonce/$signature"
-expect_status 200 -X POST -H "Content-Type: application/json" -H "Auth: $auth" --data "{}" "$service$path"'
+timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
+canonical=$(printf "moox-gateway-auth-v1\nPOST\n%s\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
+signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
+expected=404; [[ "$with_admin" == 0 ]] || expected=200
+expect_status "$expected" -X POST -H "Content-Type: application/json" \
+  -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Timestamp: $timestamp" \
+  -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
+  --data "{}" "$service$path"'
   if is_local_target; then
-    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/service-auth.env" || {
+    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" || {
       "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
       fail "public HTTPS acceptance failed"
     }
   elif [[ -n "${FETCHED_CA_FILE}" ]]; then
-    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/service-auth.env" <<<"${verify_script}" || {
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" <<<"${verify_script}" || {
       ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
       fail "public HTTPS acceptance failed"
     }
   else
-    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/service-auth.env" <<<"${verify_script}" || {
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" <<<"${verify_script}" || {
       ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
       fail "remote public HTTPS acceptance failed"
     }

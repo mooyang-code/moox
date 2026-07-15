@@ -22,6 +22,9 @@ https://{$MOOX_PUBLIC_HOST}:{$MOOX_BROWSER_HTTPS_PORT:9527} {
 			stream_close_delay 5m
 		}
 	}
+	handle /api/gateway-control/* {
+		reverse_proxy 127.0.0.1:11000
+	}
 	handle /api/* {
 		respond 404
 	}

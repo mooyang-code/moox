@@ -1,0 +1,16 @@
+{
+	auto_https disable_redirects
+	admin 127.0.0.1:2019
+	default_sni {$MOOX_PUBLIC_HOST}
+}
+
+https://{$MOOX_PUBLIC_HOST}:{$MOOX_SERVICE_HTTPS_PORT:11001} {
+	tls internal
+
+	handle /api/service/* {
+		reverse_proxy 127.0.0.1:11002
+	}
+	handle {
+		respond 404
+	}
+}

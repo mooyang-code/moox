@@ -63,6 +63,8 @@ mkdir -p \
   "${RELEASE_ROOT}/cli/bin" \
   "${RELEASE_ROOT}/admin/bin" \
   "${RELEASE_ROOT}/admin/config" \
+  "${RELEASE_ROOT}/gateway/bin" \
+  "${RELEASE_ROOT}/gateway/config" \
   "${RELEASE_ROOT}/eventbus/bin" \
   "${RELEASE_ROOT}/eventbus/config" \
   "${RELEASE_ROOT}/web-host/bin" \
@@ -98,6 +100,8 @@ copy_binary() {
 copy_binary moox-cli "${RELEASE_ROOT}/cli/bin"
 copy_binary moox-admin "${RELEASE_ROOT}/admin/bin"
 copy_binary moox-admin-cli "${RELEASE_ROOT}/admin/bin"
+copy_binary moox-gateway "${RELEASE_ROOT}/gateway/bin"
+copy_binary moox-gateway-cli "${RELEASE_ROOT}/gateway/bin"
 copy_binary moox-eventbus "${RELEASE_ROOT}/eventbus/bin"
 copy_binary moox-web-host "${RELEASE_ROOT}/web-host/bin"
 copy_binary moox-cloudnode "${RELEASE_ROOT}/cloudnode/bin"
@@ -124,6 +128,7 @@ if [[ -d "${RELEASE_ROOT}/hostagent" ]]; then
 fi
 
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/admin/config/"
+cp -R "${ROOT}/modules/gateway/config/." "${RELEASE_ROOT}/gateway/config/"
 cp -R "${ROOT}/modules/eventbus/config/." "${RELEASE_ROOT}/eventbus/config/"
 cp -R "${ROOT}/modules/cloudnode/config/." "${RELEASE_ROOT}/cloudnode/config/"
 cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/collector/config/"
@@ -145,6 +150,7 @@ cp "${ROOT}/README.md" "${RELEASE_ROOT}/README.md" 2>/dev/null || true
 cp "${ROOT}/scripts/lib/caddy-managed.sh" "${RELEASE_ROOT}/lib/caddy-managed.sh"
 cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${RELEASE_ROOT}/lib/caddy-v2.11.4-checksums.txt"
 cp "${ROOT}/deploy/caddy/Caddyfile" "${RELEASE_ROOT}/config/caddy/Caddyfile"
+cp "${ROOT}/deploy/caddy/Caddyfile.no-admin" "${RELEASE_ROOT}/config/caddy/Caddyfile.no-admin"
 chmod +x "${RELEASE_ROOT}/lib/caddy-managed.sh"
 
 tar -C "${ROOT}/release" -czf "${ARCHIVE}" "$(basename "${RELEASE_ROOT}")"

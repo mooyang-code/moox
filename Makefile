@@ -1,7 +1,10 @@
-.PHONY: build check-boundaries release deploy test-caddy package-skill clean proto
+.PHONY: build build-gateway check-boundaries release deploy verify test-caddy test-gateway-deploy package-skill clean proto
 
 build:
 	./scripts/build.sh
+
+build-gateway:
+	./scripts/build.sh gateway
 
 check-boundaries:
 	./scripts/check-module-boundaries.sh
@@ -12,11 +15,18 @@ release:
 deploy:
 	./scripts/deploy-moox.sh $(ARGS)
 
+verify: check-boundaries test-gateway-deploy test-caddy
+	cd modules/gateway && go test -count=1 ./...
+
 test-caddy:
+	bash scripts/test-caddy-config.sh
 	bash scripts/test-deploy-moox-https.sh
 	bash scripts/test-install-caddy-ca.sh
 	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
+
+test-gateway-deploy:
+	bash scripts/test-deploy-moox-gateway.sh
 
 package-skill:
 	./scripts/package-skill.sh

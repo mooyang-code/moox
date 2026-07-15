@@ -24,6 +24,8 @@ validate_moox_loopback_listeners() {
   require_loopback_listener MOOX_WEB_HOST_HEALTH_ADDR "${MOOX_WEB_HOST_HEALTH_ADDR-127.0.0.1:19527}"
   require_loopback_listener MOOX_ADMIN_CONTROL_ADDR "${MOOX_ADMIN_CONTROL_ADDR-127.0.0.1:11000}"
   require_loopback_listener MOOX_ADMIN_SERVICE_ADDR "${MOOX_ADMIN_SERVICE_ADDR-127.0.0.1:11002}"
+  require_loopback_listener MOOX_GATEWAY_SERVICE_ADDR "${MOOX_GATEWAY_SERVICE_ADDR-127.0.0.1:11002}"
+  require_loopback_listener MOOX_GATEWAY_HEALTH_ADDR "${MOOX_GATEWAY_HEALTH_ADDR-127.0.0.1:11012}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

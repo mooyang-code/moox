@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONFIG=${CADDY_CONFIG:-"${ROOT_DIR}/deploy/caddy/Caddyfile"}
+NO_ADMIN_CONFIG="${ROOT_DIR}/deploy/caddy/Caddyfile.no-admin"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -19,10 +20,17 @@ pass() {
 grep -Fq 'https://{$MOOX_PUBLIC_HOST}:{$MOOX_BROWSER_HTTPS_PORT:9527}' "${CONFIG}" || fail 'browser HTTPS listener is missing'
 grep -Fq 'https://{$MOOX_PUBLIC_HOST}:{$MOOX_SERVICE_HTTPS_PORT:11001}' "${CONFIG}" || fail 'service HTTPS listener is missing'
 grep -Fq 'handle /api/admin/*' "${CONFIG}" || fail 'browser Admin allowlist is missing'
+grep -Fq 'handle /api/gateway-control/*' "${CONFIG}" || fail 'browser Gateway control allowlist is missing'
 grep -Fq 'handle /api/service/*' "${CONFIG}" || fail 'service API allowlist is missing'
 grep -Fq 'reverse_proxy 127.0.0.1:11000' "${CONFIG}" || fail 'Admin control upstream is missing'
 grep -Fq 'reverse_proxy 127.0.0.1:9528' "${CONFIG}" || fail 'web upstream is missing'
-grep -Fq 'reverse_proxy 127.0.0.1:11002' "${CONFIG}" || fail 'Admin service upstream is missing'
+grep -Fq 'reverse_proxy 127.0.0.1:11002' "${CONFIG}" || fail 'Gateway service upstream is missing'
+[[ -f "${NO_ADMIN_CONFIG}" ]] || fail 'no-admin Caddy configuration is missing'
+grep -Fq 'handle /api/service/*' "${NO_ADMIN_CONFIG}" || fail 'no-admin service API allowlist is missing'
+grep -Fq 'reverse_proxy 127.0.0.1:11002' "${NO_ADMIN_CONFIG}" || fail 'no-admin Gateway upstream is missing'
+if grep -Fq '/api/gateway-control/' "${NO_ADMIN_CONFIG}" || grep -Fq 'MOOX_BROWSER_HTTPS_PORT' "${NO_ADMIN_CONFIG}"; then
+  fail 'no-admin Caddy configuration exposed the browser control plane'
+fi
 grep -Fq 'Content-Security-Policy' "${CONFIG}" || fail 'browser CSP is missing'
 if grep -Eq '^[[:space:]]*handle_path([[:space:]]|$)' "${CONFIG}"; then
   fail 'handle_path would strip upstream request paths'
@@ -126,6 +134,7 @@ request() { curl --silent --show-error --cacert "${ROOT_CA}" "$@"; }
 status() { request --output /dev/null --write-out '%{http_code}' "$1"; }
 
 [[ $(request https://127.0.0.1:9527/api/admin/ping) == 'admin /api/admin/ping' ]] || fail 'Admin path was not preserved'
+[[ $(request https://127.0.0.1:9527/api/gateway-control/routes) == 'admin /api/gateway-control/routes' ]] || fail 'Gateway control path was not preserved'
 [[ $(request https://127.0.0.1:9527/site/path) == 'web /site/path' ]] || fail 'site path did not reach web-host'
 for path in /api/service/ping /api/other /healthz /readyz /metrics; do
   [[ $(status "https://127.0.0.1:9527${path}") == 404 ]] || fail "browser edge exposed ${path}"
