@@ -57,8 +57,12 @@ func TestAdminUpgradeRetiresLegacyMonitorAndRoutesAlias(t *testing.T) {
 		t.Fatal("fresh Admin database created legacy host history")
 	}
 	legacy := sysdeploy.Deployment{
+		NodeID:      "gateway-gz-122",
 		ServiceName: "monitor", ServiceKind: "admin_rpc", Protocol: "http", Host: "127.0.0.1", Port: 11103,
 		GatewayPath: "trpc.moox.ops.Monitor", Scope: "internal", Status: "active", ExtraConfig: "{}",
+	}
+	if err := db.Create(&sysdeploy.GatewayNode{NodeID: "gateway-gz-122", Name: "local", PublicAddress: "https://106.53.107.122", Status: "enabled"}).Error; err != nil {
+		t.Fatalf("seed gateway node: %v", err)
 	}
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatalf("seed legacy deployment: %v", err)

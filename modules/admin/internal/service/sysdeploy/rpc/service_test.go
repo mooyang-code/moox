@@ -38,6 +38,21 @@ func (f *fakeSysDeployService) DeleteServiceDeployment(ctx context.Context, req 
 func (f *fakeSysDeployService) ListActiveServiceDeployments(ctx context.Context, req *pb.ListActiveServiceDeploymentsReq) (*pb.ListActiveServiceDeploymentsRsp, error) {
 	return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retOK()}, nil
 }
+func (f *fakeSysDeployService) ListGatewayNodes(context.Context, *pb.ListGatewayNodesReq) (*pb.ListGatewayNodesRsp, error) {
+	return &pb.ListGatewayNodesRsp{RetInfo: retOK()}, nil
+}
+func (f *fakeSysDeployService) CreateGatewayNode(context.Context, *pb.CreateGatewayNodeReq) (*pb.CreateGatewayNodeRsp, error) {
+	return &pb.CreateGatewayNodeRsp{RetInfo: retOK()}, nil
+}
+func (f *fakeSysDeployService) UpdateGatewayNode(context.Context, *pb.UpdateGatewayNodeReq) (*pb.UpdateGatewayNodeRsp, error) {
+	return &pb.UpdateGatewayNodeRsp{RetInfo: retOK()}, nil
+}
+func (f *fakeSysDeployService) DeleteGatewayNode(context.Context, *pb.DeleteGatewayNodeReq) (*pb.DeleteGatewayNodeRsp, error) {
+	return &pb.DeleteGatewayNodeRsp{RetInfo: retOK()}, nil
+}
+func (f *fakeSysDeployService) GetGatewayNodeRoutes(context.Context, *pb.GetGatewayNodeRoutesReq) (*pb.GetGatewayNodeRoutesRsp, error) {
+	return &pb.GetGatewayNodeRoutesRsp{RetInfo: retOK()}, nil
+}
 
 func retOK() *pb.RetInfo {
 	return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}
@@ -90,6 +105,26 @@ func TestNewService_ShouldWrapUnderlyingService(t *testing.T) {
 	svc := NewService(inner)
 	require.NotNil(t, svc)
 	assert.Equal(t, inner, svc.svc)
+}
+
+func TestService_GatewayNodeMethodsDelegate(t *testing.T) {
+	svc := NewService(&fakeSysDeployService{})
+	ctx := context.Background()
+	list, err := svc.ListGatewayNodes(ctx, &pb.ListGatewayNodesReq{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, list.GetRetInfo().GetCode())
+	created, err := svc.CreateGatewayNode(ctx, &pb.CreateGatewayNodeReq{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
+	updated, err := svc.UpdateGatewayNode(ctx, &pb.UpdateGatewayNodeReq{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode())
+	deleted, err := svc.DeleteGatewayNode(ctx, &pb.DeleteGatewayNodeReq{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, deleted.GetRetInfo().GetCode())
+	routes, err := svc.GetGatewayNodeRoutes(ctx, &pb.GetGatewayNodeRoutesReq{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, routes.GetRetInfo().GetCode())
 }
 
 func TestSysDeployService_GoomMock_DelegatesList(t *testing.T) {

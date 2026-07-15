@@ -19,6 +19,7 @@ func setupSysDeployTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
+	require.NoError(t, db.Create(&GatewayNode{NodeID: localNodeID(), Name: "local", PublicAddress: "https://127.0.0.1", Status: "enabled"}).Error)
 	return db
 }
 
@@ -33,6 +34,13 @@ func TestServiceImpl_SeedDefaults_ShouldInsertRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, total, int64(0))
 	assert.NotEmpty(t, rows)
+	node, err := svc.dao.GetGatewayNode(context.Background(), localNodeID())
+	require.NoError(t, err)
+	assert.Equal(t, "enabled", node.Status)
+	for _, row := range rows {
+		assert.Equal(t, localNodeID(), row.NodeID)
+		assert.NotContains(t, []string{"service_gateway", "service_gateway_internal"}, row.ServiceName)
+	}
 }
 
 func TestServiceImpl_CreateServiceDeployment_InvalidParam_ShouldReturnError(t *testing.T) {
@@ -54,6 +62,7 @@ func TestServiceImpl_CreateAndGetServiceDeployment_ValidInput_ShouldSucceed(t *t
 
 	createRsp, err := svc.CreateServiceDeployment(context.Background(), &pb.CreateServiceDeploymentReq{
 		Deployment: &pb.ServiceDeployment{
+			NodeId:      localNodeID(),
 			ServiceName: "test_svc",
 			Host:        "127.0.0.1",
 			Port:        18080,
@@ -64,7 +73,7 @@ func TestServiceImpl_CreateAndGetServiceDeployment_ValidInput_ShouldSucceed(t *t
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
 
-	getRsp, err := svc.GetServiceDeployment(context.Background(), &pb.GetServiceDeploymentReq{ServiceName: "test_svc"})
+	getRsp, err := svc.GetServiceDeployment(context.Background(), &pb.GetServiceDeploymentReq{NodeId: localNodeID(), ServiceName: "test_svc"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, getRsp.GetRetInfo().GetCode())
 	assert.Equal(t, "test_svc", getRsp.GetDeployment().GetServiceName())
@@ -85,6 +94,7 @@ func TestServiceImpl_ResolveGatewayServiceDetail_ActiveTrade_ShouldResolve(t *te
 	svc := NewService(&database.Manager{})
 	svc.dao = NewDAO(db)
 	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
+		NodeID:      localNodeID(),
 		ServiceName: "moox_trade",
 		Host:        "127.0.0.1",
 		Port:        11210,
@@ -103,6 +113,7 @@ func TestServiceImpl_ListActiveServiceDeployments_ActiveRows_ShouldReturnEndpoin
 	svc := NewService(&database.Manager{})
 	svc.dao = NewDAO(db)
 	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
+		NodeID:      localNodeID(),
 		ServiceName: "svc_active",
 		Host:        "127.0.0.1",
 		Port:        19191,
@@ -110,7 +121,7 @@ func TestServiceImpl_ListActiveServiceDeployments_ActiveRows_ShouldReturnEndpoin
 		Status:      "active",
 	}))
 
-	rsp, err := svc.ListActiveServiceDeployments(context.Background(), &pb.ListActiveServiceDeploymentsReq{})
+	rsp, err := svc.ListActiveServiceDeployments(context.Background(), &pb.ListActiveServiceDeploymentsReq{NodeId: localNodeID()})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Contains(t, rsp.GetDeploymentMap(), "svc_active")
@@ -121,7 +132,7 @@ func TestEndpointMap_MultipleRows_ShouldIndexByServiceName(t *testing.T) {
 		{ServiceName: "a", Host: "127.0.0.1", Port: 1},
 		{ServiceName: "b", Host: "127.0.0.1", Port: 2},
 	}
-	m := endpointMap(rows)
+	m := endpointMap(rows, false)
 	assert.Len(t, m, 2)
 	assert.Equal(t, "a", m["a"].ServiceName)
 }
@@ -147,7 +158,7 @@ func TestServiceImpl_GetServiceDeployment_NotFound_ShouldReturnNotFound(t *testi
 	svc := NewService(&database.Manager{})
 	svc.dao = NewDAO(db)
 
-	rsp, err := svc.GetServiceDeployment(context.Background(), &pb.GetServiceDeploymentReq{ServiceName: "missing"})
+	rsp, err := svc.GetServiceDeployment(context.Background(), &pb.GetServiceDeploymentReq{NodeId: localNodeID(), ServiceName: "missing"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }
@@ -157,6 +168,7 @@ func TestServiceImpl_UpdateServiceDeployment_ValidInput_ShouldSucceed(t *testing
 	svc := NewService(&database.Manager{})
 	svc.dao = NewDAO(db)
 	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
+		NodeID:      localNodeID(),
 		ServiceName: "svc_update",
 		Host:        "127.0.0.1",
 		Port:        18081,
@@ -164,8 +176,10 @@ func TestServiceImpl_UpdateServiceDeployment_ValidInput_ShouldSucceed(t *testing
 	}))
 
 	rsp, err := svc.UpdateServiceDeployment(context.Background(), &pb.UpdateServiceDeploymentReq{
+		NodeId:      localNodeID(),
 		ServiceName: "svc_update",
 		Deployment: &pb.ServiceDeployment{
+			NodeId:      localNodeID(),
 			ServiceName: "svc_update",
 			Host:        "127.0.0.2",
 			Port:        18082,
@@ -184,6 +198,7 @@ func TestServiceImpl_UpdateDeployment_RecomputesDerivedAddresses(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, svc.dao.Create(ctx, &Deployment{
+		NodeID:      localNodeID(),
 		ServiceName: "svc_update_address",
 		Protocol:    "http",
 		Host:        "127.0.0.1",
@@ -193,8 +208,10 @@ func TestServiceImpl_UpdateDeployment_RecomputesDerivedAddresses(t *testing.T) {
 	}))
 
 	rsp, err := svc.UpdateServiceDeployment(ctx, &pb.UpdateServiceDeploymentReq{
+		NodeId:      localNodeID(),
 		ServiceName: "svc_update_address",
 		Deployment: &pb.ServiceDeployment{
+			NodeId:      localNodeID(),
 			ServiceName: "svc_update_address",
 			Protocol:    "http",
 			Host:        "127.0.0.2",
@@ -221,12 +238,13 @@ func TestDAO_DeleteAndRecreate_CanRepeat(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		require.NoError(t, dao.Create(ctx, &Deployment{
+			NodeID:      localNodeID(),
 			ServiceName: "repeatable",
 			Host:        "127.0.0.1",
 			Port:        19090,
 			Status:      "active",
 		}))
-		require.NoError(t, dao.Delete(ctx, "repeatable"))
+		require.NoError(t, dao.Delete(ctx, localNodeID(), "repeatable"))
 	}
 }
 
@@ -257,6 +275,7 @@ func TestValidateDeployment_RejectsInvalidStaticDirectoryFields(t *testing.T) {
 
 func TestValidateDeployment_AllowsGatewayHTTPPath(t *testing.T) {
 	assert.NoError(t, validateDeployment(&Deployment{
+		NodeID:      localNodeID(),
 		ServiceName: "admin_gateway",
 		ServiceKind: "gateway",
 		Protocol:    "http",
@@ -274,6 +293,7 @@ func TestServiceImpl_GetServiceDeployments_ActiveRows_ShouldReturnMap(t *testing
 	svc := NewService(&database.Manager{})
 	svc.dao = NewDAO(db)
 	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
+		NodeID:      localNodeID(),
 		ServiceName: "svc_map",
 		Host:        "127.0.0.1",
 		Port:        19090,

@@ -38,18 +38,15 @@ func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
 	}
 }
 
-func TestDefaultServiceGatewaysUseSplitHTTPSAndLoopbackEndpoints(t *testing.T) {
+func TestDefaultDeploymentsRemoveLegacyServiceGatewayRows(t *testing.T) {
 	byName := map[string]Deployment{}
 	for _, row := range DefaultDeployments() {
 		byName[row.ServiceName] = row
 	}
-	public := byName["service_gateway"]
-	if public.Protocol != "https" || public.Port != 11001 || public.Scope != "public" {
-		t.Fatalf("service_gateway = %#v", public)
-	}
-	internal := byName["service_gateway_internal"]
-	if internal.Protocol != "http" || internal.Host != "127.0.0.1" || internal.Port != 11002 || internal.Scope != "internal" {
-		t.Fatalf("service_gateway_internal = %#v", internal)
+	for _, name := range []string{"service_gateway", "service_gateway_internal"} {
+		if _, ok := byName[name]; ok {
+			t.Fatalf("legacy gateway row %s still exists", name)
+		}
 	}
 }
 
