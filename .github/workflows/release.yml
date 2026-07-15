@@ -27,7 +27,7 @@ jobs:
   release:
     runs-on: moox-ci
     environment: production
-    timeout-minutes: 60
+    timeout-minutes: 180
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       TARGET_GOOS: linux
