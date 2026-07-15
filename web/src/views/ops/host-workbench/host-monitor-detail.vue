@@ -43,11 +43,12 @@
         <section class="data-section">
           <h4>文件系统</h4>
           <div class="table-scroll">
-            <table>
+            <table class="detail-table filesystem-table">
+              <colgroup><col style="width:28%"><col style="width:25%"><col style="width:15%"><col style="width:14%"><col style="width:18%"></colgroup>
               <thead><tr><th>挂载点</th><th>设备</th><th>类型</th><th>使用率</th><th>容量</th></tr></thead>
               <tbody>
                 <tr v-for="item in row.monitor.filesystems" :key="`${item.device}:${item.mountpoint}`">
-                  <td :title="item.mountpoint">{{ item.mountpoint || '--' }}</td><td :title="item.device">{{ item.device || '--' }}</td><td>{{ item.fs_type || '--' }}</td><td>{{ item.percent_available ? `${item.percent.toFixed(1)}%` : '--' }}</td><td>{{ formatBytes(item.total) }}</td>
+                  <td :title="item.mountpoint">{{ item.mountpoint || '--' }}</td><td :title="item.device">{{ item.device || '--' }}</td><td :title="item.fs_type">{{ item.fs_type || '--' }}</td><td :title="item.percent_available ? `${item.percent.toFixed(1)}%` : '--'">{{ item.percent_available ? `${item.percent.toFixed(1)}%` : '--' }}</td><td :title="formatBytes(item.total)">{{ formatBytes(item.total) }}</td>
                 </tr>
                 <tr v-if="!row.monitor.filesystems.length"><td colspan="5" class="empty-cell">暂无文件系统数据</td></tr>
               </tbody>
@@ -57,11 +58,12 @@
         <section class="data-section">
           <h4>磁盘 I/O</h4>
           <div class="table-scroll">
-            <table>
+            <table class="detail-table disk-table">
+              <colgroup><col style="width:14%"><col style="width:18%"><col style="width:18%"><col style="width:17%"><col style="width:17%"><col style="width:16%"></colgroup>
               <thead><tr><th>设备</th><th>读取</th><th>写入</th><th>读取 IOPS</th><th>写入 IOPS</th><th>利用率</th></tr></thead>
               <tbody>
                 <tr v-for="item in row.monitor.disks" :key="item.device">
-                  <td>{{ item.device || '--' }}</td><td>{{ item.rate_available ? formatBytesPerSecond(item.read_bytes_per_second) : '--' }}</td><td>{{ item.rate_available ? formatBytesPerSecond(item.write_bytes_per_second) : '--' }}</td><td>{{ item.rate_available ? item.read_iops.toFixed(1) : '--' }}</td><td>{{ item.rate_available ? item.write_iops.toFixed(1) : '--' }}</td><td>{{ item.rate_available ? `${item.utilization_percent.toFixed(1)}%` : '--' }}</td>
+                  <td :title="item.device">{{ item.device || '--' }}</td><td :title="item.rate_available ? formatBytesPerSecond(item.read_bytes_per_second) : '--'">{{ item.rate_available ? formatBytesPerSecond(item.read_bytes_per_second) : '--' }}</td><td :title="item.rate_available ? formatBytesPerSecond(item.write_bytes_per_second) : '--'">{{ item.rate_available ? formatBytesPerSecond(item.write_bytes_per_second) : '--' }}</td><td :title="item.rate_available ? item.read_iops.toFixed(1) : '--'">{{ item.rate_available ? item.read_iops.toFixed(1) : '--' }}</td><td :title="item.rate_available ? item.write_iops.toFixed(1) : '--'">{{ item.rate_available ? item.write_iops.toFixed(1) : '--' }}</td><td :title="item.rate_available ? `${item.utilization_percent.toFixed(1)}%` : '--'">{{ item.rate_available ? `${item.utilization_percent.toFixed(1)}%` : '--' }}</td>
                 </tr>
                 <tr v-if="!row.monitor.disks.length"><td colspan="6" class="empty-cell">暂无磁盘数据</td></tr>
               </tbody>
@@ -71,11 +73,12 @@
         <section class="data-section">
           <h4>网络接口</h4>
           <div class="table-scroll">
-            <table>
+            <table class="detail-table network-table">
+              <colgroup><col style="width:18%"><col style="width:18%"><col style="width:25%"><col style="width:25%"><col style="width:14%"></colgroup>
               <thead><tr><th>接口</th><th>状态</th><th>接收</th><th>发送</th><th>错误</th></tr></thead>
               <tbody>
                 <tr v-for="item in row.monitor.networks" :key="item.device">
-                  <td>{{ item.device || '--' }}</td><td><span class="operstate" :class="item.operstate">{{ item.operstate }}</span></td><td>{{ item.rate_available ? formatBytesPerSecond(item.rx_speed) : '--' }}</td><td>{{ item.rate_available ? formatBytesPerSecond(item.tx_speed) : '--' }}</td><td>{{ item.receive_errors_total + item.transmit_errors_total }}</td>
+                  <td :title="item.device">{{ item.device || '--' }}</td><td :title="item.operstate"><span class="operstate" :class="item.operstate">{{ item.operstate }}</span></td><td :title="item.rate_available ? formatBytesPerSecond(item.rx_speed) : '--'">{{ item.rate_available ? formatBytesPerSecond(item.rx_speed) : '--' }}</td><td :title="item.rate_available ? formatBytesPerSecond(item.tx_speed) : '--'">{{ item.rate_available ? formatBytesPerSecond(item.tx_speed) : '--' }}</td><td :title="String(item.receive_errors_total + item.transmit_errors_total)">{{ item.receive_errors_total + item.transmit_errors_total }}</td>
                 </tr>
                 <tr v-if="!row.monitor.networks.length"><td colspan="5" class="empty-cell">暂无网络数据</td></tr>
               </tbody>
@@ -156,20 +159,20 @@ onUnmounted(() => { historyRequestID++; trendChart?.release(); });
 .detail-head span,.detail-head p { color:var(--color-text-3); font-size:12px; }
 .detail-head h3 { margin:2px 0; font-size:18px; }.detail-head p { margin:0; }
 .detail-alert { margin-bottom:14px; }
-.detail-overview { display:grid; grid-template-columns:minmax(0,2fr) minmax(250px,1fr); gap:18px; }
+.detail-overview { display:grid; grid-template-columns:minmax(0,2fr) minmax(250px,1fr); gap:20px; }
 h4 { margin:0 0 10px; font-size:14px; }
 .chart-container { position:relative; width:100%; height:270px; border-top:1px solid var(--color-border-2); }
 .chart-overlay { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; background:var(--color-bg-1); }
 .empty-chart { flex-direction:column; gap:6px; color:var(--color-text-3); font-size:28px; }.empty-chart span { font-size:12px; }
 .device-section dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0; background:var(--color-border-2); border:1px solid var(--color-border-2); }
 .device-section dl div { padding:14px; background:var(--color-bg-2); }.device-section dt { color:var(--color-text-3); font-size:12px; }.device-section dd { margin:5px 0 0; font-size:16px; font-weight:600; }
-.tables-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:22px; }
+.tables-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:20px; }
 .data-section { min-width:0; }
-.table-scroll { max-height:300px; overflow:auto; border-top:1px solid var(--color-border-2); }
-table { width:100%; min-width:460px; border-collapse:collapse; font-size:12px; }
-th,td { padding:9px 8px; text-align:left; white-space:nowrap; border-bottom:1px solid var(--color-border-2); font-variant-numeric:tabular-nums; }
+.table-scroll { max-height:300px; overflow-x:hidden; overflow-y:auto; border-top:1px solid var(--color-border-2); }
+.detail-table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:11px; }
+th,td { padding:9px 5px; overflow:hidden; text-align:left; text-overflow:ellipsis; white-space:nowrap; border-bottom:1px solid var(--color-border-2); font-variant-numeric:tabular-nums; }
 th { position:sticky; top:0; z-index:1; color:var(--color-text-3); font-weight:500; background:var(--color-bg-2); }
-td { max-width:160px; overflow:hidden; text-overflow:ellipsis; }.empty-cell { color:var(--color-text-3); text-align:center; }.operstate.up { color:#16803c; }
+.empty-cell { color:var(--color-text-3); text-align:center; }.operstate.up { color:#16803c; }
 @media (max-width:1180px) { .tables-grid { grid-template-columns:minmax(0,1fr); } }
 @media (max-width:760px) { .detail-head { align-items:flex-start; flex-direction:column; }.detail-overview { grid-template-columns:minmax(0,1fr); } }
 </style>

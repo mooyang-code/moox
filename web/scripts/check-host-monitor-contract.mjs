@@ -20,8 +20,8 @@ const required = [
   'aggregateNetworkRate',
   'storage_available',
   'data_gap',
-  'key="monitor"',
-  'title="主机监控"',
+  "key: 'monitor'",
+  "label: '主机监控'",
   'tab: "monitor"',
   'getCurrentMetrics',
   'listSSHHosts',
@@ -42,6 +42,11 @@ const required = [
   '磁盘 I/O',
   '网络接口',
   'historyHasRenderableData',
+  'PageTitleTabs',
+  'aria-label="主机工作台"',
+  'detail-table',
+  'table-layout:fixed',
+  'overflow-x:hidden',
 ];
 
 const missing = required.filter((token) => !sources.includes(token));
@@ -60,6 +65,18 @@ const removedSessionPageTokens = [
 const remainingSessionPageTokens = removedSessionPageTokens.filter((token) => sources.includes(token));
 if (remainingSessionPageTokens.length) {
   console.error(`removed session page contract still present: ${remainingSessionPageTokens.join(', ')}`);
+  process.exit(1);
+}
+
+const removedLayoutTokens = [
+  '<h2>主机工作台</h2>',
+  'type="rounded"',
+  'min-width:460px',
+  'overflow:auto',
+];
+const remainingLayoutTokens = removedLayoutTokens.filter((token) => sources.includes(token));
+if (remainingLayoutTokens.length) {
+  console.error(`old host workbench layout still present: ${remainingLayoutTokens.join(', ')}`);
   process.exit(1);
 }
 

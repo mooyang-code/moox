@@ -1,23 +1,16 @@
 <template>
   <div class="moox-page host-workbench-page">
     <div class="moox-inner">
-      <header class="page-head">
-        <div>
-          <h2>主机工作台</h2>
-          <p>在同一个主机列表中查看资源状态和 SSH 配置。</p>
-        </div>
-      </header>
+      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="主机工作台" @change="onTabChange" />
 
       <a-alert v-if="loadError" type="warning" show-icon class="load-alert">{{ loadError }}</a-alert>
 
-      <a-tabs v-model:active-key="activeTab" type="rounded" @change="onTabChange">
-        <a-tab-pane key="hosts" title="主机列表">
+      <div class="workbench-content">
+        <template v-if="activeTab === 'hosts'">
           <SshHosts embedded :monitor-by-host-id="monitorByHostId" :monitor-only-hosts="monitorOnlyHosts" @connect="openTerminal" @file-manage="openFileManager" />
-        </a-tab-pane>
-        <a-tab-pane key="monitor" title="主机监控">
-          <HostMonitor />
-        </a-tab-pane>
-      </a-tabs>
+        </template>
+        <HostMonitor v-else />
+      </div>
 
       <a-modal v-model:visible="terminalVisible" :title="terminalTitle" :width="1100" :footer="false" :esc-to-close="false" unmount-on-close @close="clearTerminal">
         <div class="terminal-modal-body"><SshTerminal v-if="terminalHostId" :initial-host-id="terminalHostId" disconnect-on-unmount /></div>
@@ -36,6 +29,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import SshHosts from '@/views/container/ssh-hosts/ssh-hosts.vue';
 import SshTerminal from '@/views/container/ssh-terminal/ssh-terminal.vue';
 import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
@@ -47,6 +41,10 @@ import { mergeHostWorkbenchRows, type HostWorkbenchRow } from './host-workbench-
 const route = useRoute();
 const router = useRouter();
 type HostTab = 'hosts' | 'monitor';
+const tabs = [
+  { key: 'hosts', label: '主机列表' },
+  { key: 'monitor', label: '主机监控' },
+] as const;
 const normalizeTab = (value: unknown): HostTab => value === 'monitor' ? value : 'hosts';
 const activeTab = ref<HostTab>(normalizeTab(route.query.tab));
 if (route.query.tab !== undefined && route.query.tab !== activeTab.value) {
@@ -133,14 +131,13 @@ onMounted(async () => {
 <style scoped lang="scss">
 .host-workbench-page { height: 100%; min-height: 0; }
 .host-workbench-page > .moox-inner { min-height: 100%; }
-.page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:8px; }
-.page-head h2 { margin:0 0 4px; font-size:20px; }
-.page-head p { margin:0; color:var(--color-text-3); }
+.workbench-content { min-width:0; margin-top:16px; }
+.workbench-content :deep(.moox-page) { height:auto; padding:0; overflow:visible; background:transparent; }
+.workbench-content :deep(.moox-page > .moox-inner) { min-height:0; padding:0; border:0; border-radius:0; box-shadow:none; }
 .monitor-table-wrap { margin-top:4px; }
 .ssh-management { margin-top:16px; border-top:1px solid var(--color-border-2); padding-top:12px; }
 .ssh-management :deep(.moox-page) { padding:0; }
 .terminal-modal-body { height: min(68vh, 720px); overflow:hidden; }
 .terminal-modal-body :deep(.ssh-terminal-page) { height:100%; }
 .file-manager-loading { display:block; height:100%; }
-@media (max-width:760px) { .page-head { align-items:stretch; flex-direction:column; } }
 </style>
