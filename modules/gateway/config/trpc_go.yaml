@@ -1,0 +1,13 @@
+global:
+  namespace: Development
+  env_name: development
+server:
+  service:
+    - name: trpc.moox.gateway.service
+      network: tcp
+      protocol: http
+      address: 127.0.0.1:11002
+    - name: trpc.moox.gateway.health
+      network: tcp
+      protocol: http
+      address: 127.0.0.1:11012
