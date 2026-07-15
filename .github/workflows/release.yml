@@ -57,7 +57,7 @@ jobs:
           archive="/home/ubuntu/ci-cache/moox-${RELEASE_TAG}-src.tar.gz"
           test -s "$archive"
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          tar -xzf "$archive" -C "$GITHUB_WORKSPACE" --strip-components=1
+          tar -xzf "$archive" -C "$GITHUB_WORKSPACE"
       - name: Add preinstalled tools to PATH
         run: |
           echo /home/ubuntu/go-sdk/bin >> "$GITHUB_PATH"
