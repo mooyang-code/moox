@@ -772,6 +772,10 @@ patch_configs() {
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
       "${STAGE_DIR}/monitor/config/app.yaml"
+    if [[ "${WITH_STORAGE}" -eq 0 && "${WITH_EVENTBUS}" -eq 0 ]]; then
+      perl -0pi -e 's#(metrics:\n  enabled:) true#$1 false#' \
+        "${STAGE_DIR}/monitor/config/app.yaml"
+    fi
     local monitor_peers_json
     monitor_peers_json=$(python3 - "${MONITOR_PEERS[@]}" <<'PY'
 import json
@@ -1121,6 +1125,10 @@ apply_metrics_metadata() {
   if [[ "${WITH_MONITOR}" != "1" ]]; then
     return 0
   fi
+  if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
+    echo "skip metrics metadata for peer-only Monitor deployment"
+    return 0
+  fi
   local route_seed="${METRICS_ROUTE_SEED}"
   if [[ -z "${route_seed}" && "${WITH_STORAGE}" == "1" ]]; then
     route_seed="${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml"
@@ -1143,6 +1151,10 @@ apply_metrics_metadata() {
 
 apply_host_metadata() {
   if [[ "${WITH_MONITOR}" != "1" ]]; then
+    return 0
+  fi
+  if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
+    echo "skip host metadata for peer-only Monitor deployment"
     return 0
   fi
   local route_seed="${HOST_ROUTE_SEED}"

@@ -244,6 +244,27 @@ grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" 
 ! grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=' "${TMP}/captures/eventbus.env" || fail 'Eventbus inherited the Gateway service key'
 ! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/eventbus.env" || fail 'Eventbus inherited the Gateway control key'
 
+# A Gateway + Monitor-only node must start without an EventBus or Storage
+# metadata endpoint; the Monitor remains responsible for peer health only.
+"${DEPLOY}" --target localhost --dir "${TMP}/deploy-peer-only" --stage "${TMP}/stage-peer-only" \
+  --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
+  --node-id gateway-peer-only --gateway-control-url 'http://[::1]:11000' \
+  --monitor-instance-id monitor-peer-only --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" >/dev/null
+PEER_ONLY_DEPLOY="${TMP}/deploy-peer-only"
+grep -A1 '^metrics:$' "${PEER_ONLY_DEPLOY}/monitor/config/app.yaml" | grep -Fq 'enabled: false' || \
+  fail 'peer-only Monitor package left metrics enabled'
+cat >"${PEER_ONLY_DEPLOY}/bin/moox-monitor" <<'SH'
+#!/usr/bin/env bash
+sleep 30
+SH
+printf '#!/usr/bin/env bash\nexit 0\n' >"${PEER_ONLY_DEPLOY}/bin/moox-monitor-cli"
+chmod +x "${PEER_ONLY_DEPLOY}/bin/moox-monitor" "${PEER_ONLY_DEPLOY}/bin/moox-monitor-cli"
+STARTUP_WAIT_SECONDS=0 "${PEER_ONLY_DEPLOY}/start.sh" monitor >/dev/null
+TEST_PIDS+=("$(cat "${PEER_ONLY_DEPLOY}/run/monitor.pid")")
+
 expect_monitor_arg_rejected() {
   local label="$1"; shift
   local output
