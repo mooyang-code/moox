@@ -3,10 +3,13 @@ import path from 'node:path';
 import process from 'node:process';
 
 const source = fs.readFileSync(path.join(process.cwd(), 'src/views/ops/service-management/index.vue'), 'utf8');
+const nodes = fs.readFileSync(path.join(process.cwd(), 'src/views/ops/service-management/gateway-nodes.vue'), 'utf8');
+const instances = fs.readFileSync(path.join(process.cwd(), 'src/views/settings/service-deployments/index.vue'), 'utf8');
 const required = [
   'PageTitleTabs',
   'aria-label="服务管理"',
-  "label: '服务部署'",
+  "label: '网关节点'",
+  "label: '服务实例'",
   "label: '可用性监控'",
   "label: '应用指标'",
   'management-content',
@@ -14,9 +17,13 @@ const required = [
 const forbidden = ['<h2>服务管理</h2>', 'type="rounded"', '<a-tabs'];
 const missing = required.filter((token) => !source.includes(token));
 const remaining = forbidden.filter((token) => source.includes(token));
+const nodeRequired = ['row-key="node_id"', '查看路由', 'gatewayHashState', 'icon-eye', 'icon-edit'];
+const instanceRequired = [':row-key="serviceDeploymentRowKey"', 'filters.node_id', 'gateway_service_id', 'gateway_enabled', 'validateGatewayDeployment'];
+const missingNode = nodeRequired.filter((token) => !nodes.includes(token));
+const missingInstance = instanceRequired.filter((token) => !instances.includes(token));
 
-if (missing.length || remaining.length) {
-  console.error(`service management layout contract failed; missing: ${missing.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}`);
+if (missing.length || remaining.length || missingNode.length || missingInstance.length) {
+  console.error(`service management layout contract failed; missing: ${missing.join(', ') || 'none'}; node: ${missingNode.join(', ') || 'none'}; instances: ${missingInstance.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}`);
   process.exit(1);
 }
 

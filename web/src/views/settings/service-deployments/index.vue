@@ -3,13 +3,13 @@
     <div class="moox-inner">
     <div class="page-head">
       <div v-if="!embedded">
-        <h2>服务部署</h2>
-        <span>统一维护 admin、service、storage、trade 等服务的访问地址；SCF 运行时由 keepalive 动态获取。</span>
+        <h2>服务实例</h2>
+        <span>按节点维护本机服务与 Gateway 暴露状态。</span>
       </div>
       <a-space>
         <a-button type="primary" @click="openCreate">
           <template #icon><icon-plus /></template>
-          新增服务
+          新增实例
         </a-button>
         <a-button @click="load">
           <template #icon><icon-refresh /></template>
@@ -23,6 +23,9 @@
     </a-alert>
 
     <a-space class="filters" wrap>
+      <a-select v-model="filters.node_id" allow-clear placeholder="网关节点" style="width: 190px" @change="reloadFirstPage">
+        <a-option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.name }} ({{ node.node_id }})</a-option>
+      </a-select>
       <a-input v-model="filters.service_name" allow-clear placeholder="服务名" @press-enter="reloadFirstPage" />
       <a-select v-model="filters.service_kind" allow-clear placeholder="服务类型" style="width: 150px" @change="reloadFirstPage">
         <a-option v-for="item in kindOptions" :key="item" :value="item">{{ item }}</a-option>
@@ -35,32 +38,43 @@
         <a-option value="active">active</a-option>
         <a-option value="disabled">disabled</a-option>
       </a-select>
+      <a-select v-model="filters.gateway_enabled" allow-clear placeholder="Gateway 暴露" style="width: 150px" @change="reloadFirstPage">
+        <a-option :value="true">已暴露</a-option><a-option :value="false">未暴露</a-option>
+      </a-select>
       <a-button @click="reloadFirstPage">查询</a-button>
     </a-space>
 
     <a-table
       class="service-deployments-table"
-      row-key="service_name"
+      :row-key="serviceDeploymentRowKey"
       size="small"
       :bordered="{ cell: true }"
       :loading="loading"
       :data="rows"
       :pagination="pagination"
-      :scroll="{ x: 'max-content', y: tableBodyHeight }"
+      :scroll="{ y: tableBodyHeight }"
       @page-change="onPageChange"
       @page-size-change="onPageSizeChange"
     >
       <template #columns>
-        <a-table-column title="服务名" data-index="service_name" :width="170" />
-        <a-table-column title="类型" data-index="service_kind" :width="110" />
-        <a-table-column title="作用域" data-index="scope" :width="90" />
-        <a-table-column title="协议" data-index="protocol" :width="80" />
-        <a-table-column title="Host" data-index="host" :width="150" />
-        <a-table-column title="端口" data-index="port" :width="90" />
-        <a-table-column title="访问地址" :width="230">
-          <template #cell="{ record }">{{ deploymentAccessAddress(record) }}</template>
+        <a-table-column title="节点" :width="150" ellipsis tooltip>
+          <template #cell="{ record }">{{ nodeLabel(record.node_id) }}</template>
         </a-table-column>
-        <a-table-column title="网关/RPC Path" data-index="gateway_path" :width="230" />
+        <a-table-column title="服务实例" :width="180">
+          <template #cell="{ record }"><div class="instance-name"><strong>{{ record.service_name }}</strong><span>{{ record.service_kind }}</span></div></template>
+        </a-table-column>
+        <a-table-column title="本机地址" :width="175">
+          <template #cell="{ record }"><code>{{ record.host }}:{{ record.port }}</code></template>
+        </a-table-column>
+        <a-table-column title="Gateway" :width="195">
+          <template #cell="{ record }">
+            <div class="gateway-cell">
+              <a-tag size="small" :color="record.gateway_enabled ? 'green' : 'gray'">{{ record.gateway_enabled ? '已暴露' : '未暴露' }}</a-tag>
+              <strong>{{ record.gateway_service_id || '--' }}</strong>
+              <a-tooltip v-if="record.gateway_path" :content="record.gateway_path"><span>{{ record.gateway_path }}</span></a-tooltip>
+            </div>
+          </template>
+        </a-table-column>
         <a-table-column title="配置状态" :width="100">
           <template #cell="{ record }">
             <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
@@ -73,16 +87,15 @@
             </a-tooltip>
           </template>
         </a-table-column>
-        <a-table-column title="说明" data-index="description" :width="260" />
-        <a-table-column title="更新时间" :width="180">
+        <a-table-column class="low-priority-column" title="更新时间" :width="165">
           <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
         </a-table-column>
-        <a-table-column title="操作" :width="150" align="center" :fixed="'right'">
+        <a-table-column title="操作" :width="112" align="center" :fixed="'right'">
           <template #cell="{ record }">
             <a-space>
-              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+              <a-tooltip content="编辑实例"><a-button size="mini" type="text" :aria-label="`编辑 ${record.service_name}`" @click="openEdit(record)"><template #icon><icon-edit /></template></a-button></a-tooltip>
               <a-popconfirm content="确认删除该服务部署信息？" @ok="remove(record)">
-                <a-button size="mini" type="text" status="danger">删除</a-button>
+                <a-tooltip content="删除实例"><a-button size="mini" type="text" status="danger" :aria-label="`删除 ${record.service_name}`"><template #icon><icon-delete /></template></a-button></a-tooltip>
               </a-popconfirm>
             </a-space>
           </template>
@@ -101,6 +114,11 @@
       @ok="submit"
     >
       <a-form class="deployment-form" :model="form" layout="vertical">
+        <a-form-item field="node_id" label="网关节点" required>
+          <a-select v-model="form.node_id" :disabled="editing" placeholder="选择节点">
+            <a-option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.name }} ({{ node.node_id }})</a-option>
+          </a-select>
+        </a-form-item>
         <a-form-item field="service_name" label="服务名" required>
           <a-input v-model="form.service_name" :disabled="editing" placeholder="例如 storage_access" />
         </a-form-item>
@@ -132,8 +150,14 @@
         <a-form-item field="port" label="端口" required>
           <a-input-number v-model="form.port" :min="1" :max="65535" />
         </a-form-item>
-        <a-form-item class="form-span-2" field="gateway_path" label="网关/RPC Path">
-          <a-input v-model="form.gateway_path" placeholder="例如 /api/admin/storage 或 trpc.moox.storage.Access" />
+        <a-form-item field="gateway_enabled" label="Gateway 暴露">
+          <a-switch v-model="form.gateway_enabled" />
+        </a-form-item>
+        <a-form-item field="gateway_service_id" label="Gateway service ID" :required="form.gateway_enabled">
+          <a-input v-model="form.gateway_service_id" placeholder="例如 monitor" />
+        </a-form-item>
+        <a-form-item field="gateway_path" label="tRPC service path" :required="form.gateway_enabled">
+          <a-input v-model="form.gateway_path" placeholder="trpc.moox.monitor.Monitor" />
         </a-form-item>
         <a-form-item class="form-span-2" field="description" label="说明">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
@@ -150,12 +174,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import { createServiceDeployment, deleteServiceDeployment, listServiceDeployments, updateServiceDeployment } from '@/api/admin/sysdeploy';
-import type { ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/types';
+import { createServiceDeployment, deleteServiceDeployment, listGatewayNodes, listServiceDeployments, updateServiceDeployment } from '@/api/admin/sysdeploy';
+import type { GatewayNode, ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/types';
 import { monitorApi } from '@/api/monitor';
 import type { CheckResult } from '@/api/monitor';
 import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/views/data/shared/metadata-utils';
-import { deploymentAccessAddress, deploymentHealthState, loadLatestHealthResults, sysDeployChecksRequest } from './health';
+import { deploymentHealthState, loadLatestHealthResults, serviceDeploymentRowKey, sysDeployChecksRequest, validateGatewayDeployment } from './health';
 
 defineOptions({ name: 'SettingsServiceDeployments' });
 const props = defineProps<{ embedded?: boolean }>();
@@ -163,13 +187,17 @@ const embedded = computed(() => props.embedded === true);
 
 const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'collector', 'cloudnode', 'trade'];
 const rows = ref<ServiceDeployment[]>([]);
+const nodes = ref<GatewayNode[]>([]);
 const latestHealth = ref<Record<string, CheckResult>>({});
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
 const editingServiceName = ref('');
+const editingNodeID = ref('');
 const pagination = reactive(defaultPagination());
-const filters = reactive({ service_name: '', service_kind: '', scope: '', status: '' });
+const filters = reactive<{ service_name: string; service_kind: string; scope: string; status: string; node_id: string; gateway_enabled?: boolean }>({
+  service_name: '', service_kind: '', scope: '', status: '', node_id: '', gateway_enabled: undefined,
+});
 const viewportHeight = ref(typeof window === 'undefined' ? 900 : window.innerHeight);
 const tableBodyHeight = computed(() => Math.max(320, viewportHeight.value - 440));
 
@@ -184,21 +212,27 @@ const form = reactive<ServiceDeploymentInput>({
   status: 'active',
   description: '',
   extra_config: '{}',
+  node_id: '',
+  gateway_service_id: '',
+  gateway_enabled: false,
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑服务部署' : '新增服务部署'));
+const modalTitle = computed(() => (editing.value ? '编辑服务实例' : '新增服务实例'));
 
 async function load() {
   loading.value = true;
   try {
-    const rsp = await listServiceDeployments({
+    const [rsp, nodesRsp] = await Promise.all([listServiceDeployments({
       service_name: filters.service_name || undefined,
       service_kind: filters.service_kind || undefined,
       scope: filters.scope || undefined,
       status: filters.status || undefined,
+      node_id: filters.node_id || undefined,
+      gateway_enabled: filters.gateway_enabled,
       page: { page: pagination.current, size: pagination.pageSize },
-    });
+    }), listGatewayNodes({ page: { page: 1, size: 500 } })]);
     rows.value = rsp.deployments || [];
+    nodes.value = nodesRsp.nodes || [];
     applyPageResult(pagination, rsp.page_result);
     await loadHealth(rows.value);
   } finally {
@@ -218,12 +252,16 @@ function resetForm() {
     status: 'active',
     description: '',
     extra_config: '{}',
+    node_id: filters.node_id || nodes.value[0]?.node_id || '',
+    gateway_service_id: '',
+    gateway_enabled: false,
   });
 }
 
 function openCreate() {
   editing.value = false;
   editingServiceName.value = '';
+  editingNodeID.value = '';
   resetForm();
   visible.value = true;
 }
@@ -231,6 +269,7 @@ function openCreate() {
 function openEdit(record: ServiceDeployment) {
   editing.value = true;
   editingServiceName.value = record.service_name;
+  editingNodeID.value = record.node_id;
   Object.assign(form, deploymentInput(record));
   visible.value = true;
 }
@@ -247,6 +286,9 @@ function deploymentInput(record: ServiceDeployment): ServiceDeploymentInput {
     status: record.status,
     description: record.description || '',
     extra_config: record.extra_config || '{}',
+    node_id: record.node_id,
+    gateway_service_id: record.gateway_service_id || '',
+    gateway_enabled: record.gateway_enabled === true,
   };
 }
 
@@ -280,12 +322,14 @@ function healthTooltip(serviceName: string) {
 }
 
 async function submit() {
-  if (!form.service_name || !form.host || !form.port) {
-    Message.warning('请补全服务名、Host 和端口');
+  if (!form.node_id || !form.service_name || !form.host || !form.port) {
+    Message.warning('请补全网关节点、服务名、Host 和端口');
     return;
   }
+  const gatewayError = validateGatewayDeployment(form);
+  if (gatewayError) { Message.warning(gatewayError); return; }
   const payload = { ...form, extra_config: form.extra_config || '{}' };
-  if (editing.value) await updateServiceDeployment(editingServiceName.value, payload);
+  if (editing.value) await updateServiceDeployment(editingNodeID.value, editingServiceName.value, payload);
   else await createServiceDeployment(payload);
   if (payload.service_name.startsWith('storage_')) {
     Message.warning('服务部署已保存；storage 变更后请同步检查主存节点拓扑');
@@ -297,7 +341,7 @@ async function submit() {
 }
 
 async function remove(record: ServiceDeployment) {
-  await deleteServiceDeployment(record.service_name);
+  await deleteServiceDeployment(record.node_id, record.service_name);
   Message.success('服务部署信息已删除');
   await load();
 }
@@ -320,6 +364,11 @@ function onPageSizeChange(pageSize: number) {
 
 function updateViewportHeight() {
   viewportHeight.value = window.innerHeight;
+}
+
+function nodeLabel(nodeID: string) {
+  const node = nodes.value.find((item) => item.node_id === nodeID);
+  return node ? node.name || node.node_id : nodeID || '--';
 }
 
 onMounted(() => {
@@ -365,6 +414,38 @@ onUnmounted(() => {
   margin-bottom: 20px;
 }
 
+.service-deployments-table :deep(.arco-table-container) {
+  max-width: 100%;
+}
+
+.instance-name,
+.gateway-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.instance-name span,
+.gateway-cell span {
+  overflow: hidden;
+  color: var(--color-text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-cell strong {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-deployments-table code {
+  font-size: 12px;
+}
+
 .deployment-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -400,6 +481,19 @@ onUnmounted(() => {
 
   .form-span-2 {
     grid-column: auto;
+  }
+
+  .page-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .service-deployments-table :deep(th:nth-child(1)),
+  .service-deployments-table :deep(td:nth-child(1)),
+  .service-deployments-table :deep(th:nth-child(7)),
+  .service-deployments-table :deep(td:nth-child(7)) {
+    display: none;
   }
 }
 
