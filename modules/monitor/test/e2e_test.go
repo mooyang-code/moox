@@ -1,12 +1,14 @@
 package test
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +21,6 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 )
@@ -28,8 +29,9 @@ const monitorGatewaySecret = "two-node-monitor-gateway-secret"
 
 func TestTwoMonitorNodesSynchronizeThroughGatewaysAndAlertOnFailure(t *testing.T) {
 	ctx := context.Background()
-	nodeA := newMonitorNode(t, "monitor-a", "gateway-a")
-	nodeB := newMonitorNode(t, "monitor-b", "gateway-b")
+	gatewayBinary := buildGatewayHelper(t)
+	nodeA := newMonitorNode(t, gatewayBinary, "monitor-a", "gateway-a")
+	nodeB := newMonitorNode(t, gatewayBinary, "monitor-b", "gateway-b")
 	defer nodeA.Close()
 	defer nodeB.Close()
 
@@ -68,6 +70,11 @@ func TestTwoMonitorNodesSynchronizeThroughGatewaysAndAlertOnFailure(t *testing.T
 	if len(events) != 1 || events[0].EventType != domain.AlertEventTriggered || events[0].Status != domain.AlertStatusFiring || events[0].OwnerInstanceID != "monitor-a" || events[0].CheckID != "monitor-peer/monitor-b" {
 		t.Fatalf("peer failure events = %+v", events)
 	}
+	firingState, err := nodeA.repos.Alerts.GetState(ctx, "moox_system", "monitor-peer/monitor-b", "monitor-peer/monitor-b")
+	if err != nil || firingState.TriggeredAt == nil {
+		t.Fatalf("firing peer state = %+v, err=%v", firingState, err)
+	}
+	originalTriggeredAt := *firingState.TriggeredAt
 	if err := pullerA.MarkStale(ctx, time.Now().UTC().Add(time.Second), time.Second); err != nil {
 		t.Fatalf("repeat stale scan: %v", err)
 	}
@@ -88,6 +95,10 @@ func TestTwoMonitorNodesSynchronizeThroughGatewaysAndAlertOnFailure(t *testing.T
 	if err != nil || len(events) != 2 || events[0].EventType != domain.AlertEventResolved || events[0].Status != domain.AlertStatusResolved {
 		t.Fatalf("peer recovery events = %+v, err=%v", events, err)
 	}
+	resolvedState, err := nodeA.repos.Alerts.GetState(ctx, "moox_system", "monitor-peer/monitor-b", "monitor-peer/monitor-b")
+	if err != nil || resolvedState.TriggeredAt == nil || !resolvedState.TriggeredAt.Equal(originalTriggeredAt) || resolvedState.ResolvedAt == nil || !resolvedState.ResolvedAt.After(originalTriggeredAt) {
+		t.Fatalf("resolved peer state did not preserve trigger time: %+v, original=%s, err=%v", resolvedState, originalTriggeredAt, err)
+	}
 }
 
 type monitorNode struct {
@@ -97,11 +108,12 @@ type monitorNode struct {
 	repos      *store.Repositories
 	service    *monitorrpc.Service
 	monitor    *httptest.Server
-	gateway    *httptest.Server
+	gateway    *gatewayProcess
+	running    bool
 	mu         sync.Mutex
 }
 
-func newMonitorNode(t *testing.T, instanceID, nodeID string) *monitorNode {
+func newMonitorNode(t *testing.T, gatewayBinary, instanceID, nodeID string) *monitorNode {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -114,7 +126,7 @@ func newMonitorNode(t *testing.T, instanceID, nodeID string) *monitorNode {
 	node := &monitorNode{instanceID: instanceID, nodeID: nodeID, store: mgr, repos: mgr.Repositories()}
 	node.service = monitorrpc.New(node.repos, monitorrpc.Options{InstanceID: instanceID})
 	node.startMonitor(t)
-	node.gateway = httptest.NewServer(node.gatewayHandler())
+	node.gateway = startGatewayProcess(t, gatewayBinary, nodeID, node.monitor.URL)
 	return node
 }
 
@@ -122,67 +134,34 @@ func (node *monitorNode) startMonitor(t *testing.T) {
 	t.Helper()
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	if node.monitor != nil {
-		t.Fatal("monitor is already running")
-	}
-	node.monitor = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/trpc.moox.monitor.MonitorMgr/GetPeerSnapshot" {
-			http.NotFound(response, request)
-			return
-		}
-		result, callErr := node.service.GetPeerSnapshot(request.Context(), &monitorpb.GetPeerSnapshotReq{})
-		if callErr != nil {
-			http.Error(response, callErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		encoded, marshalErr := protojson.Marshal(result)
-		if marshalErr != nil {
-			http.Error(response, marshalErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write(encoded)
-	}))
-}
-
-func (node *monitorNode) gatewayHandler() http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			http.Error(response, "bad request", http.StatusBadRequest)
-			return
-		}
-		if _, err := gatewayauth.Verify(
-			gatewayauth.Credentials{KeyID: "monitor", Secret: monitorGatewaySecret},
-			gatewayauth.Request{Method: request.Method, Path: request.URL.EscapedPath(), TargetNode: node.nodeID, Body: body},
-			request.Header, time.Now(),
-		); err != nil {
-			http.Error(response, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		node.mu.Lock()
-		monitorServer := node.monitor
-		node.mu.Unlock()
-		if monitorServer == nil {
-			http.Error(response, "upstream unavailable", http.StatusBadGateway)
-			return
-		}
-		monitorURL, _ := url.Parse(monitorServer.URL)
-		route := gatewayproxy.Route{ServiceID: "monitor", Address: monitorURL.Host, ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"GetPeerSnapshot"}}
-		method := strings.TrimPrefix(request.URL.Path, "/api/service/monitor/")
-		upstream, err := gatewayproxy.Forward(request.Context(), nil, route, method, body, request.Header)
-		if err != nil {
-			http.Error(response, "upstream unavailable", http.StatusBadGateway)
-			return
-		}
-		for name, values := range upstream.Header {
-			for _, value := range values {
-				response.Header().Add(name, value)
+	if node.monitor == nil {
+		node.monitor = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			node.mu.Lock()
+			running := node.running
+			node.mu.Unlock()
+			if !running {
+				http.Error(response, "monitor unavailable", http.StatusServiceUnavailable)
+				return
 			}
-		}
-		response.WriteHeader(upstream.StatusCode)
-		_, _ = response.Write(upstream.Body)
-	})
+			if request.Method != http.MethodPost || request.URL.Path != "/trpc.moox.monitor.MonitorMgr/GetPeerSnapshot" {
+				http.NotFound(response, request)
+				return
+			}
+			result, callErr := node.service.GetPeerSnapshot(request.Context(), &monitorpb.GetPeerSnapshotReq{})
+			if callErr != nil {
+				http.Error(response, callErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			encoded, marshalErr := protojson.Marshal(result)
+			if marshalErr != nil {
+				http.Error(response, marshalErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(encoded)
+		}))
+	}
+	node.running = true
 }
 
 func newPeerPuller(t *testing.T, local, remote *monitorNode) *monitorpeer.Puller {
@@ -214,12 +193,8 @@ func assertPeerActiveWithSnapshot(t *testing.T, node *monitorNode, peerID string
 
 func (node *monitorNode) stopMonitor() {
 	node.mu.Lock()
-	monitor := node.monitor
-	node.monitor = nil
+	node.running = false
 	node.mu.Unlock()
-	if monitor != nil {
-		monitor.Close()
-	}
 }
 
 func (node *monitorNode) Close() {
@@ -234,4 +209,84 @@ func (node *monitorNode) Close() {
 		monitor.Close()
 	}
 	_ = node.store.Close()
+}
+
+type gatewayProcess struct {
+	URL     string
+	cmd     *exec.Cmd
+	done    chan struct{}
+	waitErr error
+	output  *bytes.Buffer
+	once    sync.Once
+}
+
+func buildGatewayHelper(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	gatewayDirectory := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "gateway"))
+	binary := filepath.Join(t.TempDir(), "moox-gateway-e2e-helper")
+	command := exec.Command("go", "build", "-o", binary, "./cmd/e2e-helper")
+	command.Dir = gatewayDirectory
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build Gateway E2E helper: %v\n%s", err, output)
+	}
+	return binary
+}
+
+func startGatewayProcess(t *testing.T, binary, nodeID, upstreamURL string) *gatewayProcess {
+	t.Helper()
+	directory := t.TempDir()
+	readyFile := filepath.Join(directory, "ready")
+	output := &bytes.Buffer{}
+	command := exec.Command(binary,
+		"--node-id", nodeID, "--upstream-url", upstreamURL,
+		"--ready-file", readyFile, "--nonce-dir", filepath.Join(directory, "nonces"),
+		"--key-id", "monitor",
+	)
+	command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+monitorGatewaySecret)
+	command.Stdout, command.Stderr = output, output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	process := &gatewayProcess{cmd: command, done: make(chan struct{}), output: output}
+	t.Cleanup(process.Close)
+	go func() {
+		process.waitErr = command.Wait()
+		close(process.done)
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if raw, err := os.ReadFile(readyFile); err == nil && strings.HasPrefix(string(raw), "http://127.0.0.1:") {
+			process.URL = string(raw)
+			return process
+		}
+		select {
+		case <-process.done:
+			t.Fatalf("Gateway E2E helper exited before ready: %v\n%s", process.waitErr, output.String())
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = command.Process.Kill()
+	<-process.done
+	t.Fatalf("Gateway E2E helper did not become ready\n%s", output.String())
+	return nil
+}
+
+func (process *gatewayProcess) Close() {
+	if process == nil || process.cmd == nil || process.cmd.Process == nil {
+		return
+	}
+	process.once.Do(func() {
+		_ = process.cmd.Process.Signal(os.Interrupt)
+		select {
+		case <-process.done:
+		case <-time.After(5 * time.Second):
+			_ = process.cmd.Process.Kill()
+			<-process.done
+		}
+	})
 }

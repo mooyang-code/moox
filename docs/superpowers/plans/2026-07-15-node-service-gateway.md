@@ -812,7 +812,7 @@ Verify the CA bundle contains two certificates with `grep -c 'BEGIN CERTIFICATE'
 - [ ] **Step 6: Deploy the Guangzhou node**
 
 ```bash
-./scripts/deploy-moox.sh --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod --public-host 106.53.107.122 --service-https-port 443 --node-id gateway-gz-122 --gateway-control-url https://106.53.107.122:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key --admin-password-file /tmp/moox-admin-password --reset-data
+./scripts/deploy-moox.sh --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod --public-host 106.53.107.122 --service-https-port 443 --node-id gateway-gz-122 --gateway-control-url https://106.53.107.122:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key --monitor-instance-id monitor-gz-122 --monitor-peer monitor-hk-177,https://43.132.204.177,gateway-hk-177 --admin-password-file /tmp/moox-admin-password --reset-data
 ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/moox-ssh-hosts.sql
 ```
 
@@ -821,7 +821,7 @@ Associate the bootstrapped `gateway-gz-122` with `腾讯云-122` and verify its 
 - [ ] **Step 7: Deploy the Hong Kong node**
 
 ```bash
-./scripts/deploy-moox.sh --target ubuntu@43.132.204.177 --dir /home/ubuntu/moox/prod --public-host 43.132.204.177 --service-https-port 443 --node-id gateway-hk-177 --gateway-control-url https://106.53.107.122:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key --no-admin --no-web-host --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor
+./scripts/deploy-moox.sh --target ubuntu@43.132.204.177 --dir /home/ubuntu/moox/prod --public-host 43.132.204.177 --service-https-port 443 --node-id gateway-hk-177 --gateway-control-url https://106.53.107.122:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key --monitor-instance-id monitor-hk-177 --monitor-peer monitor-gz-122,https://106.53.107.122,gateway-gz-122 --no-admin --no-web-host --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor
 ```
 
 Create `gateway-hk-177`, associate it with `腾讯云-香港`, and register its local Monitor and Host Agent services.

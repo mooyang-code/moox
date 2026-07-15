@@ -197,9 +197,17 @@ func (p *Puller) recordAvailabilityTransition(ctx context.Context, instanceID st
 	state := &domain.AlertState{SpaceID: peerAlertSpaceID, RuleID: checkID, CheckID: checkID, Status: status, FailureCount: 1, OwnerInstanceID: p.ownerInstanceID, TriggeredAt: &now, DedupeKey: checkID}
 	if available {
 		eventType, status, message = domain.AlertEventResolved, domain.AlertStatusResolved, "monitor peer "+instanceID+" recovered"
+		existing, err := p.alerts.GetState(ctx, peerAlertSpaceID, checkID, checkID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		state.Status = status
 		state.FailureCount = 0
 		state.SuccessCount = 1
+		state.TriggeredAt = nil
+		if existing != nil {
+			state.TriggeredAt = existing.TriggeredAt
+		}
 		state.ResolvedAt = &now
 	}
 	digest := sha256.Sum256([]byte(instanceID + "\x00" + eventType + "\x00" + now.Format(time.RFC3339Nano)))
