@@ -583,10 +583,12 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 		})
 	}
 	puller, err := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
-		Peers:       remotes,
-		Timeout:     time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
-		Credentials: gatewayauth.Credentials{KeyID: cfg.Peer.ServiceAuth.KeyID, Secret: cfg.Peer.ServiceAuth.SecretKey},
-		CAFile:      cfg.Peer.ServiceAuth.CAFile,
+		Peers:           remotes,
+		Timeout:         time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
+		Credentials:     gatewayauth.Credentials{KeyID: cfg.Peer.ServiceAuth.KeyID, Secret: cfg.Peer.ServiceAuth.SecretKey},
+		CAFile:          cfg.Peer.ServiceAuth.CAFile,
+		Alerts:          runtime.Repositories.Alerts,
+		OwnerInstanceID: cfg.Instance.InstanceID,
 	})
 	if err != nil {
 		return fmt.Errorf("monitor peer gateway client initialization failed: %w", err)

@@ -3,6 +3,8 @@ package peer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"google.golang.org/protobuf/encoding/protojson"
+	"gorm.io/gorm"
 )
 
 const peerSnapshotPath = "/api/service/monitor/GetPeerSnapshot"
@@ -29,18 +32,22 @@ type Remote struct {
 }
 
 type PullerOptions struct {
-	Peers       []Remote
-	Timeout     time.Duration
-	Credentials gatewayauth.Credentials
-	CAFile      string
+	Peers           []Remote
+	Timeout         time.Duration
+	Credentials     gatewayauth.Credentials
+	CAFile          string
+	Alerts          *store.AlertRepository
+	OwnerInstanceID string
 }
 
 type Puller struct {
-	repo        *store.PeerRepository
-	peers       []Remote
-	timeout     time.Duration
-	credentials gatewayauth.Credentials
-	client      *http.Client
+	repo            *store.PeerRepository
+	peers           []Remote
+	timeout         time.Duration
+	credentials     gatewayauth.Credentials
+	client          *http.Client
+	alerts          *store.AlertRepository
+	ownerInstanceID string
 }
 
 func NewPuller(repo *store.PeerRepository, opts PullerOptions) (*Puller, error) {
@@ -58,7 +65,7 @@ func NewPuller(repo *store.PeerRepository, opts PullerOptions) (*Puller, error) 
 	if err != nil {
 		return nil, fmt.Errorf("create peer gateway client: %w", err)
 	}
-	return &Puller{repo: repo, peers: append([]Remote(nil), opts.Peers...), timeout: timeout, credentials: opts.Credentials, client: client}, nil
+	return &Puller{repo: repo, peers: append([]Remote(nil), opts.Peers...), timeout: timeout, credentials: opts.Credentials, client: client, alerts: opts.Alerts, ownerInstanceID: strings.TrimSpace(opts.OwnerInstanceID)}, nil
 }
 
 func (p *Puller) PullOnce(ctx context.Context) error {
@@ -75,7 +82,16 @@ func (p *Puller) MarkStale(ctx context.Context, now time.Time, timeout time.Dura
 	if timeout <= 0 {
 		timeout = p.timeout
 	}
-	return p.repo.MarkStale(ctx, now.Add(-3*timeout))
+	transitioned, err := p.repo.MarkStaleTransitions(ctx, now.Add(-3*timeout))
+	if err != nil {
+		return err
+	}
+	for _, instanceID := range transitioned {
+		if err := p.recordAvailabilityTransition(ctx, instanceID, false, now.UTC()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Puller) pullRemote(ctx context.Context, remote Remote) error {
@@ -148,12 +164,49 @@ func (p *Puller) pullRemote(ctx context.Context, remote Remote) error {
 			return fmt.Errorf("peer observed_at exceeds allowed clock skew of %s", maxPeerObservationSkew)
 		}
 	}
+	wasDown := false
+	if previous, previousErr := p.repo.GetInstance(ctx, instanceID); previousErr == nil {
+		wasDown = previous.Status == domain.InstanceStatusDown
+	} else if !errors.Is(previousErr, gorm.ErrRecordNotFound) {
+		return previousErr
+	}
 	if err := p.repo.UpsertInstance(ctx, &domain.MonitorInstance{
 		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, LastSeenAt: &receivedAt, Snapshot: string(raw),
 	}); err != nil {
 		return err
 	}
-	return p.repo.UpsertSnapshot(ctx, &domain.PeerSnapshot{
+	if err := p.repo.UpsertSnapshot(ctx, &domain.PeerSnapshot{
 		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, Snapshot: string(raw), CheckedAt: observedAt,
-	})
+	}); err != nil {
+		return err
+	}
+	if wasDown {
+		return p.recordAvailabilityTransition(ctx, instanceID, true, receivedAt)
+	}
+	return nil
+}
+
+const peerAlertSpaceID = "moox_system"
+
+func (p *Puller) recordAvailabilityTransition(ctx context.Context, instanceID string, available bool, now time.Time) error {
+	if p.alerts == nil {
+		return nil
+	}
+	checkID := "monitor-peer/" + instanceID
+	eventType, status, message := domain.AlertEventTriggered, domain.AlertStatusFiring, "monitor peer "+instanceID+" is unavailable"
+	state := &domain.AlertState{SpaceID: peerAlertSpaceID, RuleID: checkID, CheckID: checkID, Status: status, FailureCount: 1, OwnerInstanceID: p.ownerInstanceID, TriggeredAt: &now, DedupeKey: checkID}
+	if available {
+		eventType, status, message = domain.AlertEventResolved, domain.AlertStatusResolved, "monitor peer "+instanceID+" recovered"
+		state.Status = status
+		state.FailureCount = 0
+		state.SuccessCount = 1
+		state.ResolvedAt = &now
+	}
+	digest := sha256.Sum256([]byte(instanceID + "\x00" + eventType + "\x00" + now.Format(time.RFC3339Nano)))
+	event := &domain.AlertEvent{
+		EventID: "peer-alert-" + hex.EncodeToString(digest[:16]), SpaceID: peerAlertSpaceID,
+		RuleID: checkID, CheckID: checkID, EventType: eventType, Status: status,
+		OwnerInstanceID: p.ownerInstanceID, Message: message, Payload: "{}", CreatedAt: now,
+	}
+	return p.alerts.RecordAvailabilityTransition(ctx, state, event)
 }
