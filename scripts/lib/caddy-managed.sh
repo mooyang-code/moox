@@ -156,8 +156,10 @@ managed_process() {
   [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null || return 1
   [[ ${MOOX_CADDY_SKIP_PID_EXE_CHECK:-0} == 1 ]] && return 0
   if [[ -L "/proc/${pid}/exe" ]]; then
-    exe=$(readlink "/proc/${pid}/exe")
-    [[ "${exe}" == "${BIN}" || "${exe}" == "${BIN} (deleted)" ]] || return 1
+    exe=$(readlink "/proc/${pid}/exe" 2>/dev/null || true)
+    if [[ -n "${exe}" ]]; then
+      [[ "${exe}" == "${BIN}" || "${exe}" == "${BIN} (deleted)" ]] || return 1
+    fi
   fi
   if [[ -r "/proc/${pid}/cmdline" ]]; then
     command=$(tr '\0' ' ' <"/proc/${pid}/cmdline"); command=${command% }
