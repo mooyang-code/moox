@@ -47,6 +47,10 @@ func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
 
 func newSignedRequestWithContext(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
 	cfg = normalizeAuthConfig(cfg)
+	return newSignedRequestWithNormalizedAuth(ctx, method, url, body, cfg)
+}
+
+func newSignedRequestWithNormalizedAuth(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
 	if cfg.AccessKey == "" || cfg.SecretKey == "" || cfg.TargetNode == "" {
 		return nil, fmt.Errorf("cloud runtime gateway key_id, secret_key and target_node are required")
 	}
@@ -55,7 +59,7 @@ func newSignedRequestWithContext(ctx context.Context, method string, url string,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	header, err := generateAuthHeader(cfg, method, req.URL.EscapedPath(), body)
+	header, err := signAuthHeader(cfg, method, req.URL.EscapedPath(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -67,5 +71,9 @@ func newSignedRequestWithContext(ctx context.Context, method string, url string,
 
 func generateAuthHeader(cfg AuthConfig, method, path string, body []byte) (http.Header, error) {
 	cfg = normalizeAuthConfig(cfg)
+	return signAuthHeader(cfg, method, path, body)
+}
+
+func signAuthHeader(cfg AuthConfig, method, path string, body []byte) (http.Header, error) {
 	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: cfg.AccessKey, Secret: cfg.SecretKey, Expire: time.Duration(cfg.ExpireSec) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: cfg.TargetNode}, time.Unix(cfg.NowUnix, 0))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,6 +51,22 @@ func TestServiceAuthCannotBypassSafeTransportWithInjectedClient(t *testing.T) {
 	require.ErrorContains(t, err, "non-loopback HTTP")
 }
 
+func TestServiceAuthSignsConstructedEscapedPathWithBasePrefix(t *testing.T) {
+	now := time.Now()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "ak", Secret: "sk"}, gatewayauth.Request{Method: r.Method, Path: r.URL.EscapedPath(), Body: body, TargetNode: "gateway-gz-122"}, r.Header, now)
+		require.NoError(t, err)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+	}))
+	defer server.Close()
+	c := New(server.URL + "/tenant%2Fone")
+	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]string{"a": "b"})
+	require.NoError(t, err)
+}
+
 func TestIsRetInfoSuccess(t *testing.T) {
 	assert.True(t, isRetInfoSuccess(0))
 	assert.False(t, isRetInfoSuccess(1))
@@ -73,8 +90,7 @@ func TestParseBatchChangeResponse(t *testing.T) {
 func TestBuildAuthHeader(t *testing.T) {
 	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key", TargetNode: "gateway-gz-122"}
 	now := time.Unix(1700000000, 0)
-	headers := map[string]string{"X-Space-Id": "space-1"}
-	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), headers, now)
+	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), now)
 	require.NoError(t, err)
 	assert.Equal(t, "gateway-gz-122", header.Get("X-Moox-Target-Node"))
 	_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "app", Secret: "key"}, gatewayauth.Request{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), TargetNode: "gateway-gz-122"}, header, now)

@@ -3,10 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
 	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
@@ -15,6 +11,10 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
 )
 
 func TestRun_InitAndImport(t *testing.T) {
@@ -114,7 +114,7 @@ func TestMetadataAdapter_DelegatesToTRPCProxy(t *testing.T) {
 
 func TestServiceAuth_AndLogRunOnce(t *testing.T) {
 	cfg := bootstrap.Default()
-	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.KeyID = "ak"
 	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
 	auth := serviceAuth(cfg)
 	require.NotNil(t, auth)

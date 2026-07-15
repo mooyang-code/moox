@@ -43,34 +43,32 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("control url is required")
 	}
-	var reader *bytes.Reader
+	var rawBody []byte
 	if body == nil {
-		reader = bytes.NewReader(nil)
+		rawBody = nil
 	} else {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		reader = bytes.NewReader(data)
+		rawBody = data
 	}
 	// 若配置了后台服务签名鉴权，则改走 /api/service/{service}/{method} 路由，
 	// 并对原始请求体做 HMAC 签名放进 Auth 头，不再依赖用户登录态。
 	finalPath := path
-	var authHeader http.Header
 	if c.ServiceAuth != nil {
 		finalPath = rewriteToServiceRoute(path)
-		rawBody, _ := io.ReadAll(reader)
-		reader = bytes.NewReader(rawBody)
-		signedHeaders := map[string]string{"X-Space-Id": c.SpaceID}
-		header, err := c.ServiceAuth.BuildAuthHeader(method, finalPath, rawBody, signedHeaders, time.Now())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+finalPath, bytes.NewReader(rawBody))
+	if err != nil {
+		return nil, err
+	}
+	var authHeader http.Header
+	if c.ServiceAuth != nil {
+		authHeader, err = c.ServiceAuth.BuildAuthHeader(req.Method, req.URL.EscapedPath(), rawBody, time.Now())
 		if err != nil {
 			return nil, err
 		}
-		authHeader = header
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+finalPath, reader)
-	if err != nil {
-		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if authHeader != nil {

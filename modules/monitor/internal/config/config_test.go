@@ -96,6 +96,18 @@ peer:
 	}
 }
 
+func TestMonitorGatewayAuthEnvironment(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-hk-177")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "monitor-key")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "monitor-secret")
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "/tmp/peers.pem")
+	cfg := Default()
+	cfg.applyEnv()
+	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
+		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
+	}
+}
+
 func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")

@@ -185,7 +185,7 @@ func runOncePayload(task *engine.FactorTask, status string, factorCount int, ela
 
 func serviceAuth(cfg *bootstrap.Config) *commonpb.AuthInfo {
 	return &commonpb.AuthInfo{
-		AppId:     cfg.SysDeploy.ServiceAuth.AccessKey,
+		AppId:     cfg.SysDeploy.ServiceAuth.KeyID,
 		AppKey:    cfg.SysDeploy.ServiceAuth.SecretKey,
 		Operator:  "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),

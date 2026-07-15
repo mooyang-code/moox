@@ -4,7 +4,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -61,10 +60,10 @@ type SysDeployConfig struct {
 }
 
 type ServiceAuthConfig struct {
-	Version       string `yaml:"version"`
-	AccessKey     string `yaml:"access_key"`
-	SecretKey     string `yaml:"secret_key"`
-	ExpireSeconds int64  `yaml:"expire_seconds"`
+	KeyID      string `yaml:"key_id"`
+	SecretKey  string `yaml:"secret_key"`
+	TargetNode string `yaml:"target_node"`
+	CAFile     string `yaml:"ca_file"`
 }
 
 type PeerConfig struct {
@@ -173,10 +172,7 @@ func Default() *Config {
 			Enabled:             true,
 			Target:              "ip://127.0.0.1:11109",
 			SyncIntervalSeconds: 60,
-			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-gateway-auth-v1",
-				ExpireSeconds: 60,
-			},
+			ServiceAuth:         ServiceAuthConfig{},
 		},
 		Peer: PeerConfig{
 			Enabled:             true,
@@ -236,12 +232,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.SysDeploy.SyncIntervalSeconds == 0 {
 		c.SysDeploy.SyncIntervalSeconds = defaults.SysDeploy.SyncIntervalSeconds
-	}
-	if c.SysDeploy.ServiceAuth.Version == "" {
-		c.SysDeploy.ServiceAuth.Version = defaults.SysDeploy.ServiceAuth.Version
-	}
-	if c.SysDeploy.ServiceAuth.ExpireSeconds == 0 {
-		c.SysDeploy.ServiceAuth.ExpireSeconds = defaults.SysDeploy.ServiceAuth.ExpireSeconds
 	}
 	if c.Peer.PullIntervalSeconds == 0 {
 		c.Peer.PullIntervalSeconds = defaults.Peer.PullIntervalSeconds
@@ -373,19 +363,17 @@ func (c *Config) applyEnv() {
 	if v := firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
 		c.Metrics.EventBusURL = v
 	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); v != "" {
-		c.SysDeploy.ServiceAuth.Version = v
+	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
+		c.SysDeploy.ServiceAuth.TargetNode = v
 	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.AccessKey = v
+	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
+		c.SysDeploy.ServiceAuth.KeyID = v
 	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"); v != "" {
+	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
 		c.SysDeploy.ServiceAuth.SecretKey = v
 	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_EXPIRE_SECONDS"); v != "" {
-		if seconds, err := strconv.ParseInt(v, 10, 64); err == nil {
-			c.SysDeploy.ServiceAuth.ExpireSeconds = seconds
-		}
+	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
+		c.SysDeploy.ServiceAuth.CAFile = v
 	}
 }
 

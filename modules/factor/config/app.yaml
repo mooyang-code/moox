@@ -46,10 +46,10 @@ instance:
 sysdeploy:
   admin_gateway_url: http://127.0.0.1:11002
   service_auth:
-    version: moox-gateway-auth-v1
-    access_key: moox-service
+    key_id: ""
     secret_key: ""
-    expire_seconds: 60
+    target_node: ""
+    ca_file: ""
 
 health:
   addr: ":11414"

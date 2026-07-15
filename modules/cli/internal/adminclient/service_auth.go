@@ -12,6 +12,6 @@ type ServiceAuthConfig struct {
 	ExpireSecs                               int64
 }
 
-func (c ServiceAuthConfig) BuildAuthHeader(method, path string, body []byte, _ map[string]string, now time.Time) (http.Header, error) {
+func (c ServiceAuthConfig) BuildAuthHeader(method, path string, body []byte, now time.Time) (http.Header, error) {
 	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: c.AccessKey, Secret: c.SecretKey, Expire: time.Duration(c.ExpireSecs) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: c.TargetNode}, now)
 }

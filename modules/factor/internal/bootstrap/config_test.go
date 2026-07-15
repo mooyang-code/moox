@@ -26,6 +26,18 @@ func TestDefaultFactorConfig(t *testing.T) {
 	}
 }
 
+func TestFactorGatewayAuthEnvironment(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "factor-key")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "factor-secret")
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "/tmp/peers.pem")
+	cfg := Default()
+	cfg.applyEnv()
+	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-gz-122" || cfg.SysDeploy.ServiceAuth.KeyID != "factor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "factor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
+		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
+	}
+}
+
 func TestLoadAppliesFactorEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_FACTOR_DB_PATH", "./override/factor.db")
 	t.Setenv("MOOX_FACTOR_NATS_URL", "")

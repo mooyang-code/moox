@@ -322,8 +322,8 @@ type realtimeLoopDeps struct {
 
 func factorAuthInfo(cfg *Config) *commonpb.AuthInfo {
 	return &commonpb.AuthInfo{
-		AppId:     "moox-factor",
-		AppKey:    cfg.SysDeploy.ServiceAuth.AccessKey,
+		AppId:     cfg.SysDeploy.ServiceAuth.KeyID,
+		AppKey:    cfg.SysDeploy.ServiceAuth.SecretKey,
 		Operator:  "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
