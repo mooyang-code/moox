@@ -36,6 +36,8 @@ done
 OS=$(normalize_os "${OS}"); ARCH=$(normalize_arch "${ARCH}")
 BIN="${DEPLOY_DIR}/bin/caddy"; CONFIG="${DEPLOY_DIR}/config/caddy/Caddyfile"; PIDFILE="${DEPLOY_DIR}/run/caddy.pid"
 ENV_FILE="${DEPLOY_DIR}/config/caddy/edge.env"
+ACTIVATION_ROLLBACK="${DEPLOY_DIR}/config/caddy/.activation.rollback"
+BIN_ROLLBACK_CHANGED="${BIN}.rollback.changed"
 if [[ -s "${ENV_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -94,6 +96,61 @@ reconcile_bind_capability() {
   [[ "$(file_capabilities)" == cap_net_bind_service=ep ]] || fail 'cap_net_bind_service validation failed after sudo -n setcap'
   log "granted cap_net_bind_service=+ep to ${BIN}"
 }
+snapshot_file() {
+  local active="$1" backup="${1}.rollback"
+  mkdir -p "$(dirname "${backup}")"
+  rm -f "${backup}" "${backup}.absent"
+  if [[ -e "${active}" ]]; then cp -p "${active}" "${backup}"; else : >"${backup}.absent"; fi
+}
+restore_file() {
+  local active="$1" backup="${1}.rollback"
+  if [[ -e "${backup}.absent" ]]; then
+    rm -f "${active}"
+  elif [[ -e "${backup}" ]]; then
+    mv "${backup}" "${active}"
+  fi
+  rm -f "${backup}.absent"
+}
+begin_activation() {
+  snapshot_file "${CONFIG}"
+  snapshot_file "${ENV_FILE}"
+  snapshot_file "${BIN}"
+  rm -f "${BIN_ROLLBACK_CHANGED}"
+  : >"${ACTIVATION_ROLLBACK}"
+}
+load_active_ports() {
+  unset MOOX_CADDY_PORTS
+  if [[ -s "${ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${ENV_FILE}"
+  fi
+  PORTS="${MOOX_CADDY_PORTS:-9527,11001}"
+  validate_ports
+}
+restore_activation() {
+  [[ -e "${ACTIVATION_ROLLBACK}" ]] || return 1
+  restore_file "${CONFIG}"
+  restore_file "${ENV_FILE}"
+  if [[ -e "${BIN_ROLLBACK_CHANGED}" ]]; then
+    restore_file "${BIN}"
+  else
+    rm -f "${BIN}.rollback" "${BIN}.rollback.absent"
+  fi
+  rm -f "${BIN_ROLLBACK_CHANGED}"
+  rm -f "${CONFIG}.candidate" "${ENV_FILE}.candidate" "${ACTIVATION_ROLLBACK}"
+  load_active_ports
+  [[ ! -x "${BIN}" ]] || reconcile_bind_capability
+}
+write_candidate_env() {
+  umask 077
+  {
+    printf 'MOOX_CADDY_PORTS=%q\n' "${PORTS}"
+    if [[ -n "${MOOX_PUBLIC_HOST:-}" ]]; then
+      printf 'MOOX_PUBLIC_HOST=%q\nMOOX_BROWSER_HTTPS_PORT=%q\nMOOX_SERVICE_HTTPS_PORT=%q\n' \
+        "${MOOX_PUBLIC_HOST}" "${MOOX_BROWSER_HTTPS_PORT:-9527}" "${MOOX_SERVICE_HTTPS_PORT:-11001}"
+    fi
+  } >"${ENV_FILE}.candidate"
+}
 pid_owned() {
   [[ -s "${PIDFILE}" ]] || return 1
   local pid exe
@@ -103,6 +160,24 @@ pid_owned() {
   exe=$(ps -p "${pid}" -o command= 2>/dev/null || true); [[ "${exe}" == "${BIN} "* || "${exe}" == "${BIN}" ]]
 }
 clean_stale_pid() { [[ ! -e "${PIDFILE}" ]] || pid_owned || { log 'removing stale or mismatched PID file without signaling it'; rm -f "${PIDFILE}"; }; }
+stop_recorded_pid() {
+  local pid
+  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+  fi
+  rm -f "${PIDFILE}"
+}
+restore_runtime_after_failure() {
+  local previous_pid="$1"
+  if [[ "${previous_pid}" =~ ^[0-9]+$ ]] && kill -0 "${previous_pid}" 2>/dev/null && [[ -x "${BIN}" && -s "${CONFIG}" ]]; then
+    printf '%s\n' "${previous_pid}" >"${PIDFILE}"
+    "${BIN}" reload --config "${CONFIG}" --adapter caddyfile >/dev/null 2>&1 || true
+  else
+    stop_recorded_pid
+  fi
+}
 validate() { [[ -s "${CONFIG}" ]] || fail "managed config missing: ${CONFIG}"; "${BIN}" validate --config "${CONFIG}" --adapter caddyfile >/dev/null; }
 check_ports() {
   local port owners pid
@@ -144,7 +219,7 @@ admin_healthy() {
   curl --fail --silent --max-time 2 "http://${ADMIN_ENDPOINT}${ADMIN_PATH}" >/dev/null
 }
 install_binary() {
-  local asset archive expected actual tmp old
+  local asset archive expected actual tmp
   asset="caddy_2.11.4_${OS}_${ARCH}.tar.gz"
   archive=${MOOX_CADDY_ARCHIVE:-}
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/moox-caddy-install.XXXXXX"); trap 'rm -rf "${tmp}"' RETURN
@@ -156,9 +231,8 @@ install_binary() {
   tar -C "${tmp}" -xzf "${archive}" caddy
   chmod 0755 "${tmp}/caddy"; [[ $("${tmp}/caddy" version | awk '{print $1}') == "${CADDY_VERSION}" ]] || fail 'downloaded binary version mismatch'
   mkdir -p "${DEPLOY_DIR}/bin"
-  old="${BIN}.rollback"; [[ ! -e "${BIN}" ]] || cp -p "${BIN}" "${old}"
   mv "${tmp}/caddy" "${BIN}.new"; mv "${BIN}.new" "${BIN}"
-  reconcile_bind_capability
+  [[ ! -e "${ACTIVATION_ROLLBACK}" ]] || : >"${BIN_ROLLBACK_CHANGED}"
   log "installed ${CADDY_VERSION} at ${BIN}"
 }
 start_caddy() {
@@ -166,16 +240,13 @@ start_caddy() {
   if pid_owned; then
     admin_healthy || fail "managed PID does not own a healthy Caddy admin endpoint at ${ADMIN_ENDPOINT}"
     if ! "${BIN}" reload --config "${CONFIG}" --adapter caddyfile; then
-      [[ ! -e "${CONFIG}.rollback" ]] || mv "${CONFIG}.rollback" "${CONFIG}"
-      [[ ! -e "${BIN}.rollback" ]] || mv "${BIN}.rollback" "${BIN}"
-      "${BIN}" reload --config "${CONFIG}" --adapter caddyfile >/dev/null 2>&1 || true
-      fail 'reload failed; restored previous managed configuration and binary'
+      fail 'managed Caddy reload failed'
     fi
     log 'reloaded managed Caddy'; publish_ca; return
   fi
   nohup "${BIN}" run --config "${CONFIG}" --adapter caddyfile >>"${DEPLOY_DIR}/run/caddy.log" 2>&1 &
   local pid=$!; printf '%s\n' "${pid}" >"${PIDFILE}.new"; mv "${PIDFILE}.new" "${PIDFILE}"
-  sleep 0.1; kill -0 "${pid}" 2>/dev/null || { rm -f "${PIDFILE}"; [[ ! -e "${CONFIG}.rollback" ]] || mv "${CONFIG}.rollback" "${CONFIG}"; [[ ! -e "${BIN}.rollback" ]] || mv "${BIN}.rollback" "${BIN}"; fail 'managed Caddy failed to start'; }
+  sleep 0.1; kill -0 "${pid}" 2>/dev/null || { rm -f "${PIDFILE}"; fail 'managed Caddy failed to start'; }
   log "started managed Caddy pid=${pid}"
   publish_ca
 }
@@ -200,23 +271,41 @@ publish_ca() {
 validate_ports
 
 case "${COMMAND}" in
-  install) install_binary;;
+  install) snapshot_file "${BIN}"; install_binary; reconcile_bind_capability;;
   check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; reconcile_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
+    previous_pid=""
+    if pid_owned; then previous_pid=$(cat "${PIDFILE}"); fi
+    begin_activation
     version_ok || install_binary
-    reconcile_bind_capability
-    umask 077
-    {
-      printf 'MOOX_CADDY_PORTS=%q\n' "${PORTS}"
-      if [[ -n "${MOOX_PUBLIC_HOST:-}" ]]; then
-        printf 'MOOX_PUBLIC_HOST=%q\nMOOX_BROWSER_HTTPS_PORT=%q\nMOOX_SERVICE_HTTPS_PORT=%q\n' \
-          "${MOOX_PUBLIC_HOST}" "${MOOX_BROWSER_HTTPS_PORT:-9527}" "${MOOX_SERVICE_HTTPS_PORT:-11001}"
+    if [[ -e "${CONFIG}.candidate" ]] && ! "${BIN}" validate --config "${CONFIG}.candidate" --adapter caddyfile >/dev/null; then
+      restore_activation || true
+      fail 'candidate Caddy configuration validation failed; restored previous activation'
+    fi
+    if ! write_candidate_env; then
+      restore_activation || true
+      fail 'could not stage Caddy edge environment; restored previous activation'
+    fi
+    if ! (reconcile_bind_capability); then
+      restore_activation || true
+      fail 'Caddy capability activation failed; restored previous activation'
+    fi
+    if ! { mv "${ENV_FILE}.candidate" "${ENV_FILE}" && { [[ ! -e "${CONFIG}.candidate" ]] || mv "${CONFIG}.candidate" "${CONFIG}"; }; }; then
+      restore_activation || true
+      fail 'could not activate Caddy config and environment; restored previous activation'
+    fi
+    if [[ -s "${CONFIG}" ]]; then
+      if [[ -n "${previous_pid}" ]] && ! pid_owned; then stop_recorded_pid; fi
+      if ! (start_caddy); then
+        restore_activation || fail 'Caddy activation failed and rollback could not restore the previous state'
+        restore_runtime_after_failure "${previous_pid}"
+        fail 'Caddy activation failed; restored previous config, binary, ports, environment, and capability'
       fi
-    } >"${ENV_FILE}"
-    [[ ! -e "${CONFIG}.candidate" ]] || { "${BIN}" validate --config "${CONFIG}.candidate" --adapter caddyfile >/dev/null; [[ ! -e "${CONFIG}" ]] || cp -p "${CONFIG}" "${CONFIG}.rollback"; mv "${CONFIG}.candidate" "${CONFIG}"; }
-    [[ -s "${CONFIG}" ]] && start_caddy || log 'binary installed; waiting for managed Caddyfile'
+    else
+      log 'binary installed; waiting for managed Caddyfile'
+    fi
     ;;
   start|reload) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; start_caddy;;
   stop)
@@ -225,16 +314,22 @@ case "${COMMAND}" in
     rm -f "${PIDFILE}";;
   rollback)
     clean_stale_pid
-    if [[ -e "${CONFIG}.rollback" ]]; then
-      mv "${CONFIG}.rollback" "${CONFIG}"
-      [[ ! -e "${BIN}.rollback" ]] || mv "${BIN}.rollback" "${BIN}"
-      reconcile_bind_capability
-      if pid_owned; then
-        "${BIN}" reload --config "${CONFIG}" --adapter caddyfile
+    if [[ -e "${ACTIVATION_ROLLBACK}" ]]; then
+      rollback_pid=""
+      if pid_owned; then rollback_pid=$(cat "${PIDFILE}"); fi
+      restore_activation || fail 'managed Caddy rollback state is incomplete'
+      if [[ -s "${CONFIG}" ]]; then
+        if [[ "${rollback_pid}" =~ ^[0-9]+$ ]] && kill -0 "${rollback_pid}" 2>/dev/null; then
+          printf '%s\n' "${rollback_pid}" >"${PIDFILE}"
+          "${BIN}" reload --config "${CONFIG}" --adapter caddyfile
+        else
+          rm -f "${PIDFILE}"
+          start_caddy
+        fi
       else
-        start_caddy
+        stop_recorded_pid
       fi
-      log 'restored previous managed Caddy configuration'
+      log 'restored previous managed Caddy activation'
     else
       if pid_owned; then
         pid=$(cat "${PIDFILE}")
@@ -242,8 +337,8 @@ case "${COMMAND}" in
         for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
       fi
       rm -f "${PIDFILE}"
-      rm -f "${CONFIG}" "${CONFIG}.candidate"
-      log 'removed first-install Caddy configuration after failed acceptance'
+      rm -f "${CONFIG}.candidate" "${ENV_FILE}.candidate"
+      log 'no managed Caddy activation rollback was available'
     fi
     ;;
   status)

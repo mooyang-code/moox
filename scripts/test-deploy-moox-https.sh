@@ -37,7 +37,8 @@ assert_contains "${ROOT}/scripts/deploy-moox.sh" '77)'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'target CA trust installation failed with status'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'cp "${ROOT}/scripts/install-caddy-ca.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"'
-assert_contains "${HELPER}" '${CONFIG}.rollback'
+assert_contains "${HELPER}" '.activation.rollback'
+assert_contains "${HELPER}" 'restore_file "${ENV_FILE}"'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'Caddyfile.next'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" '--config "${deploy_dir}/config/caddy/Caddyfile.next"'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-caddy-data.XXXXXX'
@@ -68,7 +69,7 @@ cat >"${TMP}/fixture/caddy" <<'SH'
 case "${1:-}" in
   version) echo 'v2.11.4 h1:test' ;;
   validate) exit "${FAKE_VALIDATE_EXIT:-0}" ;;
-  reload) printf 'reload\n' >>"${FAKE_LOG}" ;;
+  reload) printf 'reload\n' >>"${FAKE_LOG}"; exit "${FAKE_RELOAD_EXIT:-0}" ;;
   run) printf 'run\n' >>"${FAKE_LOG}"; exec python3 -m http.server "${FAKE_ADMIN_PORT}" --bind 127.0.0.1 ;;
 esac
 SH
@@ -230,6 +231,83 @@ grep -Fq '"admin_healthy":true' <<<"${status_json}" || fail 'managed admin endpo
 if MOOX_CADDY_ADMIN_ENDPOINT=127.0.0.1:1 "${HELPER}" check --deploy-dir "${TMP}/deploy" >/dev/null 2>&1; then
   fail 'managed Caddy with an unverified admin endpoint was accepted'
 fi
+
+printf ':443 { respond "active-443" }\n' >"${TMP}/tx-443.Caddyfile"
+printf ':8443 { respond "active-8443" }\n' >"${TMP}/tx-8443.Caddyfile"
+printf ':broken {\n' >"${TMP}/tx-invalid.Caddyfile"
+"${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 443 --config "${TMP}/tx-443.Caddyfile"
+grep -Fq 'active-443' "${TMP}/deploy/config/caddy/Caddyfile" || fail '443 baseline config was not activated'
+grep -Fq 'MOOX_CADDY_PORTS=443' "${TMP}/deploy/config/caddy/edge.env" || fail '443 baseline ports were not activated'
+[[ -s "${CAP_STATE}" ]] || fail '443 baseline capability was not activated'
+cp "${TMP}/deploy/config/caddy/Caddyfile" "${TMP}/expected-443.Caddyfile"
+cp "${TMP}/deploy/config/caddy/edge.env" "${TMP}/expected-443.env"
+
+# Candidate validation must happen before any active config, ports, or
+# capability mutation in either direction.
+if FAKE_VALIDATE_EXIT=1 "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 8443 --config "${TMP}/tx-invalid.Caddyfile" >/dev/null 2>&1; then
+  fail 'invalid 443-to-8443 candidate was accepted'
+fi
+grep -Fq 'active-443' "${TMP}/deploy/config/caddy/Caddyfile" || fail 'validation failure replaced the 443 config'
+grep -Fq 'MOOX_CADDY_PORTS=443' "${TMP}/deploy/config/caddy/edge.env" || fail 'validation failure replaced the 443 port set'
+cmp -s "${TMP}/expected-443.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'validation failure did not restore the exact 443 config'
+cmp -s "${TMP}/expected-443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 'validation failure did not restore the exact 443 environment'
+[[ -s "${CAP_STATE}" ]] || fail 'validation failure removed the 443 capability'
+
+# Reload failure must atomically restore the old activation, after which a
+# cold start from restored files must still work.
+if FAKE_RELOAD_EXIT=1 "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 8443 --config "${TMP}/tx-8443.Caddyfile" >/dev/null 2>&1; then
+  fail '443-to-8443 activation unexpectedly survived reload failure'
+fi
+grep -Fq 'active-443' "${TMP}/deploy/config/caddy/Caddyfile" || fail 'reload failure did not restore the 443 config'
+grep -Fq 'MOOX_CADDY_PORTS=443' "${TMP}/deploy/config/caddy/edge.env" || fail 'reload failure did not restore the 443 port set'
+cmp -s "${TMP}/expected-443.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'reload failure did not restore the exact 443 config'
+cmp -s "${TMP}/expected-443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 'reload failure did not restore the exact 443 environment'
+[[ -s "${CAP_STATE}" ]] || fail 'reload failure did not restore the 443 capability'
+"${HELPER}" stop --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+"${HELPER}" start --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+
+"${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 8443 --config "${TMP}/tx-8443.Caddyfile"
+grep -Fq 'active-8443' "${TMP}/deploy/config/caddy/Caddyfile" || fail '8443 baseline config was not activated'
+grep -Fq 'MOOX_CADDY_PORTS=8443' "${TMP}/deploy/config/caddy/edge.env" || fail '8443 baseline ports were not activated'
+[[ ! -e "${CAP_STATE}" ]] || fail '8443 baseline retained the bind capability'
+cp "${TMP}/deploy/config/caddy/Caddyfile" "${TMP}/expected-8443.Caddyfile"
+cp "${TMP}/deploy/config/caddy/edge.env" "${TMP}/expected-8443.env"
+
+if FAKE_VALIDATE_EXIT=1 "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 443 --config "${TMP}/tx-invalid.Caddyfile" >/dev/null 2>&1; then
+  fail 'invalid 8443-to-443 candidate was accepted'
+fi
+grep -Fq 'active-8443' "${TMP}/deploy/config/caddy/Caddyfile" || fail 'validation failure replaced the 8443 config'
+grep -Fq 'MOOX_CADDY_PORTS=8443' "${TMP}/deploy/config/caddy/edge.env" || fail 'validation failure replaced the 8443 port set'
+cmp -s "${TMP}/expected-8443.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'validation failure did not restore the exact 8443 config'
+cmp -s "${TMP}/expected-8443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 'validation failure did not restore the exact 8443 environment'
+[[ ! -e "${CAP_STATE}" ]] || fail 'validation failure granted the 443 capability'
+
+if FAKE_RELOAD_EXIT=1 "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 443 --config "${TMP}/tx-443.Caddyfile" >/dev/null 2>&1; then
+  fail '8443-to-443 activation unexpectedly survived reload failure'
+fi
+grep -Fq 'active-8443' "${TMP}/deploy/config/caddy/Caddyfile" || fail 'reload failure did not restore the 8443 config'
+grep -Fq 'MOOX_CADDY_PORTS=8443' "${TMP}/deploy/config/caddy/edge.env" || fail 'reload failure did not restore the 8443 port set'
+cmp -s "${TMP}/expected-8443.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'reload failure did not restore the exact 8443 config'
+cmp -s "${TMP}/expected-8443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 'reload failure did not restore the exact 8443 environment'
+[[ ! -e "${CAP_STATE}" ]] || fail 'reload failure retained the rejected 443 capability'
+"${HELPER}" stop --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+"${HELPER}" start --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+
+# Explicit rollback uses the same complete snapshot and reconciles the restored
+# binary to the restored port set.
+"${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+  --ports 443 --config "${TMP}/tx-443.Caddyfile"
+"${HELPER}" rollback --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+cmp -s "${TMP}/expected-8443.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'explicit rollback did not restore the exact 8443 config'
+cmp -s "${TMP}/expected-8443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 'explicit rollback did not restore the exact 8443 environment'
+[[ ! -e "${CAP_STATE}" ]] || fail 'explicit rollback did not remove the rejected 443 capability'
+
 MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT="${EDGE_PORT}" MOOX_SERVICE_HTTPS_PORT=11001 \
   "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64
 assert_contains "${FAKE_LOG}" reload
