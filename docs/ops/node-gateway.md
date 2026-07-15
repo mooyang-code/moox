@@ -65,6 +65,45 @@ done
 `{instance_id: monitor-gz-122, gateway_url: https://106.53.107.122, node_id: gateway-gz-122}`。
 不要使用默认的 hostname/PID 实例 ID；进程重启后它会变化，无法作为对端配置标识。
 
+## 两节点部署命令
+
+准备好双 CA bundle、control/service key 和 Admin 密码文件后，先部署广州：
+
+```bash
+./scripts/deploy-moox.sh \
+  --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod \
+  --public-host 106.53.107.122 --service-https-port 443 \
+  --node-id gateway-gz-122 \
+  --gateway-control-url https://106.53.107.122:9527 \
+  --gateway-ca-bundle /tmp/moox-gateway-peers.pem \
+  --gateway-control-key-file /tmp/moox-gateway-control.key \
+  --gateway-service-key-file /tmp/moox-gateway-service.key \
+  --monitor-instance-id monitor-gz-122 \
+  --monitor-peer monitor-hk-177,https://43.132.204.177,gateway-hk-177 \
+  --admin-password-file /tmp/moox-admin-password --reset-data
+```
+
+创建香港网关节点和本机 Monitor 路由后，再部署香港：
+
+```bash
+./scripts/deploy-moox.sh \
+  --target ubuntu@43.132.204.177 --dir /home/ubuntu/moox/prod \
+  --public-host 43.132.204.177 --service-https-port 443 \
+  --node-id gateway-hk-177 \
+  --gateway-control-url https://106.53.107.122:9527 \
+  --gateway-ca-bundle /tmp/moox-gateway-peers.pem \
+  --gateway-control-key-file /tmp/moox-gateway-control.key \
+  --gateway-service-key-file /tmp/moox-gateway-service.key \
+  --monitor-instance-id monitor-hk-177 \
+  --monitor-peer monitor-gz-122,https://106.53.107.122,gateway-gz-122 \
+  --no-admin --no-web-host --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor
+```
+
+`--monitor-peer` 可重复传入；部署脚本严格校验三元组、稳定 ID 和 URL，并把实例 ID 与
+peer 列表写入 Monitor 配置。HTTPS peer URL 不能带账号、路径、查询或 fragment；明文
+HTTP 只允许 loopback。
+
 ## 路由检查
 
 在节点本机检查当前已应用且校验通过的缓存：

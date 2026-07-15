@@ -19,7 +19,7 @@ assert_contains "${RELEASE}" 'gateway/config'
 assert_contains "${RELEASE}" 'copy_binary moox-gateway'
 assert_contains "${RELEASE}" 'copy_binary moox-gateway-cli'
 
-for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --no-admin; do
+for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --monitor-instance-id --monitor-peer --no-admin; do
   assert_contains "${DEPLOY}" "${option}"
 done
 assert_contains "${DEPLOY}" 'MOOX_ADMIN_NODE_ID'
@@ -171,10 +171,15 @@ kill -0 "${unrelated_pid}" 2>/dev/null || fail 'Gateway stop killed an unrelated
   --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
   --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
+  --monitor-instance-id monitor-local --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
   --gateway-service-key-file "${TMP}/service.key" >/dev/null
 MONITOR_DEPLOY="${TMP}/deploy-monitor"
 [[ -x "${MONITOR_DEPLOY}/bin/moox-cli" ]] || fail 'no-admin Monitor package omitted moox-cli'
+grep -Fq 'instance_id: "monitor-local"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'stable Monitor instance ID was not rendered'
+grep -Fq '"instance_id":"monitor-peer"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor peer instance ID was not rendered'
+grep -Fq '"gateway_url":"https://peer.example.com"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor peer Gateway URL was not rendered safely'
+grep -Fq '"node_id":"gateway-peer"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor peer node ID was not rendered'
 mkdir -p "${TMP}/captures"
 cat >"${MONITOR_DEPLOY}/bin/moox-gateway" <<'SH'
 #!/usr/bin/env bash
@@ -206,9 +211,30 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=service-secret' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive the Gateway service key'
+grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive its stable instance ID'
 ! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/monitor.env" || fail 'Monitor inherited the Gateway control key'
 ! grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the service key instead of reading its raw key file'
 ! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the control key instead of reading its raw key file'
+! grep -Fq 'MOOX_MONITOR_INSTANCE_ID=' "${TMP}/captures/gateway.env" || fail 'Gateway inherited the Monitor instance ID'
+
+expect_monitor_arg_rejected() {
+  local label="$1"; shift
+  local output
+  if output=$("${DEPLOY}" --target localhost --dir "${TMP}/reject-${label}" --stage "${TMP}/reject-stage-${label}" \
+    --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
+    --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
+    --node-id gateway-monitor --gateway-control-url 'http://127.0.0.1:11000' \
+    --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+    --gateway-service-key-file "${TMP}/service.key" "$@" 2>&1); then
+    fail "invalid Monitor arguments were accepted: ${label}"
+  fi
+  grep -Fq -- 'monitor' <<<"${output}" || fail "Monitor rejection was unclear: ${label}"
+}
+expect_monitor_arg_rejected missing-instance
+expect_monitor_arg_rejected bad-instance --monitor-instance-id '../monitor'
+expect_monitor_arg_rejected malformed-peer --monitor-instance-id monitor-local --monitor-peer 'missing,fields'
+expect_monitor_arg_rejected unsafe-peer-url --monitor-instance-id monitor-local --monitor-peer 'monitor-peer,http://peer.example.com,gateway-peer'
+expect_monitor_arg_rejected self-peer --monitor-instance-id monitor-local --monitor-peer 'monitor-local,https://peer.example.com,gateway-peer'
 
 # Remote deployment archives use collision-free 0600 paths and the EXIT trap
 # removes both local and remote copies even when remote extraction fails.

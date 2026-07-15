@@ -44,6 +44,8 @@ GATEWAY_CONTROL_URL=""
 GATEWAY_CA_BUNDLE=""
 GATEWAY_CONTROL_KEY_FILE=""
 GATEWAY_SERVICE_KEY_FILE=""
+MONITOR_INSTANCE_ID=""
+MONITOR_PEERS=()
 STAGE_DEPLOY_LOCK=""
 STAGE_DEPLOY_LOCK_TOKEN="$$.${RANDOM}.${RANDOM}"
 STAGE_DEPLOY_LOCK_HELD=0
@@ -96,6 +98,8 @@ Options:
   --gateway-ca-bundle <path>      Public PEM bundle containing peer Caddy roots (required).
   --gateway-control-key-file <p>  Local 0600 raw cluster control key file (required).
   --gateway-service-key-file <p>  Local 0600 raw cluster service key file (required).
+  --monitor-instance-id <id>      Stable Monitor instance ID (required when Monitor is enabled).
+  --monitor-peer <id>,<url>,<node>  Repeatable remote Monitor/Gateway tuple.
   -h, --help                      Show this help.
 
 Examples:
@@ -399,6 +403,8 @@ while [[ $# -gt 0 ]]; do
     --gateway-ca-bundle) GATEWAY_CA_BUNDLE="${2:-}"; shift 2 ;;
     --gateway-control-key-file) GATEWAY_CONTROL_KEY_FILE="${2:-}"; shift 2 ;;
     --gateway-service-key-file) GATEWAY_SERVICE_KEY_FILE="${2:-}"; shift 2 ;;
+    --monitor-instance-id) MONITOR_INSTANCE_ID="${2:-}"; shift 2 ;;
+    --monitor-peer) MONITOR_PEERS+=("${2:-}"); shift 2 ;;
     -h|--help)
       usage
       exit 0
@@ -414,6 +420,31 @@ done
 [[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"
 [[ "${NODE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail "--node-id is required and must be a stable identifier"
 validate_gateway_control_url "${GATEWAY_CONTROL_URL}" || fail "--gateway-control-url must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
+if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+  [[ "${MONITOR_INSTANCE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
+    fail "--monitor-instance-id is required when Monitor is enabled and must be a stable identifier"
+  validated_monitor_peers=()
+  for monitor_peer in ${MONITOR_PEERS[@]+"${MONITOR_PEERS[@]}"}; do
+    IFS=',' read -r peer_instance_id peer_gateway_url peer_node_id peer_extra <<<"${monitor_peer}"
+    [[ -n "${peer_instance_id}" && -n "${peer_gateway_url}" && -n "${peer_node_id}" && -z "${peer_extra:-}" ]] || \
+      fail "--monitor-peer must be exactly <instance_id>,<gateway_url>,<node_id>"
+    [[ "${peer_instance_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
+      fail "--monitor-peer instance ID must be a stable identifier"
+    [[ "${peer_node_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
+      fail "--monitor-peer node ID must be a stable identifier"
+    [[ "${peer_instance_id}" != "${MONITOR_INSTANCE_ID}" ]] || fail "--monitor-peer cannot target the local Monitor instance"
+    [[ "${peer_node_id}" != "${NODE_ID}" ]] || fail "--monitor-peer cannot target the local Gateway node"
+    validate_gateway_control_url "${peer_gateway_url}" || \
+      fail "--monitor-peer Gateway URL must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
+    for existing_peer in ${validated_monitor_peers[@]+"${validated_monitor_peers[@]}"}; do
+      IFS=',' read -r existing_instance _ existing_node <<<"${existing_peer}"
+      [[ "${existing_instance}" != "${peer_instance_id}" ]] || fail "--monitor-peer instance IDs must be unique"
+      [[ "${existing_node}" != "${peer_node_id}" ]] || fail "--monitor-peer node IDs must be unique"
+    done
+    validated_monitor_peers+=("${monitor_peer}")
+  done
+  MONITOR_PEERS=("${validated_monitor_peers[@]}")
+fi
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 [[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
 
@@ -741,6 +772,33 @@ patch_configs() {
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
       "${STAGE_DIR}/monitor/config/app.yaml"
+    local monitor_peers_json
+    monitor_peers_json=$(python3 - "${MONITOR_PEERS[@]}" <<'PY'
+import json
+import sys
+
+peers = []
+for value in sys.argv[1:]:
+    instance_id, gateway_url, node_id = value.split(",")
+    peers.append({"instance_id": instance_id, "gateway_url": gateway_url, "node_id": node_id})
+print(json.dumps(peers, separators=(",", ":")))
+PY
+)
+    MONITOR_INSTANCE_ID_VALUE="${MONITOR_INSTANCE_ID}" MONITOR_PEERS_JSON="${monitor_peers_json}" python3 - "${STAGE_DIR}/monitor/config/app.yaml" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+instance_line = "  instance_id: " + json.dumps(os.environ["MONITOR_INSTANCE_ID_VALUE"])
+if text.count('  instance_id: ""') != 1 or text.count("  peers: []") != 1:
+    raise SystemExit("Monitor config template does not have the expected instance/peer fields")
+text = text.replace('  instance_id: ""', instance_line, 1)
+text = text.replace("  peers: []", "  peers: " + os.environ["MONITOR_PEERS_JSON"], 1)
+path.write_text(text)
+PY
   fi
   if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
     perl -0pi -e 's#store_dir:\s*\./data/eventbus/jetstream#store_dir: ../data/eventbus/jetstream#g' \
@@ -846,6 +904,7 @@ WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-__NODE_ID__}"
 export MOOX_GATEWAY_NODE_ID
+MOOX_MONITOR_INSTANCE_ID="${MOOX_MONITOR_INSTANCE_ID:-__MONITOR_INSTANCE_ID__}"
 if [[ "${WITH_ADMIN}" == "1" ]]; then
   MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-__NODE_ID__}"
 fi
@@ -932,6 +991,7 @@ FACTOR_ENV=(
 )
 
 MONITOR_ENV=(
+  "MOOX_MONITOR_INSTANCE_ID=${MOOX_MONITOR_INSTANCE_ID}"
   "${LEGACY_SERVICE_ENV[@]}"
 )
 
@@ -1802,7 +1862,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
