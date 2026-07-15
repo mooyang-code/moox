@@ -488,6 +488,48 @@ GATEWAY_SERVICE_KEY_FILE="$(expand_local_path "${GATEWAY_SERVICE_KEY_FILE}")"
 GATEWAY_CA_BUNDLE="$(expand_local_path "${GATEWAY_CA_BUNDLE}")"
 read_admin_password
 
+validate_gateway_ca_bundle() {
+  local bundle="$1" tmp count cert fingerprint distinct
+  if grep -Eq -- '-----BEGIN ([^-]* )?PRIVATE KEY-----|-----END ([^-]* )?PRIVATE KEY-----' "${bundle}"; then
+    fail "--gateway-ca-bundle must never contain private-key blocks"
+  fi
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/moox-gateway-ca.XXXXXX")
+  if ! awk -v dir="${tmp}" '
+    /^-----BEGIN CERTIFICATE-----$/ {
+      if (inside) exit 2
+      inside=1; count++; file=sprintf("%s/cert.%06d.pem", dir, count); print > file; next
+    }
+    /^-----END CERTIFICATE-----$/ {
+      if (!inside) exit 2
+      print > file; close(file); inside=0; next
+    }
+    inside { print > file; next }
+    /[^[:space:]]/ { exit 2 }
+    END {
+      if (inside || count < 2) exit 2
+      print count > (dir "/count")
+    }
+  ' "${bundle}"; then
+    rm -rf "${tmp}"
+    fail "--gateway-ca-bundle must contain only complete PEM certificate blocks"
+  fi
+  count=$(cat "${tmp}/count")
+  : >"${tmp}/fingerprints"
+  for cert in "${tmp}"/cert.*.pem; do
+    if ! fingerprint=$(openssl x509 -in "${cert}" -noout -fingerprint -sha256 2>/dev/null); then
+      rm -rf "${tmp}"
+      fail "--gateway-ca-bundle contains a malformed certificate"
+    fi
+    fingerprint=${fingerprint#*=}
+    [[ -n "${fingerprint}" ]] || { rm -rf "${tmp}"; fail "--gateway-ca-bundle contains a certificate without a SHA-256 fingerprint"; }
+    printf '%s\n' "${fingerprint}" >>"${tmp}/fingerprints"
+  done
+  distinct=$(sort -u "${tmp}/fingerprints" | wc -l | tr -d '[:space:]')
+  rm -rf "${tmp}"
+  [[ "${count}" -ge 2 && "${distinct}" -ge 2 ]] || \
+    fail "--gateway-ca-bundle must contain at least two distinct public CA certificates"
+}
+
 HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
 STAGE_DIR="${STAGE_DIR:-${ROOT}/release/deploy-stage/moox}"
@@ -1706,8 +1748,7 @@ prepare_stage() {
   [[ "${gateway_control_secret}" == "$(printf '%s' "${gateway_control_secret}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" && \
      "${gateway_service_secret}" == "$(printf '%s' "${gateway_service_secret}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" ]] || \
     fail "Gateway keys cannot have leading or trailing whitespace"
-  [[ "$(grep -c -- 'BEGIN CERTIFICATE' "${GATEWAY_CA_BUNDLE}")" -ge 2 ]] || fail "--gateway-ca-bundle must contain both nodes' public Caddy roots"
-  ! grep -q -- 'PRIVATE KEY' "${GATEWAY_CA_BUNDLE}" || fail "--gateway-ca-bundle must never contain private keys"
+  validate_gateway_ca_bundle "${GATEWAY_CA_BUNDLE}"
   (umask 077; printf '%s\n' "${gateway_control_secret}" >"${STAGE_DIR}/secrets/gateway-control.key")
   (umask 077; printf '%s\n' "${gateway_service_secret}" >"${STAGE_DIR}/secrets/gateway-service.key")
   {

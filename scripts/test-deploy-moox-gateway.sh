@@ -71,37 +71,61 @@ printf 'control-secret' >"${TMP}/control.key"
 printf 'service-secret' >"${TMP}/service.key"
 chmod 0600 "${TMP}/control.key" "${TMP}/service.key"
 openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=gateway-test \
-  -keyout "${TMP}/private.key" -out "${TMP}/root.crt" -days 1 >/dev/null 2>&1
-cat "${TMP}/root.crt" "${TMP}/root.crt" >"${TMP}/peers.pem"
+  -keyout "${TMP}/private-one.key" -out "${TMP}/root-one.crt" -days 1 >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=gateway-peer-test \
+  -keyout "${TMP}/private-two.key" -out "${TMP}/root-two.crt" -days 1 >/dev/null 2>&1
+cat "${TMP}/root-one.crt" "${TMP}/root-two.crt" >"${TMP}/peers.pem"
 
-"${DEPLOY}" --target localhost --dir "${TMP}/deploy" --stage "${TMP}/stage" \
-  --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
-  --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
-  --node-id gateway-test --gateway-control-url https://admin.example.com \
-  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
-  --gateway-service-key-file "${TMP}/service.key" >/dev/null
+deploy_fixture() {
+  local bundle="$1" suffix="$2"
+  "${DEPLOY}" --target localhost --dir "${TMP}/deploy-${suffix}" --stage "${TMP}/stage-${suffix}" \
+    --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
+    --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
+    --node-id gateway-test --gateway-control-url https://admin.example.com \
+    --gateway-ca-bundle "${bundle}" --gateway-control-key-file "${TMP}/control.key" \
+    --gateway-service-key-file "${TMP}/service.key"
+}
+
+expect_ca_rejected() {
+  local bundle="$1" suffix="$2" message="$3" output
+  if output=$(deploy_fixture "${bundle}" "${suffix}" 2>&1); then
+    fail "Gateway deployment accepted ${suffix} CA bundle"
+  fi
+  grep -Fq -- "${message}" <<<"${output}" || fail "${suffix} CA rejection did not explain: ${message}"
+}
+
+cat "${TMP}/root-one.crt" "${TMP}/root-one.crt" >"${TMP}/duplicate.pem"
+cat "${TMP}/root-one.crt" >"${TMP}/malformed.pem"
+printf '%s\n' '-----BEGIN CERTIFICATE-----' 'not-a-certificate' '-----END CERTIFICATE-----' >>"${TMP}/malformed.pem"
+cat "${TMP}/peers.pem" "${TMP}/private-one.key" >"${TMP}/private.pem"
+expect_ca_rejected "${TMP}/duplicate.pem" duplicate 'at least two distinct public CA certificates'
+expect_ca_rejected "${TMP}/malformed.pem" malformed 'contains a malformed certificate'
+expect_ca_rejected "${TMP}/private.pem" private 'must never contain private-key blocks'
+
+deploy_fixture "${TMP}/peers.pem" valid >/dev/null
+DEPLOYED="${TMP}/deploy-valid"
 
 for script in start.sh stop.sh restart.sh status.sh healthcheck.sh; do
-  bash -n "${TMP}/deploy/${script}" || fail "generated ${script} is invalid"
+  bash -n "${DEPLOYED}/${script}" || fail "generated ${script} is invalid"
 done
-[[ -x "${TMP}/deploy/bin/moox-gateway" ]] || fail 'Gateway binary was not staged'
-[[ -f "${TMP}/deploy/gateway/config/app.yaml" ]] || fail 'Gateway config was not staged'
-grep -Fq 'id: gateway-test' "${TMP}/deploy/gateway/config/app.yaml" || fail 'node ID was not rendered'
-grep -Fq 'base_url: https://admin.example.com' "${TMP}/deploy/gateway/config/app.yaml" || fail 'control URL was not rendered'
-[[ ! -e "${TMP}/deploy/admin" && ! -e "${TMP}/deploy/bin/moox-admin" ]] || fail 'no-admin staged Admin artifacts'
-[[ ! -e "${TMP}/deploy/bin/moox-web-host" && ! -e "${TMP}/deploy/secrets/admin-jwt.env" ]] || fail 'no-admin staged browser or Admin credentials'
-cmp -s "${TMP}/peers.pem" "${TMP}/deploy/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
-! grep -Rqs -- 'PRIVATE KEY' "${TMP}/deploy/certs" || fail 'a private CA key was staged'
+[[ -x "${DEPLOYED}/bin/moox-gateway" ]] || fail 'Gateway binary was not staged'
+[[ -f "${DEPLOYED}/gateway/config/app.yaml" ]] || fail 'Gateway config was not staged'
+grep -Fq 'id: gateway-test' "${DEPLOYED}/gateway/config/app.yaml" || fail 'node ID was not rendered'
+grep -Fq 'base_url: https://admin.example.com' "${DEPLOYED}/gateway/config/app.yaml" || fail 'control URL was not rendered'
+[[ ! -e "${DEPLOYED}/admin" && ! -e "${DEPLOYED}/bin/moox-admin" ]] || fail 'no-admin staged Admin artifacts'
+[[ ! -e "${DEPLOYED}/bin/moox-web-host" && ! -e "${DEPLOYED}/secrets/admin-jwt.env" ]] || fail 'no-admin staged browser or Admin credentials'
+cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
+! grep -Rqs -- 'PRIVATE KEY' "${DEPLOYED}/certs" || fail 'a private CA key was staged'
 for secret in gateway-control.env gateway-service.env gateway-control.key gateway-service.key; do
-  mode=$(stat -f '%Lp' "${TMP}/deploy/secrets/${secret}" 2>/dev/null || stat -c '%a' "${TMP}/deploy/secrets/${secret}")
+  mode=$(stat -f '%Lp' "${DEPLOYED}/secrets/${secret}" 2>/dev/null || stat -c '%a' "${DEPLOYED}/secrets/${secret}")
   [[ "${mode}" == 600 ]] || fail "${secret} mode is ${mode}, want 600"
 done
-grep -Fq 'start_admin' "${TMP}/deploy/start.sh" || fail 'central lifecycle function was omitted'
-grep -Fq 'start_gateway' "${TMP}/deploy/start.sh" || fail 'Gateway lifecycle function was omitted'
-grep -Fq 'start_monitor' "${TMP}/deploy/start.sh" || fail 'Monitor lifecycle function was omitted'
-admin_line=$(grep -n 'start_admin$' "${TMP}/deploy/start.sh" | tail -1 | cut -d: -f1)
-gateway_line=$(grep -n 'start_gateway$' "${TMP}/deploy/start.sh" | head -1 | cut -d: -f1)
-monitor_line=$(grep -n 'start_monitor$' "${TMP}/deploy/start.sh" | tail -1 | cut -d: -f1)
+grep -Fq 'start_admin' "${DEPLOYED}/start.sh" || fail 'central lifecycle function was omitted'
+grep -Fq 'start_gateway' "${DEPLOYED}/start.sh" || fail 'Gateway lifecycle function was omitted'
+grep -Fq 'start_monitor' "${DEPLOYED}/start.sh" || fail 'Monitor lifecycle function was omitted'
+admin_line=$(grep -n 'start_admin$' "${DEPLOYED}/start.sh" | tail -1 | cut -d: -f1)
+gateway_line=$(grep -n 'start_gateway$' "${DEPLOYED}/start.sh" | head -1 | cut -d: -f1)
+monitor_line=$(grep -n 'start_monitor$' "${DEPLOYED}/start.sh" | tail -1 | cut -d: -f1)
 (( admin_line < gateway_line && gateway_line < monitor_line )) || fail 'startup order is not Admin -> Gateway -> Monitor'
 
 printf 'PASS: Gateway build, package, lifecycle, secret, CA, and Caddy contracts\n'
