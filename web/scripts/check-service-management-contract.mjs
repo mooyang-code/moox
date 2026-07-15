@@ -17,8 +17,8 @@ const required = [
 const forbidden = ['<h2>服务管理</h2>', 'type="rounded"', '<a-tabs'];
 const missing = required.filter((token) => !source.includes(token));
 const remaining = forbidden.filter((token) => source.includes(token));
-const nodeRequired = ['row-key="node_id"', '查看路由', 'gatewayHashState', 'icon-eye', 'icon-edit', '@before-ok="submit"', 'onActivated', 'createLatestRequestGuard'];
-const instanceRequired = [':row-key="serviceDeploymentRowKey"', 'filters.node_id', 'gateway_service_id', 'gateway_enabled', 'validateGatewayDeployment', '@before-ok="submit"', 'createLatestRequestGuard'];
+const nodeRequired = ['row-key="node_id"', '查看路由', 'gatewayHashState', 'icon-eye', 'icon-edit', '@before-ok="submit"', 'onActivated', 'createLatestRequestGuard', 'reportControlError'];
+const instanceRequired = [':row-key="serviceDeploymentRowKey"', 'filters.node_id', 'gateway_service_id', 'gateway_enabled', 'validateGatewayDeployment', '@before-ok="submit"', 'createLatestRequestGuard', 'reportControlError'];
 const instanceForbidden = ['healthLabel', 'monitorApi', 'loadLatestHealthResults'];
 const missingNode = nodeRequired.filter((token) => !nodes.includes(token));
 const missingInstance = instanceRequired.filter((token) => !instances.includes(token));

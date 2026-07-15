@@ -153,6 +153,7 @@
 <script setup lang="ts">
 import { onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import { reportControlError } from '@/api/admin/http';
 import { createGatewayNode, deleteGatewayNode, getGatewayNodeRoutes, listGatewayNodes, updateGatewayNode } from '@/api/admin/sysdeploy';
 import type { GatewayNode, GatewayNodeInput, GatewayRoute } from '@/api/admin/types';
 import { listSSHHosts, type SSHHost } from '@/api/modules/ssh';
@@ -194,7 +195,8 @@ async function load() {
     rows.value = nodeRsp.nodes || [];
     hosts.value = hostRsp.hosts || [];
     applyPageResult(pagination, nodeRsp.page_result);
-  } catch {
+  } catch (error) {
+    reportControlError(error);
     // The shared API client reports the error; keep the last valid snapshot visible.
   } finally {
     if (loadGuard.isCurrent(generation)) loading.value = false;
@@ -222,15 +224,27 @@ async function submit() {
     else await createGatewayNode({ ...form });
     Message.success('网关节点已保存');
     await load();
-  });
+  }, reportControlError);
   submitting.value = false;
   return result;
 }
-async function remove(node: GatewayNode) { await deleteGatewayNode(node.node_id); Message.success('网关节点已删除'); await load(); }
+async function remove(node: GatewayNode) {
+  try {
+    await deleteGatewayNode(node.node_id);
+    Message.success('网关节点已删除');
+    await load();
+  } catch (error) {
+    reportControlError(error);
+  }
+}
 async function openRoutes(node: GatewayNode) {
-  const rsp = await getGatewayNodeRoutes(node.node_id);
-  Object.assign(routeSnapshot, { node_id: rsp.node_id, generated_at: rsp.generated_at, disabled: rsp.disabled, routes: rsp.routes || [] });
-  routesVisible.value = true;
+  try {
+    const rsp = await getGatewayNodeRoutes(node.node_id);
+    Object.assign(routeSnapshot, { node_id: rsp.node_id, generated_at: rsp.generated_at, disabled: rsp.disabled, routes: rsp.routes || [] });
+    routesVisible.value = true;
+  } catch (error) {
+    reportControlError(error);
+  }
 }
 function reloadFirstPage() { pagination.current = 1; void load(); }
 function onPageChange(page: number) { pagination.current = page; void load(); }

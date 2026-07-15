@@ -11,6 +11,14 @@ const adminClient = axios.create({
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
+const reportedErrors = new WeakSet<object>();
+
+export function reportControlError(error: unknown) {
+  if (typeof error === 'object' && error !== null && reportedErrors.has(error)) return;
+  const message = error instanceof Error ? error.message : String(error || 'Control 请求失败');
+  Message.error(message);
+  if (typeof error === 'object' && error !== null) reportedErrors.add(error);
+}
 
 function readAccessTokenFromConfig(config?: AxiosRequestConfig): string {
   const headers = (config?.headers || {}) as Record<string, string | undefined>;
@@ -56,7 +64,8 @@ adminClient.interceptors.response.use(
   (error) => {
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
     const message = data?.ret_info?.msg || error?.message || 'Control 请求失败';
-    Message.error(message);
-    return Promise.reject(new Error(message));
+    const reportedError = new Error(message);
+    reportControlError(reportedError);
+    return Promise.reject(reportedError);
   },
 );

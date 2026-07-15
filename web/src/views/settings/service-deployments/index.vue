@@ -168,6 +168,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import { reportControlError } from '@/api/admin/http';
 import { createServiceDeployment, deleteServiceDeployment, listGatewayNodes, listServiceDeployments, updateServiceDeployment } from '@/api/admin/sysdeploy';
 import type { GatewayNode, ServiceDeployment, ServiceDeploymentInput } from '@/api/admin/types';
 import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/views/data/shared/metadata-utils';
@@ -229,7 +230,8 @@ async function load() {
     rows.value = rsp.deployments || [];
     nodes.value = nodesRsp.nodes || [];
     applyPageResult(pagination, rsp.page_result);
-  } catch {
+  } catch (error) {
+    reportControlError(error);
     // The shared API client reports the error; keep the last valid snapshot visible.
   } finally {
     if (loadGuard.isCurrent(generation)) loading.value = false;
@@ -303,15 +305,19 @@ async function submit() {
     if (payload.service_name.startsWith('storage_')) Message.warning('服务部署已保存；storage 变更后请同步检查主存节点拓扑');
     else Message.success('服务部署信息已保存');
     await load();
-  });
+  }, reportControlError);
   submitting.value = false;
   return result;
 }
 
 async function remove(record: ServiceDeployment) {
-  await deleteServiceDeployment(record.node_id, record.service_name);
-  Message.success('服务部署信息已删除');
-  await load();
+  try {
+    await deleteServiceDeployment(record.node_id, record.service_name);
+    Message.success('服务部署信息已删除');
+    await load();
+  } catch (error) {
+    reportControlError(error);
+  }
 }
 
 function reloadFirstPage() {

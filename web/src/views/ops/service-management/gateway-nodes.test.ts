@@ -135,5 +135,9 @@ describe('gateway node and service instance contracts', () => {
     expect(nodesSource).toContain('stopRefreshTimer');
     expect(instancesSource).not.toContain('healthLabel');
     expect(instancesSource).not.toContain('monitorApi');
+    expect(nodesSource).toContain('reportControlError');
+    expect(instancesSource).toContain('reportControlError');
+    expect(nodesSource).toContain('}, reportControlError);');
+    expect(instancesSource).toContain('}, reportControlError);');
   });
 });
