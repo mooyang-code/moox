@@ -40,6 +40,7 @@ jobs:
       GOPROXY: https://mirrors.tencent.com/go,direct
       GOPRIVATE: ""
       GONOSUMDB: ""
+      PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish_release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,6 +70,16 @@ jobs:
               --generate-notes \
               --title "MooX ${RELEASE_TAG}"
           fi
+      - name: Reclaim runner workspace before deployment
+        if: github.event_name == 'push' || inputs.deploy_production
+        run: |
+          rm -rf "release/moox-${RELEASE_TAG}-linux-amd64"
+          rm -rf web/node_modules web/dist
+          rm -rf /home/ubuntu/.cache/go-build
+          if [[ "${PUBLISH_RELEASE}" != "true" ]]; then
+            rm -f "release/moox-${RELEASE_TAG}-linux-amd64.tar.gz"
+          fi
+          df -h .
       - name: Deploy to 106.53.107.122
         if: github.event_name == 'push' || inputs.deploy_production
         run: |
