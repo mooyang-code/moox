@@ -21,25 +21,6 @@
 
     <!-- Toolbar -->
     <div class="toolbar">
-      <div class="toolbar-left">
-        <a-select
-          v-model="selectedHostId"
-          placeholder="选择主机连接..."
-          style="width: 240px"
-          allow-search
-          allow-clear
-          :loading="hostsLoading"
-          @change="onHostSelected"
-        >
-          <a-option
-            v-for="host in hostList"
-            :key="host.id"
-            :value="host.id"
-          >
-            {{ host.name }} ({{ host.address }}:{{ host.port }})
-          </a-option>
-        </a-select>
-      </div>
       <div class="toolbar-right">
         <a-space>
           <a-tooltip content="重连">
@@ -103,7 +84,7 @@
       <div v-if="tabs.length === 0" class="terminal-placeholder">
         <div class="placeholder-content">
           <icon-desktop style="font-size: 48px; color: var(--color-text-4)" />
-          <p>请从上方选择主机以建立 SSH 连接</p>
+          <p>请从主机列表点击连接以建立 SSH 连接</p>
         </div>
       </div>
     </div>
@@ -131,37 +112,17 @@ import { AttachAddon } from '@xterm/addon-attach';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import {
-  listSSHHosts,
   createSSHSession,
   disconnectSSHSession,
   resizeSSHTerminal,
   getSSHWebSocketUrl,
   getSSHHostDetail,
-  getOnlineSessions,
   type SSHHost,
 } from '@/api/modules/ssh';
 import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
 
 const route = useRoute();
 const props = defineProps<{ initialHostId?: number; disconnectOnUnmount?: boolean }>();
-
-// ---------- Host list ----------
-
-const hostList = ref<SSHHost[]>([]);
-const hostsLoading = ref(false);
-const selectedHostId = ref<number | undefined>(undefined);
-
-const fetchHosts = async () => {
-  hostsLoading.value = true;
-  try {
-    const res = await listSSHHosts({ limit: 200 });
-    hostList.value = res.hosts ?? [];
-  } catch {
-    Message.error('获取主机列表失败');
-  } finally {
-    hostsLoading.value = false;
-  }
-};
 
 // ---------- Tab management ----------
 
@@ -281,9 +242,6 @@ const connectToHost = async (hostId: number) => {
   tabs.value.push(tab);
   activeTabId.value = sessionId;
 
-  // Update selected host in dropdown
-  selectedHostId.value = hostId;
-
   // Wait for DOM to render
   await nextTick();
 
@@ -364,9 +322,6 @@ const switchTab = async (tabId: string) => {
 
   const tab = tabs.value.find((t) => t.id === tabId);
   if (tab) {
-    // Update selected host in dropdown
-    selectedHostId.value = tab.hostId;
-
     if (tab.fitAddon && tab.terminal) {
       try {
         tab.fitAddon.fit();
@@ -416,9 +371,6 @@ const closeTab = async (tabId: string) => {
       await nextTick();
       const newTab = tabs.value[newIndex];
       if (newTab) {
-        // Update selected host in dropdown
-        selectedHostId.value = newTab.hostId;
-
         if (newTab.fitAddon) {
           try {
             newTab.fitAddon.fit();
@@ -431,19 +383,11 @@ const closeTab = async (tabId: string) => {
       }
     } else {
       activeTabId.value = '';
-      selectedHostId.value = undefined;
     }
   }
 };
 
 // ---------- Toolbar actions ----------
-
-const onHostSelected = (hostId: any) => {
-  if (!hostId) return;
-  connectToHost(Number(hostId));
-  // Reset selection so user can open the same host again
-  selectedHostId.value = undefined;
-};
 
 const reconnect = async () => {
   const tab = activeTab.value;
@@ -514,8 +458,6 @@ const openFileManager = () => {
 // ---------- Lifecycle ----------
 
 onMounted(async () => {
-  await fetchHosts();
-
   window.addEventListener('resize', handleWindowResize);
 
   // Priority 1: Auto-connect if hostId is provided in query
@@ -524,30 +466,7 @@ onMounted(async () => {
     const hostId = Number(hostIdQuery);
     if (!isNaN(hostId) && hostId > 0) {
       await connectToHost(hostId);
-      return;
     }
-  }
-
-  // Priority 2: Try to connect to the most recent active host (create new session)
-  try {
-    const sessionsRes = await getOnlineSessions();
-    const sessions = sessionsRes.sessions;
-
-    if (sessions && sessions.length > 0) {
-      // Sort by last_active_time (most recent first)
-      const sortedSessions = [...sessions].sort((a, b) => {
-        const timeA = new Date(a.last_active_time).getTime();
-        const timeB = new Date(b.last_active_time).getTime();
-        return timeB - timeA;
-      });
-
-      // Connect to the most recent active host (create a new session)
-      const mostRecentSession = sortedSessions[0];
-      await connectToHost(mostRecentSession.host_id);
-    }
-  } catch (err) {
-    // Silently ignore errors - just keep the terminal empty
-    console.warn('Failed to fetch online sessions:', err);
   }
 });
 
@@ -681,7 +600,7 @@ onUnmounted(() => {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   height: 44px;
   min-height: 44px;
   padding: 0 12px;

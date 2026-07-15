@@ -72,11 +72,12 @@
               <span v-else>-</span>
             </template>
           </a-table-column>
-          <a-table-column title="操作" :width="200" align="center" fixed="right">
+          <a-table-column title="操作" :width="260" align="center" fixed="right">
             <template #cell="{ record }">
               <a-space>
                 <a-link v-if="record.monitorOnly" type="primary" @click="onConfigure(record)">配置 SSH</a-link>
                 <a-link v-else type="primary" @click="onConnect(record)">连接</a-link>
+                <a-link v-if="!record.monitorOnly" @click="onFileManage(record)">文件管理</a-link>
                 <a-link v-if="!record.monitorOnly" @click="onEdit(record)">编辑</a-link>
                 <a-popconfirm
                   content="确定要删除该主机吗？删除后将无法恢复。"
@@ -260,7 +261,7 @@ import PickColors from 'vue-pick-colors';
 
 const router = useRouter();
 const props = defineProps<{ embedded?: boolean; monitorByHostId?: Record<number, HostMetrics | undefined>; monitorOnlyHosts?: HostMetrics[] }>();
-const emit = defineEmits<{ connect: [hostId: number] }>();
+const emit = defineEmits<{ connect: [hostId: number]; fileManage: [hostId: number] }>();
 
 // ---------- 字体选项 ----------
 const fontOptions = ['Menlo', 'Consolas', 'Monaco', 'Courier New', 'Source Code Pro', 'monospace'];
@@ -434,6 +435,11 @@ const onConnect = (record: SSHHost) => {
     path: '/ops/hosts',
     query: { hostId: String(record.id) },
   });
+};
+
+const onFileManage = (record: SSHHost) => {
+  if (record.id === undefined) return;
+  emit('fileManage', record.id);
 };
 
 const onConfigure = (record: DisplaySSHHost) => {

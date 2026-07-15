@@ -78,9 +78,9 @@ export const systemMenu = [
   menu("0502", "05", "/trading/positions", "trading-positions", "trading-positions", "trading/position-detail/position-detail", 2),
   menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 3),
 
-  directory("06", "0", "/ops/services", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
-  menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 1, { svgIcon: "cloud-server", icon: "" }),
-  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 2, { svgIcon: "computer", icon: "" }),
+  directory("06", "0", "/ops/hosts", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
+  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1, { svgIcon: "computer", icon: "" }),
+  menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 2, { svgIcon: "cloud-server", icon: "" }),
   directory("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", 3),
   menu("060601", "0606", "/ops/storage/nodes", "ops-storage-nodes", "ops-storage-nodes", "ops/storage/nodes", 1),
   menu("060602", "0606", "/ops/storage/routes", "ops-storage-routes", "ops-storage-routes", "ops/storage/routes", 2),

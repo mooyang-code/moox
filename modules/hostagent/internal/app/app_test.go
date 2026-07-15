@@ -59,6 +59,11 @@ func TestNew_NilConfig_ShouldReturnError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestResolveHostName_ShouldPreferConfiguredName(t *testing.T) {
+	assert.Equal(t, "腾讯云-香港", resolveHostName("VM-32-13-ubuntu", "腾讯云-香港"))
+	assert.Equal(t, "VM-32-13-ubuntu", resolveHostName("VM-32-13-ubuntu", ""))
+}
+
 func TestNew_UnsupportedPlatform_ShouldReturnError(t *testing.T) {
 	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
 		t.Skip("linux amd64/arm64 supports New")

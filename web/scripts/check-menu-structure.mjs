@@ -67,11 +67,12 @@ assert(dataCollection.path === '/collector/datasets', 'compute-collector default
 assert(factorCompute.parentId === '0', 'factor-compute must be a root menu');
 assert(factorCompute.sort > dataCollection.sort, 'factor-compute must appear after data collection');
 assert(factorCompute.sort < trading.sort, 'factor-compute must appear before trading');
-assert(ops.path === '/ops/services', 'ops default path must be /ops/services');
+assert(ops.path === '/ops/hosts', 'ops default path must be /ops/hosts');
 const services = findMenu('ops-services');
 const hosts = findMenu('ops-hosts');
 assert(services.parentId === ops.id, 'ops-services must be under ops');
 assert(hosts.parentId === ops.id, 'ops-hosts must be under ops');
+assert(hosts.sort < services.sort, 'host workbench must appear before service management');
 assert(staticMenu.includes('svgIcon: "experiment"'), 'factor icon must be unique');
 assert(staticMenu.includes('svgIcon: "mind-mapping"'), 'strategy icon must be unique');
 assert(!staticMenu.includes('menu("0600", "06", "/ops/service-monitor"'), 'legacy service monitor must not remain visible');

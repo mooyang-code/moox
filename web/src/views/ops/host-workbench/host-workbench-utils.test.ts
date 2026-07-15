@@ -19,4 +19,14 @@ describe('mergeHostWorkbenchRows', () => {
     expect(rows[0].match).toBe('unmatched');
     expect(rows[0].ssh).toBeUndefined();
   });
+
+  it('matches an agent display name to its SSH host', () => {
+    const rows = mergeHostWorkbenchRows(
+      [{ host_id: 'agent-1', host_name: '腾讯云-香港', address: 'agent-1', status: 'online', timestamp: '', cpu: {} as any, memory: {} as any, filesystems: [], disks: [], networks: [], storage_available: true }],
+      [{ id: 1, name: '腾讯云-香港', address: '43.132.204.177' }] as any,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].match).toBe('unique_name');
+    expect(rows[0].ssh?.id).toBe(1);
+  });
 });

@@ -15,6 +15,7 @@ type Config struct {
 	IdentityPath   string        `yaml:"identity_path"`
 	EventBusConfig string        `yaml:"eventbus_config"`
 	HealthAddr     string        `yaml:"health_addr"`
+	HostName       string        `yaml:"host_name"`
 }
 type EventBusConfig struct {
 	Version       int      `yaml:"version"`
@@ -43,13 +44,18 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("identity_path and eventbus_config are required")
 	}
 	cfg.IdentityPath, cfg.EventBusConfig = Expand(cfg.IdentityPath), Expand(cfg.EventBusConfig)
+	cfg.HostName = strings.TrimSpace(cfg.HostName)
 	return cfg, nil
 }
 
 func LoadEventBus(path string) (EventBusConfig, error) {
 	info, err := os.Lstat(path)
-	if err != nil { return EventBusConfig{}, fmt.Errorf("stat eventbus config: %w", err) }
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 { return EventBusConfig{}, fmt.Errorf("eventbus config must be a regular 0600 file") }
+	if err != nil {
+		return EventBusConfig{}, fmt.Errorf("stat eventbus config: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return EventBusConfig{}, fmt.Errorf("eventbus config must be a regular 0600 file")
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return EventBusConfig{}, fmt.Errorf("read eventbus config: %w", err)
