@@ -52,6 +52,8 @@ STAGE_DEPLOY_LOCK_OWNER_TOKEN=""
 STAGE_DEPLOY_LOCK_OWNER_HOST=""
 STAGE_DEPLOY_LOCK_OWNER_PID=""
 STAGE_DEPLOY_LOCK_OWNER_CREATED_AT=""
+LOCAL_DEPLOY_ARCHIVE=""
+REMOTE_DEPLOY_ARCHIVE=""
 
 usage() {
   cat <<'EOF'
@@ -125,10 +127,23 @@ cleanup_stage_deploy_lock() {
   STAGE_DEPLOY_LOCK_HELD=0
 }
 
+cleanup_deploy_artifacts() {
+  cleanup_stage_deploy_lock
+  if [[ -n "${LOCAL_DEPLOY_ARCHIVE}" ]]; then
+    rm -f "${LOCAL_DEPLOY_ARCHIVE}"
+    LOCAL_DEPLOY_ARCHIVE=""
+  fi
+  if [[ -n "${REMOTE_DEPLOY_ARCHIVE}" && -n "${TARGET}" ]] && ! is_local_target; then
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" \
+      "rm -f -- $(shell_quote "${REMOTE_DEPLOY_ARCHIVE}")" >/dev/null 2>&1 || true
+    REMOTE_DEPLOY_ARCHIVE=""
+  fi
+}
+
 # The lock lives beside (not inside) STAGE_DIR, so prepare_stage cannot remove
 # it. Normal exits remove only the matching owner token; interrupted deploys
 # leave a stale lock that operators must remove after confirming no owner runs.
-trap cleanup_stage_deploy_lock EXIT
+trap cleanup_deploy_artifacts EXIT
 
 read_stage_deploy_lock_owner() {
   local owner="$1" key value token_count=0 host_count=0 pid_count=0 created_count=0
@@ -249,6 +264,42 @@ validate_cloud_account_id_arg() {
     fail "cloud account ID must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
 }
 
+validate_gateway_control_url() {
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate --gateway-control-url"
+  python3 - "$1" <<'PY'
+import ipaddress
+import sys
+from urllib.parse import urlsplit
+
+value = sys.argv[1]
+if not value or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    raise SystemExit(1)
+try:
+    parsed = urlsplit(value)
+    port = parsed.port
+except ValueError:
+    raise SystemExit(1)
+if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    raise SystemExit(1)
+if parsed.netloc.endswith(":") or "\\" in parsed.netloc:
+    raise SystemExit(1)
+if parsed.username is not None or parsed.password is not None:
+    raise SystemExit(1)
+if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+    raise SystemExit(1)
+if port is not None and not 1 <= port <= 65535:
+    raise SystemExit(1)
+if parsed.scheme == "http":
+    host = parsed.hostname
+    if host.lower() != "localhost":
+        try:
+            if not ipaddress.ip_address(host).is_loopback:
+                raise SystemExit(1)
+        except ValueError:
+            raise SystemExit(1)
+PY
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)
@@ -362,7 +413,7 @@ done
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
 [[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"
 [[ "${NODE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail "--node-id is required and must be a stable identifier"
-[[ "${GATEWAY_CONTROL_URL}" =~ ^https?://[^/]+/?$ ]] || fail "--gateway-control-url must be an HTTP(S) origin"
+validate_gateway_control_url "${GATEWAY_CONTROL_URL}" || fail "--gateway-control-url must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 [[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
 
@@ -542,9 +593,11 @@ build_core_binaries() {
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
   if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-    if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" cli
+    fi
+    if [[ "${WITH_ADMIN}" -eq 1 ]]; then
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" admin
     fi
@@ -657,7 +710,9 @@ patch_configs() {
       "${STAGE_DIR}/admin/config/trpc_go.yaml"
   fi
 
-  perl -0pi -e 's#id:\s*gateway-gz-122#id: '"${NODE_ID}"'#; s#base_url:\s*https://admin\.example\.com#base_url: '"${GATEWAY_CONTROL_URL}"'#; s#hmac_key_file:\s*\./secrets/gateway-control\.key#hmac_key_file: ../../secrets/gateway-control.key#; s#hmac_key_file:\s*\./secrets/gateway-service\.key#hmac_key_file: ../../secrets/gateway-service.key#; s#path:\s*\./data/gateway#path: ../../data/gateway#' \
+  local gateway_control_url_yaml
+  gateway_control_url_yaml=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "${GATEWAY_CONTROL_URL}")
+  GATEWAY_CONTROL_URL_YAML="${gateway_control_url_yaml}" perl -0pi -e 's#id:\s*gateway-gz-122#id: '"${NODE_ID}"'#; s#base_url:\s*https://admin\.example\.com#base_url: $ENV{GATEWAY_CONTROL_URL_YAML}#; s#hmac_key_file:\s*\./secrets/gateway-control\.key#hmac_key_file: ../../secrets/gateway-control.key#; s#hmac_key_file:\s*\./secrets/gateway-service\.key#hmac_key_file: ../../secrets/gateway-service.key#; s#path:\s*\./data/gateway#path: ../../data/gateway#' \
     "${STAGE_DIR}/gateway/config/app.yaml"
   if grep -q '^  ca_file:' "${STAGE_DIR}/gateway/config/app.yaml"; then
     perl -0pi -e 's#^  ca_file:.*#  ca_file: ../../certs/gateway/peers.pem#m' "${STAGE_DIR}/gateway/config/app.yaml"
@@ -739,12 +794,6 @@ HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${ROOT}/secrets/gateway-service.env" ]] || { echo "missing Gateway service credentials" >&2; exit 1; }
 set -a
 source "${ROOT}/secrets/health-auth.env"
-source "${ROOT}/secrets/service-auth.env"
-source "${ROOT}/secrets/gateway-control.env"
-source "${ROOT}/secrets/gateway-service.env"
-if [[ -r "${ROOT}/secrets/admin-jwt.env" ]]; then
-  source "${ROOT}/secrets/admin-jwt.env"
-fi
 if [[ -r "${ROOT}/secrets/cls.env" ]]; then
   source "${ROOT}/secrets/cls.env"
 fi
@@ -758,6 +807,33 @@ fi
 MOOX_GATEWAY_CA_FILE="${ROOT}/certs/gateway/peers.pem"
 export MOOX_SERVICE_GATEWAY_CA_FILE MOOX_SERVICE_GATEWAY_CA_PEM_B64 MOOX_GATEWAY_CA_FILE
 set +a
+
+read_env_value() {
+  local file="$1" name="$2" value
+  value=$(bash -c 'set -u; source "$1"; printf "%s" "${!2-}"' _ "${file}" "${name}")
+  [[ -n "${value}" ]] || { echo "missing ${name} in ${file}" >&2; exit 1; }
+  printf '%s' "${value}"
+}
+
+GATEWAY_CONTROL_ENV=(
+  "MOOX_GATEWAY_CONTROL_KEY_ID=$(read_env_value "${ROOT}/secrets/gateway-control.env" MOOX_GATEWAY_CONTROL_KEY_ID)"
+  "MOOX_GATEWAY_CONTROL_SECRET_KEY=$(read_env_value "${ROOT}/secrets/gateway-control.env" MOOX_GATEWAY_CONTROL_SECRET_KEY)"
+)
+GATEWAY_SERVICE_ENV=(
+  "MOOX_GATEWAY_SERVICE_KEY_ID=$(read_env_value "${ROOT}/secrets/gateway-service.env" MOOX_GATEWAY_SERVICE_KEY_ID)"
+  "MOOX_GATEWAY_SERVICE_SECRET_KEY=$(read_env_value "${ROOT}/secrets/gateway-service.env" MOOX_GATEWAY_SERVICE_SECRET_KEY)"
+  "MOOX_GATEWAY_CA_FILE=${MOOX_GATEWAY_CA_FILE}"
+)
+LEGACY_SERVICE_ENV=(
+  "MOOX_SERVICE_AUTH_VERSION=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_VERSION)"
+  "MOOX_SERVICE_AUTH_ACCESS_KEY=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_ACCESS_KEY)"
+  "MOOX_SERVICE_AUTH_SECRET_KEY=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_SECRET_KEY)"
+  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_EXPIRE_SECONDS)"
+)
+ADMIN_SECRET_ENV=("${GATEWAY_CONTROL_ENV[@]}")
+if [[ -r "${ROOT}/secrets/admin-jwt.env" ]]; then
+  ADMIN_SECRET_ENV+=("MOOX_ADMIN_JWT_SECRET_KEY=$(read_env_value "${ROOT}/secrets/admin-jwt.env" MOOX_ADMIN_JWT_SECRET_KEY)")
+fi
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
@@ -778,6 +854,12 @@ mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/event
 
 source "${ROOT}/lib/loopback-listeners.sh"
 validate_moox_loopback_listeners
+process_matches_service() {
+  local pid="$1" name="$2" command expected
+  expected="${ROOT}/bin/moox-${name}"
+  command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
+  [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
+}
 stop_if_running() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
@@ -788,12 +870,16 @@ stop_if_running() {
   fi
   local pid
   pid="$(cat "${pid_file}" 2>/dev/null || true)"
-  if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
+  if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1 && process_matches_service "${pid}" "${name}"; then
     echo "stopping existing ${name} pid=${pid}"
     kill "${pid}" 2>/dev/null || true
     sleep 1
+  elif [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
+    echo "${name}: stale pid ${pid} belongs to another process; removing pid file" >&2
+    rm -f "${pid_file}"
+    return
   fi
-  if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
+  if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1 && process_matches_service "${pid}" "${name}"; then
     kill -9 "${pid}" 2>/dev/null || true
   fi
   pkill -f -- "${pattern}" 2>/dev/null || true
@@ -835,27 +921,18 @@ STORAGE_SCHEMA_ENV=(
 
 COLLECTOR_ENV=(
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
-  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v2}"
-  "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}"
+  "${LEGACY_SERVICE_ENV[@]}"
 )
 
 FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
   "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
-  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v2}"
-  "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}"
+  "${LEGACY_SERVICE_ENV[@]}"
 )
 
 MONITOR_ENV=(
-  "MOOX_SERVICE_AUTH_VERSION=${MOOX_SERVICE_AUTH_VERSION:-moox-auth-v2}"
-  "MOOX_SERVICE_AUTH_ACCESS_KEY=${MOOX_SERVICE_AUTH_ACCESS_KEY:-moox-service}"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=${MOOX_SERVICE_AUTH_SECRET_KEY:-}"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=${MOOX_SERVICE_AUTH_EXPIRE_SECONDS:-60}"
+  "${LEGACY_SERVICE_ENV[@]}"
 )
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -1167,7 +1244,7 @@ start_admin() {
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   start_service "admin" "${ROOT}/admin" \
-    env "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
+    env "${ADMIN_SECRET_ENV[@]}" "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }
 
@@ -1197,7 +1274,7 @@ start_collector() {
   fi
   init_collector_schema
   start_service "collector" "${ROOT}/collector" \
-    env "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
+    env "${GATEWAY_SERVICE_ENV[@]}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
 start_factor() {
@@ -1208,7 +1285,7 @@ start_factor() {
   wait_factor_nats
   ensure_factor_python
   start_service "factor" "${ROOT}/factor" \
-    env "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
+    env "${GATEWAY_SERVICE_ENV[@]}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
 }
 
 start_monitor() {
@@ -1220,7 +1297,7 @@ start_monitor() {
   apply_host_metadata
   init_monitor_schema
   start_service "monitor" "${ROOT}/monitor" \
-    env "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
+    env "${GATEWAY_SERVICE_ENV[@]}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
@@ -1350,6 +1427,13 @@ WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 
+process_matches_service() {
+  local pid="$1" name="$2" command expected
+  expected="${ROOT}/bin/moox-${name}"
+  command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
+  [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
+}
+
 stop_service() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
@@ -1373,7 +1457,7 @@ stop_service() {
     fi
     return
   fi
-  if ps -p "${pid}" >/dev/null 2>&1; then
+  if ps -p "${pid}" >/dev/null 2>&1 && process_matches_service "${pid}" "${name}"; then
     echo "stopping ${name} pid=${pid}"
     kill "${pid}" 2>/dev/null || true
     for _ in 1 2 3 4 5; do
@@ -1382,9 +1466,13 @@ stop_service() {
       fi
       sleep 1
     done
-    if ps -p "${pid}" >/dev/null 2>&1; then
+    if ps -p "${pid}" >/dev/null 2>&1 && process_matches_service "${pid}" "${name}"; then
       kill -9 "${pid}" 2>/dev/null || true
     fi
+  elif ps -p "${pid}" >/dev/null 2>&1; then
+    echo "${name}: stale pid ${pid} belongs to another process; removing pid file"
+    rm -f "${pid_file}"
+    return
   else
     echo "${name}: stale pid ${pid}"
   fi
@@ -1792,10 +1880,12 @@ prepare_stage() {
 
   copy_required_binary "moox-gateway"
   copy_required_binary "moox-gateway-cli"
+  if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
+    copy_required_binary "moox-cli"
+  fi
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     copy_required_binary "moox-admin"
     copy_required_binary "moox-admin-cli"
-    copy_required_binary "moox-cli"
   fi
   if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
     copy_required_binary "moox-archive"
@@ -2066,13 +2156,21 @@ sync_local_stage() {
 }
 
 sync_remote_stage() {
-  local archive="${ROOT}/release/deploy-stage/moox-${TARGET_GOOS}-${TARGET_GOARCH}.tar.gz"
-  mkdir -p "$(dirname "${archive}")"
+  local archive remote_archive
+  umask 077
+  LOCAL_DEPLOY_ARCHIVE=$(mktemp "${TMPDIR:-/tmp}/moox-deploy-${TARGET_GOOS}-${TARGET_GOARCH}.XXXXXX")
+  archive="${LOCAL_DEPLOY_ARCHIVE}"
   tar -C "${STAGE_DIR}" -czf "${archive}" .
+  chmod 0600 "${archive}"
 
-  local remote_archive="/tmp/moox-deploy-${TARGET_GOOS}-${TARGET_GOARCH}.tar.gz"
-  log "upload ${archive} to ${TARGET}:${remote_archive}"
-  scp "${archive}" "${TARGET}:${remote_archive}"
+  remote_archive=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" \
+    'umask 077; archive=$(mktemp /tmp/moox-deploy.XXXXXX); chmod 0600 "$archive"; printf "%s\n" "$archive"')
+  [[ "${remote_archive}" =~ ^/tmp/moox-deploy\.[A-Za-z0-9]+$ ]] || \
+    fail "remote host returned an invalid deployment archive path"
+  REMOTE_DEPLOY_ARCHIVE="${remote_archive}"
+  log "upload secure deployment archive to ${TARGET}:${remote_archive}"
+  scp -p "${archive}" "${TARGET}:${remote_archive}"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
   local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
@@ -2253,6 +2351,9 @@ EOF
     ADMIN_PASSWORD=""
   fi
   log "deployed to ${TARGET}:${DEPLOY_DIR}"
+  rm -f "${LOCAL_DEPLOY_ARCHIVE}"
+  LOCAL_DEPLOY_ARCHIVE=""
+  REMOTE_DEPLOY_ARCHIVE=""
 }
 
 log "target=${TARGET} dir=${DEPLOY_DIR} platform=${TARGET_GOOS}/${TARGET_GOARCH}"

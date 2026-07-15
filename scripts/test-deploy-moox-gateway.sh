@@ -35,6 +35,13 @@ assert_contains "${DEPLOY}" 'gateway) url=http://127.0.0.1:11012/readyz'
 assert_contains "${DEPLOY}" 'start_service "gateway"'
 assert_contains "${DEPLOY}" 'stop_service "gateway"'
 assert_contains "${DEPLOY}" 'services+=(gateway)'
+assert_absent "${DEPLOY}" 'source "${ROOT}/secrets/gateway-control.env"'
+assert_absent "${DEPLOY}" 'source "${ROOT}/secrets/gateway-service.env"'
+assert_contains "${DEPLOY}" 'env "${ADMIN_SECRET_ENV[@]}"'
+assert_contains "${DEPLOY}" 'env "${GATEWAY_SERVICE_ENV[@]}" "${MONITOR_ENV[@]}"'
+assert_contains "${DEPLOY}" 'LOCAL_DEPLOY_ARCHIVE=$(mktemp'
+assert_contains "${DEPLOY}" 'REMOTE_DEPLOY_ARCHIVE'
+assert_contains "${DEPLOY}" 'cleanup_deploy_artifacts'
 
 assert_contains "${CADDY}" 'handle /api/gateway-control/*'
 assert_contains "${CADDY}" 'reverse_proxy 127.0.0.1:11000'
@@ -52,14 +59,17 @@ assert_contains "${ROOT}/modules/gateway/config/trpc_go.yaml" '127.0.0.1:11012'
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required for the deployment fixture'
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/moox-gateway-deploy.XXXXXX")
 CREATED_BINARIES=()
+TEST_PIDS=()
 cleanup() {
-  local binary
+  local binary pid
+  for pid in ${TEST_PIDS[@]+"${TEST_PIDS[@]}"}; do kill "${pid}" 2>/dev/null || true; done
+  for pid in ${TEST_PIDS[@]+"${TEST_PIDS[@]}"}; do wait "${pid}" 2>/dev/null || true; done
   for binary in ${CREATED_BINARIES[@]+"${CREATED_BINARIES[@]}"}; do rm -f "${binary}"; done
   rm -rf "${TMP}"
 }
 trap cleanup EXIT
 mkdir -p "${ROOT}/bin"
-for name in moox-gateway moox-gateway-cli; do
+for name in moox-gateway moox-gateway-cli moox-cli moox-monitor moox-monitor-cli; do
   binary="${ROOT}/bin/${name}"
   if [[ ! -x "${binary}" ]]; then
     printf '#!/usr/bin/env bash\nexit 0\n' >"${binary}"
@@ -77,11 +87,11 @@ openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=gateway-peer-test \
 cat "${TMP}/root-one.crt" "${TMP}/root-two.crt" >"${TMP}/peers.pem"
 
 deploy_fixture() {
-  local bundle="$1" suffix="$2"
+  local bundle="$1" suffix="$2" control_url="${3:-https://admin.example.com:9527/}"
   "${DEPLOY}" --target localhost --dir "${TMP}/deploy-${suffix}" --stage "${TMP}/stage-${suffix}" \
     --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
     --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
-    --node-id gateway-test --gateway-control-url https://admin.example.com \
+    --node-id gateway-test --gateway-control-url "${control_url}" \
     --gateway-ca-bundle "${bundle}" --gateway-control-key-file "${TMP}/control.key" \
     --gateway-service-key-file "${TMP}/service.key"
 }
@@ -94,6 +104,15 @@ expect_ca_rejected() {
   grep -Fq -- "${message}" <<<"${output}" || fail "${suffix} CA rejection did not explain: ${message}"
 }
 
+expect_url_rejected() {
+  local value="$1" suffix="$2" output
+  if output=$(deploy_fixture "${TMP}/peers.pem" "url-${suffix}" "${value}" 2>&1); then
+    fail "Gateway deployment accepted invalid control URL: ${value}"
+  fi
+  grep -Fq -- '--gateway-control-url must be HTTPS, or loopback HTTP' <<<"${output}" || \
+    fail "invalid control URL rejection was unclear: ${value}"
+}
+
 cat "${TMP}/root-one.crt" "${TMP}/root-one.crt" >"${TMP}/duplicate.pem"
 cat "${TMP}/root-one.crt" >"${TMP}/malformed.pem"
 printf '%s\n' '-----BEGIN CERTIFICATE-----' 'not-a-certificate' '-----END CERTIFICATE-----' >>"${TMP}/malformed.pem"
@@ -101,6 +120,11 @@ cat "${TMP}/peers.pem" "${TMP}/private-one.key" >"${TMP}/private.pem"
 expect_ca_rejected "${TMP}/duplicate.pem" duplicate 'at least two distinct public CA certificates'
 expect_ca_rejected "${TMP}/malformed.pem" malformed 'contains a malformed certificate'
 expect_ca_rejected "${TMP}/private.pem" private 'must never contain private-key blocks'
+expect_url_rejected 'http://example.com:11000' remote-http
+expect_url_rejected 'https://user:pass@example.com' credentials
+expect_url_rejected 'https://example.com?node=other' query
+expect_url_rejected 'https://example.com/#fragment' fragment
+expect_url_rejected $'https://example.com\ninvalid' whitespace
 
 deploy_fixture "${TMP}/peers.pem" valid >/dev/null
 DEPLOYED="${TMP}/deploy-valid"
@@ -111,7 +135,7 @@ done
 [[ -x "${DEPLOYED}/bin/moox-gateway" ]] || fail 'Gateway binary was not staged'
 [[ -f "${DEPLOYED}/gateway/config/app.yaml" ]] || fail 'Gateway config was not staged'
 grep -Fq 'id: gateway-test' "${DEPLOYED}/gateway/config/app.yaml" || fail 'node ID was not rendered'
-grep -Fq 'base_url: https://admin.example.com' "${DEPLOYED}/gateway/config/app.yaml" || fail 'control URL was not rendered'
+grep -Fq 'base_url: "https://admin.example.com:9527/"' "${DEPLOYED}/gateway/config/app.yaml" || fail 'control URL was not safely rendered as YAML'
 [[ ! -e "${DEPLOYED}/admin" && ! -e "${DEPLOYED}/bin/moox-admin" ]] || fail 'no-admin staged Admin artifacts'
 [[ ! -e "${DEPLOYED}/bin/moox-web-host" && ! -e "${DEPLOYED}/secrets/admin-jwt.env" ]] || fail 'no-admin staged browser or Admin credentials'
 cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
@@ -127,5 +151,140 @@ admin_line=$(grep -n 'start_admin$' "${DEPLOYED}/start.sh" | tail -1 | cut -d: -
 gateway_line=$(grep -n 'start_gateway$' "${DEPLOYED}/start.sh" | head -1 | cut -d: -f1)
 monitor_line=$(grep -n 'start_monitor$' "${DEPLOYED}/start.sh" | tail -1 | cut -d: -f1)
 (( admin_line < gateway_line && gateway_line < monitor_line )) || fail 'startup order is not Admin -> Gateway -> Monitor'
+
+# A reused PID must never cause the lifecycle scripts to kill an unrelated process.
+sleep 30 &
+unrelated_pid=$!
+TEST_PIDS+=("${unrelated_pid}")
+mkdir -p "${DEPLOYED}/run"
+printf '%s\n' "${unrelated_pid}" >"${DEPLOYED}/run/gateway.pid"
+"${DEPLOYED}/stop.sh" gateway >/dev/null
+kill -0 "${unrelated_pid}" 2>/dev/null || fail 'Gateway stop killed an unrelated reused PID'
+[[ ! -e "${DEPLOYED}/run/gateway.pid" ]] || fail 'stale reused Gateway PID file was not removed'
+
+# A no-Admin Monitor node still needs moox-cli for metadata apply, and only
+# Monitor (not Gateway) may inherit the cluster service credential.
+"${DEPLOY}" --target localhost --dir "${TMP}/deploy-monitor" --stage "${TMP}/stage-monitor" \
+  --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
+  --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" >/dev/null
+MONITOR_DEPLOY="${TMP}/deploy-monitor"
+[[ -x "${MONITOR_DEPLOY}/bin/moox-cli" ]] || fail 'no-admin Monitor package omitted moox-cli'
+mkdir -p "${TMP}/captures"
+cat >"${MONITOR_DEPLOY}/bin/moox-gateway" <<'SH'
+#!/usr/bin/env bash
+env >"${MOOX_TEST_CAPTURE_DIR}/gateway.env"
+sleep 30
+SH
+cat >"${MONITOR_DEPLOY}/bin/moox-monitor" <<'SH'
+#!/usr/bin/env bash
+env >"${MOOX_TEST_CAPTURE_DIR}/monitor.env"
+sleep 30
+SH
+printf '#!/usr/bin/env bash\nexit 0\n' >"${MONITOR_DEPLOY}/bin/moox-cli"
+printf '#!/usr/bin/env bash\nexit 0\n' >"${MONITOR_DEPLOY}/bin/moox-monitor-cli"
+chmod +x "${MONITOR_DEPLOY}/bin/moox-gateway" "${MONITOR_DEPLOY}/bin/moox-monitor" \
+  "${MONITOR_DEPLOY}/bin/moox-cli" "${MONITOR_DEPLOY}/bin/moox-monitor-cli"
+metadata_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+python3 -m http.server "${metadata_port}" --bind 127.0.0.1 >/dev/null 2>&1 &
+TEST_PIDS+=("$!")
+MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 "${MONITOR_DEPLOY}/start.sh" gateway >/dev/null
+TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/gateway.pid")")
+MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 \
+  MOOX_METRICS_STORAGE_METADATA_URL="http://127.0.0.1:${metadata_port}" \
+  MOOX_METRICS_STORAGE_ROUTE_SEED="${MONITOR_DEPLOY}/examples/metadata-monitor-metrics-local-route.seed.yaml" \
+  MOOX_HOST_STORAGE_ROUTE_SEED="${MONITOR_DEPLOY}/examples/metadata-monitor-host-local-route.seed.yaml" \
+  "${MONITOR_DEPLOY}/start.sh" monitor >/dev/null
+TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/monitor.pid")")
+for _ in $(seq 1 50); do
+  [[ -s "${TMP}/captures/gateway.env" && -s "${TMP}/captures/monitor.env" ]] && break
+  sleep 0.1
+done
+grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=service-secret' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive the Gateway service key'
+! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/monitor.env" || fail 'Monitor inherited the Gateway control key'
+! grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the service key instead of reading its raw key file'
+! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the control key instead of reading its raw key file'
+
+# Remote deployment archives use collision-free 0600 paths and the EXIT trap
+# removes both local and remote copies even when remote extraction fails.
+mkdir -p "${TMP}/fake-bin" "${TMP}/fake-remote"
+cat >"${TMP}/fake-bin/ssh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+cmd=""
+for arg in "$@"; do cmd="${arg}"; done
+case "${cmd}" in
+  *'mktemp /tmp/moox-deploy.XXXXXX'*)
+    local_path=$(mktemp "${FAKE_REMOTE_DIR}/moox-deploy.XXXXXX")
+    chmod 0600 "${local_path}"
+    printf '/tmp/%s\n' "$(basename "${local_path}")" | tee "${FAKE_REMOTE_DIR}/current" >/dev/stdout
+    ;;
+  *'chmod 0600 --'*)
+    remote_path=$(cat "${FAKE_REMOTE_DIR}/current")
+    chmod 0600 "${FAKE_REMOTE_DIR}/$(basename "${remote_path}")"
+    ;;
+  *'bash -s'*)
+    cat >/dev/null
+    remote_path=$(cat "${FAKE_REMOTE_DIR}/current")
+    archive="${FAKE_REMOTE_DIR}/$(basename "${remote_path}")"
+    mode=$(stat -f '%Lp' "${archive}" 2>/dev/null || stat -c '%a' "${archive}")
+    printf '%s %s\n' "${mode}" "${remote_path}" >>"${FAKE_REMOTE_DIR}/observed"
+    if [[ "${FAKE_REMOTE_SUCCESS:-0}" == 1 ]]; then
+      rm -f "${archive}"
+      exit 0
+    fi
+    exit 23
+    ;;
+  *'rm -f --'*)
+    if [[ -f "${FAKE_REMOTE_DIR}/current" ]]; then
+      remote_path=$(cat "${FAKE_REMOTE_DIR}/current")
+      rm -f "${FAKE_REMOTE_DIR}/$(basename "${remote_path}")"
+    fi
+    ;;
+esac
+SH
+cat >"${TMP}/fake-bin/scp" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=""
+destination=""
+for arg in "$@"; do
+  [[ "${arg}" == -* ]] && continue
+  if [[ -z "${source_path}" ]]; then source_path="${arg}"; else destination="${arg}"; fi
+done
+remote_path=${destination#*:}
+cp -p "${source_path}" "${FAKE_REMOTE_DIR}/$(basename "${remote_path}")"
+printf '%s\n' "${source_path}" >>"${FAKE_REMOTE_DIR}/local-paths"
+SH
+chmod +x "${TMP}/fake-bin/ssh" "${TMP}/fake-bin/scp"
+for attempt in 1 2; do
+  if PATH="${TMP}/fake-bin:${PATH}" FAKE_REMOTE_DIR="${TMP}/fake-remote" \
+    "${DEPLOY}" --target fake@example --dir /tmp/moox-test --stage "${TMP}/remote-stage-${attempt}" \
+      --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-archive \
+      --no-eventbus --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
+      --node-id gateway-remote --gateway-control-url https://admin.example.com:9527 \
+      --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+      --gateway-service-key-file "${TMP}/service.key" >/dev/null 2>&1; then
+    fail 'fake remote extraction failure was unexpectedly accepted'
+  fi
+done
+PATH="${TMP}/fake-bin:${PATH}" FAKE_REMOTE_DIR="${TMP}/fake-remote" FAKE_REMOTE_SUCCESS=1 \
+  "${DEPLOY}" --target fake@example --dir /tmp/moox-test --stage "${TMP}/remote-stage-success" \
+    --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-archive \
+    --no-eventbus --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
+    --node-id gateway-remote --gateway-control-url https://admin.example.com:9527 \
+    --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+    --gateway-service-key-file "${TMP}/service.key" >/dev/null
+[[ "$(wc -l <"${TMP}/fake-remote/observed" | tr -d '[:space:]')" == 3 ]] || fail 'remote archive success/failure paths were not all observed'
+awk '$1 != "600" { exit 1 }' "${TMP}/fake-remote/observed" || fail 'remote deployment archive was not mode 0600'
+[[ "$(awk '{print $2}' "${TMP}/fake-remote/observed" | sort -u | wc -l | tr -d '[:space:]')" == 3 ]] || fail 'remote deployment archive paths collided'
+while IFS= read -r local_archive; do
+  [[ ! -e "${local_archive}" ]] || fail 'local deployment archive survived failure cleanup'
+done <"${TMP}/fake-remote/local-paths"
+if find "${TMP}/fake-remote" -name 'moox-deploy.*' -type f -print -quit | grep -q .; then
+  fail 'remote deployment archive survived failure cleanup'
+fi
 
 printf 'PASS: Gateway build, package, lifecycle, secret, CA, and Caddy contracts\n'

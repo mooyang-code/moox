@@ -42,19 +42,19 @@ Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指
 本机发布并拉起：
 
 ```bash
-make deploy ARGS="--target localhost --dir ~/moox/dev --node-id gateway-dev --gateway-control-url https://127.0.0.1:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
+make deploy ARGS="--target localhost --dir ~/moox/dev --node-id gateway-dev --gateway-control-url http://127.0.0.1:11000 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 只生成发布目录，不启动服务：
 
 ```bash
-make deploy ARGS="--target localhost --dir /tmp/moox --skip-build --no-start --node-id gateway-dev --gateway-control-url https://127.0.0.1:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
+make deploy ARGS="--target localhost --dir /tmp/moox --skip-build --no-start --node-id gateway-dev --gateway-control-url http://127.0.0.1:11000 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 远端发布并拉起：
 
 ```bash
-make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd64 --node-id gateway-node-1 --gateway-control-url https://admin.example.com:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
+make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd64 --public-host node.example.com --node-id gateway-node-1 --gateway-control-url https://admin.example.com:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 公开部署应加 `--public-host <IP-or-DNS>`。部署会自动安装 checksum 校验的固定版本 Caddy、创建私有 CA、配置同机后端信任并做 HTTPS 验收；浏览器所在机器仍需使用 `skills/moox/scripts/caddy-ca.sh` 显式安装 CA 信任。
