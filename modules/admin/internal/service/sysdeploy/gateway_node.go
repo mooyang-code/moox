@@ -106,11 +106,25 @@ func pbToGatewayNode(item *pb.GatewayNode) *GatewayNode {
 		return nil
 	}
 	node := &GatewayNode{NodeID: item.GetNodeId(), Name: item.GetName(), PublicAddress: item.GetPublicAddress(), Status: item.GetStatus(), RouteHash: item.GetRouteHash(), AppliedRouteHash: item.GetAppliedRouteHash(), RouteCount: item.GetRouteCount(), LastError: item.GetLastError()}
+	node.LastSeenAt = parsePBTime(item.GetLastSeenAt())
+	node.CreatedAt = parsePBTime(item.GetCreatedAt())
+	node.UpdatedAt = parsePBTime(item.GetUpdatedAt())
 	if item.GetHostId() > 0 {
 		hostID := item.GetHostId()
 		node.HostID = &hostID
 	}
 	return node
+}
+
+func parsePBTime(value string) *time.Time {
+	if value == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 func gatewayNodeToPB(node *GatewayNode) *pb.GatewayNode {
 	if node == nil {
@@ -135,8 +149,10 @@ func validateGatewayNode(node *GatewayNode) error {
 		return fmt.Errorf("name is required")
 	}
 	u, err := url.Parse(node.PublicAddress)
-	if err != nil || !u.IsAbs() || u.Host == "" || u.Scheme != "https" {
-		return fmt.Errorf("public_address must be an absolute HTTPS URL")
+	loopbackDev := u != nil && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" || u.Hostname() == "localhost")
+	// Plain HTTP is restricted to explicit loopback development addresses.
+	if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "https" && !loopbackDev) {
+		return fmt.Errorf("public_address must be an absolute HTTPS URL or loopback HTTP development URL")
 	}
 	if node.Status == "" {
 		node.Status = "enabled"

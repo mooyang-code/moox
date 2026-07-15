@@ -16,10 +16,16 @@ import (
 
 func setupSysDeployTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	db := setupEmptySysDeployTestDB(t)
+	require.NoError(t, db.Create(&GatewayNode{NodeID: localNodeID(), Name: "local", PublicAddress: "https://127.0.0.1", Status: "enabled"}).Error)
+	return db
+}
+
+func setupEmptySysDeployTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
-	require.NoError(t, db.Create(&GatewayNode{NodeID: localNodeID(), Name: "local", PublicAddress: "https://127.0.0.1", Status: "enabled"}).Error)
 	return db
 }
 
