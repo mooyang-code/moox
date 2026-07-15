@@ -2046,20 +2046,9 @@ sync_local_stage() {
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
 
-  if [[ "${NO_START}" -eq 1 && -n "${PUBLIC_HOST}" ]]; then
-    local edge_ports="${SERVICE_HTTPS_PORT}" edge_port owners
-    local -a edge_port_list
-    [[ "${WITH_ADMIN}" -eq 0 ]] || edge_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
-    IFS=, read -ra edge_port_list <<<"${edge_ports}"
-    for edge_port in "${edge_port_list[@]}"; do
-      owners=""
-      if command -v lsof >/dev/null 2>&1; then
-        owners=$(lsof -nP -tiTCP:"${edge_port}" -sTCP:LISTEN 2>/dev/null || true)
-      elif command -v ss >/dev/null 2>&1; then
-        owners=$(ss -H -ltn "sport = :${edge_port}" 2>/dev/null || true)
-      fi
-      [[ -z "${owners}" ]] || fail "--no-start refuses to replace an active Caddy deployment on port ${edge_port}"
-    done
+  if [[ -e "${deploy_dir}/config/caddy/edge.env" || -e "${deploy_dir}/config/caddy/Caddyfile" || -e "${deploy_dir}/run/caddy.pid" ]]; then
+    [[ "${NO_START}" -eq 0 ]] || fail "--no-start refuses to replace an existing managed Caddy deployment"
+    [[ -n "${PUBLIC_HOST}" ]] || fail "existing managed Caddy deployment requires --public-host"
   fi
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
@@ -2300,22 +2289,15 @@ if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
   umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${KEY_FILE}"; chmod 600 "${KEY_FILE}"
 fi
-if [[ "${NO_START}" -eq 1 && -n "${PUBLIC_HOST}" ]]; then
-  EDGE_PORTS="${SERVICE_HTTPS_PORT}"
-  [[ "${WITH_ADMIN}" == "0" ]] || EDGE_PORTS="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
-  IFS=, read -ra EDGE_PORT_LIST <<<"${EDGE_PORTS}"
-  for EDGE_PORT in "${EDGE_PORT_LIST[@]}"; do
-    EDGE_OWNERS=""
-    if command -v lsof >/dev/null 2>&1; then
-      EDGE_OWNERS=$(lsof -nP -tiTCP:"${EDGE_PORT}" -sTCP:LISTEN 2>/dev/null || true)
-    elif command -v ss >/dev/null 2>&1; then
-      EDGE_OWNERS=$(ss -H -ltn "sport = :${EDGE_PORT}" 2>/dev/null || true)
-    fi
-    if [[ -n "${EDGE_OWNERS}" ]]; then
-      echo "--no-start refuses to replace an active Caddy deployment on port ${EDGE_PORT}" >&2
-      exit 1
-    fi
-  done
+if [[ -e "${DEPLOY_DIR}/config/caddy/edge.env" || -e "${DEPLOY_DIR}/config/caddy/Caddyfile" || -e "${DEPLOY_DIR}/run/caddy.pid" ]]; then
+  if [[ "${NO_START}" -eq 1 ]]; then
+    echo "--no-start refuses to replace an existing managed Caddy deployment" >&2
+    exit 1
+  fi
+  if [[ -z "${PUBLIC_HOST}" ]]; then
+    echo "existing managed Caddy deployment requires --public-host" >&2
+    exit 1
+  fi
 fi
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then

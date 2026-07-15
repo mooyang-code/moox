@@ -264,6 +264,22 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"${PEER_ONLY_DEPLOY}/bin/moox-monitor-cl
 chmod +x "${PEER_ONLY_DEPLOY}/bin/moox-monitor" "${PEER_ONLY_DEPLOY}/bin/moox-monitor-cli"
 STARTUP_WAIT_SECONDS=0 "${PEER_ONLY_DEPLOY}/start.sh" monitor >/dev/null
 TEST_PIDS+=("$(cat "${PEER_ONLY_DEPLOY}/run/monitor.pid")")
+mkdir -p "${PEER_ONLY_DEPLOY}/config/caddy"
+printf 'MOOX_CADDY_PORTS=443\n' >"${PEER_ONLY_DEPLOY}/config/caddy/edge.env"
+for mode in no-start missing-public-host; do
+  extra_args=()
+  [[ "${mode}" != no-start ]] || extra_args+=(--no-start)
+  if output=$("${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-${mode}" \
+    --skip-build --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor \
+    --local-ca skip --target-ca skip --node-id gateway-peer-only \
+    --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
+    --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
+    --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+    --gateway-service-key-file "${TMP}/service.key" ${extra_args[@]+"${extra_args[@]}"} 2>&1); then
+    fail "${mode} replaced an existing managed Caddy deployment"
+  fi
+  [[ "${output}" == *'existing managed Caddy'* ]] || fail "${mode} Caddy rejection was unclear"
+done
 
 expect_monitor_arg_rejected() {
   local label="$1"; shift
