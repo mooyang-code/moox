@@ -31,11 +31,23 @@ python3 -m venv /home/ubuntu/.venvs/moox
 
 当前机器已有 Go SDK；Node 可以安装到 `/usr/local/node`，并将 Go SDK 和 Python venv 的 `bin` 目录加入 systemd Runner 的 `PATH`。
 
-在本地拥有仓库管理员权限的机器上生成一次性注册 Token：
+### 获取 Runner 注册 Token
+
+注册 Token 不是长期凭据，需要在拥有仓库管理 Runner 权限的机器上临时生成。可以通过
+GitHub 页面或 `gh` CLI 获取：
+
+- 页面：`Settings -> Actions -> Runners -> New self-hosted runner`
+- CLI：先确认 `gh` 已登录到目标 GitHub 账号，再执行：
 
 ```bash
+gh auth status
 gh api -X POST repos/mooyang-code/moox/actions/runners/registration-token --jq .token
 ```
+
+命令输出的值就是 `<REGISTRATION_TOKEN>`，复制给服务器上的 `config.sh` 使用。Token
+短时有效且仅用于注册，过期或注册完成后不要保存、提交到仓库或写入日志；重新注册时需要重新生成。
+
+官方说明：[添加 Self-hosted Runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)。
 
 从 GitHub Actions Runner releases 页面取得当前 x64 Linux Runner 版本，然后在服务器执行：
 
