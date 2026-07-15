@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -448,7 +449,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	}
 	if resource == "data_sources" {
 		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)

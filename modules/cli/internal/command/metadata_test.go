@@ -191,6 +191,9 @@ func TestApplyProbeResultOtherResources(t *testing.T) {
 func TestVerifyMetadataResourceMoreTypes(t *testing.T) {
 	ds := &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"}
 	require.NoError(t, verifyMetadataResource("data_sources", &pb.CreateDataSourceReq{DataSource: ds}, ds))
+	require.NoError(t, verifyMetadataResource("data_sources", &pb.CreateDataSourceReq{DataSource: ds}, &pb.DataSource{
+		SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active", Attributes: map[string]string{},
+	}))
 	col := &pb.DatasetColumn{SpaceId: "crypto", DatasetId: "kline", ColumnName: "close", Status: "active"}
 	require.NoError(t, verifyMetadataResource("dataset_columns", &pb.UpsertDatasetColumnReq{Column: col}, col))
 	err := verifyMetadataResource("spaces", &pb.UpsertSubjectReq{}, &pb.Space{})
