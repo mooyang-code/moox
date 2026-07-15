@@ -65,7 +65,8 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 
 func (handler *Handler) HandleService(response http.ResponseWriter, request *http.Request) {
 	started := time.Now()
-	serviceID, method := request.PathValue("service"), request.PathValue("method")
+	serviceID, method := "unauthenticated", "unauthenticated"
+	requestedService, requestedMethod := request.PathValue("service"), request.PathValue("method")
 	status := http.StatusInternalServerError
 	if handler.options.Metrics != nil {
 		defer func() { handler.options.Metrics.ObserveRequest(serviceID, method, status, time.Since(started)) }()
@@ -87,6 +88,7 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusUnauthorized)
 		return
 	}
+	serviceID, method = "authenticated", "unresolved"
 	consumed, err := handler.options.Nonces.Consume(request.Context(), serviceNonceNamespace, claims.Nonce, claims.TTL)
 	if err != nil {
 		status = http.StatusInternalServerError
@@ -106,30 +108,36 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusServiceUnavailable)
 		return
 	}
-	route, ok := handler.options.Table.Resolve(request.PathValue("service"))
+	route, ok := handler.options.Table.Resolve(requestedService)
 	if !ok {
 		status = http.StatusNotFound
 		writeError(response, http.StatusNotFound)
 		return
 	}
+	serviceID = route.ServiceID
 	if int64(len(body)) > route.MaxBodyBytes && route.MaxBodyBytes > 0 {
 		status = http.StatusRequestEntityTooLarge
 		writeError(response, http.StatusRequestEntityTooLarge)
 		return
 	}
-	upstream, err := gatewayproxy.Forward(request.Context(), nil, route, request.PathValue("method"), body, request.Header)
+	upstream, err := gatewayproxy.Forward(request.Context(), nil, route, requestedMethod, body, request.Header)
 	if err != nil {
 		switch {
 		case errors.Is(err, gatewayproxy.ErrMethodNotAllowed):
+			method = "rejected"
 			status = http.StatusMethodNotAllowed
 			writeError(response, http.StatusMethodNotAllowed)
 		default:
+			if handler.isUpstreamNetworkFailure(err) {
+				method = requestedMethod
+			}
 			status = http.StatusBadGateway
 			handler.recordUpstreamFailure(err)
 			writeError(response, http.StatusBadGateway)
 		}
 		return
 	}
+	method = requestedMethod
 	status = upstream.StatusCode
 	for name, values := range upstream.Header {
 		for _, value := range values {
@@ -156,6 +164,14 @@ func (handler *Handler) recordUpstreamFailure(err error) {
 			handler.options.Metrics.UpstreamFailed("connection")
 		}
 	}
+}
+
+func (handler *Handler) isUpstreamNetworkFailure(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
 }
 
 func readBoundedBody(body io.ReadCloser, limit int64) ([]byte, error) {

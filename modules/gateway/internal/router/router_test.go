@@ -3,6 +3,7 @@ package router
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/gateway/internal/health"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
@@ -147,6 +149,26 @@ func TestServiceRouterRecordsUpstreamTimeout(t *testing.T) {
 	handler.ServeHTTP(recorder, signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, testSecret))
 	if recorder.Code != http.StatusBadGateway || metrics.upstream["timeout"] != 1 {
 		t.Fatalf("response=%d metrics=%+v", recorder.Code, metrics)
+	}
+}
+
+func TestUnauthenticatedRequestsUseBoundedMetricLabels(t *testing.T) {
+	state := health.NewState()
+	handler, closeHandler := newHandlerWithMetrics(t, nil, false, 1024, state)
+	defer closeHandler()
+	for index := 0; index < 50; index++ {
+		path := fmt.Sprintf("/api/service/random-%d/Method%d", index, index)
+		req := signedRequest(t, http.MethodPost, path, nil, testNode, "wrong-secret")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	recorder := httptest.NewRecorder()
+	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics := recorder.Body.String()
+	if strings.Count(metrics, "gateway_requests_total{") != 1 || strings.Count(metrics, "gateway_request_duration_seconds_sum{") != 1 {
+		t.Fatalf("unauthenticated requests created unbounded series:\n%s", metrics)
+	}
+	if strings.Contains(metrics, "random-") || !strings.Contains(metrics, "gateway_auth_failures_total 50") {
+		t.Fatalf("unsafe labels or missing auth count:\n%s", metrics)
 	}
 }
 

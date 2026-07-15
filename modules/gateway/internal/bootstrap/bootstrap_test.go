@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/controlplane"
 	"github.com/mooyang-code/moox/modules/gateway/internal/health"
@@ -100,6 +101,23 @@ func TestRefreshCountsControlPlaneRouteValidationFailures(t *testing.T) {
 	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(recorder.Body.String(), "gateway_route_validation_failures_total 1") {
 		t.Fatalf("metrics = %q", recorder.Body.String())
+	}
+}
+
+func TestHTTPServersHaveBoundedConnectionTimeouts(t *testing.T) {
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	for name, server := range map[string]*http.Server{
+		"service": newServiceHTTPServer(handler),
+		"health":  newHealthHTTPServer(handler),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.WriteTimeout <= 0 || server.IdleTimeout <= 0 {
+				t.Fatalf("timeouts are not bounded: %+v", server)
+			}
+			if name == "service" && server.WriteTimeout <= 120*time.Second {
+				t.Fatalf("service write timeout %v cuts off the maximum proxy timeout", server.WriteTimeout)
+			}
+		})
 	}
 }
 

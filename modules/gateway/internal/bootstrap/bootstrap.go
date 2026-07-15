@@ -37,6 +37,15 @@ type Options struct {
 	Health  *health.State
 }
 
+const (
+	serviceReadTimeout  = 15 * time.Second
+	serviceWriteTimeout = 140 * time.Second
+	serviceIdleTimeout  = 60 * time.Second
+	healthReadTimeout   = 5 * time.Second
+	healthWriteTimeout  = 10 * time.Second
+	healthIdleTimeout   = 30 * time.Second
+)
+
 type Runtime struct {
 	nodeID  string
 	routes  routeStore
@@ -184,8 +193,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	defer healthListener.Close()
 
-	serviceServer := &http.Server{Handler: serviceHandler, ReadHeaderTimeout: 5 * time.Second}
-	healthServer := &http.Server{Handler: state.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	serviceServer := newServiceHTTPServer(serviceHandler)
+	healthServer := newHealthHTTPServer(state.Handler())
 	serverErrors := make(chan error, 2)
 	go serve(serviceServer, serviceListener, serverErrors)
 	go serve(healthServer, healthListener, serverErrors)
@@ -204,6 +213,26 @@ func Run(ctx context.Context, cfg config.Config) error {
 		case <-ticker.C:
 			_ = runtime.Refresh(ctx)
 		}
+	}
+}
+
+func newServiceHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       serviceReadTimeout,
+		WriteTimeout:      serviceWriteTimeout,
+		IdleTimeout:       serviceIdleTimeout,
+	}
+}
+
+func newHealthHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 3 * time.Second,
+		ReadTimeout:       healthReadTimeout,
+		WriteTimeout:      healthWriteTimeout,
+		IdleTimeout:       healthIdleTimeout,
 	}
 }
 
