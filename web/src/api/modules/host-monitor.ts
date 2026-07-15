@@ -83,11 +83,13 @@ export interface HistoryPoint {
 
 interface HostSnapshot {
   cpu?: { logical_cores?: number; usage_percent?: number; usage_available?: boolean };
-  memory?: { total_bytes?: number; used_bytes?: number; available_bytes?: number; usage_percent?: number };
-  filesystems?: Array<{ device?: string; mountpoint?: string; fs_type?: string; total_bytes?: number; used_bytes?: number; available_bytes?: number; usage_percent?: number; read_only?: boolean }>;
+  memory?: { total_bytes?: WireNumber; used_bytes?: WireNumber; available_bytes?: WireNumber; usage_percent?: number };
+  filesystems?: Array<{ device?: string; mountpoint?: string; fs_type?: string; total_bytes?: WireNumber; used_bytes?: WireNumber; available_bytes?: WireNumber; usage_percent?: number; read_only?: boolean }>;
   disks?: Array<{ device?: string; read_bytes_per_second?: number; write_bytes_per_second?: number; read_iops?: number; write_iops?: number; utilization_percent?: number; rate_available?: boolean }>;
-  networks?: Array<{ device?: string; operstate?: string; receive_bytes_per_second?: number; transmit_bytes_per_second?: number; receive_errors_total?: number; transmit_errors_total?: number; rate_available?: boolean }>;
+  networks?: Array<{ device?: string; operstate?: string; receive_bytes_per_second?: number; transmit_bytes_per_second?: number; receive_errors_total?: WireNumber; transmit_errors_total?: WireNumber; rate_available?: boolean }>;
 }
+
+type WireNumber = number | string;
 
 interface HostAgent {
   agent_id?: string;
@@ -145,21 +147,21 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
       cores: cpu.logical_cores ?? 0,
     },
     memory: {
-      total: memory.total_bytes ?? 0,
-      used: memory.used_bytes ?? 0,
-      available: memory.available_bytes ?? 0,
+      total: toNumber(memory.total_bytes),
+      used: toNumber(memory.used_bytes),
+      available: toNumber(memory.available_bytes),
       percent: memory.usage_percent ?? 0,
-      percent_available: memoryUsageAvailable(memory.total_bytes, snapshot.memory !== undefined),
+      percent_available: memoryUsageAvailable(toNumber(memory.total_bytes), snapshot.memory !== undefined),
     },
     filesystems: (snapshot.filesystems ?? []).map((item) => ({
       device: item.device ?? '',
       mountpoint: item.mountpoint ?? '',
       fs_type: item.fs_type ?? '',
-      total: item.total_bytes ?? 0,
-      used: item.used_bytes ?? 0,
-      available: item.available_bytes ?? 0,
+      total: toNumber(item.total_bytes),
+      used: toNumber(item.used_bytes),
+      available: toNumber(item.available_bytes),
       percent: item.usage_percent ?? 0,
-      percent_available: filesystemUsageAvailable(item.device, item.mountpoint, item.total_bytes),
+      percent_available: filesystemUsageAvailable(item.device, item.mountpoint, toNumber(item.total_bytes)),
       read_only: item.read_only === true,
     })),
     disks: (snapshot.disks ?? []).map((item) => ({
@@ -176,8 +178,8 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
       operstate: item.operstate ?? 'unknown',
       rx_speed: item.receive_bytes_per_second ?? 0,
       tx_speed: item.transmit_bytes_per_second ?? 0,
-      receive_errors_total: item.receive_errors_total ?? 0,
-      transmit_errors_total: item.transmit_errors_total ?? 0,
+      receive_errors_total: toNumber(item.receive_errors_total),
+      transmit_errors_total: toNumber(item.transmit_errors_total),
       rate_available: item.rate_available === true,
     })),
     storage_available: storageAvailable,
@@ -203,6 +205,11 @@ const toHistoryPoint = (point: HostHistoryPoint): HistoryPoint => {
 };
 
 const isFresh = (value?: string) => !!value && Number.isFinite(Date.parse(value)) && Date.now() - Date.parse(value) < 60_000;
+
+const toNumber = (value?: WireNumber) => {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
+};
 
 const durationMilliseconds = (value: string) => {
   const match = /^(\d+)([hdm])$/.exec(value);
