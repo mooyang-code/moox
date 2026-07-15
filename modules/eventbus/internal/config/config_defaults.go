@@ -16,10 +16,10 @@ func Default() *Config {
 		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
 		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 		Streams: []StreamConfig{
-			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 21474836480},
-			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, MaxBytes: 10737418240},
-			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.exec.v1.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 10737418240},
-			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, MaxBytes: 2147483648},
+			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 8589934592},
+			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, MaxBytes: 4294967296},
+			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.exec.v1.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 4294967296},
+			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, MaxBytes: 1073741824},
 		},
 		Topics: []TopicConfig{
 			{Topic: "moox.storage.time_series.rows_updated.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated", PayloadVersion: 1, Enabled: true},

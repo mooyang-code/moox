@@ -20,9 +20,12 @@ func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
 	text := strings.ReplaceAll(string(raw), "port: 4222", "port: "+freePort(t))
 	text = strings.ReplaceAll(text, "store_dir: ./data/eventbus/jetstream", "store_dir: "+storeDir)
 	text = strings.ReplaceAll(text, "addr: \":11419\"", "addr: \"127.0.0.1:0\"")
-	text = strings.ReplaceAll(text, "21474836480", "1048576")
-	text = strings.ReplaceAll(text, "10737418240", "1048576")
-	text = strings.ReplaceAll(text, "2147483648", "1048576")
+	for _, maxBytes := range []string{
+		"21474836480", "10737418240", "2147483648",
+		"8589934592", "4294967296", "1073741824",
+	} {
+		text = strings.ReplaceAll(text, maxBytes, "1048576")
+	}
 	path := filepath.Join(t.TempDir(), "app.yaml")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
