@@ -89,14 +89,34 @@ cat >"${TMP}/cap-bin/sudo" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_SUDO_LOG}"
 [[ "${FAKE_SUDO_FAIL:-0}" != 1 ]] || exit 1
-[[ "$1" == -n && "$2" == setcap && "$3" == cap_net_bind_service=+ep ]] || exit 2
-printf '%s\n' "$4" >"${FAKE_CAP_STATE}"
+if [[ "$1" == -n && "$2" == setcap && "$3" == cap_net_bind_service=+ep ]]; then
+  printf '%s\n' "$4" >"${FAKE_CAP_STATE}"
+elif [[ "$1" == -n && "$2" == setcap && "$3" == -r && "$4" == -- ]]; then
+  rm -f "${FAKE_CAP_STATE}"
+else
+  exit 2
+fi
 SH
-chmod +x "${TMP}/cap-bin/getcap" "${TMP}/cap-bin/sudo"
+cat >"${TMP}/cap-bin/lsof" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_PORT_LOG}"
+if [[ "${FAKE_OCCUPY_9527:-0}" == 1 && "$*" == *TCP:9527* ]]; then
+  printf '424242\n'
+  exit 0
+fi
+[[ -z "${REAL_LSOF:-}" ]] || exec "${REAL_LSOF}" "$@"
+SH
+chmod +x "${TMP}/cap-bin/getcap" "${TMP}/cap-bin/sudo" "${TMP}/cap-bin/lsof"
 
 CAP_DEPLOY="${TMP}/cap-deploy"
 CAP_STATE="${TMP}/cap.state"
 SUDO_LOG="${TMP}/sudo.log"
+PORT_LOG="${TMP}/ports.log"
+REAL_LSOF=$(command -v lsof || true)
+export FAKE_PORT_LOG="${PORT_LOG}"
+export REAL_LSOF
+export FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}"
+export PATH="${TMP}/cap-bin:${PATH}"
 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
 MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
   "${HELPER}" install --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443
@@ -106,7 +126,10 @@ grep -Fxq -- '-n setcap cap_net_bind_service=+ep '"${CAP_DEPLOY}/bin/caddy" "${S
 # An existing version-correct binary must recover a missing capability, and a
 # subsequent binary replacement must grant it again.
 mkdir -p "${CAP_DEPLOY}/config/caddy"
-printf 'MOOX_BROWSER_HTTPS_PORT=9527\nMOOX_SERVICE_HTTPS_PORT=443\n' >"${CAP_DEPLOY}/config/caddy/edge.env"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443
+grep -Fq 'MOOX_CADDY_PORTS=443' "${CAP_DEPLOY}/config/caddy/edge.env" || \
+  fail 'ensure did not persist the exact configured Caddy port set'
 rm -f "${CAP_STATE}"; : >"${SUDO_LOG}"
 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
   "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64
@@ -117,10 +140,45 @@ MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" MOOX_CADDY_CHECKSUMS
   "${HELPER}" install --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443
 [[ -s "${CAP_STATE}" ]] || fail 'managed Caddy replacement did not reapply its privileged-port capability'
 
+# Dropping the last privileged port must also drop the file capability. Once
+# absent, an unprivileged-only configuration must not use sudo again.
 : >"${SUDO_LOG}"
 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
   "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 8443
-[[ ! -s "${SUDO_LOG}" ]] || fail 'nonprivileged Caddy ports unexpectedly invoked sudo'
+[[ ! -e "${CAP_STATE}" ]] || fail 'unprivileged-only Caddy retained cap_net_bind_service'
+grep -Fxq -- '-n setcap -r -- '"${CAP_DEPLOY}/bin/caddy" "${SUDO_LOG}" || \
+  fail 'privileged-to-unprivileged transition did not narrowly remove file capabilities'
+: >"${SUDO_LOG}"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64
+[[ ! -s "${SUDO_LOG}" ]] || fail 'capability-free nonprivileged Caddy ports unexpectedly invoked sudo'
+
+# Port syntax is platform-independent; non-Linux never mutates capabilities.
+printf '%s\n' "${CAP_DEPLOY}/bin/caddy" >"${CAP_STATE}"; : >"${SUDO_LOG}"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os darwin --arch amd64 --ports 443
+[[ -s "${CAP_STATE}" && ! -s "${SUDO_LOG}" ]] || fail 'non-Linux Caddy mutated Linux file capabilities'
+for os in linux darwin; do
+  for invalid_ports in '' 0 65536 0443 +443 '443,' ',443' '443,,8443' '443, 8443' abc; do
+    if FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+      "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os "${os}" --arch amd64 --ports "${invalid_ports}" \
+        >"${TMP}/invalid-port.out" 2>&1; then
+      fail "${os} accepted invalid Caddy ports: '${invalid_ports}'"
+    fi
+    grep -Fq 'invalid Caddy ports' "${TMP}/invalid-port.out" || fail "invalid port failure was unclear: '${invalid_ports}'"
+  done
+done
+
+# A no-Admin deployment persists only 443. Later lifecycle commands must not
+# synthesize browser port 9527 and collide with an unrelated listener there.
+: >"${SUDO_LOG}"; : >"${PORT_LOG}"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443
+printf ':443 { respond "ok" }\n' >"${CAP_DEPLOY}/config/caddy/Caddyfile"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+FAKE_OCCUPY_9527=1 "${HELPER}" check --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64
+grep -Fq 'TCP:443' "${PORT_LOG}" || fail 'persisted no-Admin service port was not checked'
+! grep -Fq 'TCP:9527' "${PORT_LOG}" || fail 'persisted no-Admin port set reintroduced browser port 9527'
 
 rm -f "${CAP_STATE}"; : >"${SUDO_LOG}"
 printf ':443 { respond "ok" }\n' >"${CAP_DEPLOY}/config/caddy/Caddyfile"

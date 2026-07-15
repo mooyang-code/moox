@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     --os) OS=${2:?}; shift 2;;
     --arch) ARCH=${2:?}; shift 2;;
     --config) CONFIG_SOURCE=${2:?}; shift 2;;
-    --ports) PORTS=${2:?}; PORTS_SET=1; shift 2;;
+    --ports) [[ $# -ge 2 ]] || fail '--ports requires a value'; PORTS=${2-}; PORTS_SET=1; shift 2;;
     *) fail "unknown option: $1";;
   esac
 done
@@ -42,37 +42,56 @@ if [[ -s "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
   set +a
 fi
-if [[ "${PORTS_SET}" -eq 0 && -n "${MOOX_SERVICE_HTTPS_PORT:-}" ]]; then
-  PORTS="${MOOX_BROWSER_HTTPS_PORT:-9527},${MOOX_SERVICE_HTTPS_PORT}"
+if [[ "${PORTS_SET}" -eq 0 && -n "${MOOX_CADDY_PORTS:-}" ]]; then
+  PORTS="${MOOX_CADDY_PORTS}"
 fi
 export XDG_DATA_HOME="${DEPLOY_DIR}/data/caddy" XDG_CONFIG_HOME="${DEPLOY_DIR}/config/caddy/runtime"
 
 version_ok() { [[ -x "${BIN}" ]] && [[ $("${BIN}" version 2>/dev/null | awk '{print $1}') == "${CADDY_VERSION}" ]]; }
-requires_privileged_port() {
-  [[ "${OS}" == linux ]] || return 1
+validate_ports() {
+  [[ "${PORTS}" =~ ^[1-9][0-9]{0,4}(,[1-9][0-9]{0,4})*$ ]] || \
+    fail "invalid Caddy ports: ${PORTS:-<empty>}; expected comma-separated canonical integers in 1..65535"
   local port
   local -a ports
   IFS=, read -ra ports <<<"${PORTS}"
   for port in "${ports[@]}"; do
-    [[ "${port}" =~ ^[0-9]+$ ]] || fail "invalid edge port: ${port}"
-    (( 10#${port} < 1024 )) && return 0
+    (( port <= 65535 )) || fail "invalid Caddy ports: ${PORTS}; every port must be in 1..65535"
+  done
+}
+requires_privileged_port() {
+  local port
+  local -a ports
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    (( port < 1024 )) && return 0
   done
   return 1
 }
-bind_capability_ok() {
+file_capabilities() {
   local output capabilities
-  output=$(getcap "${BIN}" 2>/dev/null || true)
+  output=$(getcap "${BIN}" 2>/dev/null) || fail "could not read file capabilities from ${BIN} with getcap"
   capabilities=${output#* }
-  [[ "${capabilities}" == cap_net_bind_service=ep ]]
+  printf '%s' "${capabilities}"
 }
-ensure_bind_capability() {
-  requires_privileged_port || return 0
-  command -v getcap >/dev/null 2>&1 || fail 'privileged Caddy ports require getcap to validate cap_net_bind_service'
-  bind_capability_ok && return 0
+reconcile_bind_capability() {
+  [[ "${OS}" == linux ]] || return 0
+  command -v getcap >/dev/null 2>&1 || fail 'Linux managed Caddy requires getcap to enforce cap_net_bind_service least privilege'
+  local capabilities
+  capabilities=$(file_capabilities)
+  if ! requires_privileged_port; then
+    [[ -z "${capabilities}" ]] && return 0
+    command -v sudo >/dev/null 2>&1 || fail 'removing stale Caddy capabilities requires passwordless sudo for setcap -r'
+    sudo -n setcap -r -- "${BIN}" || \
+      fail 'could not remove stale Caddy capabilities with sudo -n setcap -r'
+    [[ -z "$(file_capabilities)" ]] || fail 'Caddy capability removal validation failed after sudo -n setcap -r'
+    log "removed file capabilities from ${BIN} for unprivileged-only ports"
+    return 0
+  fi
+  [[ "${capabilities}" == cap_net_bind_service=ep ]] && return 0
   command -v sudo >/dev/null 2>&1 || fail 'privileged Caddy ports require passwordless sudo for setcap cap_net_bind_service=+ep'
   sudo -n setcap cap_net_bind_service=+ep "${BIN}" || \
     fail 'could not grant cap_net_bind_service=+ep with sudo -n setcap; configure passwordless setcap or use a port >=1024'
-  bind_capability_ok || fail 'cap_net_bind_service validation failed after sudo -n setcap'
+  [[ "$(file_capabilities)" == cap_net_bind_service=ep ]] || fail 'cap_net_bind_service validation failed after sudo -n setcap'
   log "granted cap_net_bind_service=+ep to ${BIN}"
 }
 pid_owned() {
@@ -139,11 +158,11 @@ install_binary() {
   mkdir -p "${DEPLOY_DIR}/bin"
   old="${BIN}.rollback"; [[ ! -e "${BIN}" ]] || cp -p "${BIN}" "${old}"
   mv "${tmp}/caddy" "${BIN}.new"; mv "${BIN}.new" "${BIN}"
-  ensure_bind_capability
+  reconcile_bind_capability
   log "installed ${CADDY_VERSION} at ${BIN}"
 }
 start_caddy() {
-  clean_stale_pid; ensure_bind_capability; validate; check_ports; mkdir -p "${DEPLOY_DIR}/run" "${XDG_DATA_HOME}" "${XDG_CONFIG_HOME}"
+  clean_stale_pid; reconcile_bind_capability; validate; check_ports; mkdir -p "${DEPLOY_DIR}/run" "${XDG_DATA_HOME}" "${XDG_CONFIG_HOME}"
   if pid_owned; then
     admin_healthy || fail "managed PID does not own a healthy Caddy admin endpoint at ${ADMIN_ENDPOINT}"
     if ! "${BIN}" reload --config "${CONFIG}" --adapter caddyfile; then
@@ -178,20 +197,24 @@ publish_ca() {
   log "Caddy CA SHA-256 fingerprint: ${fingerprint}"
 }
 
+validate_ports
+
 case "${COMMAND}" in
   install) install_binary;;
-  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; ensure_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
+  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; reconcile_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
-    if [[ -n "${MOOX_PUBLIC_HOST:-}" ]]; then
-      umask 077
-      printf 'MOOX_PUBLIC_HOST=%q\nMOOX_BROWSER_HTTPS_PORT=%q\nMOOX_SERVICE_HTTPS_PORT=%q\n' \
-        "${MOOX_PUBLIC_HOST}" "${MOOX_BROWSER_HTTPS_PORT:-9527}" "${MOOX_SERVICE_HTTPS_PORT:-11001}" >"${ENV_FILE}"
-      export MOOX_PUBLIC_HOST MOOX_BROWSER_HTTPS_PORT MOOX_SERVICE_HTTPS_PORT
-    fi
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
     version_ok || install_binary
-    ensure_bind_capability
+    reconcile_bind_capability
+    umask 077
+    {
+      printf 'MOOX_CADDY_PORTS=%q\n' "${PORTS}"
+      if [[ -n "${MOOX_PUBLIC_HOST:-}" ]]; then
+        printf 'MOOX_PUBLIC_HOST=%q\nMOOX_BROWSER_HTTPS_PORT=%q\nMOOX_SERVICE_HTTPS_PORT=%q\n' \
+          "${MOOX_PUBLIC_HOST}" "${MOOX_BROWSER_HTTPS_PORT:-9527}" "${MOOX_SERVICE_HTTPS_PORT:-11001}"
+      fi
+    } >"${ENV_FILE}"
     [[ ! -e "${CONFIG}.candidate" ]] || { "${BIN}" validate --config "${CONFIG}.candidate" --adapter caddyfile >/dev/null; [[ ! -e "${CONFIG}" ]] || cp -p "${CONFIG}" "${CONFIG}.rollback"; mv "${CONFIG}.candidate" "${CONFIG}"; }
     [[ -s "${CONFIG}" ]] && start_caddy || log 'binary installed; waiting for managed Caddyfile'
     ;;
@@ -205,6 +228,7 @@ case "${COMMAND}" in
     if [[ -e "${CONFIG}.rollback" ]]; then
       mv "${CONFIG}.rollback" "${CONFIG}"
       [[ ! -e "${BIN}.rollback" ]] || mv "${BIN}.rollback" "${BIN}"
+      reconcile_bind_capability
       if pid_owned; then
         "${BIN}" reload --config "${CONFIG}" --adapter caddyfile
       else
