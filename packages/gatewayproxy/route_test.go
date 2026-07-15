@@ -24,6 +24,7 @@ func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
 		{name: "uppercase service ID", edit: func(r *Route) { r.ServiceID = "Storage" }},
 		{name: "service ID slash", edit: func(r *Route) { r.ServiceID = "../storage" }},
 		{name: "localhost name", edit: func(r *Route) { r.Address = "localhost:8080" }},
+		{name: "generic domain", edit: func(r *Route) { r.Address = "example.com:8080" }},
 		{name: "remote IPv4", edit: func(r *Route) { r.Address = "192.0.2.1:8080" }},
 		{name: "unspecified IPv4", edit: func(r *Route) { r.Address = "0.0.0.0:8080" }},
 		{name: "unspecified IPv6", edit: func(r *Route) { r.Address = "[::]:8080" }},
@@ -44,6 +45,28 @@ func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			route := valid
+			test.edit(&route)
+			if err := ValidateRoute(route); err == nil {
+				t.Fatalf("ValidateRoute(%+v) succeeded", route)
+			}
+		})
+	}
+}
+
+func TestValidateRouteAcceptsCapsAndRejectsValuesAboveCaps(t *testing.T) {
+	base := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", TimeoutMS: maxTimeoutMS, MaxBodyBytes: maxMaxBodyBytes}
+	if err := ValidateRoute(base); err != nil {
+		t.Fatalf("ValidateRoute at caps: %v", err)
+	}
+	for _, test := range []struct {
+		name string
+		edit func(*Route)
+	}{
+		{name: "timeout above cap", edit: func(route *Route) { route.TimeoutMS = maxTimeoutMS + 1 }},
+		{name: "body above cap", edit: func(route *Route) { route.MaxBodyBytes = maxMaxBodyBytes + 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			route := base
 			test.edit(&route)
 			if err := ValidateRoute(route); err == nil {
 				t.Fatalf("ValidateRoute(%+v) succeeded", route)
@@ -74,13 +97,31 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	if first.GeneratedAt.IsZero() || time.Since(first.GeneratedAt) > time.Minute {
 		t.Fatalf("unexpected generated time: %v", first.GeneratedAt)
 	}
-	first.GeneratedAt = first.GeneratedAt.Add(time.Hour)
-	if first.RouteHash != second.RouteHash {
-		t.Fatal("GeneratedAt affected route hash")
-	}
 	routes[0].Address = "127.0.0.1:9999"
 	if first.Routes[1].Address == routes[0].Address {
 		t.Fatal("NormalizeAndHash retained caller-owned route storage")
+	}
+}
+
+func TestCanonicalSnapshotHashExcludesGeneratedAt(t *testing.T) {
+	normalized, err := NormalizeAndHash("node-1", []Route{{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := normalized
+	first.GeneratedAt = time.Unix(1, 0).UTC()
+	second := normalized
+	second.GeneratedAt = time.Unix(2, 0).UTC()
+	firstHash, err := hashSnapshot(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := hashSnapshot(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash != secondHash || firstHash != normalized.RouteHash {
+		t.Fatalf("hashes = %q, %q, normalized %q", firstHash, secondHash, normalized.RouteHash)
 	}
 }
 

@@ -94,7 +94,7 @@ func NormalizeAndHash(nodeID string, routes []Route) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("duplicate service_id %q", normalized[index].ServiceID)
 		}
 	}
-	hash, err := routeHash(nodeID, normalized)
+	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Routes: normalized})
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -115,11 +115,11 @@ func normalizeRouteDefaults(route *Route) {
 	}
 }
 
-func routeHash(nodeID string, routes []Route) (string, error) {
+func hashSnapshot(snapshot Snapshot) (string, error) {
 	canonical := struct {
 		NodeID string  `json:"node_id"`
 		Routes []Route `json:"routes"`
-	}{NodeID: nodeID, Routes: routes}
+	}{NodeID: snapshot.NodeID, Routes: snapshot.Routes}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("marshal canonical routes: %w", err)

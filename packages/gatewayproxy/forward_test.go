@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -140,6 +141,53 @@ func TestForwardReturnsUpstreamTransportErrors(t *testing.T) {
 	_, err := Forward(context.Background(), client, route, "GetStatus", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "dial failed") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestForwardDoesNotInjectCookiesFromSuppliedClientJar(t *testing.T) {
+	var gotCookie string
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		gotCookie = request.Header.Get("Cookie")
+	}))
+	defer server.Close()
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar.SetCookies(serverURL, []*http.Cookie{{Name: "session", Value: "secret"}})
+
+	if _, err := Forward(context.Background(), &http.Client{Jar: jar}, routeForServer(t, server), "GetStatus", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotCookie != "" {
+		t.Fatalf("upstream Cookie = %q, want empty", gotCookie)
+	}
+}
+
+func TestForwardReturnsRedirectWithoutFollowingIt(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetRequests.Add(1)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	response, err := Forward(context.Background(), nil, routeForServer(t, redirect), "GetStatus", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusTemporaryRedirect)
+	}
+	if targetRequests.Load() != 0 {
+		t.Fatalf("redirect target received %d requests", targetRequests.Load())
 	}
 }
 

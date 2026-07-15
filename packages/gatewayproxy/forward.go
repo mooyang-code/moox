@@ -77,6 +77,7 @@ func Forward(ctx context.Context, client *http.Client, route Route, method strin
 func safeClient(client *http.Client) *http.Client {
 	if client != nil {
 		copy := *client
+		copy.Jar = nil
 		if copy.Transport == nil {
 			copy.Transport = safeTransport()
 		}
