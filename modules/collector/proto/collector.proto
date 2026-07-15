@@ -98,6 +98,9 @@ message DisableTaskRuleRsp {
 
 // TaskInstance 任务实例。
 message TaskInstance {
+  reserved 12;
+  reserved "planned_exec_node";
+
   string space_id = 1;
   string task_id = 2;
   string rule_id = 3;
@@ -109,7 +112,6 @@ message TaskInstance {
   string symbol = 9;
   string interval = 10;
   google.protobuf.Struct task_params = 11;
-  string planned_exec_node = 12;
   string last_exec_node = 13;
   TaskInstanceStatus last_exec_status = 14;
   string last_exec_time = 15;  // RFC3339，可为空
@@ -122,6 +124,9 @@ message TaskInstance {
 
 // TaskInstanceFilter 任务实例筛选条件。
 message TaskInstanceFilter {
+  reserved 12;
+  reserved "planned_exec_node";
+
   string space_id = 1;
   string rule_id = 2;
   string task_id = 3;
@@ -133,7 +138,6 @@ message TaskInstanceFilter {
   string symbol = 9;
   string interval = 10;
   TaskInstanceStatus last_exec_status = 11;
-  string planned_exec_node = 12;
   string last_exec_node = 13;
   bool include_deleted = 14;
   common.Page page = 15;
