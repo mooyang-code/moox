@@ -1,5 +1,7 @@
 # Node Service Gateway Implementation Plan
 
+> **Status: completed.** This file is the historical execution checklist. See [节点服务网关架构](../../节点服务网关架构.md) for the implemented architecture and [Node Gateway 运维手册](../../ops/node-gateway.md) for current operations.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an independent per-server `moox-gateway`, move `/api/service/*` out of Admin, manage node-local routes from Service Management, and make the two Monitor instances inspect each other through the gateways.

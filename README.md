@@ -18,6 +18,8 @@ MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点�
 
 管理台登录使用 bcrypt 密码、一次性登录挑战、24 小时 JWT/session，登录后每个管理请求还必须带 nonce 防重放的会话 HMAC。后台接口使用独立 service HMAC，诊断端口使用独立 health HMAC。详见 [认证鉴权](docs/认证鉴权.md) 和 [管理台 HTTPS 与证书](docs/运维/管理台HTTPS与证书.md)。
 
+中央控制面、每台机器独立 Gateway、节点路由和可用性边界见[节点服务网关架构](docs/节点服务网关架构.md)；两节点部署与互检操作见[Node Gateway 运维手册](docs/ops/node-gateway.md)。
+
 ## EventBus 与指标监控
 
 `moox-eventbus` 是唯一的生产 NATS JetStream 所有者。Storage、CloudNode、Factor

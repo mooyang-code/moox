@@ -3,20 +3,22 @@
 ## 网络拓扑
 
 ```text
-Browser --HTTPS--> Caddy:9527 --HTTP loopback--> web-host:9528 or admin-control:11000
-Backend/SCF --HTTPS + service HMAC--> Caddy:11001 --HTTP loopback--> admin-service:11002
+Browser --HTTPS--> 中央 Caddy --HTTP loopback--> web-host:9528 or Admin:11000
+Gateway --HTTPS + control HMAC--> 中央 Caddy --HTTP loopback--> Admin:11000
+Backend/SCF --HTTPS + service HMAC--> 节点 Caddy --HTTP loopback--> Gateway:11002
 Monitor --health HMAC--> dedicated internal health ports
 ```
 
-Caddy 是唯一公开边缘。`9527` 只允许站点路由和 `/api/admin/*`，`11001` 只允许 `/api/service/*`；其他 API 与诊断路由返回 `404`。web-host 只提供静态文件，不代理 API。
+Caddy 是每台服务器唯一公开边缘。中央节点允许站点、`/api/admin/*`、`/api/gateway-control/*` 和本机 `/api/service/*`；`--no-admin` 节点只允许 `/api/service/*`。其他 API 与诊断路由返回 `404`。web-host 只提供静态文件，不代理 API。端口由 `--browser-https-port` 和 `--service-https-port` 决定；它们相同时由路径完成分流。
 
 | 组件 | 默认监听 | 可见性 | 鉴权/用途 |
 | --- | --- | --- | --- |
-| Caddy browser edge | `0.0.0.0:9527` HTTPS | 公开 | 站点 + `/api/admin/*` |
-| Caddy service edge | `0.0.0.0:11001` HTTPS | 公开 | `/api/service/*` + service HMAC |
+| 中央 Caddy HTTPS edge | 部署参数决定 | 公开 | 站点、`/api/admin/*`、`/api/gateway-control/*`、本机 `/api/service/*` |
+| 普通节点 Caddy HTTPS edge | 部署参数决定 | 公开 | 仅 `/api/service/*` + service HMAC |
 | web-host | `127.0.0.1:9528` HTTP | loopback | Caddy 静态上游 |
 | Admin control | `127.0.0.1:11000` HTTP | loopback | Caddy browser 上游 |
-| Admin service | `127.0.0.1:11002` HTTP | loopback | Caddy service 上游/同机调用 |
+| Node Gateway | `127.0.0.1:11002` HTTP | loopback | Caddy service 上游/同机调用 |
+| Node Gateway diagnostics | `127.0.0.1:11012` HTTP | loopback | `healthz`、`readyz`、`metrics` |
 | web-host health | `127.0.0.1:19527` HTTP | 内部 | health HMAC |
 | Admin health | `127.0.0.1:11010` HTTP | 内部 | health HMAC |
 | 其他模块诊断端口 | 模块配置 | 可配置私网 | health HMAC |
@@ -25,7 +27,7 @@ Caddy 是唯一公开边缘。`9527` 只允许站点路由和 `/api/admin/*`，`
 
 ## 首次部署
 
-`make deploy ARGS="--target user@host --dir /home/user/moox/prod --public-host <IP-or-DNS>"` 会自动执行 Caddy 前置步骤：下载固定的 Caddy `v2.11.4`、校验官方 checksum、安装到部署目录、启动 loopback 上游、启动或 reload MooX 管理的 Caddy，然后做 HTTPS 验收。正常流程不需要也不应预先安装系统 Caddy。部署还会以 `--target-ca auto` 安装目标机信任，并以 `--local-ca auto` 检查操作机信任；本机没有安装时会自动安装。根证书默认保存为 `~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt`，文件名带目标地址，迁移或多服务器并存时可直接区分。若本机缺少管理员权限，部署会明确失败并给出安装命令；只有明确不需要浏览器访问时才使用 `--local-ca skip`。使用 `--target-ca skip` 可显式跳过目标机安装。
+`make deploy` 必须同时提供稳定 `--node-id`、中央 `--gateway-control-url`、peer CA bundle 以及 control/service key 文件。部署会自动执行 Caddy 前置步骤：下载固定版本、校验官方 checksum、安装到部署目录、启动 loopback 上游、安全启动或 reload MooX 管理的 Caddy，然后做 HTTPS 验收。正常流程不需要也不应预先安装系统 Caddy。部署还会以 `--target-ca auto` 安装目标机信任，并以 `--local-ca auto` 检查操作机信任；本机没有安装时会自动安装。根证书默认保存为 `~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt`，文件名带目标地址，迁移或多服务器并存时可直接区分。若本机缺少管理员权限，部署会明确失败并给出安装命令；只有明确不需要浏览器访问时才使用 `--local-ca skip`。使用 `--target-ca skip` 可显式跳过目标机安装。
 
 管理边界是部署目录下的 `bin/caddy`、`config/caddy/Caddyfile`、`run/caddy.pid` 和 `data/caddy`。端口被其他进程占用或发现非 MooX Caddy 时部署失败并保留对方进程。
 
@@ -37,10 +39,11 @@ Caddy `tls internal` 生成私有 CA。`data/caddy` 在普通重新部署和数�
 skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox/prod --output ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt
 skills/moox/scripts/caddy-ca.sh inspect --ca-file ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt
 skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt
-curl --cacert ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt https://<host>:9527/
-curl --cacert ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt https://<host>:11001/api/service/sysdeploy/GetServiceDeployment
-openssl s_client -connect <host>:9527 -servername <dns-name> -CAfile ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt </dev/null
+curl --cacert ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt https://<host>:<browser-port>/
+openssl s_client -connect <host>:<service-port> -servername <dns-name> -CAfile ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt </dev/null
 ```
+
+`/api/service/*` 不能用普通 curl 作为成功验收，它还需要合法 service HMAC 和目标 `node_id`。正式签名示例见 [Node Gateway 运维手册](../ops/node-gateway.md)。完整组件边界见[节点服务网关架构](../节点服务网关架构.md)。
 
 `install` 在 macOS 调用 `security add-trusted-cert`，Windows 调用 `Import-Certificate`，Debian/Ubuntu 使用 `update-ca-certificates`，RHEL/Fedora 使用 `update-ca-trust`。每次公开部署都会按 SHA-256 指纹检查操作机信任；缺失时自动安装，非交互部署会要求免密管理员权限，否则失败并提示手工命令。每台浏览器机器都需本地安装 CA，否则浏览器显示不可信警告；不要通过跳过 TLS 验证规避警告。
 

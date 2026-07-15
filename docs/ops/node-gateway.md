@@ -1,5 +1,7 @@
 # Node Gateway 运维手册
 
+> 本手册对应当前“一个中央 Admin + 每台服务器一个独立 Gateway”的已实现架构。组件边界、路由模型和失败语义见[节点服务网关架构](../节点服务网关架构.md)。
+
 本文覆盖广州 `gateway-gz-122`（`106.53.107.122`）和香港
 `gateway-hk-177`（`43.132.204.177`）两个节点。部署目录固定为
 `/home/ubuntu/moox/prod`。Gateway 只监听本机 `127.0.0.1:11002`，诊断端口为
@@ -67,8 +69,11 @@ done
 
 ## 两节点部署命令
 
-> **数据丢失警告：** 广州部署命令包含 `--reset-data`，会删除并重建未上线环境的
-> Admin 数据库。未完成下面的数据库备份和 `t_ssh_host` 导出时，禁止执行部署命令。
+以下命令用于正常重复发布，不删除现有数据。Gateway 是所有节点的默认组件；香港使用
+`--no-admin`，因此不包含浏览器站点、Admin schema 和 Admin 凭据。
+
+只有明确要重建未上线环境时才额外使用 `--reset-data`。该参数会删除整个目标数据目录；
+执行前必须备份 Admin 数据库并导出 `t_ssh_host`：
 
 先在广州节点创建带时间戳的完整数据库备份，并把主机配置导出到本机：
 
@@ -90,10 +95,10 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode i
   --gateway-service-key-file /tmp/moox-gateway-service.key \
   --monitor-instance-id monitor-gz-122 \
   --monitor-peer monitor-hk-177,https://43.132.204.177,gateway-hk-177 \
-  --admin-password-file /tmp/moox-admin-password --reset-data
+  --admin-password-file /tmp/moox-admin-password
 ```
 
-广州部署成功并完成新库初始化后，立即恢复主机配置：
+若本次确实使用了 `--reset-data`，部署成功并完成新库初始化后立即恢复主机配置：
 
 ```bash
 ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/moox-ssh-hosts.sql
@@ -119,6 +124,10 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/
 `--monitor-peer` 可重复传入；部署脚本严格校验三元组、稳定 ID 和 URL，并把实例 ID 与
 peer 列表写入 Monitor 配置。HTTPS peer URL 不能带账号、路径、查询或 fragment；明文
 HTTP 只允许 loopback。
+
+当 `--no-storage` 和 `--no-eventbus` 同时使用时，部署脚本按 peer-only Monitor 处理：关闭
+指标/主机指标消费并跳过 Storage 元数据初始化，只保留对端快照、状态和告警能力。这种模式
+适合互检节点，不代表完整监控数据节点。
 
 ## 路由检查
 
