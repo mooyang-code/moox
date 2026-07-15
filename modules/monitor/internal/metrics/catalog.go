@@ -2,7 +2,9 @@ package metrics
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -66,11 +68,11 @@ func (c *MetricCatalog) ListNames(ctx context.Context, serviceName string, offse
 	}
 	offset, limit = boundedPage(offset, limit)
 	type nameRow struct {
-		ServiceName string    `gorm:"column:service_name"`
-		MetricName  string    `gorm:"column:metric_name"`
-		MetricType  string    `gorm:"column:metric_type"`
-		SeriesCount int       `gorm:"column:series_count"`
-		LastSeen    time.Time `gorm:"column:last_seen"`
+		ServiceName string            `gorm:"column:service_name"`
+		MetricName  string            `gorm:"column:metric_name"`
+		MetricType  string            `gorm:"column:metric_type"`
+		SeriesCount int               `gorm:"column:series_count"`
+		LastSeen    metricCatalogTime `gorm:"column:last_seen"`
 	}
 	var rows []MetricName
 	q := c.messageStore.db.WithContext(ctx).Table("t_monitor_metric_series").Select("c_service_name AS service_name, c_metric_name AS metric_name, MAX(c_metric_type) AS metric_type, COUNT(*) AS series_count, MAX(c_last_seen_at) AS last_seen").Group("c_service_name, c_metric_name")
@@ -90,9 +92,61 @@ func (c *MetricCatalog) ListNames(ctx context.Context, serviceName string, offse
 		return nil, 0, err
 	}
 	for _, row := range grouped {
-		rows = append(rows, MetricName{ServiceName: row.ServiceName, MetricName: row.MetricName, MetricType: row.MetricType, SeriesCount: row.SeriesCount, LastSeenAt: row.LastSeen})
+		rows = append(rows, MetricName{ServiceName: row.ServiceName, MetricName: row.MetricName, MetricType: row.MetricType, SeriesCount: row.SeriesCount, LastSeenAt: row.LastSeen.Time})
 	}
 	return rows, total, nil
+}
+
+type metricCatalogTime struct {
+	time.Time
+}
+
+func (t metricCatalogTime) Value() (driver.Value, error) {
+	return t.Time, nil
+}
+
+func (t *metricCatalogTime) Scan(value any) error {
+	switch value := value.(type) {
+	case time.Time:
+		t.Time = value
+		return nil
+	case string:
+		return t.parse(value)
+	case []byte:
+		return t.parse(string(value))
+	case nil:
+		t.Time = time.Time{}
+		return nil
+	default:
+		return fmt.Errorf("unsupported metric catalog time type %T", value)
+	}
+}
+
+func (t *metricCatalogTime) parse(value string) error {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+	} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			t.Time = parsed
+			return nil
+		}
+	}
+	valueWithoutUTC := strings.TrimSuffix(value, "Z")
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02T15:04:05.999999999",
+	} {
+		parsed, err := time.ParseInLocation(layout, valueWithoutUTC, time.UTC)
+		if err == nil {
+			t.Time = parsed
+			return nil
+		}
+	}
+	return fmt.Errorf("parse metric catalog time %q", value)
 }
 
 type MetricName struct {
