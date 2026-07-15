@@ -281,7 +281,7 @@ except ValueError:
     raise SystemExit(1)
 if parsed.scheme not in {"http", "https"} or not parsed.hostname:
     raise SystemExit(1)
-if parsed.netloc.endswith(":") or "\\" in parsed.netloc:
+if parsed.netloc.endswith(":") or "\\" in parsed.netloc or "%" in parsed.netloc:
     raise SystemExit(1)
 if parsed.username is not None or parsed.password is not None:
     raise SystemExit(1)

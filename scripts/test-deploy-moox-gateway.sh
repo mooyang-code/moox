@@ -125,6 +125,9 @@ expect_url_rejected 'https://user:pass@example.com' credentials
 expect_url_rejected 'https://example.com?node=other' query
 expect_url_rejected 'https://example.com/#fragment' fragment
 expect_url_rejected $'https://example.com\ninvalid' whitespace
+expect_url_rejected 'https://%65xample.com' escaped-authority
+expect_url_rejected 'https://example.com:' empty-port
+expect_url_rejected 'https://[::1' malformed-ipv6
 
 deploy_fixture "${TMP}/peers.pem" valid >/dev/null
 DEPLOYED="${TMP}/deploy-valid"
