@@ -147,6 +147,7 @@ for secret in gateway-control.env gateway-service.env gateway-control.key gatewa
   mode=$(stat -f '%Lp' "${DEPLOYED}/secrets/${secret}" 2>/dev/null || stat -c '%a' "${DEPLOYED}/secrets/${secret}")
   [[ "${mode}" == 600 ]] || fail "${secret} mode is ${mode}, want 600"
 done
+grep -Fq 'MOOX_GATEWAY_NODE_ID=gateway-test' "${DEPLOYED}/secrets/gateway-service.env" || fail 'Gateway node ID was not scoped with service credentials'
 grep -Fq 'start_admin' "${DEPLOYED}/start.sh" || fail 'central lifecycle function was omitted'
 grep -Fq 'start_gateway' "${DEPLOYED}/start.sh" || fail 'Gateway lifecycle function was omitted'
 grep -Fq 'start_monitor' "${DEPLOYED}/start.sh" || fail 'Monitor lifecycle function was omitted'
