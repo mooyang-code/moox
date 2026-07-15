@@ -25,6 +25,7 @@ use (
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/crypto
+	./packages/gatewayauth
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
