@@ -75,7 +75,13 @@ test.beforeEach(async ({ page }) => {
 
 test('supports the approved desktop governance workflow', async ({ page }, testInfo) => {
   await page.goto('/#/data/fields');
-  await expect(page.getByRole('heading', { name: '字段管理' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '字段管理' })).toHaveCount(0);
+  const searchBox = page.getByPlaceholder('搜索字段 ID、中文名或描述');
+  const createButton = page.getByRole('button', { name: '新建字段' });
+  const [searchBounds, createBounds] = await Promise.all([searchBox.boundingBox(), createButton.boundingBox()]);
+  const searchCenter = (searchBounds?.y || 0) + (searchBounds?.height || 0) / 2;
+  const createCenter = (createBounds?.y || 0) + (createBounds?.height || 0) / 2;
+  expect(Math.abs(searchCenter - createCenter)).toBeLessThanOrEqual(2);
   await expect(page.getByText('收盘价', { exact: true })).toBeVisible();
   await expect(page.getByText('3 个字段')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('field-workbench-desktop.png'), fullPage: true });
