@@ -206,15 +206,24 @@ check_ports() {
 }
 
 port_pids() {
-  local port="$1" hex inode fd pid
+  local port="$1" hex inode fd pid owners inspected=0
   if command -v lsof >/dev/null 2>&1; then
-    lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u || true
-    return
+    inspected=1
+    owners=$(lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u || true)
+    if [[ -z "${owners}" && "${OS}" == linux ]] && requires_privileged_port && sudo -n true >/dev/null 2>&1; then
+      owners=$(sudo -n lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u || true)
+    fi
+    if [[ -n "${owners}" ]]; then printf '%s\n' "${owners}"; return; fi
   fi
   if command -v ss >/dev/null 2>&1; then
-    ss -H -ltnp "sport = :${port}" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u || true
-    return
+    inspected=1
+    owners=$(ss -H -ltnp "sport = :${port}" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u || true)
+    if [[ -z "${owners}" && "${OS}" == linux ]] && requires_privileged_port && sudo -n true >/dev/null 2>&1; then
+      owners=$(sudo -n ss -H -ltnp "sport = :${port}" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u || true)
+    fi
+    if [[ -n "${owners}" ]]; then printf '%s\n' "${owners}"; return; fi
   fi
+  ((inspected == 0)) || return 0
   [[ -r /proc/net/tcp ]] || fail 'cannot inspect listener ownership: install ss or lsof'
   hex=$(printf '%04X' "${port}")
   for inode in $(awk -v p=":${hex}" '$2 ~ p"$" && $4=="0A" {print $10}' /proc/net/tcp /proc/net/tcp6 2>/dev/null); do
