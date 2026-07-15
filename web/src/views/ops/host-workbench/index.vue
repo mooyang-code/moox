@@ -71,8 +71,9 @@ const fileManagerVisible = ref(false);
 const fileManagerLoading = ref(false);
 const fileManagerSessionId = ref('');
 const terminalTitle = computed(() => {
-  const address = sshHosts.value.find((host) => host.id === terminalHostId.value)?.address;
-  return address ? `SSH 终端 - ${address}` : 'SSH 终端';
+  const host = sshHosts.value.find((item) => item.id === terminalHostId.value);
+  if (!host?.address) return 'SSH 终端';
+  return host.name ? `SSH 终端 - ${host.address}（${host.name}）` : `SSH 终端 - ${host.address}`;
 });
 const rows = computed<HostWorkbenchRow[]>(() => mergeHostWorkbenchRows(monitors.value, sshHosts.value, sessions.value));
 const monitorByHostId = computed(() => Object.fromEntries(rows.value.filter((row) => row.ssh?.id !== undefined && row.monitor).map((row) => [row.ssh!.id, row.monitor])));
