@@ -156,6 +156,38 @@ func TestAdminRouterDeniesMachineOnlyRevealSecretAliases(t *testing.T) {
 	assert.Empty(t, provider.lastNode)
 }
 
+func TestAdminRouterDeniesRevealSecretThroughDeploymentAlias(t *testing.T) {
+	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{
+		"/api/admin/secret_alias/RevealSecret",
+		"/api/admin/secret_alias/ListSecrets",
+	}}})
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		assert.Equal(t, "/TRPC.MOOX.OPS.SECRET_MGR/ListSecrets", r.URL.Path)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+	}))
+	t.Cleanup(upstream.Close)
+	provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
+		"admin-node-test:secret_alias": {
+			Address: upstream.Listener.Addr().String(),
+			Path:    "TRPC.MOOX.OPS.SECRET_MGR",
+		},
+	}}
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildRouter()
+
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/admin/secret_alias/RevealSecret", bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
+	assert.Equal(t, http.StatusNotFound, denied.Code)
+	assert.Equal(t, 0, upstreamCalls)
+	assert.Equal(t, "admin-node-test", provider.lastNode)
+
+	allowed := httptest.NewRecorder()
+	router.ServeHTTP(allowed, httptest.NewRequest(http.MethodPost, "/api/admin/secret_alias/ListSecrets", bytes.NewReader([]byte(`{}`))))
+	assert.Equal(t, http.StatusOK, allowed.Code)
+	assert.Equal(t, 1, upstreamCalls)
+}
+
 func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},

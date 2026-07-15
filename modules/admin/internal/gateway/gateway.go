@@ -179,9 +179,18 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	detail, err := resolveAdminServiceDetail(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID)
+	if err != nil {
+		writeForwardError(ctx, w, err, headers)
+		return
+	}
+	if isMachineOnlyResolvedMethod(detail, method) {
+		http.NotFound(w, r)
+		return
+	}
 	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），
 	// 框架服务端自动 JSON↔PB，网关不加工 body；未配置 serviceID 返回 404。
-	respBody, err := forwardHTTP(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID, method, body, headers)
+	respBody, err := forwardHTTPToDetail(ctx, serviceID, method, detail, body, headers)
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
 		return
@@ -199,6 +208,11 @@ func isMachineOnlyAdminMethod(serviceID, method string) bool {
 	default:
 		return false
 	}
+}
+
+func isMachineOnlyResolvedMethod(detail ServiceDetail, method string) bool {
+	return canonicalAdminSegment(method) == "revealsecret" &&
+		canonicalAdminSegment(detail.Path) == "trpcmooxopssecretmgr"
 }
 
 func canonicalAdminSegment(value string) string {
