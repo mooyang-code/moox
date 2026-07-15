@@ -71,27 +71,7 @@ func (r *PeerRepository) MarkStale(ctx context.Context, before time.Time) error 
 // MarkStaleTransitions returns only peers changed from active to down by this
 // call, allowing callers to emit one alert transition under concurrent pulls.
 func (r *PeerRepository) MarkStaleTransitions(ctx context.Context, before time.Time) ([]string, error) {
-	instances, err := r.ListInstances(ctx)
-	if err != nil {
-		return nil, err
-	}
-	transitioned := make([]string, 0)
-	for _, instance := range instances {
-		if instance.Status != domain.InstanceStatusActive || instance.LastSeenAt == nil || !instance.LastSeenAt.Before(before) {
-			continue
-		}
-		result := r.db.WithContext(ctx).
-			Model(&domain.MonitorInstance{}).
-			Where("c_instance_id = ? AND c_status = ?", instance.InstanceID, domain.InstanceStatusActive).
-			Updates(map[string]any{"c_status": domain.InstanceStatusDown})
-		if result.Error != nil {
-			return nil, result.Error
-		}
-		if result.RowsAffected > 0 {
-			transitioned = append(transitioned, instance.InstanceID)
-		}
-	}
-	return transitioned, nil
+	return r.MarkStaleWithAlert(ctx, before, PeerTransitionOptions{})
 }
 
 func (r *PeerRepository) UpsertSnapshot(ctx context.Context, snapshot *domain.PeerSnapshot) error {

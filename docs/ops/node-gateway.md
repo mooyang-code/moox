@@ -67,6 +67,16 @@ done
 
 ## 两节点部署命令
 
+> **数据丢失警告：** 广州部署命令包含 `--reset-data`，会删除并重建未上线环境的
+> Admin 数据库。未完成下面的数据库备份和 `t_ssh_host` 导出时，禁止执行部署命令。
+
+先在广州节点创建带时间戳的完整数据库备份，并把主机配置导出到本机：
+
+```bash
+ssh ubuntu@106.53.107.122 'cp /home/ubuntu/moox/prod/data/admin.db /home/ubuntu/moox/prod/data/admin.db.pre-gateway-$(date +%Y%m%d%H%M%S)'
+ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode insert t_ssh_host" "select * from t_ssh_host;"' > /tmp/moox-ssh-hosts.sql
+```
+
 准备好双 CA bundle、control/service key 和 Admin 密码文件后，先部署广州：
 
 ```bash
@@ -81,6 +91,12 @@ done
   --monitor-instance-id monitor-gz-122 \
   --monitor-peer monitor-hk-177,https://43.132.204.177,gateway-hk-177 \
   --admin-password-file /tmp/moox-admin-password --reset-data
+```
+
+广州部署成功并完成新库初始化后，立即恢复主机配置：
+
+```bash
+ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/moox-ssh-hosts.sql
 ```
 
 创建香港网关节点和本机 Monitor 路由后，再部署香港：

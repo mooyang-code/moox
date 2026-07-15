@@ -178,18 +178,6 @@ func (r *AlertRepository) CreateEventIdempotent(ctx context.Context, event *doma
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_event_id"}}, DoNothing: true}).Create(event).Error
 }
 
-// RecordAvailabilityTransition stores the peer state and its alert event in a
-// single transaction so the status view and event stream cannot diverge.
-func (r *AlertRepository) RecordAvailabilityTransition(ctx context.Context, state *domain.AlertState, event *domain.AlertEvent) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		alerts := NewAlertRepository(tx)
-		if err := alerts.CreateEventIdempotent(ctx, event); err != nil {
-			return err
-		}
-		return alerts.UpsertState(ctx, state)
-	})
-}
-
 func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit int) ([]domain.AlertEvent, error) {
 	if limit <= 0 {
 		limit = 100
