@@ -43,6 +43,21 @@ assert_contains "${DEPLOY}" 'LOCAL_DEPLOY_ARCHIVE=$(mktemp'
 assert_contains "${DEPLOY}" 'REMOTE_DEPLOY_ARCHIVE'
 assert_contains "${DEPLOY}" 'cleanup_deploy_artifacts'
 
+production_contract_paths=(
+  "${DEPLOY}"
+  "${RELEASE}"
+  "${ROOT}/scripts/build.sh"
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh"
+  "${ROOT}/deploy"
+)
+while IFS= read -r config_dir; do
+  production_contract_paths+=("${config_dir}")
+done < <(find "${ROOT}/modules" -type d -name config -print)
+if obsolete_refs=$(rg -n 'service-auth\.env|LEGACY_SERVICE_ENV|MOOX_SERVICE_AUTH_' "${production_contract_paths[@]}" 2>/dev/null); then
+  printf '%s\n' "${obsolete_refs}" >&2
+  fail 'production scripts or config still reference the obsolete service-auth contract'
+fi
+
 assert_contains "${CADDY}" 'handle /api/gateway-control/*'
 assert_contains "${CADDY}" 'reverse_proxy 127.0.0.1:11000'
 assert_contains "${CADDY}" 'handle /api/service/*'
@@ -69,7 +84,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "${ROOT}/bin"
-for name in moox-gateway moox-gateway-cli moox-cli moox-monitor moox-monitor-cli; do
+for name in moox-gateway moox-gateway-cli moox-cli moox-monitor moox-monitor-cli moox-eventbus; do
   binary="${ROOT}/bin/${name}"
   if [[ ! -x "${binary}" ]]; then
     printf '#!/usr/bin/env bash\nexit 0\n' >"${binary}"
@@ -141,6 +156,7 @@ grep -Fq 'id: gateway-test' "${DEPLOYED}/gateway/config/app.yaml" || fail 'node 
 grep -Fq 'base_url: "https://admin.example.com:9527/"' "${DEPLOYED}/gateway/config/app.yaml" || fail 'control URL was not safely rendered as YAML'
 [[ ! -e "${DEPLOYED}/admin" && ! -e "${DEPLOYED}/bin/moox-admin" ]] || fail 'no-admin staged Admin artifacts'
 [[ ! -e "${DEPLOYED}/bin/moox-web-host" && ! -e "${DEPLOYED}/secrets/admin-jwt.env" ]] || fail 'no-admin staged browser or Admin credentials'
+[[ ! -e "${DEPLOYED}/secrets/service-auth.env" ]] || fail 'deployment generated obsolete service-auth credentials'
 cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
 ! grep -Rqs -- 'PRIVATE KEY' "${DEPLOYED}/certs" || fail 'a private CA key was staged'
 for secret in gateway-control.env gateway-service.env gateway-control.key gateway-service.key; do
@@ -169,7 +185,7 @@ kill -0 "${unrelated_pid}" 2>/dev/null || fail 'Gateway stop killed an unrelated
 # A no-Admin Monitor node still needs moox-cli for metadata apply, and only
 # Monitor (not Gateway) may inherit the cluster service credential.
 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-monitor" --stage "${TMP}/stage-monitor" \
-  --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
+  --skip-build --no-start --no-admin --no-storage --no-archive \
   --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
   --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
   --monitor-instance-id monitor-local --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
@@ -192,15 +208,23 @@ cat >"${MONITOR_DEPLOY}/bin/moox-monitor" <<'SH'
 env >"${MOOX_TEST_CAPTURE_DIR}/monitor.env"
 sleep 30
 SH
+cat >"${MONITOR_DEPLOY}/bin/moox-eventbus" <<'SH'
+#!/usr/bin/env bash
+env >"${MOOX_TEST_CAPTURE_DIR}/eventbus.env"
+sleep 30
+SH
 printf '#!/usr/bin/env bash\nexit 0\n' >"${MONITOR_DEPLOY}/bin/moox-cli"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${MONITOR_DEPLOY}/bin/moox-monitor-cli"
-chmod +x "${MONITOR_DEPLOY}/bin/moox-gateway" "${MONITOR_DEPLOY}/bin/moox-monitor" \
+chmod +x "${MONITOR_DEPLOY}/bin/moox-gateway" "${MONITOR_DEPLOY}/bin/moox-monitor" "${MONITOR_DEPLOY}/bin/moox-eventbus" \
   "${MONITOR_DEPLOY}/bin/moox-cli" "${MONITOR_DEPLOY}/bin/moox-monitor-cli"
 metadata_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 python3 -m http.server "${metadata_port}" --bind 127.0.0.1 >/dev/null 2>&1 &
 TEST_PIDS+=("$!")
 MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 "${MONITOR_DEPLOY}/start.sh" gateway >/dev/null
 TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/gateway.pid")")
+MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 MOOX_WAIT_EVENTBUS_SECONDS=0 \
+  "${MONITOR_DEPLOY}/start.sh" eventbus >/dev/null 2>&1 || true
+TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/eventbus.pid")")
 MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 \
   MOOX_METRICS_STORAGE_METADATA_URL="http://127.0.0.1:${metadata_port}" \
   MOOX_METRICS_STORAGE_ROUTE_SEED="${MONITOR_DEPLOY}/examples/metadata-monitor-metrics-local-route.seed.yaml" \
@@ -208,7 +232,7 @@ MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 \
   "${MONITOR_DEPLOY}/start.sh" monitor >/dev/null
 TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/monitor.pid")")
 for _ in $(seq 1 50); do
-  [[ -s "${TMP}/captures/gateway.env" && -s "${TMP}/captures/monitor.env" ]] && break
+  [[ -s "${TMP}/captures/gateway.env" && -s "${TMP}/captures/eventbus.env" && -s "${TMP}/captures/monitor.env" ]] && break
   sleep 0.1
 done
 grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=service-secret' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive the Gateway service key'
@@ -217,6 +241,8 @@ grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" 
 ! grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the service key instead of reading its raw key file'
 ! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the control key instead of reading its raw key file'
 ! grep -Fq 'MOOX_MONITOR_INSTANCE_ID=' "${TMP}/captures/gateway.env" || fail 'Gateway inherited the Monitor instance ID'
+! grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=' "${TMP}/captures/eventbus.env" || fail 'Eventbus inherited the Gateway service key'
+! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/eventbus.env" || fail 'Eventbus inherited the Gateway control key'
 
 expect_monitor_arg_rejected() {
   local label="$1"; shift

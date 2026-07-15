@@ -26,14 +26,16 @@ cloudruntime.Register("collect.kline", cloudruntime.HandlerFunc(klineHandler))
 cloudruntime.Register("collect.symbol", cloudruntime.HandlerFunc(symbolHandler))
 
 err := cloudruntime.Run(ctx, cloudruntime.Config{
-    ServiceGatewayTarget: "http://127.0.0.1:11000",
+    ServiceGatewayTarget: "http://127.0.0.1:11002",
     SpaceID:              "crypto",
     NodeID:               "collector-node-1",
     SupportedJobTypes:    []string{"collect.kline", "collect.symbol"},
     RuntimeVersion:       "dev",
     Auth: cloudruntime.AuthConfig{
-        AccessKey: "moox-service",
-        SecretKey: os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"),
+        TargetNode: os.Getenv("MOOX_GATEWAY_NODE_ID"),
+        AccessKey:  os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"),
+        SecretKey:  os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"),
+        CAFile:     os.Getenv("MOOX_GATEWAY_CA_FILE"),
     },
 })
 ```

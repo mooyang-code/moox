@@ -847,7 +847,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
-[[ -r "${ROOT}/secrets/service-auth.env" ]] || { echo "missing service credentials" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/gateway-control.env" ]] || { echo "missing Gateway control credentials" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/gateway-service.env" ]] || { echo "missing Gateway service credentials" >&2; exit 1; }
 set -a
@@ -881,12 +880,6 @@ GATEWAY_SERVICE_ENV=(
   "MOOX_GATEWAY_SERVICE_KEY_ID=$(read_env_value "${ROOT}/secrets/gateway-service.env" MOOX_GATEWAY_SERVICE_KEY_ID)"
   "MOOX_GATEWAY_SERVICE_SECRET_KEY=$(read_env_value "${ROOT}/secrets/gateway-service.env" MOOX_GATEWAY_SERVICE_SECRET_KEY)"
   "MOOX_GATEWAY_CA_FILE=${MOOX_GATEWAY_CA_FILE}"
-)
-LEGACY_SERVICE_ENV=(
-  "MOOX_SERVICE_AUTH_VERSION=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_VERSION)"
-  "MOOX_SERVICE_AUTH_ACCESS_KEY=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_ACCESS_KEY)"
-  "MOOX_SERVICE_AUTH_SECRET_KEY=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_SECRET_KEY)"
-  "MOOX_SERVICE_AUTH_EXPIRE_SECONDS=$(read_env_value "${ROOT}/secrets/service-auth.env" MOOX_SERVICE_AUTH_EXPIRE_SECONDS)"
 )
 ADMIN_SECRET_ENV=("${GATEWAY_CONTROL_ENV[@]}")
 if [[ -r "${ROOT}/secrets/admin-jwt.env" ]]; then
@@ -980,19 +973,16 @@ STORAGE_SCHEMA_ENV=(
 
 COLLECTOR_ENV=(
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
-  "${LEGACY_SERVICE_ENV[@]}"
 )
 
 FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
   "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
-  "${LEGACY_SERVICE_ENV[@]}"
 )
 
 MONITOR_ENV=(
   "MOOX_MONITOR_INSTANCE_ID=${MOOX_MONITOR_INSTANCE_ID}"
-  "${LEGACY_SERVICE_ENV[@]}"
 )
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -2174,17 +2164,10 @@ sync_local_stage() {
     printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "${secret}" >"${deploy_dir}/secrets/health-auth.env"
   fi
   chmod 0600 "${deploy_dir}/secrets/health-auth.env"
-  if [[ ! -s "${deploy_dir}/secrets/service-auth.env" ]]; then
-    umask 077
-    printf 'MOOX_SERVICE_AUTH_VERSION=moox-auth-v2\nMOOX_SERVICE_AUTH_ACCESS_KEY=moox-service\nMOOX_SERVICE_AUTH_SECRET_KEY=%s\nMOOX_SERVICE_AUTH_EXPIRE_SECONDS=60\n' "$(generate_secret "${MOOX_SECURITY_SECRET_CLI:-${MOOX_HEALTH_SECRET_CLI:-${deploy_dir}/bin/moox-admin-cli}}" service-auth)" >"${deploy_dir}/secrets/service-auth.env"
-  fi
-  sed -i.bak 's/^MOOX_SERVICE_AUTH_EXPIRE_SECONDS=.*/MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60/' "${deploy_dir}/secrets/service-auth.env"
-  rm -f "${deploy_dir}/secrets/service-auth.env.bak"
   if [[ "${WITH_ADMIN}" -eq 1 && ! -s "${deploy_dir}/secrets/admin-jwt.env" ]]; then
     umask 077
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret "${MOOX_SECURITY_SECRET_CLI:-${MOOX_HEALTH_SECRET_CLI:-${deploy_dir}/bin/moox-admin-cli}}" admin-jwt)" >"${deploy_dir}/secrets/admin-jwt.env"
   fi
-  chmod 0600 "${deploy_dir}/secrets/service-auth.env"
   [[ "${WITH_ADMIN}" -eq 0 ]] || chmod 0600 "${deploy_dir}/secrets/admin-jwt.env"
   log "deployed to ${deploy_dir}"
 
@@ -2379,17 +2362,11 @@ if [[ ! -s "${DEPLOY_DIR}/secrets/health-auth.env" ]]; then
   printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "${secret}" >"${DEPLOY_DIR}/secrets/health-auth.env"
 fi
 chmod 0600 "${DEPLOY_DIR}/secrets/health-auth.env"
-if [[ ! -s "${DEPLOY_DIR}/secrets/service-auth.env" ]]; then
-  umask 077
-  printf 'MOOX_SERVICE_AUTH_VERSION=moox-auth-v2\nMOOX_SERVICE_AUTH_ACCESS_KEY=moox-service\nMOOX_SERVICE_AUTH_SECRET_KEY=%s\nMOOX_SERVICE_AUTH_EXPIRE_SECONDS=60\n' "$(generate_secret service-auth)" >"${DEPLOY_DIR}/secrets/service-auth.env"
-fi
-sed -i.bak 's/^MOOX_SERVICE_AUTH_EXPIRE_SECONDS=.*/MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60/' "${DEPLOY_DIR}/secrets/service-auth.env"
-rm -f "${DEPLOY_DIR}/secrets/service-auth.env.bak"
 if [[ "${WITH_ADMIN}" == "1" && ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; then
   umask 077
   printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret admin-jwt)" >"${DEPLOY_DIR}/secrets/admin-jwt.env"
 fi
-chmod 0600 "${DEPLOY_DIR}/secrets/service-auth.env" "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/gateway-service.env" "${DEPLOY_DIR}/secrets/gateway-control.key" "${DEPLOY_DIR}/secrets/gateway-service.key"
+chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/gateway-service.env" "${DEPLOY_DIR}/secrets/gateway-control.key" "${DEPLOY_DIR}/secrets/gateway-service.key"
 [[ "${WITH_ADMIN}" == "0" ]] || chmod 0600 "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
   if [[ "${NO_START}" -eq 0 ]]; then
