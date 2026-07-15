@@ -219,7 +219,7 @@ export const staticRoutes = [
       },
       {
         path: "/ops/resource-monitor",
-        redirect: { path: "/ops/hosts", query: { tab: "hosts" } },
+        redirect: { path: "/ops/hosts", query: { tab: "monitor" } },
         meta: { title: "ops-resource-monitor", hide: true }
       },
       {

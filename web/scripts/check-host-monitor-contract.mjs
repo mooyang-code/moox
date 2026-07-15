@@ -6,8 +6,13 @@ import ts from 'typescript';
 const root = process.cwd();
 const sources = [
   path.join(root, 'src/api/modules/host-monitor.ts'),
-  path.join(root, 'src/views/container/resource-monitor/resource-monitor.vue'),
-].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  path.join(root, 'src/views/ops/host-workbench/index.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor-card-grid.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor-master-detail.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor-detail.vue'),
+  path.join(root, 'src/router/route.ts'),
+].map((file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').join('\n');
 
 const required = [
   'host_id',
@@ -15,14 +20,27 @@ const required = [
   'aggregateNetworkRate',
   'storage_available',
   'data_gap',
+  'key="monitor"',
+  'title="主机监控"',
+  'tab: "monitor"',
+  'getCurrentMetrics',
+  'listSSHHosts',
+  '15_000',
+  "'cards'",
+  'value="master"',
+  'host-monitor-card-grid',
+  'host-monitor-master-detail',
+  'host-monitor-detail',
   'value="3d"',
-  'selectedHostID',
+  'selectedRow',
   'filesystems',
   'rate_available',
-  'data_gap',
   'aria-pressed',
   'aria-label="自动刷新"',
-  'currentRequestID',
+  'min-height: 0',
+  '文件系统',
+  '磁盘 I/O',
+  '网络接口',
   'historyHasRenderableData',
 ];
 
