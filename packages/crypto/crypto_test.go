@@ -1,8 +1,12 @@
 package crypto
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"testing"
@@ -79,6 +83,30 @@ func TestDecryptWebCryptoVector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plaintext != "secret123" {
+		t.Fatalf("plaintext=%q", plaintext)
+	}
+}
+
+func TestDecryptLegacyKeyNormalization(t *testing.T) {
+	secret := "moox-admin-secret-key-32bytes"
+	block, err := aes.NewCipher(legacyKey(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		t.Fatal(err)
+	}
+	payload := gcm.Seal(nonce, nonce, []byte("legacy-secret"), nil)
+	plaintext, err := Decrypt(base64.StdEncoding.EncodeToString(payload), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plaintext != "legacy-secret" {
 		t.Fatalf("plaintext=%q", plaintext)
 	}
 }

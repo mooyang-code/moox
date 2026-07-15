@@ -66,7 +66,40 @@ func Decrypt(ciphertext, secret string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode ciphertext: %w", err)
 	}
-	block, err := aes.NewCipher(deriveKey(secret))
+	plaintext, err := decryptWithKey(data, deriveKey(secret))
+	if err == nil {
+		return plaintext, nil
+	}
+
+	// Secrets written before the shared crypto package was introduced used the
+	// legacy key normalization. Keep reads backward-compatible so a deployment
+	// can migrate an existing admin database without re-encrypting it blindly.
+	legacyPlaintext, legacyErr := decryptWithKey(data, legacyKey(secret))
+	if legacyErr == nil {
+		return legacyPlaintext, nil
+	}
+	return "", fmt.Errorf("decrypt ciphertext: %w", err)
+}
+
+func deriveKey(secret string) []byte {
+	hash := sha256.Sum256([]byte(secret))
+	return hash[:]
+}
+
+func legacyKey(secret string) []byte {
+	switch len(secret) {
+	case 16, 24, 32:
+		return []byte(secret)
+	}
+	if len(secret) > 32 {
+		return []byte(secret[:32])
+	}
+	hash := sha256.Sum256([]byte(secret))
+	return []byte(hex.EncodeToString(hash[:])[:32])
+}
+
+func decryptWithKey(data, key []byte) (string, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("create AES cipher: %w", err)
 	}
@@ -79,14 +112,9 @@ func Decrypt(ciphertext, secret string) (string, error) {
 	}
 	plaintext, err := gcm.Open(nil, data[:gcm.NonceSize()], data[gcm.NonceSize():], nil)
 	if err != nil {
-		return "", fmt.Errorf("decrypt ciphertext: %w", err)
+		return "", err
 	}
 	return string(plaintext), nil
-}
-
-func deriveKey(secret string) []byte {
-	hash := sha256.Sum256([]byte(secret))
-	return hash[:]
 }
 
 // SHA256Hex returns the lowercase hexadecimal SHA-256 digest of data.

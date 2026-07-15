@@ -658,11 +658,33 @@ mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/eventbus/jetstream" "${ROOT}
 
 source "${ROOT}/lib/loopback-listeners.sh"
 validate_moox_loopback_listeners
+stop_processes_by_binary() {
+  local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
+  for proc in /proc/[0-9]*; do
+    [[ -d "${proc}" ]] || continue
+    pid="${proc##*/}"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    exe="$(readlink "${proc}/exe" 2>/dev/null || true)"
+    case "${exe}" in
+      "${expected}"|"${expected} (deleted)") ;;
+      *) continue ;;
+    esac
+    echo "stopping stale ${name} process pid=${pid}"
+    kill "${pid}" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 1
+    done
+    kill -9 "${pid}" 2>/dev/null || true
+  done
+}
+
 stop_if_running() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
   local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
   if [[ ! -f "${pid_file}" ]]; then
+    stop_processes_by_binary "${name}"
     pkill -f -- "${pattern}" 2>/dev/null || true
     return
   fi
@@ -676,6 +698,7 @@ stop_if_running() {
   if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
     kill -9 "${pid}" 2>/dev/null || true
   fi
+  stop_processes_by_binary "${name}"
   pkill -f -- "${pattern}" 2>/dev/null || true
   rm -f "${pid_file}"
 }
@@ -1215,11 +1238,33 @@ WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 
+stop_processes_by_binary() {
+  local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
+  for proc in /proc/[0-9]*; do
+    [[ -d "${proc}" ]] || continue
+    pid="${proc##*/}"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    exe="$(readlink "${proc}/exe" 2>/dev/null || true)"
+    case "${exe}" in
+      "${expected}"|"${expected} (deleted)") ;;
+      *) continue ;;
+    esac
+    echo "stopping stale ${name} process pid=${pid}"
+    kill "${pid}" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 1
+    done
+    kill -9 "${pid}" 2>/dev/null || true
+  done
+}
+
 stop_service() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
   local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
   if [[ ! -f "${pid_file}" ]]; then
+    stop_processes_by_binary "${name}"
     if pkill -f -- "${pattern}" 2>/dev/null; then
       echo "${name}: stopped stale process without pid file"
     else
@@ -1231,6 +1276,7 @@ stop_service() {
   pid="$(cat "${pid_file}" 2>/dev/null || true)"
   if [[ -z "${pid}" ]]; then
     rm -f "${pid_file}"
+    stop_processes_by_binary "${name}"
     if pkill -f -- "${pattern}" 2>/dev/null; then
       echo "${name}: stopped stale process with empty pid file"
     else
@@ -1253,6 +1299,7 @@ stop_service() {
   else
     echo "${name}: stale pid ${pid}"
   fi
+  stop_processes_by_binary "${name}"
   pkill -f -- "${pattern}" 2>/dev/null || true
   rm -f "${pid_file}"
 }

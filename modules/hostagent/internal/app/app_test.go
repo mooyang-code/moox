@@ -152,6 +152,7 @@ func TestAgent_Close_WithClient_ShouldCloseAndClear(t *testing.T) {
 
 func TestAgent_RunOnce_CollectError_ShouldIncrementDropped(t *testing.T) {
 	a := testAgent(t)
+	a.collector = fakeSnapshotCollector{err: errors.New("collect failed")}
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
 	assert.NotEmpty(t, rsp.GetPublishError())

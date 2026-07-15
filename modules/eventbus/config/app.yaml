@@ -38,42 +38,42 @@ streams:
     storage: file
     replicas: 1
     max_age: 72h
-    max_bytes: 21474836480
+    max_bytes: 2147483648
   - name: MOOX_METRICS
     subjects: ["moox.metrics.>"]
     retention: limits
     storage: file
     replicas: 1
     max_age: 24h
-    max_bytes: 10737418240
+    max_bytes: 536870912
   - name: MOOX_CLOUDNODE_EXEC
     subjects: ["moox.cloudnode.exec.v1.>"]
     retention: work_queue
     storage: file
     replicas: 1
     max_age: 72h
-    max_bytes: 10737418240
+    max_bytes: 536870912
   - name: MOOX_DLQ
     subjects: ["moox.dlq.>"]
     retention: limits
     storage: file
     replicas: 1
     max_age: 720h
-    max_bytes: 2147483648
+    max_bytes: 268435456
   - name: MOOX_TRADE
     subjects: ["moox.trade.>"]
     retention: limits
     storage: file
     replicas: 1
     max_age: 168h
-    max_bytes: 10737418240
+    max_bytes: 536870912
   - name: MOOX_STRATEGY
     subjects: ["moox.strategy.>"]
     retention: limits
     storage: file
     replicas: 1
     max_age: 168h
-    max_bytes: 10737418240
+    max_bytes: 536870912
 
 topics:
   - {topic: moox.storage.time_series.rows_updated.v1, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated", payload_version: 1, enabled: true}
