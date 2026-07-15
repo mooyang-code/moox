@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required_commands=(git curl jq gh go node pnpm make rsync python3)
+required_commands=(git curl jq gh go node pnpm make rsync rg python3)
 for command_name in "${required_commands[@]}"; do
   command -v "${command_name}" >/dev/null || {
     echo "missing self-hosted runner dependency: ${command_name}" >&2

@@ -13,7 +13,14 @@ mapfile_compat() {
 while IFS= read -r -d '' module; do
   module="${module#./}"
   echo "==> go test ${module}"
-  (cd "${ROOT}/${module}" && go test -count=1 ./...)
+  test_flags=(-count=1)
+  case "${module}" in
+    modules/admin|modules/hostagent|modules/trade)
+      # goom relies on disabled inlining for its method interception tests.
+      test_flags+=(-gcflags=all=-l -ldflags=-s=false)
+      ;;
+  esac
+  (cd "${ROOT}/${module}" && go test "${test_flags[@]}" ./...)
   echo "==> go vet ${module}"
   (cd "${ROOT}/${module}" && go vet ./...)
 done < <(

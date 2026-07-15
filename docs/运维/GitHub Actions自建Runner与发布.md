@@ -16,7 +16,7 @@ MooX 使用 GitHub Actions 编排 CI/CD，并将可信的 `main`、Tag 和手工
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl git jq gh make rsync openssl gcc python3-venv
+sudo apt-get install -y curl git jq gh make rsync openssl gcc ripgrep python3-venv
 mkdir -p /home/ubuntu/actions-runner
 cd /home/ubuntu/actions-runner
 ```
