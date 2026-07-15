@@ -40,11 +40,8 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_SPACE_ID"] != "crypto" {
 		t.Fatalf("space env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_ACCESS_KEY"] != "svc-ak" || item.Environment["MOOX_SERVICE_AUTH_SECRET_KEY"] != "svc-sk" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "svc-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "svc-sk" {
 		t.Fatalf("service auth env = %#v", item.Environment)
-	}
-	if item.Environment["MOOX_SERVICE_AUTH_EXPIRE_SECONDS"] != "60" {
-		t.Fatalf("service auth expire env = %#v", item.Environment)
 	}
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
 		t.Fatalf("function_name_prefix = %#v", item.Metadata["function_name_prefix"])
@@ -81,19 +78,19 @@ func TestCollectorFunctionEnvironmentAllowsExplicitEnvOverride(t *testing.T) {
 		Region:           "ap-guangzhou",
 		Env: []string{
 			"MOOX_SPACE_ID=override-space",
-			"MOOX_SERVICE_AUTH_ACCESS_KEY=override-ak",
-			"MOOX_SERVICE_AUTH_SECRET_KEY=override-sk",
-			"MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60",
+			"MOOX_GATEWAY_SERVICE_KEY_ID=override-ak",
+			"MOOX_GATEWAY_SERVICE_SECRET_KEY=override-sk",
+			"MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS=60",
 		},
 	}, "moox-collector_dev")
 
 	if item.Environment["MOOX_SPACE_ID"] != "override-space" {
 		t.Fatalf("space env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_ACCESS_KEY"] != "override-ak" || item.Environment["MOOX_SERVICE_AUTH_SECRET_KEY"] != "override-sk" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "override-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "override-sk" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_EXPIRE_SECONDS"] != "60" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS"] != "60" {
 		t.Fatalf("expire env = %#v", item.Environment)
 	}
 }

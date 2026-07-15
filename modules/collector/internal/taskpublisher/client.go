@@ -16,7 +16,6 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/servicegateway"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -26,10 +25,11 @@ const wakeNodeListPageSize uint32 = 200
 
 // AuthConfig describes HMAC auth for /api/service/cloudnode/* calls.
 type AuthConfig struct {
-	Version   string
-	AccessKey string
-	SecretKey string
-	ExpireSec int64
+	AccessKey  string
+	SecretKey  string
+	TargetNode string
+	CAFile     string
+	ExpireSec  int64
 }
 
 // Config configures the CloudNode gateway client.
@@ -64,7 +64,7 @@ func New(cfg Config) *Client {
 	if target == "" {
 		target = strings.TrimSpace(cfg.GatewayURL)
 	}
-	httpClient, httpClientErr := servicegateway.NewClient(8 * time.Second)
+	httpClient, httpClientErr := runtimeapp.NewGatewayHTTPClient(8*time.Second, runtimeapp.AuthConfig{AccessKey: cfg.Auth.AccessKey, SecretKey: cfg.Auth.SecretKey, TargetNode: cfg.Auth.TargetNode, CAFile: cfg.Auth.CAFile, ExpireSec: cfg.Auth.ExpireSec})
 	return &Client{
 		serviceGatewayTarget:  normalizeGatewayTarget(target),
 		storageMetadataTarget: strings.TrimSpace(cfg.StorageMetadataTarget),
@@ -208,10 +208,11 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 	}
 	url := fmt.Sprintf("%s/api/service/%s/%s", c.serviceGatewayTarget, service, method)
 	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, url, body, headers, runtimeapp.AuthConfig{
-		Version:   c.auth.Version,
-		AccessKey: c.auth.AccessKey,
-		SecretKey: c.auth.SecretKey,
-		ExpireSec: c.auth.ExpireSec,
+		AccessKey:  c.auth.AccessKey,
+		SecretKey:  c.auth.SecretKey,
+		TargetNode: c.auth.TargetNode,
+		CAFile:     c.auth.CAFile,
+		ExpireSec:  c.auth.ExpireSec,
 	})
 	if err != nil {
 		return err

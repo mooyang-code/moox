@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicegateway"
-
 	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -231,7 +229,7 @@ func executeReport(ctx context.Context, payload *model.HeartbeatPayload, service
 	}
 
 	// 创建HTTP客户端
-	httpClient, err := servicegateway.NewClient(5 * time.Second)
+	httpClient, err := runtimeapp.NewGatewayHTTPClient(5*time.Second, runtimeapp.DefaultAuthConfig())
 	if err != nil {
 		return err
 	}

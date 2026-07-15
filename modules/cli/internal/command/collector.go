@@ -153,8 +153,8 @@ func init() {
 
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key; 默认取 MOOX_SERVICE_AUTH_ACCESS_KEY (推荐, 走 /api/service 后台接口)")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_SERVICE_AUTH_SECRET_KEY (推荐, 走 /api/service 后台接口)")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Runtime, "runtime", "Go1", "SCF runtime")
@@ -284,11 +284,10 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 func collectorFunctionEnvironment(opts collectorPublishOptions) map[string]string {
 	env := map[string]string{}
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
-	setDefaultEnv(env, "MOOX_SERVICE_AUTH_VERSION", "moox-auth-v2")
-	setDefaultEnv(env, "MOOX_SERVICE_AUTH_ACCESS_KEY", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY")))
-	setDefaultEnv(env, "MOOX_SERVICE_AUTH_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY")))
-	setDefaultEnv(env, "MOOX_SERVICE_AUTH_EXPIRE_SECONDS", "60")
-	setDefaultEnv(env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64", os.Getenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64"))
+	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", os.Getenv("MOOX_GATEWAY_NODE_ID"))
+	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")))
+	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")))
+	setDefaultEnv(env, "MOOX_GATEWAY_CA_FILE", os.Getenv("MOOX_GATEWAY_CA_FILE"))
 	for key, value := range parseCollectorOverrides(opts.Env) {
 		env[key] = value
 	}
@@ -363,12 +362,14 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 	client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
 	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
 	client.SpaceID = defaultFlag(spaceID, os.Getenv("MOOX_SPACE_ID"))
-	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"))
-	secretKey := defaultFlag(serviceSecretKey, os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"))
+	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
+	secretKey := defaultFlag(serviceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
 	if accessKey != "" && secretKey != "" {
 		client.ServiceAuth = &adminclient.ServiceAuthConfig{
 			AccessKey:  accessKey,
 			SecretKey:  secretKey,
+			TargetNode: os.Getenv("MOOX_GATEWAY_NODE_ID"),
+			CAFile:     os.Getenv("MOOX_GATEWAY_CA_FILE"),
 			ExpireSecs: 60,
 		}
 	}

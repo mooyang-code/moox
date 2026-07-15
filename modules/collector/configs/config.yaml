@@ -7,7 +7,8 @@ system:
   storage_metadata_target: "127.0.0.1:20100" # 本地默认值；SCF 运行时由控制面 keepalive 下发 storage_metadata_trpc
   storage_access_target: "127.0.0.1:20102"   # 本地默认值；SCF 运行时由控制面 keepalive 下发 storage_access_trpc
   service_auth:
-    version: "moox-auth-v2"
+    target_node: ""
+    ca_file: ""
     access_key: "moox-service"
     secret_key: ""
     expire_seconds: 60

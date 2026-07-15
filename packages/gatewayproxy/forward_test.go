@@ -51,14 +51,14 @@ func TestForwardProxiesRequestAndPreservesAllowedResponse(t *testing.T) {
 	defer server.Close()
 
 	headers := http.Header{
-		"Content-Type":        {"application/json"},
-		"Accept-Encoding":     {"gzip"},
-		"X-Trace-Id":          {"client-trace"},
-		"X-Space-Id":          {"space-1"},
-		"Authorization":       {"Bearer secret"},
-		"X-Moox-Service-Auth": {"internal-secret"},
-		"X-User-Id":           {"user-1"},
-		"User-Agent":          {"browser-secret"},
+		"Content-Type":      {"application/json"},
+		"Accept-Encoding":   {"gzip"},
+		"X-Trace-Id":        {"client-trace"},
+		"X-Space-Id":        {"space-1"},
+		"Authorization":     {"Bearer secret"},
+		"X-Internal-Secret": {"internal-secret"},
+		"X-User-Id":         {"user-1"},
+		"User-Agent":        {"browser-secret"},
 	}
 	response, err := Forward(context.Background(), nil, routeForServer(t, server), "GetStatus", []byte(`{"node":"one"}`), headers)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestForwardProxiesRequestAndPreservesAllowedResponse(t *testing.T) {
 			t.Errorf("request header %s = %q", key, gotHeader.Get(key))
 		}
 	}
-	for _, key := range []string{"Authorization", "X-Moox-Service-Auth", "X-User-Id", "User-Agent"} {
+	for _, key := range []string{"Authorization", "X-Internal-Secret", "X-User-Id", "User-Agent"} {
 		if gotHeader.Get(key) != "" {
 			t.Errorf("unsafe request header %s forwarded", key)
 		}

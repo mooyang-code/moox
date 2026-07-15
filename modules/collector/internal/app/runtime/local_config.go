@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"os"
-	"strconv"
 
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -30,10 +29,11 @@ type SystemConfig struct {
 
 // ServiceAuthConfig 后台服务请求签名鉴权配置。
 type ServiceAuthConfig struct {
-	Version   string `json:"version" yaml:"version"`
-	AccessKey string `json:"access_key" yaml:"access_key"`
-	SecretKey string `json:"secret_key" yaml:"secret_key"`
-	ExpireSec int64  `json:"expire_seconds" yaml:"expire_seconds"`
+	AccessKey  string `json:"access_key" yaml:"access_key"`
+	SecretKey  string `json:"secret_key" yaml:"secret_key"`
+	TargetNode string `json:"target_node" yaml:"target_node"`
+	CAFile     string `json:"ca_file" yaml:"ca_file"`
+	ExpireSec  int64  `json:"expire_seconds" yaml:"expire_seconds"`
 }
 
 // EventBusConfig 事件总线配置
@@ -67,7 +67,6 @@ func DefaultConfig() *AppConfig {
 			StorageMetadataTarget: "127.0.0.1:20100",
 			StorageAccessTarget:   "127.0.0.1:20102",
 			ServiceAuth: ServiceAuthConfig{
-				Version:   "moox-auth-v2",
 				ExpireSec: 60,
 			},
 		},
@@ -98,25 +97,20 @@ func GetServiceAuthConfig() ServiceAuthConfig {
 	}
 	localAppConfigMu.RUnlock()
 
-	if cfg.Version == "" {
-		cfg.Version = "moox-auth-v2"
-	}
 	if cfg.ExpireSec <= 0 {
 		cfg.ExpireSec = 60
 	}
-	if value := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); value != "" {
-		cfg.Version = value
+	if value := os.Getenv("MOOX_GATEWAY_NODE_ID"); value != "" {
+		cfg.TargetNode = value
 	}
-	if value := os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"); value != "" {
+	if value := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); value != "" {
 		cfg.AccessKey = value
 	}
-	if value := os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"); value != "" {
+	if value := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); value != "" {
 		cfg.SecretKey = value
 	}
-	if value := os.Getenv("MOOX_SERVICE_AUTH_EXPIRE_SECONDS"); value != "" {
-		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed > 0 {
-			cfg.ExpireSec = parsed
-		}
+	if value := os.Getenv("MOOX_GATEWAY_CA_FILE"); value != "" {
+		cfg.CAFile = value
 	}
 	return cfg
 }

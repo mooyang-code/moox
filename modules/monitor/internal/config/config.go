@@ -174,7 +174,7 @@ func Default() *Config {
 			Target:              "ip://127.0.0.1:11109",
 			SyncIntervalSeconds: 60,
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v2",
+				Version:       "moox-gateway-auth-v1",
 				ExpireSeconds: 60,
 			},
 		},

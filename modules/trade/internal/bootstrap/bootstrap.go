@@ -77,9 +77,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	secretSource := secretclient.New(secretclient.Config{
 		GatewayBaseURL: appCfg.ControlGateway.BaseURL,
 		ServiceAuth: secretclient.ServiceAuthConfig{
-			Version:    appCfg.ControlGateway.ServiceAuth.Version,
 			AccessKey:  appCfg.ControlGateway.ServiceAuth.AccessKey,
 			SecretKey:  appCfg.ControlGateway.ServiceAuth.SecretKey,
+			TargetNode: appCfg.ControlGateway.ServiceAuth.TargetNode,
+			CAFile:     appCfg.ControlGateway.ServiceAuth.CAFile,
 			ExpireSecs: appCfg.ControlGateway.ServiceAuth.ExpireSeconds,
 		},
 	})

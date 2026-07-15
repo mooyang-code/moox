@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicegateway"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -435,7 +435,7 @@ func postService(ctx context.Context, cfg Config, module string, method string, 
 	if err != nil {
 		return err
 	}
-	httpClient, err := servicegateway.NewClient(cfg.HTTPTimeout)
+	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.HTTPTimeout, CAFile: cfg.Auth.CAFile})
 	if err != nil {
 		return err
 	}

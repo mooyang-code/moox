@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicegateway"
-
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 )
 
@@ -97,16 +95,17 @@ func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoi
 	body := []byte("{}")
 	url := normalizeBaseURL(cfg.SysDeploy.AdminGatewayURL) + "/api/service/sysdeploy/ListActiveServiceDeployments"
 	auth := runtimeapp.AuthConfig{
-		Version:   cfg.SysDeploy.ServiceAuth.Version,
-		AccessKey: cfg.SysDeploy.ServiceAuth.AccessKey,
-		SecretKey: cfg.SysDeploy.ServiceAuth.SecretKey,
-		ExpireSec: cfg.SysDeploy.ServiceAuth.ExpireSeconds,
+		AccessKey:  cfg.SysDeploy.ServiceAuth.AccessKey,
+		SecretKey:  cfg.SysDeploy.ServiceAuth.SecretKey,
+		TargetNode: cfg.SysDeploy.ServiceAuth.TargetNode,
+		CAFile:     cfg.SysDeploy.ServiceAuth.CAFile,
+		ExpireSec:  cfg.SysDeploy.ServiceAuth.ExpireSeconds,
 	}
 	req, err := runtimeapp.NewSignedRequestWithContext(ctx, http.MethodPost, url, body, auth)
 	if err != nil {
 		return nil, err
 	}
-	client, err := servicegateway.NewClient(5 * time.Second)
+	client, err := runtimeapp.NewGatewayHTTPClient(5*time.Second, auth)
 	if err != nil {
 		return nil, err
 	}

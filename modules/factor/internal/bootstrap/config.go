@@ -165,7 +165,7 @@ func Default() *Config {
 		SysDeploy: SysDeployConfig{
 			AdminGatewayURL: "http://127.0.0.1:11002",
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v2",
+				Version:       "moox-gateway-auth-v1",
 				ExpireSeconds: 60,
 			},
 		},
@@ -267,7 +267,7 @@ func (c *Config) applyDefaults() {
 		c.SysDeploy.AdminGatewayURL = "http://127.0.0.1:11002"
 	}
 	if c.SysDeploy.ServiceAuth.Version == "" {
-		c.SysDeploy.ServiceAuth.Version = "moox-auth-v2"
+		c.SysDeploy.ServiceAuth.Version = "moox-gateway-auth-v1"
 	}
 	if c.SysDeploy.ServiceAuth.ExpireSeconds == 0 {
 		c.SysDeploy.ServiceAuth.ExpireSeconds = 60

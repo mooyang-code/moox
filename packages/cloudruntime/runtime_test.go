@@ -24,6 +24,9 @@ func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
 		return Result{Summary: map[string]any{"rows_written": 12}}, nil
 	}))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("X-Moox-Target-Node = %q, want gateway-gz-122", got)
+		}
 		switch r.URL.Path {
 		case "/api/service/cloudnode/PollJobItems":
 			if err := json.NewDecoder(r.Body).Decode(&pollReq); err != nil {
@@ -60,8 +63,9 @@ func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey:  "test-ak",
+			SecretKey:  "test-sk",
+			TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -127,8 +131,7 @@ func TestRunReportsPermanentFailureWhenHandlerMissing(t *testing.T) {
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.unknown"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey: "test-ak", SecretKey: "test-sk", TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -178,8 +181,7 @@ func TestRunReportsRetryableErrorKind(t *testing.T) {
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey: "test-ak", SecretKey: "test-sk", TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -246,8 +248,7 @@ func TestRunReportsPermanentFailureAndCompletionLogWhenHandlerPanics(t *testing.
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey: "test-ak", SecretKey: "test-sk", TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)

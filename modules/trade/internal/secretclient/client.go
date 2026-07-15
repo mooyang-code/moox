@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	"github.com/mooyang-code/moox/packages/servicegateway"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
 // Config 是 SecretMgr 后台服务调用配置。
@@ -23,9 +23,10 @@ type Config struct {
 
 // ServiceAuthConfig 与 admin gateway service_auth 配置保持一致。
 type ServiceAuthConfig struct {
-	Version    string
 	AccessKey  string
 	SecretKey  string
+	TargetNode string
+	CAFile     string
 	ExpireSecs int64
 }
 
@@ -43,7 +44,7 @@ func New(cfg Config) *Client {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	client, clientErr := servicegateway.NewClient(timeout)
+	client, clientErr := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: cfg.ServiceAuth.CAFile})
 	return &Client{
 		baseURL: strings.TrimRight(cfg.GatewayBaseURL, "/"),
 		auth:    cfg.ServiceAuth,
@@ -115,7 +116,9 @@ func (c *Client) post(ctx context.Context, method string, req any, rsp responseW
 	if err != nil {
 		return err
 	}
-	httpReq.Header.Set("Auth", auth)
+	for name, values := range auth {
+		httpReq.Header[name] = append([]string(nil), values...)
+	}
 	httpRsp, err := c.client.Do(httpReq)
 	if err != nil {
 		return err
@@ -134,21 +137,18 @@ func (c *Client) post(ctx context.Context, method string, req any, rsp responseW
 }
 
 func (c ServiceAuthConfig) normalized() ServiceAuthConfig {
-	if c.Version == "" {
-		c.Version = servicegateway.Version
-	}
 	if c.ExpireSecs <= 0 {
 		c.ExpireSecs = 60
 	}
 	return c
 }
 
-func (c *Client) authHeader(method, path string, body []byte, now time.Time) (string, error) {
+func (c *Client) authHeader(method, path string, body []byte, now time.Time) (http.Header, error) {
 	auth := c.auth.normalized()
-	if auth.AccessKey == "" || auth.SecretKey == "" {
-		return "", fmt.Errorf("service auth access_key and secret_key are required")
+	if auth.AccessKey == "" || auth.SecretKey == "" || auth.TargetNode == "" {
+		return nil, fmt.Errorf("gateway service key_id, secret_key and target_node are required")
 	}
-	return servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, ExpireSeconds: auth.ExpireSecs}, servicegateway.AuthRequest{Method: method, Path: path, Body: body}, now)
+	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: auth.AccessKey, Secret: auth.SecretKey, Expire: time.Duration(auth.ExpireSecs) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: auth.TargetNode}, now)
 }
 
 type responseWithRetInfo interface {

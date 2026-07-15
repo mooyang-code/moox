@@ -5,7 +5,6 @@ go 1.24.0
 toolchain go1.24.1
 
 require (
-	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/matoous/go-nanoid/v2 v2.1.0
 	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
@@ -13,7 +12,6 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/servicegateway v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0
 	github.com/prometheus/client_golang v1.23.2
@@ -21,6 +19,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
+	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-filter/masking v1.0.0
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
@@ -36,9 +35,11 @@ require (
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
+	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
+	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
 )
 
@@ -69,6 +70,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.7.4 // indirect
@@ -80,7 +82,6 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron v1.2.0 // indirect
-	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/stretchr/testify v1.11.1
 	github.com/tencent/goom v1.0.6
@@ -119,8 +120,8 @@ replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messag
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/servicegateway => ../../packages/servicegateway
-
 replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth

@@ -28,7 +28,7 @@ sysdeploy:
   target: "ip://127.0.0.1:11109"
   sync_interval_seconds: 60
   service_auth:
-    version: "moox-auth-v2"
+    version: "moox-gateway-auth-v1"
     access_key: "moox-service"
     secret_key: ""
     expire_seconds: 60

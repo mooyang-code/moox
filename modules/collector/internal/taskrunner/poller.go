@@ -45,10 +45,11 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 		},
 		Limit: 8,
 		Auth: nodeRuntime.AuthConfig{
-			Version:   auth.Version,
-			AccessKey: auth.AccessKey,
-			SecretKey: auth.SecretKey,
-			ExpireSec: auth.ExpireSec,
+			AccessKey:  auth.AccessKey,
+			SecretKey:  auth.SecretKey,
+			TargetNode: auth.TargetNode,
+			CAFile:     auth.CAFile,
+			ExpireSec:  auth.ExpireSec,
 		},
 	})
 }

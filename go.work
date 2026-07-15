@@ -36,7 +36,6 @@ use (
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
-	./packages/servicegateway
 	./packages/trpcplugintest
 	./packages/trpcretry
 	./web-host

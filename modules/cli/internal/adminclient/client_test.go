@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicegateway"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
 func TestPostJSONSendsSpaceHeader(t *testing.T) {
@@ -37,7 +37,15 @@ func TestRewriteToServiceRoute(t *testing.T) {
 
 func TestServiceAuthRejectsRemotePlainHTTP(t *testing.T) {
 	c := New("http://example.com")
-	c.ServiceAuth = &ServiceAuthConfig{Version: "v1", AccessKey: "ak", SecretKey: "sk", ExpireSecs: 60}
+	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", ExpireSecs: 60}
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
+	require.ErrorContains(t, err, "non-loopback HTTP")
+}
+
+func TestServiceAuthCannotBypassSafeTransportWithInjectedClient(t *testing.T) {
+	c := New("http://example.com")
+	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
+	c.HTTPClient = &http.Client{}
 	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
 	require.ErrorContains(t, err, "non-loopback HTTP")
 }
@@ -63,18 +71,12 @@ func TestParseBatchChangeResponse(t *testing.T) {
 }
 
 func TestBuildAuthHeader(t *testing.T) {
-	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key"}
+	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key", TargetNode: "gateway-gz-122"}
 	now := time.Unix(1700000000, 0)
 	headers := map[string]string{"X-Space-Id": "space-1"}
 	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), headers, now)
 	require.NoError(t, err)
-	assert.Contains(t, header, "app")
-	assert.Contains(t, header, "1700000000")
-	_, err = servicegateway.VerifyHeader(
-		servicegateway.AuthConfig{AccessKey: "app", SecretKey: "key"},
-		servicegateway.AuthRequest{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
-		header,
-		now,
-	)
-	require.Error(t, err)
+	assert.Equal(t, "gateway-gz-122", header.Get("X-Moox-Target-Node"))
+	_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "app", Secret: "key"}, gatewayauth.Request{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), TargetNode: "gateway-gz-122"}, header, now)
+	require.NoError(t, err)
 }

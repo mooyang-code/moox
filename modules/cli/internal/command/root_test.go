@@ -159,17 +159,19 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 }
 
 func TestCollectorFunctionEnvironmentIncludesServiceGatewayCA(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "Y2E=")
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "Y2E=")
 	env := collectorFunctionEnvironment(collectorPublishOptions{})
-	assert.Equal(t, "Y2E=", env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
+	assert.Equal(t, "Y2E=", env["MOOX_GATEWAY_CA_FILE"])
 }
 
 func TestNewControlClientSetsServiceAuth(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "sk")
 	client := newControlClient("http://control", "", "", "", "crypto")
 	require.NotNil(t, client.ServiceAuth)
 	assert.Equal(t, "ak", client.ServiceAuth.AccessKey)
+	assert.Equal(t, "gateway-gz-122", client.ServiceAuth.TargetNode)
 }
 
 func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {

@@ -4,7 +4,6 @@ package bootstrap
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -52,9 +51,10 @@ type SysDeployConfig struct {
 
 // ServiceAuthConfig describes backend HMAC auth for /api/service calls.
 type ServiceAuthConfig struct {
-	Version       string `yaml:"version"`
 	AccessKey     string `yaml:"access_key"`
 	SecretKey     string `yaml:"secret_key"`
+	TargetNode    string `yaml:"target_node"`
+	CAFile        string `yaml:"ca_file"`
 	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
@@ -87,6 +87,18 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_ADMIN_GATEWAY_URL"); v != "" {
 		c.SysDeploy.AdminGatewayURL = v
 	}
+	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
+		c.SysDeploy.ServiceAuth.TargetNode = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
+		c.SysDeploy.ServiceAuth.AccessKey = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
+		c.SysDeploy.ServiceAuth.SecretKey = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
+		c.SysDeploy.ServiceAuth.CAFile = v
+	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET"); v != "" {
 		c.Storage.MetadataTarget = v
 	}
@@ -95,20 +107,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); v != "" {
-		c.SysDeploy.ServiceAuth.Version = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.AccessKey = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_EXPIRE_SECONDS"); v != "" {
-		if seconds, err := strconv.ParseInt(v, 10, 64); err == nil {
-			c.SysDeploy.ServiceAuth.ExpireSeconds = seconds
-		}
 	}
 }
 
@@ -147,10 +145,7 @@ func Default() *Config {
 			AccessTarget:   "127.0.0.1:20102",
 		},
 		SysDeploy: SysDeployConfig{
-			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v2",
-				ExpireSeconds: 60,
-			},
+			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},
 		},
 		Health: HealthConfig{
 			Addr: ":11412",
