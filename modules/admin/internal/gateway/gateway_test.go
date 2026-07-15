@@ -118,7 +118,7 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 		rawHandlersMutex.Unlock()
 	})
 
-	router := NewHTTPRouter(NewGatewayHandle())
+	router := NewHTTPRouter(NewGatewayHandle(), nil)
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
 	muxRouter.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/demo/Ping", nil))
@@ -136,7 +136,7 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 	})
 	SetServiceDetailResolver(nil)
 
-	router := NewHTTPRouter(NewGatewayHandle())
+	router := NewHTTPRouter(NewGatewayHandle(), nil)
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
@@ -162,7 +162,7 @@ func TestHandleGatewayRequest_UserIDFromContext_ShouldInjectHeader(t *testing.T)
 		return ServiceDetail{}, false
 	})
 
-	router := NewHTTPRouter(NewGatewayHandle())
+	router := NewHTTPRouter(NewGatewayHandle(), nil)
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))

@@ -53,20 +53,19 @@ var NewGatewayHandle = func() *GatewayHandle {
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	gateway *GatewayHandle
+	gateway         *GatewayHandle
+	controlProvider GatewayControlProvider
 }
 
 // NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(gateway *GatewayHandle) *HTTPRouter {
-	return &HTTPRouter{
-		gateway: gateway,
-	}
+func NewHTTPRouter(gateway *GatewayHandle, provider GatewayControlProvider) *HTTPRouter {
+	return &HTTPRouter{gateway: gateway, controlProvider: provider}
 }
 
 // RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server) error {
+func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayControlProvider) error {
 	gateway := GetGatewayHandleInstance()
-	router := NewHTTPRouter(gateway)
+	router := NewHTTPRouter(gateway, provider)
 	return router.setupRoutes(s)
 }
 
@@ -80,6 +79,11 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
 
 func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	router := mux.NewRouter()
+	router.MethodNotAllowedHandler = http.NotFoundHandler()
+	if hr.controlProvider != nil {
+		router.HandleFunc("/api/gateway-control/routes", hr.handleGatewayRoutes).Methods(http.MethodGet)
+		router.HandleFunc("/api/gateway-control/status", hr.handleGatewayStatus).Methods(http.MethodPost)
+	}
 
 	// 注册新控制台 API 路由: /api/admin/{service}/{method}
 	router.HandleFunc(

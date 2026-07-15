@@ -73,7 +73,7 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 }
 
 func TestGatewayRoutersIsolateControlServiceAndDiagnostics(t *testing.T) {
-	hr := NewHTTPRouter(NewGatewayHandle())
+	hr := NewHTTPRouter(NewGatewayHandle(), nil)
 	for name, router := range map[string]http.Handler{"control": hr.buildControlRouter(), "service": hr.buildServiceRouter()} {
 		for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
 			rr := httptest.NewRecorder()

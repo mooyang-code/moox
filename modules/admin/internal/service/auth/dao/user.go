@@ -183,6 +183,10 @@ func (d *UserDAO) ConsumeServiceNonce(ctx context.Context, accessKey, nonce stri
 	return d.cache.SetIfAbsent(ctx, fmt.Sprintf("service_nonce:%s:%s", accessKey, nonce), "1", ttl)
 }
 
+func (d *UserDAO) ConsumeGatewayControlNonce(ctx context.Context, keyID, nonce string, ttl time.Duration) (bool, error) {
+	return d.cache.SetIfAbsent(ctx, fmt.Sprintf("gateway_control_nonce:%s:%s", keyID, nonce), "1", ttl)
+}
+
 func (d *UserDAO) SetRawSessionTicket(ctx context.Context, ticket model.RawSessionTicket) error {
 	return d.setExpiringJSON(ctx, "raw_ticket:"+ticket.TicketID, ticket, ticket.ExpiresAt)
 }

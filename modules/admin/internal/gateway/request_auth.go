@@ -24,6 +24,7 @@ type requestAuthStore interface {
 	GetSigningSession(context.Context, string) (*authmodel.RequestSigningSession, error)
 	ConsumeSessionNonce(context.Context, string, string, time.Duration) (bool, error)
 	ConsumeServiceNonce(context.Context, string, string, time.Duration) (bool, error)
+	ConsumeGatewayControlNonce(context.Context, string, string, time.Duration) (bool, error)
 	ConsumeRawSessionTicket(context.Context, string) (*authmodel.RawSessionTicket, error)
 }
 

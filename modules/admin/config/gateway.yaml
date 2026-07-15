@@ -26,6 +26,10 @@ gateway:
   # 是否开启调试模式
   debug: true
 
+  # 节点网关控制面使用独立 HMAC 凭据：
+  # MOOX_GATEWAY_CONTROL_KEY_ID（默认 moox-gateway-control）
+  # MOOX_GATEWAY_CONTROL_SECRET_KEY（必填）
+
   # 后台服务对外接口签名鉴权配置
   # 请求路径: /api/service/{service}/{method}
   # 生产环境请直接修改 access_key / secret_key 为强随机值，并同步更新 SCF/cli 端。

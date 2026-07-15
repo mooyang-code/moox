@@ -10,6 +10,7 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"gorm.io/gorm"
 )
 
@@ -17,13 +18,7 @@ var nodeIDPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 type GatewayNodeFilter struct{ NodeID, Status string }
 
-type GatewayStatusReport struct {
-	NodeID           string
-	AppliedRouteHash string
-	RouteCount       int32
-	LastSeenAt       time.Time
-	LastError        string
-}
+type GatewayStatusReport = gatewayproxy.GatewayStatusReport
 
 func (s *ServiceImpl) ListGatewayNodes(ctx context.Context, req *pb.ListGatewayNodesReq) (*pb.ListGatewayNodesRsp, error) {
 	pageNo, offset, limit := normalizePage(req.GetPage())
@@ -300,7 +295,7 @@ func (d *DAO) ReportGatewayStatus(ctx context.Context, report GatewayStatusRepor
 			return err
 		}
 		if count == 0 {
-			return gorm.ErrRecordNotFound
+			return fmt.Errorf("%w: %w", gatewayproxy.ErrGatewayNodeNotFound, gorm.ErrRecordNotFound)
 		}
 		return nil
 	}

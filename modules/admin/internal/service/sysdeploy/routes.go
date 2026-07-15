@@ -20,11 +20,13 @@ type routeExtraConfig struct {
 
 type RouteConfigError struct{ Err error }
 
-var ErrInvalidGatewayRoute = errors.New("invalid gateway route")
+var ErrInvalidGatewayRoute = gatewayproxy.ErrInvalidGatewayRoute
 
-func (err *RouteConfigError) Error() string        { return err.Err.Error() }
-func (err *RouteConfigError) Unwrap() error        { return err.Err }
-func (err *RouteConfigError) Is(target error) bool { return target == ErrInvalidGatewayRoute }
+func (err *RouteConfigError) Error() string { return err.Err.Error() }
+func (err *RouteConfigError) Unwrap() error { return err.Err }
+func (err *RouteConfigError) Is(target error) bool {
+	return target == gatewayproxy.ErrInvalidGatewayRoute
+}
 
 func requiresMethodAllowlist(serviceID, servicePath string) bool {
 	return serviceID == "sysdeploy" || serviceID == "secret" || servicePath == "trpc.moox.ops.SysDeploy" || servicePath == "trpc.moox.ops.SecretMgr"
@@ -40,6 +42,9 @@ func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 		snapshot = compiled
 		return nil
 	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: %w", gatewayproxy.ErrGatewayNodeNotFound, err)
+	}
 	return snapshot, err
 }
 
