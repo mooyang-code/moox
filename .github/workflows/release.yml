@@ -35,20 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-      - uses: actions/setup-go@v5
-        with:
-          go-version: 1.24.0
-          cache-dependency-path: '**/go.sum'
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            web/pnpm-lock.yaml
+      - name: Add preinstalled Go to PATH
+        run: echo /home/ubuntu/go-sdk/bin >> "$GITHUB_PATH"
       - name: Check self-hosted runner
         run: bash scripts/ci/check-runner.sh
       - name: Verify before packaging

@@ -21,6 +21,8 @@ mkdir -p /home/ubuntu/actions-runner
 cd /home/ubuntu/actions-runner
 ```
 
+服务器需要预装 Go 1.24、Node 22 和 pnpm 10.28.2。当前机器已有 Go SDK；Node 可以安装到 `/usr/local/node`，并将其 `bin` 目录加入 systemd Runner 的 `PATH`。
+
 在本地拥有仓库管理员权限的机器上生成一次性注册 Token：
 
 ```bash
