@@ -2033,6 +2033,12 @@ sync_local_stage() {
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
 
+  if [[ "${NO_START}" -eq 0 && -x "${deploy_dir}/lib/caddy-managed.sh" ]]; then
+    local caddy_ports="${SERVICE_HTTPS_PORT}"
+    [[ "${WITH_ADMIN}" -eq 0 ]] || caddy_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+    "${deploy_dir}/lib/caddy-managed.sh" stop --deploy-dir "${deploy_dir}" --ports "${caddy_ports}" || true
+  fi
+
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" MOOX_WITH_ARCHIVE="${WITH_ARCHIVE}" "${deploy_dir}/stop.sh" || true
@@ -2270,6 +2276,11 @@ if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
   mkdir -p "${HOME}/.config/moox/credentials"
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
   umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${KEY_FILE}"; chmod 600 "${KEY_FILE}"
+fi
+if [[ "${NO_START}" -eq 0 && -x "${DEPLOY_DIR}/lib/caddy-managed.sh" ]]; then
+  CADDY_STOP_PORTS="${SERVICE_HTTPS_PORT}"
+  [[ "${WITH_ADMIN}" == "0" ]] || CADDY_STOP_PORTS="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+  "${DEPLOY_DIR}/lib/caddy-managed.sh" stop --deploy-dir "${DEPLOY_DIR}" --ports "${CADDY_STOP_PORTS}" || true
 fi
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
