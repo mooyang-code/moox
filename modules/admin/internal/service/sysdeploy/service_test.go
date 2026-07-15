@@ -256,25 +256,26 @@ func TestDAO_DeleteAndRecreate_CanRepeat(t *testing.T) {
 
 func TestValidateDeployment_RejectsInvalidStaticDirectoryFields(t *testing.T) {
 	tests := []struct {
-		name string
-		item *Deployment
+		name    string
+		item    *Deployment
+		wantErr string
 	}{
-		{"port zero", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 0}},
-		{"port too large", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 65536}},
-		{"unsupported protocol", &Deployment{ServiceName: "svc", Protocol: "udp", Host: "127.0.0.1", Port: 80}},
-		{"unsupported scope", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, Scope: "global"}},
-		{"unsupported status", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, Status: "healthy"}},
-		{"invalid extra JSON", &Deployment{ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, ExtraConfig: "{"}},
-		{"unspecified IP", &Deployment{ServiceName: "svc", Protocol: "http", Host: "0.0.0.0", Port: 80}},
-		{"link-local IP", &Deployment{ServiceName: "svc", Protocol: "http", Host: "169.254.1.1", Port: 80}},
-		{"multicast IP", &Deployment{ServiceName: "svc", Protocol: "http", Host: "224.0.0.1", Port: 80}},
-		{"hostname unsupported", &Deployment{ServiceName: "svc", Protocol: "http", Host: "service.local", Port: 80}},
-		{"rpc path starts with slash", &Deployment{ServiceName: "svc", ServiceKind: "service", Protocol: "http", Host: "127.0.0.1", Port: 80, GatewayPath: "/api/service"}},
+		{"port zero", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 0}, "port must be between"},
+		{"port too large", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 65536}, "port must be between"},
+		{"unsupported protocol", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "udp", Host: "127.0.0.1", Port: 80}, "protocol must be"},
+		{"unsupported scope", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, Scope: "global"}, "scope must be"},
+		{"unsupported status", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, Status: "healthy"}, "status must be"},
+		{"invalid extra JSON", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 80, ExtraConfig: "{"}, "extra_config must be"},
+		{"unspecified IP", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "0.0.0.0", Port: 80}, "routable unicast"},
+		{"link-local IP", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "169.254.1.1", Port: 80}, "routable unicast"},
+		{"multicast IP", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "224.0.0.1", Port: 80}, "routable unicast"},
+		{"hostname unsupported", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "service.local", Port: 80}, "host must be an IP address"},
+		{"rpc path starts with slash", &Deployment{NodeID: "node-a", ServiceName: "svc", ServiceKind: "service", Protocol: "http", Host: "127.0.0.1", Port: 80, GatewayPath: "/api/service"}, "gateway_path must be a tRPC service path"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Error(t, validateDeployment(tt.item))
+			assert.ErrorContains(t, validateDeployment(tt.item), tt.wantErr)
 		})
 	}
 }
