@@ -49,13 +49,6 @@ jobs:
         run: make verify
       - name: Build release package
         run: VERSION="$RELEASE_TAG" TARGET_GOOS="$TARGET_GOOS" TARGET_GOARCH="$TARGET_GOARCH" make release
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: moox-${{ env.RELEASE_TAG }}-linux-amd64
-          path: release/moox-${{ env.RELEASE_TAG }}-linux-amd64.tar.gz
-          if-no-files-found: error
-          retention-days: 30
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
