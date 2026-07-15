@@ -6,6 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -204,16 +205,33 @@ func TestMonitorSnapshotAndResultHook(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-a"
 	cfg.Instance.BaseURL = "http://localhost"
-	snap := monitorSnapshot(cfg)(context.Background())
-	assert.Equal(t, "monitor-a", snap.InstanceID)
-	assert.Equal(t, "http://localhost", snap.BaseURL)
-	assert.False(t, snap.ObservedAt.IsZero())
 
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	rt := &Runtime{Store: mgr, Repositories: mgr.Repositories()}
+	now := time.Now().UTC()
+	require.NoError(t, rt.Repositories.Checks.Create(context.Background(), &domain.Check{
+		CheckID: "check-1", Name: "Peer", Kind: domain.CheckKindHTTP, Enabled: true,
+	}))
+	require.NoError(t, rt.Repositories.Results.Insert(context.Background(), &domain.CheckResult{
+		ResultID: "result-1", CheckID: "check-1", Status: domain.CheckStatusDown, CheckedAt: now,
+	}))
+	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
+		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
+	}))
+	snap := monitorSnapshot(cfg, rt)(context.Background())
+	assert.Equal(t, "monitor-a", snap.InstanceID)
+	assert.Equal(t, "http://localhost", snap.BaseURL)
+	assert.False(t, snap.ObservedAt.IsZero())
+	require.Len(t, snap.Checks, 1)
+	assert.Equal(t, monitorpeer.CheckSnapshot{CheckID: "check-1", Status: domain.CheckStatusDown}, snap.Checks[0])
+	require.Len(t, snap.AlertEvents, 1)
+	assert.Equal(t, "event-1", snap.AlertEvents[0].EventID)
+	assert.Equal(t, domain.AlertEventTriggered, snap.AlertEvents[0].EventType)
+	assert.NotEmpty(t, snap.AlertEvents[0].CreatedAt)
+
 	hook := monitorResultHook(cfg, rt)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{

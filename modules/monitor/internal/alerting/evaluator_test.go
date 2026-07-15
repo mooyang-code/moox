@@ -128,6 +128,36 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	}
 }
 
+func TestAlertEvaluatorRecordsLocalEventWithoutWebhook(t *testing.T) {
+	ctx := context.Background()
+	mgr := openAlertDB(t)
+	alerts := mgr.Repositories().Alerts
+	check := testCheck()
+	if err := alerts.CreateRule(ctx, &domain.AlertRule{
+		SpaceID: "space-a", RuleID: "local-rule", CheckID: check.CheckID,
+		FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create local rule: %v", err)
+	}
+
+	notifier := &recordingNotifier{}
+	evaluator := NewEvaluator(alerts, Options{InstanceID: "monitor-a", Notifier: notifier})
+	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+		t.Fatalf("evaluate local alert: %v", err)
+	}
+	if notifier.Count() != 0 {
+		t.Fatalf("local alert unexpectedly sent webhook count=%d", notifier.Count())
+	}
+	events, err := alerts.ListEvents(ctx, "space-a", 10)
+	if err != nil || len(events) != 1 || events[0].EventType != domain.AlertEventTriggered {
+		t.Fatalf("local events = %+v, err=%v", events, err)
+	}
+	state, err := alerts.GetState(ctx, "space-a", "local-rule", check.CheckID)
+	if err != nil || state.Status != domain.AlertStatusFiring {
+		t.Fatalf("local state = %+v, err=%v", state, err)
+	}
+}
+
 func TestRenderTemplateEscapesJSONValues(t *testing.T) {
 	body := renderTemplate("", Event{
 		EventType: domain.AlertEventTriggered,

@@ -407,7 +407,7 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 		Health:   healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)),
 		Liveness: healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)),
 		Metrics:  healthAuth.Wrap(promhttp.Handler()),
-		Snapshot: monitorSnapshot(cfg),
+		Snapshot: monitorSnapshot(cfg, runtime),
 	})
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
@@ -601,13 +601,35 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 	})
 }
 
-func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snapshot {
+func monitorSnapshot(cfg *config.Config, runtime *Runtime) func(context.Context) monitorpeer.Snapshot {
 	return func(ctx context.Context) monitorpeer.Snapshot {
-		return monitorpeer.Snapshot{
-			InstanceID: cfg.Instance.InstanceID,
-			BaseURL:    cfg.Instance.BaseURL,
-			ObservedAt: time.Now().UTC(),
+		snapshot := monitorpeer.Snapshot{
+			InstanceID:  cfg.Instance.InstanceID,
+			BaseURL:     cfg.Instance.BaseURL,
+			ObservedAt:  time.Now().UTC(),
+			Checks:      []monitorpeer.CheckSnapshot{},
+			AlertEvents: []monitorpeer.AlertEventSnapshot{},
 		}
+		if runtime == nil || runtime.Repositories == nil {
+			return snapshot
+		}
+		if results, err := runtime.Repositories.Results.Latest(ctx, 500); err != nil {
+			log.WarnContextf(ctx, "monitor peer snapshot results unavailable: %v", err)
+		} else {
+			for _, result := range results {
+				snapshot.Checks = append(snapshot.Checks, monitorpeer.CheckSnapshot{CheckID: result.CheckID, Status: result.Status})
+			}
+		}
+		if events, err := runtime.Repositories.Alerts.ListRecentEvents(ctx, 100); err != nil {
+			log.WarnContextf(ctx, "monitor peer snapshot alerts unavailable: %v", err)
+		} else {
+			for _, event := range events {
+				snapshot.AlertEvents = append(snapshot.AlertEvents, monitorpeer.AlertEventSnapshot{
+					EventID: event.EventID, EventType: event.EventType, CreatedAt: event.CreatedAt.UTC().Format(time.RFC3339Nano),
+				})
+			}
+		}
+		return snapshot
 	}
 }
 

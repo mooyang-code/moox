@@ -3,6 +3,7 @@ package alerting
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -156,6 +157,9 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 	}
 	if err := e.recordEventObject(ctx, event); err != nil {
 		return err
+	}
+	if strings.TrimSpace(rule.WebhookID) == "" {
+		return nil
 	}
 	webhook, err := e.alerts.GetWebhook(ctx, rule.SpaceID, rule.WebhookID)
 	if err != nil {
