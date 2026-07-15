@@ -14,6 +14,9 @@ import (
 
 func TestRoutesSaveLoadAndRejectInvalidSnapshotWithoutReplacingFile(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	routes := NewRoutes(dir)
 	valid, err := gatewayproxy.NormalizeAndHash("node-a", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr"}})
 	if err != nil {
@@ -46,6 +49,9 @@ func TestRoutesSaveLoadAndRejectInvalidSnapshotWithoutReplacingFile(t *testing.T
 
 func TestRoutesLoadRejectsUnknownAndTrailingJSON(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "routes.json")
 	for name, contents := range map[string]string{
 		"unknown field":  `{"node_id":"node-a","unknown":true}`,
@@ -60,6 +66,50 @@ func TestRoutesLoadRejectsUnknownAndTrailingJSON(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRoutesRejectsInsecureOrSymlinkedCache(t *testing.T) {
+	t.Run("insecure directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "routes")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, _ := gatewayproxy.NormalizeAndHash("node-a", nil)
+		if err := NewRoutes(dir).Save(snapshot); err == nil {
+			t.Fatal("Save() accepted insecure directory")
+		}
+	})
+	t.Run("symlinked directory", func(t *testing.T) {
+		root := t.TempDir()
+		realDir := filepath.Join(root, "real")
+		if err := os.Mkdir(realDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(root, "link")
+		if err := os.Symlink(realDir, link); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, _ := gatewayproxy.NormalizeAndHash("node-a", nil)
+		if err := NewRoutes(link).Save(snapshot); err == nil {
+			t.Fatal("Save() accepted symlinked directory")
+		}
+	})
+	t.Run("symlinked cache file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(dir, "target.json")
+		if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, "routes.json")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewRoutes(dir).Load(); err == nil {
+			t.Fatal("Load() accepted symlinked cache file")
+		}
+	})
 }
 
 func TestNonceConsumePersistsAndRejectsConcurrentDuplicates(t *testing.T) {

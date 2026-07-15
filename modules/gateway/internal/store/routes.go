@@ -24,8 +24,11 @@ func (routes *Routes) Save(snapshot gatewayproxy.Snapshot) (resultErr error) {
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(routes.directory, 0o700); err != nil {
-		return fmt.Errorf("create route store: %w", err)
+	if err := ensureSecureRouteDirectory(routes.directory, true); err != nil {
+		return err
+	}
+	if err := ensureSecureCacheFile(routes.Path(), true); err != nil {
+		return err
 	}
 	encoded, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
@@ -70,6 +73,12 @@ func (routes *Routes) Save(snapshot gatewayproxy.Snapshot) (resultErr error) {
 }
 
 func (routes *Routes) Load() (gatewayproxy.Snapshot, error) {
+	if err := ensureSecureRouteDirectory(routes.directory, false); err != nil {
+		return gatewayproxy.Snapshot{}, err
+	}
+	if err := ensureSecureCacheFile(routes.Path(), false); err != nil {
+		return gatewayproxy.Snapshot{}, err
+	}
 	file, err := os.Open(routes.Path())
 	if err != nil {
 		return gatewayproxy.Snapshot{}, fmt.Errorf("open routes: %w", err)
@@ -96,6 +105,43 @@ func (routes *Routes) Load() (gatewayproxy.Snapshot, error) {
 		return gatewayproxy.Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func ensureSecureRouteDirectory(path string, create bool) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) && create {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("create route store: %w", err)
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect route store: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("route store must be a real directory, not a symlink")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("route store permissions must be owner-only (got %04o)", info.Mode().Perm())
+	}
+	return nil
+}
+
+func ensureSecureCacheFile(path string, allowMissing bool) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) && allowMissing {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect route cache: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("route cache must be a regular file, not a symlink")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("route cache permissions must be owner-only (got %04o)", info.Mode().Perm())
+	}
+	return nil
 }
 
 func validateSnapshot(snapshot gatewayproxy.Snapshot) error {

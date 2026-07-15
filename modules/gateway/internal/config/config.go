@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -81,6 +83,13 @@ func Load(path string) (Config, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&raw); err != nil {
 		return Config{}, fmt.Errorf("decode gateway config: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return Config{}, errors.New("decode gateway config: multiple YAML documents are not allowed")
+		}
+		return Config{}, fmt.Errorf("decode gateway config trailing content: %w", err)
 	}
 	var cfg Config
 	cfg.Node.ID = strings.TrimSpace(raw.Node.ID)
@@ -171,38 +180,51 @@ func ValidateBaseURL(value string) error {
 }
 
 func ValidateKeyFile(path string) error {
-	if strings.TrimSpace(path) == "" {
-		return errors.New("path is required")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("must be a regular file")
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("permissions must not include group or world bits (got %04o)", info.Mode().Perm())
-	}
-	secret, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(string(secret)) == "" {
-		return errors.New("file is empty")
-	}
-	return nil
+	_, err := readSecretFile(path)
+	return err
 }
 
 func ReadSecret(path string) (string, error) {
-	if err := ValidateKeyFile(path); err != nil {
-		return "", err
+	return readSecretFile(path)
+}
+
+func readSecretFile(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("path is required")
 	}
-	value, err := os.ReadFile(path)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", fmt.Errorf("open key without following symlinks: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return "", errors.New("open key file descriptor")
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(value)), nil
+	if !info.Mode().IsRegular() {
+		return "", errors.New("must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("permissions must not include group or world bits (got %04o)", info.Mode().Perm())
+	}
+	const maxSecretBytes = 64 << 10
+	value, err := io.ReadAll(io.LimitReader(file, maxSecretBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(value) > maxSecretBytes {
+		return "", errors.New("file is too large")
+	}
+	secret := strings.TrimSpace(string(value))
+	if secret == "" {
+		return "", errors.New("file is empty")
+	}
+	return secret, nil
 }
 
 func resolvePath(configPath, value string) string {

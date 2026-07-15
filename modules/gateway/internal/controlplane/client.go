@@ -53,6 +53,9 @@ func New(options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now

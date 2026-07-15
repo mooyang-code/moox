@@ -96,6 +96,30 @@ func TestLoadRejectsNonLoopbackPlaintextControlPlane(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsSymlinkedKeyAndMultipleYAMLDocuments(t *testing.T) {
+	dir := t.TempDir()
+	control := writeKey(t, dir, "control.key", 0o600)
+	service := writeKey(t, dir, "service.key", 0o600)
+	symlink := filepath.Join(dir, "control-link.key")
+	if err := os.Symlink(control, symlink); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "app.yaml")
+	for name, yaml := range map[string]string{
+		"symlinked key":   validYAML(symlink, service, filepath.Join(dir, "data"), ""),
+		"second document": validYAML(control, service, filepath.Join(dir, "data"), "") + "---\nnode:\n  id: hidden\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("Load() accepted unsafe configuration")
+			}
+		})
+	}
+}
+
 func writeKey(t *testing.T, dir, name string, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(dir, name)

@@ -58,6 +58,28 @@ func TestNewRejectsNonLoopbackPlaintextControlPlane(t *testing.T) {
 	}
 }
 
+func TestPullRejectsRedirectWithoutLeakingAuthentication(t *testing.T) {
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+		if r.Header.Get("X-Moox-Signature") != "" {
+			t.Error("redirect leaked authentication header")
+		}
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, target.URL, http.StatusFound)
+	}))
+	defer origin.Close()
+	client := newTestClient(t, origin.URL, "control-secret")
+	if _, err := client.Pull(context.Background(), ""); err == nil {
+		t.Fatal("Pull() followed redirect")
+	}
+	if targetCalled {
+		t.Fatal("redirect target was contacted")
+	}
+}
+
 func TestPullRejectsWrongNodeAndInvalidRouteHash(t *testing.T) {
 	for name, mutate := range map[string]func(*gatewayproxy.Snapshot){
 		"wrong node":   func(snapshot *gatewayproxy.Snapshot) { snapshot.NodeID = "other-node" },
