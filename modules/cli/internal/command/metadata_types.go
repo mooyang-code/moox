@@ -104,6 +104,7 @@ type metadataSeed struct {
 	SubjectSymbols     []seedSubjectSymbol     `yaml:"subject_symbols"`
 	Datasets           []seedDataset           `yaml:"datasets"`
 	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
+	FieldGroups        []seedFieldGroup        `yaml:"field_groups"`
 	Fields             []seedField             `yaml:"fields"`
 	Factors            []seedFactor            `yaml:"factors"`
 	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
@@ -182,6 +183,7 @@ type seedDatasetSubject struct {
 
 type seedField struct {
 	SpaceID            string `yaml:"space_id"`
+	GroupID            string `yaml:"group_id"`
 	FieldID            string `yaml:"field_id"`
 	Name               string `yaml:"name"`
 	Description        string `yaml:"description"`
@@ -189,7 +191,18 @@ type seedField struct {
 	Unit               string `yaml:"unit"`
 	ValidationRuleJSON string `yaml:"validation_rule_json"`
 	WriteExample       string `yaml:"write_example"`
+	SortOrder          uint32 `yaml:"sort_order"`
 	seedCommon         `yaml:",inline"`
+}
+
+type seedFieldGroup struct {
+	SpaceID       string `yaml:"space_id"`
+	GroupID       string `yaml:"group_id"`
+	Name          string `yaml:"name"`
+	Description   string `yaml:"description"`
+	ParentGroupID string `yaml:"parent_group_id"`
+	SortOrder     uint32 `yaml:"sort_order"`
+	seedCommon    `yaml:",inline"`
 }
 
 type seedFactor struct {

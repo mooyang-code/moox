@@ -2,13 +2,13 @@ package access
 
 import (
 	"context"
-	"os"
-	"testing"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"os"
+	"testing"
 )
 
 func TestCreateSpaceRejectsMissingFields(t *testing.T) {
@@ -141,7 +141,9 @@ func (s *stubMetadataStore) ListSubjectSymbols(context.Context, string, string, 
 	return nil, &pb.PageResult{}, nil
 }
 
-func (s *stubMetadataStore) UpsertSubject(context.Context, *pb.Subject) (*pb.Subject, error) { return nil, nil }
+func (s *stubMetadataStore) UpsertSubject(context.Context, *pb.Subject) (*pb.Subject, error) {
+	return nil, nil
+}
 
 func (s *stubMetadataStore) UpsertSubjectSymbol(context.Context, *pb.SubjectSymbol) (*pb.SubjectSymbol, error) {
 	return nil, nil
@@ -163,9 +165,31 @@ func (s *stubMetadataStore) ListDatasetSubjects(context.Context, string, string,
 	return nil, &pb.PageResult{}, nil
 }
 
-func (s *stubMetadataStore) UpsertDataset(context.Context, *pb.Dataset) (*pb.Dataset, error) { return nil, nil }
+func (s *stubMetadataStore) UpsertDataset(context.Context, *pb.Dataset) (*pb.Dataset, error) {
+	return nil, nil
+}
 
 func (s *stubMetadataStore) BindDatasetSubject(context.Context, *pb.DatasetSubject) (*pb.DatasetSubject, error) {
+	return nil, nil
+}
+
+func (s *stubMetadataStore) GetFieldGroup(context.Context, string, string) (*pb.FieldGroup, error) {
+	return nil, os.ErrNotExist
+}
+
+func (s *stubMetadataStore) ListFieldGroups(context.Context, string, string, *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
+}
+
+func (s *stubMetadataStore) UpsertFieldGroup(context.Context, *pb.FieldGroup) (*pb.FieldGroup, error) {
+	return nil, nil
+}
+
+func (s *stubMetadataStore) CreateFieldGroup(context.Context, *pb.FieldGroup) (*pb.FieldGroup, error) {
+	return nil, nil
+}
+
+func (s *stubMetadataStore) UpdateFieldGroup(context.Context, *pb.FieldGroup) (*pb.FieldGroup, error) {
 	return nil, nil
 }
 
@@ -173,11 +197,33 @@ func (s *stubMetadataStore) GetField(context.Context, string, string) (*pb.Field
 	return nil, os.ErrNotExist
 }
 
-func (s *stubMetadataStore) ListFields(context.Context, string, pb.FieldValueType, *pb.Page) ([]*pb.Field, *pb.PageResult, error) {
+func (s *stubMetadataStore) ListFields(context.Context, metadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
 }
 
-func (s *stubMetadataStore) UpsertField(context.Context, *pb.Field) (*pb.Field, error) { return nil, nil }
+func (s *stubMetadataStore) CountFieldsByGroup(context.Context, string) (metadata.FieldGroupCounts, error) {
+	return metadata.FieldGroupCounts{ByGroup: map[string]uint64{}}, nil
+}
+
+func (s *stubMetadataStore) UpsertField(context.Context, *pb.Field) (*pb.Field, error) {
+	return nil, nil
+}
+
+func (s *stubMetadataStore) CreateField(context.Context, *pb.Field) (*pb.Field, error) {
+	return nil, nil
+}
+
+func (s *stubMetadataStore) UpdateField(context.Context, *pb.Field) (*pb.Field, error) {
+	return nil, nil
+}
+
+func (s *stubMetadataStore) BatchUpdateFields(context.Context, string, []string, string, string) (uint32, error) {
+	return 0, nil
+}
+
+func (s *stubMetadataStore) DeleteFieldGroup(context.Context, string, string) error {
+	return nil
+}
 
 func (s *stubMetadataStore) GetFactor(context.Context, string, string) (*pb.Factor, error) {
 	return nil, os.ErrNotExist
@@ -187,7 +233,9 @@ func (s *stubMetadataStore) ListFactors(context.Context, string, string, *pb.Pag
 	return nil, &pb.PageResult{}, nil
 }
 
-func (s *stubMetadataStore) UpsertFactor(context.Context, *pb.Factor) (*pb.Factor, error) { return nil, nil }
+func (s *stubMetadataStore) UpsertFactor(context.Context, *pb.Factor) (*pb.Factor, error) {
+	return nil, nil
+}
 
 func (s *stubMetadataStore) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
@@ -303,7 +351,7 @@ func TestSpaceAndViewCRUDFlow(t *testing.T) {
 
 	colRsp, err := svc.UpsertViewColumn(ctx, &pb.UpsertViewColumnReq{Column: &pb.ViewColumn{
 		SpaceId: "crypto", ViewId: "kline_view", ColumnName: "close",
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		Attributes: map[string]string{"display_name": "收盘价"},
 	}})
 	mustRetOK(t, colRsp, err)

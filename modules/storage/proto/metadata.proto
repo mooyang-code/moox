@@ -259,6 +259,30 @@ message DatasetSubject {
   map<string, string> attributes = 10;
 }
 
+// FieldGroup 是 Space 内普通字段的两级分类目录。
+message FieldGroup {
+  // space_id 是 FieldGroup 所属 Space。
+  string space_id = 1;
+  // group_id 是 Space 内唯一的稳定英文 ID。
+  string group_id = 2;
+  // name 是字段组中文展示名。
+  string name = 3;
+  // description 是字段组说明。
+  string description = 4;
+  // parent_group_id 是可选父组 ID；系统最多允许两级。
+  string parent_group_id = 5;
+  // sort_order 是同级展示顺序。
+  uint32 sort_order = 6;
+  // status 表示启用或停用状态。
+  string status = 7;
+  // created_at 是创建时间。
+  string created_at = 8;
+  // updated_at 是最后更新时间。
+  string updated_at = 9;
+  // attributes 是扩展属性。
+  map<string, string> attributes = 10;
+}
+
 // Field 是 Space 内普通字段字典，不直接归属某个 Dataset。
 message Field {
   // space_id 是 Field 所属 Space。
@@ -285,6 +309,10 @@ message Field {
   string updated_at = 11;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 12;
+  // group_id 是字段所属 FieldGroup；字段必须归组。
+  string group_id = 13;
+  // sort_order 是字段在组内的展示顺序。
+  uint32 sort_order = 14;
 }
 
 // Factor 是 Space 内、已参数化的因子结果定义。
@@ -951,6 +979,57 @@ message ListDatasetSubjectsRsp {
   common.PageResult page_result = 3;
 }
 
+// CreateFieldGroupReq 表示创建字段组的请求。
+message CreateFieldGroupReq {
+  common.AuthInfo auth_info = 1;
+  FieldGroup field_group = 2;
+}
+
+message CreateFieldGroupRsp {
+  common.RetInfo ret_info = 1;
+  FieldGroup field_group = 2;
+}
+
+message UpdateFieldGroupReq {
+  common.AuthInfo auth_info = 1;
+  FieldGroup field_group = 2;
+}
+
+message UpdateFieldGroupRsp {
+  common.RetInfo ret_info = 1;
+  FieldGroup field_group = 2;
+}
+
+message GetFieldGroupReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string group_id = 3;
+}
+
+message GetFieldGroupRsp {
+  common.RetInfo ret_info = 1;
+  FieldGroup field_group = 2;
+}
+
+message ListFieldGroupsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string parent_group_id = 3;
+  common.Page page = 4;
+}
+
+message ListFieldGroupsRsp {
+  common.RetInfo ret_info = 1;
+  repeated FieldGroup field_groups = 2;
+  common.PageResult page_result = 3;
+  // field_counts 按字段组 ID 返回字段数量；一级组包含子组，二级组只统计直接字段。
+  map<string, uint64> field_counts = 4;
+  // total_field_count 是当前 Space 下全部字段数量。
+  uint64 total_field_count = 5;
+  // ungrouped_field_count 是未归组异常字段数量。
+  uint64 ungrouped_field_count = 6;
+}
+
 // CreateFieldReq 表示创建字段的请求。
 message CreateFieldReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1011,6 +1090,20 @@ message ListFieldsReq {
   FieldValueType value_type = 3;
   // page 是分页参数。
   common.Page page = 4;
+  // group_id 是可选字段组过滤条件。
+  string group_id = 5;
+  // status 是可选字段状态过滤条件。
+  string status = 6;
+  // keyword 按字段 ID、中文名和描述执行包含匹配。
+  string keyword = 7;
+  // include_descendants 表示查询 group_id 及其直接子组。
+  bool include_descendants = 8;
+  // ungrouped_only 表示只查询未归组异常字段，不能与 group_id 同时使用。
+  bool ungrouped_only = 9;
+  // sort_by 是排序字段：sort_order、field_id 或 updated_at。
+  string sort_by = 10;
+  // sort_order 是排序方向：asc 或 desc。
+  string sort_order = 11;
 }
 
 // ListFieldsRsp 表示列出字段的响应。
@@ -1021,6 +1114,31 @@ message ListFieldsRsp {
   repeated Field fields = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
+}
+
+// BatchUpdateFieldsReq 表示一次事务内批量调整字段组或状态。
+message BatchUpdateFieldsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  repeated string field_ids = 3;
+  string target_group_id = 4;
+  string target_status = 5;
+}
+
+message BatchUpdateFieldsRsp {
+  common.RetInfo ret_info = 1;
+  uint32 updated_count = 2;
+}
+
+// DeleteFieldGroupReq 表示删除一个没有子组和字段引用的空字段组。
+message DeleteFieldGroupReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string group_id = 3;
+}
+
+message DeleteFieldGroupRsp {
+  common.RetInfo ret_info = 1;
 }
 
 // CreateFactorReq 表示创建因子的请求。
@@ -1533,6 +1651,15 @@ service Metadata {
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
 
   // 创建普通字段。
+  rpc CreateFieldGroup(CreateFieldGroupReq) returns (CreateFieldGroupRsp);
+  // 更新字段组。
+  rpc UpdateFieldGroup(UpdateFieldGroupReq) returns (UpdateFieldGroupRsp);
+  // 按字段组 ID 获取字段组。
+  rpc GetFieldGroup(GetFieldGroupReq) returns (GetFieldGroupRsp);
+  // 列出字段组。
+  rpc ListFieldGroups(ListFieldGroupsReq) returns (ListFieldGroupsRsp);
+
+  // 创建普通字段。
   rpc CreateField(CreateFieldReq) returns (CreateFieldRsp);
   // 更新普通字段。
   rpc UpdateField(UpdateFieldReq) returns (UpdateFieldRsp);
@@ -1540,6 +1667,10 @@ service Metadata {
   rpc GetField(GetFieldReq) returns (GetFieldRsp);
   // 列出普通字段。
   rpc ListFields(ListFieldsReq) returns (ListFieldsRsp);
+  // 批量移动字段组或更新状态。
+  rpc BatchUpdateFields(BatchUpdateFieldsReq) returns (BatchUpdateFieldsRsp);
+  // 删除没有子组和字段引用的空字段组。
+  rpc DeleteFieldGroup(DeleteFieldGroupReq) returns (DeleteFieldGroupRsp);
 
   // 创建因子。
   rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);

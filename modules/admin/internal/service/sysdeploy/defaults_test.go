@@ -89,8 +89,14 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("%s health URL = %s, want %s", name, healthURL(byName[name].ExtraConfig), want)
 		}
 	}
+	if monitorEnabled(byName["moox_strategy"].ExtraConfig) {
+		t.Fatal("moox_strategy monitoring must remain disabled until the service is shipped by the deployment scripts")
+	}
 	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
+	}
+	if item := byName["storage_metadata"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage.Metadata" {
+		t.Fatalf("storage_metadata endpoint = %d/%s, want 20200/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
 	}
 	if healthURL(byName["storage_access"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage_access extra_config = %s", byName["storage_access"].ExtraConfig)
@@ -172,4 +178,12 @@ func healthURL(raw string) string {
 	}
 	_ = json.Unmarshal([]byte(raw), &extra)
 	return extra.HealthURL
+}
+
+func monitorEnabled(raw string) bool {
+	var extra struct {
+		Enabled bool `json:"monitor_enabled"`
+	}
+	_ = json.Unmarshal([]byte(raw), &extra)
+	return extra.Enabled
 }

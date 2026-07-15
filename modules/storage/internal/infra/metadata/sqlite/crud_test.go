@@ -2,13 +2,197 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+func TestFieldGovernanceQueryAndCounts(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedFieldGovernance(t, ctx, store)
+
+	items, page, err := store.ListFields(ctx, coremetadata.FieldQuery{
+		SpaceID: "stock_cn", GroupID: "market", IncludeDescendants: true,
+		Keyword: "价", Status: "active", SortBy: "field_id", SortOrder: "desc",
+	})
+	if err != nil {
+		t.Fatalf("ListFields: %v", err)
+	}
+	if len(items) != 2 || items[0].GetFieldId() != "open" || items[1].GetFieldId() != "close" || page.GetTotal() != 2 {
+		t.Fatalf("items=%+v page=%+v, want open and close", items, page)
+	}
+	literal, _, err := store.ListFields(ctx, coremetadata.FieldQuery{SpaceID: "stock_cn", Keyword: "%_"})
+	if err != nil || len(literal) != 0 {
+		t.Fatalf("literal wildcard query items=%+v err=%v, want no matches", literal, err)
+	}
+
+	counts, err := store.CountFieldsByGroup(ctx, "stock_cn")
+	if err != nil {
+		t.Fatalf("CountFieldsByGroup: %v", err)
+	}
+	if counts.Total != 3 || counts.Ungrouped != 0 || counts.ByGroup["market"] != 3 || counts.ByGroup["quote"] != 2 || counts.ByGroup["trading"] != 1 {
+		t.Fatalf("counts=%+v", counts)
+	}
+}
+
+func TestBatchUpdateFieldsIsTransactional(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedFieldGovernance(t, ctx, store)
+
+	updated, err := store.BatchUpdateFields(ctx, "stock_cn", []string{"close", "open"}, "trading", "disabled")
+	if err != nil || updated != 2 {
+		t.Fatalf("BatchUpdateFields updated=%d err=%v", updated, err)
+	}
+	for _, id := range []string{"close", "open"} {
+		field, getErr := store.GetField(ctx, "stock_cn", id)
+		if getErr != nil || field.GetGroupId() != "trading" || field.GetStatus() != "disabled" || field.GetUpdatedAt() == "" {
+			t.Fatalf("field %s = %+v err=%v", id, field, getErr)
+		}
+	}
+
+	if _, err := store.BatchUpdateFields(ctx, "stock_cn", []string{"close", "missing"}, "quote", "active"); err == nil {
+		t.Fatal("BatchUpdateFields accepted a missing field")
+	}
+	field, err := store.GetField(ctx, "stock_cn", "close")
+	if err != nil || field.GetGroupId() != "trading" || field.GetStatus() != "disabled" {
+		t.Fatalf("failed batch partially updated close: %+v err=%v", field, err)
+	}
+}
+
+func TestCreateFieldIsAtomicUnderConcurrency(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedFieldGovernance(t, ctx, store)
+	const fieldID = "concurrent_create"
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.CreateField(ctx, &pb.Field{SpaceId: "stock_cn", GroupId: "quote", FieldId: fieldID, Name: "并发字段"})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	succeeded := 0
+	for err := range errs {
+		if err == nil {
+			succeeded++
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("successful creates = %d, want exactly 1", succeeded)
+	}
+	if _, err := store.UpdateField(ctx, &pb.Field{SpaceId: "stock_cn", GroupId: "quote", FieldId: "missing", Name: "不存在"}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("UpdateField missing error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestDeleteFieldGroupRejectsNonEmptyGroups(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedFieldGovernance(t, ctx, store)
+	if err := store.DeleteFieldGroup(ctx, "stock_cn", "market"); err == nil {
+		t.Fatal("DeleteFieldGroup deleted a group with children")
+	}
+	if err := store.DeleteFieldGroup(ctx, "stock_cn", "quote"); err == nil {
+		t.Fatal("DeleteFieldGroup deleted a group with fields")
+	}
+	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "stock_cn", GroupId: "empty", Name: "空字段组"}); err != nil {
+		t.Fatalf("UpsertFieldGroup(empty): %v", err)
+	}
+	if err := store.DeleteFieldGroup(ctx, "stock_cn", "empty"); err != nil {
+		t.Fatalf("DeleteFieldGroup(empty): %v", err)
+	}
+	if _, err := store.GetFieldGroup(ctx, "stock_cn", "empty"); err == nil {
+		t.Fatal("empty group still exists")
+	}
+}
+
+func seedFieldGovernance(t *testing.T, ctx context.Context, store *Store) {
+	t.Helper()
+	if _, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: "stock_cn", Name: "A股市场"}); err != nil {
+		t.Fatalf("UpsertSpace: %v", err)
+	}
+	for _, group := range []*pb.FieldGroup{
+		{SpaceId: "stock_cn", GroupId: "market", Name: "市场数据"},
+		{SpaceId: "stock_cn", GroupId: "quote", ParentGroupId: "market", Name: "行情价格"},
+		{SpaceId: "stock_cn", GroupId: "trading", ParentGroupId: "market", Name: "成交数据"},
+	} {
+		if _, err := store.UpsertFieldGroup(ctx, group); err != nil {
+			t.Fatalf("UpsertFieldGroup(%s): %v", group.GetGroupId(), err)
+		}
+	}
+	for _, field := range []*pb.Field{
+		{SpaceId: "stock_cn", GroupId: "quote", FieldId: "close", Name: "收盘价", Description: "交易收盘价格", Status: "active"},
+		{SpaceId: "stock_cn", GroupId: "quote", FieldId: "open", Name: "开盘价", Description: "交易开盘价格", Status: "active"},
+		{SpaceId: "stock_cn", GroupId: "trading", FieldId: "volume", Name: "成交量", Status: "disabled"},
+	} {
+		if _, err := store.UpsertField(ctx, field); err != nil {
+			t.Fatalf("UpsertField(%s): %v", field.GetFieldId(), err)
+		}
+	}
+}
+
+func TestFieldGroupsAndGroupedFields(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	if _, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: "stock_cn", Name: "A股市场"}); err != nil {
+		t.Fatalf("UpsertSpace: %v", err)
+	}
+	for _, group := range []*pb.FieldGroup{
+		{SpaceId: "stock_cn", GroupId: "market", Name: "市场数据", SortOrder: 20},
+		{SpaceId: "stock_cn", GroupId: "quote", Name: "行情字段", ParentGroupId: "market", SortOrder: 10},
+		{SpaceId: "stock_cn", GroupId: "security", Name: "证券基础", SortOrder: 10},
+	} {
+		if _, err := store.UpsertFieldGroup(ctx, group); err != nil {
+			t.Fatalf("UpsertFieldGroup(%s): %v", group.GetGroupId(), err)
+		}
+	}
+	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "stock_cn", GroupId: "too_deep", Name: "第三级", ParentGroupId: "quote"}); err == nil {
+		t.Fatal("UpsertFieldGroup accepted a third-level group")
+	}
+	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "stock_cn", GroupId: "market", Name: "市场数据", ParentGroupId: "security"}); err == nil {
+		t.Fatal("UpsertFieldGroup reparented a group with children into a third level")
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE t_field_groups SET c_parent_group_id = 'security' WHERE c_space_id = 'stock_cn' AND c_group_id = 'market'`); err == nil {
+		t.Fatal("database trigger allowed a root group with children to become a child")
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE t_field_groups SET c_parent_group_id = 'quote' WHERE c_space_id = 'stock_cn' AND c_group_id = 'security'`); err == nil {
+		t.Fatal("database trigger allowed a third-level field group")
+	}
+	if _, err := store.UpsertField(ctx, &pb.Field{SpaceId: "stock_cn", FieldId: "close", Name: "收盘价", GroupId: "quote", SortOrder: 20}); err != nil {
+		t.Fatalf("UpsertField: %v", err)
+	}
+	if _, err := store.UpsertField(ctx, &pb.Field{SpaceId: "stock_cn", FieldId: "orphan", Name: "孤立字段"}); err == nil {
+		t.Fatal("UpsertField accepted a field without group_id")
+	}
+
+	groups, page, err := store.ListFieldGroups(ctx, "stock_cn", "market", nil)
+	if err != nil {
+		t.Fatalf("ListFieldGroups: %v", err)
+	}
+	if len(groups) != 1 || groups[0].GetGroupId() != "quote" || page.GetTotal() != 1 {
+		t.Fatalf("groups=%+v page=%+v, want quote", groups, page)
+	}
+	fields, page, err := store.ListFields(ctx, coremetadata.FieldQuery{SpaceID: "stock_cn", GroupID: "quote"})
+	if err != nil {
+		t.Fatalf("ListFields: %v", err)
+	}
+	if len(fields) != 1 || fields[0].GetGroupId() != "quote" || fields[0].GetSortOrder() != 20 || page.GetTotal() != 1 {
+		t.Fatalf("fields=%+v page=%+v, want grouped close field", fields, page)
+	}
+}
 
 func TestListDatasetSubjectsPagesInSQL(t *testing.T) {
 	ctx := context.Background()

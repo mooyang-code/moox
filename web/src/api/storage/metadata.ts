@@ -7,6 +7,7 @@ import type {
   DatasetSubject,
   Factor,
   Field,
+  FieldGroup,
   Page,
   PageResult,
   PrimaryStoreNode,
@@ -92,6 +93,26 @@ export async function createField(field: Field) {
   return rsp.field;
 }
 
+export async function createFieldGroup(field_group: FieldGroup) {
+  const rsp = await callMetadata<{ field_group: FieldGroup }, RetRsp & { field_group: FieldGroup }>('CreateFieldGroup', { field_group });
+  return rsp.field_group;
+}
+
+export async function updateFieldGroup(field_group: FieldGroup) {
+  const rsp = await callMetadata<{ field_group: FieldGroup }, RetRsp & { field_group: FieldGroup }>('UpdateFieldGroup', { field_group });
+  return rsp.field_group;
+}
+
+export function listFieldGroups(params: { space_id: string; parent_group_id?: string; page?: Page }) {
+  return callMetadata<typeof params, RetRsp & {
+    field_groups: FieldGroup[];
+    page_result: PageResult;
+    field_counts?: Record<string, number>;
+    total_field_count?: number;
+    ungrouped_field_count?: number;
+  }>('ListFieldGroups', params);
+}
+
 export async function updateField(field: Field) {
   const rsp = await callMetadata<{ field: Field }, RetRsp & { field: Field }>('UpdateField', { field });
   return rsp.field;
@@ -101,8 +122,32 @@ export function getField(params: { space_id: string; field_id: string }) {
   return callMetadata<typeof params, RetRsp & { field: Field }>('GetField', params);
 }
 
-export function listFields(params: { space_id: string; status?: string; page?: Page }) {
+export function listFields(params: {
+  space_id: string;
+  group_id?: string;
+  value_type?: string | number;
+  status?: string;
+  keyword?: string;
+  include_descendants?: boolean;
+  ungrouped_only?: boolean;
+  sort_by?: 'sort_order' | 'field_id' | 'updated_at';
+  sort_order?: 'asc' | 'desc';
+  page?: Page;
+}) {
   return callMetadata<typeof params, RetRsp & { fields: Field[]; page_result: PageResult }>('ListFields', params);
+}
+
+export function batchUpdateFields(params: {
+  space_id: string;
+  field_ids: string[];
+  target_group_id?: string;
+  target_status?: 'active' | 'disabled';
+}) {
+  return callMetadata<typeof params, RetRsp & { updated_count: number }>('BatchUpdateFields', params);
+}
+
+export function deleteFieldGroup(params: { space_id: string; group_id: string }) {
+  return callMetadata<typeof params, RetRsp>('DeleteFieldGroup', params);
 }
 
 export async function createFactor(factor: Factor) {

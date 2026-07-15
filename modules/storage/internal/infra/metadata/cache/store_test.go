@@ -60,11 +60,20 @@ func (stubMetadataReader) ListDatasets(context.Context, string, string, pb.DataK
 func (stubMetadataReader) ListDatasetSubjects(context.Context, string, string, string, *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	return nil, nil, nil
 }
+func (stubMetadataReader) GetFieldGroup(context.Context, string, string) (*pb.FieldGroup, error) {
+	return nil, nil
+}
+func (stubMetadataReader) ListFieldGroups(context.Context, string, string, *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
+	return nil, nil, nil
+}
 func (stubMetadataReader) GetField(context.Context, string, string) (*pb.Field, error) {
 	return nil, nil
 }
-func (stubMetadataReader) ListFields(context.Context, string, pb.FieldValueType, *pb.Page) ([]*pb.Field, *pb.PageResult, error) {
+func (stubMetadataReader) ListFields(context.Context, metadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
 	return nil, nil, nil
+}
+func (stubMetadataReader) CountFieldsByGroup(context.Context, string) (metadata.FieldGroupCounts, error) {
+	return metadata.FieldGroupCounts{ByGroup: map[string]uint64{}}, nil
 }
 func (stubMetadataReader) GetFactor(context.Context, string, string) (*pb.Factor, error) {
 	return nil, nil

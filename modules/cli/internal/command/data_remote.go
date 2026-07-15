@@ -12,6 +12,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 const remoteWriteBatchSize = 1000
@@ -47,6 +48,9 @@ func postStorageRaw(ctx context.Context, storageURL string, service string, meth
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if spaceID := protoMessageSpaceID(req.ProtoReflect()); spaceID != "" {
+		httpReq.Header.Set("X-Space-Id", spaceID)
+	}
 	client := &http.Client{Timeout: 60 * time.Second}
 	httpRsp, err := client.Do(httpReq)
 	if err != nil {
@@ -61,6 +65,28 @@ func postStorageRaw(ctx context.Context, storageURL string, service string, meth
 		return err
 	}
 	return nil
+}
+
+func protoMessageSpaceID(message protoreflect.Message) string {
+	if !message.IsValid() {
+		return ""
+	}
+	fields := message.Descriptor().Fields()
+	if field := fields.ByName("space_id"); field != nil && field.Kind() == protoreflect.StringKind {
+		if value := strings.TrimSpace(message.Get(field).String()); value != "" {
+			return value
+		}
+	}
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		if field.Kind() != protoreflect.MessageKind || field.IsList() || field.IsMap() || !message.Has(field) {
+			continue
+		}
+		if value := protoMessageSpaceID(message.Get(field).Message()); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func checkStorageRetInfo(service string, method string, rsp proto.Message) error {

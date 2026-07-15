@@ -25,6 +25,20 @@ func TestHTTPRequestHandler_ParseRequestParams_ValidPath_ShouldReturnServiceAndM
 	assert.Equal(t, "login", method)
 }
 
+func TestHTTPRequestHandler_FieldMetadataMethodsUseStorageGatewayRegistration(t *testing.T) {
+	h := NewHTTPRequestHandler()
+	for _, method := range []string{"ListFields", "BatchUpdateFields", "DeleteFieldGroup"} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/storage_metadata/"+method, nil)
+			req = mux.SetURLVars(req, map[string]string{"service": "storage_metadata", "method": method})
+			serviceID, gotMethod, err := h.parseRequestParams(req)
+			require.NoError(t, err)
+			assert.Equal(t, "storage_metadata", serviceID)
+			assert.Equal(t, method, gotMethod)
+		})
+	}
+}
+
 func TestHTTPRequestHandler_ParseRequestParams_MissingService_ShouldError(t *testing.T) {
 	h := NewHTTPRequestHandler()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin//login", nil)

@@ -99,10 +99,6 @@ export const statusOptions: SelectOption[] = [
 export const dataKindOptions: SelectOption<DataKind>[] = [
   { label: '时序数据', value: 'DATA_KIND_TIME_SERIES', aliases: [2] },
   { label: '记录数据', value: 'DATA_KIND_RECORD', aliases: [1] },
-  { label: '快照数据', value: 'DATA_KIND_SNAPSHOT', aliases: [3] },
-  { label: '事件数据', value: 'DATA_KIND_EVENT', aliases: [4] },
-  { label: '文档数据', value: 'DATA_KIND_DOCUMENT', aliases: [5] },
-  { label: '表格数据', value: 'DATA_KIND_TABLE', aliases: [6] },
 ];
 
 export const fieldValueTypeOptions: SelectOption<FieldValueType>[] = [

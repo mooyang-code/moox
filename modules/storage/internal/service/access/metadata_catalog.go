@@ -3,10 +3,15 @@ package access
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 // 本文件聚合数据源、主体、数据集、字段、因子及其列绑定相关的元数据 CRUD 入口。
@@ -259,29 +264,106 @@ func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSu
 	return &pb.ListDatasetSubjectsRsp{RetInfo: response.Success("success"), DatasetSubjects: items, PageResult: page}, nil
 }
 
+func (s *Service) CreateFieldGroup(ctx context.Context, req *pb.CreateFieldGroupReq) (*pb.CreateFieldGroupRsp, error) {
+	item := req.GetFieldGroup()
+	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
+		return &pb.CreateFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and name are required"))}, nil
+	}
+	if item.GroupId == "" {
+		item.GroupId = defaultID(item.GetName(), "field_group")
+	}
+	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
+		return &pb.CreateFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	created, err := s.metadata.CreateFieldGroup(ctx, item)
+	if err != nil {
+		return &pb.CreateFieldGroupRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "create field group")
+	return &pb.CreateFieldGroupRsp{RetInfo: response.Success("success"), FieldGroup: created}, nil
+}
+
+func (s *Service) UpdateFieldGroup(ctx context.Context, req *pb.UpdateFieldGroupReq) (*pb.UpdateFieldGroupRsp, error) {
+	item := req.GetFieldGroup()
+	if item == nil || item.GetSpaceId() == "" || item.GetGroupId() == "" {
+		return &pb.UpdateFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and group_id are required"))}, nil
+	}
+	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
+		return &pb.UpdateFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	updated, err := s.metadata.UpdateFieldGroup(ctx, item)
+	if err != nil {
+		return &pb.UpdateFieldGroupRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "update field group")
+	return &pb.UpdateFieldGroupRsp{RetInfo: response.Success("success"), FieldGroup: updated}, nil
+}
+
+func (s *Service) GetFieldGroup(ctx context.Context, req *pb.GetFieldGroupReq) (*pb.GetFieldGroupRsp, error) {
+	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
+		return &pb.GetFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	item, err := s.metadata.GetFieldGroup(ctx, req.GetSpaceId(), req.GetGroupId())
+	if err != nil {
+		return &pb.GetFieldGroupRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.GetFieldGroupRsp{RetInfo: response.Success("success"), FieldGroup: item}, nil
+}
+
+func (s *Service) ListFieldGroups(ctx context.Context, req *pb.ListFieldGroupsReq) (*pb.ListFieldGroupsRsp, error) {
+	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
+		return &pb.ListFieldGroupsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	items, page, err := s.metadata.ListFieldGroups(ctx, req.GetSpaceId(), req.GetParentGroupId(), req.GetPage())
+	if err != nil {
+		return &pb.ListFieldGroupsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	counts, err := s.metadata.CountFieldsByGroup(ctx, req.GetSpaceId())
+	if err != nil {
+		return &pb.ListFieldGroupsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ListFieldGroupsRsp{
+		RetInfo: response.Success("success"), FieldGroups: items, PageResult: page,
+		FieldCounts: counts.ByGroup, TotalFieldCount: counts.Total, UngroupedFieldCount: counts.Ungrouped,
+	}, nil
+}
+
 func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.CreateFieldRsp, error) {
-	created, err := s.metadata.UpsertField(ctx, req.GetField())
+	if req.GetField() == nil || req.GetField().GetGroupId() == "" {
+		return &pb.CreateFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("field.group_id is required"))}, nil
+	}
+	item := req.GetField()
+	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
+		return &pb.CreateFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	created, err := s.metadata.CreateField(ctx, item)
 	if err != nil {
 		return &pb.CreateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
-	}
+	s.refreshMetadataCacheAfterCommit(ctx, "create field")
 	return &pb.CreateFieldRsp{RetInfo: response.Success("success"), Field: created}, nil
 }
 
 func (s *Service) UpdateField(ctx context.Context, req *pb.UpdateFieldReq) (*pb.UpdateFieldRsp, error) {
-	updated, err := s.metadata.UpsertField(ctx, req.GetField())
+	item := req.GetField()
+	if item == nil || item.GetSpaceId() == "" || item.GetFieldId() == "" {
+		return &pb.UpdateFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and field_id are required"))}, nil
+	}
+	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
+		return &pb.UpdateFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	updated, err := s.metadata.UpdateField(ctx, item)
 	if err != nil {
 		return &pb.UpdateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateFieldRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
-	}
+	s.refreshMetadataCacheAfterCommit(ctx, "update field")
 	return &pb.UpdateFieldRsp{RetInfo: response.Success("success"), Field: updated}, nil
 }
 
 func (s *Service) GetField(ctx context.Context, req *pb.GetFieldReq) (*pb.GetFieldRsp, error) {
+	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
+		return &pb.GetFieldRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	item, err := s.metadata.GetField(ctx, req.GetSpaceId(), req.GetFieldId())
 	if err != nil {
 		return &pb.GetFieldRsp{RetInfo: response.Error(pb.ErrorCode_FIELD_NOT_FOUND, err)}, nil
@@ -290,11 +372,81 @@ func (s *Service) GetField(ctx context.Context, req *pb.GetFieldReq) (*pb.GetFie
 }
 
 func (s *Service) ListFields(ctx context.Context, req *pb.ListFieldsReq) (*pb.ListFieldsRsp, error) {
-	items, page, err := s.metadata.ListFields(ctx, req.GetSpaceId(), req.GetValueType(), req.GetPage())
+	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
+		return &pb.ListFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if req.GetGroupId() != "" && req.GetUngroupedOnly() {
+		return &pb.ListFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("group_id and ungrouped_only cannot be used together"))}, nil
+	}
+	if !validFieldSort(req.GetSortBy(), req.GetSortOrder()) {
+		return &pb.ListFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("invalid field sort"))}, nil
+	}
+	items, page, err := s.metadata.ListFields(ctx, coremetadata.FieldQuery{
+		SpaceID: req.GetSpaceId(), GroupID: req.GetGroupId(), ValueType: req.GetValueType(),
+		Status: req.GetStatus(), Keyword: req.GetKeyword(), IncludeDescendants: req.GetIncludeDescendants(),
+		UngroupedOnly: req.GetUngroupedOnly(), SortBy: req.GetSortBy(), SortOrder: req.GetSortOrder(), Page: req.GetPage(),
+	})
 	if err != nil {
 		return &pb.ListFieldsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListFieldsRsp{RetInfo: response.Success("success"), Fields: items, PageResult: page}, nil
+}
+
+func validFieldSort(sortBy string, sortOrder string) bool {
+	if sortBy != "" && sortBy != "sort_order" && sortBy != "field_id" && sortBy != "updated_at" {
+		return false
+	}
+	return sortOrder == "" || strings.EqualFold(sortOrder, "asc") || strings.EqualFold(sortOrder, "desc")
+}
+
+func (s *Service) BatchUpdateFields(ctx context.Context, req *pb.BatchUpdateFieldsReq) (*pb.BatchUpdateFieldsRsp, error) {
+	if req.GetSpaceId() == "" || len(req.GetFieldIds()) == 0 || len(req.GetFieldIds()) > 100 {
+		return &pb.BatchUpdateFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and 1-100 field_ids are required"))}, nil
+	}
+	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
+		return &pb.BatchUpdateFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if req.GetTargetGroupId() == "" && req.GetTargetStatus() == "" {
+		return &pb.BatchUpdateFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_group_id or target_status is required"))}, nil
+	}
+	if req.GetTargetStatus() != "" && req.GetTargetStatus() != "active" && req.GetTargetStatus() != "disabled" {
+		return &pb.BatchUpdateFieldsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_status must be active or disabled"))}, nil
+	}
+	updated, err := s.metadata.BatchUpdateFields(ctx, req.GetSpaceId(), req.GetFieldIds(), req.GetTargetGroupId(), req.GetTargetStatus())
+	if err != nil {
+		return &pb.BatchUpdateFieldsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "batch update fields")
+	return &pb.BatchUpdateFieldsRsp{RetInfo: response.Success("success"), UpdatedCount: updated}, nil
+}
+
+func (s *Service) DeleteFieldGroup(ctx context.Context, req *pb.DeleteFieldGroupReq) (*pb.DeleteFieldGroupRsp, error) {
+	if req.GetSpaceId() == "" || req.GetGroupId() == "" {
+		return &pb.DeleteFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and group_id are required"))}, nil
+	}
+	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
+		return &pb.DeleteFieldGroupRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if err := s.metadata.DeleteFieldGroup(ctx, req.GetSpaceId(), req.GetGroupId()); err != nil {
+		return &pb.DeleteFieldGroupRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "delete field group")
+	return &pb.DeleteFieldGroupRsp{RetInfo: response.Success("success")}, nil
+}
+
+func validateFieldSpaceContext(ctx context.Context, requestSpaceID string) error {
+	head := thttp.Head(ctx)
+	if head == nil || head.Request == nil {
+		return nil
+	}
+	headerSpaceID := strings.TrimSpace(head.Request.Header.Get("X-Space-Id"))
+	if headerSpaceID == "" {
+		return fmt.Errorf("%s header is required", http.CanonicalHeaderKey("X-Space-Id"))
+	}
+	if requestSpaceID == "" || requestSpaceID != headerSpaceID {
+		return fmt.Errorf("request space_id does not match %s header", http.CanonicalHeaderKey("X-Space-Id"))
+	}
+	return nil
 }
 
 func (s *Service) CreateFactor(ctx context.Context, req *pb.CreateFactorReq) (*pb.CreateFactorRsp, error) {

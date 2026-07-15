@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '2')
+VALUES ('schema_version', '3')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_data_kind IN ('record', 'time_series', 'snapshot', 'event', 'document', 'table')),
+    CHECK (c_data_kind IN ('record', 'time_series')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_data_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -302,28 +302,103 @@ BEGIN
     UPDATE t_dataset_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
+CREATE TABLE IF NOT EXISTS t_field_groups (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_group_id TEXT NOT NULL,
+    c_name TEXT NOT NULL,
+    c_description TEXT NOT NULL DEFAULT '',
+    c_parent_group_id TEXT,
+    c_sort_order INTEGER NOT NULL DEFAULT 0,
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_attrs_json TEXT NOT NULL DEFAULT '{}',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_sort_order >= 0),
+    CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
+    CHECK (c_parent_group_id IS NULL OR c_parent_group_id <> c_group_id),
+    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_space_id, c_parent_group_id) REFERENCES t_field_groups (c_space_id, c_group_id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    UNIQUE (c_space_id, c_group_id),
+    UNIQUE (c_space_id, c_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_field_groups_parent ON t_field_groups (c_space_id, c_parent_group_id, c_sort_order, c_group_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_field_groups_two_levels_insert
+BEFORE INSERT ON t_field_groups
+FOR EACH ROW
+WHEN NEW.c_parent_group_id IS NOT NULL AND (
+    EXISTS (
+        SELECT 1 FROM t_field_groups parent
+        WHERE parent.c_space_id = NEW.c_space_id
+          AND parent.c_group_id = NEW.c_parent_group_id
+          AND parent.c_parent_group_id IS NOT NULL
+    )
+    OR EXISTS (
+        SELECT 1 FROM t_field_groups child
+        WHERE child.c_space_id = NEW.c_space_id
+          AND child.c_parent_group_id = NEW.c_group_id
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'field groups support at most two levels');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_field_groups_two_levels_update
+BEFORE UPDATE OF c_parent_group_id ON t_field_groups
+FOR EACH ROW
+WHEN NEW.c_parent_group_id IS NOT NULL AND (
+    EXISTS (
+        SELECT 1 FROM t_field_groups parent
+        WHERE parent.c_space_id = NEW.c_space_id
+          AND parent.c_group_id = NEW.c_parent_group_id
+          AND parent.c_parent_group_id IS NOT NULL
+    )
+    OR EXISTS (
+        SELECT 1 FROM t_field_groups child
+        WHERE child.c_space_id = NEW.c_space_id
+          AND child.c_parent_group_id = NEW.c_group_id
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'field groups support at most two levels');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_field_groups_mtime
+AFTER UPDATE ON t_field_groups
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_field_groups SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
 CREATE TABLE IF NOT EXISTS t_fields (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_field_id TEXT NOT NULL,
+    c_group_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
     c_value_type TEXT NOT NULL,
     c_unit TEXT NOT NULL DEFAULT '',
     c_validation_rule_json TEXT NOT NULL DEFAULT '{}',
     c_write_example TEXT NOT NULL DEFAULT '',
+    c_sort_order INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
+    CHECK (c_sort_order >= 0),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
-    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_space_id, c_group_id) REFERENCES t_field_groups (c_space_id, c_group_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_field_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_fields_value_type ON t_fields (c_space_id, c_value_type, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_fields_status ON t_fields (c_space_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_fields_group ON t_fields (c_space_id, c_group_id, c_sort_order, c_field_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_fields_mtime
 AFTER UPDATE ON t_fields

@@ -6,6 +6,27 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
+// FieldQuery contains the supported server-side field filters and ordering.
+type FieldQuery struct {
+	SpaceID            string
+	GroupID            string
+	ValueType          pb.FieldValueType
+	Status             string
+	Keyword            string
+	IncludeDescendants bool
+	UngroupedOnly      bool
+	SortBy             string
+	SortOrder          string
+	Page               *pb.Page
+}
+
+// FieldGroupCounts contains direct child counts and recursive root counts.
+type FieldGroupCounts struct {
+	ByGroup   map[string]uint64
+	Total     uint64
+	Ungrouped uint64
+}
+
 // Reader 定义元数据存储的只读查询接口。
 type Reader interface {
 	GetSpace(ctx context.Context, spaceID string) (*pb.Space, error)
@@ -27,8 +48,11 @@ type Reader interface {
 	ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error)
 	ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error)
 
+	GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error)
+	ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error)
 	GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error)
-	ListFields(ctx context.Context, spaceID string, valueType pb.FieldValueType, page *pb.Page) ([]*pb.Field, *pb.PageResult, error)
+	ListFields(ctx context.Context, query FieldQuery) ([]*pb.Field, *pb.PageResult, error)
+	CountFieldsByGroup(ctx context.Context, spaceID string) (FieldGroupCounts, error)
 	GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error)
 	ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error)
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
@@ -57,7 +81,14 @@ type Writer interface {
 	RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
 	BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) (*pb.DatasetSubject, error)
+	UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
+	CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
+	UpdateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, error)
+	CreateField(ctx context.Context, item *pb.Field) (*pb.Field, error)
+	UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, error)
+	BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs []string, targetGroupID string, targetStatus string) (uint32, error)
+	DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error
 	UpsertFactor(ctx context.Context, item *pb.Factor) (*pb.Factor, error)
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
 	UpsertPrimaryStoreNode(ctx context.Context, item *pb.PrimaryStoreNode) (*pb.PrimaryStoreNode, error)

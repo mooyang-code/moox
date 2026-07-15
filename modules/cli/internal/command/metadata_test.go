@@ -176,6 +176,17 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 	))
 }
 
+func TestMetadataContractsEqualTreatsNilAndEmptyAttributesAsEqual(t *testing.T) {
+	assert.True(t, metadataContractsEqual("spaces",
+		&pb.Space{SpaceId: "moox_system", Name: "MooX System", Status: "active"},
+		&pb.Space{SpaceId: "moox_system", Name: "MooX System", Status: "active", Attributes: map[string]string{}},
+	))
+	assert.True(t, metadataContractsEqual("data_sources",
+		&pb.DataSource{SpaceId: "moox_system", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active"},
+		&pb.DataSource{SpaceId: "moox_system", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active", Attributes: map[string]string{}},
+	))
+}
+
 func TestApplyProbeResultOtherResources(t *testing.T) {
 	ds := &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance"}
 	probe := &metadataExistsProbe{
@@ -203,14 +214,15 @@ func TestParseEnumsAllValues(t *testing.T) {
 		kind  pb.DataKind
 	}{
 		{"RECORD", pb.DataKind_DATA_KIND_RECORD},
-		{"SNAPSHOT", pb.DataKind_DATA_KIND_SNAPSHOT},
-		{"EVENT", pb.DataKind_DATA_KIND_EVENT},
-		{"DOCUMENT", pb.DataKind_DATA_KIND_DOCUMENT},
-		{"TABLE", pb.DataKind_DATA_KIND_TABLE},
+		{"TIME_SERIES", pb.DataKind_DATA_KIND_TIME_SERIES},
 	} {
 		got, err := parseDataKind(tc.input)
 		require.NoError(t, err)
 		assert.Equal(t, tc.kind, got)
+	}
+	for _, value := range []string{"SNAPSHOT", "EVENT", "DOCUMENT", "TABLE"} {
+		_, err := parseDataKind(value)
+		require.Error(t, err)
 	}
 	for _, tc := range []struct {
 		input string
@@ -234,6 +246,40 @@ func TestParseEnumsAllValues(t *testing.T) {
 	origin2, err := parseColumnOriginType("EXPRESSION")
 	require.NoError(t, err)
 	assert.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION, origin2)
+}
+
+func TestBuildMetadataImportCallsRejectsUndefinedExplicitFieldGroup(t *testing.T) {
+	_, err := buildMetadataImportCalls(metadataSeed{Fields: []seedField{{
+		SpaceID: "stock_cn", GroupID: "missing", FieldID: "close", Name: "收盘价", ValueType: "double",
+	}}})
+	require.ErrorContains(t, err, `undefined field_group "missing"`)
+}
+
+func TestBuildMetadataImportCallsValidatesFieldGroupHierarchy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		groups []seedFieldGroup
+		want   string
+	}{
+		{name: "duplicate", groups: []seedFieldGroup{{SpaceID: "s", GroupID: "g", Name: "G"}, {SpaceID: "s", GroupID: "g", Name: "G2"}}, want: "duplicate field_group"},
+		{name: "missing parent", groups: []seedFieldGroup{{SpaceID: "s", GroupID: "child", ParentGroupID: "missing", Name: "Child"}}, want: "undefined parent"},
+		{name: "third level", groups: []seedFieldGroup{{SpaceID: "s", GroupID: "root", Name: "Root"}, {SpaceID: "s", GroupID: "child", ParentGroupID: "root", Name: "Child"}, {SpaceID: "s", GroupID: "leaf", ParentGroupID: "child", Name: "Leaf"}}, want: "two-level hierarchy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildMetadataImportCalls(metadataSeed{FieldGroups: tc.groups})
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestMetadataNotFoundAcceptsGenericNotFound(t *testing.T) {
+	require.True(t, metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND, Msg: "sql: no rows"}))
+}
+
+func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
+	req := &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "stock_cn", FieldId: "close"}}
+	assert.Equal(t, "stock_cn", protoMessageSpaceID(req.ProtoReflect()))
+	assert.Empty(t, protoMessageSpaceID((&pb.ListPrimaryStoreNodesReq{}).ProtoReflect()))
 }
 
 func TestSeedToPBAllTypes(t *testing.T) {

@@ -2,10 +2,6 @@ export type DataKind =
   | 'DATA_KIND_UNSPECIFIED'
   | 'DATA_KIND_RECORD'
   | 'DATA_KIND_TIME_SERIES'
-  | 'DATA_KIND_SNAPSHOT'
-  | 'DATA_KIND_EVENT'
-  | 'DATA_KIND_DOCUMENT'
-  | 'DATA_KIND_TABLE'
   | number;
 
 export type FieldValueType =
@@ -176,6 +172,7 @@ export interface DatasetSubject {
 
 export interface Field {
   space_id: string;
+  group_id: string;
   field_id: string;
   name: string;
   description?: string;
@@ -183,6 +180,20 @@ export interface Field {
   unit?: string;
   validation_rule_json?: string;
   write_example?: string;
+  sort_order?: number;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  attributes?: Record<string, string>;
+}
+
+export interface FieldGroup {
+  space_id: string;
+  group_id: string;
+  name: string;
+  description?: string;
+  parent_group_id?: string;
+  sort_order?: number;
   status: string;
   created_at?: string;
   updated_at?: string;

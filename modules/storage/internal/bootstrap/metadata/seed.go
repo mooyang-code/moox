@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ type ImportResult struct {
 	SubjectSymbols     int
 	Datasets           int
 	DatasetSubjects    int
+	FieldGroups        int
 	Fields             int
 	Factors            int
 	DatasetColumns     int
@@ -82,6 +84,11 @@ func ImportSeed(ctx context.Context, opts SeedOptions) (ImportResult, error) {
 // importEntities 按依赖顺序写入各类元数据：父实体先于子实体。
 func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (ImportResult, error) {
 	var result ImportResult
+	var err error
+	seed, err = normalizeSeedFieldGroups(seed)
+	if err != nil {
+		return result, err
+	}
 
 	for _, item := range seed.Spaces {
 		if _, err := store.UpsertSpace(ctx, &pb.Space{
@@ -129,7 +136,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
-			Freqs: item.Freqs, Status: item.Status,
+			Freqs: item.Freqs, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
@@ -147,11 +154,21 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.DatasetSubjects++
 	}
 
+	for _, item := range seed.FieldGroups {
+		if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{
+			SpaceId: item.SpaceID, GroupId: item.GroupID, Name: item.Name, Description: item.Description,
+			ParentGroupId: item.ParentGroupID, SortOrder: item.SortOrder, Status: item.Status,
+		}); err != nil {
+			return result, seedErr("field_group", item.GroupID, err)
+		}
+		result.FieldGroups++
+	}
+
 	for _, item := range seed.Fields {
 		if _, err := store.UpsertField(ctx, &pb.Field{
-			SpaceId: item.SpaceID, FieldId: item.FieldID, Name: item.Name, Description: item.Description,
+			SpaceId: item.SpaceID, GroupId: item.GroupID, FieldId: item.FieldID, Name: item.Name, Description: item.Description,
 			ValueType: parseValueType(item.ValueType), Unit: item.Unit,
-			ValidationRuleJson: item.ValidationRuleJSON, WriteExample: item.WriteExample, Status: item.Status,
+			ValidationRuleJson: item.ValidationRuleJSON, WriteExample: item.WriteExample, SortOrder: item.SortOrder, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("field", item.FieldID, err)
 		}
@@ -238,6 +255,48 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	return result, nil
 }
 
+func normalizeSeedFieldGroups(seed seedFile) (seedFile, error) {
+	existing := make(map[string]seedFieldGroup, len(seed.FieldGroups))
+	for _, group := range seed.FieldGroups {
+		key := group.SpaceID + "\x00" + group.GroupID
+		if group.SpaceID == "" || group.GroupID == "" || group.Name == "" {
+			return seedFile{}, errors.New("field_group space_id, group_id and name are required")
+		}
+		if _, duplicate := existing[key]; duplicate {
+			return seedFile{}, fmt.Errorf("duplicate field_group %s/%s", group.SpaceID, group.GroupID)
+		}
+		existing[key] = group
+	}
+	for _, group := range seed.FieldGroups {
+		if group.ParentGroupID == "" {
+			continue
+		}
+		parent, ok := existing[group.SpaceID+"\x00"+group.ParentGroupID]
+		if !ok {
+			return seedFile{}, fmt.Errorf("field_group %s/%s references undefined parent %q", group.SpaceID, group.GroupID, group.ParentGroupID)
+		}
+		if parent.ParentGroupID != "" {
+			return seedFile{}, fmt.Errorf("field_group %s/%s exceeds the two-level hierarchy", group.SpaceID, group.GroupID)
+		}
+	}
+	for i := range seed.Fields {
+		if seed.Fields[i].GroupID == "" {
+			seed.Fields[i].GroupID = "general"
+			key := seed.Fields[i].SpaceID + "\x00general"
+			if _, ok := existing[key]; !ok {
+				seed.FieldGroups = append(seed.FieldGroups, seedFieldGroup{SpaceID: seed.Fields[i].SpaceID, GroupID: "general", Name: "通用字段"})
+				existing[key] = seed.FieldGroups[len(seed.FieldGroups)-1]
+			}
+			continue
+		}
+		key := seed.Fields[i].SpaceID + "\x00" + seed.Fields[i].GroupID
+		if _, ok := existing[key]; !ok {
+			return seedFile{}, fmt.Errorf("field %s/%s references undefined field_group %q", seed.Fields[i].SpaceID, seed.Fields[i].FieldID, seed.Fields[i].GroupID)
+		}
+	}
+	return seed, nil
+}
+
 func seedErr(kind string, id string, err error) error {
 	return fmt.Errorf("import %s %q: %w", kind, id, err)
 }
@@ -269,14 +328,6 @@ func parseDataKind(value string) pb.DataKind {
 		return pb.DataKind_DATA_KIND_RECORD
 	case "time_series":
 		return pb.DataKind_DATA_KIND_TIME_SERIES
-	case "snapshot":
-		return pb.DataKind_DATA_KIND_SNAPSHOT
-	case "event":
-		return pb.DataKind_DATA_KIND_EVENT
-	case "document":
-		return pb.DataKind_DATA_KIND_DOCUMENT
-	case "table":
-		return pb.DataKind_DATA_KIND_TABLE
 	default:
 		return pb.DataKind_DATA_KIND_UNSPECIFIED
 	}
@@ -318,6 +369,7 @@ type seedFile struct {
 	SubjectSymbols     []seedSubjectSymbol     `yaml:"subject_symbols"`
 	Datasets           []seedDataset           `yaml:"datasets"`
 	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
+	FieldGroups        []seedFieldGroup        `yaml:"field_groups"`
 	Fields             []seedField             `yaml:"fields"`
 	Factors            []seedFactor            `yaml:"factors"`
 	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
@@ -372,14 +424,15 @@ type seedSubjectSymbol struct {
 
 // seedDataset 描述待初始化的 Dataset 元数据。
 type seedDataset struct {
-	SpaceID      string   `yaml:"space_id"`
-	DatasetID    string   `yaml:"dataset_id"`
-	DataSourceID string   `yaml:"data_source_id"`
-	Name         string   `yaml:"name"`
-	Description  string   `yaml:"description"`
-	DataKind     string   `yaml:"data_kind"`
-	Freqs        []string `yaml:"freqs"`
-	Status       string   `yaml:"status"`
+	SpaceID      string            `yaml:"space_id"`
+	DatasetID    string            `yaml:"dataset_id"`
+	DataSourceID string            `yaml:"data_source_id"`
+	Name         string            `yaml:"name"`
+	Description  string            `yaml:"description"`
+	DataKind     string            `yaml:"data_kind"`
+	Freqs        []string          `yaml:"freqs"`
+	Status       string            `yaml:"status"`
+	Attributes   map[string]string `yaml:"attributes"`
 }
 
 // seedDatasetSubject 描述 Dataset 与 Subject 的绑定关系。
@@ -396,6 +449,7 @@ type seedDatasetSubject struct {
 // seedField 描述待初始化的字段定义。
 type seedField struct {
 	SpaceID            string `yaml:"space_id"`
+	GroupID            string `yaml:"group_id"`
 	FieldID            string `yaml:"field_id"`
 	Name               string `yaml:"name"`
 	Description        string `yaml:"description"`
@@ -403,7 +457,18 @@ type seedField struct {
 	Unit               string `yaml:"unit"`
 	ValidationRuleJSON string `yaml:"validation_rule_json"`
 	WriteExample       string `yaml:"write_example"`
+	SortOrder          uint32 `yaml:"sort_order"`
 	Status             string `yaml:"status"`
+}
+
+type seedFieldGroup struct {
+	SpaceID       string `yaml:"space_id"`
+	GroupID       string `yaml:"group_id"`
+	Name          string `yaml:"name"`
+	Description   string `yaml:"description"`
+	ParentGroupID string `yaml:"parent_group_id"`
+	SortOrder     uint32 `yaml:"sort_order"`
+	Status        string `yaml:"status"`
 }
 
 // seedFactor 描述待初始化的因子定义。

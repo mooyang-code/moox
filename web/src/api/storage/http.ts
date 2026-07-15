@@ -4,7 +4,7 @@ import { gatewayOrigin } from '@/api/gateway';
 import { isRetInfoSuccess } from '../ret-info';
 import { getStorageAuthInfo } from './auth';
 import type { RetInfo } from './types';
-import { installSignedClient } from '../admin/signed-client';
+import { installSpaceAwareSignedClient } from '../admin/signed-client';
 
 const storageClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -23,10 +23,14 @@ function storageServiceID(group: 'metadata' | 'access' | 'view') {
 
 function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
-    throw new Error('storage response missing ret_info');
+    const error = new Error('Storage 响应缺少 ret_info');
+    Message.error(error.message);
+    throw error;
   }
   if (!isRetInfoSuccess(retInfo.code)) {
-    throw new Error(retInfo.msg || `storage request failed: ${retInfo.code}`);
+    const error = new Error(retInfo.msg || `Storage 请求失败: ${retInfo.code}`);
+    Message.error(error.message);
+    throw error;
   }
 }
 
@@ -58,7 +62,7 @@ export const callView = <TReq extends object, TRsp extends { ret_info: RetInfo }
   req: TReq,
 ) => callStorage<TReq, TRsp>('view', method, req);
 
-installSignedClient(storageClient);
+installSpaceAwareSignedClient(storageClient);
 
 storageClient.interceptors.response.use(
   (rsp) => {

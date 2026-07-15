@@ -3,9 +3,10 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -60,6 +61,11 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 			return err
 		}
 	}
+	for _, item := range seed.FieldGroups {
+		if err := check("field_groups", item.SpaceID); err != nil {
+			return err
+		}
+	}
 	for _, item := range seed.Fields {
 		if err := check("fields", item.SpaceID); err != nil {
 			return err
@@ -96,7 +102,7 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 func isReservedReferenceSeed(seed metadataSeed) bool {
 	return len(seed.Spaces) == 0 &&
 		len(seed.DataSources) == 0 && len(seed.Subjects) == 0 && len(seed.SubjectSymbols) == 0 &&
-		len(seed.Datasets) == 0 && len(seed.DatasetSubjects) == 0 && len(seed.Fields) == 0 &&
+		len(seed.Datasets) == 0 && len(seed.DatasetSubjects) == 0 && len(seed.FieldGroups) == 0 && len(seed.Fields) == 0 &&
 		len(seed.Factors) == 0 && len(seed.DatasetColumns) == 0 && len(seed.Views) == 0 &&
 		len(seed.ViewColumns) == 0 && len(seed.PrimaryStoreNodes) == 0 && len(seed.Devices) == 0 &&
 		len(seed.PrimaryStoreRoutes) > 0
@@ -124,6 +130,11 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 }
 
 func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
+	var err error
+	seed, err = normalizeFieldGroups(seed)
+	if err != nil {
+		return nil, err
+	}
 	var calls []metadataImportCall
 	for _, item := range seed.Spaces {
 		space := item.toPB()
@@ -178,6 +189,14 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	}
 	for _, item := range seed.DatasetSubjects {
 		calls = append(calls, metadataImportCall{Resource: "dataset_subjects", Method: "BindDatasetSubject", Request: &pb.BindDatasetSubjectReq{DatasetSubject: item.toPB()}, Response: &pb.BindDatasetSubjectRsp{}})
+	}
+	for _, item := range seed.FieldGroups {
+		group := item.toPB()
+		calls = append(calls, metadataImportCall{
+			Resource: "field_groups", Method: "CreateFieldGroup",
+			Request: &pb.CreateFieldGroupReq{FieldGroup: group}, Response: &pb.CreateFieldGroupRsp{},
+			Exists: &metadataExistsProbe{Method: "GetFieldGroup", Request: &pb.GetFieldGroupReq{SpaceId: group.GetSpaceId(), GroupId: group.GetGroupId()}, Response: &pb.GetFieldGroupRsp{}},
+		})
 	}
 	for _, item := range seed.Fields {
 		field, err := item.toPB()
@@ -299,6 +318,48 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	return calls, nil
 }
 
+func normalizeFieldGroups(seed metadataSeed) (metadataSeed, error) {
+	existing := make(map[string]seedFieldGroup, len(seed.FieldGroups))
+	for _, group := range seed.FieldGroups {
+		key := group.SpaceID + "\x00" + group.GroupID
+		if strings.TrimSpace(group.SpaceID) == "" || strings.TrimSpace(group.GroupID) == "" || strings.TrimSpace(group.Name) == "" {
+			return metadataSeed{}, errors.New("field_group space_id, group_id and name are required")
+		}
+		if _, duplicate := existing[key]; duplicate {
+			return metadataSeed{}, fmt.Errorf("duplicate field_group %s/%s", group.SpaceID, group.GroupID)
+		}
+		existing[key] = group
+	}
+	for _, group := range seed.FieldGroups {
+		if strings.TrimSpace(group.ParentGroupID) == "" {
+			continue
+		}
+		parent, ok := existing[group.SpaceID+"\x00"+group.ParentGroupID]
+		if !ok {
+			return metadataSeed{}, fmt.Errorf("field_group %s/%s references undefined parent %q", group.SpaceID, group.GroupID, group.ParentGroupID)
+		}
+		if strings.TrimSpace(parent.ParentGroupID) != "" {
+			return metadataSeed{}, fmt.Errorf("field_group %s/%s exceeds the two-level hierarchy", group.SpaceID, group.GroupID)
+		}
+	}
+	for i := range seed.Fields {
+		if strings.TrimSpace(seed.Fields[i].GroupID) == "" {
+			seed.Fields[i].GroupID = "general"
+			key := seed.Fields[i].SpaceID + "\x00general"
+			if _, ok := existing[key]; !ok {
+				seed.FieldGroups = append(seed.FieldGroups, seedFieldGroup{SpaceID: seed.Fields[i].SpaceID, GroupID: "general", Name: "通用字段"})
+				existing[key] = seed.FieldGroups[len(seed.FieldGroups)-1]
+			}
+			continue
+		}
+		key := seed.Fields[i].SpaceID + "\x00" + seed.Fields[i].GroupID
+		if _, ok := existing[key]; !ok {
+			return metadataSeed{}, fmt.Errorf("field %s/%s references undefined field_group %q", seed.Fields[i].SpaceID, seed.Fields[i].FieldID, seed.Fields[i].GroupID)
+		}
+	}
+	return seed, nil
+}
+
 func runMetadataImport(ctx context.Context, metadataURL string, calls []metadataImportCall, ifNotExists bool) (metadataImportSummary, error) {
 	summary := metadataImportSummary{
 		Status:      "ok",
@@ -390,6 +451,8 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		return true, rsp.GetDataSource()
 	case *pb.GetDatasetRsp:
 		return true, rsp.GetDataset()
+	case *pb.GetFieldGroupRsp:
+		return true, rsp.GetFieldGroup()
 	case *pb.GetFieldRsp:
 		return true, rsp.GetField()
 	case *pb.GetPrimaryStoreRouteRsp:
@@ -418,6 +481,8 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetDataSource()
 	case *pb.CreateDatasetReq:
 		expected = req.GetDataset()
+	case *pb.CreateFieldGroupReq:
+		expected = req.GetFieldGroup()
 	case *pb.CreateFieldReq:
 		expected = req.GetField()
 	case *pb.UpsertDatasetColumnReq:
@@ -444,11 +509,11 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	if resource == "spaces" {
 		x, y := a.(*pb.Space), b.(*pb.Space)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetName() == y.GetName() && x.GetDescription() == y.GetDescription() && x.GetOwner() == y.GetOwner() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetName() == y.GetName() && x.GetDescription() == y.GetDescription() && x.GetOwner() == y.GetOwner() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "data_sources" {
 		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && reflect.DeepEqual(x.GetAttributes(), y.GetAttributes())
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
@@ -456,7 +521,11 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	}
 	if resource == "fields" {
 		x, y := a.(*pb.Field), b.(*pb.Field)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetFieldId() == y.GetFieldId() && x.GetValueType() == y.GetValueType() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetFieldId() == y.GetFieldId() && x.GetGroupId() == y.GetGroupId() && x.GetValueType() == y.GetValueType() && x.GetSortOrder() == y.GetSortOrder() && x.GetStatus() == y.GetStatus()
+	}
+	if resource == "field_groups" {
+		x, y := a.(*pb.FieldGroup), b.(*pb.FieldGroup)
+		return x.GetSpaceId() == y.GetSpaceId() && x.GetGroupId() == y.GetGroupId() && x.GetParentGroupId() == y.GetParentGroupId() && x.GetSortOrder() == y.GetSortOrder() && x.GetStatus() == y.GetStatus()
 	}
 	if resource == "dataset_columns" {
 		x, y := a.(*pb.DatasetColumn), b.(*pb.DatasetColumn)
@@ -572,7 +641,11 @@ func (s seedField) toPB() (*pb.Field, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Field{SpaceId: s.SpaceID, FieldId: s.FieldID, Name: s.Name, Description: s.Description, ValueType: valueType, Unit: s.Unit, ValidationRuleJson: s.ValidationRuleJSON, WriteExample: s.WriteExample, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.Field{SpaceId: s.SpaceID, GroupId: s.GroupID, FieldId: s.FieldID, Name: s.Name, Description: s.Description, ValueType: valueType, Unit: s.Unit, ValidationRuleJson: s.ValidationRuleJSON, WriteExample: s.WriteExample, SortOrder: s.SortOrder, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+}
+
+func (s seedFieldGroup) toPB() *pb.FieldGroup {
+	return &pb.FieldGroup{SpaceId: s.SpaceID, GroupId: s.GroupID, Name: s.Name, Description: s.Description, ParentGroupId: s.ParentGroupID, SortOrder: s.SortOrder, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedFactor) toPB() (*pb.Factor, error) {
@@ -631,14 +704,6 @@ func parseDataKind(value string) (pb.DataKind, error) {
 		return pb.DataKind_DATA_KIND_RECORD, nil
 	case "TIME_SERIES":
 		return pb.DataKind_DATA_KIND_TIME_SERIES, nil
-	case "SNAPSHOT":
-		return pb.DataKind_DATA_KIND_SNAPSHOT, nil
-	case "EVENT":
-		return pb.DataKind_DATA_KIND_EVENT, nil
-	case "DOCUMENT":
-		return pb.DataKind_DATA_KIND_DOCUMENT, nil
-	case "TABLE":
-		return pb.DataKind_DATA_KIND_TABLE, nil
 	default:
 		return pb.DataKind_DATA_KIND_UNSPECIFIED, fmt.Errorf("unsupported data_kind %q", value)
 	}

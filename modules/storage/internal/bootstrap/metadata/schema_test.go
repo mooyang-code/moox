@@ -38,10 +38,10 @@ func schemaPath(t *testing.T) string {
 }
 
 func TestParseDataKindCoversAllKnownKinds(t *testing.T) {
-	assert.Equal(t, pb.DataKind_DATA_KIND_SNAPSHOT, parseDataKind("snapshot"))
-	assert.Equal(t, pb.DataKind_DATA_KIND_EVENT, parseDataKind("event"))
-	assert.Equal(t, pb.DataKind_DATA_KIND_DOCUMENT, parseDataKind("document"))
-	assert.Equal(t, pb.DataKind_DATA_KIND_TABLE, parseDataKind("table"))
+	assert.Equal(t, pb.DataKind_DATA_KIND_UNSPECIFIED, parseDataKind("snapshot"))
+	assert.Equal(t, pb.DataKind_DATA_KIND_UNSPECIFIED, parseDataKind("event"))
+	assert.Equal(t, pb.DataKind_DATA_KIND_UNSPECIFIED, parseDataKind("document"))
+	assert.Equal(t, pb.DataKind_DATA_KIND_UNSPECIFIED, parseDataKind("table"))
 }
 
 func TestParseValueTypeCoversRemainingTypes(t *testing.T) {

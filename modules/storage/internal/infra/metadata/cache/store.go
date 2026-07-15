@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
@@ -30,6 +31,7 @@ const (
 	kindSubjectSymbol     = "subject_symbol"
 	kindDataset           = "dataset"
 	kindDatasetSubject    = "dataset_subject"
+	kindFieldGroup        = "field_group"
 	kindField             = "field"
 	kindFactor            = "factor"
 	kindDatasetColumn     = "dataset_column"
@@ -67,6 +69,8 @@ type entry struct {
 	SubjectID      string   `json:"subject_id,omitempty"`
 	ExternalSymbol string   `json:"external_symbol,omitempty"`
 	DatasetID      string   `json:"dataset_id,omitempty"`
+	GroupID        string   `json:"group_id,omitempty"`
+	ParentGroupID  string   `json:"parent_group_id,omitempty"`
 	DatasetIDs     []string `json:"dataset_ids,omitempty"`
 	DataKind       int32    `json:"data_kind,omitempty"`
 	Freqs          []string `json:"freqs,omitempty"`
@@ -280,15 +284,57 @@ func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*
 	return getProto(s, ctx, kindField, spaceID, fieldID, func() *pb.Field { return &pb.Field{} })
 }
 
-func (s *Store) ListFields(ctx context.Context, spaceID string, valueType pb.FieldValueType, page *pb.Page) ([]*pb.Field, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindField, func(item entry) bool {
+func (s *Store) GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error) {
+	return getProto(s, ctx, kindFieldGroup, spaceID, groupID, func() *pb.FieldGroup { return &pb.FieldGroup{} })
+}
+
+func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
+	items, err := decodeEntries(s.list(kindFieldGroup, func(item entry) bool {
 		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(valueType == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED || item.ValueType == int32(valueType))
-	}), func() *pb.Field { return &pb.Field{} })
+			(parentGroupID == "" || item.ParentGroupID == parentGroupID)
+	}), func() *pb.FieldGroup { return &pb.FieldGroup{} })
 	if err != nil {
 		return nil, nil, err
 	}
 	return pageItems(items, page)
+}
+
+func (s *Store) ListFields(ctx context.Context, query metadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
+	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
+	groups := make(map[string]bool)
+	if query.GroupID != "" && query.IncludeDescendants {
+		groups[query.GroupID] = true
+		for _, item := range s.list(kindFieldGroup, func(item entry) bool {
+			return item.SpaceID == query.SpaceID && item.ParentGroupID == query.GroupID
+		}) {
+			groups[item.ID] = true
+		}
+	}
+	items, err := decodeEntries(s.list(kindField, func(item entry) bool {
+		if query.UngroupedOnly && item.GroupID != "" {
+			return false
+		}
+		if query.GroupID != "" && query.IncludeDescendants && !groups[item.GroupID] {
+			return false
+		}
+		if query.GroupID != "" && !query.IncludeDescendants && item.GroupID != query.GroupID {
+			return false
+		}
+		if keyword != "" && !strings.Contains(strings.ToLower(string(item.Payload)), keyword) {
+			return false
+		}
+		return (query.SpaceID == "" || item.SpaceID == query.SpaceID) &&
+			(query.Status == "" || item.Status == query.Status) &&
+			(query.ValueType == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED || item.ValueType == int32(query.ValueType))
+	}), func() *pb.Field { return &pb.Field{} })
+	if err != nil {
+		return nil, nil, err
+	}
+	return pageItems(items, query.Page)
+}
+
+func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (metadata.FieldGroupCounts, error) {
+	return s.base.CountFieldsByGroup(ctx, spaceID)
 }
 
 func (s *Store) GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error) {
@@ -407,6 +453,9 @@ func (s *Store) fetchEntries(ctx context.Context) ([]entry, error) {
 		return nil, err
 	}
 	if out, err = s.fetchDatasetSubjects(ctx, out); err != nil {
+		return nil, err
+	}
+	if out, err = s.fetchFieldGroups(ctx, out); err != nil {
 		return nil, err
 	}
 	if out, err = s.fetchFields(ctx, out); err != nil {
@@ -534,13 +583,29 @@ func (s *Store) fetchDatasetSubjects(ctx context.Context, out []entry) ([]entry,
 
 func (s *Store) fetchFields(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Field, *pb.PageResult, error) {
-		return s.base.ListFields(ctx, "", pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, page)
+		return s.base.ListFields(ctx, metadata.FieldQuery{Page: page})
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindField, SpaceID: item.GetSpaceId(), ID: item.GetFieldId(), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindField, SpaceID: item.GetSpaceId(), ID: item.GetFieldId(), GroupID: item.GetGroupId(), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) fetchFieldGroups(ctx context.Context, out []entry) ([]entry, error) {
+	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
+		return s.base.ListFieldGroups(ctx, "", "", page)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		out, err = appendEntry(out, entry{Kind: kindFieldGroup, SpaceID: item.GetSpaceId(), ID: item.GetGroupId(), ParentGroupID: item.GetParentGroupId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

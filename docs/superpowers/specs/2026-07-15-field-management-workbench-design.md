@@ -132,7 +132,7 @@ MooX 的字段是 Space 内可复用的普通字段字典，通过两级 `FieldG
 
 页面将以下状态写入 hash route 的 query：
 
-- `group`：当前字段组 ID，`all` 表示全部字段，`ungrouped` 表示异常未分组字段。
+- `group`：当前字段组 ID；省略表示全部字段，`ungrouped` 表示异常未分组字段。
 - `keyword`：搜索关键字。
 - `value_type`：值类型。
 - `status`：字段状态。
@@ -196,7 +196,7 @@ message BatchUpdateFieldsRsp {
 }
 ```
 
-请求至少包含 `target_group_id` 或 `target_status` 之一，最多接收 100 个字段 ID。服务端验证字段、目标组和状态后，在单个事务中更新。
+请求至少包含 `target_group_id` 或 `target_status` 之一，最多接收 100 个字段 ID。服务端验证字段、目标组和状态（`active` 或 `disabled`）后，在单个事务中更新。
 
 ### 8.4 删除字段组
 

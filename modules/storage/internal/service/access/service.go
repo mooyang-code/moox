@@ -114,6 +114,12 @@ func (s *Service) refreshMetadataCache(ctx context.Context) error {
 	return s.metadataCache.Refresh(ctx)
 }
 
+func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation string) {
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		log.ErrorContextf(ctx, "%s committed but metadata cache refresh failed: %v", operation, err)
+	}
+}
+
 // Close releases dependencies owned by the access service. Event transport is
 // bootstrap-owned and is deliberately not closed here.
 func (s *Service) Close() error {

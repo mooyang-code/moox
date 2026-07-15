@@ -79,6 +79,14 @@ type MetadataService interface {
 	BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq) (*BindDatasetSubjectRsp, error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq) (*ListDatasetSubjectsRsp, error)
+	// CreateFieldGroup 创建普通字段。
+	CreateFieldGroup(ctx context.Context, req *CreateFieldGroupReq) (*CreateFieldGroupRsp, error)
+	// UpdateFieldGroup 更新字段组。
+	UpdateFieldGroup(ctx context.Context, req *UpdateFieldGroupReq) (*UpdateFieldGroupRsp, error)
+	// GetFieldGroup 按字段组 ID 获取字段组。
+	GetFieldGroup(ctx context.Context, req *GetFieldGroupReq) (*GetFieldGroupRsp, error)
+	// ListFieldGroups 列出字段组。
+	ListFieldGroups(ctx context.Context, req *ListFieldGroupsReq) (*ListFieldGroupsRsp, error)
 	// CreateField 创建普通字段。
 	CreateField(ctx context.Context, req *CreateFieldReq) (*CreateFieldRsp, error)
 	// UpdateField 更新普通字段。
@@ -87,6 +95,10 @@ type MetadataService interface {
 	GetField(ctx context.Context, req *GetFieldReq) (*GetFieldRsp, error)
 	// ListFields 列出普通字段。
 	ListFields(ctx context.Context, req *ListFieldsReq) (*ListFieldsRsp, error)
+	// BatchUpdateFields 批量移动字段组或更新状态。
+	BatchUpdateFields(ctx context.Context, req *BatchUpdateFieldsReq) (*BatchUpdateFieldsRsp, error)
+	// DeleteFieldGroup 删除没有子组和字段引用的空字段组。
+	DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq) (*DeleteFieldGroupRsp, error)
 	// CreateFactor 创建因子。
 	CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error)
 	// UpdateFactor 更新因子。
@@ -669,6 +681,78 @@ func MetadataService_ListDatasetSubjects_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
+func MetadataService_CreateFieldGroup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateFieldGroupReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).CreateFieldGroup(ctx, reqbody.(*CreateFieldGroupReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpdateFieldGroup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateFieldGroupReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpdateFieldGroup(ctx, reqbody.(*UpdateFieldGroupReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_GetFieldGroup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFieldGroupReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).GetFieldGroup(ctx, reqbody.(*GetFieldGroupReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ListFieldGroups_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFieldGroupsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ListFieldGroups(ctx, reqbody.(*ListFieldGroupsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MetadataService_CreateField_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &CreateFieldReq{}
 	filters, err := f(req)
@@ -731,6 +815,42 @@ func MetadataService_ListFields_Handler(svr interface{}, ctx context.Context, f 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).ListFields(ctx, reqbody.(*ListFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_BatchUpdateFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchUpdateFieldsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).BatchUpdateFields(ctx, reqbody.(*BatchUpdateFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_DeleteFieldGroup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFieldGroupReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).DeleteFieldGroup(ctx, reqbody.(*DeleteFieldGroupReq))
 	}
 
 	var rsp interface{}
@@ -1227,6 +1347,22 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ListDatasetSubjects_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/CreateFieldGroup",
+			Func: MetadataService_CreateFieldGroup_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/UpdateFieldGroup",
+			Func: MetadataService_UpdateFieldGroup_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/GetFieldGroup",
+			Func: MetadataService_GetFieldGroup_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ListFieldGroups",
+			Func: MetadataService_ListFieldGroups_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/CreateField",
 			Func: MetadataService_CreateField_Handler,
 		},
@@ -1241,6 +1377,14 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Metadata/ListFields",
 			Func: MetadataService_ListFields_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/BatchUpdateFields",
+			Func: MetadataService_BatchUpdateFields_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/DeleteFieldGroup",
+			Func: MetadataService_DeleteFieldGroup_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/CreateFactor",
@@ -1486,6 +1630,26 @@ func (s *UnimplementedMetadata) ListDatasetSubjects(ctx context.Context, req *Li
 	return nil, errors.New("rpc ListDatasetSubjects of service Metadata is not implemented")
 }
 
+// CreateFieldGroup 创建普通字段。
+func (s *UnimplementedMetadata) CreateFieldGroup(ctx context.Context, req *CreateFieldGroupReq) (*CreateFieldGroupRsp, error) {
+	return nil, errors.New("rpc CreateFieldGroup of service Metadata is not implemented")
+}
+
+// UpdateFieldGroup 更新字段组。
+func (s *UnimplementedMetadata) UpdateFieldGroup(ctx context.Context, req *UpdateFieldGroupReq) (*UpdateFieldGroupRsp, error) {
+	return nil, errors.New("rpc UpdateFieldGroup of service Metadata is not implemented")
+}
+
+// GetFieldGroup 按字段组 ID 获取字段组。
+func (s *UnimplementedMetadata) GetFieldGroup(ctx context.Context, req *GetFieldGroupReq) (*GetFieldGroupRsp, error) {
+	return nil, errors.New("rpc GetFieldGroup of service Metadata is not implemented")
+}
+
+// ListFieldGroups 列出字段组。
+func (s *UnimplementedMetadata) ListFieldGroups(ctx context.Context, req *ListFieldGroupsReq) (*ListFieldGroupsRsp, error) {
+	return nil, errors.New("rpc ListFieldGroups of service Metadata is not implemented")
+}
+
 // CreateField 创建普通字段。
 func (s *UnimplementedMetadata) CreateField(ctx context.Context, req *CreateFieldReq) (*CreateFieldRsp, error) {
 	return nil, errors.New("rpc CreateField of service Metadata is not implemented")
@@ -1504,6 +1668,16 @@ func (s *UnimplementedMetadata) GetField(ctx context.Context, req *GetFieldReq) 
 // ListFields 列出普通字段。
 func (s *UnimplementedMetadata) ListFields(ctx context.Context, req *ListFieldsReq) (*ListFieldsRsp, error) {
 	return nil, errors.New("rpc ListFields of service Metadata is not implemented")
+}
+
+// BatchUpdateFields 批量移动字段组或更新状态。
+func (s *UnimplementedMetadata) BatchUpdateFields(ctx context.Context, req *BatchUpdateFieldsReq) (*BatchUpdateFieldsRsp, error) {
+	return nil, errors.New("rpc BatchUpdateFields of service Metadata is not implemented")
+}
+
+// DeleteFieldGroup 删除没有子组和字段引用的空字段组。
+func (s *UnimplementedMetadata) DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq) (*DeleteFieldGroupRsp, error) {
+	return nil, errors.New("rpc DeleteFieldGroup of service Metadata is not implemented")
 }
 
 // CreateFactor 创建因子。
@@ -1674,6 +1848,14 @@ type MetadataClientProxy interface {
 	BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq, opts ...client.Option) (rsp *BindDatasetSubjectRsp, err error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq, opts ...client.Option) (rsp *ListDatasetSubjectsRsp, err error)
+	// CreateFieldGroup 创建普通字段。
+	CreateFieldGroup(ctx context.Context, req *CreateFieldGroupReq, opts ...client.Option) (rsp *CreateFieldGroupRsp, err error)
+	// UpdateFieldGroup 更新字段组。
+	UpdateFieldGroup(ctx context.Context, req *UpdateFieldGroupReq, opts ...client.Option) (rsp *UpdateFieldGroupRsp, err error)
+	// GetFieldGroup 按字段组 ID 获取字段组。
+	GetFieldGroup(ctx context.Context, req *GetFieldGroupReq, opts ...client.Option) (rsp *GetFieldGroupRsp, err error)
+	// ListFieldGroups 列出字段组。
+	ListFieldGroups(ctx context.Context, req *ListFieldGroupsReq, opts ...client.Option) (rsp *ListFieldGroupsRsp, err error)
 	// CreateField 创建普通字段。
 	CreateField(ctx context.Context, req *CreateFieldReq, opts ...client.Option) (rsp *CreateFieldRsp, err error)
 	// UpdateField 更新普通字段。
@@ -1682,6 +1864,10 @@ type MetadataClientProxy interface {
 	GetField(ctx context.Context, req *GetFieldReq, opts ...client.Option) (rsp *GetFieldRsp, err error)
 	// ListFields 列出普通字段。
 	ListFields(ctx context.Context, req *ListFieldsReq, opts ...client.Option) (rsp *ListFieldsRsp, err error)
+	// BatchUpdateFields 批量移动字段组或更新状态。
+	BatchUpdateFields(ctx context.Context, req *BatchUpdateFieldsReq, opts ...client.Option) (rsp *BatchUpdateFieldsRsp, err error)
+	// DeleteFieldGroup 删除没有子组和字段引用的空字段组。
+	DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq, opts ...client.Option) (rsp *DeleteFieldGroupRsp, err error)
 	// CreateFactor 创建因子。
 	CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (rsp *CreateFactorRsp, err error)
 	// UpdateFactor 更新因子。
@@ -2333,6 +2519,86 @@ func (c *MetadataClientProxyImpl) ListDatasetSubjects(ctx context.Context, req *
 	return rsp, nil
 }
 
+func (c *MetadataClientProxyImpl) CreateFieldGroup(ctx context.Context, req *CreateFieldGroupReq, opts ...client.Option) (*CreateFieldGroupRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateFieldGroup")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("CreateFieldGroup")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateFieldGroupRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpdateFieldGroup(ctx context.Context, req *UpdateFieldGroupReq, opts ...client.Option) (*UpdateFieldGroupRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateFieldGroup")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpdateFieldGroup")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateFieldGroupRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) GetFieldGroup(ctx context.Context, req *GetFieldGroupReq, opts ...client.Option) (*GetFieldGroupRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetFieldGroup")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("GetFieldGroup")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetFieldGroupRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ListFieldGroups(ctx context.Context, req *ListFieldGroupsReq, opts ...client.Option) (*ListFieldGroupsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListFieldGroups")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ListFieldGroups")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFieldGroupsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func (c *MetadataClientProxyImpl) CreateField(ctx context.Context, req *CreateFieldReq, opts ...client.Option) (*CreateFieldRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -2407,6 +2673,46 @@ func (c *MetadataClientProxyImpl) ListFields(ctx context.Context, req *ListField
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) BatchUpdateFields(ctx context.Context, req *BatchUpdateFieldsReq, opts ...client.Option) (*BatchUpdateFieldsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/BatchUpdateFields")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("BatchUpdateFields")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &BatchUpdateFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq, opts ...client.Option) (*DeleteFieldGroupRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/DeleteFieldGroup")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("DeleteFieldGroup")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFieldGroupRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

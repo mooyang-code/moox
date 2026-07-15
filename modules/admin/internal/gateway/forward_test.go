@@ -82,6 +82,7 @@ func TestBuildForwardHeaders_WithHeaders_ShouldMapToHTTPHeaders(t *testing.T) {
 	assert.Equal(t, "10.0.0.1", reqHead.Header.Get("X-Client-Ip"))
 	assert.Equal(t, "trace-1", reqHead.Header.Get("X-Trace-Id"))
 	assert.Equal(t, "token-1", reqHead.Header.Get("X-Access-Token"))
+	assert.Equal(t, "space-1", reqHead.Header.Get("X-Space-Id"))
 }
 
 func TestWriteForwardError_ShouldWriteRetInfo(t *testing.T) {
@@ -114,6 +115,19 @@ func TestForwardHTTP_EmptyAddress_ShouldError(t *testing.T) {
 	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "配置缺失")
+}
+
+func TestResolveForwardDestination_FieldMetadataMethods(t *testing.T) {
+	SetServiceDetailResolver(func(context.Context, string) (ServiceDetail, bool) {
+		return ServiceDetail{Address: "storage.internal:20200", Path: "trpc.moox.storage.Metadata"}, true
+	})
+	t.Cleanup(func() { SetServiceDetailResolver(nil) })
+	for _, method := range []string{"ListFields", "BatchUpdateFields", "DeleteFieldGroup"} {
+		target, targetURL, err := resolveForwardDestination(context.Background(), "storage_metadata", method)
+		require.NoError(t, err)
+		assert.Equal(t, "ip://storage.internal:20200", target)
+		assert.Equal(t, "/trpc.moox.storage.Metadata/"+method, targetURL)
+	}
 }
 
 func TestAddVaryHeader_ExistingValue_ShouldAppend(t *testing.T) {
