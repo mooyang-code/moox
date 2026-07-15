@@ -1,18 +1,7 @@
 <template>
   <div class="moox-page service-management-page">
     <div class="moox-inner">
-      <header class="page-head">
-        <div>
-          <h2>服务管理</h2>
-          <p>统一维护服务部署、可用性探测和应用指标。</p>
-        </div>
-      </header>
-
-      <a-tabs v-model:active-key="activeTab" class="management-tabs" type="rounded" @change="onTabChange">
-        <a-tab-pane key="deployments" title="服务部署" />
-        <a-tab-pane key="availability" title="可用性监控" />
-        <a-tab-pane key="metrics" title="应用指标" />
-      </a-tabs>
+      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="服务管理" @change="onTabChange" />
 
       <section class="management-content">
         <keep-alive>
@@ -26,11 +15,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import ServiceDeployments from '@/views/settings/service-deployments/index.vue';
 import ServiceMonitor from '@/views/ops/service-monitor/index.vue';
 import MetricMonitor from '@/views/ops/metric-monitor/index.vue';
 
 type ServiceManagementTab = 'deployments' | 'availability' | 'metrics';
+const tabs = [
+  { key: 'deployments', label: '服务部署' },
+  { key: 'availability', label: '可用性监控' },
+  { key: 'metrics', label: '应用指标' },
+] as const;
 
 const route = useRoute();
 const router = useRouter();
@@ -73,32 +68,28 @@ watch(() => route.query.tab, (value) => {
   flex-direction: column;
 }
 
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head p {
-  margin: 0;
-  color: var(--color-text-3);
-}
-
-.management-tabs {
-  flex: none;
-}
-
 .management-content {
   min-height: 0;
   flex: 1;
+  margin-top: 16px;
   overflow: hidden;
+}
+
+.management-content :deep(.moox-page) {
+  padding: 0;
+  background: transparent;
+}
+
+.management-content :deep(.moox-page > .moox-inner) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.management-content :deep(.monitor-page) {
+  padding: 0;
+  background: transparent;
 }
 
 .management-content :deep(.moox-page),
