@@ -42,9 +42,6 @@ jobs:
       GOPROXY: https://mirrors.tencent.com/go,direct
       GOPRIVATE: ""
       GONOSUMDB: ""
-      # The small deployment host cannot retain the full Go build cache while
-      # running the complete multi-module verification suite.
-      GOCACHE: off
     steps:
       - uses: actions/checkout@v4
       - name: Add preinstalled tools to PATH
