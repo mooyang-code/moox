@@ -95,12 +95,16 @@ func TestServiceImpl_DeleteServiceDeployment_MissingName_ShouldReturnInvalidPara
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestServiceImpl_ResolveGatewayServiceDetail_ActiveTrade_ShouldResolve(t *testing.T) {
+func TestServiceImpl_ResolveAdminServiceDetail_RequiresMatchingActiveNode(t *testing.T) {
 	db := setupSysDeployTestDB(t)
 	svc := NewService(&database.Manager{})
 	svc.dao = NewDAO(db)
-	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
-		NodeID:      localNodeID(),
+	ctx := context.Background()
+	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{
+		NodeID: "admin-node-b", Name: "admin-b", PublicAddress: "https://admin-b.example", Status: "enabled",
+	}))
+	require.NoError(t, svc.dao.Create(ctx, &Deployment{
+		NodeID:      "admin-node-b",
 		ServiceName: "moox_trade",
 		Host:        "127.0.0.1",
 		Port:        11210,
@@ -108,10 +112,20 @@ func TestServiceImpl_ResolveGatewayServiceDetail_ActiveTrade_ShouldResolve(t *te
 		Status:      "active",
 	}))
 
-	detail, ok := svc.ResolveGatewayServiceDetail(context.Background(), "trade")
+	detail, ok := svc.ResolveAdminServiceDetail(ctx, "admin-node-b", "trade")
 	assert.True(t, ok)
 	assert.Equal(t, "127.0.0.1:11210", detail.Address)
 	assert.Equal(t, "trpc.moox.trade.Trade", detail.Path)
+
+	_, ok = svc.ResolveAdminServiceDetail(ctx, "admin-node-a", "trade")
+	assert.False(t, ok)
+
+	require.NoError(t, svc.dao.Update(ctx, "admin-node-b", "moox_trade", &Deployment{
+		NodeID: "admin-node-b", ServiceName: "moox_trade", Host: "127.0.0.1", Port: 11210,
+		GatewayPath: "trpc.moox.trade.Trade", Status: "disabled",
+	}))
+	_, ok = svc.ResolveAdminServiceDetail(ctx, "admin-node-b", "trade")
+	assert.False(t, ok)
 }
 
 func TestServiceImpl_ListActiveServiceDeployments_ActiveRows_ShouldReturnEndpoints(t *testing.T) {
@@ -233,7 +247,7 @@ func TestServiceImpl_UpdateDeployment_RecomputesDerivedAddresses(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.2:18082", rsp.GetDeployment().GetBaseUrl())
 	assert.Equal(t, "127.0.0.2:18082", rsp.GetDeployment().GetRpcAddress())
 
-	detail, ok := svc.ResolveGatewayServiceDetail(ctx, "svc_update_address")
+	detail, ok := svc.ResolveAdminServiceDetail(ctx, localNodeID(), "svc_update_address")
 	require.True(t, ok)
 	assert.Equal(t, "127.0.0.2:18082", detail.Address)
 }

@@ -129,13 +129,12 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 }
 
 func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t *testing.T) {
+	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
-	SetServiceDetailResolver(nil)
-
 	router := NewHTTPRouter(NewGatewayHandle(), nil)
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
@@ -146,6 +145,23 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 	assert.Contains(t, rr.Body.String(), "ret_info")
 }
 
+func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
+	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-b")
+	SetConfig(&Config{
+		JWT:     JWTConfig{SecretKey: "secret"},
+		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
+	})
+	provider := &fakeGatewayControlProvider{}
+	router := NewHTTPRouter(NewGatewayHandle(), provider)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
+
+	router.buildRouter().ServeHTTP(rr, req)
+
+	assert.Equal(t, "admin-node-b", provider.lastNode)
+}
+
 func TestGetGatewayHandleInstance_ShouldReturnSingleton(t *testing.T) {
 	a := GetGatewayHandleInstance()
 	b := GetGatewayHandleInstance()
@@ -153,15 +169,12 @@ func TestGetGatewayHandleInstance_ShouldReturnSingleton(t *testing.T) {
 }
 
 func TestHandleGatewayRequest_UserIDFromContext_ShouldInjectHeader(t *testing.T) {
+	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
-	SetServiceDetailResolver(func(ctx context.Context, serviceID string) (ServiceDetail, bool) {
-		return ServiceDetail{}, false
-	})
-
 	router := NewHTTPRouter(NewGatewayHandle(), nil)
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()

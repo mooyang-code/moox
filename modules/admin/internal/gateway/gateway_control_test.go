@@ -22,6 +22,14 @@ type fakeGatewayControlProvider struct {
 	snapshots map[string]gatewayproxy.Snapshot
 	err       error
 	reports   []gatewayproxy.GatewayStatusReport
+	details   map[string]ServiceDetail
+	lastNode  string
+}
+
+func (p *fakeGatewayControlProvider) ResolveAdminServiceDetail(_ context.Context, nodeID, serviceID string) (ServiceDetail, bool) {
+	p.lastNode = nodeID
+	detail, ok := p.details[nodeID+":"+serviceID]
+	return detail, ok
 }
 
 func (p *fakeGatewayControlProvider) CompileGatewaySnapshot(_ context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
@@ -56,7 +64,7 @@ func signedGatewayControlRequest(t *testing.T, method, target, body string, at t
 	return req
 }
 
-func setupGatewayControlRouter(t *testing.T, provider GatewayControlProvider) (*HTTPRouter, *fakeRequestAuthStore) {
+func setupGatewayControlRouter(t *testing.T, provider GatewayProvider) (*HTTPRouter, *fakeRequestAuthStore) {
 	t.Helper()
 	t.Setenv("MOOX_GATEWAY_CONTROL_SECRET_KEY", testGatewayControlSecret)
 	store := &fakeRequestAuthStore{nonces: map[string]bool{}}

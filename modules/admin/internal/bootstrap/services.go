@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
@@ -89,8 +88,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	if err := sysDeployService.SeedDefaults(ctx); err != nil {
 		return nil, err
 	}
-	gateway.SetServiceDetailResolver(sysDeployService.ResolveGatewayServiceDetail)
-
 	db := dbManager.GetDB()
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）

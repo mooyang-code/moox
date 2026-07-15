@@ -8,34 +8,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveServiceDetail_WithResolver_ShouldReturnDetail(t *testing.T) {
-	SetServiceDetailResolver(func(ctx context.Context, serviceID string) (ServiceDetail, bool) {
-		if serviceID == "auth" {
-			return ServiceDetail{Address: "127.0.0.1:8080", Path: "trpc.moox.infra.Auth"}, true
-		}
-		return ServiceDetail{}, false
-	})
-	t.Cleanup(func() { SetServiceDetailResolver(nil) })
+type stubAdminServiceProvider struct {
+	details map[string]ServiceDetail
+}
 
-	detail, err := resolveServiceDetail(context.Background(), "auth")
+func (p stubAdminServiceProvider) ResolveAdminServiceDetail(_ context.Context, adminNodeID, serviceID string) (ServiceDetail, bool) {
+	detail, ok := p.details[adminNodeID+":"+serviceID]
+	return detail, ok
+}
+
+func TestResolveAdminServiceDetailUsesExplicitNode(t *testing.T) {
+	provider := stubAdminServiceProvider{details: map[string]ServiceDetail{
+		"node-a:auth": {Address: "127.0.0.1:8080", Path: "trpc.moox.infra.Auth"},
+	}}
+
+	detail, err := resolveAdminServiceDetail(context.Background(), provider, "node-a", "auth")
 	require.NoError(t, err)
 	assert.Equal(t, "127.0.0.1:8080", detail.Address)
 	assert.Equal(t, "trpc.moox.infra.Auth", detail.Path)
+
+	_, err = resolveAdminServiceDetail(context.Background(), provider, "node-b", "auth")
+	require.Error(t, err)
 }
 
-func TestResolveServiceDetail_MissingDeployment_ShouldError(t *testing.T) {
-	SetServiceDetailResolver(func(ctx context.Context, serviceID string) (ServiceDetail, bool) {
-		return ServiceDetail{}, false
-	})
-	t.Cleanup(func() { SetServiceDetailResolver(nil) })
-
-	_, err := resolveServiceDetail(context.Background(), "missing")
+func TestResolveAdminServiceDetailMissingProviderErrors(t *testing.T) {
+	_, err := resolveAdminServiceDetail(context.Background(), nil, "node-a", "auth")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing")
-}
-
-func TestResolveServiceDetail_NilResolver_ShouldError(t *testing.T) {
-	SetServiceDetailResolver(nil)
-	_, err := resolveServiceDetail(context.Background(), "auth")
-	require.Error(t, err)
+	assert.Contains(t, err.Error(), "node-a")
 }

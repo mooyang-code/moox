@@ -34,12 +34,12 @@ func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 //
 // 请求 URL = /{path}/{method}，框架服务端自动 JSON↔PB，网关不做序列化/加工，
 // 原样返回 http body；错误由 trpc 框架以 errs 错误返回，网关转写 trpc-ret/trpc-func-ret header。
-func forwardHTTP(ctx context.Context, serviceID, method string, body []byte, headers map[string]string) ([]byte, error) {
+func forwardHTTP(ctx context.Context, provider AdminServiceDetailProvider, adminNodeID, serviceID, method string, body []byte, headers map[string]string) ([]byte, error) {
 	cfg := GetConfig()
 	if cfg == nil {
 		return nil, fmt.Errorf("网关配置未初始化")
 	}
-	detail, err := resolveServiceDetail(ctx, serviceID)
+	detail, err := resolveAdminServiceDetail(ctx, provider, adminNodeID, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,6 @@ func buildForwardHeaders(headers map[string]string) *thttp.ClientReqHeader {
 	addIfPresent(reqHead, headers, "space_id", spacecontext.SpaceIDHeader)
 	addIfPresent(reqHead, headers, "user_id", "X-User-Id")
 	addIfPresent(reqHead, headers, "user_role", "X-User-Role")
-	addIfPresent(reqHead, headers, "service_auth", "X-Moox-Service-Auth")
 	return reqHead
 }
 

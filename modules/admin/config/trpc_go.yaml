@@ -23,12 +23,6 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 30000
-    - name: trpc.moox.gateway.service
-      ip: 127.0.0.1
-      port: 11002
-      network: tcp
-      protocol: http_no_protocol
-      timeout: 30000
     - name: trpc.moox.admin.Health
       ip: 127.0.0.1
       port: 11010

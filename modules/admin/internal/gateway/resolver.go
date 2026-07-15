@@ -3,33 +3,19 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"sync"
 )
 
-// ServiceDetailResolver resolves gateway forwarding targets from runtime service
-// deployment records without adding per-endpoint gateway logic.
-type ServiceDetailResolver func(ctx context.Context, serviceID string) (ServiceDetail, bool)
-
-var (
-	serviceDetailResolverMu sync.RWMutex
-	serviceDetailResolver   ServiceDetailResolver
-)
-
-// SetServiceDetailResolver sets the runtime resolver used by forwardHTTP.
-func SetServiceDetailResolver(resolver ServiceDetailResolver) {
-	serviceDetailResolverMu.Lock()
-	defer serviceDetailResolverMu.Unlock()
-	serviceDetailResolver = resolver
+// AdminServiceDetailProvider resolves browser control-plane targets for the
+// Admin process's configured node.
+type AdminServiceDetailProvider interface {
+	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (ServiceDetail, bool)
 }
 
-func resolveServiceDetail(ctx context.Context, serviceID string) (ServiceDetail, error) {
-	serviceDetailResolverMu.RLock()
-	resolver := serviceDetailResolver
-	serviceDetailResolverMu.RUnlock()
-	if resolver != nil {
-		if detail, ok := resolver(ctx, serviceID); ok {
+func resolveAdminServiceDetail(ctx context.Context, provider AdminServiceDetailProvider, adminNodeID, serviceID string) (ServiceDetail, error) {
+	if provider != nil {
+		if detail, ok := provider.ResolveAdminServiceDetail(ctx, adminNodeID, serviceID); ok {
 			return detail, nil
 		}
 	}
-	return ServiceDetail{}, fmt.Errorf("服务 '%s' 未在 t_service_deployments 中找到 active 部署记录", serviceID)
+	return ServiceDetail{}, fmt.Errorf("服务 '%s' 未在节点 '%s' 找到 active 部署记录", serviceID, adminNodeID)
 }

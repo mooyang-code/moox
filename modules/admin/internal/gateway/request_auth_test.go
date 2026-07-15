@@ -37,15 +37,6 @@ func (s *fakeRequestAuthStore) ConsumeSessionNonce(_ context.Context, sid, nonce
 	return true, nil
 }
 
-func (s *fakeRequestAuthStore) ConsumeServiceNonce(_ context.Context, accessKey, nonce string, _ time.Duration) (bool, error) {
-	k := "service:" + accessKey + ":" + nonce
-	if s.nonces[k] {
-		return false, nil
-	}
-	s.nonces[k] = true
-	return true, nil
-}
-
 func (s *fakeRequestAuthStore) ConsumeGatewayControlNonce(_ context.Context, keyID, nonce string, _ time.Duration) (bool, error) {
 	key := "gateway_control:" + keyID + ":" + nonce
 	if s.nonces[key] {
@@ -157,11 +148,6 @@ func TestLoginRoutesRemainUnsigned(t *testing.T) {
 	setupRequestAuthTest(t)
 	assert.True(t, shouldSkipAdminRequestAuth("/api/admin/auth/Login"))
 	assert.True(t, shouldSkipAdminRequestAuth("/api/admin/auth/GetLoginSalt"))
-}
-
-func TestServiceRoutesKeepServiceAuthOnly(t *testing.T) {
-	setupRequestAuthTest(t)
-	assert.False(t, isAdminRequestPath("/api/service/storage/Append"))
 }
 
 func TestRawTicketRequiresMatchingOwnedSSHSession(t *testing.T) {

@@ -78,7 +78,7 @@ func TestAdminUpgradeRetiresLegacyMonitorAndRoutesAlias(t *testing.T) {
 	if activeLegacy != 0 {
 		t.Fatal("legacy Admin monitor deployment remains active")
 	}
-	detail, ok := service.ResolveGatewayServiceDetail(context.Background(), "monitor")
+	detail, ok := service.ResolveAdminServiceDetail(context.Background(), "gateway-gz-122", "monitor")
 	if !ok || detail.Path != "trpc.moox.monitor.MonitorMgr" || detail.Address != "127.0.0.1:11410" {
 		t.Fatalf("monitor gateway alias = %+v, ok=%v", detail, ok)
 	}

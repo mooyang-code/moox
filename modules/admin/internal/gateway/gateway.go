@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,17 +55,18 @@ var NewGatewayHandle = func() *GatewayHandle {
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	gateway         *GatewayHandle
-	controlProvider GatewayControlProvider
+	gateway              *GatewayHandle
+	controlProvider      GatewayProvider
+	adminServiceProvider AdminServiceDetailProvider
 }
 
 // NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(gateway *GatewayHandle, provider GatewayControlProvider) *HTTPRouter {
-	return &HTTPRouter{gateway: gateway, controlProvider: provider}
+func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider) *HTTPRouter {
+	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider}
 }
 
 // RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayControlProvider) error {
+func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider) error {
 	gateway := GetGatewayHandleInstance()
 	router := NewHTTPRouter(gateway, provider)
 	return router.setupRoutes(s)
@@ -74,7 +77,7 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
 	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.control"), hr.buildControlRouter()); err != nil {
 		return err
 	}
-	return healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.service"), hr.buildServiceRouter())
+	return nil
 }
 
 func (hr *HTTPRouter) buildControlRouter() *mux.Router {
@@ -94,29 +97,15 @@ func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	return router
 }
 
-func (hr *HTTPRouter) buildServiceRouter() *mux.Router {
-	router := mux.NewRouter()
-	router.HandleFunc(
-		"/api/service/{service}/{method}",
-		hr.handleServiceRequest).
-		Methods("GET", "POST", "PUT", "DELETE")
-	return router
-}
-
 // buildRouter remains the control-router test helper.
 func (hr *HTTPRouter) buildRouter() *mux.Router { return hr.buildControlRouter() }
 
 // handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
 func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
-	hr.handleGatewayRequest(w, r, false)
+	hr.handleGatewayRequest(w, r)
 }
 
-// handleServiceRequest 处理后台服务请求，使用 Auth HMAC 签名鉴权。
-func (hr *HTTPRouter) handleServiceRequest(w http.ResponseWriter, r *http.Request) {
-	hr.handleGatewayRequest(w, r, true)
-}
-
-func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request, requireServiceAuth bool) {
+func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	handler := hr.gateway.requestHandler
 
@@ -128,7 +117,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !requireServiceAuth && !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
+	if !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
 		if _, usesTicket := rawRouteOperations[serviceID+"/"+method]; usesTicket {
 			claims, err := validateRawRouteTicket(r, serviceID, method)
 			if err != nil {
@@ -174,32 +163,26 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 
 	// 裸 HTTP 处理器分派（用于 multipart/流式等不适合 PB RPC 的场景）。
 	// 必须在读取请求体之前分派，避免 multipart body 被网关读干。
-	// 仅管理台侧（JWT）支持裸处理器；后台服务侧（HMAC）需先读 body 验签，不走此路径。
-	if !requireServiceAuth {
-		if rawAndServe(ctx, w, r, serviceID, method, headers) {
-			return
-		}
+	// 裸处理器仍使用管理台 JWT 或一次性 raw ticket 鉴权。
+	if rawAndServe(ctx, w, r, serviceID, method, headers) {
+		return
 	}
 
 	// 读取请求体
-	rawBody, body, err := handler.readRequestBodyWithRaw(r)
+	_, body, err := handler.readRequestBodyWithRaw(r)
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if requireServiceAuth {
-		if err := handler.validateServiceAuth(r, rawBody); err != nil {
-			log.WarnContextf(ctx, "后台服务请求鉴权失败: %v", err)
-			http.Error(w, "service auth failed", http.StatusUnauthorized)
-			return
-		}
-		headers["service_auth"] = "true"
-	}
-
 	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），
 	// 框架服务端自动 JSON↔PB，网关不加工 body；未配置 serviceID 返回 404。
-	respBody, err := forwardHTTP(ctx, serviceID, method, body, headers)
+	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
+	if adminNodeID == "" {
+		writeForwardError(ctx, w, fmt.Errorf("MOOX_ADMIN_NODE_ID is required"), headers)
+		return
+	}
+	respBody, err := forwardHTTP(ctx, hr.adminServiceProvider, adminNodeID, serviceID, method, body, headers)
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
 		return
@@ -251,14 +234,6 @@ func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []
 	defer r.Body.Close()
 	rawBody := append([]byte(nil), body...)
 	return rawBody, body, nil
-}
-
-func (h *HTTPRequestHandler) validateServiceAuth(r *http.Request, rawBody []byte) error {
-	cfg, err := currentServiceAuthConfig()
-	if err != nil {
-		return err
-	}
-	return validateServiceAuthHeader(r.Context(), r.Header.Get("Auth"), r.Method, r.URL.EscapedPath(), rawBody, signedGatewayHeaders(r), time.Now(), cfg)
 }
 
 func signedGatewayHeaders(r *http.Request) map[string]string {

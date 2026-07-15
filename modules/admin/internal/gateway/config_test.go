@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"net/http"
@@ -36,10 +37,6 @@ func TestLoadConfig_ValidYAML_ShouldParse(t *testing.T) {
   secret_key: test-secret
 gateway:
   debug: true
-  service_auth:
-    enabled: true
-    access_key: ak
-    secret_key: sk
 cors:
   allowed_origins:
     - "*"
@@ -72,26 +69,31 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestGatewayRoutersIsolateControlServiceAndDiagnostics(t *testing.T) {
-	hr := NewHTTPRouter(NewGatewayHandle(), nil)
-	for name, router := range map[string]http.Handler{"control": hr.buildControlRouter(), "service": hr.buildServiceRouter()} {
-		for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
-			rr := httptest.NewRecorder()
-			router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
-			if rr.Code != http.StatusNotFound {
-				t.Fatalf("%s router exposed %s: %d", name, path, rr.Code)
-			}
+func TestAdminRouterKeepsAdminAndGatewayControlButRejectsMachineService(t *testing.T) {
+	hr := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{})
+	router := hr.buildControlRouter()
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("admin router exposed %s: %d", path, rr.Code)
 		}
 	}
 
-	serviceRR := httptest.NewRecorder()
-	hr.buildControlRouter().ServeHTTP(serviceRR, httptest.NewRequest(http.MethodPost, "/api/service/cloudnode/PollJobItems", nil))
-	if serviceRR.Code != http.StatusNotFound {
-		t.Fatalf("control router service status=%d", serviceRR.Code)
+	for _, path := range []string{
+		"/api/admin/auth/GetLoginSalt",
+		"/api/gateway-control/routes",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		match := &mux.RouteMatch{}
+		if !router.Match(request, match) {
+			t.Fatalf("admin router did not register %s", path)
+		}
 	}
-	adminRR := httptest.NewRecorder()
-	hr.buildServiceRouter().ServeHTTP(adminRR, httptest.NewRequest(http.MethodPost, "/api/admin/auth/Login", nil))
-	if adminRR.Code != http.StatusNotFound {
-		t.Fatalf("service router admin status=%d", adminRR.Code)
+
+	machineRR := httptest.NewRecorder()
+	router.ServeHTTP(machineRR, httptest.NewRequest(http.MethodPost, "/api/service/monitor/GetPeerSnapshot", nil))
+	if machineRR.Code != http.StatusNotFound {
+		t.Fatalf("admin router machine service status=%d, want 404", machineRR.Code)
 	}
 }

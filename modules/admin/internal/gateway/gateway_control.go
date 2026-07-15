@@ -27,6 +27,11 @@ type GatewayControlProvider interface {
 	ReportGatewayStatus(context.Context, gatewayproxy.GatewayStatusReport) error
 }
 
+type GatewayProvider interface {
+	GatewayControlProvider
+	AdminServiceDetailProvider
+}
+
 type gatewayStatusRequest struct {
 	NodeID           string `json:"node_id"`
 	AppliedRouteHash string `json:"applied_route_hash"`

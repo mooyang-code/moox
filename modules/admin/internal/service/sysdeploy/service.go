@@ -25,7 +25,7 @@ type Service interface {
 	pb.SysDeployService
 	SeedDefaults(ctx context.Context) error
 	GetServiceDeployments(ctx context.Context) (map[string]interface{}, error)
-	ResolveGatewayServiceDetail(ctx context.Context, serviceID string) (gateway.ServiceDetail, bool)
+	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool)
 	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error)
 	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
 }
@@ -230,10 +230,14 @@ func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]int
 	return payload, nil
 }
 
-// ResolveGatewayServiceDetail resolves /api/admin and /api/service forwarding
-// targets from active t_service_deployments records.
-func (s *ServiceImpl) ResolveGatewayServiceDetail(ctx context.Context, serviceID string) (gateway.ServiceDetail, bool) {
-	row, err := s.dao.Get(ctx, localNodeID(), gatewayDeploymentName(serviceID))
+// ResolveAdminServiceDetail resolves browser control-plane forwarding only from
+// active deployments assigned to the Admin process's configured node.
+func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool) {
+	adminNodeID = strings.TrimSpace(adminNodeID)
+	if adminNodeID == "" {
+		return gateway.ServiceDetail{}, false
+	}
+	row, err := s.dao.Get(ctx, adminNodeID, gatewayDeploymentName(serviceID))
 	if err != nil || row == nil || row.Status != "active" {
 		return gateway.ServiceDetail{}, false
 	}
