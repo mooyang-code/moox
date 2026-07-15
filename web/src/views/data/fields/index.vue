@@ -1,32 +1,34 @@
 <template>
   <div class="moox-page fields-page">
     <div class="moox-inner fields-inner">
-      <header class="page-head">
-        <div>
-          <h2>字段管理</h2>
-          <span v-if="selectedSpaceId" class="field-total">{{ totalFieldCount }} 个字段</span>
+      <div class="toolbar">
+        <div class="toolbar-main">
+          <a-button class="mobile-group-trigger" @click="mobileGroupVisible = true"><template #icon><icon-menu /></template>字段组</a-button>
+          <div class="keyword-control">
+            <a-input-search v-model="searchKeyword" class="keyword-input" allow-clear placeholder="搜索字段 ID、中文名或描述" @input="scheduleSearch" @search="commitSearch" />
+          </div>
+          <div class="filter-control">
+            <a-select v-model="state.valueType" class="filter-select" allow-clear placeholder="值类型" @change="changeFilter">
+              <a-option v-for="item in fieldValueTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+            </a-select>
+          </div>
+          <div class="filter-control">
+            <a-select v-model="state.status" class="filter-select" allow-clear placeholder="状态" @change="changeFilter">
+              <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+            </a-select>
+          </div>
         </div>
-        <a-space>
+        <div class="toolbar-actions">
+          <span v-if="selectedSpaceId" class="field-total">{{ totalFieldCount }} 个字段</span>
           <a-tooltip content="刷新"><a-button :disabled="!selectedSpaceId" @click="loadAll"><icon-refresh /></a-button></a-tooltip>
           <a-button type="primary" :disabled="!selectedSpaceId || !groups.length" @click="openCreateField">
             <template #icon><icon-plus /></template>新建字段
           </a-button>
-        </a-space>
-      </header>
+        </div>
+      </div>
 
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
-        <div class="toolbar">
-          <a-button class="mobile-group-trigger" @click="mobileGroupVisible = true"><template #icon><icon-menu /></template>字段组</a-button>
-          <a-input-search v-model="searchKeyword" class="keyword-input" allow-clear placeholder="搜索字段 ID、中文名或描述" @input="scheduleSearch" @search="commitSearch" />
-          <a-select v-model="state.valueType" class="filter-select" allow-clear placeholder="值类型" @change="changeFilter">
-            <a-option v-for="item in fieldValueTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-          </a-select>
-          <a-select v-model="state.status" class="filter-select" allow-clear placeholder="状态" @change="changeFilter">
-            <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-          </a-select>
-        </div>
-
         <section class="field-workbench">
           <aside class="group-panel">
             <a-alert v-if="groupError" type="error" class="inline-error">字段组加载失败 <a-link @click="loadGroups">重试</a-link></a-alert>
@@ -397,13 +399,13 @@ onMounted(async () => {
 
 <style scoped>
 .fields-inner { display: flex; min-height: calc(100vh - 116px); flex-direction: column; }
-.page-head { display: flex; margin-bottom: 12px; align-items: center; justify-content: space-between; gap: 16px; }
-.page-head > div:first-child { display: flex; align-items: baseline; gap: 10px; }
-.page-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.toolbar { display: flex; min-height: 48px; margin-bottom: 8px; align-items: center; justify-content: space-between; gap: 16px; }
+.toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
+.toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; white-space: nowrap; }
 .field-total { color: var(--color-text-3); font-size: 13px; }
-.toolbar { display: flex; min-height: 48px; padding: 8px 0; align-items: center; gap: 8px; }
-.keyword-input { width: 360px; min-width: 260px; flex: 0 1 360px; }
-.filter-select { width: 150px; flex: 0 0 150px; }
+.keyword-control { min-width: 220px; flex: 1 1 360px; }
+.filter-control { width: 140px; flex: 0 0 140px; }
+.keyword-input, .filter-select { width: 100%; }
 .mobile-group-trigger { display: none; }
 .field-workbench { display: grid; min-height: 560px; flex: 1; grid-template-columns: 240px minmax(0, 1fr); border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
 .group-panel { min-height: 0; overflow: auto; border-right: 1px solid var(--color-border-2); background: var(--color-fill-1); }
@@ -414,13 +416,15 @@ onMounted(async () => {
   .group-panel { display: none; }
   .field-workbench { grid-template-columns: minmax(0, 1fr); }
   .mobile-group-trigger { display: inline-flex; }
-  .toolbar { flex-wrap: wrap; }
-  .keyword-input { width: min(100%, 420px); min-width: 220px; flex: 1 1 260px; }
-  .filter-select { flex: 1 1 130px; }
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .toolbar-main { flex: 1 1 100%; flex-wrap: wrap; }
+  .toolbar-actions { margin-left: auto; }
+  .keyword-control { min-width: 220px; flex: 1 1 260px; }
+  .filter-control { width: auto; flex: 1 1 130px; }
 }
 @media (max-width: 560px) {
-  .page-head { align-items: flex-start; }
-  .page-head :deep(.arco-space) { flex-wrap: wrap; justify-content: flex-end; }
+  .toolbar-main, .toolbar-actions { width: 100%; }
+  .toolbar-actions { justify-content: flex-end; }
   .field-workbench { min-height: 480px; }
 }
 </style>

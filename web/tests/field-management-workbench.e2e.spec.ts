@@ -82,6 +82,10 @@ test('supports the approved desktop governance workflow', async ({ page }, testI
   const searchCenter = (searchBounds?.y || 0) + (searchBounds?.height || 0) / 2;
   const createCenter = (createBounds?.y || 0) + (createBounds?.height || 0) / 2;
   expect(Math.abs(searchCenter - createCenter)).toBeLessThanOrEqual(2);
+  expect((await page.locator('.keyword-control').boundingBox())?.width || 0).toBeGreaterThanOrEqual(300);
+  for (const filter of await page.locator('.filter-control').all()) {
+    expect((await filter.boundingBox())?.width || 0).toBeLessThanOrEqual(160);
+  }
   await expect(page.getByText('收盘价', { exact: true })).toBeVisible();
   await expect(page.getByText('3 个字段')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('field-workbench-desktop.png'), fullPage: true });
