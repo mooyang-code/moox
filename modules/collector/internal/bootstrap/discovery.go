@@ -95,11 +95,12 @@ func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoi
 	body := []byte("{}")
 	url := normalizeBaseURL(cfg.SysDeploy.AdminGatewayURL) + "/api/service/sysdeploy/ListActiveServiceDeployments"
 	auth := runtimeapp.AuthConfig{
-		AccessKey:  cfg.SysDeploy.ServiceAuth.AccessKey,
-		SecretKey:  cfg.SysDeploy.ServiceAuth.SecretKey,
-		TargetNode: cfg.SysDeploy.ServiceAuth.TargetNode,
-		CAFile:     cfg.SysDeploy.ServiceAuth.CAFile,
-		ExpireSec:  cfg.SysDeploy.ServiceAuth.ExpireSeconds,
+		AccessKey:   cfg.SysDeploy.ServiceAuth.AccessKey,
+		SecretKey:   cfg.SysDeploy.ServiceAuth.SecretKey,
+		TargetNode:  cfg.SysDeploy.ServiceAuth.TargetNode,
+		CAFile:      cfg.SysDeploy.ServiceAuth.CAFile,
+		CAPEMBase64: cfg.SysDeploy.ServiceAuth.CAPEMBase64,
+		ExpireSec:   cfg.SysDeploy.ServiceAuth.ExpireSeconds,
 	}
 	req, err := runtimeapp.NewSignedRequestWithContext(ctx, http.MethodPost, url, body, auth)
 	if err != nil {

@@ -29,11 +29,12 @@ type SystemConfig struct {
 
 // ServiceAuthConfig 后台服务请求签名鉴权配置。
 type ServiceAuthConfig struct {
-	AccessKey  string `json:"access_key" yaml:"access_key"`
-	SecretKey  string `json:"secret_key" yaml:"secret_key"`
-	TargetNode string `json:"target_node" yaml:"target_node"`
-	CAFile     string `json:"ca_file" yaml:"ca_file"`
-	ExpireSec  int64  `json:"expire_seconds" yaml:"expire_seconds"`
+	AccessKey   string `json:"access_key" yaml:"access_key"`
+	SecretKey   string `json:"secret_key" yaml:"secret_key"`
+	TargetNode  string `json:"target_node" yaml:"target_node"`
+	CAFile      string `json:"ca_file" yaml:"ca_file"`
+	CAPEMBase64 string `json:"ca_pem_base64" yaml:"ca_pem_base64"`
+	ExpireSec   int64  `json:"expire_seconds" yaml:"expire_seconds"`
 }
 
 // EventBusConfig 事件总线配置
@@ -111,6 +112,9 @@ func GetServiceAuthConfig() ServiceAuthConfig {
 	}
 	if value := os.Getenv("MOOX_GATEWAY_CA_FILE"); value != "" {
 		cfg.CAFile = value
+	}
+	if value := os.Getenv("MOOX_GATEWAY_CA_PEM_B64"); value != "" {
+		cfg.CAPEMBase64 = value
 	}
 	return cfg
 }

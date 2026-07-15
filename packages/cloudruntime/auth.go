@@ -15,12 +15,13 @@ const defaultExpireSec = int64(60)
 
 // AuthConfig describes the HMAC authentication used by MooX backend service APIs.
 type AuthConfig struct {
-	AccessKey  string
-	SecretKey  string
-	TargetNode string
-	CAFile     string
-	NowUnix    int64
-	ExpireSec  int64
+	AccessKey   string
+	SecretKey   string
+	TargetNode  string
+	CAFile      string
+	CAPEMBase64 string
+	NowUnix     int64
+	ExpireSec   int64
 }
 
 func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
@@ -35,6 +36,9 @@ func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
 	}
 	if cfg.CAFile == "" {
 		cfg.CAFile = os.Getenv("MOOX_GATEWAY_CA_FILE")
+	}
+	if cfg.CAPEMBase64 == "" {
+		cfg.CAPEMBase64 = os.Getenv("MOOX_GATEWAY_CA_PEM_B64")
 	}
 	if cfg.NowUnix <= 0 {
 		cfg.NowUnix = time.Now().Unix()

@@ -40,6 +40,35 @@ func TestServiceRouterProxiesAuthenticatedRequestAndPreservesHeaders(t *testing.
 	}
 }
 
+func TestServiceRouterAllowsAuthenticatedRevealSecret(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/trpc.moox.ops.SecretMgr/RevealSecret" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_value":"plain"}}`))
+	}))
+	defer upstream.Close()
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{ServiceID: "secret", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.ops.SecretMgr", MaxBodyBytes: 1024, AllowedMethods: []string{"RevealSecret"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table gatewayproxy.Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonces.Close()
+	handler := New(Options{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, MaxBodyBytes: 1024, Table: &table, Nonces: nonces})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, signedRequest(t, http.MethodPost, "/api/service/secret/RevealSecret", []byte(`{"secret_id":"s1"}`), testNode, testSecret))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "plain") {
+		t.Fatalf("response=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestServiceRouterRejectsInvalidMethodAndPath(t *testing.T) {
 	handler, closeHandler := newHandler(t, nil, false, 1024)
 	defer closeHandler()

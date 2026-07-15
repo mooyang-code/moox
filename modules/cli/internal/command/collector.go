@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/spf13/cobra"
 )
 
@@ -250,9 +252,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		PackageID: uploadResp.PackageID,
 	}
 
-	createResp, err := client.BatchCreateNodes(ctx, []adminclient.NodeCreateItem{
-		buildCollectorCreateNodeItem(opts, uploadResp.PackageID),
-	})
+	createItem, err := buildCollectorCreateNodeItem(opts, uploadResp.PackageID)
+	if err != nil {
+		return summary, err
+	}
+	createResp, err := client.BatchCreateNodes(ctx, []adminclient.NodeCreateItem{createItem})
 	if err != nil {
 		return summary, err
 	}
@@ -261,16 +265,20 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	return summary, nil
 }
 
-func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
+func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
 	bizType := defaultFlag(opts.BizType, "data_collector")
+	environment, err := collectorFunctionEnvironment(opts)
+	if err != nil {
+		return adminclient.NodeCreateItem{}, err
+	}
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
 		Runtime:        defaultFlag(opts.Runtime, "Go1"),
 		Handler:        defaultFlag(opts.Handler, "main"),
 		Config:         parseCollectorOverrides(opts.Config),
-		Environment:    collectorFunctionEnvironment(opts),
+		Environment:    environment,
 		Region:         opts.Region,
 		PackageID:      packageID,
 		Metadata: map[string]any{
@@ -278,23 +286,53 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"biz_type":             bizType,
 			"supported_workloads":  []string{"collect.kline", "collect.symbol"},
 		},
-	}
+	}, nil
 }
 
-func collectorFunctionEnvironment(opts collectorPublishOptions) map[string]string {
+func collectorFunctionEnvironment(opts collectorPublishOptions) (map[string]string, error) {
 	env := map[string]string{}
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", os.Getenv("MOOX_GATEWAY_NODE_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")))
-	setDefaultEnv(env, "MOOX_GATEWAY_CA_FILE", os.Getenv("MOOX_GATEWAY_CA_FILE"))
-	for key, value := range parseCollectorOverrides(opts.Env) {
+	overrides := parseCollectorOverrides(opts.Env)
+	if strings.TrimSpace(overrides["MOOX_GATEWAY_CA_FILE"]) != "" {
+		return nil, fmt.Errorf("serverless environment must not contain MOOX_GATEWAY_CA_FILE")
+	}
+	caFile := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
+	caMaterial := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_PEM_B64"))
+	if overrideMaterial := strings.TrimSpace(overrides["MOOX_GATEWAY_CA_PEM_B64"]); overrideMaterial != "" {
+		if caFile != "" || (caMaterial != "" && caMaterial != overrideMaterial) {
+			return nil, fmt.Errorf("gateway CA material conflicts with host configuration")
+		}
+		caMaterial = overrideMaterial
+	}
+	if caFile != "" && caMaterial != "" {
+		return nil, fmt.Errorf("gateway CA file and CA PEM material are mutually exclusive")
+	}
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read gateway CA file: %w", err)
+		}
+		caMaterial = base64.StdEncoding.EncodeToString(pem)
+	}
+	if caMaterial != "" {
+		if _, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{CAPEMBase64: caMaterial}); err != nil {
+			return nil, fmt.Errorf("invalid gateway CA material: %w", err)
+		}
+		setDefaultEnv(env, "MOOX_GATEWAY_CA_PEM_B64", caMaterial)
+	}
+	for key, value := range overrides {
+		if key == "MOOX_GATEWAY_CA_FILE" || key == "MOOX_GATEWAY_CA_PEM_B64" {
+			continue
+		}
 		env[key] = value
 	}
 	if len(env) == 0 {
-		return nil
+		return nil, nil
 	}
-	return env
+	return env, nil
 }
 
 func setDefaultEnv(env map[string]string, key string, value string) {

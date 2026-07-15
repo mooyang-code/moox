@@ -3,6 +3,7 @@ package gatewayauth
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -14,18 +15,34 @@ import (
 )
 
 type ClientOptions struct {
-	Timeout time.Duration
-	CAFile  string
+	Timeout     time.Duration
+	CAFile      string
+	CAPEMBase64 string
 }
 
 // NewHTTPClient returns a client that permits plaintext only for loopback targets.
 func NewHTTPClient(options ClientOptions) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if caFile := strings.TrimSpace(options.CAFile); caFile != "" {
-		pem, err := os.ReadFile(caFile)
+	caFile := strings.TrimSpace(options.CAFile)
+	caMaterial := strings.TrimSpace(options.CAPEMBase64)
+	if caFile != "" && caMaterial != "" {
+		return nil, errors.New("gateway CA file and CA PEM material are mutually exclusive")
+	}
+	var pem []byte
+	if caFile != "" {
+		var err error
+		pem, err = os.ReadFile(caFile)
 		if err != nil {
 			return nil, fmt.Errorf("read gateway CA file: %w", err)
 		}
+	} else if caMaterial != "" {
+		var err error
+		pem, err = base64.StdEncoding.Strict().DecodeString(caMaterial)
+		if err != nil {
+			return nil, errors.New("gateway CA PEM material is not valid base64")
+		}
+	}
+	if len(pem) > 0 {
 		roots, err := x509.SystemCertPool()
 		if err != nil || roots == nil {
 			roots = x509.NewCertPool()
@@ -43,6 +60,9 @@ func NewHTTPClient(options ClientOptions) (*http.Client, error) {
 	return &http.Client{
 		Timeout:   options.Timeout,
 		Transport: secureRoundTripper{next: transport},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("gateway HTTP redirects are disabled")
+		},
 	}, nil
 }
 

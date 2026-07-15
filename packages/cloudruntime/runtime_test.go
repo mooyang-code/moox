@@ -2,19 +2,18 @@ package cloudruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestPostServiceUsesCAFileFromEnvironment(t *testing.T) {
+func TestPostServiceUsesServerlessCAPEMFromEnvironment(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
 			t.Fatalf("target node = %q", got)
@@ -22,12 +21,11 @@ func TestPostServiceUsesCAFileFromEnvironment(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
 	}))
 	defer server.Close()
-	caFile := filepath.Join(t.TempDir(), "peer-ca.pem")
-	requireNoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600))
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
-	t.Setenv("MOOX_GATEWAY_CA_FILE", caFile)
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", base64.StdEncoding.EncodeToString(caPEM))
 	var out map[string]any
 	requireNoError(t, postService(context.Background(), Config{ServiceGatewayTarget: server.URL, HTTPTimeout: time.Second}, "cloudnode", "PollJobItems", map[string]any{}, &out))
 }

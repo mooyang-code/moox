@@ -14,27 +14,29 @@ const defaultExpireSec = int64(60)
 
 // AuthConfig describes the HMAC authentication used by backend service APIs.
 type AuthConfig struct {
-	AccessKey  string
-	SecretKey  string
-	TargetNode string
-	CAFile     string
-	NowUnix    int64
-	ExpireSec  int64
+	AccessKey   string
+	SecretKey   string
+	TargetNode  string
+	CAFile      string
+	CAPEMBase64 string
+	NowUnix     int64
+	ExpireSec   int64
 }
 
 func DefaultAuthConfig() AuthConfig {
 	cfg := GetServiceAuthConfig()
 	return AuthConfig{
-		AccessKey:  cfg.AccessKey,
-		SecretKey:  cfg.SecretKey,
-		TargetNode: cfg.TargetNode,
-		CAFile:     cfg.CAFile,
-		ExpireSec:  cfg.ExpireSec,
+		AccessKey:   cfg.AccessKey,
+		SecretKey:   cfg.SecretKey,
+		TargetNode:  cfg.TargetNode,
+		CAFile:      cfg.CAFile,
+		CAPEMBase64: cfg.CAPEMBase64,
+		ExpireSec:   cfg.ExpireSec,
 	}
 }
 
 func NewGatewayHTTPClient(timeout time.Duration, cfg AuthConfig) (*http.Client, error) {
-	return gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: cfg.CAFile})
+	return gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64})
 }
 
 func normalizeAuthConfig(cfg AuthConfig) AuthConfig {

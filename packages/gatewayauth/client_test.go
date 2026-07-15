@@ -71,6 +71,56 @@ func TestHTTPClientRejectsMissingAndInvalidCAFiles(t *testing.T) {
 	}
 }
 
+func TestHTTPClientAllowsHTTPSWithBase64CAPEM(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	client, err := NewHTTPClient(ClientOptions{Timeout: time.Second, CAPEMBase64: base64.StdEncoding.EncodeToString(certificatePEM(server))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+}
+
+func TestHTTPClientRejectsConflictingOrInvalidCAMaterial(t *testing.T) {
+	caFile := filepath.Join(t.TempDir(), "root.pem")
+	if err := os.WriteFile(caFile, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewHTTPClient(ClientOptions{CAFile: caFile, CAPEMBase64: "bm90LWEtY2VydA=="}); err == nil {
+		t.Fatal("conflicting CA inputs accepted")
+	}
+	if _, err := NewHTTPClient(ClientOptions{CAPEMBase64: "%%%"}); err == nil {
+		t.Fatal("invalid base64 CA accepted")
+	}
+	if _, err := NewHTTPClient(ClientOptions{CAPEMBase64: base64.StdEncoding.EncodeToString([]byte("not a certificate"))}); err == nil {
+		t.Fatal("invalid PEM CA accepted")
+	}
+}
+
+func TestHTTPClientRejectsRedirectWithoutContactingTarget(t *testing.T) {
+	targetCalls := 0
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { targetCalls++ }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	client, err := NewHTTPClient(ClientOptions{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(redirect.URL); err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("redirect error = %v", err)
+	}
+	if targetCalls != 0 {
+		t.Fatalf("redirect target contacted %d times", targetCalls)
+	}
+}
+
 func certificatePEM(server *httptest.Server) []byte {
 	return []byte("-----BEGIN CERTIFICATE-----\n" + base64.StdEncoding.EncodeToString(server.Certificate().Raw) + "\n-----END CERTIFICATE-----\n")
 }

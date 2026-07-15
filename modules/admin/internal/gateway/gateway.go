@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,6 +116,10 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if isMachineOnlyAdminMethod(serviceID, method) {
+		http.NotFound(w, r)
+		return
+	}
 
 	if !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
 		if _, usesTicket := rawRouteOperations[serviceID+"/"+method]; usesTicket {
@@ -182,6 +187,29 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeForwardResponse(w, respBody, headers)
+}
+
+func isMachineOnlyAdminMethod(serviceID, method string) bool {
+	if canonicalAdminSegment(method) != "revealsecret" {
+		return false
+	}
+	switch canonicalAdminSegment(serviceID) {
+	case "secret", "secretmgr", "trpcmooxopssecretmgr":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalAdminSegment(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '.', '-', '_':
+			return -1
+		default:
+			return r
+		}
+	}, strings.ToLower(strings.TrimSpace(value)))
 }
 
 // handleHealthCheck 处理健康检查请求

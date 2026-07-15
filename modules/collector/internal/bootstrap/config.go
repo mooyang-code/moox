@@ -55,6 +55,7 @@ type ServiceAuthConfig struct {
 	SecretKey     string `yaml:"secret_key"`
 	TargetNode    string `yaml:"target_node"`
 	CAFile        string `yaml:"ca_file"`
+	CAPEMBase64   string `yaml:"ca_pem_base64"`
 	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
@@ -98,6 +99,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
 		c.SysDeploy.ServiceAuth.CAFile = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_CA_PEM_B64"); v != "" {
+		c.SysDeploy.ServiceAuth.CAPEMBase64 = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET"); v != "" {
 		c.Storage.MetadataTarget = v

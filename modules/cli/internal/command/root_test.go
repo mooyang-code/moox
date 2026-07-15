@@ -158,10 +158,13 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 	assert.Equal(t, "v", env["K"])
 }
 
-func TestCollectorFunctionEnvironmentIncludesServiceGatewayCA(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "Y2E=")
-	env := collectorFunctionEnvironment(collectorPublishOptions{})
-	assert.Equal(t, "Y2E=", env["MOOX_GATEWAY_CA_FILE"])
+func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
 }
 
 func TestNewControlClientSetsServiceAuth(t *testing.T) {

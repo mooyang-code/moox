@@ -144,6 +144,18 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 	assert.Contains(t, rr.Body.String(), "ret_info")
 }
 
+func TestAdminRouterDeniesMachineOnlyRevealSecretAliases(t *testing.T) {
+	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/secret/RevealSecret", "/api/admin/SecretMgr/revealsecret"}}})
+	provider := &fakeGatewayControlProvider{}
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildRouter()
+	for _, path := range []string{"/api/admin/secret/RevealSecret", "/api/admin/SecretMgr/revealsecret", "/api/admin/trpc.moox.ops.SecretMgr/REVEALSECRET"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
+		assert.Equal(t, http.StatusNotFound, recorder.Code, path)
+	}
+	assert.Empty(t, provider.lastNode)
+}
+
 func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},

@@ -436,7 +436,7 @@ func postService(ctx context.Context, cfg Config, module string, method string, 
 	if err != nil {
 		return err
 	}
-	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.HTTPTimeout, CAFile: auth.CAFile})
+	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.HTTPTimeout, CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64})
 	if err != nil {
 		return err
 	}

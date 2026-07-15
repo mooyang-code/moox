@@ -25,11 +25,12 @@ const wakeNodeListPageSize uint32 = 200
 
 // AuthConfig describes HMAC auth for /api/service/cloudnode/* calls.
 type AuthConfig struct {
-	AccessKey  string
-	SecretKey  string
-	TargetNode string
-	CAFile     string
-	ExpireSec  int64
+	AccessKey   string
+	SecretKey   string
+	TargetNode  string
+	CAFile      string
+	CAPEMBase64 string
+	ExpireSec   int64
 }
 
 // Config configures the CloudNode gateway client.
@@ -64,7 +65,7 @@ func New(cfg Config) *Client {
 	if target == "" {
 		target = strings.TrimSpace(cfg.GatewayURL)
 	}
-	httpClient, httpClientErr := runtimeapp.NewGatewayHTTPClient(8*time.Second, runtimeapp.AuthConfig{AccessKey: cfg.Auth.AccessKey, SecretKey: cfg.Auth.SecretKey, TargetNode: cfg.Auth.TargetNode, CAFile: cfg.Auth.CAFile, ExpireSec: cfg.Auth.ExpireSec})
+	httpClient, httpClientErr := runtimeapp.NewGatewayHTTPClient(8*time.Second, runtimeapp.AuthConfig{AccessKey: cfg.Auth.AccessKey, SecretKey: cfg.Auth.SecretKey, TargetNode: cfg.Auth.TargetNode, CAFile: cfg.Auth.CAFile, CAPEMBase64: cfg.Auth.CAPEMBase64, ExpireSec: cfg.Auth.ExpireSec})
 	return &Client{
 		serviceGatewayTarget:  normalizeGatewayTarget(target),
 		storageMetadataTarget: strings.TrimSpace(cfg.StorageMetadataTarget),
@@ -208,11 +209,12 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 	}
 	url := fmt.Sprintf("%s/api/service/%s/%s", c.serviceGatewayTarget, service, method)
 	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, url, body, headers, runtimeapp.AuthConfig{
-		AccessKey:  c.auth.AccessKey,
-		SecretKey:  c.auth.SecretKey,
-		TargetNode: c.auth.TargetNode,
-		CAFile:     c.auth.CAFile,
-		ExpireSec:  c.auth.ExpireSec,
+		AccessKey:   c.auth.AccessKey,
+		SecretKey:   c.auth.SecretKey,
+		TargetNode:  c.auth.TargetNode,
+		CAFile:      c.auth.CAFile,
+		CAPEMBase64: c.auth.CAPEMBase64,
+		ExpireSec:   c.auth.ExpireSec,
 	})
 	if err != nil {
 		return err

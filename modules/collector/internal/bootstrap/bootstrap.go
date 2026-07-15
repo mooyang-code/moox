@@ -146,10 +146,11 @@ func registerCollectorSchedule(s *server.Server) {
 
 func taskpublisherAuth(cfg ServiceAuthConfig) taskpublisher.AuthConfig {
 	return taskpublisher.AuthConfig{
-		AccessKey:  cfg.AccessKey,
-		SecretKey:  cfg.SecretKey,
-		TargetNode: cfg.TargetNode,
-		CAFile:     cfg.CAFile,
-		ExpireSec:  cfg.ExpireSeconds,
+		AccessKey:   cfg.AccessKey,
+		SecretKey:   cfg.SecretKey,
+		TargetNode:  cfg.TargetNode,
+		CAFile:      cfg.CAFile,
+		CAPEMBase64: cfg.CAPEMBase64,
+		ExpireSec:   cfg.ExpireSeconds,
 	}
 }
