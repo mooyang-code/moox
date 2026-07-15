@@ -1,0 +1,92 @@
+package gatewayproxy
+
+import (
+	"testing"
+	"time"
+)
+
+func TestValidateRouteAcceptsLiteralLoopbackAddresses(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:8080", "[::1]:65535"} {
+		route := Route{ServiceID: "storage_api", Address: address, ServicePath: "trpc.moox.storage.Storage", TimeoutMS: 1, MaxBodyBytes: 1}
+		if err := ValidateRoute(route); err != nil {
+			t.Fatalf("ValidateRoute(%q): %v", address, err)
+		}
+	}
+}
+
+func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
+	valid := Route{ServiceID: "storage-api", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.storage.Storage", TimeoutMS: 1, MaxBodyBytes: 1}
+	tests := []struct {
+		name string
+		edit func(*Route)
+	}{
+		{name: "empty service ID", edit: func(r *Route) { r.ServiceID = "" }},
+		{name: "uppercase service ID", edit: func(r *Route) { r.ServiceID = "Storage" }},
+		{name: "service ID slash", edit: func(r *Route) { r.ServiceID = "../storage" }},
+		{name: "localhost name", edit: func(r *Route) { r.Address = "localhost:8080" }},
+		{name: "remote IPv4", edit: func(r *Route) { r.Address = "192.0.2.1:8080" }},
+		{name: "unspecified IPv4", edit: func(r *Route) { r.Address = "0.0.0.0:8080" }},
+		{name: "unspecified IPv6", edit: func(r *Route) { r.Address = "[::]:8080" }},
+		{name: "mapped loopback", edit: func(r *Route) { r.Address = "[::ffff:127.0.0.1]:8080" }},
+		{name: "IPv6 zone", edit: func(r *Route) { r.Address = "[::1%lo0]:8080" }},
+		{name: "URL", edit: func(r *Route) { r.Address = "http://127.0.0.1:8080" }},
+		{name: "missing port", edit: func(r *Route) { r.Address = "127.0.0.1" }},
+		{name: "zero port", edit: func(r *Route) { r.Address = "127.0.0.1:0" }},
+		{name: "large port", edit: func(r *Route) { r.Address = "127.0.0.1:65536" }},
+		{name: "empty service path", edit: func(r *Route) { r.ServicePath = "" }},
+		{name: "leading slash", edit: func(r *Route) { r.ServicePath = "/trpc.moox.Storage" }},
+		{name: "path traversal", edit: func(r *Route) { r.ServicePath = "trpc.moox..Storage" }},
+		{name: "nonpositive timeout", edit: func(r *Route) { r.TimeoutMS = -1 }},
+		{name: "excessive timeout", edit: func(r *Route) { r.TimeoutMS = 120001 }},
+		{name: "nonpositive body limit", edit: func(r *Route) { r.MaxBodyBytes = -1 }},
+		{name: "excessive body limit", edit: func(r *Route) { r.MaxBodyBytes = 64<<20 + 1 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			route := valid
+			test.edit(&route)
+			if err := ValidateRoute(route); err == nil {
+				t.Fatalf("ValidateRoute(%+v) succeeded", route)
+			}
+		})
+	}
+}
+
+func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
+	routes := []Route{
+		{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.Storage"},
+		{ServiceID: "admin", Address: "[::1]:8001", ServicePath: "trpc.moox.Admin"},
+	}
+	first, err := NormalizeAndHash("node-1", routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NormalizeAndHash("node-1", []Route{routes[1], routes[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RouteHash == "" || first.RouteHash != second.RouteHash {
+		t.Fatalf("unstable hashes: %q and %q", first.RouteHash, second.RouteHash)
+	}
+	if first.Routes[0].ServiceID != "admin" || first.Routes[0].TimeoutMS != 5000 || first.Routes[0].MaxBodyBytes != 4<<20 {
+		t.Fatalf("unexpected normalized routes: %+v", first.Routes)
+	}
+	if first.GeneratedAt.IsZero() || time.Since(first.GeneratedAt) > time.Minute {
+		t.Fatalf("unexpected generated time: %v", first.GeneratedAt)
+	}
+	first.GeneratedAt = first.GeneratedAt.Add(time.Hour)
+	if first.RouteHash != second.RouteHash {
+		t.Fatal("GeneratedAt affected route hash")
+	}
+	routes[0].Address = "127.0.0.1:9999"
+	if first.Routes[1].Address == routes[0].Address {
+		t.Fatal("NormalizeAndHash retained caller-owned route storage")
+	}
+}
+
+func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
+	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin"}
+	if _, err := NormalizeAndHash("node-1", []Route{route, route}); err == nil {
+		t.Fatal("NormalizeAndHash accepted duplicate service IDs")
+	}
+}

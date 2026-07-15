@@ -26,6 +26,7 @@ use (
 	./packages/commonpb
 	./packages/crypto
 	./packages/gatewayauth
+	./packages/gatewayproxy
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
