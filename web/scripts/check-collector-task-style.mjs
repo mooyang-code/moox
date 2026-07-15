@@ -13,7 +13,6 @@ const required = [
   ':bordered="{ cell: true }"',
   ':scroll="{ x: 1810 }"',
   'class="task-id-button"',
-  'justify-content: flex-start;',
   '<icon-eye />',
   'type="primary"',
   'size="mini"',
@@ -35,10 +34,11 @@ const forbidden = [
 
 const missing = required.filter((token) => !source.includes(token));
 const remaining = forbidden.filter((token) => source.includes(token));
+const taskIDTruncationAligned = /\.task-id-button\s*\{[^}]*display:\s*block;[^}]*text-overflow:\s*ellipsis;/s.test(source);
 
-if (missing.length || remaining.length) {
+if (missing.length || remaining.length || !taskIDTruncationAligned) {
   console.error(
-    `collector task style contract failed; missing: ${missing.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}`,
+    `collector task style contract failed; missing: ${missing.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}; task id truncation aligned: ${taskIDTruncationAligned}`,
   );
   process.exit(1);
 }
