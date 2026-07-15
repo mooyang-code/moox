@@ -11,7 +11,8 @@ const required = [
   'class="task-toolbar"',
   'class="task-filters"',
   ':bordered="{ cell: true }"',
-  ':scroll="{ x: 1810 }"',
+  ':scroll="{ x: 1650 }"',
+  'pageSize: 20',
   'class="task-id-button"',
   '<icon-eye />',
   'type="primary"',
@@ -30,6 +31,10 @@ const forbidden = [
   'const selectAll =',
   'y: 500',
   '<a-tag bordered',
+  'plannedExecNode',
+  'PlannedExecNode',
+  'planned_exec_node',
+  '计划节点',
 ];
 
 const missing = required.filter((token) => !source.includes(token));
