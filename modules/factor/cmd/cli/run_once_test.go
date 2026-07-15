@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
@@ -112,14 +111,14 @@ func TestMetadataAdapter_DelegatesToTRPCProxy(t *testing.T) {
 	_, _ = adapter.CreatePrimaryStoreRoute(ctx, &storagepb.CreatePrimaryStoreRouteReq{})
 }
 
-func TestServiceAuth_AndLogRunOnce(t *testing.T) {
-	cfg := bootstrap.Default()
-	cfg.SysDeploy.ServiceAuth.KeyID = "ak"
-	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
-	auth := serviceAuth(cfg)
+func TestFactorAuthDoesNotUseGatewaySecret_AndLogRunOnce(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "gateway-key")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "gateway-secret")
+	auth := serviceAuth()
 	require.NotNil(t, auth)
-	assert.Equal(t, "ak", auth.AppId)
-	assert.Equal(t, "sk", auth.AppKey)
+	assert.Equal(t, "moox-factor", auth.AppId)
+	assert.Empty(t, auth.AppKey)
+	assert.NotEqual(t, "gateway-secret", auth.AppKey)
 
 	task := &engine.FactorTask{TaskID: "t1", SpaceID: "s", SourceDataset: "d", SubjectID: "BTC", Freq: "1m", BarTime: time.Unix(0, 0).UTC()}
 	logRunOnce(context.Background(), task, domain.RunStatusFailed, "boom", 3)

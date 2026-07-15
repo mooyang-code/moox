@@ -45,11 +45,5 @@ instance:
 
 sysdeploy:
   admin_gateway_url: http://127.0.0.1:11002
-  service_auth:
-    key_id: ""
-    secret_key: ""
-    target_node: ""
-    ca_file: ""
-
 health:
   addr: ":11414"

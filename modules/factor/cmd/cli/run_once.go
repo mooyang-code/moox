@@ -45,7 +45,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 
 	appCfg := bootstrap.Default()
-	auth := serviceAuth(appCfg)
+	auth := serviceAuth()
 	metaProxy := storagepb.NewMetadataClientProxy(client.WithTarget(storageio.NormalizeStorageTarget(appCfg.Storage.MetadataTarget, "20100")))
 	syncer := registry.NewMetadataSync(metadataAdapter{proxy: metaProxy}, auth)
 	if err := syncer.SyncResultDataset(ctx, cfg.SpaceID, cfg.DatasetID, cfg.Freq, factors); err != nil {
@@ -183,10 +183,9 @@ func runOncePayload(task *engine.FactorTask, status string, factorCount int, ela
 	}
 }
 
-func serviceAuth(cfg *bootstrap.Config) *commonpb.AuthInfo {
+func serviceAuth() *commonpb.AuthInfo {
 	return &commonpb.AuthInfo{
-		AppId:     cfg.SysDeploy.ServiceAuth.KeyID,
-		AppKey:    cfg.SysDeploy.ServiceAuth.SecretKey,
+		AppId:     "moox-factor",
 		Operator:  "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}

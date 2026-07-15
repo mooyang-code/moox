@@ -92,7 +92,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	authInfo := factorAuthInfo(cfg)
+	authInfo := factorAuthInfo()
 	factorRepo := dbm.Factors()
 	bindingRepo := dbm.Bindings()
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.MetadataTarget), authInfo)
@@ -320,10 +320,9 @@ type realtimeLoopDeps struct {
 	factorsDir     string
 }
 
-func factorAuthInfo(cfg *Config) *commonpb.AuthInfo {
+func factorAuthInfo() *commonpb.AuthInfo {
 	return &commonpb.AuthInfo{
-		AppId:     cfg.SysDeploy.ServiceAuth.KeyID,
-		AppKey:    cfg.SysDeploy.ServiceAuth.SecretKey,
+		AppId:     "moox-factor",
 		Operator:  "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}

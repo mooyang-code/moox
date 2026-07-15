@@ -82,16 +82,7 @@ type InstanceConfig struct {
 
 // SysDeployConfig describes optional dependency discovery through admin.
 type SysDeployConfig struct {
-	AdminGatewayURL string            `yaml:"admin_gateway_url"`
-	ServiceAuth     ServiceAuthConfig `yaml:"service_auth"`
-}
-
-// ServiceAuthConfig describes backend HMAC auth for service calls.
-type ServiceAuthConfig struct {
-	KeyID      string `yaml:"key_id"`
-	SecretKey  string `yaml:"secret_key"`
-	TargetNode string `yaml:"target_node"`
-	CAFile     string `yaml:"ca_file"`
+	AdminGatewayURL string `yaml:"admin_gateway_url"`
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.
@@ -164,7 +155,6 @@ func Default() *Config {
 		},
 		SysDeploy: SysDeployConfig{
 			AdminGatewayURL: "http://127.0.0.1:11002",
-			ServiceAuth:     ServiceAuthConfig{},
 		},
 		Health: HealthConfig{
 			Addr: ":11414",
@@ -300,18 +290,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_FACTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.TargetNode = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.KeyID = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.SysDeploy.ServiceAuth.CAFile = v
 	}
 }
 
