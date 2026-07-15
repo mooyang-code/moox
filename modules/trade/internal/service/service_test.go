@@ -10,7 +10,7 @@ import (
 )
 
 type transferStore struct {
-	execOrderStore
+	Store
 	flows []*FundFlow
 }
 
@@ -23,7 +23,7 @@ func (s *transferStore) AppendFundFlows(_ context.Context, _ string, flows []*Fu
 }
 
 type syncBalanceStore struct {
-	execOrderStore
+	testServiceStore
 	balances []*Balance
 }
 
@@ -47,7 +47,7 @@ func (s *syncBalanceStore) GetBalances(_ context.Context, _, _ string, _ []strin
 }
 
 type syncBalanceAdapter struct {
-	fakeExecAdapter
+	testExchangeAdapter
 }
 
 func (syncBalanceAdapter) GetBalances(context.Context, exchange.Credential, exchange.MarketType, []string) ([]exchange.Balance, error) {
@@ -67,7 +67,7 @@ func TestAccountService_Transfer_ValidAccounts_ShouldCreatePairedFlows(t *testin
 }
 
 func TestAccountService_SyncBalances_WithLinkedChannel_ShouldUpsert(t *testing.T) {
-	store := &syncBalanceStore{execOrderStore: execOrderStore{
+	store := &syncBalanceStore{testServiceStore: testServiceStore{
 		account: &Account{AccountID: "acc_1", ChannelID: "ch_1"},
 		channel: &TradeChannel{ChannelID: "ch_1", Exchange: "binance", MarketType: "spot", AccountID: "acc_1", APIKeyID: "ak_1"},
 		apiKey:  &APIKey{APIKeyID: "ak_1", APIKey: "k", APISecret: "s"},
@@ -80,24 +80,4 @@ func TestAccountService_SyncBalances_WithLinkedChannel_ShouldUpsert(t *testing.T
 	require.Len(t, got, 1)
 	assert.Equal(t, "USDT", got[0].Currency)
 	assert.Equal(t, "100", got[0].Available)
-}
-
-func TestApplyFills_FullFill_ShouldMarkFilled(t *testing.T) {
-	adapter := &fakeExecAdapter{}
-	svc, store := newExecOrderService(t, adapter)
-	ctx := context.Background()
-	require.NoError(t, svc.store.SaveOrder(ctx, "crypto", &Order{
-		OrderID: "o-full", AccountID: "acc_1", ChannelID: "ch_1", Exchange: "binance",
-		Symbol: "BTCUSDT", Side: "buy", Quantity: "2", Price: "100", Status: int(exchange.StatusSubmitted),
-	}))
-	err := svc.ApplyFills(ctx, "crypto", "o-full", []*exchange.Trade{
-		{Price: "100", Quantity: "1"},
-		{Price: "100", Quantity: "1", Fee: "0.05", FeeCurrency: "USDT"},
-	})
-	require.NoError(t, err)
-	updated, err := svc.store.GetOrder(ctx, "crypto", "o-full", "")
-	require.NoError(t, err)
-	assert.Equal(t, "2", updated.FilledQty)
-	assert.Equal(t, int(exchange.StatusFilled), updated.Status)
-	assert.Len(t, store.trades, 2)
 }

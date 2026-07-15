@@ -63,28 +63,6 @@ func (s stubStore) DeleteChannel(context.Context, string, string) error { return
 func (s stubStore) ListChannels(context.Context, string, service.ChannelFilter, service.Page) ([]*service.TradeChannel, int, error) {
 	return nil, 0, nil
 }
-func (s stubStore) SaveOrder(context.Context, string, *service.Order) error { return nil }
-func (s stubStore) UpsertOrders(context.Context, string, []*service.Order) error {
-	return nil
-}
-func (s stubStore) UpdateOrder(context.Context, string, *service.Order) error { return nil }
-func (s stubStore) GetOrder(context.Context, string, string, string) (*service.Order, error) {
-	return nil, nil
-}
-func (s stubStore) ListOrders(context.Context, string, service.OrderFilter, service.Page) ([]*service.Order, int, error) {
-	return nil, 0, nil
-}
-func (s stubStore) AppendTrades(context.Context, string, []*service.Trade) error { return nil }
-func (s stubStore) ListTrades(context.Context, string, service.TradeFilter, service.Page) ([]*service.Trade, int, error) {
-	return nil, 0, nil
-}
-func (s stubStore) UpsertPositions(context.Context, string, []*service.Position) error { return nil }
-func (s stubStore) ReplacePositions(context.Context, string, string, string, []*service.Position) error {
-	return nil
-}
-func (s stubStore) ListPositions(context.Context, string, string, string) ([]*service.Position, error) {
-	return nil, nil
-}
 func (s stubStore) AppendOrderOperation(context.Context, string, *service.OrderOperation) error {
 	return nil
 }

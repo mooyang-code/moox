@@ -252,7 +252,7 @@ enum OrderType {
   ORDER_TYPE_FOK = 6;         // 全部成交或取消
 }
 
-// OrderStatus 订单状态（与 t_orders.c_status 对齐）。
+// OrderStatus 订单状态（由 Trade Kernel 聚合状态映射）。
 enum OrderStatus {
   ORDER_STATUS_PENDING = 0;          // 待提交
   ORDER_STATUS_SUBMITTED = 1;        // 已提交
@@ -305,7 +305,7 @@ message Instrument {
   string last_price = 10;
 }
 
-// Order 订单（对应 t_orders）。
+// Order 订单（由 Trade Kernel 订单聚合返回）。
 message Order {
   string order_id = 1;
   string client_order_id = 2;
@@ -339,7 +339,7 @@ message Order {
   int64 updated_at = 30;
 }
 
-// Trade 成交明细（对应 t_trades）。
+// Trade 成交明细（由 Trade Kernel Fill 事实返回）。
 message Trade {
   string trade_id = 1;
   string exchange_trade_id = 2;
@@ -359,7 +359,7 @@ message Trade {
   int64 traded_at = 16;
 }
 
-// Position 持仓（对应 t_positions）。
+// Position 持仓（由 Trade Kernel 成交事实投影）。
 message Position {
   string position_id = 1;
   string account_id = 2;

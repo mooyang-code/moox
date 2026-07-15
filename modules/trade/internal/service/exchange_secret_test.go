@@ -21,20 +21,18 @@ func (f fakeExchangeSecretSource) ListExchangeSecrets(ctx context.Context, provi
 
 type importSecretStore struct {
 	Store
-	accounts  map[string]*Account
-	keys      map[string]*APIKey
-	channels  map[string]*TradeChannel
-	balances  map[string][]*Balance
-	positions map[string][]*Position
+	accounts map[string]*Account
+	keys     map[string]*APIKey
+	channels map[string]*TradeChannel
+	balances map[string][]*Balance
 }
 
 func newImportSecretStore() *importSecretStore {
 	return &importSecretStore{
-		accounts:  map[string]*Account{},
-		keys:      map[string]*APIKey{},
-		channels:  map[string]*TradeChannel{},
-		balances:  map[string][]*Balance{},
-		positions: map[string][]*Position{},
+		accounts: map[string]*Account{},
+		keys:     map[string]*APIKey{},
+		channels: map[string]*TradeChannel{},
+		balances: map[string][]*Balance{},
 	}
 }
 
@@ -105,19 +103,6 @@ func (s *importSecretStore) UpsertBalances(ctx context.Context, spaceID string, 
 
 func (s *importSecretStore) GetBalances(ctx context.Context, spaceID, accountID string, currencies []string) ([]*Balance, error) {
 	return s.balances[accountID], nil
-}
-
-func (s *importSecretStore) ReplacePositions(ctx context.Context, spaceID, accountID, symbol string, positions []*Position) error {
-	for _, p := range positions {
-		cp := *p
-		cp.SpaceID = spaceID
-		s.positions[accountID] = append(s.positions[accountID], &cp)
-	}
-	return nil
-}
-
-func (s *importSecretStore) ListPositions(ctx context.Context, spaceID, accountID, symbol string) ([]*Position, error) {
-	return s.positions[accountID], nil
 }
 
 func TestSyncExchangeAccountsImportsBinanceSecrets(t *testing.T) {
@@ -291,11 +276,5 @@ func TestSyncExchangeAccountsWithSnapshotsImportsBalancesAndSwapPositions(t *tes
 	swapID := deterministicID("acc", "secret-both|swap")
 	if len(store.balances[spotID]) == 0 || len(store.balances[swapID]) == 0 {
 		t.Fatalf("balances not synced: spot=%v swap=%v", store.balances[spotID], store.balances[swapID])
-	}
-	if got := store.positions[swapID]; len(got) != 1 || got[0].Symbol != "STOUSDT" {
-		t.Fatalf("swap positions not synced: %+v", got)
-	}
-	if got := store.positions[spotID]; len(got) != 0 {
-		t.Fatalf("spot account should not sync contract positions: %+v", got)
 	}
 }

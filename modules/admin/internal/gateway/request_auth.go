@@ -117,7 +117,7 @@ func readAndRestoreBody(r *http.Request) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := readBoundedBody(r.Body)
 	if err != nil {
 		return nil, err
 	}

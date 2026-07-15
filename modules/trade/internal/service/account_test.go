@@ -117,26 +117,6 @@ func (m *memoryAccountStore) ListChannels(_ context.Context, _ string, _ Channel
 	}
 	return out, len(out), nil
 }
-func (m *memoryAccountStore) SaveOrder(context.Context, string, *Order) error      { return nil }
-func (m *memoryAccountStore) UpsertOrders(context.Context, string, []*Order) error { return nil }
-func (m *memoryAccountStore) UpdateOrder(context.Context, string, *Order) error    { return nil }
-func (m *memoryAccountStore) GetOrder(context.Context, string, string, string) (*Order, error) {
-	return nil, ErrNotFound
-}
-func (m *memoryAccountStore) ListOrders(context.Context, string, OrderFilter, Page) ([]*Order, int, error) {
-	return nil, 0, nil
-}
-func (m *memoryAccountStore) AppendTrades(context.Context, string, []*Trade) error { return nil }
-func (m *memoryAccountStore) ListTrades(context.Context, string, TradeFilter, Page) ([]*Trade, int, error) {
-	return nil, 0, nil
-}
-func (m *memoryAccountStore) UpsertPositions(context.Context, string, []*Position) error { return nil }
-func (m *memoryAccountStore) ReplacePositions(context.Context, string, string, string, []*Position) error {
-	return nil
-}
-func (m *memoryAccountStore) ListPositions(context.Context, string, string, string) ([]*Position, error) {
-	return nil, nil
-}
 func (m *memoryAccountStore) AppendOrderOperation(context.Context, string, *OrderOperation) error {
 	return nil
 }

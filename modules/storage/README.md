@@ -577,6 +577,8 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 | `WriteTimeSeriesRows` / `ReadTimeSeriesRows` | 写入/读取固定 `subject_id + freq` 下按 `data_time` 演进的时序数据 |
 | `WriteRecordRows` / `ReadRecordRows` | 写入/读取记录数据，按 `record_id + version` 定位 |
 
+批量写入按主存目标分组提交，跨目标请求不保证整体原子性。`WriteTimeSeriesRowsRsp.written_keys` 和 `WriteRecordRowsRsp.keys` 在后续目标失败时仍会返回此前已经提交的键，调用方可据此只重试未提交部分。
+
 ### DataView — 用户侧查询（端口 20103 / HTTP 20202）
 
 | RPC | 说明 |

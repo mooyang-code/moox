@@ -102,27 +102,6 @@ func TestServer_SetLeverage_ValidChannel_ShouldSucceed(t *testing.T) {
 	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
-func TestServer_AmendOrder_ServicePath_ShouldUpdatePrice(t *testing.T) {
-	svc, h := newRPCStubService(t)
-	ctx := rpcCtx(t, "crypto", "user-1")
-	accountID, channelID := seedLinkedAccountChannel(t, svc, h, ctx)
-	require.NoError(t, svc.Account.UpsertBalances(ctx, "crypto", []*service.Balance{{
-		AccountID: accountID, Currency: "USDT", Available: "1000", Total: "1000",
-	}}))
-	placeRsp, err := h.PlaceOrder(ctx, &tradepb.PlaceOrderReq{
-		AccountId: accountID, ChannelId: channelID, Symbol: "BTCUSDT",
-		Side: tradepb.OrderSide_ORDER_SIDE_BUY, OrderType: tradepb.OrderType_ORDER_TYPE_LIMIT,
-		Quantity: "1", Price: "100",
-	})
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, placeRsp.RetInfo.Code)
-	rsp, err := h.AmendOrder(ctx, &tradepb.AmendOrderReq{
-		ChannelId: channelID, OrderId: placeRsp.OrderId, NewPrice: "110",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
-}
-
 func TestServer_Transfer_BetweenAccounts_ShouldSucceed(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
@@ -372,6 +351,37 @@ func TestServer_ListTrades_KernelEmpty_ShouldSucceed(t *testing.T) {
 	_ = engine
 }
 
+type syncFillKernelAdapter struct{ kernelTradeAdapter }
+
+func (syncFillKernelAdapter) ListFills(context.Context, string, string) ([]exchange.FillEvent, error) {
+	return []exchange.FillEvent{{
+		ExchangeTradeID: "fill-sync-1", Symbol: "BTC-USDT", Side: "BUY",
+		BaseAsset: "BTC", QuoteAsset: "USDT", Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("10"), Fee: shared.Zero(),
+	}}, nil
+}
+
+func TestServer_SyncTradesWritesFactsReadByListTrades(t *testing.T) {
+	ks, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ks.Close() })
+	seedKernelBalance(t, ks)
+	engine := &command.Engine{Store: ks, Adapter: syncFillKernelAdapter{}}
+	seedKernelOpenOrder(t, engine, "ord-sync")
+	h := New(nil, engine)
+	ctx := rpcCtx(t, "crypto", "user-1")
+
+	syncRsp, err := h.SyncTrades(ctx, &tradepb.SyncTradesReq{AccountId: "acct-1", OrderId: "ord-sync", Symbol: "BTC-USDT", Page: &tradepb.Page{Page: 1, Size: 10}})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, syncRsp.GetRetInfo().GetCode())
+	require.Len(t, syncRsp.GetTrades(), 1)
+
+	listRsp, err := h.ListTrades(ctx, &tradepb.ListTradesReq{AccountId: "acct-1", OrderId: "ord-sync", Symbol: "BTC-USDT", Page: &tradepb.Page{Page: 1, Size: 10}})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, listRsp.GetRetInfo().GetCode())
+	require.Len(t, listRsp.GetTrades(), 1)
+	assert.Equal(t, syncRsp.GetTrades()[0].GetTradeId(), listRsp.GetTrades()[0].GetTradeId())
+}
+
 func openKernelStore(t *testing.T) *store.Store {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
@@ -591,7 +601,7 @@ func TestServer_PlaceOrder_InvalidChannel_ShouldReject(t *testing.T) {
 	assert.NotEqual(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 }
 
-func TestServer_PlaceOrder_ValidRequest_ShouldSucceed(t *testing.T) {
+func TestServer_PlaceOrder_WithoutKernel_ShouldFail(t *testing.T) {
 	svc, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accRsp, err := h.CreateAccount(ctx, &tradepb.CreateAccountReq{AccountName: "trade-acc"})
@@ -619,8 +629,7 @@ func TestServer_PlaceOrder_ValidRequest_ShouldSucceed(t *testing.T) {
 		Quantity: "1", Price: "100", ClientOrderId: "rpc-cli-1",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
-	assert.NotEmpty(t, rsp.OrderId)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func TestServer_CancelOrder_MissingOrder_ShouldFail(t *testing.T) {
@@ -642,13 +651,13 @@ func TestServer_AmendOrder_InvalidParams_ShouldReject(t *testing.T) {
 	assert.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.RetInfo.Code)
 }
 
-func TestServer_CancelAllOrders_ValidChannel_ShouldReturnCount(t *testing.T) {
+func TestServer_CancelAllOrders_WithoutKernel_ShouldFail(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	_, channelID := seedAccountChannel(t, h, ctx)
 	rsp, err := h.CancelAllOrders(ctx, &tradepb.CancelAllOrdersReq{ChannelId: channelID})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func seedAccountChannel(t *testing.T, h *Server, ctx context.Context) (accountID, channelID string) {
@@ -700,51 +709,6 @@ func TestServer_ListChannels_ShouldReturnCreatedChannel(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, rsp.Channels)
 	assert.Equal(t, channelID, rsp.Channels[0].ChannelId)
-}
-
-func TestServer_ListOrders_AfterSave_ShouldReturnOrder(t *testing.T) {
-	svc, store := newRPCTestService(t)
-	h := New(svc)
-	ctx := rpcCtx(t, "crypto", "user-1")
-	accountID, channelID := seedAccountChannel(t, h, ctx)
-	require.NoError(t, store.SaveOrder(ctx, "crypto", &service.Order{
-		OrderID: "ord-1", ClientOrderID: "client-1", AccountID: accountID, ChannelID: channelID,
-		Exchange: "binance", Symbol: "BTCUSDT", MarketType: "spot", Side: "buy", OrderType: "limit", Status: 1,
-	}))
-	rsp, err := h.ListOrders(ctx, &tradepb.ListOrdersReq{AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10}})
-	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
-	require.Len(t, rsp.Orders, 1)
-	assert.Equal(t, "ord-1", rsp.Orders[0].OrderId)
-}
-
-func TestServer_GetOrder_ShouldReturnSavedOrder(t *testing.T) {
-	svc, store := newRPCTestService(t)
-	h := New(svc)
-	ctx := rpcCtx(t, "crypto", "user-1")
-	accountID, channelID := seedAccountChannel(t, h, ctx)
-	require.NoError(t, store.SaveOrder(ctx, "crypto", &service.Order{
-		OrderID: "ord-2", ClientOrderID: "client-2", AccountID: accountID, ChannelID: channelID,
-		Exchange: "binance", Symbol: "ETHUSDT", MarketType: "spot", Side: "sell", OrderType: "market", Status: 3,
-	}))
-	rsp, err := h.GetOrder(ctx, &tradepb.GetOrderReq{OrderId: "ord-2"})
-	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
-	assert.Equal(t, "ETHUSDT", rsp.Order.Symbol)
-}
-
-func TestServer_ListPositions_AfterUpsert_ShouldReturnPosition(t *testing.T) {
-	svc, store := newRPCTestService(t)
-	h := New(svc)
-	ctx := rpcCtx(t, "crypto", "user-1")
-	accountID, _ := seedAccountChannel(t, h, ctx)
-	require.NoError(t, store.UpsertPositions(ctx, "crypto", []*service.Position{{
-		PositionID: "pos-1", AccountID: accountID, Symbol: "BTCUSDT", Quantity: "2", AvgPrice: "60000",
-	}}))
-	rsp, err := h.ListPositions(ctx, &tradepb.ListPositionsReq{AccountId: accountID})
-	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
-	require.Len(t, rsp.Positions, 1)
 }
 
 func TestServer_Transfer_InvalidParams_ShouldReject(t *testing.T) {
@@ -966,14 +930,14 @@ func (a rpcPingAdapter) Ping(context.Context, exchange.Credential) (int64, error
 	return a.latency, a.err
 }
 
-func TestServer_ListTrades_Empty_ShouldSucceed(t *testing.T) {
+func TestServer_ListTrades_WithoutKernel_ShouldFail(t *testing.T) {
 	svc, _ := newRPCTestService(t)
 	h := New(svc)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
 	rsp, err := h.ListTrades(ctx, &tradepb.ListTradesReq{AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func TestServer_UpdateChannel_ShouldPersist(t *testing.T) {
@@ -1096,39 +1060,37 @@ func seedLinkedAccountChannel(t *testing.T, svc *service.Service, h *Server, ctx
 	return accountID, channelID
 }
 
-func TestServer_SyncOrders_WithStubAdapter_ShouldReturnOrders(t *testing.T) {
-	svc, h := newRPCStubService(t)
+func TestServer_SyncOrders_WithoutKernel_ShouldFail(t *testing.T) {
+	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
 
 	rsp, err := h.SyncOrders(ctx, &tradepb.SyncOrdersReq{
-		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
+		AccountId: "account", Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
-func TestServer_SyncTrades_WithStubAdapter_ShouldSucceed(t *testing.T) {
-	svc, h := newRPCStubService(t)
+func TestServer_SyncTrades_WithoutKernel_ShouldFail(t *testing.T) {
+	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
-	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
 	rsp, err := h.SyncTrades(ctx, &tradepb.SyncTradesReq{
-		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
+		AccountId: "account", Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
-func TestServer_SyncPositions_WithStubAdapter_ShouldSucceed(t *testing.T) {
+func TestServer_SyncPositions_WithoutKernel_ShouldFail(t *testing.T) {
 	svc, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedLinkedAccountChannel(t, svc, h, ctx)
 	rsp, err := h.SyncPositions(ctx, &tradepb.SyncPositionsReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
-func TestServer_ListOrders_Empty_ShouldSucceed(t *testing.T) {
+func TestServer_ListOrders_WithoutKernel_ShouldFail(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
@@ -1136,16 +1098,16 @@ func TestServer_ListOrders_Empty_ShouldSucceed(t *testing.T) {
 		AccountId: accountID, Page: &tradepb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
-func TestServer_ListPositions_Empty_ShouldSucceed(t *testing.T) {
+func TestServer_ListPositions_WithoutKernel_ShouldFail(t *testing.T) {
 	_, h := newRPCStubService(t)
 	ctx := rpcCtx(t, "crypto", "user-1")
 	accountID, _ := seedAccountChannel(t, h, ctx)
 	rsp, err := h.ListPositions(ctx, &tradepb.ListPositionsReq{AccountId: accountID})
 	require.NoError(t, err)
-	assert.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
+	assert.Equal(t, tradepb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 }
 
 func TestServer_SyncExchangeAccounts_WithoutSecretSource_ShouldReject(t *testing.T) {

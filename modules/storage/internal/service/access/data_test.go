@@ -2,22 +2,22 @@ package access
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
+	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"path/filepath"
 	"runtime"
-	"testing"
-	"fmt"
-	"time"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
-	"google.golang.org/protobuf/proto"
-	"errors"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
 	"strings"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	"testing"
+	"time"
 )
 
 func TestMetadataMutationRefreshesCacheReader(t *testing.T) {
@@ -587,7 +587,7 @@ func TestTimeSeriesKeyAdapterRoundTrip(t *testing.T) {
 			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1m",
 			DataTime: "2026-07-10T12:00:00Z", Dimensions: map[string]string{"venue": "binance"},
 		},
-		Columns: []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns:    []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 		Attributes: map[string]string{"source": "test"},
 	}
 
@@ -682,6 +682,55 @@ func TestWriteTimeSeriesRowsRoutesAndPublishes(t *testing.T) {
 	assert.Equal(t, 1, published)
 }
 
+func TestWriteTimeSeriesRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
+	ctx := context.Background()
+	primaryStore := &partialFailurePrimary{failNode: "node-2"}
+	svc := &Service{
+		validator: schema.NewValidator(writeValidatorMetadata{}),
+		router:    router.NewResolver(twoTargetRouteReader{}),
+		primary:   primaryStore,
+	}
+	rows := []*pb.TimeSeriesRow{
+		{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "A", Freq: "1m", DataTime: "2026-07-10T12:00:00Z"}, Columns: []*pb.ColumnValue{doubleColumn("close", 1.2)}},
+		{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "B", Freq: "1m", DataTime: "2026-07-10T12:01:00Z"}, Columns: []*pb.ColumnValue{doubleColumn("close", 1.3)}},
+	}
+
+	rsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: rows})
+	require.NoError(t, err)
+	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetWrittenKeys(), 1)
+	assert.Contains(t, rsp.GetWrittenKeys()[0], "A")
+	assert.Equal(t, []string{"node-1", "node-2"}, primaryStore.calls)
+}
+
+func TestWriteRecordRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
+	ctx := context.Background()
+	primaryStore := &partialFailurePrimary{failNode: "node-2"}
+	svc := &Service{
+		validator: schema.NewValidator(writeValidatorMetadata{record: true}),
+		router:    router.NewResolver(twoTargetRouteReader{}),
+		primary:   primaryStore,
+	}
+	rows := []*pb.RecordRow{
+		{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "kline", RecordId: "A", Version: "2026-07-10T12:00:00Z"}, Columns: []*pb.ColumnValue{stringColumn("title", "first")}},
+		{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "kline", RecordId: "B", Version: "2026-07-10T12:01:00Z"}, Columns: []*pb.ColumnValue{stringColumn("title", "second")}},
+	}
+
+	rsp, err := svc.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: rows})
+	require.NoError(t, err)
+	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetKeys(), 1)
+	assert.Equal(t, "A", rsp.GetKeys()[0].GetRecordId())
+}
+
+func doubleColumn(name string, value float64) *pb.ColumnValue {
+	return &pb.ColumnValue{ColumnName: name, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}
+}
+
+func stringColumn(name, value string) *pb.ColumnValue {
+	return &pb.ColumnValue{ColumnName: name, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}}
+}
+
 func TestWriteRecordRowsAssignsTimestampVersion(t *testing.T) {
 	ctx := context.Background()
 	primaryStore := &capturingPrimary{}
@@ -756,3 +805,43 @@ func (*capturingPrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.S
 }
 
 var _ primary.Client = (*capturingPrimary)(nil)
+
+type partialFailurePrimary struct {
+	failNode string
+	calls    []string
+}
+
+func (p *partialFailurePrimary) WriteRows(_ context.Context, target *pb.PrimaryStoreTarget, _ []*pb.PrimaryStoreRow) error {
+	p.calls = append(p.calls, target.GetNodeId())
+	if target.GetNodeId() == p.failNode {
+		return errors.New("injected target failure")
+	}
+	return nil
+}
+
+func (*partialFailurePrimary) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	return nil, nil, nil
+}
+
+func (*partialFailurePrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+	return nil, nil, nil
+}
+
+type twoTargetRouteReader struct{}
+
+func (twoTargetRouteReader) ListPrimaryStoreRoutes(context.Context, string, string, string, string, *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
+	return []*pb.PrimaryStoreRoute{
+		{SpaceId: "crypto", DatasetId: "kline", RouteId: "route-a", SubjectPattern: "A", NodeId: "node-1", Status: "active"},
+		{SpaceId: "crypto", DatasetId: "kline", RouteId: "route-b", SubjectPattern: "B", NodeId: "node-2", Status: "active"},
+	}, &pb.PageResult{}, nil
+}
+
+func (twoTargetRouteReader) GetPrimaryStoreNode(_ context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
+	return &pb.PrimaryStoreNode{NodeId: nodeID, Status: "active"}, nil
+}
+
+func (twoTargetRouteReader) ListDevices(_ context.Context, nodeID, _ string, _ *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
+	return []*pb.Device{{DeviceId: "device-" + nodeID, NodeId: nodeID, Engine: "pebble", Status: "active"}}, &pb.PageResult{}, nil
+}
+
+var _ primary.Client = (*partialFailurePrimary)(nil)
