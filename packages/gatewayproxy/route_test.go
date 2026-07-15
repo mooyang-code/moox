@@ -149,3 +149,42 @@ func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
 		t.Fatalf("disabled state not retained: enabled=%v disabled=%v", enabled.Disabled, disabled.Disabled)
 	}
 }
+
+func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testing.T) {
+	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments", "GetGatewayNodeRoutes", "ListActiveServiceDeployments"}}
+	snapshot, err := NormalizeAndHash("node-1", []Route{route})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot.Routes[0]
+	if len(got.AllowedMethods) != 2 || got.AllowedMethods[0] != "GetGatewayNodeRoutes" || got.AllowedMethods[1] != "ListActiveServiceDeployments" {
+		t.Fatalf("allowed methods = %v", got.AllowedMethods)
+	}
+	if !got.AllowsMethod("ListActiveServiceDeployments") || got.AllowsMethod("CreateGatewayNode") {
+		t.Fatalf("unexpected authorization: %+v", got)
+	}
+	unrestricted := Route{}
+	if !unrestricted.AllowsMethod("Anything") {
+		t.Fatal("empty allowlist should allow ordinary routes")
+	}
+	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.RouteHash == without.RouteHash {
+		t.Fatal("allowed methods missing from hash")
+	}
+	route.AllowedMethods[0] = "Mutated"
+	if snapshot.Routes[0].AllowedMethods[1] != "ListActiveServiceDeployments" {
+		t.Fatal("normalization retained caller method storage")
+	}
+}
+
+func TestNormalizeAllowedMethodsRejectsUnsafeNames(t *testing.T) {
+	for _, method := range []string{"", "../Delete", "Service.Method", "With/Slash", "has space"} {
+		_, err := NormalizeAndHash("node-1", []Route{{ServiceID: "svc", Address: "127.0.0.1:1", ServicePath: "trpc.test.Service", AllowedMethods: []string{method}}})
+		if err == nil {
+			t.Fatalf("unsafe method %q accepted", method)
+		}
+	}
+}

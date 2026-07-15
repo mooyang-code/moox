@@ -12,9 +12,15 @@ import (
 )
 
 type routeExtraConfig struct {
-	TimeoutMS    *int64 `json:"timeout_ms"`
-	MaxBodyBytes *int64 `json:"max_body_bytes"`
+	TimeoutMS      *int64   `json:"timeout_ms"`
+	MaxBodyBytes   *int64   `json:"max_body_bytes"`
+	GatewayMethods []string `json:"gateway_methods"`
 }
+
+type RouteConfigError struct{ Err error }
+
+func (err *RouteConfigError) Error() string { return err.Err.Error() }
+func (err *RouteConfigError) Unwrap() error { return err.Err }
 
 func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
 	var snapshot gatewayproxy.Snapshot
@@ -43,9 +49,9 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 		for _, row := range rows {
 			extra, err := parseRouteExtraConfig(row.ExtraConfig)
 			if err != nil {
-				return gatewayproxy.Snapshot{}, fmt.Errorf("deployment %s/%s extra_config: %w", row.NodeID, row.ServiceName, err)
+				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("deployment %s/%s extra_config: %w", row.NodeID, row.ServiceName, err)}
 			}
-			route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port))), ServicePath: row.GatewayPath}
+			route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods}
 			if extra.TimeoutMS != nil {
 				route.TimeoutMS = *extra.TimeoutMS
 			}
@@ -57,7 +63,7 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 	}
 	snapshot, err := gatewayproxy.NormalizeAndHashState(nodeID, node.Status == "disabled", routes)
 	if err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
 	}
 	if err := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}).Error; err != nil {
 		return gatewayproxy.Snapshot{}, err
@@ -84,6 +90,11 @@ func parseRouteExtraConfig(raw string) (routeExtraConfig, error) {
 			return extra, fmt.Errorf("%s must be an integer", key)
 		}
 		*target = &decoded
+	}
+	if value, ok := object["gateway_methods"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayMethods) != nil {
+			return extra, fmt.Errorf("gateway_methods must be an array of strings")
+		}
 	}
 	return extra, nil
 }

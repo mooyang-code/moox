@@ -26,11 +26,24 @@ var (
 )
 
 type Route struct {
-	ServiceID    string `json:"service_id,omitempty"`
-	Address      string `json:"address,omitempty"`
-	ServicePath  string `json:"service_path,omitempty"`
-	TimeoutMS    int64  `json:"timeout_ms,omitempty"`
-	MaxBodyBytes int64  `json:"max_body_bytes,omitempty"`
+	ServiceID      string   `json:"service_id,omitempty"`
+	Address        string   `json:"address,omitempty"`
+	ServicePath    string   `json:"service_path,omitempty"`
+	TimeoutMS      int64    `json:"timeout_ms,omitempty"`
+	MaxBodyBytes   int64    `json:"max_body_bytes,omitempty"`
+	AllowedMethods []string `json:"allowed_methods,omitempty"`
+}
+
+func (route Route) AllowsMethod(method string) bool {
+	if len(route.AllowedMethods) == 0 {
+		return true
+	}
+	for _, allowed := range route.AllowedMethods {
+		if allowed == method {
+			return true
+		}
+	}
+	return false
 }
 
 type Snapshot struct {
@@ -93,6 +106,18 @@ func NormalizeAndHash(nodeID string, routes []Route) (Snapshot, error) {
 func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapshot, error) {
 	normalized := append([]Route(nil), routes...)
 	for index := range normalized {
+		methods := append([]string(nil), normalized[index].AllowedMethods...)
+		sort.Strings(methods)
+		deduplicated := methods[:0]
+		for _, method := range methods {
+			if !methodPattern.MatchString(method) {
+				return Snapshot{}, fmt.Errorf("route %d: allowed method %q must be a safe method segment", index, method)
+			}
+			if len(deduplicated) == 0 || deduplicated[len(deduplicated)-1] != method {
+				deduplicated = append(deduplicated, method)
+			}
+		}
+		normalized[index].AllowedMethods = deduplicated
 		normalizeRouteDefaults(&normalized[index])
 		if err := ValidateRoute(normalized[index]); err != nil {
 			return Snapshot{}, fmt.Errorf("route %d: %w", index, err)

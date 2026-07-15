@@ -189,6 +189,7 @@ message GatewayRoute {
   string service_path = 3;
   int32 timeout_ms = 4;
   int64 max_body_bytes = 5;
+  repeated string allowed_methods = 6;
 }
 
 message GetGatewayNodeRoutesReq {

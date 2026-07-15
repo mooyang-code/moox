@@ -29,6 +29,7 @@ func (table *Table) Resolve(serviceID string) (Route, bool) {
 	}
 	for _, route := range snapshot.Routes {
 		if route.ServiceID == serviceID {
+			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
 			return route, true
 		}
 	}

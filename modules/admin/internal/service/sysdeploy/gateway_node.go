@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -61,7 +62,10 @@ func (s *ServiceImpl) UpdateGatewayNode(ctx context.Context, req *pb.UpdateGatew
 		code := gatewayNodeDAOErrorCode(err)
 		return &pb.UpdateGatewayNodeRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
-	row, _ := s.dao.GetGatewayNode(ctx, node.NodeID)
+	row, err := s.dao.GetGatewayNode(ctx, node.NodeID)
+	if err != nil {
+		return &pb.UpdateGatewayNodeRsp{RetInfo: retErr(gatewayNodeDAOErrorCode(err), err.Error())}, nil
+	}
 	return &pb.UpdateGatewayNodeRsp{RetInfo: retOK(), Node: gatewayNodeToPB(row)}, nil
 }
 
@@ -77,7 +81,7 @@ func (s *ServiceImpl) DeleteGatewayNode(ctx context.Context, req *pb.DeleteGatew
 }
 
 func gatewayNodeDAOErrorCode(err error) pb.ErrorCode {
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return pb.ErrorCode_NOT_FOUND
 	}
 	message := err.Error()
@@ -93,15 +97,20 @@ func (s *ServiceImpl) GetGatewayNodeRoutes(ctx context.Context, req *pb.GetGatew
 	}
 	snapshot, err := s.CompileGatewaySnapshot(ctx, req.GetNodeId())
 	if err != nil {
-		code := pb.ErrorCode_INVALID_PARAM
-		if err == gorm.ErrRecordNotFound {
+		code := pb.ErrorCode_INNER_ERR
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			code = pb.ErrorCode_NOT_FOUND
+		} else {
+			var configErr *RouteConfigError
+			if errors.As(err, &configErr) {
+				code = pb.ErrorCode_INVALID_PARAM
+			}
 		}
 		return &pb.GetGatewayNodeRoutesRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
 	routes := make([]*pb.GatewayRoute, 0, len(snapshot.Routes))
 	for _, route := range snapshot.Routes {
-		routes = append(routes, &pb.GatewayRoute{ServiceId: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, TimeoutMs: int32(route.TimeoutMS), MaxBodyBytes: route.MaxBodyBytes})
+		routes = append(routes, &pb.GatewayRoute{ServiceId: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, TimeoutMs: int32(route.TimeoutMS), MaxBodyBytes: route.MaxBodyBytes, AllowedMethods: append([]string(nil), route.AllowedMethods...)})
 	}
 	return &pb.GetGatewayNodeRoutesRsp{RetInfo: retOK(), NodeId: snapshot.NodeID, RouteHash: snapshot.RouteHash, GeneratedAt: snapshot.GeneratedAt.Format(time.RFC3339Nano), Disabled: snapshot.Disabled, Routes: routes}, nil
 }

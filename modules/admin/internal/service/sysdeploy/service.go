@@ -3,6 +3,7 @@ package sysdeploy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -49,7 +50,7 @@ func NewService(dbManager *database.Manager) *ServiceImpl {
 func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
 	nodeID := localNodeID()
 	node, err := s.dao.GetGatewayNode(ctx, nodeID)
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		node := &GatewayNode{NodeID: nodeID, Name: nodeID, PublicAddress: "https://" + defaultPublicHost, Status: "enabled"}
 		if err := s.dao.CreateGatewayNode(ctx, node); err != nil {
 			return err
@@ -113,7 +114,7 @@ func (s *ServiceImpl) GetServiceDeployment(ctx context.Context, req *pb.GetServi
 	}
 	row, err := s.dao.Get(ctx, req.GetNodeId(), req.GetServiceName())
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "服务部署信息不存在")}, nil
 		}
 		log.ErrorContextf(ctx, "[SysDeploy] GetServiceDeployment failed: %v", err)
@@ -128,7 +129,10 @@ func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.Creat
 		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if _, err := s.dao.GetGatewayNode(ctx, item.NodeID); err != nil {
-		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "gateway node not found")}, nil
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "gateway node not found")}, nil
+		}
+		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "query gateway node failed")}, nil
 	}
 	if err := s.dao.Create(ctx, item); err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] CreateServiceDeployment failed: %v", err)
@@ -157,7 +161,7 @@ func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.Updat
 	if err := s.dao.Update(ctx, nodeID, serviceName, item); err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] UpdateServiceDeployment failed: %v", err)
 		code := pb.ErrorCode_INNER_ERR
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			code = pb.ErrorCode_NOT_FOUND
 		}
 		if isUniqueConstraintError(err) {
@@ -184,7 +188,7 @@ func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.Delet
 	if err := s.dao.Delete(ctx, nodeID, serviceName); err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] DeleteServiceDeployment failed: %v", err)
 		code := pb.ErrorCode_INNER_ERR
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			code = pb.ErrorCode_NOT_FOUND
 		}
 		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil

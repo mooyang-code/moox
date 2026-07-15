@@ -100,3 +100,24 @@ func TestTableAcceptsStateAwareEnabledAndDisabledHashes(t *testing.T) {
 		}
 	}
 }
+
+func TestTableDeepCopiesAllowedMethods(t *testing.T) {
+	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Routes[0].AllowedMethods[0] = "DeleteGatewayNode"
+	route, ok := table.Resolve("sysdeploy")
+	if !ok || !route.AllowsMethod("ListActiveServiceDeployments") || route.AllowsMethod("DeleteGatewayNode") {
+		t.Fatalf("table methods mutated: %+v", route)
+	}
+	route.AllowedMethods[0] = "CreateGatewayNode"
+	again, _ := table.Resolve("sysdeploy")
+	if !again.AllowsMethod("ListActiveServiceDeployments") {
+		t.Fatalf("resolved method slice was live: %+v", again)
+	}
+}

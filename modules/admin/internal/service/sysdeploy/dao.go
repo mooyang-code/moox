@@ -72,7 +72,7 @@ func (d *DAO) Update(ctx context.Context, nodeID, serviceName string, item *Depl
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("service deployment not found: %s", serviceName)
+		return fmt.Errorf("service deployment not found: %s: %w", serviceName, gorm.ErrRecordNotFound)
 	}
 	return nil
 }
@@ -90,7 +90,7 @@ func (d *DAO) Delete(ctx context.Context, nodeID, serviceName string) error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("service deployment not found: %s", serviceName)
+		return fmt.Errorf("service deployment not found: %s: %w", serviceName, gorm.ErrRecordNotFound)
 	}
 	return nil
 }
