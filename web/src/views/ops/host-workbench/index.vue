@@ -29,7 +29,7 @@
         </a-tab-pane>
       </a-tabs>
 
-      <a-modal v-model:visible="terminalVisible" title="SSH 终端" :width="1100" :footer="false" :esc-to-close="false" unmount-on-close @close="clearTerminal">
+      <a-modal v-model:visible="terminalVisible" :title="terminalTitle" :width="1100" :footer="false" :esc-to-close="false" unmount-on-close @close="clearTerminal">
         <div class="terminal-modal-body"><SshTerminal v-if="terminalHostId" :initial-host-id="terminalHostId" disconnect-on-unmount /></div>
       </a-modal>
 
@@ -70,6 +70,10 @@ const terminalHostId = ref<number>();
 const fileManagerVisible = ref(false);
 const fileManagerLoading = ref(false);
 const fileManagerSessionId = ref('');
+const terminalTitle = computed(() => {
+  const address = sshHosts.value.find((host) => host.id === terminalHostId.value)?.address;
+  return address ? `SSH 终端 - ${address}` : 'SSH 终端';
+});
 const rows = computed<HostWorkbenchRow[]>(() => mergeHostWorkbenchRows(monitors.value, sshHosts.value, sessions.value));
 const monitorByHostId = computed(() => Object.fromEntries(rows.value.filter((row) => row.ssh?.id !== undefined && row.monitor).map((row) => [row.ssh!.id, row.monitor])));
 const monitorOnlyHosts = computed(() => rows.value.filter((row) => row.monitor && !row.ssh).map((row) => row.monitor!));
