@@ -13,6 +13,7 @@ const required = [
   ':bordered="{ cell: true }"',
   ':scroll="{ x: 1810 }"',
   'class="task-id-button"',
+  'justify-content: flex-start;',
   '<icon-eye />',
   'type="primary"',
   'size="mini"',

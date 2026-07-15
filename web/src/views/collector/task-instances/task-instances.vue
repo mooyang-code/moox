@@ -430,14 +430,20 @@ onMounted(() => {
 
 .task-id-button {
   height: auto;
+  width: 100%;
   max-width: 100%;
+  justify-content: flex-start;
+  overflow: hidden;
   padding: 0;
   color: #165dff;
 }
 
 .task-id-button :deep(.arco-btn-content) {
+  display: block;
+  width: 100%;
   max-width: 100%;
   overflow: hidden;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
