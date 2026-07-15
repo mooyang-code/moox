@@ -26,8 +26,8 @@ func (err *RouteConfigError) Error() string        { return err.Err.Error() }
 func (err *RouteConfigError) Unwrap() error        { return err.Err }
 func (err *RouteConfigError) Is(target error) bool { return target == ErrInvalidGatewayRoute }
 
-func requiresMethodAllowlist(serviceID string) bool {
-	return serviceID == "sysdeploy" || serviceID == "secret"
+func requiresMethodAllowlist(serviceID, servicePath string) bool {
+	return serviceID == "sysdeploy" || serviceID == "secret" || servicePath == "trpc.moox.ops.SysDeploy" || servicePath == "trpc.moox.ops.SecretMgr"
 }
 
 func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
@@ -59,7 +59,7 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 			if err != nil {
 				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("deployment %s/%s extra_config: %w", row.NodeID, row.ServiceName, err)}
 			}
-			if requiresMethodAllowlist(row.GatewayServiceID) && len(extra.GatewayMethods) == 0 {
+			if requiresMethodAllowlist(row.GatewayServiceID, row.GatewayPath) && len(extra.GatewayMethods) == 0 {
 				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("%s requires nonempty gateway_methods", row.GatewayServiceID)}
 			}
 			route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods}

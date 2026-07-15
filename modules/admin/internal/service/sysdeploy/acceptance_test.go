@@ -352,6 +352,35 @@ func TestSensitiveGatewayDeploymentsRequireNonemptyMethodsOnCreateUpdateAndCompi
 	assert.ErrorIs(t, err, ErrInvalidGatewayRoute)
 }
 
+func TestSensitiveGatewayPathsRequireMethodsEvenWithAliasServiceID(t *testing.T) {
+	for _, tc := range []struct{ name, servicePath, alias, allowed string }{
+		{name: "sysdeploy alias", servicePath: "trpc.moox.ops.SysDeploy", alias: "ops_alias", allowed: "ListActiveServiceDeployments"},
+		{name: "secret alias", servicePath: "trpc.moox.ops.SecretMgr", alias: "secret_alias", allowed: "ListSecrets"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupEmptySysDeployTestDB(t)
+			svc := newTestService(db)
+			ctx := context.Background()
+			require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
+			makePB := func(extra string) *pb.ServiceDeployment {
+				return &pb.ServiceDeployment{NodeId: "node-a", ServiceName: "aliased", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: tc.servicePath, GatewayServiceId: tc.alias, GatewayEnabled: true, Status: "active", ExtraConfig: extra}
+			}
+			created, err := svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{}`)})
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, created.GetRetInfo().GetCode())
+			created, err = svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{"gateway_methods":["` + tc.allowed + `"]}`)})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
+			updated, err := svc.UpdateServiceDeployment(ctx, &pb.UpdateServiceDeploymentReq{NodeId: "node-a", ServiceName: "aliased", Deployment: makePB(`{"gateway_methods":[]}`)})
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, updated.GetRetInfo().GetCode())
+			require.NoError(t, db.Model(&Deployment{}).Where("c_node_id = ? AND c_service_name = ?", "node-a", "aliased").Update("c_extra_config", `{}`).Error)
+			_, err = svc.CompileGatewaySnapshot(ctx, "node-a")
+			assert.ErrorIs(t, err, ErrInvalidGatewayRoute)
+		})
+	}
+}
+
 func TestCompileGatewaySnapshotGatewayMethodsStrictAndNormalized(t *testing.T) {
 	dao := NewDAO(setupEmptySysDeployTestDB(t))
 	ctx := context.Background()

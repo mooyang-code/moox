@@ -323,7 +323,7 @@ func validateDeployment(item *Deployment) error {
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
 		}
-		if requiresMethodAllowlist(item.GatewayServiceID) && len(extra.GatewayMethods) == 0 {
+		if requiresMethodAllowlist(item.GatewayServiceID, item.GatewayPath) && len(extra.GatewayMethods) == 0 {
 			return fmt.Errorf("%w: %s requires nonempty gateway_methods", ErrInvalidGatewayRoute, item.GatewayServiceID)
 		}
 		route := gatewayproxy.Route{ServiceID: item.GatewayServiceID, Address: deploymentRPCAddress(item), ServicePath: item.GatewayPath, AllowedMethods: extra.GatewayMethods}
