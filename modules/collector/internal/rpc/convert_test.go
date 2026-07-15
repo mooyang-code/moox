@@ -8,6 +8,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -60,6 +61,9 @@ func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	})
 	assert.Equal(t, "task-1", instance.GetTaskId())
 	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS, instance.GetLastExecStatus())
+	encoded, err := protojson.Marshal(instance)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "plannedExecNode")
 }
 
 func TestStatusAndJSONHelpers(t *testing.T) {

@@ -21,22 +21,21 @@ var ErrTaskInstanceNotFound = errors.New("task instance not found")
 
 // TaskInstanceFilter describes task instance list filters.
 type TaskInstanceFilter struct {
-	SpaceID         string
-	TaskID          string
-	RuleID          string
-	Exchange        string
-	Market          string
-	DataType        string
-	DatasetID       string
-	SubjectID       string
-	Interval        string
-	PlannedExecNode string
-	LastExecNode    string
-	LastExecStatus  *int
-	Symbol          string
-	IncludeDeleted  bool
-	Page            int
-	PageSize        int
+	SpaceID        string
+	TaskID         string
+	RuleID         string
+	Exchange       string
+	Market         string
+	DataType       string
+	DatasetID      string
+	SubjectID      string
+	Interval       string
+	LastExecNode   string
+	LastExecStatus *int
+	Symbol         string
+	IncludeDeleted bool
+	Page           int
+	PageSize       int
 }
 
 // TaskInstanceRepository persists executable task instances.
@@ -88,7 +87,6 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_subject_id",
 			"c_symbol",
 			"c_interval",
-			"c_planned_exec_node",
 			"c_task_params",
 			"c_is_deleted",
 			"c_mtime",
@@ -172,9 +170,6 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 	}
 	if filter.Interval != "" {
 		q = q.Where("c_interval = ?", filter.Interval)
-	}
-	if filter.PlannedExecNode != "" {
-		q = q.Where("c_planned_exec_node = ?", filter.PlannedExecNode)
 	}
 	if filter.LastExecNode != "" {
 		q = q.Where("c_last_exec_node = ?", filter.LastExecNode)

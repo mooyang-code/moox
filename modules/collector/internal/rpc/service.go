@@ -226,7 +226,6 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 		repoFilter.DatasetID = filter.GetDatasetId()
 		repoFilter.SubjectID = filter.GetSubjectId()
 		repoFilter.Interval = filter.GetInterval()
-		repoFilter.PlannedExecNode = filter.GetPlannedExecNode()
 		repoFilter.LastExecNode = filter.GetLastExecNode()
 		repoFilter.Symbol = filter.GetSymbol()
 		repoFilter.IncludeDeleted = filter.GetIncludeDeleted()
