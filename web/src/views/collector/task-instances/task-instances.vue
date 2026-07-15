@@ -2,12 +2,8 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <div class="page-head">
-          <h2>任务实例</h2>
-        </div>
-
-        <section class="task-query-panel">
-          <a-space wrap class="task-filter-row">
+        <div class="task-toolbar">
+          <a-space wrap class="task-filters">
             <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
             <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
             <a-input v-model="form.plannedExecNode" placeholder="计划节点" allow-clear style="width: 150px" />
@@ -30,95 +26,94 @@
               <span>重置</span>
             </a-button>
           </a-space>
-        </section>
+        </div>
 
-        <section class="task-result-pane">
-          <a-table
-            row-key="TaskID"
-            size="small"
-            :data="instanceList"
-            :bordered="{ cell: true }"
-            :loading="loading"
-            :scroll="{ x: 1810, y: 500 }"
-            :pagination="paginationConfig"
-            :row-selection="{ type: 'checkbox', showCheckedAll: true }"
-            :selected-keys="selectedKeys"
-            @select="select"
-            @select-all="selectAll"
-            @page-change="onPageChange"
-            @page-size-change="onPageSizeChange"
-          >
-            <template #columns>
-              <a-table-column title="任务ID" data-index="TaskID" :width="200">
-                <template #cell="{ record }">
-                  <a-link @click="onViewDetails(record)">{{ record.TaskID }}</a-link>
-                </template>
-              </a-table-column>
-              <a-table-column title="规则ID" data-index="RuleID" :width="190">
-                <template #cell="{ record }">
-                  <a-tooltip :content="record.RuleID">
-                    <span class="ellipsis-text">{{ record.RuleID }}</span>
-                  </a-tooltip>
-                </template>
-              </a-table-column>
-              <a-table-column title="交易标的" data-index="Symbol" :width="180">
-                <template #cell="{ record }">
-                  <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="计划节点" data-index="PlannedExecNode" :width="160">
-                <template #cell="{ record }">
-                  <a-tooltip :content="record.PlannedExecNode">
-                    <span class="ellipsis-text">{{ record.PlannedExecNode }}</span>
-                  </a-tooltip>
-                </template>
-              </a-table-column>
-              <a-table-column title="最后执行节点" data-index="LastExecNode" :width="300">
-                <template #cell="{ record }">
-                  <a-tooltip :content="getLastExecNode(record)">
-                    <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
-                  </a-tooltip>
-                </template>
-              </a-table-column>
-              <a-table-column title="执行状态" :width="100" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" :color="getStatusColor(record.LastExecStatus)">
-                    {{ getStatusText(record.LastExecStatus) }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="有效性" :width="80" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" :color="record.IsDeleted ? 'red' : 'green'">
-                    {{ record.IsDeleted ? "无效" : "有效" }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="数据类型" :width="100" align="center">
-                <template #cell="{ record }">
-                  <a-tag color="purple" size="small">{{ record.DataType || "-" }}</a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="最后执行时间" :width="180">
-                <template #cell="{ record }">
-                  {{ formatDateTime(record.LastExecTime) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="任务创建时间" :width="180">
-                <template #cell="{ record }">
-                  {{ formatDateTime(record.CreateTime) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="操作" :width="100" align="center" fixed="right">
-                <template #cell="{ record }">
-                  <a-space>
-                    <a-button type="text" size="mini" @click="onViewDetails(record)">查看</a-button>
-                  </a-space>
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
-        </section>
+        <a-table
+          row-key="TaskID"
+          size="small"
+          :data="instanceList"
+          :bordered="{ cell: true }"
+          :loading="loading"
+          :scroll="{ x: 1810 }"
+          :pagination="paginationConfig"
+          @page-change="onPageChange"
+          @page-size-change="onPageSizeChange"
+        >
+          <template #columns>
+            <a-table-column title="任务ID" data-index="TaskID" :width="200">
+              <template #cell="{ record }">
+                <a-button class="task-id-button" type="text" @click="onViewDetails(record)">
+                  {{ record.TaskID }}
+                </a-button>
+              </template>
+            </a-table-column>
+            <a-table-column title="规则ID" data-index="RuleID" :width="190">
+              <template #cell="{ record }">
+                <a-tooltip :content="record.RuleID">
+                  <span class="ellipsis-text">{{ record.RuleID }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="交易标的" data-index="Symbol" :width="180">
+              <template #cell="{ record }">
+                <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="计划节点" data-index="PlannedExecNode" :width="160">
+              <template #cell="{ record }">
+                <a-tooltip :content="record.PlannedExecNode">
+                  <span class="ellipsis-text">{{ record.PlannedExecNode }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="最后执行节点" data-index="LastExecNode" :width="300">
+              <template #cell="{ record }">
+                <a-tooltip :content="getLastExecNode(record)">
+                  <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="执行状态" :width="100" align="center">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="getStatusColor(record.LastExecStatus)">
+                  {{ getStatusText(record.LastExecStatus) }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="有效性" :width="80" align="center">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="record.IsDeleted ? 'red' : 'green'">
+                  {{ record.IsDeleted ? "无效" : "有效" }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="数据类型" :width="100" align="center">
+              <template #cell="{ record }">
+                <a-tag color="purple" size="small">{{ record.DataType || "-" }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="最后执行时间" :width="180">
+              <template #cell="{ record }">
+                {{ formatDateTime(record.LastExecTime) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="任务创建时间" :width="180">
+              <template #cell="{ record }">
+                {{ formatDateTime(record.CreateTime) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" :width="100" align="center" fixed="right">
+              <template #cell="{ record }">
+                <a-space>
+                  <a-button type="primary" size="mini" @click="onViewDetails(record)">
+                    <template #icon><icon-eye /></template>
+                    查看
+                  </a-button>
+                </a-space>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
       </div>
     </a-spin>
 
@@ -202,7 +197,6 @@ type TaskInstanceRecord = Partial<TaskInstance>;
 
 const loading = ref(false);
 const instanceList = ref<TaskInstance[]>([]);
-const selectedKeys = ref<string[]>([]);
 const detailVisible = ref(false);
 const detailData = ref<Partial<TaskInstance>>({});
 
@@ -329,14 +323,6 @@ const formatDateTime = (dateTime: string | null | undefined) => {
   }
 };
 
-const select = (list: string[]) => {
-  selectedKeys.value = list;
-};
-
-const selectAll = (state: boolean) => {
-  selectedKeys.value = state ? instanceList.value.map(el => el.TaskID) : [];
-};
-
 const onPageChange = (current: number) => {
   pagination.value.current = current;
   getInstanceList();
@@ -429,40 +415,31 @@ onMounted(() => {
   min-width: 0;
 }
 
-.page-head {
+.task-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.task-query-panel {
   margin-bottom: 12px;
 }
 
-.task-filter-row {
-  width: 100%;
+.task-filters {
+  flex: 1 1 auto;
 }
 
-.task-result-pane {
-  width: 100%;
-  min-width: 0;
+.task-id-button {
+  height: auto;
   max-width: 100%;
-  box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
+  padding: 0;
+  color: #165dff;
 }
 
-.task-result-pane :deep(.arco-pagination) {
-  margin-top: 12px;
+.task-id-button :deep(.arco-btn-content) {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ellipsis-text {
@@ -472,20 +449,6 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.params-preview {
-  margin: 0;
-  font-family: monospace;
-  font-size: 12px;
-  background: #f5f5f5;
-  padding: 12px;
-  border-radius: 4px;
-  max-width: 400px;
-  max-height: 300px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-wrap: break-word;
 }
 
 .detail-json {
