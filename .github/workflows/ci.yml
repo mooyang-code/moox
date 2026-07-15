@@ -38,6 +38,10 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: moox-ci
     timeout-minutes: 45
+    env:
+      GOPROXY: https://mirrors.tencent.com/go,direct
+      GOPRIVATE: ""
+      GONOSUMDB: ""
     steps:
       - uses: actions/checkout@v4
       - name: Add preinstalled Go to PATH
