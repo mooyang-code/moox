@@ -15,6 +15,11 @@ on:
         required: true
         default: true
         type: boolean
+      publish_release:
+        description: Create or update the GitHub Release asset
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -50,6 +55,7 @@ jobs:
       - name: Build release package
         run: VERSION="$RELEASE_TAG" TARGET_GOOS="$TARGET_GOOS" TARGET_GOARCH="$TARGET_GOARCH" make release
       - name: Create or update GitHub Release
+        if: github.event_name == 'push' || inputs.publish_release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -72,7 +78,6 @@ jobs:
             --goos "$TARGET_GOOS" \
             --goarch "$TARGET_GOARCH" \
             --skip-build \
-            --public-host 106.53.107.122 \
             --local-ca skip \
             --target-ca skip
       - name: Verify deployed services
