@@ -151,13 +151,26 @@ write_candidate_env() {
     fi
   } >"${ENV_FILE}.candidate"
 }
+managed_process() {
+  local pid="$1" exe command
+  [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null || return 1
+  [[ ${MOOX_CADDY_SKIP_PID_EXE_CHECK:-0} == 1 ]] && return 0
+  if [[ -L "/proc/${pid}/exe" ]]; then
+    exe=$(readlink "/proc/${pid}/exe")
+    [[ "${exe}" == "${BIN}" || "${exe}" == "${BIN} (deleted)" ]] || return 1
+  fi
+  if [[ -r "/proc/${pid}/cmdline" ]]; then
+    command=$(tr '\0' ' ' <"/proc/${pid}/cmdline"); command=${command% }
+  else
+    command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
+  fi
+  [[ "${command}" == "${BIN} run --config ${CONFIG} --adapter caddyfile" ]]
+}
 pid_owned() {
   [[ -s "${PIDFILE}" ]] || return 1
-  local pid exe
-  pid=$(cat "${PIDFILE}"); [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null || return 1
-  [[ ${MOOX_CADDY_SKIP_PID_EXE_CHECK:-0} == 1 ]] && return 0
-  if [[ -e "/proc/${pid}/exe" ]]; then exe=$(readlink "/proc/${pid}/exe"); [[ "${exe}" == "${BIN}" ]]; return; fi
-  exe=$(ps -p "${pid}" -o command= 2>/dev/null || true); [[ "${exe}" == "${BIN} "* || "${exe}" == "${BIN}" ]]
+  local pid
+  pid=$(cat "${PIDFILE}")
+  managed_process "${pid}"
 }
 clean_stale_pid() { [[ ! -e "${PIDFILE}" ]] || pid_owned || { log 'removing stale or mismatched PID file without signaling it'; rm -f "${PIDFILE}"; }; }
 stop_recorded_pid() {
@@ -208,6 +221,29 @@ port_pids() {
       pid=${fd#/proc/}; pid=${pid%%/*}; printf '%s\n' "${pid}"
     done
   done | sort -u
+}
+
+adopt_managed_process() {
+  local port pid admin_port owners unique count
+  local -a candidates=()
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    while IFS= read -r pid; do [[ -z "${pid}" ]] || candidates+=("${pid}"); done < <(port_pids "${port}")
+  done
+  ((${#candidates[@]} > 0)) || return 1
+  unique=$(printf '%s\n' "${candidates[@]}" | sort -u)
+  count=$(printf '%s\n' "${unique}" | awk 'NF { count++ } END { print count + 0 }')
+  ((count == 1)) || return 1
+  pid=${unique}
+  managed_process "${pid}" || return 1
+  admin_port=${ADMIN_ENDPOINT##*:}
+  owners=$(port_pids "${admin_port}")
+  [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] || return 1
+  curl --fail --silent --max-time 2 "http://${ADMIN_ENDPOINT}${ADMIN_PATH}" >/dev/null || return 1
+  mkdir -p "${DEPLOY_DIR}/run"
+  printf '%s\n' "${pid}" >"${PIDFILE}.new"
+  mv "${PIDFILE}.new" "${PIDFILE}"
+  log "adopted managed Caddy pid=${pid} after binary replacement"
 }
 
 admin_healthy() {
@@ -276,6 +312,8 @@ case "${COMMAND}" in
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
+    clean_stale_pid
+    pid_owned || adopt_managed_process || true
     previous_pid=""
     if pid_owned; then previous_pid=$(cat "${PIDFILE}"); fi
     begin_activation

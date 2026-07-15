@@ -2046,10 +2046,20 @@ sync_local_stage() {
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
 
-  if [[ "${NO_START}" -eq 0 && -x "${deploy_dir}/lib/caddy-managed.sh" ]]; then
-    local caddy_ports="${SERVICE_HTTPS_PORT}"
-    [[ "${WITH_ADMIN}" -eq 0 ]] || caddy_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
-    "${deploy_dir}/lib/caddy-managed.sh" stop --deploy-dir "${deploy_dir}" --ports "${caddy_ports}" || true
+  if [[ "${NO_START}" -eq 1 && -n "${PUBLIC_HOST}" ]]; then
+    local edge_ports="${SERVICE_HTTPS_PORT}" edge_port owners
+    local -a edge_port_list
+    [[ "${WITH_ADMIN}" -eq 0 ]] || edge_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+    IFS=, read -ra edge_port_list <<<"${edge_ports}"
+    for edge_port in "${edge_port_list[@]}"; do
+      owners=""
+      if command -v lsof >/dev/null 2>&1; then
+        owners=$(lsof -nP -tiTCP:"${edge_port}" -sTCP:LISTEN 2>/dev/null || true)
+      elif command -v ss >/dev/null 2>&1; then
+        owners=$(ss -H -ltn "sport = :${edge_port}" 2>/dev/null || true)
+      fi
+      [[ -z "${owners}" ]] || fail "--no-start refuses to replace an active Caddy deployment on port ${edge_port}"
+    done
   fi
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
@@ -2290,10 +2300,22 @@ if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
   umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${KEY_FILE}"; chmod 600 "${KEY_FILE}"
 fi
-if [[ "${NO_START}" -eq 0 && -x "${DEPLOY_DIR}/lib/caddy-managed.sh" ]]; then
-  CADDY_STOP_PORTS="${SERVICE_HTTPS_PORT}"
-  [[ "${WITH_ADMIN}" == "0" ]] || CADDY_STOP_PORTS="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
-  "${DEPLOY_DIR}/lib/caddy-managed.sh" stop --deploy-dir "${DEPLOY_DIR}" --ports "${CADDY_STOP_PORTS}" || true
+if [[ "${NO_START}" -eq 1 && -n "${PUBLIC_HOST}" ]]; then
+  EDGE_PORTS="${SERVICE_HTTPS_PORT}"
+  [[ "${WITH_ADMIN}" == "0" ]] || EDGE_PORTS="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
+  IFS=, read -ra EDGE_PORT_LIST <<<"${EDGE_PORTS}"
+  for EDGE_PORT in "${EDGE_PORT_LIST[@]}"; do
+    EDGE_OWNERS=""
+    if command -v lsof >/dev/null 2>&1; then
+      EDGE_OWNERS=$(lsof -nP -tiTCP:"${EDGE_PORT}" -sTCP:LISTEN 2>/dev/null || true)
+    elif command -v ss >/dev/null 2>&1; then
+      EDGE_OWNERS=$(ss -H -ltn "sport = :${EDGE_PORT}" 2>/dev/null || true)
+    fi
+    if [[ -n "${EDGE_OWNERS}" ]]; then
+      echo "--no-start refuses to replace an active Caddy deployment on port ${EDGE_PORT}" >&2
+      exit 1
+    fi
+  done
 fi
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
