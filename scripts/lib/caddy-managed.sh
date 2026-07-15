@@ -20,6 +20,7 @@ OS=${MOOX_CADDY_OS:-$(uname -s)}
 ARCH=${MOOX_CADDY_ARCH:-$(uname -m)}
 CONFIG_SOURCE=
 PORTS=9527,11001
+PORTS_SET=0
 ADMIN_ENDPOINT=${MOOX_CADDY_ADMIN_ENDPOINT:-127.0.0.1:2019}
 ADMIN_PATH=${MOOX_CADDY_ADMIN_PATH:-/config/}
 while [[ $# -gt 0 ]]; do
@@ -28,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     --os) OS=${2:?}; shift 2;;
     --arch) ARCH=${2:?}; shift 2;;
     --config) CONFIG_SOURCE=${2:?}; shift 2;;
-    --ports) PORTS=${2:?}; shift 2;;
+    --ports) PORTS=${2:?}; PORTS_SET=1; shift 2;;
     *) fail "unknown option: $1";;
   esac
 done
@@ -41,9 +42,39 @@ if [[ -s "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
   set +a
 fi
+if [[ "${PORTS_SET}" -eq 0 && -n "${MOOX_SERVICE_HTTPS_PORT:-}" ]]; then
+  PORTS="${MOOX_BROWSER_HTTPS_PORT:-9527},${MOOX_SERVICE_HTTPS_PORT}"
+fi
 export XDG_DATA_HOME="${DEPLOY_DIR}/data/caddy" XDG_CONFIG_HOME="${DEPLOY_DIR}/config/caddy/runtime"
 
 version_ok() { [[ -x "${BIN}" ]] && [[ $("${BIN}" version 2>/dev/null | awk '{print $1}') == "${CADDY_VERSION}" ]]; }
+requires_privileged_port() {
+  [[ "${OS}" == linux ]] || return 1
+  local port
+  local -a ports
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    [[ "${port}" =~ ^[0-9]+$ ]] || fail "invalid edge port: ${port}"
+    (( 10#${port} < 1024 )) && return 0
+  done
+  return 1
+}
+bind_capability_ok() {
+  local output capabilities
+  output=$(getcap "${BIN}" 2>/dev/null || true)
+  capabilities=${output#* }
+  [[ "${capabilities}" == cap_net_bind_service=ep ]]
+}
+ensure_bind_capability() {
+  requires_privileged_port || return 0
+  command -v getcap >/dev/null 2>&1 || fail 'privileged Caddy ports require getcap to validate cap_net_bind_service'
+  bind_capability_ok && return 0
+  command -v sudo >/dev/null 2>&1 || fail 'privileged Caddy ports require passwordless sudo for setcap cap_net_bind_service=+ep'
+  sudo -n setcap cap_net_bind_service=+ep "${BIN}" || \
+    fail 'could not grant cap_net_bind_service=+ep with sudo -n setcap; configure passwordless setcap or use a port >=1024'
+  bind_capability_ok || fail 'cap_net_bind_service validation failed after sudo -n setcap'
+  log "granted cap_net_bind_service=+ep to ${BIN}"
+}
 pid_owned() {
   [[ -s "${PIDFILE}" ]] || return 1
   local pid exe
@@ -108,10 +139,11 @@ install_binary() {
   mkdir -p "${DEPLOY_DIR}/bin"
   old="${BIN}.rollback"; [[ ! -e "${BIN}" ]] || cp -p "${BIN}" "${old}"
   mv "${tmp}/caddy" "${BIN}.new"; mv "${BIN}.new" "${BIN}"
+  ensure_bind_capability
   log "installed ${CADDY_VERSION} at ${BIN}"
 }
 start_caddy() {
-  clean_stale_pid; validate; check_ports; mkdir -p "${DEPLOY_DIR}/run" "${XDG_DATA_HOME}" "${XDG_CONFIG_HOME}"
+  clean_stale_pid; ensure_bind_capability; validate; check_ports; mkdir -p "${DEPLOY_DIR}/run" "${XDG_DATA_HOME}" "${XDG_CONFIG_HOME}"
   if pid_owned; then
     admin_healthy || fail "managed PID does not own a healthy Caddy admin endpoint at ${ADMIN_ENDPOINT}"
     if ! "${BIN}" reload --config "${CONFIG}" --adapter caddyfile; then
@@ -148,7 +180,7 @@ publish_ca() {
 
 case "${COMMAND}" in
   install) install_binary;;
-  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
+  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; ensure_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
     if [[ -n "${MOOX_PUBLIC_HOST:-}" ]]; then
@@ -159,6 +191,7 @@ case "${COMMAND}" in
     fi
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
     version_ok || install_binary
+    ensure_bind_capability
     [[ ! -e "${CONFIG}.candidate" ]] || { "${BIN}" validate --config "${CONFIG}.candidate" --adapter caddyfile >/dev/null; [[ ! -e "${CONFIG}" ]] || cp -p "${CONFIG}" "${CONFIG}.rollback"; mv "${CONFIG}.candidate" "${CONFIG}"; }
     [[ -s "${CONFIG}" ]] && start_caddy || log 'binary installed; waiting for managed Caddyfile'
     ;;

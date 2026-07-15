@@ -76,11 +76,67 @@ chmod +x "${TMP}/fixture/caddy"
 tar -C "${TMP}/fixture" -czf "${TMP}/caddy_2.11.4_linux_amd64.tar.gz" caddy
 digest=$(shasum -a 512 "${TMP}/caddy_2.11.4_linux_amd64.tar.gz" | awk '{print $1}')
 printf '%s  %s\n' "${digest}" caddy_2.11.4_linux_amd64.tar.gz >"${TMP}/checksums.txt"
+export FAKE_LOG="${TMP}/caddy.log"
+
+mkdir -p "${TMP}/cap-bin"
+cat >"${TMP}/cap-bin/getcap" <<'SH'
+#!/usr/bin/env bash
+if [[ -s "${FAKE_CAP_STATE}" ]]; then
+  printf '%s cap_net_bind_service=ep\n' "$1"
+fi
+SH
+cat >"${TMP}/cap-bin/sudo" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_SUDO_LOG}"
+[[ "${FAKE_SUDO_FAIL:-0}" != 1 ]] || exit 1
+[[ "$1" == -n && "$2" == setcap && "$3" == cap_net_bind_service=+ep ]] || exit 2
+printf '%s\n' "$4" >"${FAKE_CAP_STATE}"
+SH
+chmod +x "${TMP}/cap-bin/getcap" "${TMP}/cap-bin/sudo"
+
+CAP_DEPLOY="${TMP}/cap-deploy"
+CAP_STATE="${TMP}/cap.state"
+SUDO_LOG="${TMP}/sudo.log"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
+  "${HELPER}" install --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443
+grep -Fxq -- '-n setcap cap_net_bind_service=+ep '"${CAP_DEPLOY}/bin/caddy" "${SUDO_LOG}" || \
+  fail 'privileged-port install did not grant only cap_net_bind_service'
+
+# An existing version-correct binary must recover a missing capability, and a
+# subsequent binary replacement must grant it again.
+mkdir -p "${CAP_DEPLOY}/config/caddy"
+printf 'MOOX_BROWSER_HTTPS_PORT=9527\nMOOX_SERVICE_HTTPS_PORT=443\n' >"${CAP_DEPLOY}/config/caddy/edge.env"
+rm -f "${CAP_STATE}"; : >"${SUDO_LOG}"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64
+[[ -s "${CAP_STATE}" ]] || fail 'existing managed Caddy did not recover its privileged-port capability'
+rm -f "${CAP_STATE}"; : >"${SUDO_LOG}"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
+  "${HELPER}" install --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443
+[[ -s "${CAP_STATE}" ]] || fail 'managed Caddy replacement did not reapply its privileged-port capability'
+
+: >"${SUDO_LOG}"
+FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 8443
+[[ ! -s "${SUDO_LOG}" ]] || fail 'nonprivileged Caddy ports unexpectedly invoked sudo'
+
+rm -f "${CAP_STATE}"; : >"${SUDO_LOG}"
+printf ':443 { respond "ok" }\n' >"${CAP_DEPLOY}/config/caddy/Caddyfile"
+: >"${FAKE_LOG}"
+if FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" FAKE_SUDO_FAIL=1 PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 443 \
+    >"${TMP}/cap-failure.out" 2>&1; then
+  fail 'privileged-port ensure accepted a missing capability after setcap failed'
+fi
+grep -Fq 'cap_net_bind_service' "${TMP}/cap-failure.out" || fail 'privileged-port capability failure was unclear'
+! grep -Fq 'run' "${FAKE_LOG}" || fail 'Caddy start was attempted after privileged-port capability setup failed'
+
 EDGE_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 ADMIN_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 printf ':%s { respond "ok" }\n' "${EDGE_PORT}" >"${TMP}/candidate.Caddyfile"
 
-export FAKE_LOG="${TMP}/caddy.log"
 export FAKE_ADMIN_PORT="${ADMIN_PORT}"
 export MOOX_CADDY_ADMIN_ENDPOINT="127.0.0.1:${ADMIN_PORT}"
 export MOOX_CADDY_ADMIN_PATH=/
