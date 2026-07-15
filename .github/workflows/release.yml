@@ -1,0 +1,101 @@
+name: Release and deploy MooX
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Git tag to package and deploy
+        required: true
+        type: string
+      deploy_production:
+        description: Deploy the package to 106.53.107.122
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: moox-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: moox-ci
+    environment: production
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      TARGET_GOOS: linux
+      TARGET_GOARCH: amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.0
+          cache-dependency-path: '**/go.sum'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            web/pnpm-lock.yaml
+      - name: Check self-hosted runner
+        run: bash scripts/ci/check-runner.sh
+      - name: Verify before packaging
+        run: make verify
+      - name: Build release package
+        run: VERSION="$RELEASE_TAG" TARGET_GOOS="$TARGET_GOOS" TARGET_GOARCH="$TARGET_GOARCH" make release
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: moox-${{ env.RELEASE_TAG }}-linux-amd64
+          path: release/moox-${{ env.RELEASE_TAG }}-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="release/moox-${RELEASE_TAG}-linux-amd64.tar.gz"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$archive" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$archive" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "MooX ${RELEASE_TAG}"
+          fi
+      - name: Deploy to 106.53.107.122
+        if: github.event_name == 'push' || inputs.deploy_production
+        run: |
+          ./scripts/deploy-moox.sh \
+            --target localhost \
+            --dir /home/ubuntu/moox/prod \
+            --goos "$TARGET_GOOS" \
+            --goarch "$TARGET_GOARCH" \
+            --skip-build \
+            --public-host 106.53.107.122 \
+            --local-ca skip \
+            --target-ca skip
+      - name: Verify deployed services
+        if: github.event_name == 'push' || inputs.deploy_production
+        run: |
+          set -a
+          source /home/ubuntu/moox/prod/secrets/health-auth.env
+          set +a
+          /home/ubuntu/moox/prod/healthcheck.sh
+          curl --fail --silent --show-error \
+            --cacert /home/ubuntu/moox/prod/certs/caddy/root.crt \
+            --resolve 106.53.107.122:9527:127.0.0.1 \
+            https://106.53.107.122:9527/ >/dev/null

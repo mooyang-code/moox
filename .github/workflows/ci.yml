@@ -4,22 +4,30 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Never execute untrusted fork PR code on the personal server. Trusted
+    # pushes and manual runs use the persistent runner for local tool caches.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'moox-ci' }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: 1.24.0
           cache-dependency-path: '**/go.sum'
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.28.2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -27,4 +35,7 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             web/pnpm-lock.yaml
+      - name: Check self-hosted runner
+        if: github.event_name != 'pull_request'
+        run: bash scripts/ci/check-runner.sh
       - run: make verify
