@@ -3,12 +3,12 @@ module github.com/mooyang-code/moox/modules/monitor
 go 1.24.0
 
 require (
-	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
@@ -24,6 +24,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
+	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
@@ -37,6 +38,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
+	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
@@ -116,6 +118,8 @@ replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonp
 replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+
+replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 

@@ -390,6 +390,18 @@ message ListMonitorInstancesRsp { common.RetInfo ret_info = 1; repeated MonitorI
 message SyncSystemChecksReq {}
 message SyncSystemChecksRsp { common.RetInfo ret_info = 1; int32 synced = 2; }
 
+message GetPeerSnapshotReq {}
+message PeerCheckSnapshot { string check_id = 1; string status = 2; }
+message PeerAlertEventSnapshot { string event_id = 1; string event_type = 2; string created_at = 3; }
+message GetPeerSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  string instance_id = 2;
+  string base_url = 3;
+  string observed_at = 4;
+  repeated PeerCheckSnapshot checks = 5;
+  repeated PeerAlertEventSnapshot alert_events = 6;
+}
+
 message HostAgentInfo {
   string agent_id = 1;
   string hostname = 2;
@@ -428,6 +440,7 @@ service MonitorMgr {
   rpc ListAlertEvents(ListAlertEventsReq) returns (ListAlertEventsRsp);
   rpc ListMonitorInstances(ListMonitorInstancesReq) returns (ListMonitorInstancesRsp);
   rpc SyncSystemChecks(SyncSystemChecksReq) returns (SyncSystemChecksRsp);
+  rpc GetPeerSnapshot(GetPeerSnapshotReq) returns (GetPeerSnapshotRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc ListMetricServices(ListMetricServicesReq) returns (ListMetricServicesRsp);

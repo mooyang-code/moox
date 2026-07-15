@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 	"path/filepath"
 	"testing"
@@ -203,12 +204,7 @@ func TestMetricRuleRPCWithInjectedStores(t *testing.T) {
 }
 
 func protoCloneRule(rule *monitorpb.MetricRule) *monitorpb.MetricRule {
-	out := *rule
-	conds := make([]*monitorpb.MetricCondition, len(rule.Conditions))
-	copy(conds, rule.Conditions)
-	out.Conditions = conds
-	out.WebhookIds = append([]string(nil), rule.WebhookIds...)
-	return &out
+	return proto.Clone(rule).(*monitorpb.MetricRule)
 }
 
 func TestMetricRPCUnavailableBranches(t *testing.T) {

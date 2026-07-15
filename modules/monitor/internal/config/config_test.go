@@ -106,6 +106,9 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
 		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
 	}
+	if cfg.Peer.ServiceAuth.KeyID != "monitor-key" || cfg.Peer.ServiceAuth.SecretKey != "monitor-secret" || cfg.Peer.ServiceAuth.CAFile != "/tmp/peers.pem" {
+		t.Fatalf("peer gateway auth = %#v", cfg.Peer.ServiceAuth)
+	}
 }
 
 func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
@@ -148,20 +151,25 @@ instance:
 peer:
   peers:
     - instance_id: peer-a
-      base_url: http://127.0.0.1:11419
+      gateway_url: http://127.0.0.1:11419
 `)
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load() error = nil, want invalid peer entry")
 	}
 }
 
-func TestMonitorConfigRequiresPeerTokenWhenEnabled(t *testing.T) {
+func TestMonitorConfigRequiresPeerGatewayCredentialsWhenConfigured(t *testing.T) {
 	cfg := Default()
 	cfg.Instance.InstanceID = "monitor-test"
 	cfg.Peer.Enabled = true
-	cfg.Peer.Token = ""
+	cfg.SysDeploy.Enabled = false
+	cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want peer token error")
+		t.Fatal("Validate() error = nil, want peer gateway credentials error")
+	}
+	cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
 	}
 }
 

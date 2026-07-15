@@ -6,7 +6,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -201,7 +200,7 @@ func TestPruneMonitorHistoryNoopAndHappyPath(t *testing.T) {
 	require.NoError(t, pruneMonitorHistory(ctx, rt, 24*time.Hour))
 }
 
-func TestMonitorSnapshotAndResultHook(t *testing.T) {
+func TestMonitorResultHook(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-a"
 	cfg.Instance.BaseURL = "http://localhost"
@@ -221,17 +220,6 @@ func TestMonitorSnapshotAndResultHook(t *testing.T) {
 	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
 		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
 	}))
-	snap := monitorSnapshot(cfg, rt)(context.Background())
-	assert.Equal(t, "monitor-a", snap.InstanceID)
-	assert.Equal(t, "http://localhost", snap.BaseURL)
-	assert.False(t, snap.ObservedAt.IsZero())
-	require.Len(t, snap.Checks, 1)
-	assert.Equal(t, monitorpeer.CheckSnapshot{CheckID: "check-1", Status: domain.CheckStatusDown}, snap.Checks[0])
-	require.Len(t, snap.AlertEvents, 1)
-	assert.Equal(t, "event-1", snap.AlertEvents[0].EventID)
-	assert.Equal(t, domain.AlertEventTriggered, snap.AlertEvents[0].EventType)
-	assert.NotEmpty(t, snap.AlertEvents[0].CreatedAt)
-
 	hook := monitorResultHook(cfg, rt)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{

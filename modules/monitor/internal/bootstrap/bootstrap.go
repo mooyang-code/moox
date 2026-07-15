@@ -23,6 +23,7 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
@@ -402,13 +403,10 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 	if err != nil {
 		return fmt.Errorf("monitor health authentication is invalid: %w", err)
 	}
-	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
-		Token:    cfg.Peer.Token,
-		Health:   healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)),
-		Liveness: healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)),
-		Metrics:  healthAuth.Wrap(promhttp.Handler()),
-		Snapshot: monitorSnapshot(cfg, runtime),
-	})
+	handler := healthz.NewMux()
+	handler.Handle("/healthz", healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)))
+	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
+	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
 	}
@@ -426,6 +424,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
 		InstanceID:       cfg.Instance.InstanceID,
+		BaseURL:          cfg.Instance.BaseURL,
 		Runner:           runner,
 		OnResult:         hook,
 		SyncSystem:       syncSystem,
@@ -569,21 +568,27 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 }
 
 func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) {
-	if !cfg.Peer.Enabled {
+	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
 		return
 	}
 	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))
 	for _, item := range cfg.Peer.Peers {
 		remotes = append(remotes, monitorpeer.Remote{
 			InstanceID: item.InstanceID,
-			BaseURL:    item.BaseURL,
-			Token:      item.Token,
+			GatewayURL: item.GatewayURL,
+			NodeID:     item.NodeID,
 		})
 	}
-	puller := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
-		Peers:   remotes,
-		Timeout: time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
+	puller, err := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
+		Peers:       remotes,
+		Timeout:     time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
+		Credentials: gatewayauth.Credentials{KeyID: cfg.Peer.ServiceAuth.KeyID, Secret: cfg.Peer.ServiceAuth.SecretKey},
+		CAFile:      cfg.Peer.ServiceAuth.CAFile,
 	})
+	if err != nil {
+		log.ErrorContextf(ctx, "monitor peer gateway client initialization failed: %v", err)
+		return
+	}
 	runtime.Go(func() {
 		ticker := time.NewTicker(time.Duration(cfg.Peer.PullIntervalSeconds) * time.Second)
 		defer ticker.Stop()
@@ -599,38 +604,6 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 			}
 		}
 	})
-}
-
-func monitorSnapshot(cfg *config.Config, runtime *Runtime) func(context.Context) monitorpeer.Snapshot {
-	return func(ctx context.Context) monitorpeer.Snapshot {
-		snapshot := monitorpeer.Snapshot{
-			InstanceID:  cfg.Instance.InstanceID,
-			BaseURL:     cfg.Instance.BaseURL,
-			ObservedAt:  time.Now().UTC(),
-			Checks:      []monitorpeer.CheckSnapshot{},
-			AlertEvents: []monitorpeer.AlertEventSnapshot{},
-		}
-		if runtime == nil || runtime.Repositories == nil {
-			return snapshot
-		}
-		if results, err := runtime.Repositories.Results.Latest(ctx, 500); err != nil {
-			log.WarnContextf(ctx, "monitor peer snapshot results unavailable: %v", err)
-		} else {
-			for _, result := range results {
-				snapshot.Checks = append(snapshot.Checks, monitorpeer.CheckSnapshot{CheckID: result.CheckID, Status: result.Status})
-			}
-		}
-		if events, err := runtime.Repositories.Alerts.ListRecentEvents(ctx, 100); err != nil {
-			log.WarnContextf(ctx, "monitor peer snapshot alerts unavailable: %v", err)
-		} else {
-			for _, event := range events {
-				snapshot.AlertEvents = append(snapshot.AlertEvents, monitorpeer.AlertEventSnapshot{
-					EventID: event.EventID, EventType: event.EventType, CreatedAt: event.CreatedAt.UTC().Format(time.RFC3339Nano),
-				})
-			}
-		}
-		return snapshot
-	}
 }
 
 func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {

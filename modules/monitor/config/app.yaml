@@ -37,7 +37,10 @@ peer:
   enabled: true
   pull_interval_seconds: 10
   timeout_seconds: 5
-  token: "moox-monitor-peer-token-change-me"
+  service_auth:
+    key_id: ""
+    secret_key: ""
+    ca_file: ""
   peers: []
 
 alert:

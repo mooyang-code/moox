@@ -67,17 +67,17 @@ type ServiceAuthConfig struct {
 }
 
 type PeerConfig struct {
-	Enabled             bool        `yaml:"enabled"`
-	PullIntervalSeconds int         `yaml:"pull_interval_seconds"`
-	TimeoutSeconds      int         `yaml:"timeout_seconds"`
-	Token               string      `yaml:"token"`
-	Peers               []PeerEntry `yaml:"peers"`
+	Enabled             bool              `yaml:"enabled"`
+	PullIntervalSeconds int               `yaml:"pull_interval_seconds"`
+	TimeoutSeconds      int               `yaml:"timeout_seconds"`
+	ServiceAuth         ServiceAuthConfig `yaml:"service_auth"`
+	Peers               []PeerEntry       `yaml:"peers"`
 }
 
 type PeerEntry struct {
 	InstanceID string `yaml:"instance_id"`
-	BaseURL    string `yaml:"base_url"`
-	Token      string `yaml:"token"`
+	GatewayURL string `yaml:"gateway_url"`
+	NodeID     string `yaml:"node_id"`
 }
 
 type AlertConfig struct {
@@ -354,9 +354,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_BASE_URL"); v != "" {
 		c.Instance.BaseURL = v
 	}
-	if v := os.Getenv("MOOX_MONITOR_PEER_TOKEN"); v != "" {
-		c.Peer.Token = v
-	}
 	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
 		c.SysDeploy.Target = v
 	}
@@ -368,12 +365,15 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.KeyID = v
+		c.Peer.ServiceAuth.KeyID = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
 		c.SysDeploy.ServiceAuth.SecretKey = v
+		c.Peer.ServiceAuth.SecretKey = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
 		c.SysDeploy.ServiceAuth.CAFile = v
+		c.Peer.ServiceAuth.CAFile = v
 	}
 }
 
@@ -383,9 +383,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Instance.BaseURL == "" {
 		return fmt.Errorf("instance.base_url must not be empty")
-	}
-	if c.Peer.Enabled && strings.TrimSpace(c.Peer.Token) == "" {
-		return fmt.Errorf("peer.token must not be empty when peer monitoring is enabled")
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
@@ -411,9 +408,12 @@ func (c *Config) Validate() error {
 		}
 	}
 	for i, peer := range c.Peer.Peers {
-		if peer.InstanceID == "" || peer.BaseURL == "" || peer.Token == "" {
-			return fmt.Errorf("peer.peers[%d] requires instance_id, base_url, and token", i)
+		if peer.InstanceID == "" || peer.GatewayURL == "" || peer.NodeID == "" {
+			return fmt.Errorf("peer.peers[%d] requires instance_id, gateway_url, and node_id", i)
 		}
+	}
+	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (strings.TrimSpace(c.Peer.ServiceAuth.KeyID) == "" || strings.TrimSpace(c.Peer.ServiceAuth.SecretKey) == "") {
+		return fmt.Errorf("peer.service_auth key_id and secret_key must not be empty when peers are configured")
 	}
 	return nil
 }
