@@ -1445,6 +1445,9 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+set -a
+source "${ROOT}/secrets/health-auth.env"
+set +a
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
@@ -1542,7 +1545,7 @@ ensure_service() {
 
   log_line "${name}: stopped or stale pid=${pid:-none}; restarting"
   echo "${name}: stopped; restarting"
-  if STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}" "${ROOT}/start.sh" "${name}" >> "${LOG_FILE}" 2>&1 && probe_service "${name}"; then
+  if STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}" "${ROOT}/start.sh" "${name}" 9>&- >> "${LOG_FILE}" 2>&1 && probe_service "${name}"; then
     log_line "${name}: restart success"
     return 0
   fi
