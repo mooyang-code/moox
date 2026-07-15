@@ -44,8 +44,10 @@ jobs:
       GONOSUMDB: ""
     steps:
       - uses: actions/checkout@v4
-      - name: Add preinstalled Go to PATH
-        run: echo /home/ubuntu/go-sdk/bin >> "$GITHUB_PATH"
+      - name: Add preinstalled tools to PATH
+        run: |
+          echo /home/ubuntu/go-sdk/bin >> "$GITHUB_PATH"
+          echo /home/ubuntu/.venvs/moox/bin >> "$GITHUB_PATH"
       - name: Check self-hosted runner
         run: bash scripts/ci/check-runner.sh
       - run: make verify

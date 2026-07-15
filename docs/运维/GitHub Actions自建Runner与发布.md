@@ -16,12 +16,20 @@ MooX 使用 GitHub Actions 编排 CI/CD，并将可信的 `main`、Tag 和手工
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl git jq gh make rsync openssl gcc
+sudo apt-get install -y curl git jq gh make rsync openssl gcc python3-venv
 mkdir -p /home/ubuntu/actions-runner
 cd /home/ubuntu/actions-runner
 ```
 
-服务器需要预装 Go 1.24、Node 22 和 pnpm 10.28.2。当前机器已有 Go SDK；Node 可以安装到 `/usr/local/node`，并将其 `bin` 目录加入 systemd Runner 的 `PATH`。
+服务器需要预装 Go 1.24、Node 22、pnpm 10.28.2，以及因子测试需要的 Python 运行时：
+
+```bash
+python3 -m venv /home/ubuntu/.venvs/moox
+/home/ubuntu/.venvs/moox/bin/pip install \\
+  -r /home/ubuntu/moox/src/modules/factor/pyworker/runtime-requirements.txt
+```
+
+当前机器已有 Go SDK；Node 可以安装到 `/usr/local/node`，并将 Go SDK 和 Python venv 的 `bin` 目录加入 systemd Runner 的 `PATH`。
 
 在本地拥有仓库管理员权限的机器上生成一次性注册 Token：
 
@@ -47,7 +55,7 @@ sudo ./svc.sh install ubuntu
 sudo ./svc.sh start
 ```
 
-Runner 需要能够对 GitHub 建立出站 HTTPS 连接。Runner 会由 Workflow 自动安装 Go 1.24、Node 22 和 pnpm；服务器上的 `gh` 用于创建 GitHub Release。
+Runner 需要能够对 GitHub 建立出站 HTTPS 连接。Workflow 使用服务器预装的 Go、Node、pnpm 和 Python；服务器上的 `gh` 用于创建 GitHub Release。
 
 检查状态：
 
