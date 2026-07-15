@@ -4,11 +4,7 @@ package sysdeploy
 // New deployments should update public rows through SysDeploy/UI after the admin plane is reachable.
 const defaultPublicHost = "106.53.107.122"
 
-func DefaultDeployments(nodeIDs ...string) []Deployment {
-	nodeID := localNodeID()
-	if len(nodeIDs) > 0 && nodeIDs[0] != "" {
-		nodeID = nodeIDs[0]
-	}
+func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("web_host", "frontend", "https", defaultPublicHost, 9527, "", "public", "Caddy 管理台 HTTPS 页面入口；web-host 上游仅绑定 loopback"), `{"health_url":"http://127.0.0.1:19527/readyz","health_kind":"readiness","monitor_enabled":true}`),

@@ -34,7 +34,7 @@ func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 		}
 	}()
 
-	cfg := &Config{App: &config.AppConfig{}}
+	cfg := &Config{App: &config.AppConfig{}, AdminNodeID: "admin-node-test"}
 	services, err := createCoreServices(context.Background(), mgr, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, services)
@@ -61,6 +61,7 @@ func TestStartBackgroundServices_FullFlow_ShouldPass(t *testing.T) {
 	}()
 
 	cfg := &Config{
+		AdminNodeID: "admin-node-test",
 		App: &config.AppConfig{
 			Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "unused.db")},
 		},

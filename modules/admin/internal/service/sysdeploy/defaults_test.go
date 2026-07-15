@@ -40,7 +40,7 @@ func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
 
 func TestDefaultDeploymentsRemoveLegacyServiceGatewayRows(t *testing.T) {
 	byName := map[string]Deployment{}
-	for _, row := range DefaultDeployments() {
+	for _, row := range DefaultDeployments(testAdminNodeID) {
 		byName[row.ServiceName] = row
 	}
 	for _, name := range []string{"service_gateway", "service_gateway_internal"} {
@@ -51,7 +51,7 @@ func TestDefaultDeploymentsRemoveLegacyServiceGatewayRows(t *testing.T) {
 }
 
 func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
-	rows := DefaultDeployments()
+	rows := DefaultDeployments(testAdminNodeID)
 	byName := make(map[string]Deployment, len(rows))
 	for _, row := range rows {
 		byName[row.ServiceName] = row

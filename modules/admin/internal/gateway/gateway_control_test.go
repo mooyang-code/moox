@@ -70,7 +70,7 @@ func setupGatewayControlRouter(t *testing.T, provider GatewayProvider) (*HTTPRou
 	store := &fakeRequestAuthStore{nonces: map[string]bool{}}
 	SetRequestAuthStore(store)
 	t.Cleanup(func() { SetRequestAuthStore(nil) })
-	return NewHTTPRouter(NewGatewayHandle(), provider), store
+	return NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test"), store
 }
 
 func TestGatewayControlRoutesReturnsOnlySignedTargetSnapshot(t *testing.T) {

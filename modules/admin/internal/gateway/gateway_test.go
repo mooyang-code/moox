@@ -118,7 +118,7 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 		rawHandlersMutex.Unlock()
 	})
 
-	router := NewHTTPRouter(NewGatewayHandle(), nil)
+	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
 	muxRouter.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/demo/Ping", nil))
@@ -129,13 +129,12 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 }
 
 func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t *testing.T) {
-	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
-	router := NewHTTPRouter(NewGatewayHandle(), nil)
+	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
@@ -146,19 +145,44 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 }
 
 func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
-	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-b")
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider)
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-b")
+	t.Setenv("MOOX_ADMIN_NODE_ID", "changed-after-startup")
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
 
 	router.buildRouter().ServeHTTP(rr, req)
 
+	assert.Equal(t, "admin-node-b", provider.lastNode)
+}
+
+func TestHandleGatewayRequest_GetLoginSaltWorksWithConfiguredNode(t *testing.T) {
+	SetConfig(&Config{
+		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetLoginSalt"}},
+	})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/trpc.moox.infra.Auth/GetLoginSalt", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"salt":"salt-1"}`))
+	}))
+	t.Cleanup(upstream.Close)
+	provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
+		"admin-node-b:auth": {Address: upstream.Listener.Addr().String(), Path: "trpc.moox.infra.Auth"},
+	}}
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-b")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetLoginSalt", bytes.NewBufferString(`{"username":"admin"}`))
+
+	router.buildRouter().ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.JSONEq(t, `{"ret_info":{"code":0},"salt":"salt-1"}`, rr.Body.String())
 	assert.Equal(t, "admin-node-b", provider.lastNode)
 }
 
@@ -169,13 +193,12 @@ func TestGetGatewayHandleInstance_ShouldReturnSingleton(t *testing.T) {
 }
 
 func TestHandleGatewayRequest_UserIDFromContext_ShouldInjectHeader(t *testing.T) {
-	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
-	router := NewHTTPRouter(NewGatewayHandle(), nil)
+	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
 	muxRouter := router.buildRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))

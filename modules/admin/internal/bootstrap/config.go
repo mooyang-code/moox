@@ -17,9 +17,10 @@ import (
 
 // Config 应用配置集合
 type Config struct {
-	App     *config.AppConfig
-	Auth    *authcfg.Config
-	Gateway *gateway.Config
+	App         *config.AppConfig
+	Auth        *authcfg.Config
+	Gateway     *gateway.Config
+	AdminNodeID string
 }
 
 // LoadConfigs 加载系统中各个模块配置
@@ -34,6 +35,10 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	config.SetGlobalConfig(appCfg) // 设置全局配置，供其他模块使用
 	if err := loadEncryptionKey(); err != nil {
 		return nil, err
+	}
+	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
+	if adminNodeID == "" {
+		return nil, fmt.Errorf("MOOX_ADMIN_NODE_ID is required in server mode")
 	}
 	log.Info("应用配置加载成功")
 
@@ -69,9 +74,10 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 
 	// 5. 创建配置对象
 	cfg := &Config{
-		App:     appCfg,
-		Auth:    authCfg,
-		Gateway: gatewayCfg,
+		App:         appCfg,
+		Auth:        authCfg,
+		Gateway:     gatewayCfg,
+		AdminNodeID: adminNodeID,
 	}
 	return cfg, nil
 }

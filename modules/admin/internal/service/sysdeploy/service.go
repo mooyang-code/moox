@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -40,15 +39,19 @@ func (s *ServiceImpl) ReportGatewayStatus(ctx context.Context, report GatewaySta
 
 type ServiceImpl struct {
 	pb.UnimplementedSysDeploy
-	dao *DAO
+	dao         *DAO
+	adminNodeID string
 }
 
-func NewService(dbManager *database.Manager) *ServiceImpl {
-	return &ServiceImpl{dao: NewDAO(dbManager.GetDB())}
+func NewService(dbManager *database.Manager, adminNodeID string) *ServiceImpl {
+	return &ServiceImpl{dao: NewDAO(dbManager.GetDB()), adminNodeID: strings.TrimSpace(adminNodeID)}
 }
 
 func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
-	nodeID := localNodeID()
+	nodeID := s.adminNodeID
+	if nodeID == "" {
+		return fmt.Errorf("admin node id is required")
+	}
 	node, err := s.dao.GetGatewayNode(ctx, nodeID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		node := &GatewayNode{NodeID: nodeID, Name: nodeID, PublicAddress: "https://" + defaultPublicHost, Status: "enabled"}
@@ -77,13 +80,6 @@ func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
 		}
 	}
 	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID))
-}
-
-func localNodeID() string {
-	if value := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID")); value != "" {
-		return value
-	}
-	return "gateway-gz-122"
 }
 
 func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
@@ -207,7 +203,10 @@ func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.
 
 // GetServiceDeployments 返回可直接序列化到 SCF keepalive event 的 active 部署信息。
 func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]interface{}, error) {
-	rows, err := s.dao.ListActive(ctx, localNodeID())
+	if s.adminNodeID == "" {
+		return nil, fmt.Errorf("admin node id is required")
+	}
+	rows, err := s.dao.ListActive(ctx, s.adminNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +233,7 @@ func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]int
 // active deployments assigned to the Admin process's configured node.
 func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool) {
 	adminNodeID = strings.TrimSpace(adminNodeID)
-	if adminNodeID == "" {
+	if adminNodeID == "" || adminNodeID != s.adminNodeID {
 		return gateway.ServiceDetail{}, false
 	}
 	row, err := s.dao.Get(ctx, adminNodeID, gatewayDeploymentName(serviceID))

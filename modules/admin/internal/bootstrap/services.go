@@ -84,7 +84,7 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 
 	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
 	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
-	sysDeployService := sysdeploy.NewService(dbManager)
+	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
 	if err := sysDeployService.SeedDefaults(ctx); err != nil {
 		return nil, err
 	}

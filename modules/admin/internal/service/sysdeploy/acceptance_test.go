@@ -14,8 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func newTestService(db *gorm.DB) *ServiceImpl {
-	svc := NewService(&database.Manager{})
+func newTestService(db *gorm.DB, adminNodeID string) *ServiceImpl {
+	svc := NewService(&database.Manager{}, adminNodeID)
 	svc.dao = NewDAO(db)
 	return svc
 }
@@ -38,7 +38,7 @@ func TestCompileGatewaySnapshot_ExcludesDisabledDeployment(t *testing.T) {
 
 func TestServiceDeploymentCompositeRPCIsolationAndLists(t *testing.T) {
 	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db)
+	svc := newTestService(db, testAdminNodeID)
 	ctx := context.Background()
 	for _, id := range []string{"node-a", "node-b"} {
 		require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: id, Name: id, PublicAddress: "https://" + id + ".example", Status: "enabled"}))
@@ -72,7 +72,7 @@ func TestServiceDeploymentCompositeRPCIsolationAndLists(t *testing.T) {
 
 func TestGatewayNodeManagementRPCFiltersValidationAndHostFK(t *testing.T) {
 	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db)
+	svc := newTestService(db, testAdminNodeID)
 	ctx := context.Background()
 	require.NoError(t, db.Exec(`INSERT INTO t_ssh_host(c_name,c_address,c_user) VALUES ('host-a','a.example','root')`).Error)
 	var hostID int64
@@ -141,9 +141,8 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 		wantHost    bool
 	}{{"match", defaultPublicHost, true}, {"no-match", "10.0.0.9", false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("MOOX_ADMIN_NODE_ID", "configured-node")
 			db := setupEmptySysDeployTestDB(t)
-			svc := newTestService(db)
+			svc := newTestService(db, "configured-node")
 			ctx := context.Background()
 			require.NoError(t, db.Exec(`INSERT INTO t_ssh_host(c_name,c_address,c_user) VALUES ('host',?,'root')`, tc.hostAddress).Error)
 			require.NoError(t, svc.SeedDefaults(ctx))
@@ -176,9 +175,8 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 }
 
 func TestSeedDefaultsRemovesPersistedObsoleteGatewayRows(t *testing.T) {
-	t.Setenv("MOOX_ADMIN_NODE_ID", "configured-node")
 	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db)
+	svc := newTestService(db, "configured-node")
 	ctx := context.Background()
 	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "configured-node", Name: "configured-node", PublicAddress: "https://a.example", Status: "enabled"}))
 	for _, name := range []string{"service_gateway", "service_gateway_internal"} {
@@ -241,8 +239,7 @@ func TestDisabledNodeStateChangesAndRestoresRouteHash(t *testing.T) {
 }
 
 func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
-	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
-	svc := newTestService(setupEmptySysDeployTestDB(t))
+	svc := newTestService(setupEmptySysDeployTestDB(t), "node-a")
 	ctx := context.Background()
 	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
 	require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceID: "sysdeploy", GatewayEnabled: true, Status: "active"}))
@@ -288,8 +285,7 @@ func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
 }
 
 func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
-	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
-	svc := newTestService(setupEmptySysDeployTestDB(t))
+	svc := newTestService(setupEmptySysDeployTestDB(t), "node-a")
 	ctx := context.Background()
 	require.NoError(t, svc.SeedDefaults(ctx))
 	snapshot, err := svc.CompileGatewaySnapshot(ctx, "node-a")
@@ -328,7 +324,7 @@ func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
 
 func TestSensitiveGatewayDeploymentsRequireNonemptyMethodsOnCreateUpdateAndCompile(t *testing.T) {
 	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db)
+	svc := newTestService(db, testAdminNodeID)
 	ctx := context.Background()
 	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
 	makePB := func(extra string) *pb.ServiceDeployment {
@@ -359,7 +355,7 @@ func TestSensitiveGatewayPathsRequireMethodsEvenWithAliasServiceID(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupEmptySysDeployTestDB(t)
-			svc := newTestService(db)
+			svc := newTestService(db, testAdminNodeID)
 			ctx := context.Background()
 			require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
 			makePB := func(extra string) *pb.ServiceDeployment {
@@ -399,7 +395,7 @@ func TestCompileGatewaySnapshotGatewayMethodsStrictAndNormalized(t *testing.T) {
 
 func TestGatewayNodeRPCMapsMissingAndUnexpectedDatabaseErrors(t *testing.T) {
 	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db)
+	svc := newTestService(db, testAdminNodeID)
 	ctx := context.Background()
 	missing, err := svc.UpdateGatewayNode(ctx, &pb.UpdateGatewayNodeReq{NodeId: "missing", Node: &pb.GatewayNode{Name: "missing", PublicAddress: "https://missing.example", Status: "enabled"}})
 	require.NoError(t, err)
@@ -423,7 +419,7 @@ func TestGatewayNodeRPCMapsMissingAndUnexpectedDatabaseErrors(t *testing.T) {
 
 func TestGetGatewayNodeRoutesClassifiesMissingAndRouteConfigErrors(t *testing.T) {
 	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db)
+	svc := newTestService(db, testAdminNodeID)
 	ctx := context.Background()
 	missing, err := svc.GetGatewayNodeRoutes(ctx, &pb.GetGatewayNodeRoutesReq{NodeId: "missing"})
 	require.NoError(t, err)
@@ -442,7 +438,7 @@ func dbCountGatewayNodes(dao *DAO, count *int64) error {
 
 func TestDeploymentAndNodeListStatusFilters(t *testing.T) {
 	dao := NewDAO(setupEmptySysDeployTestDB(t))
-	svc := newTestService(dao.db)
+	svc := newTestService(dao.db, testAdminNodeID)
 	ctx := context.Background()
 	for _, node := range []GatewayNode{{NodeID: "node-enabled", Name: "enabled", PublicAddress: "https://enabled.example", Status: "enabled"}, {NodeID: "node-disabled", Name: "disabled", PublicAddress: "https://disabled.example", Status: "disabled"}} {
 		item := node

@@ -70,7 +70,7 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 }
 
 func TestAdminRouterKeepsAdminAndGatewayControlButRejectsMachineService(t *testing.T) {
-	hr := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{})
+	hr := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test")
 	router := hr.buildControlRouter()
 	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
 		rr := httptest.NewRecorder()

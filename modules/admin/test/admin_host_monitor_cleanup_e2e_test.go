@@ -32,7 +32,7 @@ func TestAdminHasNoLegacyHostMonitorSurface(t *testing.T) {
 	if adminconfig.DefaultConfig().Database.Path == "" {
 		t.Fatal("Admin default configuration is incomplete")
 	}
-	for _, deployment := range sysdeploy.DefaultDeployments() {
+	for _, deployment := range sysdeploy.DefaultDeployments("gateway-gz-122") {
 		if deployment.ServiceName == "monitor" || deployment.GatewayPath == "trpc.moox.ops.Monitor" {
 			t.Fatalf("legacy monitor deployment still exposed: %+v", deployment)
 		}
@@ -67,7 +67,7 @@ func TestAdminUpgradeRetiresLegacyMonitorAndRoutesAlias(t *testing.T) {
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatalf("seed legacy deployment: %v", err)
 	}
-	service := sysdeploy.NewService(manager)
+	service := sysdeploy.NewService(manager, "gateway-gz-122")
 	if err := service.SeedDefaults(context.Background()); err != nil {
 		t.Fatalf("SeedDefaults: %v", err)
 	}

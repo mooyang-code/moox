@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -58,17 +56,18 @@ type HTTPRouter struct {
 	gateway              *GatewayHandle
 	controlProvider      GatewayProvider
 	adminServiceProvider AdminServiceDetailProvider
+	adminNodeID          string
 }
 
 // NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider) *HTTPRouter {
-	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider}
+func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider, adminNodeID string) *HTTPRouter {
+	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider, adminNodeID: adminNodeID}
 }
 
 // RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider) error {
+func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider, adminNodeID string) error {
 	gateway := GetGatewayHandleInstance()
-	router := NewHTTPRouter(gateway, provider)
+	router := NewHTTPRouter(gateway, provider, adminNodeID)
 	return router.setupRoutes(s)
 }
 
@@ -177,12 +176,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 	}
 	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），
 	// 框架服务端自动 JSON↔PB，网关不加工 body；未配置 serviceID 返回 404。
-	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
-	if adminNodeID == "" {
-		writeForwardError(ctx, w, fmt.Errorf("MOOX_ADMIN_NODE_ID is required"), headers)
-		return
-	}
-	respBody, err := forwardHTTP(ctx, hr.adminServiceProvider, adminNodeID, serviceID, method, body, headers)
+	respBody, err := forwardHTTP(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID, method, body, headers)
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
 		return
