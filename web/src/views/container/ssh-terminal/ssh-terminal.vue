@@ -1,24 +1,5 @@
 <template>
   <div class="ssh-terminal-page">
-    <!-- Tab bar -->
-    <div class="tab-bar">
-      <div class="tab-list">
-        <div
-          v-for="tab in tabs"
-          :key="tab.id"
-          class="tab-item"
-          :class="{ active: tab.id === activeTabId }"
-          @click="switchTab(tab.id)"
-        >
-          <span class="tab-status" :class="{ connected: tab.connected }" />
-          <span class="tab-name">{{ tab.hostName }}</span>
-          <span class="tab-close" @click.stop="closeTab(tab.id)">
-            <icon-close />
-          </span>
-        </div>
-      </div>
-    </div>
-
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-right">
@@ -129,7 +110,6 @@ const props = defineProps<{ initialHostId?: number; disconnectOnUnmount?: boolea
 interface TerminalTab {
   id: string;
   hostId: number;
-  hostName: string;
   connected: boolean;
   terminal?: Terminal;
   fitAddon?: FitAddon;
@@ -234,7 +214,6 @@ const connectToHost = async (hostId: number) => {
   const tab: TerminalTab = {
     id: sessionId,
     hostId: hostId,
-    hostName: hostConfig.name || `${hostConfig.address}:${hostConfig.port}`,
     connected: false,
     config: hostConfig,
   };
@@ -310,81 +289,6 @@ const initTerminal = async (tab: TerminalTab) => {
 
   // Setup resize observer for this tab
   setupResizeObserver(tab.id);
-};
-
-// ---------- Tab switching ----------
-
-const switchTab = async (tabId: string) => {
-  if (activeTabId.value === tabId) return;
-  activeTabId.value = tabId;
-
-  await nextTick();
-
-  const tab = tabs.value.find((t) => t.id === tabId);
-  if (tab) {
-    if (tab.fitAddon && tab.terminal) {
-      try {
-        tab.fitAddon.fit();
-        tab.terminal.focus();
-      } catch {
-        // ignore
-      }
-      setupResizeObserver(tabId);
-    }
-  }
-};
-
-// ---------- Tab close ----------
-
-const closeTab = async (tabId: string) => {
-  const tabIndex = tabs.value.findIndex((t) => t.id === tabId);
-  if (tabIndex === -1) return;
-
-  const tab = tabs.value[tabIndex];
-
-  // Disconnect
-  if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
-    tab.ws.close();
-  }
-  try {
-    await disconnectSSHSession(tab.id);
-  } catch {
-    // ignore
-  }
-
-  // Dispose terminal
-  if (tab.terminal) {
-    tab.terminal.dispose();
-  }
-
-  // Clean up ref
-  delete terminalRefs[tabId];
-
-  // Remove tab
-  tabs.value.splice(tabIndex, 1);
-
-  // Switch to adjacent tab
-  if (activeTabId.value === tabId) {
-    if (tabs.value.length > 0) {
-      const newIndex = Math.min(tabIndex, tabs.value.length - 1);
-      activeTabId.value = tabs.value[newIndex].id;
-      await nextTick();
-      const newTab = tabs.value[newIndex];
-      if (newTab) {
-        if (newTab.fitAddon) {
-          try {
-            newTab.fitAddon.fit();
-            newTab.terminal?.focus();
-          } catch {
-            // ignore
-          }
-          setupResizeObserver(newTab.id);
-        }
-      }
-    } else {
-      activeTabId.value = '';
-    }
-  }
 };
 
 // ---------- Toolbar actions ----------
@@ -502,97 +406,6 @@ onUnmounted(() => {
   height: 100vh;
   background: #1a1a2e;
   overflow: hidden;
-}
-
-/* ---------- Tab bar ---------- */
-
-.tab-bar {
-  display: flex;
-  align-items: center;
-  height: 38px;
-  min-height: 38px;
-  background: #16213e;
-  border-bottom: 1px solid #0f3460;
-  padding: 0 8px;
-  overflow-x: auto;
-
-  &::-webkit-scrollbar {
-    height: 2px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: #0f3460;
-  }
-}
-
-.tab-list {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 100%;
-}
-
-.tab-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 6px 6px 0 0;
-  background: #1a1a2e;
-  color: #8e8ea0;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-  transition: background 0.15s, color 0.15s;
-
-  &:hover {
-    background: #252545;
-    color: #c4c4d8;
-  }
-
-  &.active {
-    background: #1e1e1e;
-    color: #e4e4e8;
-  }
-}
-
-.tab-status {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #555;
-  flex-shrink: 0;
-
-  &.connected {
-    background: #52c41a;
-    box-shadow: 0 0 4px rgba(82, 196, 26, 0.5);
-  }
-}
-
-.tab-name {
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tab-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  font-size: 10px;
-  flex-shrink: 0;
-  opacity: 0.5;
-  transition: opacity 0.15s, background 0.15s;
-
-  &:hover {
-    opacity: 1;
-    background: rgba(255, 255, 255, 0.1);
-  }
 }
 
 /* ---------- Toolbar ---------- */
