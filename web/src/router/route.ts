@@ -234,7 +234,7 @@ export const staticRoutes = [
       },
       {
         path: "/ops/ssh-sessions",
-        redirect: { path: "/ops/hosts", query: { tab: "sessions" } },
+        redirect: { path: "/ops/hosts", query: { tab: "hosts" } },
         meta: { title: "ops-ssh-sessions", hide: true }
       },
       {

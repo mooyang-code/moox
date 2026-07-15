@@ -50,6 +50,19 @@ if (missing.length) {
   process.exit(1);
 }
 
+const removedSessionPageTokens = [
+  'key="sessions"',
+  'title="在线会话"',
+  'SshSessions',
+  'getOnlineSessions',
+  'tab: "sessions"',
+];
+const remainingSessionPageTokens = removedSessionPageTokens.filter((token) => sources.includes(token));
+if (remainingSessionPageTokens.length) {
+  console.error(`removed session page contract still present: ${remainingSessionPageTokens.join(', ')}`);
+  process.exit(1);
+}
+
 const mappingPath = path.join(root, 'src/api/modules/host-monitor-mapping.ts');
 const mappingSource = fs.readFileSync(mappingPath, 'utf8');
 const compiled = ts.transpileModule(mappingSource, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;

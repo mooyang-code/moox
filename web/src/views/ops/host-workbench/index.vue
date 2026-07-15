@@ -4,7 +4,7 @@
       <header class="page-head">
         <div>
           <h2>主机工作台</h2>
-          <p>在同一个主机列表中查看资源状态、SSH 配置和在线会话。</p>
+          <p>在同一个主机列表中查看资源状态和 SSH 配置。</p>
         </div>
       </header>
 
@@ -16,9 +16,6 @@
         </a-tab-pane>
         <a-tab-pane key="monitor" title="主机监控">
           <HostMonitor />
-        </a-tab-pane>
-        <a-tab-pane key="sessions" title="在线会话">
-          <SshSessions />
         </a-tab-pane>
       </a-tabs>
 
@@ -40,18 +37,17 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
 import SshHosts from '@/views/container/ssh-hosts/ssh-hosts.vue';
-import SshSessions from '@/views/container/ssh-sessions/ssh-sessions.vue';
 import SshTerminal from '@/views/container/ssh-terminal/ssh-terminal.vue';
 import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
 import HostMonitor from './host-monitor.vue';
 import { getCurrentMetrics, type HostMetrics } from '@/api/modules/host-monitor';
-import { createSSHSession, disconnectSSHSession, getOnlineSessions, listSSHHosts, type SSHHost, type SessionInfo } from '@/api/modules/ssh';
+import { createSSHSession, disconnectSSHSession, listSSHHosts, type SSHHost } from '@/api/modules/ssh';
 import { mergeHostWorkbenchRows, type HostWorkbenchRow } from './host-workbench-utils';
 
 const route = useRoute();
 const router = useRouter();
-type HostTab = 'hosts' | 'monitor' | 'sessions';
-const normalizeTab = (value: unknown): HostTab => value === 'monitor' || value === 'sessions' ? value : 'hosts';
+type HostTab = 'hosts' | 'monitor';
+const normalizeTab = (value: unknown): HostTab => value === 'monitor' ? value : 'hosts';
 const activeTab = ref<HostTab>(normalizeTab(route.query.tab));
 if (route.query.tab !== undefined && route.query.tab !== activeTab.value) {
   void router.replace({ query: { ...route.query, tab: activeTab.value } });
@@ -60,7 +56,6 @@ const monitorLoading = ref(false);
 const loadError = ref('');
 const monitors = ref<HostMetrics[]>([]);
 const sshHosts = ref<SSHHost[]>([]);
-const sessions = ref<SessionInfo[]>([]);
 const terminalVisible = ref(false);
 const terminalHostId = ref<number>();
 const fileManagerVisible = ref(false);
@@ -71,7 +66,7 @@ const terminalTitle = computed(() => {
   if (!host?.address) return 'SSH 终端';
   return host.name ? `SSH 终端 - ${host.address}（${host.name}）` : `SSH 终端 - ${host.address}`;
 });
-const rows = computed<HostWorkbenchRow[]>(() => mergeHostWorkbenchRows(monitors.value, sshHosts.value, sessions.value));
+const rows = computed<HostWorkbenchRow[]>(() => mergeHostWorkbenchRows(monitors.value, sshHosts.value));
 const monitorByHostId = computed(() => Object.fromEntries(rows.value.filter((row) => row.ssh?.id !== undefined && row.monitor).map((row) => [row.ssh!.id, row.monitor])));
 const monitorOnlyHosts = computed(() => rows.value.filter((row) => row.monitor && !row.ssh).map((row) => row.monitor!));
 
@@ -79,14 +74,12 @@ async function loadMonitorData() {
   monitorLoading.value = true;
   loadError.value = '';
   try {
-    const results = await Promise.allSettled([getCurrentMetrics(), listSSHHosts({ limit: 500 }), getOnlineSessions()]);
-    const [monitorRsp, sshRsp, sessionRsp] = results;
+    const results = await Promise.allSettled([getCurrentMetrics(), listSSHHosts({ limit: 500 })]);
+    const [monitorRsp, sshRsp] = results;
     if (monitorRsp.status === 'fulfilled') monitors.value = monitorRsp.value.metrics;
     else loadError.value = '资源监控暂不可用，仍可管理 SSH 主机。';
     if (sshRsp.status === 'fulfilled') sshHosts.value = sshRsp.value.hosts || [];
     else loadError.value = `${loadError.value ? `${loadError.value} ` : ''}SSH 主机配置加载失败。`;
-    if (sessionRsp.status === 'fulfilled') sessions.value = sessionRsp.value.sessions || [];
-    else loadError.value = `${loadError.value ? `${loadError.value} ` : ''}在线会话加载失败。`;
   } finally {
     monitorLoading.value = false;
   }
