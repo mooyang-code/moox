@@ -41,6 +41,7 @@ func TestServiceDeploymentsStoresOnlyCurrentRows(t *testing.T) {
 		"c_node_id TEXT NOT NULL",
 		"c_gateway_service_id TEXT NOT NULL DEFAULT ''",
 		"c_gateway_enabled INTEGER NOT NULL DEFAULT 0",
+		"CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0)",
 		"FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes(c_node_id)",
 		"ON t_service_deployments(c_node_id, c_service_name)",
 		"WHERE c_gateway_enabled = 1 AND c_gateway_service_id <> ''",

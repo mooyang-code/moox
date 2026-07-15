@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS t_service_deployments (
     c_extra_config TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0),
     FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes(c_node_id)
 );
 
