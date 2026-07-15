@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -31,10 +32,14 @@ type controlClient interface {
 }
 
 type Options struct {
-	NodeID  string
-	Routes  routeStore
-	Control controlClient
-	Health  *health.State
+	NodeID              string
+	Routes              routeStore
+	Control             controlClient
+	Health              *health.State
+	Now                 func() time.Time
+	Warn                func(string)
+	SyncWarningAfter    time.Duration
+	SyncWarningInterval time.Duration
 }
 
 const (
@@ -47,16 +52,42 @@ const (
 )
 
 type Runtime struct {
-	nodeID  string
-	routes  routeStore
-	control controlClient
-	health  *health.State
-	table   gatewayproxy.Table
-	mu      sync.Mutex
+	nodeID        string
+	routes        routeStore
+	control       controlClient
+	health        *health.State
+	table         gatewayproxy.Table
+	mu            sync.Mutex
+	now           func() time.Time
+	warn          func(string)
+	warnAfter     time.Duration
+	warnEvery     time.Duration
+	failureSince  time.Time
+	failureActive bool
+	lastWarning   time.Time
 }
 
 func New(options Options) *Runtime {
-	return &Runtime{nodeID: options.NodeID, routes: options.Routes, control: options.Control, health: options.Health}
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
+	warn := options.Warn
+	if warn == nil {
+		warn = func(message string) { log.Print(message) }
+	}
+	warnAfter := options.SyncWarningAfter
+	if warnAfter <= 0 {
+		warnAfter = 10 * time.Minute
+	}
+	warnEvery := options.SyncWarningInterval
+	if warnEvery <= 0 {
+		warnEvery = 10 * time.Minute
+	}
+	return &Runtime{
+		nodeID: options.NodeID, routes: options.Routes, control: options.Control, health: options.Health,
+		now: now, warn: warn, warnAfter: warnAfter, warnEvery: warnEvery,
+	}
 }
 
 func (runtime *Runtime) Table() *gatewayproxy.Table { return &runtime.table }
@@ -75,6 +106,7 @@ func (runtime *Runtime) Initialize(ctx context.Context) error {
 	snapshot, err := runtime.control.Pull(ctx, hash)
 	if err != nil {
 		runtime.health.RouteSyncFailed()
+		runtime.noteSyncFailure()
 		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
 			runtime.health.RouteValidationFailed()
 		}
@@ -86,12 +118,14 @@ func (runtime *Runtime) Initialize(ctx context.Context) error {
 	}
 	if err := runtime.apply(snapshot, true); err != nil {
 		runtime.health.RouteSyncFailed()
+		runtime.noteSyncFailure()
 		if hasCache {
 			runtime.report(ctx, err.Error())
 			return nil
 		}
 		return fmt.Errorf("apply initial route snapshot: %w", err)
 	}
+	runtime.resetSyncFailure()
 	runtime.report(ctx, "")
 	return nil
 }
@@ -106,14 +140,42 @@ func (runtime *Runtime) Refresh(ctx context.Context) error {
 	}
 	if err != nil {
 		runtime.health.RouteSyncFailed()
+		runtime.noteSyncFailure()
 		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
 			runtime.health.RouteValidationFailed()
 		}
 		runtime.report(ctx, err.Error())
 		return err
 	}
+	runtime.resetSyncFailure()
 	runtime.report(ctx, "")
 	return nil
+}
+
+func (runtime *Runtime) noteSyncFailure() {
+	now := runtime.now()
+	if !runtime.failureActive {
+		runtime.failureSince = now
+		runtime.failureActive = true
+		return
+	}
+	if now.Sub(runtime.failureSince) < runtime.warnAfter {
+		return
+	}
+	if !runtime.lastWarning.IsZero() && now.Sub(runtime.lastWarning) < runtime.warnEvery {
+		return
+	}
+	runtime.lastWarning = now
+	runtime.warn(fmt.Sprintf(
+		"gateway route sync stale: node_id=%s continuous_failure=%s; retaining cached routes and readiness",
+		runtime.nodeID, now.Sub(runtime.failureSince).Truncate(time.Second),
+	))
+}
+
+func (runtime *Runtime) resetSyncFailure() {
+	runtime.failureSince = time.Time{}
+	runtime.failureActive = false
+	runtime.lastWarning = time.Time{}
 }
 
 func (runtime *Runtime) apply(snapshot gatewayproxy.Snapshot, persist bool) error {

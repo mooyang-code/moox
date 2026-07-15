@@ -121,6 +121,70 @@ func TestHTTPServersHaveBoundedConnectionTimeouts(t *testing.T) {
 	}
 }
 
+func TestContinuousSyncFailureWarnsAfterThresholdAndResetsOnRecovery(t *testing.T) {
+	snapshot := testSnapshot(t, "node-a", "monitor")
+	state := health.NewState()
+	control := &fakeControl{pull: snapshot}
+	now := time.Unix(1_700_000_000, 0)
+	warnings := []string{}
+	runtime := New(Options{
+		NodeID: "node-a", Routes: &fakeRoutes{load: snapshot}, Control: control, Health: state,
+		Now: func() time.Time { return now }, Warn: func(message string) { warnings = append(warnings, message) },
+		SyncWarningAfter: 10 * time.Minute, SyncWarningInterval: 10 * time.Minute,
+	})
+	if err := runtime.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	control.pullErr = errors.New("admin unavailable")
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("first failure succeeded")
+	}
+	now = now.Add(9 * time.Minute)
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("nine-minute failure succeeded")
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings before threshold = %v", warnings)
+	}
+	now = now.Add(time.Minute)
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("ten-minute failure succeeded")
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "node_id=node-a") {
+		t.Fatalf("warnings at threshold = %v", warnings)
+	}
+	if !state.Ready() {
+		t.Fatal("warning cleared readiness")
+	}
+	if _, ok := runtime.Table().Resolve("monitor"); !ok {
+		t.Fatal("warning discarded cached route")
+	}
+	now = now.Add(time.Minute)
+	_ = runtime.Refresh(context.Background())
+	if len(warnings) != 1 {
+		t.Fatalf("warning spam = %v", warnings)
+	}
+
+	control.pullErr = nil
+	if err := runtime.Refresh(context.Background()); err != nil {
+		t.Fatalf("recovery = %v", err)
+	}
+	control.pullErr = errors.New("admin unavailable again")
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("second outage succeeded")
+	}
+	now = now.Add(10 * time.Minute)
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("second threshold failure succeeded")
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("recovery did not reset warning streak: %v", warnings)
+	}
+	if strings.Contains(strings.Join(warnings, " "), "admin unavailable") {
+		t.Fatalf("warning leaked error details: %v", warnings)
+	}
+}
+
 func testSnapshot(t *testing.T, nodeID, serviceID string) gatewayproxy.Snapshot {
 	t.Helper()
 	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: serviceID, Address: "127.0.0.1:1234", ServicePath: "trpc.moox.test.Service"}})
