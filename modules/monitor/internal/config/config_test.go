@@ -173,6 +173,51 @@ func TestMonitorConfigRequiresPeerGatewayCredentialsWhenConfigured(t *testing.T)
 	}
 }
 
+func TestMonitorConfigRejectsNonPositivePeerIntervals(t *testing.T) {
+	for _, mutate := range []func(*Config){
+		func(cfg *Config) { cfg.Peer.PullIntervalSeconds = -1 },
+		func(cfg *Config) { cfg.Peer.TimeoutSeconds = -1 },
+		func(cfg *Config) { cfg.Peer.PullIntervalSeconds = 0 },
+		func(cfg *Config) { cfg.Peer.TimeoutSeconds = 0 },
+	} {
+		cfg := Default()
+		cfg.SysDeploy.Enabled = false
+		cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
+		cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
+		mutate(cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("Validate() error = nil, want non-positive peer interval rejection")
+		}
+	}
+}
+
+func TestMonitorConfigDefaultsZeroPeerIntervalsBeforeValidation(t *testing.T) {
+	path := writeConfig(t, `
+instance:
+  instance_id: monitor-test
+sysdeploy:
+  enabled: false
+peer:
+  enabled: true
+  pull_interval_seconds: 0
+  timeout_seconds: 0
+  service_auth:
+    key_id: monitor
+    secret_key: secret
+  peers:
+    - instance_id: peer-a
+      gateway_url: https://peer.example
+      node_id: gateway-peer-a
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.Peer.PullIntervalSeconds != 10 || cfg.Peer.TimeoutSeconds != 5 {
+		t.Fatalf("peer intervals = %d/%d, want defaults 10/5", cfg.Peer.PullIntervalSeconds, cfg.Peer.TimeoutSeconds)
+	}
+}
+
 func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 	cfg := Default()
 	cfg.Metrics.HostStorage.SpaceID = "crypto"

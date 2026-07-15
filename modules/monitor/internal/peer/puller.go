@@ -20,6 +20,7 @@ import (
 
 const peerSnapshotPath = "/api/service/monitor/GetPeerSnapshot"
 const maxPeerSnapshotBytes int64 = 4 << 20
+const maxPeerObservationSkew = 5 * time.Minute
 
 type Remote struct {
 	InstanceID string
@@ -135,20 +136,24 @@ func (p *Puller) pullRemote(ctx context.Context, remote Remote) error {
 	if baseURL == "" {
 		baseURL = remote.GatewayURL
 	}
-	seenAt := time.Now().UTC()
+	receivedAt := time.Now().UTC()
+	observedAt := receivedAt
 	if snapshot.GetObservedAt() != "" {
-		seenAt, err = time.Parse(time.RFC3339Nano, snapshot.GetObservedAt())
+		observedAt, err = time.Parse(time.RFC3339Nano, snapshot.GetObservedAt())
 		if err != nil {
 			return fmt.Errorf("parse peer observed_at: %w", err)
 		}
-		seenAt = seenAt.UTC()
+		observedAt = observedAt.UTC()
+		if observedAt.Before(receivedAt.Add(-maxPeerObservationSkew)) || observedAt.After(receivedAt.Add(maxPeerObservationSkew)) {
+			return fmt.Errorf("peer observed_at exceeds allowed clock skew of %s", maxPeerObservationSkew)
+		}
 	}
 	if err := p.repo.UpsertInstance(ctx, &domain.MonitorInstance{
-		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, LastSeenAt: &seenAt, Snapshot: string(raw),
+		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, LastSeenAt: &receivedAt, Snapshot: string(raw),
 	}); err != nil {
 		return err
 	}
 	return p.repo.UpsertSnapshot(ctx, &domain.PeerSnapshot{
-		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, Snapshot: string(raw), CheckedAt: seenAt,
+		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, Snapshot: string(raw), CheckedAt: observedAt,
 	})
 }

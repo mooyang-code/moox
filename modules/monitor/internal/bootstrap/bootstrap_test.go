@@ -171,10 +171,23 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	assert.Nil(t, monitorSyncFunc(ctx, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 
 	cfg.Peer.Enabled = false
-	startPeerPuller(ctx, cfg, rt)
+	assert.NoError(t, startPeerPuller(ctx, cfg, rt))
 
 	registerMetricsReporter(nil)
 	assert.NoError(t, registerHealth(nil, nil, rt, nil))
+}
+
+func TestStartPeerPullerReturnsClientConstructionError(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	cfg := config.Default()
+	cfg.Peer.Peers = []config.PeerEntry{{InstanceID: "monitor-peer", GatewayURL: "https://peer.example", NodeID: "gateway-peer"}}
+	cfg.Peer.ServiceAuth = config.ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret", CAFile: filepath.Join(t.TempDir(), "missing.pem")}
+	err = startPeerPuller(context.Background(), cfg, &Runtime{Repositories: mgr.Repositories()})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "peer gateway client")
 }
 
 func TestWaitHostMetricsRespectsCancel(t *testing.T) {

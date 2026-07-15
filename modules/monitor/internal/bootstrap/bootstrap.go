@@ -190,9 +190,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
+	if err := startPeerPuller(runtimeCtx, cfg, runtime); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	runtime.Scheduler = startScheduler(runtimeCtx, cfg, runtime, probeRunner, resultHook)
 	startRetentionCleaner(runtimeCtx, cfg, runtime)
-	startPeerPuller(runtimeCtx, cfg, runtime)
 	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
 	startMetricsConsumer(runtimeCtx, cfg, runtime, metricsStorage)
@@ -567,9 +570,9 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 	return syncer.Sync
 }
 
-func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) {
+func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) error {
 	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
-		return
+		return nil
 	}
 	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))
 	for _, item := range cfg.Peer.Peers {
@@ -586,8 +589,7 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 		CAFile:      cfg.Peer.ServiceAuth.CAFile,
 	})
 	if err != nil {
-		log.ErrorContextf(ctx, "monitor peer gateway client initialization failed: %v", err)
-		return
+		return fmt.Errorf("monitor peer gateway client initialization failed: %w", err)
 	}
 	runtime.Go(func() {
 		ticker := time.NewTicker(time.Duration(cfg.Peer.PullIntervalSeconds) * time.Second)
@@ -604,6 +606,7 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 			}
 		}
 	})
+	return nil
 }
 
 func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {

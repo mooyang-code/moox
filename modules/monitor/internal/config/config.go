@@ -415,6 +415,9 @@ func (c *Config) Validate() error {
 	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (strings.TrimSpace(c.Peer.ServiceAuth.KeyID) == "" || strings.TrimSpace(c.Peer.ServiceAuth.SecretKey) == "") {
 		return fmt.Errorf("peer.service_auth key_id and secret_key must not be empty when peers are configured")
 	}
+	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (c.Peer.PullIntervalSeconds <= 0 || c.Peer.TimeoutSeconds <= 0) {
+		return fmt.Errorf("peer pull_interval_seconds and timeout_seconds must be positive when peers are configured")
+	}
 	return nil
 }
 

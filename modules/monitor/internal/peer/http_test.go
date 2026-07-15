@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,7 @@ func TestPullerPostsSnapshotRPCThroughTargetGateway(t *testing.T) {
 	ctx := context.Background()
 	mgr := openPeerDB(t)
 	repo := mgr.Repositories().Peers
-	now := time.Now().UTC()
+	now := time.Now().UTC().Add(-time.Minute)
 	const secret = "peer-service-secret"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/api/service/monitor/GetPeerSnapshot" {
@@ -78,8 +79,8 @@ func TestPullerPostsSnapshotRPCThroughTargetGateway(t *testing.T) {
 		t.Fatalf("snapshot checked_at = %s, want remote observed_at %s", snapshots[0].CheckedAt, now)
 	}
 	instances, err := repo.ListInstances(ctx)
-	if err != nil || len(instances) != 1 || instances[0].LastSeenAt == nil || !instances[0].LastSeenAt.Equal(now) {
-		t.Fatalf("instances=%+v err=%v, want remote observed_at %s", instances, err, now)
+	if err != nil || len(instances) != 1 || instances[0].LastSeenAt == nil || !instances[0].LastSeenAt.After(now) {
+		t.Fatalf("instances=%+v err=%v, want local receipt time after remote observed_at %s", instances, err, now)
 	}
 }
 
@@ -147,6 +148,72 @@ func TestPullerRejectsResponseWithoutRPCStatus(t *testing.T) {
 	}
 	if err := puller.PullOnce(context.Background()); err == nil {
 		t.Fatal("PullOnce error = nil, want missing ret_info rejection")
+	}
+}
+
+func TestPullerRejectsInvalidGatewayResponses(t *testing.T) {
+	const secret = "peer-service-secret"
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "malformed JSON", payload: `{"retInfo":`},
+		{name: "trailing JSON", payload: `{"retInfo":{"code":"SUCCESS"}} {}`},
+		{name: "unknown field", payload: `{"retInfo":{"code":"SUCCESS"},"unexpected":true}`},
+		{name: "instance mismatch", payload: `{"retInfo":{"code":"SUCCESS"},"instanceId":"other"}`},
+		{name: "bad observed time", payload: `{"retInfo":{"code":"SUCCESS"},"instanceId":"monitor-peer","observedAt":"not-a-time"}`},
+		{name: "future observed time", payload: fmt.Sprintf(`{"retInfo":{"code":"SUCCESS"},"instanceId":"monitor-peer","observedAt":%q}`, time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano))},
+		{name: "stale observed time", payload: fmt.Sprintf(`{"retInfo":{"code":"SUCCESS"},"instanceId":"monitor-peer","observedAt":%q}`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := openPeerDB(t).Repositories().Peers
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(tc.payload)) }))
+			defer server.Close()
+			puller, err := NewPuller(repo, PullerOptions{Peers: []Remote{{InstanceID: "monitor-peer", GatewayURL: server.URL, NodeID: "gateway-peer"}}, Credentials: gatewayauth.Credentials{KeyID: "monitor", Secret: secret}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := puller.PullOnce(context.Background()); err == nil {
+				t.Fatal("PullOnce error = nil, want response rejection")
+			}
+		})
+	}
+}
+
+func TestPullerRejectsOversizedResponseAndRedirect(t *testing.T) {
+	const secret = "peer-service-secret"
+	for _, handler := range []http.Handler{
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(make([]byte, maxPeerSnapshotBytes+1)) }),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/elsewhere", http.StatusFound) }),
+	} {
+		repo := openPeerDB(t).Repositories().Peers
+		server := httptest.NewServer(handler)
+		puller, err := NewPuller(repo, PullerOptions{Peers: []Remote{{InstanceID: "monitor-peer", GatewayURL: server.URL, NodeID: "gateway-peer"}}, Credentials: gatewayauth.Credentials{KeyID: "monitor", Secret: secret}})
+		if err != nil {
+			server.Close()
+			t.Fatal(err)
+		}
+		if err := puller.PullOnce(context.Background()); err == nil {
+			server.Close()
+			t.Fatal("PullOnce error = nil, want hardened response rejection")
+		}
+		server.Close()
+	}
+}
+
+func TestPullerRejectsUnsafeClientConfiguration(t *testing.T) {
+	repo := openPeerDB(t).Repositories().Peers
+	credentials := gatewayauth.Credentials{KeyID: "monitor", Secret: "peer-service-secret"}
+	if _, err := NewPuller(repo, PullerOptions{Credentials: credentials, CAFile: filepath.Join(t.TempDir(), "missing.pem")}); err == nil {
+		t.Fatal("NewPuller error = nil, want bad CA rejection")
+	}
+	puller, err := NewPuller(repo, PullerOptions{Peers: []Remote{{InstanceID: "monitor-peer", GatewayURL: "http://192.0.2.1", NodeID: "gateway-peer"}}, Credentials: credentials, Timeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := puller.PullOnce(context.Background()); err == nil {
+		t.Fatal("PullOnce error = nil, want non-loopback plaintext rejection")
 	}
 }
 
