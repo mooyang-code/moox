@@ -87,6 +87,10 @@ func validateLoopbackAddress(address string) error {
 }
 
 func NormalizeAndHash(nodeID string, routes []Route) (Snapshot, error) {
+	return NormalizeAndHashState(nodeID, false, routes)
+}
+
+func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapshot, error) {
 	normalized := append([]Route(nil), routes...)
 	for index := range normalized {
 		normalizeRouteDefaults(&normalized[index])
@@ -102,7 +106,7 @@ func NormalizeAndHash(nodeID string, routes []Route) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("duplicate service_id %q", normalized[index].ServiceID)
 		}
 	}
-	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Routes: normalized})
+	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Disabled: disabled, Routes: normalized})
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -110,6 +114,7 @@ func NormalizeAndHash(nodeID string, routes []Route) (Snapshot, error) {
 		NodeID:      nodeID,
 		RouteHash:   hash,
 		GeneratedAt: time.Now().UTC(),
+		Disabled:    disabled,
 		Routes:      normalized,
 	}, nil
 }
@@ -125,9 +130,10 @@ func normalizeRouteDefaults(route *Route) {
 
 func hashSnapshot(snapshot Snapshot) (string, error) {
 	canonical := struct {
-		NodeID string  `json:"node_id"`
-		Routes []Route `json:"routes"`
-	}{NodeID: snapshot.NodeID, Routes: snapshot.Routes}
+		NodeID   string  `json:"node_id"`
+		Disabled bool    `json:"disabled"`
+		Routes   []Route `json:"routes"`
+	}{NodeID: snapshot.NodeID, Disabled: snapshot.Disabled, Routes: snapshot.Routes}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("marshal canonical routes: %w", err)

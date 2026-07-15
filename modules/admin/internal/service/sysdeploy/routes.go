@@ -55,11 +55,10 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 			routes = append(routes, route)
 		}
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, routes)
+	snapshot, err := gatewayproxy.NormalizeAndHashState(nodeID, node.Status == "disabled", routes)
 	if err != nil {
 		return gatewayproxy.Snapshot{}, err
 	}
-	snapshot.Disabled = node.Status == "disabled"
 	if err := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}).Error; err != nil {
 		return gatewayproxy.Snapshot{}, err
 	}

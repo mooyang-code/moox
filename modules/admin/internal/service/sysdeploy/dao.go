@@ -194,15 +194,23 @@ func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) 
 		return err
 	}
 	next, changed := mergeDefaultExtraConfig(row.ExtraConfig, item.ExtraConfig)
-	if !changed {
+	updates := map[string]interface{}{}
+	if changed {
+		updates["c_extra_config"] = next
+	}
+	if row.GatewayEnabled != item.GatewayEnabled {
+		updates["c_gateway_enabled"] = item.GatewayEnabled
+	}
+	if row.GatewayServiceID != item.GatewayServiceID {
+		updates["c_gateway_service_id"] = item.GatewayServiceID
+	}
+	if len(updates) == 0 {
 		return nil
 	}
+	updates["c_mtime"] = time.Now()
 	return d.db.WithContext(ctx).Model(&Deployment{}).
 		Where("c_node_id = ? AND c_service_name = ?", item.NodeID, item.ServiceName).
-		Updates(map[string]interface{}{
-			"c_extra_config": next,
-			"c_mtime":        time.Now(),
-		}).Error
+		Updates(updates).Error
 }
 
 func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
@@ -297,5 +305,5 @@ func isUniqueConstraintError(err error) bool {
 		return false
 	}
 	message := err.Error()
-	return strings.Contains(message, "UNIQUE constraint") || strings.Contains(message, "constraint failed")
+	return strings.Contains(message, "UNIQUE constraint")
 }

@@ -76,15 +76,27 @@ func TestTableAllowsEmptySnapshotAndHonorsDisabled(t *testing.T) {
 	if err := table.Replace(empty); err != nil {
 		t.Fatalf("Replace(empty): %v", err)
 	}
-	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin"}})
+	snapshot, err := NormalizeAndHashState("node-1", true, []Route{{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot.Disabled = true
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := table.Resolve("admin"); ok {
 		t.Fatal("Resolve returned a route from a disabled snapshot")
+	}
+}
+
+func TestTableAcceptsStateAwareEnabledAndDisabledHashes(t *testing.T) {
+	var table Table
+	for _, disabled := range []bool{false, true} {
+		snapshot, err := NormalizeAndHashState("node-1", disabled, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := table.Replace(snapshot); err != nil {
+			t.Fatalf("Replace(disabled=%v): %v", disabled, err)
+		}
 	}
 }

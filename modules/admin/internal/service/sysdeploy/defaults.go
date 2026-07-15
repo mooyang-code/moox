@@ -50,8 +50,7 @@ func DefaultDeployments(nodeIDs ...string) []Deployment {
 		deployment("trade_ops", "trade", "http", "127.0.0.1", 11212, "trpc.moox.trade.TradeOpsSvc", "internal", "交易暂停、对账与 Saga 运维服务"),
 	}
 	canonical := map[string]string{
-		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "secret": "secret", "sysdeploy": "sysdeploy",
-		"trade_account": "trade_account", "trade_balance": "trade_balance", "trade_fund": "trade_fund", "trade_apikey": "trade_apikey", "trade_channel": "trade_channel", "trade_tradeop": "trade_tradeop", "trade_order": "trade_order", "trade_tradeq": "trade_tradeq", "trade_position": "trade_position", "trade_rebalance": "trade_rebalance", "trade_ops": "trade_ops",
+		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent",
 	}
 	for i := range rows {
 		rows[i].NodeID = nodeID

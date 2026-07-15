@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -163,8 +164,11 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 					enabledIDs[row.GatewayServiceID] = true
 				}
 			}
-			for _, serviceID := range []string{"collectmgr", "cloudnode", "factormgr", "strategymgr", "monitor", "hostagent", "secret", "sysdeploy", "trade_account", "trade_order"} {
+			for _, serviceID := range []string{"collectmgr", "cloudnode", "factormgr", "strategymgr", "monitor", "hostagent"} {
 				assert.True(t, enabledIDs[serviceID], "canonical gateway service %s missing", serviceID)
+			}
+			for _, serviceID := range []string{"secret", "sysdeploy", "trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
+				assert.False(t, enabledIDs[serviceID], "sensitive gateway service %s exposed", serviceID)
 			}
 		})
 	}
@@ -200,6 +204,101 @@ func TestReportGatewayStatusExactHeartbeatAndUnknownNode(t *testing.T) {
 	var count int64
 	require.NoError(t, dbCountGatewayNodes(dao, &count))
 	assert.Equal(t, int64(1), count)
+}
+
+func TestReportGatewayStatusIgnoresOutOfOrderReport(t *testing.T) {
+	dao := NewDAO(setupEmptySysDeployTestDB(t))
+	ctx := context.Background()
+	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
+	newer := time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)
+	older := newer.Add(-time.Minute)
+	require.NoError(t, dao.ReportGatewayStatus(ctx, GatewayStatusReport{NodeID: "node-a", AppliedRouteHash: "new", RouteCount: 2, LastSeenAt: newer, LastError: "new-error"}))
+	require.NoError(t, dao.ReportGatewayStatus(ctx, GatewayStatusReport{NodeID: "node-a", AppliedRouteHash: "old", RouteCount: 1, LastSeenAt: older, LastError: "old-error"}))
+	node, err := dao.GetGatewayNode(ctx, "node-a")
+	require.NoError(t, err)
+	assert.Equal(t, "new", node.AppliedRouteHash)
+	assert.Equal(t, int32(2), node.RouteCount)
+	assert.Equal(t, "new-error", node.LastError)
+	require.NotNil(t, node.LastSeenAt)
+	assert.True(t, newer.Equal(*node.LastSeenAt))
+}
+
+func TestDisabledNodeStateChangesAndRestoresRouteHash(t *testing.T) {
+	dao := NewDAO(setupEmptySysDeployTestDB(t))
+	ctx := context.Background()
+	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
+	enabled, err := dao.CompileGatewaySnapshot(ctx, "node-a")
+	require.NoError(t, err)
+	require.NoError(t, dao.UpdateGatewayNode(ctx, "node-a", &GatewayNode{Name: "A", PublicAddress: "https://a.example", Status: "disabled"}))
+	disabled, err := dao.CompileGatewaySnapshot(ctx, "node-a")
+	require.NoError(t, err)
+	assert.NotEqual(t, enabled.RouteHash, disabled.RouteHash)
+	require.NoError(t, dao.UpdateGatewayNode(ctx, "node-a", &GatewayNode{Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
+	reenabled, err := dao.CompileGatewaySnapshot(ctx, "node-a")
+	require.NoError(t, err)
+	assert.Equal(t, enabled.RouteHash, reenabled.RouteHash)
+}
+
+func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
+	t.Setenv("MOOX_ADMIN_NODE_ID", "node-a")
+	svc := newTestService(setupEmptySysDeployTestDB(t))
+	ctx := context.Background()
+	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
+	require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceID: "sysdeploy", GatewayEnabled: true, Status: "active"}))
+	require.NoError(t, svc.SeedDefaults(ctx))
+	snapshot, err := svc.CompileGatewaySnapshot(ctx, "node-a")
+	require.NoError(t, err)
+	ids := map[string]bool{}
+	for _, route := range snapshot.Routes {
+		ids[route.ServiceID] = true
+	}
+	for _, id := range []string{"secret", "sysdeploy", "trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
+		assert.False(t, ids[id], "sensitive route %s compiled", id)
+	}
+}
+
+func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
+	assert.True(t, isUniqueConstraintError(errors.New("UNIQUE constraint failed: t.c")))
+	assert.False(t, isUniqueConstraintError(errors.New("constraint failed: FOREIGN KEY constraint failed (787)")))
+	assert.False(t, isUniqueConstraintError(errors.New("constraint failed: CHECK constraint failed (275)")))
+	db := setupEmptySysDeployTestDB(t)
+	fkErr := db.Create(&Deployment{NodeID: "missing", ServiceName: "svc"}).Error
+	require.Error(t, fkErr)
+	assert.False(t, isUniqueConstraintError(fkErr))
+	checkErr := db.Create(&GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "invalid"}).Error
+	require.Error(t, checkErr)
+	assert.False(t, isUniqueConstraintError(checkErr))
+}
+
+func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
+	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent"}
+	sensitive := map[string]bool{"secret": true, "sysdeploy": true, "trade_account": true, "trade_apikey": true, "trade_order": true, "trade_tradeop": true}
+	for _, row := range DefaultDeployments("node-a") {
+		if serviceID, ok := allowed[row.ServiceName]; ok {
+			assert.True(t, row.GatewayEnabled)
+			assert.Equal(t, serviceID, row.GatewayServiceID)
+			continue
+		}
+		if sensitive[row.ServiceName] {
+			assert.False(t, row.GatewayEnabled)
+			assert.Empty(t, row.GatewayServiceID)
+		}
+	}
+}
+
+func TestGatewayNodeRPCMapsMissingAndUnexpectedDatabaseErrors(t *testing.T) {
+	db := setupEmptySysDeployTestDB(t)
+	svc := newTestService(db)
+	ctx := context.Background()
+	missing, err := svc.UpdateGatewayNode(ctx, &pb.UpdateGatewayNodeReq{NodeId: "missing", Node: &pb.GatewayNode{Name: "missing", PublicAddress: "https://missing.example", Status: "enabled"}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_NOT_FOUND, missing.GetRetInfo().GetCode())
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	failed, err := svc.CreateGatewayNode(ctx, &pb.CreateGatewayNodeReq{Node: &pb.GatewayNode{NodeId: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INNER_ERR, failed.GetRetInfo().GetCode())
 }
 
 func dbCountGatewayNodes(dao *DAO, count *int64) error {

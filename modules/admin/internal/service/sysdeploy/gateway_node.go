@@ -43,7 +43,7 @@ func (s *ServiceImpl) CreateGatewayNode(ctx context.Context, req *pb.CreateGatew
 		return &pb.CreateGatewayNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := s.dao.CreateGatewayNode(ctx, node); err != nil {
-		return &pb.CreateGatewayNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.CreateGatewayNodeRsp{RetInfo: retErr(gatewayNodeDAOErrorCode(err), err.Error())}, nil
 	}
 	return &pb.CreateGatewayNodeRsp{RetInfo: retOK(), Node: gatewayNodeToPB(node)}, nil
 }
@@ -58,10 +58,7 @@ func (s *ServiceImpl) UpdateGatewayNode(ctx context.Context, req *pb.UpdateGatew
 		return &pb.UpdateGatewayNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := s.dao.UpdateGatewayNode(ctx, node.NodeID, node); err != nil {
-		code := pb.ErrorCode_INNER_ERR
-		if err == gorm.ErrRecordNotFound {
-			code = pb.ErrorCode_NOT_FOUND
-		}
+		code := gatewayNodeDAOErrorCode(err)
 		return &pb.UpdateGatewayNodeRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
 	row, _ := s.dao.GetGatewayNode(ctx, node.NodeID)
@@ -73,13 +70,21 @@ func (s *ServiceImpl) DeleteGatewayNode(ctx context.Context, req *pb.DeleteGatew
 		return &pb.DeleteGatewayNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id is required")}, nil
 	}
 	if err := s.dao.DeleteGatewayNode(ctx, req.GetNodeId()); err != nil {
-		code := pb.ErrorCode_INVALID_PARAM
-		if err == gorm.ErrRecordNotFound {
-			code = pb.ErrorCode_NOT_FOUND
-		}
+		code := gatewayNodeDAOErrorCode(err)
 		return &pb.DeleteGatewayNodeRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
 	return &pb.DeleteGatewayNodeRsp{RetInfo: retOK()}, nil
+}
+
+func gatewayNodeDAOErrorCode(err error) pb.ErrorCode {
+	if err == gorm.ErrRecordNotFound {
+		return pb.ErrorCode_NOT_FOUND
+	}
+	message := err.Error()
+	if strings.Contains(message, "gateway node already exists") || strings.Contains(message, "ssh host not found") || strings.Contains(message, "has ") && strings.Contains(message, "service deployments") {
+		return pb.ErrorCode_INVALID_PARAM
+	}
+	return pb.ErrorCode_INNER_ERR
 }
 
 func (s *ServiceImpl) GetGatewayNodeRoutes(ctx context.Context, req *pb.GetGatewayNodeRoutesReq) (*pb.GetGatewayNodeRoutesRsp, error) {
@@ -274,12 +279,21 @@ func (d *DAO) ReportGatewayStatus(ctx context.Context, report GatewayStatusRepor
 	if report.LastSeenAt.IsZero() {
 		report.LastSeenAt = time.Now().UTC()
 	}
-	result := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", report.NodeID).Updates(map[string]interface{}{"c_applied_route_hash": report.AppliedRouteHash, "c_route_count": report.RouteCount, "c_last_seen_at": report.LastSeenAt, "c_last_error": report.LastError, "c_mtime": time.Now()})
+	result := d.db.WithContext(ctx).Model(&GatewayNode{}).
+		Where("c_node_id = ? AND (c_last_seen_at IS NULL OR c_last_seen_at <= ?)", report.NodeID, report.LastSeenAt).
+		Updates(map[string]interface{}{"c_applied_route_hash": report.AppliedRouteHash, "c_route_count": report.RouteCount, "c_last_seen_at": report.LastSeenAt, "c_last_error": report.LastError, "c_mtime": time.Now()})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		var count int64
+		if err := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", report.NodeID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
 	}
 	return nil
 }

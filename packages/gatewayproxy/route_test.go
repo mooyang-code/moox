@@ -132,3 +132,20 @@ func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
 		t.Fatal("NormalizeAndHash accepted duplicate service IDs")
 	}
 }
+
+func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
+	enabled, err := NormalizeAndHashState("node-1", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := NormalizeAndHashState("node-1", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.RouteHash == disabled.RouteHash {
+		t.Fatalf("enabled and disabled hashes match: %s", enabled.RouteHash)
+	}
+	if enabled.Disabled || !disabled.Disabled {
+		t.Fatalf("disabled state not retained: enabled=%v disabled=%v", enabled.Disabled, disabled.Disabled)
+	}
+}

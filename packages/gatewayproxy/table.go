@@ -10,7 +10,7 @@ type Table struct {
 }
 
 func (table *Table) Replace(snapshot Snapshot) error {
-	normalized, err := NormalizeAndHash(snapshot.NodeID, snapshot.Routes)
+	normalized, err := NormalizeAndHashState(snapshot.NodeID, snapshot.Disabled, snapshot.Routes)
 	if err != nil {
 		return err
 	}
@@ -18,7 +18,6 @@ func (table *Table) Replace(snapshot Snapshot) error {
 		return fmt.Errorf("route hash mismatch: got %q, want %q", snapshot.RouteHash, normalized.RouteHash)
 	}
 	normalized.GeneratedAt = snapshot.GeneratedAt
-	normalized.Disabled = snapshot.Disabled
 	table.current.Store(&normalized)
 	return nil
 }
