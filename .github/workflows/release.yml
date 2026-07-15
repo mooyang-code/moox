@@ -35,6 +35,9 @@ jobs:
       GOPROXY: https://mirrors.tencent.com/go,direct
       GOPRIVATE: ""
       GONOSUMDB: ""
+      # Keep verification and packaging from racing Go's cache eviction on the
+      # 40 GB self-hosted deployment host.
+      GOCACHE: off
     steps:
       - uses: actions/checkout@v4
         with:
