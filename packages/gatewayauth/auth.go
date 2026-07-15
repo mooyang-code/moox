@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/mooyang-code/moox/packages/requestauth"
@@ -116,16 +118,21 @@ func Verify(c Credentials, req Request, header http.Header, now time.Time) (Clai
 	}
 
 	signedAt := time.Unix(timestamp, 0)
-	if now.Before(signedAt.Add(-skew)) || now.After(signedAt.Add(expire+skew)) {
+	validUntil := signedAt.Add(expire).Add(skew)
+	if now.Before(signedAt.Add(-skew)) || now.After(validUntil) {
 		return Claims{}, errors.New("gateway signature expired or timestamp is in the future")
 	}
 	expected := sign(c.Secret, req.Method, path, req.Body, timestamp, nonce, targetNode)
 	if !hmac.Equal([]byte(expected), []byte(signature)) {
 		return Claims{}, errors.New("gateway signature does not match")
 	}
+	ttl := validUntil.Sub(now)
+	if ttl == 0 {
+		ttl = time.Nanosecond
+	}
 	return Claims{
 		KeyID: keyID, Nonce: nonce, TargetNode: targetNode, Timestamp: timestamp,
-		TTL: expire + skew,
+		TTL: ttl,
 	}, nil
 }
 
@@ -138,11 +145,8 @@ func singleHeader(header http.Header, name string) (string, error) {
 }
 
 func validateCredentials(c Credentials) (time.Duration, time.Duration, error) {
-	if strings.TrimSpace(c.KeyID) == "" || strings.TrimSpace(c.Secret) == "" {
+	if !validIdentifier(c.KeyID) || strings.TrimSpace(c.Secret) == "" {
 		return 0, 0, errors.New("gateway key ID and secret are required")
-	}
-	if strings.ContainsAny(c.KeyID, "\r\n") {
-		return 0, 0, errors.New("gateway key ID cannot contain newlines")
 	}
 	if c.Expire < 0 || c.ClockSkew < 0 {
 		return 0, 0, errors.New("gateway expiry and clock skew cannot be negative")
@@ -162,7 +166,7 @@ func escapedPath(req Request) (string, error) {
 	if strings.TrimSpace(req.Method) == "" {
 		return "", errors.New("gateway request method is required")
 	}
-	if strings.TrimSpace(req.TargetNode) == "" || strings.ContainsAny(req.TargetNode, "\r\n") {
+	if !validIdentifier(req.TargetNode) {
 		return "", errors.New("gateway target node is invalid")
 	}
 	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
@@ -177,6 +181,11 @@ func escapedPath(req Request) (string, error) {
 		return "", errors.New("gateway request path is invalid")
 	}
 	return path, nil
+}
+
+func validIdentifier(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && utf8.ValidString(value) &&
+		!strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func sign(secret, method, path string, body []byte, timestamp int64, nonce, targetNode string) string {

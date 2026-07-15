@@ -109,6 +109,27 @@ func TestVerifyRejectsExpiredAndFutureTimestamp(t *testing.T) {
 	}
 }
 
+func TestVerifyClaimsTTLCoversEntireFutureTimestampWindow(t *testing.T) {
+	signedAt := time.Unix(1_700_000_000, 0)
+	expire := time.Minute
+	skew := 30 * time.Second
+	credentials := Credentials{KeyID: "key", Secret: "secret", Expire: expire, ClockSkew: skew}
+	request := Request{Method: http.MethodGet, Path: "/readyz", TargetNode: "node-a"}
+	header, err := Sign(credentials, request, signedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedAt := signedAt.Add(-skew)
+	claims, err := Verify(credentials, request, header, verifiedAt)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	want := signedAt.Add(expire).Add(skew).Sub(verifiedAt)
+	if claims.TTL != want {
+		t.Fatalf("Claims.TTL = %v, want %v", claims.TTL, want)
+	}
+}
+
 func TestCredentialsValidation(t *testing.T) {
 	request := Request{Method: http.MethodGet, Path: "/readyz", TargetNode: "node-a"}
 	now := time.Unix(1_700_000_000, 0)
@@ -118,6 +139,10 @@ func TestCredentialsValidation(t *testing.T) {
 		"negative expiry":     {KeyID: "key", Secret: "secret", Expire: -time.Second},
 		"negative clock skew": {KeyID: "key", Secret: "secret", ClockSkew: -time.Second},
 		"whitespace key id":   {KeyID: " ", Secret: "secret"},
+		"leading key space":   {KeyID: " key", Secret: "secret"},
+		"trailing key space":  {KeyID: "key ", Secret: "secret"},
+		"key control":         {KeyID: "key\x00id", Secret: "secret"},
+		"key delete control":  {KeyID: "key\x7fid", Secret: "secret"},
 		"whitespace secret":   {KeyID: "key", Secret: " "},
 	}
 	for name, credentials := range tests {
@@ -127,6 +152,24 @@ func TestCredentialsValidation(t *testing.T) {
 			}
 			if _, err := Verify(credentials, request, http.Header{}, now); err == nil {
 				t.Fatal("Verify() accepted invalid credentials")
+			}
+		})
+	}
+}
+
+func TestSignRejectsNonCanonicalTargetNode(t *testing.T) {
+	credentials := Credentials{KeyID: "key", Secret: "secret"}
+	now := time.Unix(1_700_000_000, 0)
+	for name, targetNode := range map[string]string{
+		"leading space":  " node-a",
+		"trailing space": "node-a ",
+		"control":        "node\x00a",
+		"delete control": "node\x7fa",
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := Request{Method: http.MethodGet, Path: "/readyz", TargetNode: targetNode}
+			if _, err := Sign(credentials, request, now); err == nil {
+				t.Fatal("Sign() accepted invalid target node")
 			}
 		})
 	}
