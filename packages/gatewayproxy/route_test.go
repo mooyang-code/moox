@@ -33,6 +33,7 @@ func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
 		{name: "URL", edit: func(r *Route) { r.Address = "http://127.0.0.1:8080" }},
 		{name: "missing port", edit: func(r *Route) { r.Address = "127.0.0.1" }},
 		{name: "zero port", edit: func(r *Route) { r.Address = "127.0.0.1:0" }},
+		{name: "signed port", edit: func(r *Route) { r.Address = "127.0.0.1:+80" }},
 		{name: "large port", edit: func(r *Route) { r.Address = "127.0.0.1:65536" }},
 		{name: "empty service path", edit: func(r *Route) { r.ServicePath = "" }},
 		{name: "leading slash", edit: func(r *Route) { r.ServicePath = "/trpc.moox.Storage" }},

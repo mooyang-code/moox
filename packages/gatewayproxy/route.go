@@ -71,6 +71,14 @@ func validateLoopbackAddress(address string) error {
 	if strings.Contains(host, "%") {
 		return fmt.Errorf("address zones are not allowed")
 	}
+	if portText == "" {
+		return fmt.Errorf("address port must not be empty")
+	}
+	for _, character := range portText {
+		if character < '0' || character > '9' {
+			return fmt.Errorf("address port %q must contain only ASCII digits", portText)
+		}
+	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("address port %q must be between 1 and 65535", portText)

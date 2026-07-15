@@ -5,12 +5,22 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"time"
 )
 
 var methodPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+var (
+	loopbackDialer     = &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	hardenedTransport  = newHardenedTransport()
+	hardenedHTTPClient = &http.Client{
+		Transport:     hardenedTransport,
+		CheckRedirect: rejectRedirect,
+	}
+)
 
 var requestHeaderAllowlist = []string{
 	"Content-Type",
@@ -33,7 +43,9 @@ type Response struct {
 	Body       []byte
 }
 
-func Forward(ctx context.Context, client *http.Client, route Route, method string, body []byte, headers http.Header) (*Response, error) {
+// Forward ignores the client argument so caller-owned transports, proxies, and
+// cookie jars cannot bypass the package's direct loopback-only transport.
+func Forward(ctx context.Context, _ *http.Client, route Route, method string, body []byte, headers http.Header) (*Response, error) {
 	normalizeRouteDefaults(&route)
 	if err := ValidateRoute(route); err != nil {
 		return nil, fmt.Errorf("invalid route: %w", err)
@@ -55,8 +67,7 @@ func Forward(ctx context.Context, client *http.Client, route Route, method strin
 	// An explicit empty value suppresses net/http's implicit User-Agent.
 	request.Header["User-Agent"] = []string{""}
 
-	httpClient := safeClient(client)
-	upstream, err := httpClient.Do(request)
+	upstream, err := hardenedHTTPClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("send upstream request: %w", err)
 	}
@@ -74,24 +85,19 @@ func Forward(ctx context.Context, client *http.Client, route Route, method strin
 	return &Response{StatusCode: upstream.StatusCode, Header: responseHeaders, Body: responseBody}, nil
 }
 
-func safeClient(client *http.Client) *http.Client {
-	if client != nil {
-		copy := *client
-		copy.Jar = nil
-		if copy.Transport == nil {
-			copy.Transport = safeTransport()
-		}
-		copy.CheckRedirect = rejectRedirect
-		return &copy
-	}
-	return &http.Client{Transport: safeTransport(), CheckRedirect: rejectRedirect}
-}
-
-func safeTransport() *http.Transport {
+func newHardenedTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	transport.DialContext = dialLoopback
 	transport.DisableCompression = true
 	return transport
+}
+
+func dialLoopback(ctx context.Context, network, address string) (net.Conn, error) {
+	if err := validateLoopbackAddress(address); err != nil {
+		return nil, fmt.Errorf("reject non-loopback dial target: %w", err)
+	}
+	return loopbackDialer.DialContext(ctx, network, address)
 }
 
 func rejectRedirect(_ *http.Request, _ []*http.Request) error {

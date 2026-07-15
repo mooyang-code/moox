@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -134,12 +135,17 @@ func TestForwardTimesOut(t *testing.T) {
 }
 
 func TestForwardReturnsUpstreamTransportErrors(t *testing.T) {
-	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("dial failed")
-	})}
-	route := Route{ServiceID: "admin", Address: "127.0.0.1:1", ServicePath: "trpc.moox.Admin", TimeoutMS: 100, MaxBodyBytes: 1024}
-	_, err := Forward(context.Background(), client, route, "GetStatus", nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "dial failed") {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	route := Route{ServiceID: "admin", Address: address, ServicePath: "trpc.moox.Admin", TimeoutMS: 100, MaxBodyBytes: 1024}
+	_, err = Forward(context.Background(), nil, route, "GetStatus", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "send upstream request") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -168,6 +174,29 @@ func TestForwardDoesNotInjectCookiesFromSuppliedClientJar(t *testing.T) {
 	}
 }
 
+func TestForwardIgnoresSuppliedClientTransport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, "direct")
+	}))
+	defer server.Close()
+	var customTransportCalls atomic.Int32
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		customTransportCalls.Add(1)
+		return nil, errors.New("custom transport must not run")
+	})}
+
+	response, err := Forward(context.Background(), client, routeForServer(t, server), "GetStatus", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response.Body) != "direct" {
+		t.Fatalf("body = %q, want direct", response.Body)
+	}
+	if customTransportCalls.Load() != 0 {
+		t.Fatalf("custom transport called %d times", customTransportCalls.Load())
+	}
+}
+
 func TestForwardReturnsRedirectWithoutFollowingIt(t *testing.T) {
 	var targetRequests atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -188,6 +217,68 @@ func TestForwardReturnsRedirectWithoutFollowingIt(t *testing.T) {
 	}
 	if targetRequests.Load() != 0 {
 		t.Fatalf("redirect target received %d requests", targetRequests.Load())
+	}
+}
+
+func TestForwardReusesSharedHardenedTransportConnections(t *testing.T) {
+	var newConnections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, "ok")
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConnections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	route := routeForServer(t, server)
+
+	for range 2 {
+		if _, err := Forward(context.Background(), nil, route, "GetStatus", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if newConnections.Load() != 1 {
+		t.Fatalf("new connections = %d, want 1", newConnections.Load())
+	}
+}
+
+func TestValidatedLoopbackAddressesAreForwardable(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		network string
+		address string
+	}{
+		{name: "IPv4", network: "tcp4", address: "127.0.0.1:0"},
+		{name: "IPv6", network: "tcp6", address: "[::1]:0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			listener, err := net.Listen(test.network, test.address)
+			if err != nil {
+				if test.network == "tcp6" {
+					t.Skipf("IPv6 loopback unavailable: %v", err)
+				}
+				t.Fatal(err)
+			}
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(writer, "ok")
+			}))
+			server.Listener = listener
+			server.Start()
+			defer server.Close()
+			route := routeForServer(t, server)
+			if err := ValidateRoute(route); err != nil {
+				t.Fatalf("ValidateRoute: %v", err)
+			}
+			response, err := Forward(context.Background(), nil, route, "GetStatus", nil, nil)
+			if err != nil {
+				t.Fatalf("Forward: %v", err)
+			}
+			if string(response.Body) != "ok" {
+				t.Fatalf("body = %q, want ok", response.Body)
+			}
+		})
 	}
 }
 
