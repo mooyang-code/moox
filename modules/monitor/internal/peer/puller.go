@@ -137,10 +137,11 @@ func (p *Puller) pullRemote(ctx context.Context, remote Remote) error {
 	}
 	seenAt := time.Now().UTC()
 	if snapshot.GetObservedAt() != "" {
-		_, err = time.Parse(time.RFC3339Nano, snapshot.GetObservedAt())
+		seenAt, err = time.Parse(time.RFC3339Nano, snapshot.GetObservedAt())
 		if err != nil {
 			return fmt.Errorf("parse peer observed_at: %w", err)
 		}
+		seenAt = seenAt.UTC()
 	}
 	if err := p.repo.UpsertInstance(ctx, &domain.MonitorInstance{
 		InstanceID: instanceID, BaseURL: baseURL, Status: domain.InstanceStatusActive, LastSeenAt: &seenAt, Snapshot: string(raw),

@@ -74,6 +74,13 @@ func TestPullerPostsSnapshotRPCThroughTargetGateway(t *testing.T) {
 	if err != nil || len(snapshots) != 1 || snapshots[0].InstanceID != "monitor-hk" {
 		t.Fatalf("snapshots=%+v err=%v", snapshots, err)
 	}
+	if !snapshots[0].CheckedAt.Equal(now) {
+		t.Fatalf("snapshot checked_at = %s, want remote observed_at %s", snapshots[0].CheckedAt, now)
+	}
+	instances, err := repo.ListInstances(ctx)
+	if err != nil || len(instances) != 1 || instances[0].LastSeenAt == nil || !instances[0].LastSeenAt.Equal(now) {
+		t.Fatalf("instances=%+v err=%v, want remote observed_at %s", instances, err, now)
+	}
 }
 
 func TestPullerContinuesAfterPeerFailure(t *testing.T) {
