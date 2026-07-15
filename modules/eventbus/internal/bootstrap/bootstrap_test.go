@@ -22,7 +22,7 @@ func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
 	text = strings.ReplaceAll(text, "addr: \":11419\"", "addr: \"127.0.0.1:0\"")
 	for _, maxBytes := range []string{
 		"21474836480", "10737418240", "2147483648",
-		"8589934592", "4294967296", "1073741824",
+		"8589934592", "4294967296", "2147483648", "1073741824", "536870912",
 	} {
 		text = strings.ReplaceAll(text, maxBytes, "1048576")
 	}
