@@ -4,6 +4,14 @@
     <div class="page-head">
       <h2>数据对象</h2>
       <a-space>
+        <a-input-search
+          v-model="searchKeyword"
+          allow-clear
+          placeholder="搜索对象ID、名称或类型"
+          style="width: 280px"
+          @search="onSearch"
+          @clear="onSearch"
+        />
         <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增对象
@@ -157,6 +165,7 @@ const rows = ref<Subject[]>([]);
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
+const searchKeyword = ref('');
 const pagination = reactive(defaultPagination());
 
 const form = reactive<Subject>({
@@ -195,6 +204,7 @@ async function load() {
   try {
     const rsp = await listSubjects({
       space_id: selectedSpaceId.value,
+      keyword: searchKeyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize },
     });
     rows.value = rsp.subjects || [];
@@ -202,6 +212,11 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function onSearch() {
+  pagination.current = 1;
+  void load();
 }
 
 function resetForm() {

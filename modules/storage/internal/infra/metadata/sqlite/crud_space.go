@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -78,14 +79,16 @@ func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID 
 	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
 }
 
-func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string, market string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string, market string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+	keyword = strings.TrimSpace(keyword)
 	items, err := queryMessages(ctx, s.db, `
 		SELECT c_attrs_json FROM t_data_sources
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_kind = ?)
 		  AND (? = '' OR c_market = ?)
+		  AND (? = '' OR instr(lower(c_data_source_id), lower(?)) > 0 OR instr(lower(c_name), lower(?)) > 0 OR instr(lower(c_kind), lower(?)) > 0 OR instr(lower(c_market), lower(?)) > 0)
 		ORDER BY c_space_id, c_data_source_id
-	`, []any{spaceID, spaceID, kind, kind, market, market}, func() *pb.DataSource { return &pb.DataSource{} })
+	`, []any{spaceID, spaceID, kind, kind, market, market, keyword, keyword, keyword, keyword, keyword}, func() *pb.DataSource { return &pb.DataSource{} })
 	if err != nil {
 		return nil, nil, err
 	}

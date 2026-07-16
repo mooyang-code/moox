@@ -121,7 +121,7 @@ func (s *stubMetadataStore) GetDataSource(context.Context, string, string) (*pb.
 	return nil, os.ErrNotExist
 }
 
-func (s *stubMetadataStore) ListDataSources(context.Context, string, string, string, *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+func (s *stubMetadataStore) ListDataSources(context.Context, string, string, string, string, *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
 }
 
@@ -133,7 +133,7 @@ func (s *stubMetadataStore) GetSubject(context.Context, string, string) (*pb.Sub
 	return nil, os.ErrNotExist
 }
 
-func (s *stubMetadataStore) ListSubjects(context.Context, string, string, string, []string, *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
+func (s *stubMetadataStore) ListSubjects(context.Context, string, string, string, []string, string, *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
 }
 
