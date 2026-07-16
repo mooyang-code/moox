@@ -401,7 +401,7 @@ onMounted(async () => {
 
 <style scoped>
 .fields-inner { display: flex; min-height: calc(100vh - 116px); flex-direction: column; }
-.toolbar { display: flex; min-height: 48px; margin-bottom: var(--moox-space-2); align-items: center; justify-content: space-between; gap: var(--moox-space-4); }
+.toolbar { display: flex; min-height: 32px; margin-bottom: var(--moox-space-2); align-items: center; justify-content: space-between; gap: var(--moox-space-4); }
 .toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: var(--moox-space-2); }
 .page-title { flex: 0 0 auto; margin: 0 var(--moox-space-2) 0 0; font-size: 20px; font-weight: 600; }
 .toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--moox-space-2); white-space: nowrap; }
