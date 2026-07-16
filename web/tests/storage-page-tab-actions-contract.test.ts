@@ -48,4 +48,11 @@ describe('storage page actions contract', () => {
     expect(pages.archive).not.toContain('debugMode');
     expect(pages.archive).not.toContain('technicalDetails');
   });
+
+  it('uses green create actions while keeping the archive query action primary', () => {
+    expect(pageActions('nodes', pages.nodes)).toMatch(/<a-button\s+type="primary"\s+status="success"[^>]*>[\s\S]*新增节点/);
+    expect(pageActions('routes', pages.routes)).toMatch(/<a-button\s+type="primary"\s+status="success"[^>]*>[\s\S]*新增路由/);
+    expect(pageActions('archive', pages.archive)).toMatch(/<a-button\s+type="primary"[^>]*>[\s\S]*查询/);
+    expect(pageActions('archive', pages.archive)).not.toContain('status="success"');
+  });
 });

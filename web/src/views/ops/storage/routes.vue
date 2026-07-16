@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-actions">
         <a-space>
-          <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+          <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
             <template #icon><icon-plus /></template>
             新增路由
           </a-button>

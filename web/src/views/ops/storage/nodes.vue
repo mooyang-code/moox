@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-actions">
         <a-space>
-          <a-button type="primary" @click="openCreate">
+          <a-button type="primary" status="success" @click="openCreate">
             <template #icon><icon-plus /></template>
             新增节点
           </a-button>
