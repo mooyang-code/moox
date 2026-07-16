@@ -33,7 +33,7 @@ describe('page toolbar cleanup contract', () => {
 
     const sources = read('data/sources/index.vue');
     expect(sources).not.toContain('<icon-refresh />');
-    expect(sources).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*4px;/);
+    expect(sources).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*8px;/);
   });
 
   it('removes refresh and reset controls reviewed beside create or query actions', () => {

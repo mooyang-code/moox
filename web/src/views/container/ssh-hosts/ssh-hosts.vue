@@ -546,7 +546,7 @@ onMounted(() => {
     min-height: 100%;
 
     .host-list-toolbar {
-      margin-bottom: 4px;
+      margin-bottom: 8px;
     }
   }
 
