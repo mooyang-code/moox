@@ -13,7 +13,9 @@
       :exclude-likely-factor-datasets="true"
     >
       <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据视图" @change="syncRoute" />
+        <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
+          <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
+        </a-tabs>
       </template>
     </ViewDefinitions>
     <ViewBrowse
@@ -26,7 +28,9 @@
       :exclude-likely-factor-datasets="true"
     >
       <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据视图" @change="syncRoute" />
+        <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
+          <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
+        </a-tabs>
       </template>
     </ViewBrowse>
   </div>
@@ -35,7 +39,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import { listFactorBindings } from '@/api/factor';
 import type { FactorBinding } from '@/api/factor/types';
 import { useSpaceStore } from '@/store/modules/space';

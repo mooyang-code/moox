@@ -16,6 +16,18 @@ describe('collector data management workbench', () => {
     expect(source).toContain('query-key="datasetTab"');
   });
 
+  it('uses a compact rounded style for the secondary workbench tabs', () => {
+    const datasets = fs.readFileSync(path.resolve(__dirname, '../datasets/index.vue'), 'utf8');
+    const views = fs.readFileSync(path.resolve(__dirname, '../views/index.vue'), 'utf8');
+
+    for (const source of [datasets, views]) {
+      expect(source).toContain('type="rounded"');
+      expect(source).toContain('size="small"');
+      expect(source).toContain('class="collector-subtabs"');
+      expect(source).not.toContain('PageTitleTabs');
+    }
+  });
+
   it('keeps legacy data routes pointed at the unified workbench', () => {
     const menu = fs.readFileSync(path.resolve(__dirname, '../../../api/modules/system/static-menu.ts'), 'utf8');
     const routes = fs.readFileSync(path.resolve(__dirname, '../../../router/route.ts'), 'utf8');
