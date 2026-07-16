@@ -32,7 +32,7 @@ func TestAdminHasNoLegacyHostMonitorSurface(t *testing.T) {
 	if adminconfig.DefaultConfig().Database.Path == "" {
 		t.Fatal("Admin default configuration is incomplete")
 	}
-	for _, deployment := range sysdeploy.DefaultDeployments() {
+	for _, deployment := range sysdeploy.DefaultDeployments("gateway-gz-122") {
 		if deployment.ServiceName == "monitor" || deployment.GatewayPath == "trpc.moox.ops.Monitor" {
 			t.Fatalf("legacy monitor deployment still exposed: %+v", deployment)
 		}
@@ -57,13 +57,17 @@ func TestAdminUpgradeRetiresLegacyMonitorAndRoutesAlias(t *testing.T) {
 		t.Fatal("fresh Admin database created legacy host history")
 	}
 	legacy := sysdeploy.Deployment{
+		NodeID:      "gateway-gz-122",
 		ServiceName: "monitor", ServiceKind: "admin_rpc", Protocol: "http", Host: "127.0.0.1", Port: 11103,
 		GatewayPath: "trpc.moox.ops.Monitor", Scope: "internal", Status: "active", ExtraConfig: "{}",
+	}
+	if err := db.Create(&sysdeploy.GatewayNode{NodeID: "gateway-gz-122", Name: "local", PublicAddress: "https://106.53.107.122", Status: "enabled"}).Error; err != nil {
+		t.Fatalf("seed gateway node: %v", err)
 	}
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatalf("seed legacy deployment: %v", err)
 	}
-	service := sysdeploy.NewService(manager)
+	service := sysdeploy.NewService(manager, "gateway-gz-122")
 	if err := service.SeedDefaults(context.Background()); err != nil {
 		t.Fatalf("SeedDefaults: %v", err)
 	}
@@ -74,7 +78,7 @@ func TestAdminUpgradeRetiresLegacyMonitorAndRoutesAlias(t *testing.T) {
 	if activeLegacy != 0 {
 		t.Fatal("legacy Admin monitor deployment remains active")
 	}
-	detail, ok := service.ResolveGatewayServiceDetail(context.Background(), "monitor")
+	detail, ok := service.ResolveAdminServiceDetail(context.Background(), "gateway-gz-122", "monitor")
 	if !ok || detail.Path != "trpc.moox.monitor.MonitorMgr" || detail.Address != "127.0.0.1:11410" {
 		t.Fatalf("monitor gateway alias = %+v, ok=%v", detail, ok)
 	}

@@ -90,7 +90,8 @@ admin 网关
 - `MOOX_COLLECTOR_DB_PATH` — 覆盖 Collector SQLite 路径
 - `MOOX_COLLECTOR_ADMIN_GATEWAY_URL` — 配置后从 Admin SysDeploy active 部署记录解析 CloudNode/Storage 依赖
 - `MOOX_COLLECTOR_STORAGE_METADATA_TARGET` / `MOOX_COLLECTOR_STORAGE_ACCESS_TARGET` — 覆盖 storage tRPC 直连 target
-- `MOOX_SERVICE_AUTH_ACCESS_KEY` / `MOOX_SERVICE_AUTH_SECRET_KEY` — Collector 调用 `/api/service/sysdeploy/*` 时使用的后台签名密钥
+- `MOOX_GATEWAY_NODE_ID` / `MOOX_GATEWAY_SERVICE_KEY_ID` / `MOOX_GATEWAY_SERVICE_SECRET_KEY` — Collector 调用 `/api/service/*` 时使用的 Gateway 节点签名身份
+- `MOOX_GATEWAY_CA_FILE` — 宿主机进程使用的 Gateway CA 文件；SCF 使用 `MOOX_GATEWAY_CA_PEM_B64`
 
 ## SCF runtime 配置
 

@@ -101,8 +101,9 @@ func TestApplyEnv_OverridesBusinessFields(t *testing.T) {
 	t.Setenv("MOOX_TRADE_DB_PATH", dbPath)
 	t.Setenv("MOOX_TRADE_ENCRYPTION_KEY", "env-secret")
 	t.Setenv("MOOX_TRADE_CONTROL_GATEWAY", "http://127.0.0.1:18080")
-	t.Setenv("MOOX_TRADE_SERVICE_AUTH_ACCESS_KEY", "env-ak")
-	t.Setenv("MOOX_TRADE_SERVICE_AUTH_SECRET_KEY", "env-sk")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "env-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "env-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
 
 	cfg := DefaultConfig()
 	cfg.applyEnv()
@@ -112,6 +113,7 @@ func TestApplyEnv_OverridesBusinessFields(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:18080", cfg.ControlGateway.BaseURL)
 	assert.Equal(t, "env-ak", cfg.ControlGateway.ServiceAuth.AccessKey)
 	assert.Equal(t, "env-sk", cfg.ControlGateway.ServiceAuth.SecretKey)
+	assert.Equal(t, "gateway-gz-122", cfg.ControlGateway.ServiceAuth.TargetNode)
 }
 
 func TestLoad_InvalidYAML_ShouldReturnParseError(t *testing.T) {

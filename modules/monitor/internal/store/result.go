@@ -34,6 +34,26 @@ func (r *ResultRepository) Recent(ctx context.Context, spaceID, checkID string, 
 	return results, err
 }
 
+// Latest returns the newest result for each monitored check.
+func (r *ResultRepository) Latest(ctx context.Context, limit int) ([]domain.CheckResult, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	var results []domain.CheckResult
+	err := r.db.WithContext(ctx).
+		Raw(`SELECT r.* FROM t_monitor_checks c
+			JOIN t_monitor_check_results r ON r.c_id = (
+				SELECT latest.c_id FROM t_monitor_check_results latest
+				WHERE latest.c_space_id = c.c_space_id AND latest.c_check_id = c.c_check_id
+				ORDER BY latest.c_checked_at DESC, latest.c_id DESC LIMIT 1
+			)
+			WHERE c.c_enabled = 1 AND c.c_is_deleted = 0
+			ORDER BY c.c_space_id ASC, c.c_check_id ASC
+			LIMIT ?`, limit).
+		Scan(&results).Error
+	return results, err
+}
+
 func (r *ResultRepository) Stats(ctx context.Context, spaceID string, since time.Time) (float64, int64, error) {
 	query := r.db.WithContext(ctx).Where("c_checked_at >= ?", since)
 	if spaceID != "" {

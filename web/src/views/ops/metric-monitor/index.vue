@@ -1,7 +1,7 @@
 <template>
   <div class="metric-monitor-page">
     <header class="page-head">
-      <div>
+      <div v-if="!embedded">
         <h2>应用指标</h2>
         <span>服务实例主动上报的 Prometheus 指标与历史趋势。</span>
       </div>
@@ -137,6 +137,9 @@ import MetricChart, { type ChartPoint } from './metric-chart.vue';
 import MetricRuleEditor from './metric-rule-editor.vue';
 import { metricMonitorApi } from '@/api/metric-monitor';
 import type { MetricHistoryPoint, MetricLatestPoint, MetricNameInfo, MetricRule, MetricRuleEvaluation, MetricSeriesInfo, MetricServiceInfo, MetricRuleState, WebhookChannel } from '@/api/metric-monitor/types';
+
+const props = defineProps<{ embedded?: boolean }>();
+const embedded = computed(() => props.embedded === true);
 
 const MAX_DISPLAY_SERIES = 50;
 const MAX_CHART_SERIES = 10;
@@ -347,7 +350,7 @@ onMounted(refreshAll);
 </script>
 
 <style scoped lang="scss">
-.metric-monitor-page { padding: 20px; color: var(--color-text-1); }
+.metric-monitor-page { height: 100%; overflow-y: auto; padding: 0 0 20px; color: var(--color-text-1); }
 .page-head, .section-head, .filter-band { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .page-head { margin-bottom: 16px; }
 .page-head h2 { margin: 0 0 6px; font-size: 22px; }
@@ -357,7 +360,7 @@ onMounted(refreshAll);
 .option-count { color: var(--color-text-3); }
 .state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: 16px; padding: 16px; border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
 .state-band { min-height: 220px; display: grid; place-items: center; }
-.explorer-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; }
+.explorer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .latest-panel, .chart-panel { min-width: 0; }
 .section-head { margin-bottom: 12px; }
 .section-head > div { display: flex; align-items: baseline; gap: 10px; }
@@ -365,5 +368,4 @@ onMounted(refreshAll);
 .inline-empty { padding: 28px; text-align: center; color: var(--color-text-3); }
 .rule-name { display: flex; flex-direction: column; gap: 3px; }
 .rule-name span { color: var(--color-text-3); font-size: 12px; }
-@media (max-width: 1100px) { .explorer-grid { grid-template-columns: 1fr; } }
 </style>

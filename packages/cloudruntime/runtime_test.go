@@ -2,7 +2,9 @@ package cloudruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,30 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPostServiceUsesServerlessCAPEMFromEnvironment(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("target node = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+	}))
+	defer server.Close()
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", base64.StdEncoding.EncodeToString(caPEM))
+	var out map[string]any
+	requireNoError(t, postService(context.Background(), Config{ServiceGatewayTarget: server.URL, HTTPTimeout: time.Second}, "cloudnode", "PollJobItems", map[string]any{}, &out))
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
 	resetRegistryForTest()
@@ -24,6 +50,9 @@ func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
 		return Result{Summary: map[string]any{"rows_written": 12}}, nil
 	}))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("X-Moox-Target-Node = %q, want gateway-gz-122", got)
+		}
 		switch r.URL.Path {
 		case "/api/service/cloudnode/PollJobItems":
 			if err := json.NewDecoder(r.Body).Decode(&pollReq); err != nil {
@@ -60,8 +89,9 @@ func TestRunPollsJobItemsAndDispatchesRegisteredHandler(t *testing.T) {
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey:  "test-ak",
+			SecretKey:  "test-sk",
+			TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -127,8 +157,7 @@ func TestRunReportsPermanentFailureWhenHandlerMissing(t *testing.T) {
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.unknown"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey: "test-ak", SecretKey: "test-sk", TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -178,8 +207,7 @@ func TestRunReportsRetryableErrorKind(t *testing.T) {
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey: "test-ak", SecretKey: "test-sk", TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -246,8 +274,7 @@ func TestRunReportsPermanentFailureAndCompletionLogWhenHandlerPanics(t *testing.
 		NodeID:               "node-a",
 		SupportedJobTypes:    []string{"collect.kline"},
 		Auth: AuthConfig{
-			AccessKey: "test-ak",
-			SecretKey: "test-sk",
+			AccessKey: "test-ak", SecretKey: "test-sk", TargetNode: "gateway-gz-122",
 		},
 	}); err != nil {
 		t.Fatalf("Run returned error: %v", err)

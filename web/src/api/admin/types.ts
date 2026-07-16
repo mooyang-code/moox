@@ -53,6 +53,9 @@ export interface ServiceDeployment {
   extra_config?: string;
   created_at?: string;
   updated_at?: string;
+  node_id: string;
+  gateway_service_id: string;
+  gateway_enabled: boolean;
 }
 
 export type ServiceDeploymentInput = Pick<
@@ -67,7 +70,36 @@ export type ServiceDeploymentInput = Pick<
   | 'status'
   | 'description'
   | 'extra_config'
+  | 'node_id'
+  | 'gateway_service_id'
+  | 'gateway_enabled'
 >;
+
+export interface GatewayNode {
+  node_id: string;
+  host_id: number;
+  name: string;
+  public_address: string;
+  status: string;
+  route_hash?: string;
+  applied_route_hash?: string;
+  route_count?: number;
+  last_seen_at?: string;
+  last_error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type GatewayNodeInput = Pick<GatewayNode, 'node_id' | 'host_id' | 'name' | 'public_address' | 'status'>;
+
+export interface GatewayRoute {
+  service_id: string;
+  address: string;
+  service_path: string;
+  timeout_ms: number;
+  max_body_bytes: number;
+  allowed_methods?: string[];
+}
 
 export interface ServiceDeploymentWarning {
   code: string;

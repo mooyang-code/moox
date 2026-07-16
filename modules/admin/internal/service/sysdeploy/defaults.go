@@ -4,11 +4,9 @@ package sysdeploy
 // New deployments should update public rows through SysDeploy/UI after the admin plane is reachable.
 const defaultPublicHost = "106.53.107.122"
 
-func DefaultDeployments() []Deployment {
+func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
-		deployment("service_gateway", "gateway", "https", defaultPublicHost, 11001, "/api/service", "public", "后台/SCF HTTPS 入口，使用 HMAC 鉴权访问 /api/service/*"),
-		deployment("service_gateway_internal", "gateway", "http", "127.0.0.1", 11002, "/api/service", "internal", "同机后台请求入口，使用 HMAC 鉴权访问 /api/service/*"),
 		withExtra(deployment("web_host", "frontend", "https", defaultPublicHost, 9527, "", "public", "Caddy 管理台 HTTPS 页面入口；web-host 上游仅绑定 loopback"), `{"health_url":"http://127.0.0.1:19527/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("storage_metadata", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage.Metadata", "public", "moox-storage 元数据 HTTP 服务"), `{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("storage_access", "storage", "http", defaultPublicHost, 20201, "trpc.moox.storage.Access", "public", "moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连"), `{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true}`),
@@ -46,6 +44,21 @@ func DefaultDeployments() []Deployment {
 		deployment("trade_position", "trade", "http", "127.0.0.1", 11208, "trpc.moox.trade.PositionSvc", "internal", "持仓服务"),
 		deployment("trade_rebalance", "trade", "http", "127.0.0.1", 11211, "trpc.moox.trade.RebalanceSvc", "internal", "目标仓位调仓服务"),
 		deployment("trade_ops", "trade", "http", "127.0.0.1", 11212, "trpc.moox.trade.TradeOpsSvc", "internal", "交易暂停、对账与 Saga 运维服务"),
+	}
+	canonical := map[string]string{
+		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",
+	}
+	for i := range rows {
+		rows[i].NodeID = nodeID
+		if serviceID, ok := canonical[rows[i].ServiceName]; ok && rows[i].GatewayPath != "" {
+			rows[i].GatewayServiceID, rows[i].GatewayEnabled = serviceID, true
+		}
+		if rows[i].ServiceName == "sysdeploy" {
+			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments"]}`
+		}
+		if rows[i].ServiceName == "secret" {
+			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"]}`
+		}
 	}
 	return rows
 }

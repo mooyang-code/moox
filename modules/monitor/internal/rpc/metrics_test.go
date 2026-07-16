@@ -93,11 +93,12 @@ func TestMetricRPCWithInjectedQueryService(t *testing.T) {
 	require.Len(t, services.GetServices(), 1)
 	assert.Equal(t, "api", services.GetServices()[0].GetServiceName())
 
-	// ListMetricNames hits a sqlite driver scan quirk on MAX(c_last_seen_at);
-	// still exercise the RPC path (returns INNER_ERR rather than panicking).
 	names, err := svc.ListMetricNames(ctx, &monitorpb.ListMetricNamesReq{SpaceId: "moox_system", ServiceName: "api"})
 	require.NoError(t, err)
-	assert.NotNil(t, names.GetRetInfo())
+	assert.Equal(t, commonpb.ErrorCode_SUCCESS, names.GetRetInfo().GetCode())
+	require.Len(t, names.GetNames(), 1)
+	assert.Equal(t, "requests", names.GetNames()[0].GetMetricName())
+	assert.NotEmpty(t, names.GetNames()[0].GetLastSeenAt())
 
 	series, err := svc.ListMetricSeries(ctx, &monitorpb.ListMetricSeriesReq{SpaceId: "moox_system", ServiceName: "api", MetricName: "requests"})
 	require.NoError(t, err)

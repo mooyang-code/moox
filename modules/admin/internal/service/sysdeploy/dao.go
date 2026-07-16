@@ -21,13 +21,13 @@ func (d *DAO) Create(ctx context.Context, item *Deployment) error {
 		return fmt.Errorf("deployment is required")
 	}
 	normalizeDeployment(item)
-	if item.ServiceName == "" {
-		return fmt.Errorf("service_name is required")
+	if item.NodeID == "" || item.ServiceName == "" {
+		return fmt.Errorf("node_id and service_name are required")
 	}
-	if exists, err := d.exists(ctx, item.ServiceName); err != nil {
+	if exists, err := d.exists(ctx, item.NodeID, item.ServiceName); err != nil {
 		return err
 	} else if exists {
-		return fmt.Errorf("service deployment already exists: %s", item.ServiceName)
+		return fmt.Errorf("service deployment already exists: %s/%s", item.NodeID, item.ServiceName)
 	}
 	now := time.Now()
 	item.CreatedAt = now
@@ -41,7 +41,8 @@ func (d *DAO) Create(ctx context.Context, item *Deployment) error {
 	return nil
 }
 
-func (d *DAO) Update(ctx context.Context, serviceName string, item *Deployment) error {
+func (d *DAO) Update(ctx context.Context, nodeID, serviceName string, item *Deployment) error {
+	nodeID = strings.TrimSpace(nodeID)
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
 		return fmt.Errorf("service_name is required")
@@ -49,55 +50,59 @@ func (d *DAO) Update(ctx context.Context, serviceName string, item *Deployment) 
 	if item == nil {
 		return fmt.Errorf("deployment is required")
 	}
-	item.ServiceName = serviceName
+	item.NodeID, item.ServiceName = nodeID, serviceName
 	normalizeDeployment(item)
 	result := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ?", serviceName).
+		Where("c_node_id = ? AND c_service_name = ?", nodeID, serviceName).
 		Updates(map[string]interface{}{
-			"c_service_kind": item.ServiceKind,
-			"c_protocol":     item.Protocol,
-			"c_host":         item.Host,
-			"c_port":         item.Port,
-			"c_gateway_path": item.GatewayPath,
-			"c_scope":        item.Scope,
-			"c_status":       item.Status,
-			"c_description":  item.Description,
-			"c_extra_config": item.ExtraConfig,
-			"c_mtime":        time.Now(),
+			"c_service_kind":       item.ServiceKind,
+			"c_protocol":           item.Protocol,
+			"c_host":               item.Host,
+			"c_port":               item.Port,
+			"c_gateway_path":       item.GatewayPath,
+			"c_gateway_service_id": item.GatewayServiceID,
+			"c_gateway_enabled":    item.GatewayEnabled,
+			"c_scope":              item.Scope,
+			"c_status":             item.Status,
+			"c_description":        item.Description,
+			"c_extra_config":       item.ExtraConfig,
+			"c_mtime":              time.Now(),
 		})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("service deployment not found: %s", serviceName)
+		return fmt.Errorf("service deployment not found: %s: %w", serviceName, gorm.ErrRecordNotFound)
 	}
 	return nil
 }
 
-func (d *DAO) Delete(ctx context.Context, serviceName string) error {
+func (d *DAO) Delete(ctx context.Context, nodeID, serviceName string) error {
+	nodeID = strings.TrimSpace(nodeID)
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
 		return fmt.Errorf("service_name is required")
 	}
 	result := d.db.WithContext(ctx).
-		Where("c_service_name = ?", serviceName).
+		Where("c_node_id = ? AND c_service_name = ?", nodeID, serviceName).
 		Delete(&Deployment{})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("service deployment not found: %s", serviceName)
+		return fmt.Errorf("service deployment not found: %s: %w", serviceName, gorm.ErrRecordNotFound)
 	}
 	return nil
 }
 
-func (d *DAO) Get(ctx context.Context, serviceName string) (*Deployment, error) {
+func (d *DAO) Get(ctx context.Context, nodeID, serviceName string) (*Deployment, error) {
+	nodeID = strings.TrimSpace(nodeID)
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
 		return nil, fmt.Errorf("service_name is required")
 	}
 	var row Deployment
-	err := d.db.WithContext(ctx).Where("c_service_name = ?", serviceName).First(&row).Error
+	err := d.db.WithContext(ctx).Where("c_node_id = ? AND c_service_name = ?", nodeID, serviceName).First(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +111,9 @@ func (d *DAO) Get(ctx context.Context, serviceName string) (*Deployment, error) 
 
 func (d *DAO) List(ctx context.Context, filter ListFilter, offset int, limit int) ([]Deployment, int64, error) {
 	query := d.db.WithContext(ctx).Model(&Deployment{})
+	if filter.NodeID != "" {
+		query = query.Where("c_node_id = ?", filter.NodeID)
+	}
 	if filter.ServiceName != "" {
 		query = query.Where("c_service_name LIKE ?", "%"+filter.ServiceName+"%")
 	}
@@ -118,22 +126,27 @@ func (d *DAO) List(ctx context.Context, filter ListFilter, offset int, limit int
 	if filter.Status != "" {
 		query = query.Where("c_status = ?", filter.Status)
 	}
+	if filter.GatewayEnabled != nil {
+		query = query.Where("c_gateway_enabled = ?", *filter.GatewayEnabled)
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Deployment
-	if err := query.Order("c_scope DESC, c_service_kind ASC, c_service_name ASC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+	if err := query.Order("c_node_id ASC, c_scope DESC, c_service_kind ASC, c_service_name ASC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	return rows, total, nil
 }
 
-func (d *DAO) ListActive(ctx context.Context) ([]Deployment, error) {
+func (d *DAO) ListActive(ctx context.Context, nodeID string) ([]Deployment, error) {
 	var rows []Deployment
-	err := d.db.WithContext(ctx).
-		Where("c_status = ?", "active").
-		Order("c_scope DESC, c_service_kind ASC, c_service_name ASC").
+	query := d.db.WithContext(ctx).Where("c_status = ?", "active")
+	if nodeID != "" {
+		query = query.Where("c_node_id = ?", nodeID)
+	}
+	err := query.Order("c_node_id ASC, c_scope DESC, c_service_kind ASC, c_service_name ASC").
 		Find(&rows).Error
 	return rows, err
 }
@@ -142,13 +155,16 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 	if err := d.retireLegacyAdminMonitor(ctx); err != nil {
 		return err
 	}
+	if err := d.db.WithContext(ctx).Where("c_service_name IN ?", []string{"service_gateway", "service_gateway_internal"}).Delete(&Deployment{}).Error; err != nil {
+		return err
+	}
 	for i := range rows {
 		item := rows[i]
 		normalizeDeployment(&item)
 		if item.ServiceName == "" {
 			continue
 		}
-		exists, err := d.exists(ctx, item.ServiceName)
+		exists, err := d.exists(ctx, item.NodeID, item.ServiceName)
 		if err != nil {
 			return err
 		}
@@ -173,20 +189,28 @@ func (d *DAO) retireLegacyAdminMonitor(ctx context.Context) error {
 }
 
 func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) error {
-	row, err := d.Get(ctx, item.ServiceName)
+	row, err := d.Get(ctx, item.NodeID, item.ServiceName)
 	if err != nil {
 		return err
 	}
 	next, changed := mergeDefaultExtraConfig(row.ExtraConfig, item.ExtraConfig)
-	if !changed {
+	updates := map[string]interface{}{}
+	if changed {
+		updates["c_extra_config"] = next
+	}
+	if row.GatewayEnabled != item.GatewayEnabled {
+		updates["c_gateway_enabled"] = item.GatewayEnabled
+	}
+	if row.GatewayServiceID != item.GatewayServiceID {
+		updates["c_gateway_service_id"] = item.GatewayServiceID
+	}
+	if len(updates) == 0 {
 		return nil
 	}
+	updates["c_mtime"] = time.Now()
 	return d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ?", item.ServiceName).
-		Updates(map[string]interface{}{
-			"c_extra_config": next,
-			"c_mtime":        time.Now(),
-		}).Error
+		Where("c_node_id = ? AND c_service_name = ?", item.NodeID, item.ServiceName).
+		Updates(updates).Error
 }
 
 func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
@@ -230,27 +254,31 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	return string(raw), true
 }
 
-func (d *DAO) exists(ctx context.Context, serviceName string) (bool, error) {
+func (d *DAO) exists(ctx context.Context, nodeID, serviceName string) (bool, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&Deployment{}).
-		Where("c_service_name = ?", serviceName).
+		Where("c_node_id = ? AND c_service_name = ?", nodeID, serviceName).
 		Count(&count).Error
 	return count > 0, err
 }
 
 type ListFilter struct {
-	ServiceName string
-	ServiceKind string
-	Scope       string
-	Status      string
+	NodeID         string
+	ServiceName    string
+	ServiceKind    string
+	Scope          string
+	Status         string
+	GatewayEnabled *bool
 }
 
 func normalizeDeployment(item *Deployment) {
+	item.NodeID = strings.TrimSpace(item.NodeID)
 	item.ServiceName = strings.TrimSpace(item.ServiceName)
 	item.ServiceKind = strings.TrimSpace(item.ServiceKind)
 	item.Protocol = strings.TrimSpace(item.Protocol)
 	item.Host = strings.TrimSpace(item.Host)
 	item.GatewayPath = strings.TrimSpace(item.GatewayPath)
+	item.GatewayServiceID = strings.TrimSpace(item.GatewayServiceID)
 	item.Scope = strings.TrimSpace(item.Scope)
 	item.Status = strings.TrimSpace(item.Status)
 	item.Description = strings.TrimSpace(item.Description)
@@ -277,5 +305,5 @@ func isUniqueConstraintError(err error) bool {
 		return false
 	}
 	message := err.Error()
-	return strings.Contains(message, "UNIQUE constraint") || strings.Contains(message, "constraint failed")
+	return strings.Contains(message, "UNIQUE constraint")
 }

@@ -82,16 +82,7 @@ type InstanceConfig struct {
 
 // SysDeployConfig describes optional dependency discovery through admin.
 type SysDeployConfig struct {
-	AdminGatewayURL string            `yaml:"admin_gateway_url"`
-	ServiceAuth     ServiceAuthConfig `yaml:"service_auth"`
-}
-
-// ServiceAuthConfig describes backend HMAC auth for service calls.
-type ServiceAuthConfig struct {
-	Version       string `yaml:"version"`
-	AccessKey     string `yaml:"access_key"`
-	SecretKey     string `yaml:"secret_key"`
-	ExpireSeconds int64  `yaml:"expire_seconds"`
+	AdminGatewayURL string `yaml:"admin_gateway_url"`
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.
@@ -164,10 +155,6 @@ func Default() *Config {
 		},
 		SysDeploy: SysDeployConfig{
 			AdminGatewayURL: "http://127.0.0.1:11002",
-			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v2",
-				ExpireSeconds: 60,
-			},
 		},
 		Health: HealthConfig{
 			Addr: ":11414",
@@ -266,12 +253,6 @@ func (c *Config) applyDefaults() {
 	if c.SysDeploy.AdminGatewayURL == "" {
 		c.SysDeploy.AdminGatewayURL = "http://127.0.0.1:11002"
 	}
-	if c.SysDeploy.ServiceAuth.Version == "" {
-		c.SysDeploy.ServiceAuth.Version = "moox-auth-v2"
-	}
-	if c.SysDeploy.ServiceAuth.ExpireSeconds == 0 {
-		c.SysDeploy.ServiceAuth.ExpireSeconds = 60
-	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":11414"
 	}
@@ -309,20 +290,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_FACTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_VERSION"); v != "" {
-		c.SysDeploy.ServiceAuth.Version = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_ACCESS_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.AccessKey = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_SERVICE_AUTH_EXPIRE_SECONDS"); v != "" {
-		if seconds, err := strconv.ParseInt(v, 10, 64); err == nil {
-			c.SysDeploy.ServiceAuth.ExpireSeconds = seconds
-		}
 	}
 }
 

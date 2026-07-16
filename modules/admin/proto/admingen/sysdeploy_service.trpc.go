@@ -30,6 +30,16 @@ type SysDeployService interface {
 	DeleteServiceDeployment(ctx context.Context, req *DeleteServiceDeploymentReq) (*DeleteServiceDeploymentRsp, error)
 
 	ListActiveServiceDeployments(ctx context.Context, req *ListActiveServiceDeploymentsReq) (*ListActiveServiceDeploymentsRsp, error)
+
+	ListGatewayNodes(ctx context.Context, req *ListGatewayNodesReq) (*ListGatewayNodesRsp, error)
+
+	CreateGatewayNode(ctx context.Context, req *CreateGatewayNodeReq) (*CreateGatewayNodeRsp, error)
+
+	UpdateGatewayNode(ctx context.Context, req *UpdateGatewayNodeReq) (*UpdateGatewayNodeRsp, error)
+
+	DeleteGatewayNode(ctx context.Context, req *DeleteGatewayNodeReq) (*DeleteGatewayNodeRsp, error)
+
+	GetGatewayNodeRoutes(ctx context.Context, req *GetGatewayNodeRoutesReq) (*GetGatewayNodeRoutesRsp, error)
 }
 
 func SysDeployService_ListServiceDeployments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -140,6 +150,96 @@ func SysDeployService_ListActiveServiceDeployments_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
+func SysDeployService_ListGatewayNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListGatewayNodesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).ListGatewayNodes(ctx, reqbody.(*ListGatewayNodesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SysDeployService_CreateGatewayNode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateGatewayNodeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).CreateGatewayNode(ctx, reqbody.(*CreateGatewayNodeReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SysDeployService_UpdateGatewayNode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateGatewayNodeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).UpdateGatewayNode(ctx, reqbody.(*UpdateGatewayNodeReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SysDeployService_DeleteGatewayNode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteGatewayNodeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).DeleteGatewayNode(ctx, reqbody.(*DeleteGatewayNodeReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SysDeployService_GetGatewayNodeRoutes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetGatewayNodeRoutesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).GetGatewayNodeRoutes(ctx, reqbody.(*GetGatewayNodeRoutesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // SysDeployServer_ServiceDesc descriptor for server.RegisterService.
 var SysDeployServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.SysDeploy",
@@ -168,6 +268,26 @@ var SysDeployServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.ops.SysDeploy/ListActiveServiceDeployments",
 			Func: SysDeployService_ListActiveServiceDeployments_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/ListGatewayNodes",
+			Func: SysDeployService_ListGatewayNodes_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/CreateGatewayNode",
+			Func: SysDeployService_CreateGatewayNode_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/UpdateGatewayNode",
+			Func: SysDeployService_UpdateGatewayNode_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/DeleteGatewayNode",
+			Func: SysDeployService_DeleteGatewayNode_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/GetGatewayNodeRoutes",
+			Func: SysDeployService_GetGatewayNodeRoutes_Handler,
 		},
 	},
 }
@@ -201,6 +321,21 @@ func (s *UnimplementedSysDeploy) DeleteServiceDeployment(ctx context.Context, re
 func (s *UnimplementedSysDeploy) ListActiveServiceDeployments(ctx context.Context, req *ListActiveServiceDeploymentsReq) (*ListActiveServiceDeploymentsRsp, error) {
 	return nil, errors.New("rpc ListActiveServiceDeployments of service SysDeploy is not implemented")
 }
+func (s *UnimplementedSysDeploy) ListGatewayNodes(ctx context.Context, req *ListGatewayNodesReq) (*ListGatewayNodesRsp, error) {
+	return nil, errors.New("rpc ListGatewayNodes of service SysDeploy is not implemented")
+}
+func (s *UnimplementedSysDeploy) CreateGatewayNode(ctx context.Context, req *CreateGatewayNodeReq) (*CreateGatewayNodeRsp, error) {
+	return nil, errors.New("rpc CreateGatewayNode of service SysDeploy is not implemented")
+}
+func (s *UnimplementedSysDeploy) UpdateGatewayNode(ctx context.Context, req *UpdateGatewayNodeReq) (*UpdateGatewayNodeRsp, error) {
+	return nil, errors.New("rpc UpdateGatewayNode of service SysDeploy is not implemented")
+}
+func (s *UnimplementedSysDeploy) DeleteGatewayNode(ctx context.Context, req *DeleteGatewayNodeReq) (*DeleteGatewayNodeRsp, error) {
+	return nil, errors.New("rpc DeleteGatewayNode of service SysDeploy is not implemented")
+}
+func (s *UnimplementedSysDeploy) GetGatewayNodeRoutes(ctx context.Context, req *GetGatewayNodeRoutesReq) (*GetGatewayNodeRoutesRsp, error) {
+	return nil, errors.New("rpc GetGatewayNodeRoutes of service SysDeploy is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -221,6 +356,16 @@ type SysDeployClientProxy interface {
 	DeleteServiceDeployment(ctx context.Context, req *DeleteServiceDeploymentReq, opts ...client.Option) (rsp *DeleteServiceDeploymentRsp, err error)
 
 	ListActiveServiceDeployments(ctx context.Context, req *ListActiveServiceDeploymentsReq, opts ...client.Option) (rsp *ListActiveServiceDeploymentsRsp, err error)
+
+	ListGatewayNodes(ctx context.Context, req *ListGatewayNodesReq, opts ...client.Option) (rsp *ListGatewayNodesRsp, err error)
+
+	CreateGatewayNode(ctx context.Context, req *CreateGatewayNodeReq, opts ...client.Option) (rsp *CreateGatewayNodeRsp, err error)
+
+	UpdateGatewayNode(ctx context.Context, req *UpdateGatewayNodeReq, opts ...client.Option) (rsp *UpdateGatewayNodeRsp, err error)
+
+	DeleteGatewayNode(ctx context.Context, req *DeleteGatewayNodeReq, opts ...client.Option) (rsp *DeleteGatewayNodeRsp, err error)
+
+	GetGatewayNodeRoutes(ctx context.Context, req *GetGatewayNodeRoutesReq, opts ...client.Option) (rsp *GetGatewayNodeRoutesRsp, err error)
 }
 
 type SysDeployClientProxyImpl struct {
@@ -346,6 +491,106 @@ func (c *SysDeployClientProxyImpl) ListActiveServiceDeployments(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListActiveServiceDeploymentsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) ListGatewayNodes(ctx context.Context, req *ListGatewayNodesReq, opts ...client.Option) (*ListGatewayNodesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/ListGatewayNodes")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("ListGatewayNodes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListGatewayNodesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) CreateGatewayNode(ctx context.Context, req *CreateGatewayNodeReq, opts ...client.Option) (*CreateGatewayNodeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/CreateGatewayNode")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("CreateGatewayNode")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateGatewayNodeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) UpdateGatewayNode(ctx context.Context, req *UpdateGatewayNodeReq, opts ...client.Option) (*UpdateGatewayNodeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/UpdateGatewayNode")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("UpdateGatewayNode")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateGatewayNodeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) DeleteGatewayNode(ctx context.Context, req *DeleteGatewayNodeReq, opts ...client.Option) (*DeleteGatewayNodeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/DeleteGatewayNode")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("DeleteGatewayNode")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteGatewayNodeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) GetGatewayNodeRoutes(ctx context.Context, req *GetGatewayNodeRoutesReq, opts ...client.Option) (*GetGatewayNodeRoutesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/GetGatewayNodeRoutes")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("GetGatewayNodeRoutes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetGatewayNodeRoutesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

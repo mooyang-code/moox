@@ -11,8 +11,8 @@ import (
 func TestListExchangeSecretsRevealsPlainSecretWithServiceAuth(t *testing.T) {
 	var seenListAuth, seenRevealAuth bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Auth") == "" {
-			t.Fatalf("%s missing Auth header", r.URL.Path)
+		if r.Header.Get("X-Moox-Signature") == "" || r.Header.Get("X-Moox-Target-Node") != "gateway-gz-122" {
+			t.Fatalf("%s missing node-targeted gateway auth", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -54,9 +54,9 @@ func TestListExchangeSecretsRevealsPlainSecretWithServiceAuth(t *testing.T) {
 	client := New(Config{
 		GatewayBaseURL: srv.URL,
 		ServiceAuth: ServiceAuthConfig{
-			Version:   "moox-auth-v2",
-			AccessKey: "access",
-			SecretKey: "secret",
+			AccessKey:  "access",
+			SecretKey:  "secret",
+			TargetNode: "gateway-gz-122",
 		},
 	})
 	secrets, err := client.ListExchangeSecrets(context.Background(), "binance")

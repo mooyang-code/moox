@@ -31,7 +31,7 @@ features:
     details: CQRS 架构，写入主存后通过 MemoryBus/NATS 事件总线异步构建物化视图和全文索引。Blue-Green 模式管理视图版本切换。
   - icon: 🖥️
     title: 管理控制台
-    details: 用户管理、JWT 鉴权、服务部署信息、运维监控，以及采集/云节点独立服务的统一 HTTP 网关转发。当前面向个人开发者，正式支持单机多进程、每个服务单实例部署。
+    details: 中央 Admin 负责用户、鉴权、服务实例、网关节点和运维管理；每台服务器的独立 Gateway 只代理本机服务，支持一个控制面管理多节点。
   - icon: 🌐
     title: 前端工作台
     details: Vue 3 + Arco Design + Pinia，三套 Axios 实例分层调用 Admin/Storage API。动态路由、Space 上下文切换、CodeMirror/xterm 富交互。

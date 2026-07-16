@@ -50,12 +50,13 @@ func TestParamsFromJSON_AndFactorAuthInfo(t *testing.T) {
 	_, err = paramsFromJSON(`not-json`)
 	require.Error(t, err)
 
-	cfg := Default()
-	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
-	auth := factorAuthInfo(cfg)
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "gateway-key")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "gateway-secret")
+	auth := factorAuthInfo()
 	require.NotNil(t, auth)
 	assert.Equal(t, "moox-factor", auth.AppId)
-	assert.Equal(t, "ak", auth.AppKey)
+	assert.Empty(t, auth.AppKey)
+	assert.NotEqual(t, "gateway-secret", auth.AppKey)
 	assert.Equal(t, "moox-factor", auth.Operator)
 	assert.NotEmpty(t, auth.RequestId)
 }

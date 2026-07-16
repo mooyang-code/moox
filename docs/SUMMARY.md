@@ -8,6 +8,7 @@
 ## 第一部分：整体架构
 
 * [架构总览](架构总览.md)
+* [节点服务网关架构](节点服务网关架构.md)
 * [大仓架构](大仓架构.md)
 * [协议设计](协议设计.md)
 
@@ -36,6 +37,7 @@
 ## 运维
 
 * [管理台 HTTPS 与证书](运维/管理台HTTPS与证书.md)
+* [Node Gateway 运维手册](ops/node-gateway.md)
 * [MooX EventBus 运维](运维/MooX-EventBus运维.md)
 * [MooX 指标监控](运维/MooX指标监控.md)
 * [MooX Trade 运维](运维/MooX-Trade运维.md)

@@ -87,6 +87,8 @@ case "${TARGET_MODULE}" in
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     build_go modules/admin ./cmd/server moox-admin 0
     build_go modules/admin ./cmd/cli moox-admin-cli 0
+    build_go modules/gateway ./cmd/server moox-gateway 0
+    build_go modules/gateway ./cmd/cli moox-gateway-cli 0
     build_go modules/eventbus ./cmd/server moox-eventbus 0
     build_web_host
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
@@ -114,6 +116,10 @@ case "${TARGET_MODULE}" in
     ;;
   admin-cli)
     build_go modules/admin ./cmd/cli moox-admin-cli 0
+    ;;
+  gateway)
+    build_go modules/gateway ./cmd/server moox-gateway 0
+    build_go modules/gateway ./cmd/cli moox-gateway-cli 0
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0

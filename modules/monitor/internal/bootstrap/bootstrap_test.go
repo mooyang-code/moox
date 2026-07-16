@@ -171,10 +171,23 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	assert.Nil(t, monitorSyncFunc(ctx, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 
 	cfg.Peer.Enabled = false
-	startPeerPuller(ctx, cfg, rt)
+	assert.NoError(t, startPeerPuller(ctx, cfg, rt))
 
 	registerMetricsReporter(nil)
 	assert.NoError(t, registerHealth(nil, nil, rt, nil))
+}
+
+func TestStartPeerPullerReturnsClientConstructionError(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	cfg := config.Default()
+	cfg.Peer.Peers = []config.PeerEntry{{InstanceID: "monitor-peer", GatewayURL: "https://peer.example", NodeID: "gateway-peer"}}
+	cfg.Peer.ServiceAuth = config.ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret", CAFile: filepath.Join(t.TempDir(), "missing.pem")}
+	err = startPeerPuller(context.Background(), cfg, &Runtime{Repositories: mgr.Repositories()})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "peer gateway client")
 }
 
 func TestWaitHostMetricsRespectsCancel(t *testing.T) {
@@ -200,20 +213,26 @@ func TestPruneMonitorHistoryNoopAndHappyPath(t *testing.T) {
 	require.NoError(t, pruneMonitorHistory(ctx, rt, 24*time.Hour))
 }
 
-func TestMonitorSnapshotAndResultHook(t *testing.T) {
+func TestMonitorResultHook(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-a"
 	cfg.Instance.BaseURL = "http://localhost"
-	snap := monitorSnapshot(cfg)(context.Background())
-	assert.Equal(t, "monitor-a", snap.InstanceID)
-	assert.Equal(t, "http://localhost", snap.BaseURL)
-	assert.False(t, snap.ObservedAt.IsZero())
 
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	rt := &Runtime{Store: mgr, Repositories: mgr.Repositories()}
+	now := time.Now().UTC()
+	require.NoError(t, rt.Repositories.Checks.Create(context.Background(), &domain.Check{
+		CheckID: "check-1", Name: "Peer", Kind: domain.CheckKindHTTP, Enabled: true,
+	}))
+	require.NoError(t, rt.Repositories.Results.Insert(context.Background(), &domain.CheckResult{
+		ResultID: "result-1", CheckID: "check-1", Status: domain.CheckStatusDown, CheckedAt: now,
+	}))
+	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
+		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
+	}))
 	hook := monitorResultHook(cfg, rt)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{

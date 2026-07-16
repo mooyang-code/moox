@@ -106,6 +106,7 @@ cors:
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-test")
 	return dir
 }
 
@@ -117,7 +118,18 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	assert.NotNil(t, cfg.App)
 	assert.NotNil(t, cfg.Auth)
 	assert.NotNil(t, cfg.Gateway)
+	assert.Equal(t, "admin-node-test", cfg.AdminNodeID)
 	assert.Equal(t, "test-secret-key-32bytes-long-123456", cfg.Gateway.JWT.SecretKey)
+}
+
+func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
+	setupBootstrapConfigDir(t)
+	t.Setenv("MOOX_ADMIN_NODE_ID", "")
+
+	_, err := LoadConfigs(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MOOX_ADMIN_NODE_ID")
 }
 
 func TestLoadConfigs_EmptyJWTSecret_ShouldError(t *testing.T) {
@@ -144,6 +156,7 @@ cors:
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-test")
 
 	_, err = LoadConfigs(context.Background())
 	require.Error(t, err)

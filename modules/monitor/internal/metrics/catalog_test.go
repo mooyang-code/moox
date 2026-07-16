@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 )
@@ -25,4 +26,10 @@ func TestMetricCatalogNoDataAfter(t *testing.T) {
 	assert.Equal(t, 2*time.Minute, c.NoDataAfter())
 	c.SetNoDataAfter(5 * time.Minute)
 	assert.Equal(t, 5*time.Minute, c.NoDataAfter())
+}
+
+func TestMetricCatalogTimeScansRFC3339(t *testing.T) {
+	var got metricCatalogTime
+	require.NoError(t, got.Scan("2026-07-15T04:17:48.123456789Z"))
+	assert.Equal(t, "2026-07-15T04:17:48.123456789Z", got.UTC().Format(time.RFC3339Nano))
 }

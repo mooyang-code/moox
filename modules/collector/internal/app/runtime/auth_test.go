@@ -6,38 +6,38 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicegateway"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeAuthConfig_AppliesDefaults(t *testing.T) {
 	cfg := normalizeAuthConfig(AuthConfig{AccessKey: "ak", SecretKey: "sk"})
-	assert.Equal(t, defaultAuthVersion, cfg.Version)
 	assert.Equal(t, defaultExpireSec, cfg.ExpireSec)
 	assert.Greater(t, cfg.NowUnix, int64(0))
 }
 
 func TestGenerateAuthHeader_IsDeterministic(t *testing.T) {
 	cfg := AuthConfig{
-		Version:   defaultAuthVersion,
-		AccessKey: "ak",
-		SecretKey: "sk",
-		NowUnix:   1700000000,
-		ExpireSec: 1800,
+		AccessKey:  "ak",
+		SecretKey:  "sk",
+		TargetNode: "gateway-gz-122",
+		NowUnix:    1700000000,
+		ExpireSec:  1800,
 	}
 	got, err := GenerateAuthHeader(cfg, "POST", "/api/service/x/Do", []byte(`{"k":"v"}`))
 	require.NoError(t, err)
-	assert.Contains(t, got, "moox-auth-v2/ak/1700000000/1800/")
+	assert.Equal(t, "gateway-gz-122", got.Get("X-Moox-Target-Node"))
 }
 
 func TestNewSignedRequestWithContext_SetsAuthHeader(t *testing.T) {
 	req, err := NewSignedRequestWithContext(context.Background(), "POST", "http://127.0.0.1:8080/api", []byte(`{}`), AuthConfig{
-		AccessKey: "ak", SecretKey: "sk", NowUnix: time.Now().Unix(), ExpireSec: 60,
+		AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", NowUnix: time.Now().Unix(), ExpireSec: 60,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
-	assert.NotEmpty(t, req.Header.Get("Auth"))
+	assert.NotEmpty(t, req.Header.Get("X-Moox-Signature"))
+	assert.Equal(t, "gateway-gz-122", req.Header.Get("X-Moox-Target-Node"))
 }
 
 func TestNewSignedRequestWithContext_RequiresCredentials(t *testing.T) {
@@ -46,26 +46,26 @@ func TestNewSignedRequestWithContext_RequiresCredentials(t *testing.T) {
 	assert.Contains(t, err.Error(), "required")
 }
 
-func TestNewSignedRequestWithContextAndHeaders_BindsSpaceHeader(t *testing.T) {
+func TestNewSignedRequestWithContextAndHeaders_PreservesSpaceHeader(t *testing.T) {
 	now := time.Now()
 	req, err := NewSignedRequestWithContextAndHeaders(
 		context.Background(), http.MethodPost, "http://127.0.0.1:8080/api/service/x/Do", []byte(`{}`),
 		map[string]string{"X-Space-Id": "space-1"},
-		AuthConfig{AccessKey: "ak", SecretKey: "sk", NowUnix: now.Unix(), ExpireSec: 60},
+		AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", NowUnix: now.Unix(), ExpireSec: 60},
 	)
 	require.NoError(t, err)
-	_, err = servicegateway.VerifyHeader(
-		servicegateway.AuthConfig{AccessKey: "ak", SecretKey: "sk", ExpireSeconds: 60},
-		servicegateway.AuthRequest{Method: http.MethodPost, Path: req.URL.EscapedPath(), Body: []byte(`{}`), Headers: map[string]string{"X-Space-Id": "space-2"}},
-		req.Header.Get("Auth"), now,
-	)
-	require.Error(t, err)
+	_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "ak", Secret: "sk", Expire: 60 * time.Second}, gatewayauth.Request{
+		Method: http.MethodPost, Path: req.URL.EscapedPath(), Body: []byte(`{}`), TargetNode: "gateway-gz-122",
+	}, req.Header, now)
+	require.NoError(t, err)
 }
 
 func TestDefaultAuthConfig_UsesGlobalConfig(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "env-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "env-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "env-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "env-sk")
 	cfg := DefaultAuthConfig()
 	assert.Equal(t, "env-ak", cfg.AccessKey)
 	assert.Equal(t, "env-sk", cfg.SecretKey)
+	assert.Equal(t, "gateway-gz-122", cfg.TargetNode)
 }

@@ -48,6 +48,8 @@ ensure_required_binary moox-cli
 ensure_required_binary moox-eventbus
 ensure_required_binary moox-archive
 ensure_required_binary moox-archive-cli
+ensure_required_binary moox-gateway
+ensure_required_binary moox-gateway-cli
 
 HEALTH_SECRET_CLI="${TMP_ROOT}/moox-admin-cli"
 printf '#!/usr/bin/env bash\nprintf '\''{"status":"ok","bytes":32,"secret":"%%064d"}\\n'\'' 0\n' >"${HEALTH_SECRET_CLI}"
@@ -61,12 +63,20 @@ chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
 mkdir -p "${DEPLOY_DIR}/data" "${DEPLOY_DIR}/logs" "${DEPLOY_DIR}/run"
 : >"${DEPLOY_DIR}/data/admin.db"
 mkdir -p "${DEPLOY_DIR}/secrets" "${DEPLOY_DIR}/certs/caddy"
-printf 'MOOX_SERVICE_AUTH_SECRET_KEY=keep-this-secret\nMOOX_SERVICE_AUTH_EXPIRE_SECONDS=1800\n' >"${DEPLOY_DIR}/secrets/service-auth.env"
 printf 'keep-this-ca\n' >"${DEPLOY_DIR}/certs/caddy/root.crt"
 seed_disabled_component cloudnode moox-cloudnode moox-cloudnode-cli
 seed_disabled_component collector moox-collector moox-collector-cli moox-collector-scf
 seed_disabled_component factor moox-factor moox-factor-cli
 seed_disabled_component storage moox-storage moox-storage-cli
+
+printf 'control-secret' >"${TMP_ROOT}/control.key"
+printf 'service-secret' >"${TMP_ROOT}/service.key"
+chmod 0600 "${TMP_ROOT}/control.key" "${TMP_ROOT}/service.key"
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=preserve-one \
+  -keyout "${TMP_ROOT}/ca-one.key" -out "${TMP_ROOT}/ca-one.crt" -days 1 >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=preserve-two \
+  -keyout "${TMP_ROOT}/ca-two.key" -out "${TMP_ROOT}/ca-two.crt" -days 1 >/dev/null 2>&1
+cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
 
 "${ROOT}/scripts/deploy-moox.sh" \
   --target localhost \
@@ -78,7 +88,13 @@ seed_disabled_component storage moox-storage moox-storage-cli
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-  --no-factor >/dev/null
+  --no-factor \
+  --no-monitor \
+  --node-id preserve-test \
+  --gateway-control-url http://127.0.0.1:11000 \
+  --gateway-ca-bundle "${TMP_ROOT}/peers.pem" \
+  --gateway-control-key-file "${TMP_ROOT}/control.key" \
+  --gateway-service-key-file "${TMP_ROOT}/service.key" >/dev/null
 
 for path in \
   cloudnode/config/keep.txt \
@@ -101,8 +117,6 @@ do
   fi
 done
 
-grep -Fq 'MOOX_SERVICE_AUTH_SECRET_KEY=keep-this-secret' "${DEPLOY_DIR}/secrets/service-auth.env"
-grep -Fq 'MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60' "${DEPLOY_DIR}/secrets/service-auth.env"
 grep -Fq 'keep-this-ca' "${DEPLOY_DIR}/certs/caddy/root.crt"
 
 echo "disabled deployment artifacts preserved"

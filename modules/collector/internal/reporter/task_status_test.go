@@ -9,9 +9,13 @@ import (
 )
 
 func TestSendRequestReturnsMalformedResponseError(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "test-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "test-sk")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("target node = %q", got)
+		}
 		_, _ = w.Write([]byte("not-json"))
 	}))
 	defer server.Close()
@@ -23,9 +27,13 @@ func TestSendRequestReturnsMalformedResponseError(t *testing.T) {
 }
 
 func TestSendRequestReturnsRetInfoError(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "test-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "test-sk")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("target node = %q", got)
+		}
 		_, _ = w.Write([]byte(`{"ret_info":{"code":1,"msg":"bad"}}`))
 	}))
 	defer server.Close()

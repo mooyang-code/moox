@@ -164,6 +164,8 @@ examples/metadata-crypto-spot-kline-1m-view.seed.yaml
 - collector task instances 全部成功；
 - storage access 中能扫描到 `binance_spot_kline` 时序 K 线数据。
 
+SCF 步骤从部署目录的 `secrets/gateway-service.env` 读取节点和服务身份，将公开 CA 证书以 `MOOX_GATEWAY_CA_PEM_B64` 传入运行时，并通过独立 Gateway `127.0.0.1:11002` 访问 `/api/service/*`。任一身份或 CA 配置缺失时会在调用前失败，不会打印密钥。
+
 远端发布并验证示例：
 
 ```bash

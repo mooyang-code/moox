@@ -23,8 +23,11 @@ new_stage() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${MOOX_TEST_CALLS}"
-[[ "${MOOX_SERVICE_AUTH_ACCESS_KEY:-}" == "svc""-ak" ]]
-[[ "${MOOX_SERVICE_AUTH_SECRET_KEY:-}" == "svc""-sk" ]]
+[[ "${MOOX_GATEWAY_NODE_ID:-}" == "gateway-test" ]]
+[[ "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" == "svc""-ak" ]]
+[[ "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" == "svc""-sk" ]]
+[[ "${MOOX_GATEWAY_CA_FILE:-}" == */certs/gateway/peers.pem ]]
+[[ -r "${MOOX_GATEWAY_CA_FILE}" ]]
 output=
 cloud_account=__not_set__
 while [[ $# -gt 0 ]]; do
@@ -71,11 +74,13 @@ CLI
 
 new_deploy() {
   local deploy=$1
-  mkdir -p "${deploy}/secrets"
-  printf 'MOOX_SERVICE_AUTH_ACCESS_KEY=svc-ak\nMOOX_SERVICE_AUTH_SECRET_KEY=svc-sk\n' \
-    >"${deploy}/secrets/service-auth.env"
+  mkdir -p "${deploy}/secrets" "${deploy}/certs/gateway"
+  printf 'MOOX_GATEWAY_NODE_ID=gateway-test\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\n' \
+    >"${deploy}/secrets/gateway-service.env"
+  printf '%s\n' '-----BEGIN CERTIFICATE-----' 'Y2VydA==' '-----END CERTIFICATE-----' \
+    >"${deploy}/certs/gateway/peers.pem"
   printf 'old-cls-env\n' >"${deploy}/secrets/cls.env"
-  chmod 0600 "${deploy}/secrets/service-auth.env" "${deploy}/secrets/cls.env"
+  chmod 0600 "${deploy}/secrets/gateway-service.env" "${deploy}/secrets/cls.env"
 }
 
 file_mode() {

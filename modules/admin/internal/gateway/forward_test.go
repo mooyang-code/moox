@@ -95,39 +95,25 @@ func TestWriteForwardError_ShouldWriteRetInfo(t *testing.T) {
 
 func TestForwardHTTP_NilConfig_ShouldError(t *testing.T) {
 	SetConfig(nil)
-	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
+	_, err := forwardHTTP(context.Background(), nil, "node-a", "auth", "Login", []byte(`{}`), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "网关配置未初始化")
 }
 
 func TestForwardHTTP_MissingResolver_ShouldError(t *testing.T) {
 	SetConfig(&Config{JWT: JWTConfig{SecretKey: "secret"}})
-	SetServiceDetailResolver(nil)
-	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
+	_, err := forwardHTTP(context.Background(), nil, "node-a", "auth", "Login", []byte(`{}`), nil)
 	require.Error(t, err)
 }
 
 func TestForwardHTTP_EmptyAddress_ShouldError(t *testing.T) {
 	SetConfig(&Config{JWT: JWTConfig{SecretKey: "secret"}})
-	SetServiceDetailResolver(func(ctx context.Context, serviceID string) (ServiceDetail, bool) {
-		return ServiceDetail{Address: "", Path: "trpc.moox.infra.Auth"}, true
-	})
-	_, err := forwardHTTP(context.Background(), "auth", "Login", []byte(`{}`), nil)
+	provider := stubAdminServiceProvider{details: map[string]ServiceDetail{
+		"node-a:auth": {Address: "", Path: "trpc.moox.infra.Auth"},
+	}}
+	_, err := forwardHTTP(context.Background(), provider, "node-a", "auth", "Login", []byte(`{}`), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "配置缺失")
-}
-
-func TestResolveForwardDestination_FieldMetadataMethods(t *testing.T) {
-	SetServiceDetailResolver(func(context.Context, string) (ServiceDetail, bool) {
-		return ServiceDetail{Address: "storage.internal:20200", Path: "trpc.moox.storage.Metadata"}, true
-	})
-	t.Cleanup(func() { SetServiceDetailResolver(nil) })
-	for _, method := range []string{"ListFields", "BatchUpdateFields", "DeleteFieldGroup"} {
-		target, targetURL, err := resolveForwardDestination(context.Background(), "storage_metadata", method)
-		require.NoError(t, err)
-		assert.Equal(t, "ip://storage.internal:20200", target)
-		assert.Equal(t, "/trpc.moox.storage.Metadata/"+method, targetURL)
-	}
 }
 
 func TestAddVaryHeader_ExistingValue_ShouldAppend(t *testing.T) {

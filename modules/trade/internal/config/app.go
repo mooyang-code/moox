@@ -54,9 +54,10 @@ type ControlGatewayConfig struct {
 
 // ServiceAuthConfig 与 admin gateway.service_auth 保持一致。
 type ServiceAuthConfig struct {
-	Version       string `yaml:"version"`
 	AccessKey     string `yaml:"access_key"`
 	SecretKey     string `yaml:"secret_key"`
+	TargetNode    string `yaml:"target_node"`
+	CAFile        string `yaml:"ca_file"`
 	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
@@ -112,7 +113,6 @@ func DefaultConfig() *AppConfig {
 		ControlGateway: ControlGatewayConfig{
 			BaseURL: "https://106.53.107.122:11001",
 			ServiceAuth: ServiceAuthConfig{
-				Version:       "moox-auth-v2",
 				AccessKey:     "moox-service",
 				SecretKey:     "",
 				ExpireSeconds: 60,
@@ -172,11 +172,17 @@ func (c *AppConfig) applyEnv() {
 	if v := os.Getenv("MOOX_TRADE_CONTROL_GATEWAY"); v != "" {
 		c.ControlGateway.BaseURL = v
 	}
-	if v := os.Getenv("MOOX_TRADE_SERVICE_AUTH_ACCESS_KEY"); v != "" {
+	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.ControlGateway.ServiceAuth.AccessKey = v
 	}
-	if v := os.Getenv("MOOX_TRADE_SERVICE_AUTH_SECRET_KEY"); v != "" {
+	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
 		c.ControlGateway.ServiceAuth.SecretKey = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
+		c.ControlGateway.ServiceAuth.TargetNode = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
+		c.ControlGateway.ServiceAuth.CAFile = v
 	}
 	if v := os.Getenv("MOOX_TRADE_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v

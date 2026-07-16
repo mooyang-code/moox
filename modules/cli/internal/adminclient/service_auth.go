@@ -1,15 +1,17 @@
 package adminclient
 
 import (
-	"github.com/mooyang-code/moox/packages/servicegateway"
+	"net/http"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
 type ServiceAuthConfig struct {
-	Version, AccessKey, SecretKey string
-	ExpireSecs                    int64
+	AccessKey, SecretKey, TargetNode, CAFile string
+	ExpireSecs                               int64
 }
 
-func (c ServiceAuthConfig) BuildAuthHeader(method, path string, body []byte, headers map[string]string, now time.Time) (string, error) {
-	return servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: c.AccessKey, SecretKey: c.SecretKey, ExpireSeconds: c.ExpireSecs}, servicegateway.AuthRequest{Method: method, Path: path, Body: body, Headers: headers}, now)
+func (c ServiceAuthConfig) BuildAuthHeader(method, path string, body []byte, now time.Time) (http.Header, error) {
+	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: c.AccessKey, Secret: c.SecretKey, Expire: time.Duration(c.ExpireSecs) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: c.TargetNode}, now)
 }

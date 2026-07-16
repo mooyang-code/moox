@@ -31,6 +31,18 @@ func (r *PeerRepository) IsActive(ctx context.Context, instanceID string) (bool,
 	return count > 0, err
 }
 
+func (r *PeerRepository) GetInstance(ctx context.Context, instanceID string) (*domain.MonitorInstance, error) {
+	var instance domain.MonitorInstance
+	result := r.db.WithContext(ctx).Where("c_instance_id = ?", instanceID).Limit(1).Find(&instance)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &instance, nil
+}
+
 func (r *PeerRepository) UpsertInstance(ctx context.Context, instance *domain.MonitorInstance) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_instance_id"}},
@@ -52,22 +64,14 @@ func (r *PeerRepository) ListInstances(ctx context.Context) ([]domain.MonitorIns
 }
 
 func (r *PeerRepository) MarkStale(ctx context.Context, before time.Time) error {
-	instances, err := r.ListInstances(ctx)
-	if err != nil {
-		return err
-	}
-	for _, instance := range instances {
-		if instance.Status != domain.InstanceStatusActive || instance.LastSeenAt == nil || !instance.LastSeenAt.Before(before) {
-			continue
-		}
-		if err := r.db.WithContext(ctx).
-			Model(&domain.MonitorInstance{}).
-			Where("c_instance_id = ? AND c_status = ?", instance.InstanceID, domain.InstanceStatusActive).
-			Updates(map[string]any{"c_status": domain.InstanceStatusDown}).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := r.MarkStaleTransitions(ctx, before)
+	return err
+}
+
+// MarkStaleTransitions returns only peers changed from active to down by this
+// call, allowing callers to emit one alert transition under concurrent pulls.
+func (r *PeerRepository) MarkStaleTransitions(ctx context.Context, before time.Time) ([]string, error) {
+	return r.MarkStaleWithAlert(ctx, before, PeerTransitionOptions{})
 }
 
 func (r *PeerRepository) UpsertSnapshot(ctx context.Context, snapshot *domain.PeerSnapshot) error {

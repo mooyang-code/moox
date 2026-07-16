@@ -35,7 +35,8 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 func TestGetCOSAccountInfoUsesSignedServiceRouteAndReveal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/service/cloudnode/GetCOSAccountInfo", r.URL.Path)
-		require.NotEmpty(t, r.Header.Get("Auth"))
+		require.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
+		require.Equal(t, "gateway-gz-122", r.Header.Get("X-Moox-Target-Node"))
 		var body struct {
 			AccountID string `json:"account_id"`
 			Reveal    bool   `json:"reveal"`
@@ -49,7 +50,7 @@ func TestGetCOSAccountInfoUsesSignedServiceRouteAndReveal(t *testing.T) {
 
 	client := New(server.URL)
 	client.HTTPClient = server.Client()
-	client.ServiceAuth = &ServiceAuthConfig{Version: "moox-auth-v2", AccessKey: "ak", SecretKey: "sk", ExpireSecs: 60}
+	client.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", ExpireSecs: 60}
 	secret, err := client.GetCOSAccountInfo(context.Background(), "acct-1")
 	require.NoError(t, err)
 	require.Equal(t, "sid", secret.SecretID)

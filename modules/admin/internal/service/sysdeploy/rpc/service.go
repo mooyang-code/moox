@@ -41,3 +41,19 @@ func (s *Service) DeleteServiceDeployment(ctx context.Context, req *pb.DeleteSer
 func (s *Service) ListActiveServiceDeployments(ctx context.Context, req *pb.ListActiveServiceDeploymentsReq) (*pb.ListActiveServiceDeploymentsRsp, error) {
 	return s.svc.ListActiveServiceDeployments(ctx, req)
 }
+
+func (s *Service) ListGatewayNodes(ctx context.Context, req *pb.ListGatewayNodesReq) (*pb.ListGatewayNodesRsp, error) {
+	return s.svc.ListGatewayNodes(ctx, req)
+}
+func (s *Service) CreateGatewayNode(ctx context.Context, req *pb.CreateGatewayNodeReq) (*pb.CreateGatewayNodeRsp, error) {
+	return s.svc.CreateGatewayNode(ctx, req)
+}
+func (s *Service) UpdateGatewayNode(ctx context.Context, req *pb.UpdateGatewayNodeReq) (*pb.UpdateGatewayNodeRsp, error) {
+	return s.svc.UpdateGatewayNode(ctx, req)
+}
+func (s *Service) DeleteGatewayNode(ctx context.Context, req *pb.DeleteGatewayNodeReq) (*pb.DeleteGatewayNodeRsp, error) {
+	return s.svc.DeleteGatewayNode(ctx, req)
+}
+func (s *Service) GetGatewayNodeRoutes(ctx context.Context, req *pb.GetGatewayNodeRoutesReq) (*pb.GetGatewayNodeRoutesRsp, error) {
+	return s.svc.GetGatewayNodeRoutes(ctx, req)
+}

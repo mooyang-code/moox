@@ -16,7 +16,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 ## 端口
 
 - `:11410`: tRPC/HTTP 管理 API `trpc.moox.monitor.MonitorMgr`
-- `:11409`: tRPC `http_no_protocol` 健康接口（`/healthz`、`/readyz`、`/metrics`）与 peer snapshot API
+- `:11409`: tRPC `http_no_protocol` 健康接口（`/healthz`、`/readyz`、`/metrics`）
 
 ## 配置
 
@@ -32,11 +32,14 @@ instance:
   base_url: http://127.0.0.1:11409
 peer:
   enabled: true
-  token: "change-me"
+  service_auth:
+    key_id: moox-service
+    secret_key: "从受限环境文件注入"
+    ca_file: ./certs/gateway-peers.pem
   peers:
     - instance_id: monitor-b
-      base_url: http://10.0.0.2:11409
-      token: "change-me"
+      gateway_url: https://peer.example
+      node_id: gateway-peer-b
 ```
 
 ## 运行
@@ -47,9 +50,9 @@ peer:
 ./bin/moox-monitor -conf=config/trpc_go.yaml
 ```
 
-Admin 只作为网关和 SysDeploy 注册中心。Monitor 会周期性读取 SysDeploy active 部署，生成 `moox-system` 内置检查；探测时不依赖 Admin。
+Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会周期性读取 SysDeploy active 部署，生成 `moox-system` 内置检查；探测时不依赖 Admin。
 
-所有独立部署进程都通过 tRPC `http_no_protocol` 提供 `/healthz` 与 `/readyz`；Monitor 默认探测 `/readyz`，多实例 peer snapshot 需要共享 Token。
+所有独立部署进程都通过 tRPC `http_no_protocol` 提供 `/healthz` 与 `/readyz`；Monitor 默认探测 `/readyz`。多实例之间通过目标节点 Gateway 的 `GetPeerSnapshot` RPC 同步，并使用统一的节点 HMAC 服务密钥。
 
 ## 管理接口
 

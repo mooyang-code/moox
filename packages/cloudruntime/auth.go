@@ -4,29 +4,41 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/packages/servicegateway"
 	"net/http"
-	"net/url"
+	"os"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
-const (
-	defaultAuthVersion = servicegateway.Version
-	defaultExpireSec   = int64(60)
-)
+const defaultExpireSec = int64(60)
 
 // AuthConfig describes the HMAC authentication used by MooX backend service APIs.
 type AuthConfig struct {
-	Version   string
-	AccessKey string
-	SecretKey string
-	NowUnix   int64
-	ExpireSec int64
+	AccessKey   string
+	SecretKey   string
+	TargetNode  string
+	CAFile      string
+	CAPEMBase64 string
+	NowUnix     int64
+	ExpireSec   int64
 }
 
 func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
-	if cfg.Version == "" {
-		cfg.Version = defaultAuthVersion
+	if cfg.TargetNode == "" {
+		cfg.TargetNode = os.Getenv("MOOX_GATEWAY_NODE_ID")
+	}
+	if cfg.AccessKey == "" {
+		cfg.AccessKey = os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")
+	}
+	if cfg.SecretKey == "" {
+		cfg.SecretKey = os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")
+	}
+	if cfg.CAFile == "" {
+		cfg.CAFile = os.Getenv("MOOX_GATEWAY_CA_FILE")
+	}
+	if cfg.CAPEMBase64 == "" {
+		cfg.CAPEMBase64 = os.Getenv("MOOX_GATEWAY_CA_PEM_B64")
 	}
 	if cfg.NowUnix <= 0 {
 		cfg.NowUnix = time.Now().Unix()
@@ -39,26 +51,33 @@ func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
 
 func newSignedRequestWithContext(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
 	cfg = normalizeAuthConfig(cfg)
-	if cfg.AccessKey == "" || cfg.SecretKey == "" {
-		return nil, fmt.Errorf("cloud runtime service auth access_key and secret_key are required")
+	return newSignedRequestWithNormalizedAuth(ctx, method, url, body, cfg)
+}
+
+func newSignedRequestWithNormalizedAuth(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
+	if cfg.AccessKey == "" || cfg.SecretKey == "" || cfg.TargetNode == "" {
+		return nil, fmt.Errorf("cloud runtime gateway key_id, secret_key and target_node are required")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	header, err := generateAuthHeader(cfg, method, req.URL.EscapedPath(), body)
+	header, err := signAuthHeader(cfg, method, req.URL.EscapedPath(), body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Auth", header)
+	for name, values := range header {
+		req.Header[name] = append([]string(nil), values...)
+	}
 	return req, nil
 }
 
-func generateAuthHeader(cfg AuthConfig, method, path string, body []byte) (string, error) {
+func generateAuthHeader(cfg AuthConfig, method, path string, body []byte) (http.Header, error) {
 	cfg = normalizeAuthConfig(cfg)
-	if _, err := url.Parse(path); err != nil {
-		return "", err
-	}
-	return servicegateway.BuildHeader(servicegateway.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, ExpireSeconds: cfg.ExpireSec}, servicegateway.AuthRequest{Method: method, Path: path, Body: body}, time.Unix(cfg.NowUnix, 0))
+	return signAuthHeader(cfg, method, path, body)
+}
+
+func signAuthHeader(cfg AuthConfig, method, path string, body []byte) (http.Header, error) {
+	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: cfg.AccessKey, Secret: cfg.SecretKey, Expire: time.Duration(cfg.ExpireSec) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: cfg.TargetNode}, time.Unix(cfg.NowUnix, 0))
 }

@@ -40,7 +40,7 @@
         row-key="id"
         size="small"
         :loading="loading"
-        :data="hostList"
+        :data="displayHostList"
         :bordered="{ cell: true }"
         :pagination="paginationConfig"
         :scroll="{ x: '100%', y: '100%', minWidth: 1000 }"
@@ -58,17 +58,27 @@
           <a-table-column title="地址" data-index="address" :width="180" />
           <a-table-column title="端口" data-index="port" :width="80" align="center" />
           <a-table-column title="用户" data-index="user" :width="120" />
+          <a-table-column title="资源状态" :width="110" align="center">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="monitorStatusColor(record)">
+                {{ monitorStatusLabel(record) }}
+              </a-tag>
+            </template>
+          </a-table-column>
           <a-table-column title="认证方式" :width="100" align="center">
             <template #cell="{ record }">
               <a-tag v-if="record.auth_type === 'pwd'" size="small" color="arcoblue">密码</a-tag>
-              <a-tag v-else size="small" color="green">证书</a-tag>
+              <a-tag v-else-if="record.auth_type === 'cert'" size="small" color="green">证书</a-tag>
+              <span v-else>-</span>
             </template>
           </a-table-column>
-          <a-table-column title="操作" :width="200" align="center" fixed="right">
+          <a-table-column title="操作" :width="260" align="center" fixed="right">
             <template #cell="{ record }">
               <a-space>
-                <a-link type="primary" @click="onConnect(record)">连接</a-link>
-                <a-link @click="onEdit(record)">编辑</a-link>
+                <a-link v-if="record.monitorOnly" type="primary" @click="onConfigure(record)">配置 SSH</a-link>
+                <a-link v-else type="primary" @click="onConnect(record)">连接</a-link>
+                <a-link v-if="!record.monitorOnly" @click="onFileManage(record)">文件管理</a-link>
+                <a-link v-if="!record.monitorOnly" @click="onEdit(record)">编辑</a-link>
                 <a-popconfirm
                   content="确定要删除该主机吗？删除后将无法恢复。"
                   ok-text="确定"
@@ -76,7 +86,7 @@
                   @ok="() => onDelete(record)"
                   position="tr"
                 >
-                  <a-link status="danger">删除</a-link>
+                  <a-link v-if="!record.monitorOnly" status="danger">删除</a-link>
                 </a-popconfirm>
               </a-space>
             </template>
@@ -246,9 +256,12 @@ import { ref, reactive, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { Message, Modal } from '@arco-design/web-vue';
 import { listSSHHosts, createSSHHost, updateSSHHost, deleteSSHHost, type SSHHost } from '@/api/modules/ssh';
+import type { HostMetrics } from '@/api/modules/host-monitor';
 import PickColors from 'vue-pick-colors';
 
 const router = useRouter();
+const props = defineProps<{ embedded?: boolean; monitorByHostId?: Record<number, HostMetrics | undefined>; monitorOnlyHosts?: HostMetrics[] }>();
+const emit = defineEmits<{ connect: [hostId: number]; fileManage: [hostId: number] }>();
 
 // ---------- 字体选项 ----------
 const fontOptions = ['Menlo', 'Consolas', 'Monaco', 'Courier New', 'Source Code Pro', 'monospace'];
@@ -275,6 +288,19 @@ const loading = ref(false);
 const keyword = ref('');
 const hostList = ref<SSHHost[]>([]);
 const selectedKeys = ref<number[]>([]);
+type DisplaySSHHost = SSHHost & { monitorOnly?: boolean; monitor?: HostMetrics };
+const displayHostList = computed<DisplaySSHHost[]>(() => [
+  ...hostList.value,
+  ...(pagination.value.current === 1 ? (props.monitorOnlyHosts || []).map((monitor, index) => ({
+    id: -(index + 1),
+    name: monitor.host_name || monitor.host_id,
+    address: monitor.address || monitor.host_id,
+    port: 0,
+    user: '-',
+    monitorOnly: true,
+    monitor,
+  } as DisplaySSHHost)) : []),
+]);
 
 // 分页配置
 const pagination = ref({
@@ -301,6 +327,7 @@ const paginationConfig = computed(() => ({
 const rowSelection = reactive({
   type: 'checkbox' as const,
   showCheckedAll: true,
+  getCheckboxProps: (record: DisplaySSHHost) => ({ disabled: record.monitorOnly === true }),
 });
 
 // ---------- 弹窗状态 ----------
@@ -399,11 +426,31 @@ const onPageSizeChange = (pageSize: number) => {
 
 // ---------- 操作：连接 ----------
 const onConnect = (record: SSHHost) => {
+  if (record.id === undefined) return;
+  if (props.embedded) {
+    emit('connect', record.id);
+    return;
+  }
   router.push({
-    path: '/container-management/ssh-terminal',
+    path: '/ops/hosts',
     query: { hostId: String(record.id) },
   });
 };
+
+const onFileManage = (record: SSHHost) => {
+  if (record.id === undefined) return;
+  emit('fileManage', record.id);
+};
+
+const onConfigure = (record: DisplaySSHHost) => {
+  isEdit.value = false;
+  formData.value = { ...getDefaultFormData(), name: record.name, address: record.address, port: 22 };
+  modalVisible.value = true;
+};
+
+const monitorFor = (record: DisplaySSHHost) => record.monitor || (record.id === undefined ? undefined : props.monitorByHostId?.[record.id]);
+const monitorStatusColor = (record: SSHHost) => monitorFor(record)?.status === 'online' ? 'green' : monitorFor(record) ? 'red' : 'gray';
+const monitorStatusLabel = (record: SSHHost) => monitorFor(record) ? (monitorFor(record)?.status === 'online' ? '在线' : '离线') : '未接入监控';
 
 // ---------- 操作：新增 ----------
 const onAdd = () => {

@@ -8,11 +8,9 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 func TestRetHelpers(t *testing.T) {
@@ -172,7 +170,7 @@ func TestRevealSecretRejectsInactiveSecret(t *testing.T) {
 	}
 }
 
-func TestRevealSecretRejectsControlPlaneCall(t *testing.T) {
+func TestRevealSecretReliesOnGatewayMethodAllowlist(t *testing.T) {
 	svc := NewService(&revealSecretFakeService{
 		record: &model.Secret{
 			SecretID:    "sec_binance",
@@ -190,8 +188,8 @@ func TestRevealSecretRejectsControlPlaneCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RevealSecret returned transport error: %v", err)
 	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("RevealSecret code = %v, want INVALID_PARAM", rsp.GetRetInfo().GetCode())
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || rsp.GetSecret().GetSecretValue() != "secret" {
+		t.Fatalf("RevealSecret response = %#v, want plaintext success", rsp)
 	}
 }
 
@@ -210,7 +208,5 @@ func TestRevealSecretMapsMissingSecret(t *testing.T) {
 }
 
 func serviceAuthCtx() context.Context {
-	req := &http.Request{Header: http.Header{}}
-	req.Header.Set("X-Moox-Service-Auth", "true")
-	return thttp.WithHeader(context.Background(), &thttp.Header{Request: req})
+	return context.Background()
 }

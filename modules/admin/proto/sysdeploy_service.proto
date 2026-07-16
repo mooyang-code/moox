@@ -25,6 +25,9 @@ message ServiceDeployment {
   string extra_config = 13;
   string created_at = 14;
   string updated_at = 15;
+  string node_id = 16;
+  string gateway_service_id = 17;
+  bool gateway_enabled = 18;
 }
 
 message ServiceDeploymentEndpoint {
@@ -38,6 +41,9 @@ message ServiceDeploymentEndpoint {
   string gateway_path = 8;
   string scope = 9;
   string status = 10;
+  string node_id = 11;
+  string gateway_service_id = 12;
+  bool gateway_enabled = 13;
 }
 
 message ServiceDeploymentWarning {
@@ -53,6 +59,8 @@ message ListServiceDeploymentsReq {
   string scope = 3;
   string status = 4;
   trpc.moox.common.Page page = 5;
+  string node_id = 6;
+  optional bool gateway_enabled = 7;
 }
 
 message ListServiceDeploymentsRsp {
@@ -64,6 +72,7 @@ message ListServiceDeploymentsRsp {
 
 message GetServiceDeploymentReq {
   string service_name = 1;
+  string node_id = 2;
 }
 
 message GetServiceDeploymentRsp {
@@ -89,6 +98,7 @@ message UpdateServiceDeploymentReq {
   reserved "confirm_storage_topology_overlap";
   string service_name = 1;
   ServiceDeployment deployment = 2;
+  string node_id = 4;
 }
 
 message UpdateServiceDeploymentRsp {
@@ -101,6 +111,7 @@ message DeleteServiceDeploymentReq {
   reserved 2;
   reserved "confirm_storage_topology_overlap";
   string service_name = 1;
+  string node_id = 3;
 }
 
 message DeleteServiceDeploymentRsp {
@@ -108,12 +119,90 @@ message DeleteServiceDeploymentRsp {
   repeated ServiceDeploymentWarning warnings = 2;
 }
 
-message ListActiveServiceDeploymentsReq {}
+message ListActiveServiceDeploymentsReq {
+  string node_id = 1;
+}
 
 message ListActiveServiceDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
   repeated ServiceDeployment deployments = 2;
   map<string, ServiceDeploymentEndpoint> deployment_map = 3;
+}
+
+message GatewayNode {
+  string node_id = 1;
+  int64 host_id = 2;
+  string name = 3;
+  string public_address = 4;
+  string status = 5;
+  string route_hash = 6;
+  string applied_route_hash = 7;
+  int32 route_count = 8;
+  string last_seen_at = 9;
+  string last_error = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message ListGatewayNodesReq {
+  string node_id = 1;
+  string status = 2;
+  trpc.moox.common.Page page = 3;
+}
+
+message ListGatewayNodesRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated GatewayNode nodes = 2;
+  trpc.moox.common.PageResult page_result = 3;
+}
+
+message CreateGatewayNodeReq {
+  GatewayNode node = 1;
+}
+
+message CreateGatewayNodeRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  GatewayNode node = 2;
+}
+
+message UpdateGatewayNodeReq {
+  string node_id = 1;
+  GatewayNode node = 2;
+}
+
+message UpdateGatewayNodeRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  GatewayNode node = 2;
+}
+
+message DeleteGatewayNodeReq {
+  string node_id = 1;
+}
+
+message DeleteGatewayNodeRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
+message GatewayRoute {
+  string service_id = 1;
+  string address = 2;
+  string service_path = 3;
+  int32 timeout_ms = 4;
+  int64 max_body_bytes = 5;
+  repeated string allowed_methods = 6;
+}
+
+message GetGatewayNodeRoutesReq {
+  string node_id = 1;
+}
+
+message GetGatewayNodeRoutesRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  string node_id = 2;
+  string route_hash = 3;
+  string generated_at = 4;
+  bool disabled = 5;
+  repeated GatewayRoute routes = 6;
 }
 
 service SysDeploy {
@@ -123,4 +212,9 @@ service SysDeploy {
   rpc UpdateServiceDeployment(UpdateServiceDeploymentReq) returns (UpdateServiceDeploymentRsp);
   rpc DeleteServiceDeployment(DeleteServiceDeploymentReq) returns (DeleteServiceDeploymentRsp);
   rpc ListActiveServiceDeployments(ListActiveServiceDeploymentsReq) returns (ListActiveServiceDeploymentsRsp);
+  rpc ListGatewayNodes(ListGatewayNodesReq) returns (ListGatewayNodesRsp);
+  rpc CreateGatewayNode(CreateGatewayNodeReq) returns (CreateGatewayNodeRsp);
+  rpc UpdateGatewayNode(UpdateGatewayNodeReq) returns (UpdateGatewayNodeRsp);
+  rpc DeleteGatewayNode(DeleteGatewayNodeReq) returns (DeleteGatewayNodeRsp);
+  rpc GetGatewayNodeRoutes(GetGatewayNodeRoutesReq) returns (GetGatewayNodeRoutesRsp);
 }

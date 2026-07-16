@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
@@ -85,12 +84,10 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 
 	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
 	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
-	sysDeployService := sysdeploy.NewService(dbManager)
+	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
 	if err := sysDeployService.SeedDefaults(ctx); err != nil {
 		return nil, err
 	}
-	gateway.SetServiceDetailResolver(sysDeployService.ResolveGatewayServiceDetail)
-
 	db := dbManager.GetDB()
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）

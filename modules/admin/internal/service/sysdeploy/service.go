@@ -3,8 +3,10 @@ package sysdeploy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -21,29 +24,73 @@ type Service interface {
 	pb.SysDeployService
 	SeedDefaults(ctx context.Context) error
 	GetServiceDeployments(ctx context.Context) (map[string]interface{}, error)
-	ResolveGatewayServiceDetail(ctx context.Context, serviceID string) (gateway.ServiceDetail, bool)
+	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool)
+	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error)
+	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
+}
+
+func (s *ServiceImpl) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
+	return s.dao.CompileGatewaySnapshot(ctx, nodeID)
+}
+
+func (s *ServiceImpl) ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error {
+	return s.dao.ReportGatewayStatus(ctx, report)
 }
 
 type ServiceImpl struct {
 	pb.UnimplementedSysDeploy
-	dao *DAO
+	dao         *DAO
+	adminNodeID string
 }
 
-func NewService(dbManager *database.Manager) *ServiceImpl {
-	return &ServiceImpl{dao: NewDAO(dbManager.GetDB())}
+func NewService(dbManager *database.Manager, adminNodeID string) *ServiceImpl {
+	return &ServiceImpl{dao: NewDAO(dbManager.GetDB()), adminNodeID: strings.TrimSpace(adminNodeID)}
 }
 
 func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
-	return s.dao.SeedDefaults(ctx, DefaultDeployments())
+	nodeID := s.adminNodeID
+	if nodeID == "" {
+		return fmt.Errorf("admin node id is required")
+	}
+	node, err := s.dao.GetGatewayNode(ctx, nodeID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		node := &GatewayNode{NodeID: nodeID, Name: nodeID, PublicAddress: "https://" + defaultPublicHost, Status: "enabled"}
+		if err := s.dao.CreateGatewayNode(ctx, node); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	node, err = s.dao.GetGatewayNode(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	if node.HostID == nil {
+		publicURL, _ := url.Parse(node.PublicAddress)
+		var hostID int64
+		if publicURL != nil && publicURL.Hostname() != "" {
+			if err := s.dao.db.WithContext(ctx).Table("t_ssh_host").Select("c_id").Where("c_address = ?", publicURL.Hostname()).Limit(1).Scan(&hostID).Error; err != nil {
+				return err
+			}
+		}
+		if hostID > 0 {
+			if err := s.dao.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Update("c_host_id", hostID).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID))
 }
 
 func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
 	pageNo, offset, limit := normalizePage(req.GetPage())
 	rows, total, err := s.dao.List(ctx, ListFilter{
-		ServiceName: req.GetServiceName(),
-		ServiceKind: req.GetServiceKind(),
-		Scope:       req.GetScope(),
-		Status:      req.GetStatus(),
+		NodeID:         req.GetNodeId(),
+		ServiceName:    req.GetServiceName(),
+		ServiceKind:    req.GetServiceKind(),
+		Scope:          req.GetScope(),
+		Status:         req.GetStatus(),
+		GatewayEnabled: req.GatewayEnabled,
 	}, offset, limit)
 	if err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] ListServiceDeployments failed: %v", err)
@@ -58,9 +105,12 @@ func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListSe
 }
 
 func (s *ServiceImpl) GetServiceDeployment(ctx context.Context, req *pb.GetServiceDeploymentReq) (*pb.GetServiceDeploymentRsp, error) {
-	row, err := s.dao.Get(ctx, req.GetServiceName())
+	if req.GetNodeId() == "" || req.GetServiceName() == "" {
+		return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id and service_name are required")}, nil
+	}
+	row, err := s.dao.Get(ctx, req.GetNodeId(), req.GetServiceName())
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "服务部署信息不存在")}, nil
 		}
 		log.ErrorContextf(ctx, "[SysDeploy] GetServiceDeployment failed: %v", err)
@@ -74,9 +124,19 @@ func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.Creat
 	if err := validateDeployment(item); err != nil {
 		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if _, err := s.dao.GetGatewayNode(ctx, item.NodeID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "gateway node not found")}, nil
+		}
+		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "query gateway node failed")}, nil
+	}
 	if err := s.dao.Create(ctx, item); err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] CreateServiceDeployment failed: %v", err)
-		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		code := pb.ErrorCode_INNER_ERR
+		if strings.Contains(err.Error(), "already exists") {
+			code = pb.ErrorCode_INVALID_PARAM
+		}
+		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
 	return &pb.CreateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(item), Warnings: storageTopologyWarnings(item.ServiceName)}, nil
 }
@@ -84,20 +144,28 @@ func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.Creat
 func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.UpdateServiceDeploymentReq) (*pb.UpdateServiceDeploymentRsp, error) {
 	item := pbToModel(req.GetDeployment())
 	serviceName := req.GetServiceName()
+	nodeID := req.GetNodeId()
 	if serviceName == "" && item != nil {
 		serviceName = item.ServiceName
 	}
 	if item != nil {
-		item.ServiceName = serviceName
+		item.ServiceName, item.NodeID = serviceName, nodeID
 	}
 	if err := validateDeployment(item); err != nil {
 		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	if err := s.dao.Update(ctx, serviceName, item); err != nil {
+	if err := s.dao.Update(ctx, nodeID, serviceName, item); err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] UpdateServiceDeployment failed: %v", err)
-		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		code := pb.ErrorCode_INNER_ERR
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			code = pb.ErrorCode_NOT_FOUND
+		}
+		if isUniqueConstraintError(err) {
+			code = pb.ErrorCode_INVALID_PARAM
+		}
+		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
-	row, err := s.dao.Get(ctx, serviceName)
+	row, err := s.dao.Get(ctx, nodeID, serviceName)
 	if err != nil {
 		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "保存后读取失败")}, nil
 	}
@@ -106,28 +174,39 @@ func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.Updat
 
 func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.DeleteServiceDeploymentReq) (*pb.DeleteServiceDeploymentRsp, error) {
 	serviceName := req.GetServiceName()
+	nodeID := req.GetNodeId()
 	if serviceName == "" {
 		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "service_name is required")}, nil
 	}
-	if err := s.dao.Delete(ctx, serviceName); err != nil {
+	if nodeID == "" {
+		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id is required")}, nil
+	}
+	if err := s.dao.Delete(ctx, nodeID, serviceName); err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] DeleteServiceDeployment failed: %v", err)
-		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		code := pb.ErrorCode_INNER_ERR
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			code = pb.ErrorCode_NOT_FOUND
+		}
+		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
 	return &pb.DeleteServiceDeploymentRsp{RetInfo: retOK(), Warnings: storageTopologyWarnings(serviceName)}, nil
 }
 
 func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.ListActiveServiceDeploymentsReq) (*pb.ListActiveServiceDeploymentsRsp, error) {
-	rows, err := s.dao.ListActive(ctx)
+	rows, err := s.dao.ListActive(ctx, req.GetNodeId())
 	if err != nil {
 		log.ErrorContextf(ctx, "[SysDeploy] ListActiveServiceDeployments failed: %v", err)
 		return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询 active 服务部署信息失败")}, nil
 	}
-	return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retOK(), Deployments: modelsToPB(rows), DeploymentMap: endpointMap(rows)}, nil
+	return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retOK(), Deployments: modelsToPB(rows), DeploymentMap: endpointMap(rows, req.GetNodeId() == "")}, nil
 }
 
 // GetServiceDeployments 返回可直接序列化到 SCF keepalive event 的 active 部署信息。
 func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]interface{}, error) {
-	rows, err := s.dao.ListActive(ctx)
+	if s.adminNodeID == "" {
+		return nil, fmt.Errorf("admin node id is required")
+	}
+	rows, err := s.dao.ListActive(ctx, s.adminNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,10 +229,14 @@ func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]int
 	return payload, nil
 }
 
-// ResolveGatewayServiceDetail resolves /api/admin and /api/service forwarding
-// targets from active t_service_deployments records.
-func (s *ServiceImpl) ResolveGatewayServiceDetail(ctx context.Context, serviceID string) (gateway.ServiceDetail, bool) {
-	row, err := s.dao.Get(ctx, gatewayDeploymentName(serviceID))
+// ResolveAdminServiceDetail resolves browser control-plane forwarding only from
+// active deployments assigned to the Admin process's configured node.
+func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool) {
+	adminNodeID = strings.TrimSpace(adminNodeID)
+	if adminNodeID == "" || adminNodeID != s.adminNodeID {
+		return gateway.ServiceDetail{}, false
+	}
+	row, err := s.dao.Get(ctx, adminNodeID, gatewayDeploymentName(serviceID))
 	if err != nil || row == nil || row.Status != "active" {
 		return gateway.ServiceDetail{}, false
 	}
@@ -195,6 +278,9 @@ func validateDeployment(item *Deployment) error {
 		return fmt.Errorf("deployment is required")
 	}
 	normalizeDeployment(item)
+	if item.NodeID == "" {
+		return fmt.Errorf("node_id is required")
+	}
 	if item.ServiceName == "" {
 		return fmt.Errorf("service_name is required")
 	}
@@ -231,6 +317,22 @@ func validateDeployment(item *Deployment) error {
 	extra := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(item.ExtraConfig), &extra); err != nil || extra == nil {
 		return fmt.Errorf("extra_config must be a valid JSON object")
+	}
+	if item.GatewayEnabled {
+		if item.Protocol != "http" {
+			return fmt.Errorf("gateway-enabled protocol must be http")
+		}
+		extra, err := parseRouteExtraConfig(item.ExtraConfig)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
+		}
+		if requiresMethodAllowlist(item.GatewayServiceID, item.GatewayPath) && len(extra.GatewayMethods) == 0 {
+			return fmt.Errorf("%w: %s requires nonempty gateway_methods", ErrInvalidGatewayRoute, item.GatewayServiceID)
+		}
+		route := gatewayproxy.Route{ServiceID: item.GatewayServiceID, Address: deploymentRPCAddress(item), ServicePath: item.GatewayPath, AllowedMethods: extra.GatewayMethods}
+		if _, err := gatewayproxy.NormalizeAndHash("validation", []gatewayproxy.Route{route}); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
+		}
 	}
 	return nil
 }
@@ -282,6 +384,7 @@ func modelToPB(row *Deployment) *pb.ServiceDeployment {
 		ExtraConfig: row.ExtraConfig,
 		CreatedAt:   formatTime(row.CreatedAt),
 		UpdatedAt:   formatTime(row.UpdatedAt),
+		NodeId:      row.NodeID, GatewayServiceId: row.GatewayServiceID, GatewayEnabled: row.GatewayEnabled,
 	}
 }
 
@@ -301,14 +404,19 @@ func pbToModel(item *pb.ServiceDeployment) *Deployment {
 		Status:      item.GetStatus(),
 		Description: item.GetDescription(),
 		ExtraConfig: item.GetExtraConfig(),
+		NodeID:      item.GetNodeId(), GatewayServiceID: item.GetGatewayServiceId(), GatewayEnabled: item.GetGatewayEnabled(),
 	}
 }
 
-func endpointMap(rows []Deployment) map[string]*pb.ServiceDeploymentEndpoint {
+func endpointMap(rows []Deployment, composite bool) map[string]*pb.ServiceDeploymentEndpoint {
 	items := make(map[string]*pb.ServiceDeploymentEndpoint, len(rows))
 	for i := range rows {
 		row := rows[i]
-		items[row.ServiceName] = &pb.ServiceDeploymentEndpoint{
+		key := row.ServiceName
+		if composite {
+			key = row.NodeID + "/" + row.ServiceName
+		}
+		items[key] = &pb.ServiceDeploymentEndpoint{
 			ServiceName: row.ServiceName,
 			ServiceKind: row.ServiceKind,
 			Protocol:    row.Protocol,
@@ -319,6 +427,7 @@ func endpointMap(rows []Deployment) map[string]*pb.ServiceDeploymentEndpoint {
 			GatewayPath: row.GatewayPath,
 			Scope:       row.Scope,
 			Status:      row.Status,
+			NodeId:      row.NodeID, GatewayServiceId: row.GatewayServiceID, GatewayEnabled: row.GatewayEnabled,
 		}
 	}
 	return items
@@ -343,4 +452,11 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+func formatTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return formatTime(*t)
 }

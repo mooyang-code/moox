@@ -10,7 +10,7 @@ import (
 
 func TestInitGatewayServices_NilConfig_ShouldError(t *testing.T) {
 	SetConfig(nil)
-	err := InitGatewayServices(&server.Server{})
+	err := InitGatewayServices(&server.Server{}, nil, "admin-node-test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "网关配置未初始化")
 }
