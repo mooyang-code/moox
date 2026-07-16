@@ -3,11 +3,11 @@
     <div class="moox-inner">
       <div class="page-actions">
         <a-space>
-          <a-input v-model="datasetFilter" class="archive-dataset-filter" allow-clear placeholder="dataset_id" />
-          <a-switch v-model="debugMode" size="small">
-            <template #checked>调试</template>
-            <template #unchecked>调试</template>
-          </a-switch>
+          <a-input v-model="datasetFilter" allow-clear placeholder="请输入数据集ID" @press-enter="search" />
+          <a-button type="primary" :disabled="!selectedSpaceId" @click="search">
+            <template #icon><icon-search /></template>
+            <span>查询</span>
+          </a-button>
         </a-space>
       </div>
 
@@ -53,16 +53,6 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column v-if="debugMode" title="技术详情" :width="180" :fixed="'right'">
-            <template #cell="{ record }">
-              <a-popover title="技术详情">
-                <a-button size="mini" type="text">查看</a-button>
-                <template #content>
-                  <pre>{{ technicalDetails(record) }}</pre>
-                </template>
-              </a-popover>
-            </template>
-          </a-table-column>
         </template>
       </a-table>
     </div>
@@ -83,7 +73,6 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<ArchiveFile[]>([]);
 const loading = ref(false);
 const datasetFilter = ref('');
-const debugMode = ref(false);
 const pagination = reactive(defaultPagination());
 
 async function load() {
@@ -105,16 +94,9 @@ async function load() {
   }
 }
 
-function technicalDetails(record: ArchiveFile) {
-  return JSON.stringify(
-    {
-      archive_file_id: record.archive_file_id,
-      device_id: record.device_id,
-      attributes: record.attributes || {},
-    },
-    null,
-    2,
-  );
+function search() {
+  pagination.current = 1;
+  load();
 }
 
 function onPageChange(page: number) {
@@ -133,11 +115,6 @@ watch(selectedSpaceId, () => {
   load();
 });
 
-watch(datasetFilter, () => {
-  pagination.current = 1;
-  load();
-});
-
 onMounted(load);
 </script>
 
@@ -148,20 +125,4 @@ onMounted(load);
   margin-bottom: 14px;
 }
 
-.archive-dataset-filter {
-  width: 180px;
-}
-
-@media (max-width: 960px) {
-  .archive-dataset-filter {
-    width: 128px;
-  }
-}
-
-pre {
-  max-width: 360px;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 </style>

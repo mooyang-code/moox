@@ -24,7 +24,7 @@ describe('storage page actions contract', () => {
   it('keeps the remaining storage controls and removes refresh actions', () => {
     expect(pageActions('nodes', pages.nodes)).toContain('新增节点');
     expect(pageActions('routes', pages.routes)).toContain('新增路由');
-    expect(pageActions('archive', pages.archive)).toMatch(/datasetFilter[\s\S]*debugMode/);
+    expect(pageActions('archive', pages.archive)).toMatch(/datasetFilter[\s\S]*icon-search[\s\S]*查询/);
     expect(Object.values(pages).join('\n')).not.toContain('icon-refresh');
     expect(Object.values(pages).join('\n')).not.toContain('刷新节点列表');
     expect(Object.values(pages).join('\n')).not.toContain('刷新路由列表');
@@ -38,5 +38,14 @@ describe('storage page actions contract', () => {
   it('removes the storage topology warning from the node page', () => {
     expect(pages.nodes).not.toContain('<a-alert');
     expect(pages.nodes).not.toContain('topology-alert');
+  });
+
+  it('keeps only the search input and query button in archive actions', () => {
+    const actions = pageActions('archive', pages.archive);
+    expect(actions.match(/<a-input\b/g)).toHaveLength(1);
+    expect(actions.match(/<a-button\b/g)).toHaveLength(1);
+    expect(actions).not.toContain('<a-switch');
+    expect(pages.archive).not.toContain('debugMode');
+    expect(pages.archive).not.toContain('technicalDetails');
   });
 });
