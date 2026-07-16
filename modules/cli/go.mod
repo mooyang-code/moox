@@ -8,10 +8,12 @@ replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/pr
 
 require (
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
+	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls v1.3.131
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.131
+	golang.org/x/crypto v0.47.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -19,8 +21,8 @@ require (
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
 )
 
 require (
