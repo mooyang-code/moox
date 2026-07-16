@@ -1,16 +1,16 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <h2>主存节点</h2>
+    <div class="page-toolbar">
       <a-space>
+        <a-tooltip content="刷新节点列表">
+          <a-button aria-label="刷新节点列表" @click="load">
+            <template #icon><icon-refresh /></template>
+          </a-button>
+        </a-tooltip>
         <a-button type="primary" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增节点
-        </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
@@ -171,17 +171,11 @@ onMounted(load);
 </script>
 
 <style scoped>
-.page-head {
+.page-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+  justify-content: flex-end;
+  margin-bottom: 14px;
 }
 
 .topology-alert {

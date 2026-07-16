@@ -1,20 +1,18 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div>
-        <h2>归档文件</h2>
-      </div>
+    <div class="page-toolbar">
       <a-space>
         <a-input v-model="datasetFilter" allow-clear placeholder="dataset_id" style="width: 180px" />
         <a-switch v-model="debugMode" size="small">
           <template #checked>调试</template>
           <template #unchecked>调试</template>
         </a-switch>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
+        <a-tooltip content="刷新归档列表">
+          <a-button aria-label="刷新归档列表" :disabled="!selectedSpaceId" @click="load">
+            <template #icon><icon-refresh /></template>
+          </a-button>
+        </a-tooltip>
       </a-space>
     </div>
 
@@ -149,21 +147,11 @@ onMounted(load);
 </script>
 
 <style scoped>
-.page-head {
+.page-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
+  justify-content: flex-end;
+  margin-bottom: 14px;
 }
 
 pre {

@@ -1,18 +1,16 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div>
-        <h2>主存路由</h2>
-      </div>
+    <div class="page-toolbar">
       <a-space>
+        <a-tooltip content="刷新路由列表">
+          <a-button aria-label="刷新路由列表" :disabled="!selectedSpaceId" @click="load">
+            <template #icon><icon-refresh /></template>
+          </a-button>
+        </a-tooltip>
         <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增路由
-        </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
@@ -227,20 +225,10 @@ onMounted(load);
 </script>
 
 <style scoped>
-.page-head {
+.page-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
+  justify-content: flex-end;
+  margin-bottom: 14px;
 }
 </style>

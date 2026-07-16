@@ -239,21 +239,19 @@ export const staticRoutes = [
       },
       {
         path: "/ops/storage/nodes",
-        name: "ops-storage-nodes",
-        component: () => import("@/views/ops/storage/nodes.vue"),
-        meta: { title: "ops-storage-nodes" }
+        name: "ops-storage",
+        component: () => import("@/views/ops/storage/index.vue"),
+        meta: { title: "ops-storage" }
       },
       {
         path: "/ops/storage/routes",
-        name: "ops-storage-routes",
-        component: () => import("@/views/ops/storage/routes.vue"),
-        meta: { title: "ops-storage-routes" }
+        redirect: { path: "/ops/storage/nodes", query: { tab: "routes" } },
+        meta: { title: "ops-storage", hide: true }
       },
       {
         path: "/ops/storage/archive",
-        name: "ops-storage-archive",
-        component: () => import("@/views/ops/storage/archive.vue"),
-        meta: { title: "ops-storage-archive" }
+        redirect: { path: "/ops/storage/nodes", query: { tab: "archive" } },
+        meta: { title: "ops-storage", hide: true }
       }
     ]
   }
