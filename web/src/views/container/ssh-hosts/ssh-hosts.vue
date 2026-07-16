@@ -1,8 +1,11 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <!-- 筛选区域 -->
-      <a-space wrap>
+      <a-space class="host-list-toolbar" wrap>
+        <a-button type="primary" status="success" @click="onAdd">
+          <template #icon><icon-plus /></template>
+          <span>新增主机</span>
+        </a-button>
         <a-input
           v-model="keyword"
           placeholder="搜索主机名称或地址"
@@ -15,21 +18,11 @@
           <template #icon><icon-search /></template>
           <span>查询</span>
         </a-button>
+        <a-button type="primary" status="danger" :disabled="selectedKeys.length === 0" @click="batchDelete">
+          <template #icon><icon-delete /></template>
+          <span>批量删除</span>
+        </a-button>
       </a-space>
-
-      <!-- 操作按钮区域 -->
-      <a-row>
-        <a-space wrap>
-          <a-button type="primary" status="success" @click="onAdd">
-            <template #icon><icon-plus /></template>
-            <span>新增主机</span>
-          </a-button>
-          <a-button type="primary" status="danger" @click="batchDelete" :disabled="selectedKeys.length === 0">
-            <template #icon><icon-delete /></template>
-            <span>批量删除</span>
-          </a-button>
-        </a-space>
-      </a-row>
 
       <!-- 主机列表 -->
       <a-table
@@ -552,12 +545,8 @@ onMounted(() => {
     flex-direction: column;
     min-height: 100%;
 
-    :deep(.arco-row) {
-      margin-top: 2px;
-    }
-
-    :deep(.arco-table) {
-      margin-top: 2px;
+    .host-list-toolbar {
+      margin-bottom: 12px;
     }
   }
 

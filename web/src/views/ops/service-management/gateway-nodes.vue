@@ -1,21 +1,17 @@
 <template>
   <div class="gateway-nodes">
-    <div class="toolbar">
-      <a-space wrap>
-        <a-input v-model="filters.node_id" allow-clear placeholder="节点 ID" @press-enter="reloadFirstPage" />
-        <a-select v-model="filters.status" allow-clear placeholder="配置状态" class="status-filter" @change="reloadFirstPage">
-          <a-option value="enabled">enabled</a-option>
-          <a-option value="disabled">disabled</a-option>
-        </a-select>
-        <a-button @click="reloadFirstPage">查询</a-button>
-      </a-space>
-      <a-space>
-        <a-button type="primary" status="success" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增节点
-        </a-button>
-      </a-space>
-    </div>
+    <a-space class="toolbar" wrap>
+      <a-button type="primary" status="success" @click="openCreate">
+        <template #icon><icon-plus /></template>
+        新增节点
+      </a-button>
+      <a-input v-model="filters.node_id" allow-clear placeholder="节点 ID" @press-enter="reloadFirstPage" />
+      <a-select v-model="filters.status" allow-clear placeholder="配置状态" class="status-filter" @change="reloadFirstPage">
+        <a-option value="enabled">enabled</a-option>
+        <a-option value="disabled">disabled</a-option>
+      </a-select>
+      <a-button @click="reloadFirstPage">查询</a-button>
+    </a-space>
 
     <a-table
       row-key="node_id"
@@ -272,7 +268,7 @@ onUnmounted(() => { stopRefreshTimer(); loadGuard.invalidate(); });
 
 <style scoped>
 .gateway-nodes { min-width: 0; }
-.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .status-filter { width: 140px; }
 .node-identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .node-name { display: flex; min-width: 0; align-items: center; gap: 6px; }
@@ -286,7 +282,7 @@ onUnmounted(() => { stopRefreshTimer(); loadGuard.invalidate(); });
 .form-span-2 { grid-column: 1 / -1; }
 .routes-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 14px; color: var(--color-text-2); }
 @media (max-width: 768px) {
-  .toolbar { align-items: stretch; flex-direction: column; }
+  .toolbar { align-items: stretch; }
   .node-form { grid-template-columns: 1fr; }
   .form-span-2 { grid-column: auto; }
 }
