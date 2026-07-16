@@ -277,13 +277,13 @@ onUnmounted(() => { stopRefreshTimer(); loadGuard.invalidate(); });
 .node-name { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .node-identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-identity span, .hash-state code { color: var(--color-text-3); font-size: 12px; }
-.hash-state { display: flex; align-items: center; gap: 8px; }
+.hash-state { display: flex; align-items: center; gap: var(--moox-space-2); }
 .hash-values { display: flex; min-width: 0; flex-direction: column; }
 .error-text { color: rgb(var(--danger-6)); }
-.node-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.node-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--moox-space-2) var(--moox-space-4); }
 .node-form :deep(.arco-form-item) { margin-bottom: 0; }
 .form-span-2 { grid-column: 1 / -1; }
-.routes-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 14px; color: var(--color-text-2); }
+.routes-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--moox-space-2) var(--moox-space-5); margin-bottom: 14px; color: var(--color-text-2); }
 @media (max-width: 768px) {
   .toolbar { align-items: stretch; }
   .node-form { grid-template-columns: 1fr; }

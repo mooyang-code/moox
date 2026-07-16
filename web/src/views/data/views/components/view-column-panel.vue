@@ -215,7 +215,7 @@ watch(() => [props.spaceId, props.viewId], load, { immediate: true });
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--moox-space-3);
 }
 
 .panel-toolbar {

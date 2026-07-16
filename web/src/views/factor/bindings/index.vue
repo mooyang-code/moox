@@ -73,7 +73,7 @@
       :align-center="false"
       :top="'48px'"
       :modal-style="{ maxWidth: 'calc(100vw - 32px)' }"
-      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '18px 24px 14px' }"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '18px var(--moox-space-6) 14px' }"
       @ok="submit"
     >
       <a-form class="binding-form" :model="form" layout="vertical">
@@ -279,7 +279,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--moox-space-3);
   margin-bottom: var(--moox-space-2);
 }
 
@@ -305,7 +305,7 @@ onMounted(load);
   .page-head {
     align-items: flex-start;
     flex-direction: column;
-    gap: 12px;
+    gap: var(--moox-space-3);
   }
 
   .binding-form {

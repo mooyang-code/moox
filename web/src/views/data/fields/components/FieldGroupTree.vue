@@ -93,14 +93,14 @@ function toggle(groupID: string) {
 </script>
 
 <style scoped>
-.group-tree { height: 100%; min-height: 0; padding: 10px 8px; }
+.group-tree { height: 100%; min-height: 0; padding: 10px var(--moox-space-2); }
 .group-tree-head { display: flex; height: 34px; padding: 0 6px 6px 10px; align-items: center; justify-content: space-between; }
 .group-tree-spin { display: block; min-height: 160px; }
 .tree-group { margin-top: 2px; }
 .tree-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 28px; align-items: center; }
 .tree-row:hover .node-menu { opacity: 1; }
 .child-row { padding-left: 18px; }
-.tree-item { display: flex; min-width: 0; height: 34px; padding: 0 8px; border: 0; border-radius: 4px; align-items: center; gap: 8px; background: transparent; color: var(--color-text-2); cursor: pointer; text-align: left; }
+.tree-item { display: flex; min-width: 0; height: 34px; padding: 0 var(--moox-space-2); border: 0; border-radius: 4px; align-items: center; gap: var(--moox-space-2); background: transparent; color: var(--color-text-2); cursor: pointer; text-align: left; }
 .group-tree-spin > .tree-item { width: 100%; }
 .tree-item:hover { background: var(--color-fill-2); }
 .tree-item.active { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 600; }

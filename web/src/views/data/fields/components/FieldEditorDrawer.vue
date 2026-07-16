@@ -143,10 +143,10 @@ async function submit() {
 </script>
 
 <style scoped>
-.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--moox-space-4); }
 .span-2 { grid-column: 1 / -1; }
 .code-input :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.drawer-footer { position: sticky; bottom: 0; display: flex; min-height: 60px; margin: 8px -16px -16px; padding: 12px 16px; border-top: 1px solid var(--color-border-2); align-items: center; justify-content: flex-end; gap: 8px; background: var(--color-bg-2); }
+.drawer-footer { position: sticky; bottom: 0; display: flex; min-height: 60px; margin: var(--moox-space-2) calc(-1 * var(--moox-space-4)) calc(-1 * var(--moox-space-4)); padding: var(--moox-space-3) var(--moox-space-4); border-top: 1px solid var(--color-border-2); align-items: center; justify-content: flex-end; gap: var(--moox-space-2); background: var(--color-bg-2); }
 :global(.field-editor-container) { pointer-events: none; }
 :global(.field-editor-container .arco-drawer) { pointer-events: auto; }
 @media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } .span-2 { grid-column: auto; } }

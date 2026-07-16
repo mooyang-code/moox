@@ -144,14 +144,14 @@ onMounted(loadServices);
 </script>
 
 <style scoped lang="scss">
-.rule-editor { padding-bottom: 24px; }
-.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 16px; }
+.rule-editor { padding-bottom: var(--moox-space-6); }
+.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 var(--moox-space-4); }
 .form-grid .wide { grid-column: 1 / -1; }
-.conditions-head, .preview-head, .editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.conditions-head { border-top: 1px solid var(--color-border-2); padding-top: 16px; }
+.conditions-head, .preview-head, .editor-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--moox-space-3); }
+.conditions-head { border-top: 1px solid var(--color-border-2); padding-top: var(--moox-space-4); }
 .conditions-head span { margin-left: 10px; color: var(--color-text-3); font-size: 12px; }
 .condition-empty { padding: 18px; color: var(--color-text-3); text-align: center; border-left: 2px solid var(--color-border-2); }
-.preview-result { padding: 12px 0; }
-.editor-actions { justify-content: flex-end; border-top: 1px solid var(--color-border-2); padding-top: 16px; margin-top: 18px; }
+.preview-result { padding: var(--moox-space-3) 0; }
+.editor-actions { justify-content: flex-end; border-top: 1px solid var(--color-border-2); padding-top: var(--moox-space-4); margin-top: 18px; }
 @media (max-width: 900px) { .form-grid { grid-template-columns: 1fr; } .form-grid .wide { grid-column: auto; } }
 </style>

@@ -388,7 +388,7 @@ onMounted(() => {
 .task-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--moox-space-2);
@@ -425,7 +425,7 @@ onMounted(() => {
   font-family: monospace;
   font-size: 12px;
   background: #f5f5f5;
-  padding: 12px;
+  padding: var(--moox-space-3);
   border-radius: 4px;
   max-height: 200px;
   overflow: auto;

@@ -37,7 +37,7 @@
           <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
-              <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: 4px;">
+              <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: var(--moox-space-1);">
                 {{ region.tag }}
               </a-tag>
             </a-option>
@@ -61,7 +61,7 @@
         <a-alert
           v-if="batchChangeStatuses.length > 0"
           type="info"
-          style="margin: 16px 0;"
+          style="margin: var(--moox-space-4) 0;"
           closable
           @close="handleCloseBatchChangeAlert"
         >
@@ -71,7 +71,7 @@
               <span>云节点批量变更处理中</span>
             </a-space>
           </template>
-          <div v-for="(batchChange, index) in batchChangeStatuses" :key="batchChange.batch_id || index" style="margin-bottom: 12px;">
+          <div v-for="(batchChange, index) in batchChangeStatuses" :key="batchChange.batch_id || index" style="margin-bottom: var(--moox-space-3);">
             <div>批次 {{ index + 1 }}：{{ getBatchChangeTypeText(batchChange.batch_change_type) }}</div>
             <div>处理进度：{{ batchChange.success_count + batchChange.failed_count }} / {{ batchChange.total_count }}</div>
             <div>成功：{{ batchChange.success_count }}，失败：{{ batchChange.failed_count }}</div>
@@ -79,14 +79,14 @@
               :percent="(Number(batchChange.progress) || 0) / 100" 
               :status="batchChange.failed_count > 0 ? 'warning' : 'normal'"
               :stroke-width="8"
-              style="margin-top: 8px"
+              style="margin-top: var(--moox-space-2)"
             />
           </div>
         </a-alert>
         <a-alert
           v-else-if="currentBatchChangeStatus && currentBatchChangeStatus.batch_change_status === 1"
           type="info"
-          style="margin: 16px 0;"
+          style="margin: var(--moox-space-4) 0;"
           closable
           @close="handleCloseBatchChangeAlert"
         >
@@ -104,7 +104,7 @@
               :percent="(Number(currentBatchChangeStatus.progress) || 0) / 100" 
               :status="currentBatchChangeStatus.failed_count > 0 ? 'warning' : 'normal'"
               :stroke-width="8"
-              style="margin-top: 8px"
+              style="margin-top: var(--moox-space-2)"
             />
           </div>
         </a-alert>
@@ -113,7 +113,7 @@
         <a-alert
           v-if="selectedKeys.length > 0 && !batchChangeProcessing"
           type="info"
-          style="margin: 16px 0;"
+          style="margin: var(--moox-space-4) 0;"
           :closable="true"
           @close="selectedKeys = []"
         >
@@ -172,7 +172,7 @@
             </a-table-column>
             <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
               <template #cell="{ record }">
-                <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" style="display: flex; flex-wrap: wrap; gap: 4px;">
+                <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" style="display: flex; flex-wrap: wrap; gap: var(--moox-space-1);">
                   <a-tag
                     v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
                     :key="index"
@@ -284,7 +284,7 @@
             <a-option :value="REGION_UNLIMITED">不限</a-option>
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
-              <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: 4px;">
+              <a-tag v-if="region.tag" size="small" :color="region.tag === '国内' ? 'blue' : 'orange'" style="margin-left: var(--moox-space-1);">
                 {{ region.tag }}
               </a-tag>
             </a-option>
@@ -367,13 +367,13 @@
       @ok="handleBatchPlanOk"
     >
       <a-spin :loading="batchPlanLoading">
-        <div style="margin-bottom: 12px;">
+        <div style="margin-bottom: var(--moox-space-3);">
           <div>标签：{{ batchPlanTag }}</div>
           <div>请求数量：{{ batchPlanRequested }}</div>
           <div>可用总数：{{ batchPlanTotalAvailable }}</div>
           <div>计划数量：{{ batchPlanPlannedTotal }} / {{ batchPlanTarget }}</div>
         </div>
-        <a-alert v-if="batchPlanNotice" type="warning" style="margin-bottom: 12px;">
+        <a-alert v-if="batchPlanNotice" type="warning" style="margin-bottom: var(--moox-space-3);">
           {{ batchPlanNotice }}
         </a-alert>
         <a-table
@@ -462,8 +462,8 @@
         <a-form-item>
           <a-alert type="info">
             <div>将为以下 {{ selectedKeys.length }} 个节点部署选中的函数版本：</div>
-            <div style="margin-top: 8px; max-height: 120px; overflow-y: auto;">
-              <a-tag v-for="nodeId in selectedKeys" :key="nodeId" style="margin: 4px;">
+            <div style="margin-top: var(--moox-space-2); max-height: 120px; overflow-y: auto;">
+              <a-tag v-for="nodeId in selectedKeys" :key="nodeId" style="margin: var(--moox-space-1);">
                 {{ nodeId }}
               </a-tag>
             </div>
@@ -483,7 +483,7 @@
     >
       <a-form :model="singleDeployForm" layout="vertical">
         <a-form-item label="节点信息">
-          <a-alert type="info" style="margin-bottom: 8px;">
+          <a-alert type="info" style="margin-bottom: var(--moox-space-2);">
             <div><strong>节点ID：</strong>{{ singleDeployForm.nodeId }}</div>
             <div><strong>命名空间：</strong>{{ singleDeployForm.namespace }}</div>
             <div><strong>地区：</strong>{{ singleDeployForm.region }}</div>
@@ -614,7 +614,7 @@
             {{ selectedNodeDetail.cls_topic_id || '-' }}
           </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
-            <div v-if="selectedNodeDetail.metadata" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background: #f6f8fa; padding: 8px; border-radius: 4px;">{{ formatMetadata(selectedNodeDetail.metadata) }}</div>
+            <div v-if="selectedNodeDetail.metadata" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background: #f6f8fa; padding: var(--moox-space-2); border-radius: 4px;">{{ formatMetadata(selectedNodeDetail.metadata) }}</div>
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="创建时间">
@@ -638,7 +638,7 @@
     >
       <div v-if="packageDetail" class="package-detail">
         <!-- 基本信息 -->
-        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
           <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
           <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
           <a-descriptions-item label="类型">
@@ -662,7 +662,7 @@
         </a-descriptions>
         
         <!-- 存储信息 -->
-        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
           <a-descriptions-item label="云账户ID">{{ packageDetail.cloud_account_id }}</a-descriptions-item>
           <a-descriptions-item label="COS区域">{{ packageDetail.cos_region }}</a-descriptions-item>
           <a-descriptions-item label="COS Bucket">{{ packageDetail.cos_bucket }}</a-descriptions-item>
@@ -671,7 +671,7 @@
         </a-descriptions>
         
         <!-- 审计信息 -->
-        <a-descriptions title="审计信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+        <a-descriptions title="审计信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
           <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_time) }}</a-descriptions-item>
           <a-descriptions-item label="最后部署时间" :span="2">
@@ -679,7 +679,7 @@
           </a-descriptions-item>
         </a-descriptions>
         
-        <div style="margin-top: 16px; text-align: right;">
+        <div style="margin-top: var(--moox-space-4); text-align: right;">
           <a-space>
             <a-button @click="handlePackageDetailCancel">关闭</a-button>
             <a-button 
@@ -700,9 +700,9 @@
           </a-space>
         </div>
       </div>
-      <div v-else style="text-align: center; padding: 40px;">
+      <div v-else style="text-align: center; padding: var(--moox-space-8);">
         <a-spin :loading="true" />
-        <div style="margin-top: 16px;">加载中...</div>
+        <div style="margin-top: var(--moox-space-4);">加载中...</div>
       </div>
     </a-modal>
 
@@ -717,7 +717,7 @@
     >
       <a-form :model="editNodeForm" layout="vertical">
         <a-form-item label="节点信息">
-          <a-alert type="info" style="margin-bottom: 8px;">
+          <a-alert type="info" style="margin-bottom: var(--moox-space-2);">
             <div><strong>节点ID：</strong>{{ editNodeForm.nodeId }}</div>
             <div><strong>命名空间：</strong>{{ editNodeForm.namespace }}</div>
             <div><strong>地区：</strong>{{ editNodeForm.region }}</div>
@@ -1065,27 +1065,27 @@ const handleBatchChangeComplete = async (data: BatchChangeStatusResponse) => {
     
     // 创建 Vue 渲染函数
     const content = () => h('div', { style: { maxHeight: '400px', overflowY: 'auto' } }, [
-      h('div', { style: { marginBottom: '12px' } }, [
+      h('div', { style: { marginBottom: 'var(--moox-space-3)' } }, [
         h('div', `变更类型：${getBatchChangeTypeText(data.batch_change_type)}`),
         h('div', `总数量：${data.total_count}`),
         h('div', `成功数量：${data.success_count}`),
         h('div', { style: { color: '#ff4d4f' } }, `失败数量：${data.failed_count}`)
       ]),
-      failedItems.length > 0 && h('div', { style: { marginTop: '16px' } }, [
+      failedItems.length > 0 && h('div', { style: { marginTop: 'var(--moox-space-4)' } }, [
         h('strong', '失败详情：'),
-        h('div', { style: { marginTop: '8px' } }, 
+        h('div', { style: { marginTop: 'var(--moox-space-2)' } },
           failedItems.map((item: any, index: number) => 
             h('div', { 
               key: index, 
               style: { 
-                marginBottom: '12px', 
-                padding: '8px', 
+                marginBottom: 'var(--moox-space-3)',
+                padding: 'var(--moox-space-2)',
                 backgroundColor: '#fff2f0', 
                 borderRadius: '4px',
                 border: '1px solid #ffccc7'
               } 
             }, [
-              h('div', { style: { fontWeight: 'bold', marginBottom: '4px' } }, item.item_name || item.item_id),
+              h('div', { style: { fontWeight: 'bold', marginBottom: 'var(--moox-space-1)' } }, item.item_name || item.item_id),
               h('div', { style: { color: '#ff4d4f', fontSize: '12px' } }, item.error_message || '未知错误')
             ])
           )

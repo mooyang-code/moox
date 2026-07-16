@@ -188,7 +188,7 @@ const logOut = () => {
     margin-left: $margin;
     overflow: hidden;
     .my_image {
-      margin-right: 8px;
+      margin-right: var(--moox-space-2);
       border-radius: 50%;
     }
     .user-nickname {

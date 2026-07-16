@@ -216,7 +216,7 @@
                 v-model="objectsValue"
                 placeholder="输入标的后按回车添加，如 BTC-USDT 或 BTC-*"
                 allow-clear
-                :style="{ marginTop: '8px' }" />
+                :style="{ marginTop: 'var(--moox-space-2)' }" />
               <div v-show="objectsSelectAll" class="select-all-hint">
                 已选择全部标的，将采集所有可用交易对数据
               </div>
@@ -268,7 +268,7 @@
         </template>
 
         <!-- 其他表单字段 -->
-        <a-form auto-label-width :layout="'vertical'" style="margin-top: 16px;">
+        <a-form auto-label-width :layout="'vertical'" style="margin-top: var(--moox-space-4);">
           <a-form-item label="创建人">
             <a-input v-model="addForm.creator" readonly />
           </a-form-item>
@@ -1272,7 +1272,7 @@ onMounted(() => {
 }
 
 .moox-inner .a-table {
-  margin-top: 16px;
+  margin-top: var(--moox-space-4);
 }
 
 pre {
@@ -1280,7 +1280,7 @@ pre {
   font-family: monospace;
   font-size: 12px;
   background: #f5f5f5;
-  padding: 8px;
+  padding: var(--moox-space-2);
   border-radius: 4px;
   max-height: 200px;
   overflow: auto;
@@ -1291,8 +1291,8 @@ pre {
 }
 
 .select-all-hint {
-  margin-top: 8px;
-  padding: 8px 12px;
+  margin-top: var(--moox-space-2);
+  padding: var(--moox-space-2) var(--moox-space-3);
   background: #f0f9eb;
   border: 1px solid #c6e7c6;
   border-radius: 4px;
@@ -1301,17 +1301,17 @@ pre {
 }
 
 .custom-form-item {
-  margin-bottom: 20px;
+  margin-bottom: var(--moox-space-5);
 }
 
 .custom-form-label {
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
   color: var(--color-text-2);
   font-size: 14px;
 }
 
 .custom-form-extra {
-  margin-top: 4px;
+  margin-top: var(--moox-space-1);
   color: var(--color-text-3);
   font-size: 12px;
 }
@@ -1319,7 +1319,7 @@ pre {
 :deep(.arco-checkbox-group) {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--moox-space-2);
 }
 
 :deep(.arco-checkbox-group .arco-checkbox) {

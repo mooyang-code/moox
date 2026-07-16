@@ -738,7 +738,7 @@ watch(selectedSpaceId, () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head__title {
@@ -748,7 +748,7 @@ watch(selectedSpaceId, () => {
 }
 
 .page-head h2 {
-  margin: 0 0 4px;
+  margin: 0 0 var(--moox-space-1);
   font-size: 20px;
   font-weight: 600;
 }
@@ -763,7 +763,7 @@ watch(selectedSpaceId, () => {
   align-items: flex-end;
   gap: 18px;
   min-width: 0;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .dataset-tabs {
@@ -782,7 +782,7 @@ watch(selectedSpaceId, () => {
 
 .freq-tabs :deep(.arco-tabs-tab) {
   min-height: 26px;
-  padding: 4px 10px;
+  padding: var(--moox-space-1) 10px;
   border: 1px solid var(--color-border-2);
   border-radius: 4px;
 }
@@ -796,7 +796,7 @@ watch(selectedSpaceId, () => {
   display: grid;
   grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
   align-items: start;
-  gap: 16px;
+  gap: var(--moox-space-4);
   min-height: 500px;
   height: calc(100vh - 246px);
 }
@@ -819,7 +819,7 @@ watch(selectedSpaceId, () => {
   min-height: 560px;
   max-height: 760px;
   overflow: hidden;
-  padding: 12px;
+  padding: var(--moox-space-3);
 }
 
 .pane-head,
@@ -827,7 +827,7 @@ watch(selectedSpaceId, () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--moox-space-3);
 }
 
 .pane-head {
@@ -838,7 +838,7 @@ watch(selectedSpaceId, () => {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--moox-space-1);
   height: 0;
   min-height: 0;
   margin-top: 10px;
@@ -855,7 +855,7 @@ watch(selectedSpaceId, () => {
   flex: 0 0 auto;
   width: 100%;
   min-height: 36px;
-  padding: 8px 9px;
+  padding: var(--moox-space-2) 9px;
   overflow: hidden;
   color: var(--color-text-1);
   font-weight: 500;
@@ -883,11 +883,11 @@ watch(selectedSpaceId, () => {
 
 .table-pane,
 .record-table-pane {
-  padding: 12px;
+  padding: var(--moox-space-3);
 }
 
 .table-toolbar {
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .table-toolbar > div > strong,
@@ -924,20 +924,20 @@ watch(selectedSpaceId, () => {
 .detail-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--moox-space-4);
 }
 
 .detail-table {
-  margin-top: 4px;
+  margin-top: var(--moox-space-1);
 }
 
 .preview-pager {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 16px;
+  gap: 10px var(--moox-space-4);
   align-items: center;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: var(--moox-space-3);
   color: var(--color-text-2);
   font-size: 13px;
 }

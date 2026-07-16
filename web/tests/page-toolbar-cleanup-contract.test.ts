@@ -19,7 +19,7 @@ describe('page toolbar cleanup contract', () => {
     expect(services).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
 
     const serviceManagement = read('ops/service-management/index.vue');
-    expect(serviceManagement).toMatch(/\.management-content\s*\{[\s\S]*?margin-top:\s*12px;/);
+    expect(serviceManagement).toMatch(/\.management-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
 
     const secrets = read('settings/secrets/index.vue');
     expect(secrets).not.toContain('统一管理 admin 本地秘钥');
@@ -33,7 +33,7 @@ describe('page toolbar cleanup contract', () => {
 
     const sources = read('data/sources/index.vue');
     expect(sources).not.toContain('<icon-refresh />');
-    expect(sources).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(sources).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
   });
 
   it('removes refresh and reset controls reviewed beside create or query actions', () => {

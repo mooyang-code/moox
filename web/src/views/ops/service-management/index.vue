@@ -74,7 +74,7 @@ watch(() => route.query.tab, (value) => {
 .management-content {
   min-height: 0;
   flex: 1;
-  margin-top: 12px;
+  margin-top: var(--moox-space-3);
   overflow: hidden;
 }
 

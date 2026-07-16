@@ -202,11 +202,11 @@ describe('page layout standards', () => {
     expect(resourceMonitor).toMatch(/\.summary-band\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(resourceMonitor).toMatch(/\.page-alert,\s*\.history-alert\s*\{\s*margin-bottom:\s*var\(--moox-space-2\);\s*\}/);
 
-    expect(factors).toMatch(/\.metadata-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\) var\(--moox-space-4\) 72px;/);
+    expect(factors).toMatch(/\.metadata-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\) var\(--moox-space-4\) var\(--moox-space-11\);/);
     expectMargin(factors, '.page-head', 'margin-bottom', 8);
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
-    expect(overview).toMatch(/\.overview-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\) var\(--moox-space-4\) 72px;/);
+    expect(overview).toMatch(/\.overview-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\) var\(--moox-space-4\) var\(--moox-space-11\);/);
     expectMargin(overview, '.page-head', 'margin-bottom', 8);
     expect(overview).toMatch(/\.overview-hero\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
 

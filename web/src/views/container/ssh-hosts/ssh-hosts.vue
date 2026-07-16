@@ -102,7 +102,7 @@
         layout="vertical"
       >
         <!-- 基本信息 -->
-        <a-typography-title :heading="6" style="margin-top: 0; margin-bottom: 16px;">基本信息</a-typography-title>
+        <a-typography-title :heading="6" style="margin-top: 0; margin-bottom: var(--moox-space-4);">基本信息</a-typography-title>
         <a-row :gutter="16">
           <a-col :span="12">
             <a-form-item field="name" label="名称" validate-trigger="blur">
@@ -135,7 +135,7 @@
         </a-row>
 
         <!-- 认证方式 -->
-        <a-typography-title :heading="6" style="margin-bottom: 16px;">认证方式</a-typography-title>
+        <a-typography-title :heading="6" style="margin-bottom: var(--moox-space-4);">认证方式</a-typography-title>
         <a-form-item field="auth_type" label="认证类型">
           <a-radio-group v-model="formData.auth_type" type="button">
             <a-radio value="pwd">密码</a-radio>
@@ -546,7 +546,7 @@ onMounted(() => {
     min-height: 100%;
 
     .host-list-toolbar {
-      margin-bottom: 8px;
+      margin-bottom: var(--moox-space-2);
     }
   }
 
@@ -556,21 +556,21 @@ onMounted(() => {
   }
 
   .form-collapse {
-    margin-top: 8px;
+    margin-top: var(--moox-space-2);
 
     :deep(.arco-collapse-item) {
       border-bottom: none;
     }
 
     :deep(.arco-collapse-item-header) {
-      padding: 8px 0;
+      padding: var(--moox-space-2) 0;
       font-weight: 500;
       color: var(--color-text-2);
       background: transparent;
     }
 
     :deep(.arco-collapse-item-content) {
-      padding: 12px 0 0;
+      padding: var(--moox-space-3) 0 0;
       background: transparent;
     }
 

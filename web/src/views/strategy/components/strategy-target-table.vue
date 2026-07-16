@@ -22,5 +22,5 @@ const hasComparison = computed(() => props.targets.some((target) => target.portf
 </script>
 
 <style scoped>
-.source-note { margin-bottom: 12px; }
+.source-note { margin-bottom: var(--moox-space-3); }
 </style>

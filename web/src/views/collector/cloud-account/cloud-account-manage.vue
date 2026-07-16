@@ -22,7 +22,7 @@
         :bordered="{ cell: true }"
         :loading="loading"
         :scroll="{ y: 400 }"
-        style="margin-top: 16px"
+        style="margin-top: var(--moox-space-4)"
       >
         <template #columns>
           <a-table-column title="账户名称" data-index="account_name" :width="180"></a-table-column>

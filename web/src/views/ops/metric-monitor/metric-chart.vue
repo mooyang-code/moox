@@ -69,7 +69,7 @@ onBeforeUnmount(releaseChart);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--moox-space-3);
   color: var(--color-text-3);
 }
 

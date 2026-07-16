@@ -349,7 +349,7 @@ onMounted(refreshAll);
 .metric-monitor-page { height: 100%; overflow-y: auto; padding: 0 0 var(--moox-space-5); color: var(--color-text-1); }
 .page-head, .section-head, .filter-band { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .page-head { margin-bottom: var(--moox-space-2); }
-.page-head h2 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+.page-head h2 { margin: 0 0 var(--moox-space-1); font-size: 20px; font-weight: 600; }
 .page-head span, .section-meta, .cardinality-note { color: var(--color-text-3); font-size: 12px; }
 .metric-subtabs { margin-bottom: var(--moox-space-3); }
 .metric-subtabs :deep(.arco-tabs-content) { display: none; }

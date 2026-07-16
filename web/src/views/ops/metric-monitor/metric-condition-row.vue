@@ -80,11 +80,11 @@ function updateMatcher(index: number, value: Partial<{ name: string; value: stri
 </script>
 
 <style scoped lang="scss">
-.condition-row { display: flex; gap: 10px; border-left: 2px solid var(--color-primary-light-3); padding: 12px 0 12px 12px; }
+.condition-row { display: flex; gap: 10px; border-left: 2px solid var(--color-primary-light-3); padding: var(--moox-space-3) 0 var(--moox-space-3) var(--moox-space-3); }
 .condition-index { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid var(--color-primary-light-3); color: var(--color-primary-6); font-weight: 600; }
-.condition-fields { flex: 1; min-width: 0; display: grid; gap: 8px; }
-.selector-line, .matcher-line, .reduce-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.matcher-list { display: grid; gap: 7px; padding-left: 4px; }
-.reduce-line { border-top: 1px solid var(--color-border-2); padding-top: 8px; }
+.condition-fields { flex: 1; min-width: 0; display: grid; gap: var(--moox-space-2); }
+.selector-line, .matcher-line, .reduce-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--moox-space-2); }
+.matcher-list { display: grid; gap: 7px; padding-left: var(--moox-space-1); }
+.reduce-line { border-top: 1px solid var(--color-border-2); padding-top: var(--moox-space-2); }
 .unit { color: var(--color-text-3); font-size: 12px; }
 </style>

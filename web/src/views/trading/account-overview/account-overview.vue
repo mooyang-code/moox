@@ -151,7 +151,7 @@
 
       <!-- 余额弹窗 -->
       <a-modal v-model:visible="balanceModalVisible" width="720px" :title="`账户余额 - ${selectedAccount?.account_name || ''}`" :footer="false">
-        <div style="margin-bottom: 12px;">
+        <div style="margin-bottom: var(--moox-space-3);">
           <a-space>
             <a-button type="primary" size="small" @click="onSyncBalances" :loading="syncing">
               <template #icon><icon-sync /></template>
@@ -310,7 +310,7 @@
 
       <!-- API 凭证弹窗 -->
       <a-modal v-model:visible="apiKeyModalVisible" width="860px" :title="`API 凭证 - ${selectedAccount?.account_name || ''}`" :footer="false">
-        <div style="margin-bottom: 12px;">
+        <div style="margin-bottom: var(--moox-space-3);">
           <a-button type="primary" status="success" size="small" @click="openCreateApiKey">
             <template #icon><icon-plus /></template>
             新增凭证
@@ -1042,11 +1042,11 @@ onMounted(loadAccounts);
 }
 
 .account-card-skeleton {
-  padding-bottom: 16px;
+  padding-bottom: var(--moox-space-4);
 }
 
 .account-card-skeleton :deep(.arco-skeleton) {
-  padding: 18px 16px 0;
+  padding: 18px var(--moox-space-4) 0;
 }
 
 .account-card-topline {
@@ -1056,10 +1056,10 @@ onMounted(loadAccounts);
 
 .account-card-header {
   display: flex;
-  gap: 12px;
+  gap: var(--moox-space-3);
   align-items: flex-start;
   justify-content: space-between;
-  padding: 16px 16px 10px;
+  padding: var(--moox-space-4) var(--moox-space-4) 10px;
 }
 
 .account-title-block {
@@ -1068,7 +1068,7 @@ onMounted(loadAccounts);
 
 .account-name-row {
   display: flex;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
 }
 
@@ -1085,7 +1085,7 @@ onMounted(loadAccounts);
 }
 
 .account-subtitle {
-  margin-top: 4px;
+  margin-top: var(--moox-space-1);
   overflow: hidden;
   color: #86909c;
   font-size: 12px;
@@ -1095,8 +1095,8 @@ onMounted(loadAccounts);
 
 .account-meta-row {
   display: flex;
-  gap: 8px;
-  padding: 0 16px 12px;
+  gap: var(--moox-space-2);
+  padding: 0 var(--moox-space-4) var(--moox-space-3);
   flex-wrap: wrap;
 }
 
@@ -1104,7 +1104,7 @@ onMounted(loadAccounts);
   display: inline-flex;
   height: 24px;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 var(--moox-space-2);
   border: 1px solid #e5e6eb;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.78);
@@ -1113,8 +1113,8 @@ onMounted(loadAccounts);
 }
 
 .balance-panel {
-  margin: 0 16px 14px;
-  padding: 12px;
+  margin: 0 var(--moox-space-4) 14px;
+  padding: var(--moox-space-3);
   border: 1px solid #e5e6eb;
   border-radius: 6px;
   background: rgba(247, 248, 250, 0.78);
@@ -1134,7 +1134,7 @@ onMounted(loadAccounts);
 }
 
 .balance-panel-head strong {
-  margin-left: 8px;
+  margin-left: var(--moox-space-2);
   color: #1d2129;
   font-size: 22px;
   line-height: 26px;
@@ -1143,7 +1143,7 @@ onMounted(loadAccounts);
 .balance-chip-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--moox-space-2);
   margin-top: 10px;
 }
 
@@ -1191,7 +1191,7 @@ onMounted(loadAccounts);
   align-items: center;
   justify-content: space-between;
   margin-top: auto;
-  padding: 12px 16px;
+  padding: var(--moox-space-3) var(--moox-space-4);
   border-top: 1px solid #f2f3f5;
   background: rgba(255, 255, 255, 0.86);
 }
@@ -1205,26 +1205,26 @@ onMounted(loadAccounts);
 .account-pagination {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: var(--moox-space-4);
 }
 
 .filter-bar {
   display: flex;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .liquidation-alert {
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .liquidation-toolbar {
   display: flex;
-  gap: 12px;
+  gap: var(--moox-space-3);
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .liquidation-count {
@@ -1235,13 +1235,13 @@ onMounted(loadAccounts);
 .liquidation-account,
 .liquidation-muted,
 .liquidation-result-message {
-  margin-left: 8px;
+  margin-left: var(--moox-space-2);
   color: #86909c;
 }
 
 .liquidation-confirm {
   display: flex;
-  gap: 12px;
+  gap: var(--moox-space-3);
   align-items: center;
   justify-content: flex-end;
   margin-top: 14px;

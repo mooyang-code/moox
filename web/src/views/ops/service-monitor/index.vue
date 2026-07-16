@@ -166,7 +166,7 @@
       width="780px"
       :title="checkDrawerTitle"
       :footer="false"
-      :body-style="{ padding: '18px 24px 20px' }"
+      :body-style="{ padding: '18px var(--moox-space-6) var(--moox-space-5)' }"
       unmount-on-close
     >
       <a-form class="monitor-form" :model="checkForm" layout="vertical">
@@ -331,7 +331,7 @@
       width="900px"
       title="Webhook 通道"
       :footer="false"
-      :body-style="{ padding: '18px 24px 20px' }"
+      :body-style="{ padding: '18px var(--moox-space-6) var(--moox-space-5)' }"
       unmount-on-close
     >
       <div class="drawer-toolbar">
@@ -398,7 +398,7 @@
       width="920px"
       :title="ruleDrawerTitle"
       :footer="false"
-      :body-style="{ padding: '18px 24px 20px' }"
+      :body-style="{ padding: '18px var(--moox-space-6) var(--moox-space-5)' }"
       unmount-on-close
     >
       <div class="drawer-toolbar">
@@ -471,7 +471,7 @@
       width="860px"
       title="监控实例"
       :footer="false"
-      :body-style="{ padding: '18px 24px 20px' }"
+      :body-style="{ padding: '18px var(--moox-space-6) var(--moox-space-5)' }"
       unmount-on-close
     >
       <a-table size="small" row-key="instance_id" :pagination="false" :data="instances">
@@ -1193,7 +1193,7 @@ onUnmounted(() => {
 
 .status-hero strong {
   display: block;
-  margin: 8px 0 4px;
+  margin: var(--moox-space-2) 0 var(--moox-space-1);
   font-size: 32px;
   line-height: 36px;
   color: #1d2129;
@@ -1254,7 +1254,7 @@ onUnmounted(() => {
 }
 
 .group-card {
-  padding: 14px 16px;
+  padding: 14px var(--moox-space-4);
 }
 
 .group-card-head {
@@ -1268,7 +1268,7 @@ onUnmounted(() => {
 .group-card-body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--moox-space-2);
   color: #4e5969;
 }
 
@@ -1290,11 +1290,11 @@ onUnmounted(() => {
 
 .failing-item {
   height: 76px;
-  padding: 12px 14px;
+  padding: var(--moox-space-3) 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--moox-space-3);
   border: 1px solid #f2b6b6;
   border-radius: 8px;
   background: #fff;
@@ -1336,8 +1336,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
 }
 
 .name-cell {
@@ -1359,7 +1359,7 @@ onUnmounted(() => {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  padding: 18px 24px 20px;
+  padding: 18px var(--moox-space-6) var(--moox-space-5);
 }
 
 .detail-tabs {
@@ -1382,7 +1382,7 @@ onUnmounted(() => {
 .monitor-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 16px;
+  column-gap: var(--moox-space-4);
 }
 
 .form-span-2 {
@@ -1393,7 +1393,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding-top: 12px;
+  padding-top: var(--moox-space-3);
   border-top: 1px solid #e5e6eb;
 }
 

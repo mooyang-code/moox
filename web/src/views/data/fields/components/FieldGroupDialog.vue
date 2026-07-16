@@ -60,6 +60,6 @@ function submit() {
 </script>
 
 <style scoped>
-.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--moox-space-4); }
 .span-2 { grid-column: 1 / -1; }
 </style>
