@@ -572,7 +572,12 @@ default_local_ca_output() {
 }
 
 local_file_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+  local mode
+  if mode=$(stat -f '%Lp' "$1" 2>/dev/null); then
+    printf '%s\n' "${mode}"
+    return
+  fi
+  stat -c '%a' "$1"
 }
 
 TARGET_GOOS="${TARGET_GOOS:-$(detect_os)}"

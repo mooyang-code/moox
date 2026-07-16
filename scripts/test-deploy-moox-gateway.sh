@@ -95,6 +95,21 @@ done
 printf 'control-secret' >"${TMP}/control.key"
 printf 'service-secret' >"${TMP}/service.key"
 chmod 0600 "${TMP}/control.key" "${TMP}/service.key"
+REAL_STAT_BIN=$(command -v stat)
+mkdir -p "${TMP}/gnu-stat-bin"
+cat >"${TMP}/gnu-stat-bin/stat" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == -f && "${2:-}" == %Lp ]]; then
+  printf 'GNU stat diagnostic output before rejecting the BSD format\n'
+  exit 1
+fi
+if [[ "${1:-}" == -c && "${2:-}" == %a ]]; then
+  printf '600\n'
+  exit 0
+fi
+exec "${REAL_STAT_BIN}" "$@"
+SH
+chmod +x "${TMP}/gnu-stat-bin/stat"
 openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=gateway-test \
   -keyout "${TMP}/private-one.key" -out "${TMP}/root-one.crt" -days 1 >/dev/null 2>&1
 openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=gateway-peer-test \
@@ -135,6 +150,12 @@ cat "${TMP}/peers.pem" "${TMP}/private-one.key" >"${TMP}/private.pem"
 expect_ca_rejected "${TMP}/duplicate.pem" duplicate 'at least two distinct public CA certificates'
 expect_ca_rejected "${TMP}/malformed.pem" malformed 'contains a malformed certificate'
 expect_ca_rejected "${TMP}/private.pem" private 'must never contain private-key blocks'
+if output=$(REAL_STAT_BIN="${REAL_STAT_BIN}" PATH="${TMP}/gnu-stat-bin:${PATH}" \
+  deploy_fixture "${TMP}/duplicate.pem" duplicate-gnu-stat 2>&1); then
+  fail 'Gateway deployment accepted a duplicate CA bundle with GNU stat semantics'
+fi
+grep -Fq -- 'at least two distinct public CA certificates' <<<"${output}" || \
+  fail 'GNU stat fallback corrupted the detected secret-file mode'
 expect_url_rejected 'http://example.com:11000' remote-http
 expect_url_rejected 'https://user:pass@example.com' credentials
 expect_url_rejected 'https://example.com?node=other' query
