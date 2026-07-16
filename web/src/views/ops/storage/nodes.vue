@@ -3,11 +3,6 @@
     <div class="moox-inner">
       <div class="page-actions">
         <a-space>
-          <a-tooltip content="刷新节点列表">
-            <a-button aria-label="刷新节点列表" @click="load">
-              <template #icon><icon-refresh /></template>
-            </a-button>
-          </a-tooltip>
           <a-button type="primary" @click="openCreate">
             <template #icon><icon-plus /></template>
             新增节点
@@ -169,7 +164,7 @@ onMounted(load);
 <style scoped>
 .page-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-bottom: 14px;
 }
 </style>

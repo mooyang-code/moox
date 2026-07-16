@@ -8,11 +8,6 @@
             <template #checked>调试</template>
             <template #unchecked>调试</template>
           </a-switch>
-          <a-tooltip content="刷新归档列表">
-            <a-button aria-label="刷新归档列表" :disabled="!selectedSpaceId" @click="load">
-              <template #icon><icon-refresh /></template>
-            </a-button>
-          </a-tooltip>
         </a-space>
       </div>
 
@@ -149,7 +144,7 @@ onMounted(load);
 <style scoped>
 .page-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-bottom: 14px;
 }
 

@@ -3,11 +3,6 @@
     <div class="moox-inner">
       <div class="page-actions">
         <a-space>
-          <a-tooltip content="刷新路由列表">
-            <a-button aria-label="刷新路由列表" :disabled="!selectedSpaceId" @click="load">
-              <template #icon><icon-refresh /></template>
-            </a-button>
-          </a-tooltip>
           <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
             <template #icon><icon-plus /></template>
             新增路由
@@ -227,7 +222,7 @@ onMounted(load);
 <style scoped>
 .page-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-bottom: 14px;
 }
 </style>

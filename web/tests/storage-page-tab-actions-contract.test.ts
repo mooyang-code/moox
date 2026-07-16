@@ -21,10 +21,18 @@ describe('storage page actions contract', () => {
     expect(source).not.toContain('PageTabActions');
   });
 
-  it('keeps each storage page action set in its original order', () => {
-    expect(pageActions('nodes', pages.nodes)).toMatch(/刷新节点列表[\s\S]*新增节点/);
-    expect(pageActions('routes', pages.routes)).toMatch(/刷新路由列表[\s\S]*新增路由/);
-    expect(pageActions('archive', pages.archive)).toMatch(/datasetFilter[\s\S]*debugMode[\s\S]*刷新归档列表/);
+  it('keeps the remaining storage controls and removes refresh actions', () => {
+    expect(pageActions('nodes', pages.nodes)).toContain('新增节点');
+    expect(pageActions('routes', pages.routes)).toContain('新增路由');
+    expect(pageActions('archive', pages.archive)).toMatch(/datasetFilter[\s\S]*debugMode/);
+    expect(Object.values(pages).join('\n')).not.toContain('icon-refresh');
+    expect(Object.values(pages).join('\n')).not.toContain('刷新节点列表');
+    expect(Object.values(pages).join('\n')).not.toContain('刷新路由列表');
+    expect(Object.values(pages).join('\n')).not.toContain('刷新归档列表');
+  });
+
+  it.each(Object.entries(pages))('%s aligns its action row to the left', (_page, source) => {
+    expect(source).toMatch(/\.page-actions\s*\{[\s\S]*?justify-content:\s*flex-start;/);
   });
 
   it('removes the storage topology warning from the node page', () => {
