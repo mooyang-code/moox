@@ -4,11 +4,30 @@
       <div class="moox-inner">
         <div class="page-head">
           <h2>云节点</h2>
-          <a-space class="cloud-node-toolbar" wrap>
+        </div>
+        <a-space class="cloud-node-action-bar" wrap>
           <a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">
             <template #icon><icon-plus-circle /></template>
             <span>批量新增</span>
           </a-button>
+          <a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">
+            <template #icon><icon-upload /></template>
+            <span>批量部署</span>
+          </a-button>
+          <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
+            <template #icon><icon-delete /></template>
+            <span>批量删除</span>
+          </a-button>
+          <a-button type="outline" @click="onCloudAccountManage">
+            <template #icon><icon-settings /></template>
+            <span>云账户管理</span>
+          </a-button>
+          <a-button type="outline" @click="onFunctionPackageManage">
+            <template #icon><icon-code /></template>
+            <span>代码包版本</span>
+          </a-button>
+        </a-space>
+        <a-space class="cloud-node-filter-bar" wrap>
           <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
@@ -36,24 +55,7 @@
             <template #icon><icon-search /></template>
             <span>查询</span>
           </a-button>
-          <a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">
-            <template #icon><icon-upload /></template>
-            <span>批量部署</span>
-          </a-button>
-          <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
-            <template #icon><icon-delete /></template>
-            <span>批量删除</span>
-          </a-button>
-          <a-button type="outline" @click="onCloudAccountManage">
-            <template #icon><icon-settings /></template>
-            <span>云账户管理</span>
-          </a-button>
-          <a-button type="outline" @click="onFunctionPackageManage">
-            <template #icon><icon-code /></template>
-            <span>代码包版本</span>
-          </a-button>
-          </a-space>
-        </div>
+        </a-space>
 
         <!-- 批量变更进度提示 -->
         <a-alert
@@ -2403,31 +2405,23 @@ const handleEditNodeOk = async () => {
 }
 
 .page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
   margin-bottom: 8px;
 }
 .page-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
-.cloud-node-toolbar {
+.cloud-node-action-bar {
   display: flex;
-  width: calc(100% - 72px);
-  max-width: calc(100% - 72px);
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
-  flex: 1;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  margin-bottom: 8px;
 }
-
-@media (max-width: 768px) {
-  .page-head {
-    flex-direction: column;
-  }
-
-  .cloud-node-toolbar {
-    width: 100%;
-    max-width: 100%;
-    justify-content: flex-start;
-  }
+.cloud-node-filter-bar {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  margin-bottom: 8px;
 }
 </style>

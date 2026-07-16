@@ -83,10 +83,26 @@ describe('page layout standards', () => {
     const viewBrowse = read('data/view-browse/index.vue');
 
     expect(cloudNodes).toContain('<h2>云节点</h2>');
-    expect(cloudNodes).toContain('class="cloud-node-toolbar"');
+    expect(cloudNodes).toContain('class="cloud-node-action-bar"');
+    expect(cloudNodes).toContain('class="cloud-node-filter-bar"');
+    expect(cloudNodes).not.toContain('class="cloud-node-toolbar"');
     expect(cloudNodes).not.toContain('.moox-inner .a-row');
-    expect(cloudNodes.indexOf('<h2>云节点</h2>')).toBeLessThan(cloudNodes.indexOf('class="cloud-node-toolbar"'));
+    const cloudNodeTitle = cloudNodes.indexOf('<h2>云节点</h2>');
+    const cloudNodeActions = cloudNodes.indexOf('class="cloud-node-action-bar"');
+    const cloudNodeFilters = cloudNodes.indexOf('class="cloud-node-filter-bar"');
+    const cloudNodeTable = cloudNodes.indexOf('<a-table');
+    expect(cloudNodeTitle).toBeLessThan(cloudNodeActions);
+    expect(cloudNodeActions).toBeLessThan(cloudNodeFilters);
+    expect(cloudNodeFilters).toBeLessThan(cloudNodeTable);
+    for (const action of ['批量新增', '批量部署', '批量删除', '云账户管理', '代码包版本']) {
+      expect(cloudNodes.indexOf(action)).toBeLessThan(cloudNodeFilters);
+    }
+    for (const filter of ['placeholder="请选择云账户"', 'placeholder="请输入节点ID"']) {
+      expect(cloudNodes.indexOf(filter)).toBeGreaterThan(cloudNodeFilters);
+    }
     expectMargin(cloudNodes, '.page-head', 'margin-bottom', 8);
+    expectMargin(cloudNodes, '.cloud-node-action-bar', 'margin-bottom', 8);
+    expectMargin(cloudNodes, '.cloud-node-filter-bar', 'margin-bottom', 8);
     expect(cloudNodes).toMatch(/\.moox-page\s*\{[\s\S]*?overflow-y:\s*auto;/);
 
     expect(factorResults).toContain('class="factor-results-content"');
