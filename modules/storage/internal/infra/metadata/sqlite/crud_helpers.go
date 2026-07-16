@@ -222,14 +222,6 @@ func dataKindSQL(kind pb.DataKind) string {
 	switch kind {
 	case pb.DataKind_DATA_KIND_TIME_SERIES:
 		return "time_series"
-	case pb.DataKind_DATA_KIND_SNAPSHOT:
-		return "snapshot"
-	case pb.DataKind_DATA_KIND_EVENT:
-		return "event"
-	case pb.DataKind_DATA_KIND_DOCUMENT:
-		return "document"
-	case pb.DataKind_DATA_KIND_TABLE:
-		return "table"
 	default:
 		return "record"
 	}

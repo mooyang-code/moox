@@ -112,14 +112,8 @@ enum DataKind {
   DATA_KIND_RECORD = 1;
   // DATA_KIND_TIME_SERIES 表示时序数据，例如 K 线或 tick。
   DATA_KIND_TIME_SERIES = 2;
-  // DATA_KIND_SNAPSHOT 表示快照数据，例如最新行情状态。
-  DATA_KIND_SNAPSHOT = 3 [deprecated = true];
-  // DATA_KIND_EVENT 表示事件数据，例如公告或成交事件。
-  DATA_KIND_EVENT = 4 [deprecated = true];
-  // DATA_KIND_DOCUMENT 表示文档型数据，例如新闻或研报。
-  DATA_KIND_DOCUMENT = 5 [deprecated = true];
-  // DATA_KIND_TABLE 表示通用表格数据，例如榜单。
-  DATA_KIND_TABLE = 6 [deprecated = true];
+  reserved 3, 4, 5, 6;
+  reserved "DATA_KIND_SNAPSHOT", "DATA_KIND_EVENT", "DATA_KIND_DOCUMENT", "DATA_KIND_TABLE";
 }
 
 // FieldValueType 表示字段、因子和查询列的逻辑值类型。

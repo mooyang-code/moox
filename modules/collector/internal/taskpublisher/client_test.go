@@ -167,6 +167,42 @@ func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
 	}
 }
 
+func TestSubmitCollectorJobItemsReturnsSuccessfulBatchesWithError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req cloudnodepb.SubmitJobItemsReq
+		if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
+			t.Fatal(err)
+		}
+		if len(req.GetItems()) == 1 {
+			writeProtoJSON(t, w, &cloudnodepb.SubmitJobItemsRsp{
+				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_INNER_ERR, Msg: "rejected batch"},
+			})
+			return
+		}
+		acks := make([]*cloudnodepb.JobItemAck, 0, len(req.GetItems()))
+		for _, item := range req.GetItems() {
+			acks = append(acks, &cloudnodepb.JobItemAck{JobItemId: item.GetJobItemId(), Status: cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED})
+		}
+		writeProtoJSON(t, w, &cloudnodepb.SubmitJobItemsRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"}, Acks: acks,
+		})
+	}))
+	defer server.Close()
+
+	instances := make([]domain.TaskInstance, 0, submitJobItemBatchSize+1)
+	for i := 0; i < submitJobItemBatchSize+1; i++ {
+		instances = append(instances, domain.TaskInstance{SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i), TaskParams: `{"job_type":"collect.kline","code_package_id":"pkg"}`})
+	}
+	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
+	ids, err := client.SubmitCollectorJobItems(context.Background(), instances)
+	if err == nil || !strings.Contains(err.Error(), "rejected batch") {
+		t.Fatalf("error = %v, want rejected batch", err)
+	}
+	if len(ids) != submitJobItemBatchSize {
+		t.Fatalf("successful ids = %d, want %d", len(ids), submitJobItemBatchSize)
+	}
+}
+
 func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) {
 	var invoked bool
 	var server *httptest.Server
@@ -373,8 +409,8 @@ func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 		SpaceID:  "crypto",
 		JobTypes: []string{"collect.kline"},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "cloud account not found") {
+		t.Fatalf("error=%v, want partial wake error", err)
 	}
 	sort.Strings(invoked)
 	if count != 1 || strings.Join(invoked, ",") != "bad-node,good-node" {

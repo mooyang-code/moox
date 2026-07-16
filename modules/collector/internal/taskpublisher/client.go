@@ -47,7 +47,6 @@ type Config struct {
 	ServiceGatewayTarget string
 	// EventServiceGatewayTarget is the gateway target passed to SCF wake events.
 	EventServiceGatewayTarget string
-	GatewayURL                string // Deprecated: use ServiceGatewayTarget.
 	StorageMetadataTarget     string
 	StorageAccessTarget       string
 	Auth                      AuthConfig
@@ -73,9 +72,6 @@ type WakeOptions struct {
 // New creates a CloudNode client.
 func New(cfg Config) *Client {
 	controlTarget := strings.TrimSpace(cfg.ServiceGatewayTarget)
-	if controlTarget == "" {
-		controlTarget = strings.TrimSpace(cfg.GatewayURL)
-	}
 	eventTarget := strings.TrimSpace(cfg.EventServiceGatewayTarget)
 	if eventTarget == "" {
 		eventTarget = controlTarget
@@ -110,8 +106,9 @@ func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain
 	}
 	idsByTaskID := make(map[string]string, len(jobItems))
 	var idsMu sync.Mutex
-	group, groupCtx := errgroup.WithContext(ctx)
+	var group errgroup.Group
 	semaphore := make(chan struct{}, submitJobItemConcurrency)
+	var batchErrors []error
 	for start := 0; start < len(jobItems); start += submitJobItemBatchSize {
 		end := start + submitJobItemBatchSize
 		if end > len(jobItems) {
@@ -122,14 +119,20 @@ func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain
 		group.Go(func() error {
 			select {
 			case semaphore <- struct{}{}:
-			case <-groupCtx.Done():
-				return groupCtx.Err()
+			case <-ctx.Done():
+				idsMu.Lock()
+				batchErrors = append(batchErrors, ctx.Err())
+				idsMu.Unlock()
+				return nil
 			}
 			defer func() { <-semaphore }()
 
-			ids, err := c.submitCollectorJobItemBatch(groupCtx, batch, batchStart, batchEnd)
+			ids, err := c.submitCollectorJobItemBatch(ctx, batch, batchStart, batchEnd)
 			if err != nil {
-				return err
+				idsMu.Lock()
+				batchErrors = append(batchErrors, err)
+				idsMu.Unlock()
+				return nil
 			}
 			idsMu.Lock()
 			for taskID, jobItemID := range ids {
@@ -139,10 +142,8 @@ func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
-		return nil, err
-	}
-	return idsByTaskID, nil
+	_ = group.Wait()
+	return idsByTaskID, errors.Join(batchErrors...)
 }
 
 func (c *Client) submitCollectorJobItemBatch(ctx context.Context, batch []*pb.JobItem, start, end int) (map[string]string, error) {
@@ -188,6 +189,9 @@ func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int,
 			select {
 			case semaphore <- struct{}{}:
 			case <-groupCtx.Done():
+				wakeMu.Lock()
+				wakeErrors = append(wakeErrors, groupCtx.Err())
+				wakeMu.Unlock()
 				return nil
 			}
 			defer func() { <-semaphore }()
@@ -234,8 +238,8 @@ func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int,
 	_ = group.Wait()
 	wakeMu.Lock()
 	defer wakeMu.Unlock()
-	if woken == 0 && len(wakeErrors) > 0 {
-		return 0, errors.Join(wakeErrors...)
+	if len(wakeErrors) > 0 {
+		return woken, errors.Join(wakeErrors...)
 	}
 	return woken, nil
 }

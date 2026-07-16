@@ -144,7 +144,7 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 	}
 
 	rt, jsCfg := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}
@@ -239,7 +239,7 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 func TestCanceledRunningJobItemReportTerminatesQueueMessageWithActiveKV(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}
@@ -301,7 +301,7 @@ func TestCanceledRunningJobItemReportTerminatesQueueMessageWithActiveKV(t *testi
 func TestSubmitJobItemsRetriesEnqueueFailedActiveKVItem(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}
@@ -370,7 +370,7 @@ func TestPollJobItemsTerminatesAndArchivesWhenMaxAttemptsExhausted(t *testing.T)
 	}
 
 	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}
@@ -451,7 +451,7 @@ func TestPollJobItemsTerminatesAndArchivesWhenMaxAttemptsExhausted(t *testing.T)
 func TestCancelJobItemWritesTerminalHistory(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}
@@ -505,7 +505,7 @@ func TestCancelJobItemWritesTerminalHistory(t *testing.T) {
 func TestSubmitJobItemsRejectsInvalidItemWithoutActiveKVSideEffect(t *testing.T) {
 	ctx := context.Background()
 	rt, jsCfg := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}

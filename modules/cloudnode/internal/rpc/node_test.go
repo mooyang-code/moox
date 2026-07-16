@@ -2,22 +2,22 @@ package rpc
 
 import (
 	"context"
-	"testing"
-	"time"
+	"errors"
+	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
+	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"google.golang.org/protobuf/types/known/structpb"
+	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudnode/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"errors"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
-	"strings"
-	"github.com/glebarez/sqlite"
-	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
-	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudnode/schema"
+	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
+	"strings"
+	"testing"
+	"time"
 )
 
 func TestReportHeartbeatEnqueuesHeartbeatSink(t *testing.T) {
@@ -44,7 +44,7 @@ func TestReportHeartbeatEnqueuesHeartbeatSink(t *testing.T) {
 func TestReportHeartbeatReturnsCancelDirectiveFromActiveKV(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestReportHeartbeatReturnsCancelDirectiveFromActiveKV(t *testing.T) {
 func TestReportHeartbeatWithSinkSkipsCancelDirectiveScan(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.JetStream().KeyValue(config.Default().JobItem.ActiveKVBucket)
+	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
 	}

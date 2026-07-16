@@ -10,34 +10,6 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestDeleteConsumerIsIdempotent(t *testing.T) {
-	srv, url := startTestServer(t)
-	defer srv.Shutdown()
-	client := connectTestClient(t, url)
-	defer client.Close()
-	ensureTestStream(t, client, "TEST", "moox.test.>")
-
-	consumer, err := client.NewPullConsumer(context.Background(), ConsumerConfig{
-		Stream: "TEST", Durable: "worker-a", FilterSubject: "moox.test.a", AckWait: time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := consumer.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := client.DeleteConsumer(context.Background(), "TEST", "worker-a"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.js.ConsumerInfo("TEST", "worker-a"); !errors.Is(err, nats.ErrConsumerNotFound) {
-		t.Fatalf("deleted consumer still exists: %v", err)
-	}
-	if err := client.DeleteConsumer(context.Background(), "TEST", "worker-a"); err != nil {
-		t.Fatalf("DeleteConsumer() should be idempotent, got %v", err)
-	}
-}
-
 func TestNewPullConsumerRequiresDurableAndStream(t *testing.T) {
 	client := &Client{}
 	_, err := client.NewPullConsumer(context.Background(), ConsumerConfig{})

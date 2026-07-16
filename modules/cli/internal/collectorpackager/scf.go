@@ -127,6 +127,73 @@ func validCLSTopicID(topicID string) bool {
 	return clsTopicIDPattern.MatchString(strings.TrimSpace(topicID))
 }
 
+// ValidateSCFPackageCLSTopic verifies that an existing package writes to the resolved topic.
+func ValidateSCFPackageCLSTopic(packagePath, expectedTopicID string) error {
+	if !validCLSTopicID(expectedTopicID) {
+		return fmt.Errorf("expected CLS topic ID is invalid")
+	}
+	reader, err := zip.OpenReader(packagePath)
+	if err != nil {
+		return fmt.Errorf("open SCF package: %w", err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name != "trpc_go.yaml" {
+			continue
+		}
+		stream, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("open trpc_go.yaml in SCF package: %w", err)
+		}
+		content, readErr := io.ReadAll(stream)
+		closeErr := stream.Close()
+		if readErr != nil {
+			return fmt.Errorf("read trpc_go.yaml in SCF package: %w", readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close trpc_go.yaml in SCF package: %w", closeErr)
+		}
+		topicID, err := clsTopicIDFromTRPCConfig(content)
+		if err != nil {
+			return fmt.Errorf("validate trpc_go.yaml in SCF package: %w", err)
+		}
+		if topicID != strings.TrimSpace(expectedTopicID) {
+			return fmt.Errorf("SCF package CLS topic %q does not match resolved topic %q; rebuild the package", topicID, expectedTopicID)
+		}
+		return nil
+	}
+	return fmt.Errorf("SCF package does not contain trpc_go.yaml")
+}
+
+func clsTopicIDFromTRPCConfig(source []byte) (string, error) {
+	var document map[string]any
+	if err := yaml.Unmarshal(source, &document); err != nil {
+		return "", err
+	}
+	plugins, _ := document["plugins"].(map[string]any)
+	logs, _ := plugins["log"].(map[string]any)
+	writers, _ := logs["default"].([]any)
+	var topicID string
+	clsWriters := 0
+	for _, writer := range writers {
+		config, _ := writer.(map[string]any)
+		if config["writer"] != "cls" {
+			continue
+		}
+		clsWriters++
+		remote, _ := config["remote_config"].(map[string]any)
+		value, _ := remote["topic_id"].(string)
+		if value = strings.TrimSpace(value); value == "" {
+			return "", fmt.Errorf("CLS writer topic_id is missing")
+		}
+		topicID = value
+	}
+	if clsWriters != 1 {
+		return "", fmt.Errorf("trpc_go.yaml must contain exactly one CLS writer, got %d", clsWriters)
+	}
+	return topicID, nil
+}
+
 func addRenderedTRPCConfig(zw *zip.Writer, sourcePath, topicID string) error {
 	source, err := os.ReadFile(sourcePath)
 	if err != nil {

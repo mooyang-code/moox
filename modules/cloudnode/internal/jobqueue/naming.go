@@ -30,6 +30,7 @@ func ValidateNamingConfig(cfg NamingConfig) error {
 
 // SubjectToken converts arbitrary IDs into a safe single NATS subject token.
 func SubjectToken(raw string) string {
+	identity := raw
 	raw = strings.TrimSpace(strings.ToLower(raw))
 	var b strings.Builder
 	for _, r := range raw {
@@ -50,11 +51,14 @@ func SubjectToken(raw string) string {
 	for strings.Contains(token, "__") {
 		token = strings.ReplaceAll(token, "__", "_")
 	}
-	if token == "" || len(token) > 64 {
-		sum := sha256.Sum256([]byte(raw))
-		return "x" + hex.EncodeToString(sum[:])[:16]
+	if token == "" {
+		token = "x"
 	}
-	return token
+	if len(token) > 40 {
+		token = strings.TrimRight(token[:40], "_")
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return token + "_" + hex.EncodeToString(sum[:])[:16]
 }
 
 // ExecSubject returns the exact subject used for one executable JobItem message.
@@ -77,7 +81,9 @@ func ExecStreamSubject(cfg NamingConfig) string {
 
 // ConsumerName returns a durable consumer name for a specific executable route.
 func ConsumerName(spaceID, codePackageID, jobType string) string {
-	return "cn_exec_" + SubjectToken(spaceID) + "_" + SubjectToken(codePackageID) + "_" + SubjectToken(jobType)
+	identity := fmt.Sprintf("%d:%s%d:%s%d:%s", len(spaceID), spaceID, len(codePackageID), codePackageID, len(jobType), jobType)
+	sum := sha256.Sum256([]byte(identity))
+	return "cn_exec_" + hex.EncodeToString(sum[:])[:24]
 }
 
 func subjectPrefix(cfg NamingConfig) string {

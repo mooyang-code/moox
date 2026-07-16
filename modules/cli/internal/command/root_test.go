@@ -161,6 +161,8 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
 	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
+	t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
+	t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
 	require.NoError(t, err)
 	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")

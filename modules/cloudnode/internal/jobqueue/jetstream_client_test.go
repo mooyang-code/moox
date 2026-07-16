@@ -13,7 +13,6 @@ import (
 func TestRuntime_NilSafeMethods(t *testing.T) {
 	var rt *Runtime
 	assert.Nil(t, rt.Client())
-	assert.Nil(t, rt.JetStream())
 
 	err := rt.EnsureStreams(config.JetStreamConfig{}, config.JobItemConfig{})
 	require.Error(t, err)

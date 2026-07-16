@@ -42,9 +42,6 @@ func (r *Runtime) Client() *jetstream.Client {
 	return r.client
 }
 
-// JetStream is retained as a compatibility alias for tests and callers that
-// only need the shared client; it does not expose raw NATS ownership.
-func (r *Runtime) JetStream() *jetstream.Client { return r.Client() }
 func (r *Runtime) SetCloseHook(fn func() error) {
 	if r != nil {
 		r.extraClose = fn

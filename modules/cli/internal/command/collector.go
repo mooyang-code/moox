@@ -268,6 +268,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 		zipPath = result.Path
 	}
+	if err := collectorpackager.ValidateSCFPackageCLSTopic(zipPath, opts.CLSTopicID); err != nil {
+		return collectorPublishSummary{}, err
+	}
 	data, err := os.ReadFile(zipPath)
 	if err != nil {
 		return collectorPublishSummary{}, err
@@ -337,9 +340,12 @@ func collectorFunctionEnvironment(opts collectorPublishOptions) (map[string]stri
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", os.Getenv("MOOX_GATEWAY_NODE_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")))
-	setDefaultEnv(env, "MOOX_CLS_HOST", os.Getenv("MOOX_CLS_HOST"))
-	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", os.Getenv("MOOX_CLS_SECRET_ID"))
-	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", os.Getenv("MOOX_CLS_SECRET_KEY"))
+	clsHost := firstNonEmpty(os.Getenv("MOOX_CLS_HOST"), clsprepare.Host)
+	clsSecretID := firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID"), os.Getenv("TENCENT_SECRET_ID"))
+	clsSecretKey := firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"), os.Getenv("TENCENT_SECRET_KEY"))
+	setDefaultEnv(env, "MOOX_CLS_HOST", clsHost)
+	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", clsSecretID)
+	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", clsSecretKey)
 	overrides := parseCollectorOverrides(opts.Env)
 	if strings.TrimSpace(overrides["MOOX_GATEWAY_CA_FILE"]) != "" {
 		return nil, fmt.Errorf("serverless environment must not contain MOOX_GATEWAY_CA_FILE")
@@ -373,6 +379,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions) (map[string]stri
 			continue
 		}
 		env[key] = value
+	}
+	if strings.TrimSpace(env["MOOX_CLS_HOST"]) == "" || strings.TrimSpace(env["MOOX_CLS_SECRET_ID"]) == "" || strings.TrimSpace(env["MOOX_CLS_SECRET_KEY"]) == "" {
+		return nil, fmt.Errorf("CLS runtime host and credentials are required; set MOOX_CLS_* or TENCENTCLOUD_SECRET_ID/TENCENTCLOUD_SECRET_KEY")
 	}
 	if len(env) == 0 {
 		return nil, nil

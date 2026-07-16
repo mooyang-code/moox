@@ -2,12 +2,10 @@ package jobqueue
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,11 +62,6 @@ func TestRouteConsumerKeySeparatesJobTypes(t *testing.T) {
 	)
 }
 
-func TestShouldRecreateRouteConsumerOnlyForConfigurationDrift(t *testing.T) {
-	require.True(t, shouldRecreateRouteConsumer(errors.Join(errors.New("consumer drift"), jetstream.ErrInvalidConsumer)))
-	require.False(t, shouldRecreateRouteConsumer(errors.New("network down")))
-}
-
 func TestTryAcquireFetchLockSkipsBusyRoute(t *testing.T) {
 	lock := &sync.Mutex{}
 	lock.Lock()
@@ -76,4 +69,19 @@ func TestTryAcquireFetchLockSkipsBusyRoute(t *testing.T) {
 	lock.Unlock()
 	require.True(t, tryAcquireFetchLock(lock))
 	lock.Unlock()
+}
+
+func TestRotateStringsAdvancesAcrossRoutes(t *testing.T) {
+	values := []string{"collect.kline", "collect.symbol", "collect.trade"}
+	require.Equal(t, []string{"collect.symbol", "collect.trade", "collect.kline"}, rotateStrings(values, 1))
+	require.Equal(t, []string{"collect.trade", "collect.kline", "collect.symbol"}, rotateStrings(values, 2))
+}
+
+func TestOrderedJobTypesIsolatesIndependentRouteSets(t *testing.T) {
+	q := NewJetStreamQueue(nil, QueueConfig{})
+	multi := []string{"collect.kline", "collect.symbol"}
+	require.Equal(t, multi, q.orderedJobTypes("crypto", "pkg", multi))
+	require.Equal(t, []string{"collect.kline"}, q.orderedJobTypes("crypto", "pkg", []string{"collect.kline"}))
+	require.Equal(t, []string{"collect.symbol", "collect.kline"}, q.orderedJobTypes("crypto", "pkg", []string{"collect.symbol", "collect.kline"}))
+	require.Equal(t, multi, q.orderedJobTypes("stocks", "pkg", multi))
 }

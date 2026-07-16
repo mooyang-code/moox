@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,18 +19,16 @@ import (
 
 const defaultFetchMaxWait = 500 * time.Millisecond
 
-// JobRequestedSubjectWildcard covers all concrete execution routes.
-const JobRequestedSubjectWildcard = "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*"
-
 // JetStreamQueue implements ExecutionQueue on the centrally managed stream.
 type JetStreamQueue struct {
-	rt        *Runtime
-	client    *jetstream.Client
-	cfg       QueueConfig
-	mu        sync.Mutex
-	inflight  map[string]*jetstream.Delivery
-	consumers map[string]*jetstream.PullConsumer
-	fetchLock map[string]*sync.Mutex
+	rt         *Runtime
+	client     *jetstream.Client
+	cfg        QueueConfig
+	mu         sync.Mutex
+	inflight   map[string]*jetstream.Delivery
+	consumers  map[string]*jetstream.PullConsumer
+	fetchLock  map[string]*sync.Mutex
+	fetchStart map[string]uint64
 }
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
@@ -52,7 +51,7 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if rt != nil {
 		client = rt.Client()
 	}
-	return &JetStreamQueue{rt: rt, client: client, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.PullConsumer), fetchLock: make(map[string]*sync.Mutex)}
+	return &JetStreamQueue{rt: rt, client: client, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.PullConsumer), fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64)}
 }
 
 func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
@@ -108,21 +107,11 @@ func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) 
 	// request returns.
 	consumerCfg := consumerConfigForRoute(q.cfg, spaceID, codePackageID, jobType)
 	consumer, err := q.client.NewPullConsumer(context.Background(), consumerCfg)
-	if shouldRecreateRouteConsumer(err) {
-		if deleteErr := q.client.DeleteConsumer(context.Background(), consumerCfg.Stream, consumerCfg.Durable); deleteErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("delete stale route consumer: %w", deleteErr))
-		}
-		consumer, err = q.client.NewPullConsumer(context.Background(), consumerCfg)
-	}
 	if err != nil {
 		return nil, err
 	}
 	q.consumers[key] = consumer
 	return consumer, nil
-}
-
-func shouldRecreateRouteConsumer(err error) bool {
-	return errors.Is(err, jetstream.ErrInvalidConsumer)
 }
 
 func (q *JetStreamQueue) ensureFetchLock(key string) *sync.Mutex {
@@ -161,6 +150,7 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 	if limit <= 0 || limit > q.cfg.DefaultMaxBatch {
 		limit = q.cfg.DefaultMaxBatch
 	}
+	jobTypes = q.orderedJobTypes(req.SpaceID, req.CodePackageID, jobTypes)
 
 	var deliveries []*jetstream.Delivery
 	for _, jobType := range jobTypes {
@@ -249,6 +239,7 @@ func (q *JetStreamQueue) Close() error {
 	consumers := q.consumers
 	q.consumers = make(map[string]*jetstream.PullConsumer)
 	q.fetchLock = make(map[string]*sync.Mutex)
+	q.fetchStart = make(map[string]uint64)
 	q.mu.Unlock()
 	var closeErr error
 	for _, consumer := range consumers {
@@ -274,6 +265,30 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func rotateStrings(values []string, start int) []string {
+	if len(values) < 2 || start%len(values) == 0 {
+		return values
+	}
+	start %= len(values)
+	out := make([]string, 0, len(values))
+	out = append(out, values[start:]...)
+	return append(out, values[:start]...)
+}
+
+func (q *JetStreamQueue) orderedJobTypes(spaceID, codePackageID string, jobTypes []string) []string {
+	if len(jobTypes) < 2 {
+		return jobTypes
+	}
+	canonical := append([]string(nil), jobTypes...)
+	sort.Strings(canonical)
+	key := fmt.Sprintf("%q|%q|%q", spaceID, codePackageID, canonical)
+	q.mu.Lock()
+	start := int(q.fetchStart[key] % uint64(len(jobTypes)))
+	q.fetchStart[key]++
+	q.mu.Unlock()
+	return rotateStrings(canonical, start)
 }
 
 func contains(values []string, target string) bool {

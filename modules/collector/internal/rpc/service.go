@@ -326,25 +326,31 @@ func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (i
 	if err := s.instanceRepo.UpsertMany(ctx, instances); err != nil {
 		return 0, fmt.Errorf("upsert instances for rule %s: %w", rule.RuleID, err)
 	}
-	jobItemIDs, err := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
-	if err != nil {
-		return 0, fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, err)
-	}
+	jobItemIDs, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
 	if err := s.instanceRepo.UpdateCloudJobItemIDs(ctx, rule.SpaceID, jobItemIDs); err != nil {
 		return 0, fmt.Errorf("record cloud job items for rule %s: %w", rule.RuleID, err)
 	}
+	var wakeErr error
 	if len(jobItemIDs) > 0 {
 		woken, err := s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{
 			SpaceID:  rule.SpaceID,
 			JobTypes: jobTypesFromInstances(instances),
 		})
 		if err != nil {
+			wakeErr = err
 			log.WarnContextf(ctx, "[Collector] wake collector nodes failed rule_id=%s: %v", rule.RuleID, err)
 		} else if woken == 0 {
 			log.WarnContextf(ctx, "[Collector] no collector nodes woken rule_id=%s", rule.RuleID)
 		} else {
 			log.InfoContextf(ctx, "[Collector] woken collector nodes rule_id=%s count=%d", rule.RuleID, woken)
 		}
+	}
+	if submitErr != nil {
+		err := fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
+		if wakeErr != nil {
+			err = errors.Join(err, fmt.Errorf("wake submitted cloud job items: %w", wakeErr))
+		}
+		return 0, err
 	}
 	return len(instances), nil
 }

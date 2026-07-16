@@ -19,12 +19,24 @@ import (
 
 func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
 	t.Helper()
+	setCollectorCLSTestCredentials(t)
 	item, err := buildCollectorCreateNodeItem(opts, packageID)
 	require.NoError(t, err)
 	return item
 }
 
+func setCollectorCLSTestCredentials(t *testing.T) {
+	t.Helper()
+	if os.Getenv("MOOX_CLS_SECRET_ID") == "" && os.Getenv("TENCENTCLOUD_SECRET_ID") == "" {
+		t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
+	}
+	if os.Getenv("MOOX_CLS_SECRET_KEY") == "" && os.Getenv("TENCENTCLOUD_SECRET_KEY") == "" {
+		t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
+	}
+}
+
 func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
@@ -39,25 +51,40 @@ func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
+		setCollectorCLSTestCredentials(t)
 		t.Setenv("MOOX_GATEWAY_CA_FILE", filepath.Join(t.TempDir(), "missing.pem"))
 		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
 		require.Error(t, err)
 	})
 	t.Run("conflict", func(t *testing.T) {
+		setCollectorCLSTestCredentials(t)
 		t.Setenv("MOOX_GATEWAY_CA_FILE", "one")
 		t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "two")
 		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
 		require.ErrorContains(t, err, "mutually exclusive")
 	})
 	t.Run("invalid material", func(t *testing.T) {
+		setCollectorCLSTestCredentials(t)
 		t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "not-base64")
 		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
 		require.Error(t, err)
 	})
 	t.Run("explicit serverless path", func(t *testing.T) {
+		setCollectorCLSTestCredentials(t)
 		_, err := collectorFunctionEnvironment(collectorPublishOptions{Env: []string{"MOOX_GATEWAY_CA_FILE=/host/peer.pem"}})
 		require.ErrorContains(t, err, "must not contain")
 	})
+}
+
+func TestCollectorFunctionEnvironmentRequiresRuntimeCLSCredentials(t *testing.T) {
+	t.Setenv("MOOX_CLS_SECRET_ID", "")
+	t.Setenv("MOOX_CLS_SECRET_KEY", "")
+	t.Setenv("TENCENTCLOUD_SECRET_ID", "")
+	t.Setenv("TENCENTCLOUD_SECRET_KEY", "")
+	t.Setenv("TENCENT_SECRET_ID", "")
+	t.Setenv("TENCENT_SECRET_KEY", "")
+	_, err := collectorFunctionEnvironment(collectorPublishOptions{})
+	require.ErrorContains(t, err, "CLS runtime host and credentials are required")
 }
 
 type collectorCLSAPI struct{}

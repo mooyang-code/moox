@@ -62,6 +62,8 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 		}
 	}
 	assert.ElementsMatch(t, []string{"main", "config.yaml", "trpc_go.yaml", "sources/binance/kline.yaml"}, names)
+	require.NoError(t, ValidateSCFPackageCLSTopic(outPath, "topic-unified"))
+	require.ErrorContains(t, ValidateSCFPackageCLSTopic(outPath, "topic-other"), "does not match")
 }
 
 func TestBuildSCFPackage_MissingCLSTopicID_ShouldReturnError(t *testing.T) {
@@ -75,4 +77,17 @@ func TestBuildSCFPackage_MissingCLSTopicID_ShouldReturnError(t *testing.T) {
 		OutPath:    filepath.Join(tmp, "package.zip"),
 	})
 	require.ErrorContains(t, err, "CLS topic ID is required")
+}
+
+func TestCLSTopicIDFromTRPCConfigRejectsMultipleWriters(t *testing.T) {
+	config := []byte(`plugins:
+  log:
+    default:
+      - writer: cls
+        remote_config: {topic_id: topic-a}
+      - writer: cls
+        remote_config: {topic_id: topic-b}
+`)
+	_, err := clsTopicIDFromTRPCConfig(config)
+	require.ErrorContains(t, err, "exactly one CLS writer")
 }

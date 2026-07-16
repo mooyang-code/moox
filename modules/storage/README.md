@@ -227,7 +227,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 枚举取值（在 seed 文件里用短名书写）：
 
-- `data_kind`：`time_series` / `record`（其他历史枚举值仅保留 wire 兼容，不允许新建 Dataset）
+- `data_kind`：`time_series` / `record`
 - `value_type`：`string` / `int` / `double` / `bool` / `time` / `json` / `bytes`
 - `dataset_columns.origin_type`：`field` / `factor` / `system`
 - `view_columns.origin_type`：`dataset_column` / `expression` / `system`
