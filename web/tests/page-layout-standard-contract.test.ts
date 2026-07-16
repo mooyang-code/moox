@@ -82,28 +82,49 @@ describe('page layout standards', () => {
     const datasetBrowse = read('data/browse/index.vue');
     const viewBrowse = read('data/view-browse/index.vue');
 
-    expect(cloudNodes).toContain('<h2>云节点</h2>');
-    expect(cloudNodes).toContain('class="cloud-node-action-bar"');
-    expect(cloudNodes).toContain('class="cloud-node-filter-bar"');
+    expect(cloudNodes).toContain('<a-space class="cloud-node-action-bar" wrap>');
+    expect(cloudNodes).toContain('<a-space class="cloud-node-filter-bar" wrap>');
     expect(cloudNodes).not.toContain('class="cloud-node-toolbar"');
     expect(cloudNodes).not.toContain('.moox-inner .a-row');
-    const cloudNodeTitle = cloudNodes.indexOf('<h2>云节点</h2>');
-    const cloudNodeActions = cloudNodes.indexOf('class="cloud-node-action-bar"');
-    const cloudNodeFilters = cloudNodes.indexOf('class="cloud-node-filter-bar"');
-    const cloudNodeTable = cloudNodes.indexOf('<a-table');
-    expect(cloudNodeTitle).toBeLessThan(cloudNodeActions);
-    expect(cloudNodeActions).toBeLessThan(cloudNodeFilters);
-    expect(cloudNodeFilters).toBeLessThan(cloudNodeTable);
-    for (const action of ['批量新增', '批量部署', '批量删除', '云账户管理', '代码包版本']) {
-      expect(cloudNodes.indexOf(action)).toBeLessThan(cloudNodeFilters);
+    const cloudNodeLayoutIndexes = [
+      '<h2>云节点</h2>',
+      'class="cloud-node-action-bar"',
+      '<span>批量新增</span>',
+      '<span>批量部署</span>',
+      '<span>批量删除</span>',
+      '<span>云账户管理</span>',
+      '<span>代码包版本</span>',
+      'class="cloud-node-filter-bar"',
+      'placeholder="请选择云账户"',
+      'placeholder="请输入节点ID"',
+      'placeholder="地区"',
+      'placeholder="节点类型"',
+      'placeholder="节点状态"',
+      '<a-button type="primary" @click="search">',
+      '<icon-search />',
+      '<span>查询</span>',
+      '<a-table',
+    ].map(marker => cloudNodes.indexOf(marker));
+    for (const index of cloudNodeLayoutIndexes) {
+      expect(index).toBeGreaterThanOrEqual(0);
     }
-    for (const filter of ['placeholder="请选择云账户"', 'placeholder="请输入节点ID"']) {
-      expect(cloudNodes.indexOf(filter)).toBeGreaterThan(cloudNodeFilters);
+    for (let index = 1; index < cloudNodeLayoutIndexes.length; index += 1) {
+      expect(cloudNodeLayoutIndexes[index - 1]).toBeLessThan(cloudNodeLayoutIndexes[index]);
     }
     expectMargin(cloudNodes, '.page-head', 'margin-bottom', 8);
-    expectMargin(cloudNodes, '.cloud-node-action-bar', 'margin-bottom', 8);
-    expectMargin(cloudNodes, '.cloud-node-filter-bar', 'margin-bottom', 8);
-    expect(cloudNodes).toMatch(/\.moox-page\s*\{[\s\S]*?overflow-y:\s*auto;/);
+    for (const toolbar of ['.cloud-node-action-bar', '.cloud-node-filter-bar']) {
+      const escapedToolbar = toolbar.replace('.', '\\.');
+      expect(cloudNodes).toMatch(new RegExp(
+        `${escapedToolbar}\\s*\\{[^}]*display:\\s*flex;[^}]*width:\\s*100%;[^}]*max-width:\\s*100%;[^}]*min-width:\\s*0;[^}]*justify-content:\\s*flex-start;[^}]*margin-bottom:\\s*8px;`,
+      ));
+    }
+    expect(cloudNodes).toMatch(/\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
+    expect(cloudNodes).toMatch(/\.moox-page :deep\(\.arco-spin\),\s*\.moox-page :deep\(\.arco-spin-children\)\s*\{[^}]*overflow-x:\s*hidden;/);
+    expect(cloudNodes).toMatch(/\.moox-inner\s*\{[^}]*overflow-x:\s*hidden;/);
+    expect(cloudNodes).not.toContain('width: calc(100% - 72px)');
+    expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*flex:\s*1;/);
+    expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
+    expect(cloudNodes).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
 
     expect(factorResults).toContain('class="factor-results-content"');
     expectMargin(factorResults, '.factor-results-content', 'margin-top', 12);
