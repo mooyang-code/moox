@@ -1141,7 +1141,7 @@ onUnmounted(() => {
 .monitor-page {
   height: 100%;
   min-height: 100%;
-  padding: 20px;
+  padding: 16px;
   background: #f5f7fb;
   overflow-y: auto;
 }
@@ -1151,13 +1151,13 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
-  margin: 0 0 4px;
-  font-size: 22px;
-  font-weight: 650;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
   color: #1d2129;
 }
 
@@ -1169,7 +1169,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: minmax(220px, 1.5fr) repeat(5, minmax(130px, 1fr));
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .status-hero,
@@ -1250,7 +1250,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .group-card {
@@ -1262,7 +1262,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .group-card-body {
@@ -1273,7 +1273,7 @@ onUnmounted(() => {
 }
 
 .failing-band {
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .band-title {
@@ -1337,7 +1337,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .name-cell {
@@ -1345,7 +1345,7 @@ onUnmounted(() => {
 }
 
 .detail-table {
-  margin-top: 14px;
+  margin-top: 8px;
 }
 
 .detail-drawer :deep(.arco-drawer-body) {

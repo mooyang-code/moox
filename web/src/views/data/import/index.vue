@@ -395,7 +395,7 @@ onMounted(loadDatasets);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
@@ -414,7 +414,5 @@ onMounted(loadDatasets);
   padding: 16px 0;
 }
 
-.sync-alert {
-  margin: 12px 0;
-}
+.sync-alert { margin: 8px 0; }
 </style>

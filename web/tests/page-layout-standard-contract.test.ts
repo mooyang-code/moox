@@ -167,4 +167,49 @@ describe('page layout standards', () => {
       expectMargin(source, '.page-head', 'margin-bottom', 8);
     }
   });
+
+  it('keeps dashboard page boundaries on the compact spacing rhythm', () => {
+    const serviceMonitor = read('ops/service-monitor/index.vue');
+    const resourceMonitor = read('container/resource-monitor/resource-monitor.vue');
+    const factors = read('data/factors/index.vue');
+    const dataImport = read('data/import/index.vue');
+    const overview = read('data/overview/overview.vue');
+    const strategyOverview = read('strategy/overview/index.vue');
+    const strategyPerformance = read('strategy/performance/index.vue');
+    const hostMonitor = read('ops/host-workbench/host-monitor.vue');
+    const packageManage = read('collector/cloud-node/function-package-manage.vue');
+
+    expect(serviceMonitor).toMatch(/\.monitor-page\s*\{[\s\S]*?padding:\s*16px;/);
+    expectMargin(serviceMonitor, '.page-head', 'margin-bottom', 8);
+    expect(serviceMonitor).toMatch(/\.page-head h2\s*\{[\s\S]*?font-size:\s*20px;[\s\S]*?font-weight:\s*600;/);
+    expectMargin(serviceMonitor, '.status-grid', 'margin-bottom', 8);
+    expectMargin(serviceMonitor, '.group-band', 'margin-bottom', 8);
+    expectMargin(serviceMonitor, '.failing-band', 'margin-bottom', 8);
+    expectMargin(serviceMonitor, '.detail-table', 'margin-top', 8);
+
+    expect(resourceMonitor).toMatch(/\.resource-monitor-page\s*\{\s*padding:\s*16px;\s*\}/);
+    expect(resourceMonitor).toMatch(/\.page-header\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(resourceMonitor).toMatch(/\.page-header h2\s*\{[\s\S]*?font-size:\s*20px;/);
+    expect(resourceMonitor).toMatch(/\.summary-band\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(resourceMonitor).toMatch(/\.page-alert,\s*\.history-alert\s*\{\s*margin-bottom:\s*8px;\s*\}/);
+
+    expect(factors).toMatch(/\.metadata-page\s*\{[\s\S]*?padding:\s*16px 16px 72px;/);
+    expectMargin(factors, '.page-head', 'margin-bottom', 8);
+    expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*8px 0;\s*\}/);
+    expect(overview).toMatch(/\.overview-page\s*\{[\s\S]*?padding:\s*16px 16px 72px;/);
+    expectMargin(overview, '.page-head', 'margin-bottom', 8);
+    expect(overview).toMatch(/\.overview-hero\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+
+    expectMargin(strategyOverview, '.summary-grid', 'margin-bottom', 8);
+    expect(strategyOverview).toMatch(/\.filters\s*\{[\s\S]*?gap:\s*8px;[\s\S]*?margin-bottom:\s*8px;/);
+    expectMargin(strategyOverview, '.top-alert', 'margin-bottom', 8);
+    expectMargin(strategyPerformance, '.performance-toolbar', 'margin-bottom', 8);
+    expect(strategyPerformance).toMatch(/\.metrics\s*\{\s*margin:\s*8px 0;\s*\}/);
+    expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:0 0 20px;/);
+    expectMargin(hostMonitor, '.monitor-toolbar', 'margin-bottom', 8);
+    expectMargin(hostMonitor, '.monitor-summary', 'margin-bottom', 8);
+    expectMargin(hostMonitor, '.monitor-alert', 'margin-bottom', 8);
+    expectMargin(packageManage, '.package-toolbar', 'margin-bottom', 8);
+  });
 });
