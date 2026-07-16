@@ -1042,7 +1042,7 @@ const formatTime = (time: string | undefined) => {
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .package-filters {

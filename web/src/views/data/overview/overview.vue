@@ -206,7 +206,7 @@ onMounted(load);
 .overview-page {
   height: 100%;
   box-sizing: border-box;
-  padding: 20px 20px 72px;
+  padding: 16px 16px 72px;
   overflow-y: auto;
 }
 
@@ -214,7 +214,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
@@ -241,7 +241,7 @@ onMounted(load);
   justify-content: space-between;
   gap: 16px;
   padding: 18px 20px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   background: linear-gradient(135deg, var(--color-bg-2), var(--color-fill-1));

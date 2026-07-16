@@ -201,7 +201,7 @@ onMounted(load);
 .metadata-page {
   height: 100%;
   box-sizing: border-box;
-  padding: 20px 20px 72px;
+  padding: 16px 16px 72px;
   overflow-y: auto;
 }
 
@@ -209,7 +209,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
