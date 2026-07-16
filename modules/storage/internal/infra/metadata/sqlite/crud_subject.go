@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
@@ -47,7 +48,8 @@ func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string
 	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, []any{spaceID, subjectID}, func() *pb.Subject { return &pb.Subject{} })
 }
 
-func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
+func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	items, err := queryMessages(ctx, s.db, `
 		SELECT c_attrs_json FROM t_subjects
 		WHERE (? = '' OR c_space_id = ?)
@@ -63,6 +65,19 @@ func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType st
 		filtered := items[:0]
 		for _, item := range items {
 			if allow[item.GetSubjectId()] {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	if keyword != "" {
+		filtered := items[:0]
+		for _, item := range items {
+			if strings.Contains(strings.ToLower(item.GetSubjectId()), keyword) ||
+				strings.Contains(strings.ToLower(item.GetSubjectType()), keyword) ||
+				strings.Contains(strings.ToLower(item.GetName()), keyword) ||
+				strings.Contains(strings.ToLower(item.GetMarket()), keyword) ||
+				strings.Contains(strings.ToLower(item.GetCurrency()), keyword) {
 				filtered = append(filtered, item)
 			}
 		}

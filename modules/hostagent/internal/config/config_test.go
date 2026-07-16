@@ -23,6 +23,16 @@ func TestLoad_ValidConfig_ShouldApplyDefaults(t *testing.T) {
 	assert.NotContains(t, cfg.EventBusConfig, "~")
 }
 
+func TestLoad_HostNameOverride_ShouldTrimValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hostagent.yaml")
+	content := "host_name: '  腾讯云-香港  '\nidentity_path: ~/.local/state/moox/hostagent/identity.yaml\neventbus_config: ~/.config/moox/hostagent/eventbus.yaml\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "腾讯云-香港", cfg.HostName)
+}
+
 func TestLoad_MissingRequiredPaths_ShouldReturnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hostagent.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("identity_path: \"\"\neventbus_config: \"\"\n"), 0o600))

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/tencentcloud"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
@@ -112,7 +112,7 @@ func runLighthouseFirewallAdd(cmd *cobra.Command, opts lighthouseFirewallAddOpti
 			"request":   preview,
 		})
 	}
-	client, err := tencentcloud.NewClient(tencentcloud.ClientOptions{
+	client, err := tencent.NewClient(tencent.ClientOptions{
 		SecretID:  opts.SecretID,
 		SecretKey: opts.SecretKey,
 		Region:    opts.Region,
@@ -133,7 +133,7 @@ func runLighthouseFirewallAdd(cmd *cobra.Command, opts lighthouseFirewallAddOpti
 		}
 		opts.InstanceID = instanceID
 	}
-	req, err := tencentcloud.NewCreateFirewallRulesRequest(tencentcloud.CreateFirewallRulesOptions{
+	req, err := tencent.NewCreateFirewallRulesRequest(tencent.CreateFirewallRulesOptions{
 		InstanceID:      instanceID,
 		Protocol:        opts.Protocol,
 		Ports:           opts.Ports,
@@ -165,7 +165,7 @@ func buildFirewallAddPreview(opts lighthouseFirewallAddOptions) (map[string]any,
 	if instanceID == "" && strings.TrimSpace(opts.PublicIP) != "" {
 		instanceID = "<resolve-from-public-ip>"
 	}
-	req, err := tencentcloud.NewCreateFirewallRulesRequest(tencentcloud.CreateFirewallRulesOptions{
+	req, err := tencent.NewCreateFirewallRulesRequest(tencent.CreateFirewallRulesOptions{
 		InstanceID:      instanceID,
 		Protocol:        opts.Protocol,
 		Ports:           opts.Ports,

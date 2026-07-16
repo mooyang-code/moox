@@ -6,8 +6,13 @@ import ts from 'typescript';
 const root = process.cwd();
 const sources = [
   path.join(root, 'src/api/modules/host-monitor.ts'),
-  path.join(root, 'src/views/container/resource-monitor/resource-monitor.vue'),
-].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  path.join(root, 'src/views/ops/host-workbench/index.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor-card-grid.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor-master-detail.vue'),
+  path.join(root, 'src/views/ops/host-workbench/host-monitor-detail.vue'),
+  path.join(root, 'src/router/route.ts'),
+].map((file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').join('\n');
 
 const required = [
   'host_id',
@@ -15,20 +20,63 @@ const required = [
   'aggregateNetworkRate',
   'storage_available',
   'data_gap',
+  "key: 'monitor'",
+  "label: '主机监控'",
+  'tab: "monitor"',
+  'getCurrentMetrics',
+  'listSSHHosts',
+  '15_000',
+  "'cards'",
+  'value="master"',
+  'host-monitor-card-grid',
+  'host-monitor-master-detail',
+  'host-monitor-detail',
   'value="3d"',
-  'selectedHostID',
+  'selectedRow',
   'filesystems',
   'rate_available',
-  'data_gap',
   'aria-pressed',
   'aria-label="自动刷新"',
-  'currentRequestID',
+  'min-height: 0',
+  '文件系统',
+  '磁盘 I/O',
+  '网络接口',
   'historyHasRenderableData',
+  'PageTitleTabs',
+  'aria-label="主机工作台"',
+  'detail-table',
+  'table-layout:fixed',
+  'overflow-x:hidden',
 ];
 
 const missing = required.filter((token) => !sources.includes(token));
 if (missing.length) {
   console.error(`host monitor contract missing: ${missing.join(', ')}`);
+  process.exit(1);
+}
+
+const removedSessionPageTokens = [
+  'key="sessions"',
+  'title="在线会话"',
+  'SshSessions',
+  'getOnlineSessions',
+  'tab: "sessions"',
+];
+const remainingSessionPageTokens = removedSessionPageTokens.filter((token) => sources.includes(token));
+if (remainingSessionPageTokens.length) {
+  console.error(`removed session page contract still present: ${remainingSessionPageTokens.join(', ')}`);
+  process.exit(1);
+}
+
+const removedLayoutTokens = [
+  '<h2>主机工作台</h2>',
+  'type="rounded"',
+  'min-width:460px',
+  'overflow:auto',
+];
+const remainingLayoutTokens = removedLayoutTokens.filter((token) => sources.includes(token));
+if (remainingLayoutTokens.length) {
+  console.error(`old host workbench layout still present: ${remainingLayoutTokens.join(', ')}`);
   process.exit(1);
 }
 

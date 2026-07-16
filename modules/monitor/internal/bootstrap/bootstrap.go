@@ -23,6 +23,7 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
@@ -189,9 +190,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
+	if err := startPeerPuller(runtimeCtx, cfg, runtime); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	runtime.Scheduler = startScheduler(runtimeCtx, cfg, runtime, probeRunner, resultHook)
 	startRetentionCleaner(runtimeCtx, cfg, runtime)
-	startPeerPuller(runtimeCtx, cfg, runtime)
 	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
 	startMetricsConsumer(runtimeCtx, cfg, runtime, metricsStorage)
@@ -402,13 +406,10 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 	if err != nil {
 		return fmt.Errorf("monitor health authentication is invalid: %w", err)
 	}
-	handler := monitorpeer.NewHTTPHandler(monitorpeer.HTTPOptions{
-		Token:    cfg.Peer.Token,
-		Health:   healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)),
-		Liveness: healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)),
-		Metrics:  healthAuth.Wrap(promhttp.Handler()),
-		Snapshot: monitorSnapshot(cfg),
-	})
+	handler := healthz.NewMux()
+	handler.Handle("/healthz", healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)))
+	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
+	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
 	}
@@ -426,6 +427,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
 		InstanceID:       cfg.Instance.InstanceID,
+		BaseURL:          cfg.Instance.BaseURL,
 		Runner:           runner,
 		OnResult:         hook,
 		SyncSystem:       syncSystem,
@@ -568,22 +570,29 @@ func monitorSyncFunc(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 	return syncer.Sync
 }
 
-func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) {
-	if !cfg.Peer.Enabled {
-		return
+func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) error {
+	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
+		return nil
 	}
 	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))
 	for _, item := range cfg.Peer.Peers {
 		remotes = append(remotes, monitorpeer.Remote{
 			InstanceID: item.InstanceID,
-			BaseURL:    item.BaseURL,
-			Token:      item.Token,
+			GatewayURL: item.GatewayURL,
+			NodeID:     item.NodeID,
 		})
 	}
-	puller := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
-		Peers:   remotes,
-		Timeout: time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
+	puller, err := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
+		Peers:           remotes,
+		Timeout:         time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
+		Credentials:     gatewayauth.Credentials{KeyID: cfg.Peer.ServiceAuth.KeyID, Secret: cfg.Peer.ServiceAuth.SecretKey},
+		CAFile:          cfg.Peer.ServiceAuth.CAFile,
+		Alerts:          runtime.Repositories.Alerts,
+		OwnerInstanceID: cfg.Instance.InstanceID,
 	})
+	if err != nil {
+		return fmt.Errorf("monitor peer gateway client initialization failed: %w", err)
+	}
 	runtime.Go(func() {
 		ticker := time.NewTicker(time.Duration(cfg.Peer.PullIntervalSeconds) * time.Second)
 		defer ticker.Stop()
@@ -599,16 +608,7 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 			}
 		}
 	})
-}
-
-func monitorSnapshot(cfg *config.Config) func(context.Context) monitorpeer.Snapshot {
-	return func(ctx context.Context) monitorpeer.Snapshot {
-		return monitorpeer.Snapshot{
-			InstanceID: cfg.Instance.InstanceID,
-			BaseURL:    cfg.Instance.BaseURL,
-			ObservedAt: time.Now().UTC(),
-		}
-	}
+	return nil
 }
 
 func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {

@@ -1,6 +1,28 @@
 import { HOME_PATH } from "@/config/index";
 import Layout from "@/layout/index.vue";
 
+const collectorDataManagementPath = "/collector/data-management";
+
+function redirectCollectorDatasets(to: { query?: Record<string, unknown> }) {
+  return {
+    path: collectorDataManagementPath,
+    query: {
+      tab: "datasets",
+      datasetTab: to.query?.tab === "browse" ? "browse" : "definitions"
+    }
+  };
+}
+
+function redirectCollectorViews(to: { query?: Record<string, unknown> }) {
+  return {
+    path: collectorDataManagementPath,
+    query: {
+      tab: "views",
+      viewTab: to.query?.tab === "browse" ? "browse" : "definitions"
+    }
+  };
+}
+
 export const staticRoutes = [
   {
     path: "/",
@@ -38,9 +60,8 @@ export const staticRoutes = [
       },
       {
         path: "/settings/service-deployments",
-        name: "settings-service-deployments",
-        component: () => import("@/views/settings/service-deployments/index.vue"),
-        meta: { title: "settings-service-deployments" }
+        redirect: { path: "/ops/services", query: { tab: "deployments" } },
+        meta: { title: "settings-service-deployments", hide: true }
       },
       {
         path: "/data/sources",
@@ -56,7 +77,7 @@ export const staticRoutes = [
       },
       {
         path: "/data/datasets",
-        redirect: { path: "/collector/datasets", query: { tab: "definitions" } },
+        redirect: redirectCollectorDatasets,
         meta: { title: "collector-datasets", hide: true }
       },
       {
@@ -108,27 +129,36 @@ export const staticRoutes = [
       },
       {
         path: "/data/views",
-        redirect: { path: "/collector/views", query: { tab: "definitions" } },
+        redirect: redirectCollectorViews,
         meta: { title: "collector-views", hide: true }
       },
       {
         path: "/data/view-browse",
-        redirect: { path: "/collector/views", query: { tab: "browse" } },
+        redirect: () => ({
+          path: collectorDataManagementPath,
+          query: { tab: "views", viewTab: "browse" }
+        }),
         meta: { title: "collector-views", hide: true }
       },
       {
         path: "/data/overview",
-        redirect: "/collector/datasets",
+        redirect: redirectCollectorDatasets,
         meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/list",
-        redirect: { path: "/collector/datasets", query: { tab: "browse" } },
+        redirect: () => ({
+          path: collectorDataManagementPath,
+          query: { tab: "datasets", datasetTab: "browse" }
+        }),
         meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/browse",
-        redirect: { path: "/collector/datasets", query: { tab: "browse" } },
+        redirect: () => ({
+          path: collectorDataManagementPath,
+          query: { tab: "datasets", datasetTab: "browse" }
+        }),
         meta: { title: "collector-datasets", hide: true }
       },
       {
@@ -143,16 +173,20 @@ export const staticRoutes = [
         meta: { title: "collector-cloudnodes", hide: true }
       },
       {
+        path: "/collector/data-management",
+        name: "collector-data-management",
+        component: () => import("@/views/collector/data-management/index.vue"),
+        meta: { title: "collector-data-management" }
+      },
+      {
         path: "/collector/datasets",
-        name: "collector-datasets",
-        component: () => import("@/views/collector/datasets/index.vue"),
-        meta: { title: "collector-datasets" }
+        redirect: redirectCollectorDatasets,
+        meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/collector/views",
-        name: "collector-views",
-        component: () => import("@/views/collector/views/index.vue"),
-        meta: { title: "collector-views" }
+        redirect: redirectCollectorViews,
+        meta: { title: "collector-views", hide: true }
       },
       {
         path: "/collector/cloudnodes",
@@ -162,21 +196,19 @@ export const staticRoutes = [
       },
       {
         path: "/collector/packages",
-        name: "collector-packages",
-        component: () => import("@/views/collector/cloud-node/function-package-manage.vue"),
-        meta: { title: "collector-packages" }
+        redirect: "/collector/cloudnodes",
+        meta: { title: "collector-cloudnodes", hide: true }
       },
       {
         path: "/collector/rules",
         name: "collector-rules",
-        component: () => import("@/views/collector/collector-rules/collector-rules.vue"),
+        component: () => import("@/views/collector/task-management/index.vue"),
         meta: { title: "collector-rules" }
       },
       {
         path: "/collector/tasks",
-        name: "collector-tasks",
-        component: () => import("@/views/collector/task-instances/task-instances.vue"),
-        meta: { title: "collector-tasks" }
+        redirect: { path: "/collector/rules", query: { tab: "instances" } },
+        meta: { title: "collector-rules", hide: true }
       },
       {
         path: "/trading/accounts",
@@ -197,58 +229,62 @@ export const staticRoutes = [
         meta: { title: "trading-orders" }
       },
       {
+        path: "/ops/services",
+        name: "ops-services",
+        component: () => import("@/views/ops/service-management/index.vue"),
+        meta: { title: "ops-services" }
+      },
+      {
+        path: "/ops/hosts",
+        name: "ops-hosts",
+        component: () => import("@/views/ops/host-workbench/index.vue"),
+        meta: { title: "ops-hosts" }
+      },
+      {
         path: "/ops/service-monitor",
-        name: "ops-service-monitor",
-        component: () => import("@/views/ops/service-monitor/index.vue"),
-        meta: { title: "ops-service-monitor" }
+        redirect: { path: "/ops/services", query: { tab: "availability" } },
+        meta: { title: "ops-service-monitor", hide: true }
       },
       {
         path: "/ops/metric-monitor",
-        name: "ops-metric-monitor",
-        component: () => import("@/views/ops/metric-monitor/index.vue"),
-        meta: { title: "ops-metric-monitor" }
+        redirect: { path: "/ops/services", query: { tab: "metrics" } },
+        meta: { title: "ops-metric-monitor", hide: true }
       },
       {
         path: "/ops/resource-monitor",
-        name: "ops-resource-monitor",
-        component: () => import("@/views/container/resource-monitor/resource-monitor.vue"),
-        meta: { title: "ops-resource-monitor" }
+        redirect: { path: "/ops/hosts", query: { tab: "monitor" } },
+        meta: { title: "ops-resource-monitor", hide: true }
       },
       {
         path: "/ops/ssh-hosts",
-        name: "ops-ssh-hosts",
-        component: () => import("@/views/container/ssh-hosts/ssh-hosts.vue"),
-        meta: { title: "ops-ssh-hosts" }
+        redirect: { path: "/ops/hosts", query: { tab: "hosts" } },
+        meta: { title: "ops-ssh-hosts", hide: true }
       },
       {
         path: "/ops/ssh-terminal",
-        name: "ops-ssh-terminal",
-        component: () => import("@/views/container/ssh-terminal/ssh-terminal.vue"),
-        meta: { title: "ops-ssh-terminal" }
+        redirect: (to: any) => ({ path: "/ops/hosts", query: { tab: "hosts", ...(to.query.hostId ? { hostId: to.query.hostId } : {}) } }),
+        meta: { title: "ops-ssh-terminal", hide: true }
       },
       {
         path: "/ops/ssh-sessions",
-        name: "ops-ssh-sessions",
-        component: () => import("@/views/container/ssh-sessions/ssh-sessions.vue"),
-        meta: { title: "ops-ssh-sessions" }
+        redirect: { path: "/ops/hosts", query: { tab: "hosts" } },
+        meta: { title: "ops-ssh-sessions", hide: true }
       },
       {
         path: "/ops/storage/nodes",
-        name: "ops-storage-nodes",
-        component: () => import("@/views/ops/storage/nodes.vue"),
-        meta: { title: "ops-storage-nodes" }
+        name: "ops-storage",
+        component: () => import("@/views/ops/storage/index.vue"),
+        meta: { title: "ops-storage" }
       },
       {
         path: "/ops/storage/routes",
-        name: "ops-storage-routes",
-        component: () => import("@/views/ops/storage/routes.vue"),
-        meta: { title: "ops-storage-routes" }
+        redirect: { path: "/ops/storage/nodes", query: { tab: "routes" } },
+        meta: { title: "ops-storage", hide: true }
       },
       {
         path: "/ops/storage/archive",
-        name: "ops-storage-archive",
-        component: () => import("@/views/ops/storage/archive.vue"),
-        meta: { title: "ops-storage-archive" }
+        redirect: { path: "/ops/storage/nodes", query: { tab: "archive" } },
+        meta: { title: "ops-storage", hide: true }
       }
     ]
   }

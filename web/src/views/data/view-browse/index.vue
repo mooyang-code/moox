@@ -1,22 +1,12 @@
 <template>
   <div class="moox-page view-browse-page">
     <div class="moox-inner">
-    <div class="page-head">
+    <div v-if="!props.embedded" class="page-head">
       <div class="page-head__title">
         <slot name="page-title">
           <h2>{{ props.pageTitle }}</h2>
         </slot>
       </div>
-      <a-space>
-        <a-button :disabled="!selectedSpaceId" :loading="metaLoading || contextLoading" @click="loadMeta">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
-        <a-button :disabled="!activeView" :loading="loading" @click="reloadRows">
-          <template #icon><icon-sync /></template>
-          重新查询
-        </a-button>
-      </a-space>
     </div>
 
     <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
@@ -37,10 +27,8 @@
           <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
             {{ activeView?.active_index_id ? '已构建' : '未构建' }}
           </a-tag>
+          <span>{{ buildTimeText }}</span>
           <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
-          <span v-if="mode === 'time_series' && hasQueried">
-            已加载 {{ tableRows.length }} 条<span v-if="previewHasMore">+</span>
-          </span>
         </section>
 
         <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
@@ -355,10 +343,12 @@ import {
   type OwnerModule,
   type ViewRole,
 } from '@/views/data/shared/module-attribution';
+import { viewBuildTimeLabel } from './view-build-time';
 
 defineOptions({ name: 'DataViewBrowse' });
 
 const props = withDefaults(defineProps<{
+  embedded?: boolean;
   pageTitle?: string;
   emptyDescription?: string;
   allowedPrimaryDatasetIds?: string[];
@@ -368,6 +358,7 @@ const props = withDefaults(defineProps<{
   includeUnowned?: boolean;
   excludeLikelyFactorDatasets?: boolean;
 }>(), {
+  embedded: false,
   pageTitle: '视图数据浏览',
   emptyDescription: '暂无查询视图',
   allowedPrimaryDatasetIds: undefined,
@@ -482,6 +473,7 @@ const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
 };
 
 const activeView = computed(() => visibleViews.value.find((item) => item.view_id === activeViewId.value));
+const buildTimeText = computed(() => viewBuildTimeLabel(activeView.value));
 const primaryDataset = computed(() => datasets.value.find((item) => item.dataset_id === activeView.value?.primary_dataset_id));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
@@ -1238,7 +1230,7 @@ watch(klineVisible, (visible) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head__title {

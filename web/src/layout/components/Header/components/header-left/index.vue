@@ -14,7 +14,7 @@
         <template #empty>
           <div style="text-align: center; padding: 12px;">
             <div>暂无空间</div>
-            <a-button type="text" size="small" @click="openCreate" style="margin-top: 8px;">
+            <a-button type="primary" status="success" size="small" @click="openCreate" style="margin-top: 8px;">
               新建空间
             </a-button>
           </div>

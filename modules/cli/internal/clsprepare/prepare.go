@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/tencentcloud"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
 const (
@@ -24,7 +24,7 @@ type AccountSource interface {
 	GetCOSAccountInfo(context.Context, string) (*adminclient.COSAccountInfo, error)
 }
 
-type Factory func(secretID, secretKey string) (tencentcloud.CLSAPI, error)
+type Factory func(secretID, secretKey string) (tencent.CLSAPI, error)
 
 type Options struct {
 	CloudAccountID    string
@@ -81,7 +81,7 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	if err != nil {
 		return Result{}, safeUpstreamError("create CLS client", err)
 	}
-	resources, err := tencentcloud.BootstrapCLS(ctx, api, tencentcloud.CLSBootstrapOptions{
+	resources, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
 		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: 30, Partitions: 1,
 	})
 	if err != nil {

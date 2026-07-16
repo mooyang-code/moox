@@ -4,13 +4,17 @@
     <div class="page-head">
       <h2>数据对象</h2>
       <a-space>
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+        <a-input-search
+          v-model="searchKeyword"
+          allow-clear
+          placeholder="搜索对象ID、名称或类型"
+          style="width: 280px"
+          @search="onSearch"
+          @clear="onSearch"
+        />
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增对象
-        </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
@@ -87,13 +91,9 @@
       <template #title>外部符号：{{ activeSubject?.subject_id }}</template>
       <div class="drawer-toolbar">
         <a-space>
-          <a-button type="primary" @click="openSymbolCreate">
+          <a-button type="primary" status="success" @click="openSymbolCreate">
             <template #icon><icon-plus /></template>
             新增符号
-          </a-button>
-          <a-button @click="loadSymbols">
-            <template #icon><icon-refresh /></template>
-            刷新
           </a-button>
         </a-space>
       </div>
@@ -157,6 +157,7 @@ const rows = ref<Subject[]>([]);
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
+const searchKeyword = ref('');
 const pagination = reactive(defaultPagination());
 
 const form = reactive<Subject>({
@@ -195,6 +196,7 @@ async function load() {
   try {
     const rsp = await listSubjects({
       space_id: selectedSpaceId.value,
+      keyword: searchKeyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize },
     });
     rows.value = rsp.subjects || [];
@@ -202,6 +204,11 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function onSearch() {
+  pagination.current = 1;
+  void load();
 }
 
 function resetForm() {
@@ -319,12 +326,18 @@ onMounted(load);
 </script>
 
 <style scoped>
-.page-head,
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
 .drawer-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {

@@ -37,27 +37,26 @@ type TaskSpec struct {
 
 // TaskInstance is the Collector-owned executable business task.
 type TaskInstance struct {
-	ID              int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID         string     `gorm:"column:c_space_id"`
-	TaskID          string     `gorm:"column:c_task_id"`
-	CloudJobItemID  string     `gorm:"column:c_cloud_job_item_id"`
-	RuleID          string     `gorm:"column:c_rule_id"`
-	Exchange        string     `gorm:"column:c_exchange"`
-	Market          string     `gorm:"column:c_market"`
-	DataType        string     `gorm:"column:c_data_type"`
-	DatasetID       string     `gorm:"column:c_dataset_id"`
-	SubjectID       string     `gorm:"column:c_subject_id"`
-	Symbol          string     `gorm:"column:c_symbol"`
-	Interval        string     `gorm:"column:c_interval"`
-	PlannedExecNode string     `gorm:"column:c_planned_exec_node"`
-	LastExecNode    string     `gorm:"column:c_last_exec_node"`
-	LastExecStatus  int        `gorm:"column:c_last_exec_status"`
-	TaskParams      string     `gorm:"column:c_task_params"`
-	LastExecTime    *time.Time `gorm:"column:c_last_exec_time"`
-	Result          string     `gorm:"column:c_result"`
-	IsDeleted       bool       `gorm:"column:c_is_deleted"`
-	CreateTime      time.Time  `gorm:"column:c_ctime"`
-	ModifyTime      time.Time  `gorm:"column:c_mtime"`
+	ID             int        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID        string     `gorm:"column:c_space_id"`
+	TaskID         string     `gorm:"column:c_task_id"`
+	CloudJobItemID string     `gorm:"column:c_cloud_job_item_id"`
+	RuleID         string     `gorm:"column:c_rule_id"`
+	Exchange       string     `gorm:"column:c_exchange"`
+	Market         string     `gorm:"column:c_market"`
+	DataType       string     `gorm:"column:c_data_type"`
+	DatasetID      string     `gorm:"column:c_dataset_id"`
+	SubjectID      string     `gorm:"column:c_subject_id"`
+	Symbol         string     `gorm:"column:c_symbol"`
+	Interval       string     `gorm:"column:c_interval"`
+	LastExecNode   string     `gorm:"column:c_last_exec_node"`
+	LastExecStatus int        `gorm:"column:c_last_exec_status"`
+	TaskParams     string     `gorm:"column:c_task_params"`
+	LastExecTime   *time.Time `gorm:"column:c_last_exec_time"`
+	Result         string     `gorm:"column:c_result"`
+	IsDeleted      bool       `gorm:"column:c_is_deleted"`
+	CreateTime     time.Time  `gorm:"column:c_ctime"`
+	ModifyTime     time.Time  `gorm:"column:c_mtime"`
 }
 
 // TableName returns the Collector task instance table.

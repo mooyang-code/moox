@@ -23,7 +23,8 @@ sysdeploy:
   # 同机后台调用默认直连 service gateway；远程环境应使用 HTTPS 11001。
   admin_gateway_url: "http://127.0.0.1:11002"
   service_auth:
-    version: "moox-auth-v2"
+    target_node: ""
+    ca_file: ""
     access_key: "moox-service"
     secret_key: ""
     expire_seconds: 60

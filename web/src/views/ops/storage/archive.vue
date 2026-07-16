@@ -1,77 +1,60 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div>
-        <h2>归档文件</h2>
+      <div class="page-actions">
+        <a-space>
+          <a-input v-model="datasetFilter" allow-clear placeholder="请输入数据集ID" @press-enter="search" />
+          <a-button type="primary" :disabled="!selectedSpaceId" @click="search">
+            <template #icon><icon-search /></template>
+            <span>查询</span>
+          </a-button>
+        </a-space>
       </div>
-      <a-space>
-        <a-input v-model="datasetFilter" allow-clear placeholder="dataset_id" style="width: 180px" />
-        <a-switch v-model="debugMode" size="small">
-          <template #checked>调试</template>
-          <template #unchecked>调试</template>
-        </a-switch>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
-      </a-space>
-    </div>
 
-    <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
-    <a-table
-      v-else
-      row-key="archive_file_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="rows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="归档ID" data-index="archive_file_id" :width="180" />
-        <a-table-column title="数据集" data-index="dataset_id" :width="150" />
-        <a-table-column title="分区" data-index="partition_key" :width="160" />
-        <a-table-column title="文件URI" data-index="file_uri" :width="360" />
-        <a-table-column title="格式" data-index="file_format" :width="100" />
-        <a-table-column title="最小时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.min_time) }}</template>
-        </a-table-column>
-        <a-table-column title="最大时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.max_time) }}</template>
-        </a-table-column>
-        <a-table-column title="行数" data-index="row_count" :width="100" />
-        <a-table-column title="内容Hash" data-index="content_hash" :width="220" />
-        <a-table-column title="列" :width="220">
-          <template #cell="{ record }">{{ joinList(record.columns) || '-' }}</template>
-        </a-table-column>
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="创建时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-        </a-table-column>
-        <a-table-column v-if="debugMode" title="技术详情" :width="180" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-popover title="技术详情">
-              <a-button size="mini" type="text">查看</a-button>
-              <template #content>
-                <pre>{{ technicalDetails(record) }}</pre>
-              </template>
-            </a-popover>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
+      <a-table
+        v-else
+        row-key="archive_file_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="rows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="归档ID" data-index="archive_file_id" :width="180" />
+          <a-table-column title="数据集" data-index="dataset_id" :width="150" />
+          <a-table-column title="分区" data-index="partition_key" :width="160" />
+          <a-table-column title="文件URI" data-index="file_uri" :width="360" />
+          <a-table-column title="格式" data-index="file_format" :width="100" />
+          <a-table-column title="最小时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.min_time) }}</template>
+          </a-table-column>
+          <a-table-column title="最大时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.max_time) }}</template>
+          </a-table-column>
+          <a-table-column title="行数" data-index="row_count" :width="100" />
+          <a-table-column title="内容Hash" data-index="content_hash" :width="220" />
+          <a-table-column title="列" :width="220">
+            <template #cell="{ record }">{{ joinList(record.columns) || '-' }}</template>
+          </a-table-column>
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="创建时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+          </a-table-column>
+        </template>
+      </a-table>
     </div>
   </div>
 </template>
@@ -90,7 +73,6 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<ArchiveFile[]>([]);
 const loading = ref(false);
 const datasetFilter = ref('');
-const debugMode = ref(false);
 const pagination = reactive(defaultPagination());
 
 async function load() {
@@ -112,16 +94,9 @@ async function load() {
   }
 }
 
-function technicalDetails(record: ArchiveFile) {
-  return JSON.stringify(
-    {
-      archive_file_id: record.archive_file_id,
-      device_id: record.device_id,
-      attributes: record.attributes || {},
-    },
-    null,
-    2,
-  );
+function search() {
+  pagination.current = 1;
+  load();
 }
 
 function onPageChange(page: number) {
@@ -140,36 +115,14 @@ watch(selectedSpaceId, () => {
   load();
 });
 
-watch(datasetFilter, () => {
-  pagination.current = 1;
-  load();
-});
-
 onMounted(load);
 </script>
 
 <style scoped>
-.page-head {
+.page-actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  justify-content: flex-start;
+  margin-bottom: 8px;
 }
 
-.page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
-}
-
-pre {
-  max-width: 360px;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 </style>

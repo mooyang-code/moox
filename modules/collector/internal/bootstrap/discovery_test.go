@@ -11,6 +11,9 @@ import (
 
 func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("X-Moox-Target-Node = %q, want gateway-gz-122", got)
+		}
 		if r.URL.Path != "/api/service/sysdeploy/ListActiveServiceDeployments" {
 			t.Fatalf("path = %s, want sysdeploy active deployments", r.URL.Path)
 		}
@@ -51,6 +54,7 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	cfg.SysDeploy.AdminGatewayURL = server.URL
 	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
 	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "gateway-gz-122"
 	cfg.Storage.MetadataTarget = "127.0.0.1:20100"
 	cfg.Storage.AccessTarget = "127.0.0.1:20102"
 

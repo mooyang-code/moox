@@ -10,7 +10,9 @@
       :include-unowned="true"
     >
       <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据集合" @change="syncRoute" />
+        <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
+          <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
+        </a-tabs>
       </template>
     </DatasetDefinitions>
     <DatasetBrowse
@@ -20,7 +22,9 @@
       :include-unowned="true"
     >
       <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据集合" @change="syncRoute" />
+        <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
+          <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
+        </a-tabs>
       </template>
     </DatasetBrowse>
   </div>
@@ -29,11 +33,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import DatasetDefinitions from '@/views/data/datasets/index.vue';
 import DatasetBrowse from '@/views/data/browse/index.vue';
 
 defineOptions({ name: 'CollectorDatasets' });
+
+const props = withDefaults(
+  defineProps<{
+    queryKey?: string;
+    routePath?: string;
+  }>(),
+  {
+    queryKey: 'tab',
+    routePath: '/collector/datasets',
+  },
+);
 
 const route = useRoute();
 const router = useRouter();
@@ -45,16 +59,19 @@ const tabs = [
   { key: 'browse', label: '查看数据' },
 ] as const;
 
-const normalizedQuery = computed(() => String(route.query.tab || ''));
+const normalizedQuery = computed(() => String(route.query[props.queryKey] || ''));
 
 function tabFromRoute() {
-  return route.query.tab === 'browse' ? 'browse' : 'definitions';
+  return route.query[props.queryKey] === 'browse' ? 'browse' : 'definitions';
 }
 
 function syncRoute(key: string | number) {
   const tab: CollectorDatasetTab = key === 'browse' ? 'browse' : 'definitions';
   activeTab.value = tab;
-  router.replace({ path: '/collector/datasets', query: tab === 'browse' ? { tab } : {} });
+  const query = { ...route.query };
+  if (tab === 'browse') query[props.queryKey] = tab;
+  else delete query[props.queryKey];
+  void router.replace({ path: props.routePath, query });
 }
 
 watch(normalizedQuery, () => {

@@ -81,7 +81,7 @@ func TestCORSMiddleware_NoOrigin_ShouldPassThrough(t *testing.T) {
 
 func TestControlRouter_UnknownPreflightPath_ShouldReturnNotFound(t *testing.T) {
 	SetConfig(&Config{CORS: CORSConfig{AllowedOrigins: []string{"https://app.example.com"}}})
-	router := NewHTTPRouter(NewGatewayHandle()).buildControlRouter()
+	router := NewHTTPRouter(NewGatewayHandle(), nil, "").buildControlRouter()
 	req := httptest.NewRequest(http.MethodOptions, "/not-an-admin-route", nil)
 	req.Header.Set("Origin", "https://app.example.com")
 	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
@@ -94,7 +94,7 @@ func TestControlRouter_UnknownPreflightPath_ShouldReturnNotFound(t *testing.T) {
 
 func TestControlRouter_NonPreflightOptions_ShouldReturnMethodNotAllowed(t *testing.T) {
 	SetConfig(&Config{CORS: CORSConfig{AllowedOrigins: []string{"https://app.example.com"}}})
-	router := NewHTTPRouter(NewGatewayHandle()).buildControlRouter()
+	router := NewHTTPRouter(NewGatewayHandle(), nil, "").buildControlRouter()
 	req := httptest.NewRequest(http.MethodOptions, "/api/admin/auth/Login", nil)
 	req.Header.Set("Origin", "https://app.example.com")
 	rr := httptest.NewRecorder()
@@ -106,27 +106,13 @@ func TestControlRouter_NonPreflightOptions_ShouldReturnMethodNotAllowed(t *testi
 
 func TestControlRouter_OptionsWithoutOrigin_ShouldReturnMethodNotAllowed(t *testing.T) {
 	SetConfig(&Config{CORS: CORSConfig{AllowedOrigins: []string{"https://app.example.com"}}})
-	router := NewHTTPRouter(NewGatewayHandle()).buildControlRouter()
+	router := NewHTTPRouter(NewGatewayHandle(), nil, "").buildControlRouter()
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, httptest.NewRequest(http.MethodOptions, "/api/admin/auth/Login", nil))
 
 	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 	assert.Equal(t, "GET, POST, PUT, DELETE", rr.Header().Get("Allow"))
-}
-
-func TestServiceRouter_Preflight_ShouldNotEnableBrowserCORS(t *testing.T) {
-	SetConfig(&Config{CORS: CORSConfig{AllowedOrigins: []string{"https://app.example.com"}}})
-	router := NewHTTPRouter(NewGatewayHandle()).buildServiceRouter()
-	req := httptest.NewRequest(http.MethodOptions, "/api/service/cloudnode/PollJobItems", nil)
-	req.Header.Set("Origin", "https://app.example.com")
-	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
-	rr := httptest.NewRecorder()
-
-	router.ServeHTTP(rr, req)
-
-	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
-	assert.Empty(t, rr.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestApplyCORSHeaders_AllowedOrigin_ShouldSetHeaders(t *testing.T) {

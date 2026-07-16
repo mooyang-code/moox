@@ -1,55 +1,46 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <h2>主存节点</h2>
-      <a-space>
-        <a-button type="primary" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增节点
-        </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
-      </a-space>
-    </div>
+      <div class="page-actions">
+        <a-space>
+          <a-button type="primary" status="success" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            新增节点
+          </a-button>
+        </a-space>
+      </div>
 
-    <a-alert class="topology-alert" type="warning" show-icon>
-      主存节点是 storage 数据拓扑配置，不等同于系统服务部署信息。若在“系统设置 / 服务部署信息”修改了 storage_* 服务 IP/端口，请同步检查这里的 Endpoint。
-    </a-alert>
-
-    <a-table
-      row-key="node_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="rows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="节点ID" data-index="node_id" :width="180" />
-        <a-table-column title="名称" data-index="name" :width="180" />
-        <a-table-column title="Endpoint" data-index="endpoint" :width="260" />
-        <a-table-column title="权重" data-index="weight" :width="90" />
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-        </a-table-column>
-        <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
+      <a-table
+        row-key="node_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="rows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="节点ID" data-index="node_id" :width="180" />
+          <a-table-column title="名称" data-index="name" :width="180" />
+          <a-table-column title="Endpoint" data-index="endpoint" :width="260" />
+          <a-table-column title="权重" data-index="weight" :width="90" />
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+          </a-table-column>
+          <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
 
     </div>
 
@@ -171,20 +162,9 @@ onMounted(load);
 </script>
 
 <style scoped>
-.page-head {
+.page-actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.topology-alert {
-  margin-bottom: 14px;
+  justify-content: flex-start;
+  margin-bottom: 8px;
 }
 </style>

@@ -2,13 +2,9 @@
   <div class="panel">
     <div class="panel-toolbar">
       <a-space>
-        <a-button type="primary" :disabled="!datasetId" @click="openCreate">
+        <a-button type="primary" status="success" :disabled="!datasetId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增列
-        </a-button>
-        <a-button :disabled="!datasetId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>

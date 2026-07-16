@@ -40,36 +40,6 @@ ON t_space_members(c_space_id, c_user_id);
 CREATE INDEX IF NOT EXISTS idx_space_members_user_id
 ON t_space_members(c_user_id);
 
--- ************ 系统服务部署信息表 ************
-CREATE TABLE IF NOT EXISTS t_service_deployments (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_service_name TEXT NOT NULL,
-    c_service_kind TEXT NOT NULL DEFAULT '',
-    c_protocol TEXT NOT NULL DEFAULT 'http',
-    c_host TEXT NOT NULL DEFAULT '',
-    c_port INTEGER NOT NULL DEFAULT 0,
-    c_gateway_path TEXT NOT NULL DEFAULT '',
-    c_scope TEXT NOT NULL DEFAULT 'public',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_description TEXT NOT NULL DEFAULT '',
-    c_extra_config TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_name
-ON t_service_deployments(c_service_name);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_kind
-ON t_service_deployments(c_service_kind);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_scope
-ON t_service_deployments(c_scope);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_status
-ON t_service_deployments(c_status);
-
-DROP TRIGGER IF EXISTS update_service_deployments_mtime;
-CREATE TRIGGER IF NOT EXISTS update_service_deployments_mtime AFTER UPDATE ON t_service_deployments BEGIN
-    UPDATE t_service_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
-
 -- ************ 用户表 ************
 CREATE TABLE IF NOT EXISTS t_users (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
@@ -159,6 +129,78 @@ CREATE TABLE IF NOT EXISTS t_ssh_host (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
+-- ************ 网关节点表 ************
+CREATE TABLE IF NOT EXISTS t_gateway_nodes (
+    c_node_id TEXT NOT NULL PRIMARY KEY,
+    c_host_id INTEGER,
+    c_name TEXT NOT NULL,
+    c_public_address TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'enabled' CHECK (c_status IN ('enabled', 'disabled')),
+    c_route_hash TEXT NOT NULL DEFAULT '',
+    c_applied_route_hash TEXT NOT NULL DEFAULT '',
+    c_route_count INTEGER NOT NULL DEFAULT 0,
+    c_last_seen_at DATETIME,
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_host_id) REFERENCES t_ssh_host(c_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_nodes_host_id
+ON t_gateway_nodes(c_host_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_nodes_status
+ON t_gateway_nodes(c_status);
+CREATE INDEX IF NOT EXISTS idx_gateway_nodes_last_seen_at
+ON t_gateway_nodes(c_last_seen_at);
+
+DROP TRIGGER IF EXISTS update_gateway_nodes_mtime;
+CREATE TRIGGER IF NOT EXISTS update_gateway_nodes_mtime AFTER UPDATE ON t_gateway_nodes BEGIN
+    UPDATE t_gateway_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
+-- ************ 系统服务部署信息表 ************
+CREATE TABLE IF NOT EXISTS t_service_deployments (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_node_id TEXT NOT NULL,
+    c_service_name TEXT NOT NULL,
+    c_service_kind TEXT NOT NULL DEFAULT '',
+    c_protocol TEXT NOT NULL DEFAULT 'http',
+    c_host TEXT NOT NULL DEFAULT '',
+    c_port INTEGER NOT NULL DEFAULT 0,
+    c_gateway_path TEXT NOT NULL DEFAULT '',
+    c_gateway_service_id TEXT NOT NULL DEFAULT '',
+    c_gateway_enabled INTEGER NOT NULL DEFAULT 0 CHECK (c_gateway_enabled IN (0, 1)),
+    c_scope TEXT NOT NULL DEFAULT 'public',
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_description TEXT NOT NULL DEFAULT '',
+    c_extra_config TEXT NOT NULL DEFAULT '{}',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0),
+    FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes(c_node_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_node_name
+ON t_service_deployments(c_node_id, c_service_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_node_gateway_service
+ON t_service_deployments(c_node_id, c_gateway_service_id)
+WHERE c_gateway_enabled = 1 AND c_gateway_service_id <> '';
+CREATE INDEX IF NOT EXISTS idx_service_deployments_node_id
+ON t_service_deployments(c_node_id);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_gateway_enabled
+ON t_service_deployments(c_gateway_enabled);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_gateway_service_id
+ON t_service_deployments(c_gateway_service_id);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_kind
+ON t_service_deployments(c_service_kind);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_scope
+ON t_service_deployments(c_scope);
+CREATE INDEX IF NOT EXISTS idx_service_deployments_status
+ON t_service_deployments(c_status);
+
+DROP TRIGGER IF EXISTS update_service_deployments_mtime;
+CREATE TRIGGER IF NOT EXISTS update_service_deployments_mtime AFTER UPDATE ON t_service_deployments BEGIN
+    UPDATE t_service_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+
 -- ************ SSH 会话表（用于会话管理） ************
 CREATE TABLE IF NOT EXISTS t_ssh_session (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
@@ -202,7 +244,7 @@ CREATE TABLE IF NOT EXISTS t_secrets (
     c_name TEXT NOT NULL,                                       -- 秘钥名称
     c_description TEXT NOT NULL DEFAULT '',                     -- 秘钥描述/备注
     c_category TEXT NOT NULL,                                   -- 秘钥分类: ssh=SSH凭证, exchange=交易所,
-                                                                --           database=数据库,
+                                                                --           cloud=云厂商凭据, database=数据库,
                                                                 --           jwt=系统令牌, other=其他
     c_provider TEXT NOT NULL DEFAULT '',                        -- 提供方/来源 (binance/okx/mysql/postgres等)
     c_secret_type TEXT NOT NULL DEFAULT 'api_key',              -- 秘钥类型: api_key=API密钥对, password=密码,

@@ -24,18 +24,18 @@ func TestQuantInitialSeedEndToEnd(t *testing.T) {
 		SeedPath:   seedPath,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 7, result.Spaces)
+	require.Equal(t, 5, result.Spaces)
 
 	svc := NewServiceWithOptions(Options{Root: root, MetadataPath: metadataPath, InitSchemaPath: schemaPath})
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
 	spaces, err := svc.ListSpaces(ctx, &pb.ListSpacesReq{Page: &pb.Page{Page: 1, Size: 100}})
 	mustRetOK(t, spaces, err)
-	require.Len(t, spaces.GetSpaces(), 7)
+	require.Len(t, spaces.GetSpaces(), 5)
 
 	groups, err := svc.ListFieldGroups(ctx, &pb.ListFieldGroupsReq{SpaceId: "stock_cn", Page: &pb.Page{Page: 1, Size: 100}})
 	mustRetOK(t, groups, err)
-	require.Len(t, groups.GetFieldGroups(), 8)
+	require.Len(t, groups.GetFieldGroups(), 5)
 
 	fields, err := svc.ListFields(ctx, &pb.ListFieldsReq{SpaceId: "stock_cn", GroupId: "finance", Page: &pb.Page{Page: 1, Size: 100}})
 	mustRetOK(t, fields, err)
@@ -43,7 +43,7 @@ func TestQuantInitialSeedEndToEnd(t *testing.T) {
 
 	datasets, err := svc.ListDatasets(ctx, &pb.ListDatasetsReq{SpaceId: "stock_cn", Page: &pb.Page{Page: 1, Size: 100}})
 	mustRetOK(t, datasets, err)
-	require.Len(t, datasets.GetDatasets(), 17)
+	require.Len(t, datasets.GetDatasets(), 4)
 
 	summary, err := svc.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: "stock_cn", DatasetId: "financial_summary"})
 	mustRetOK(t, summary, err)
@@ -53,9 +53,11 @@ func TestQuantInitialSeedEndToEnd(t *testing.T) {
 	require.Len(t, columns.GetColumns(), 8)
 
 	for _, key := range [][2]string{
-		{"stock_cn", "stock_kline_view"}, {"stock_cn", "financial_view"}, {"stock_hk", "hk_kline_view"},
-		{"stock_us", "us_kline_view"}, {"crypto_binance", "spot_kline_view"}, {"crypto_okx", "spot_kline_view"},
-		{"macro_global", "macro_view"}, {"quant_research", "factor_view"},
+		{"stock_cn", "stock_kline_1d_view"}, {"stock_cn", "index_kline_1d_view"},
+		{"stock_cn", "financial_metric_view"}, {"stock_cn", "financial_summary_view"},
+		{"stock_hk", "stock_kline_1d_view"}, {"stock_us", "stock_kline_1d_view"},
+		{"crypto_binance", "spot_kline_1h_view"}, {"crypto_binance", "perpetual_kline_1h_view"},
+		{"crypto_okx", "spot_kline_1h_view"}, {"crypto_okx", "perpetual_kline_1h_view"},
 	} {
 		got, getErr := svc.GetView(ctx, &pb.GetViewReq{SpaceId: key[0], ViewId: key[1]})
 		mustRetOK(t, got, getErr)

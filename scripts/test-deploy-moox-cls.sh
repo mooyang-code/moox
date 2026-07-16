@@ -69,6 +69,7 @@ ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-cad
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
+ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 cat >"${FIXTURE_ROOT}/skills/moox/scripts/cls-bootstrap.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -83,13 +84,27 @@ echo 'fake CLS preflight failure' >&2
 exit 1
 EOF
 chmod +x "${FIXTURE_ROOT}/skills/moox/scripts/cls-bootstrap.sh"
-for binary in moox-admin moox-admin-cli moox-cli; do
+for binary in moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
 mkdir -p "${DEPLOY_DIR}/data" "${DEPLOY_DIR}/secrets" "${DEPLOY_DIR}/bin"
 : >"${DEPLOY_DIR}/data/admin.db"
-printf 'MOOX_SERVICE_AUTH_SECRET_KEY=existing\n' >"${DEPLOY_DIR}/secrets/service-auth.env"
+printf 'control-secret' >"${TMP_ROOT}/control.key"
+printf 'service-secret' >"${TMP_ROOT}/service.key"
+chmod 0600 "${TMP_ROOT}/control.key" "${TMP_ROOT}/service.key"
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=cls-one \
+  -keyout "${TMP_ROOT}/ca-one.key" -out "${TMP_ROOT}/ca-one.crt" -days 1 >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=cls-two \
+  -keyout "${TMP_ROOT}/ca-two.key" -out "${TMP_ROOT}/ca-two.crt" -days 1 >/dev/null 2>&1
+cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
+GATEWAY_ARGS=(
+  --node-id cls-test
+  --gateway-control-url http://127.0.0.1:11000
+  --gateway-ca-bundle "${TMP_ROOT}/peers.pem"
+  --gateway-control-key-file "${TMP_ROOT}/control.key"
+  --gateway-service-key-file "${TMP_ROOT}/service.key"
+)
 cat >"${DEPLOY_DIR}/stop.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -101,6 +116,7 @@ if MOOX_TEST_STOP_MARKER="${STOP_MARKER}" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
     --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    "${GATEWAY_ARGS[@]}" \
     >"${TMP_ROOT}/fixture.out" 2>&1; then
   echo 'deployment unexpectedly succeeded after CLS preflight failure' >&2
   exit 1
@@ -119,6 +135,7 @@ MOOX_TEST_PREFLIGHT_RELEASE="${PREFLIGHT_RELEASE}" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${LOCK_STAGE_ARG}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
     --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    "${GATEWAY_ARGS[@]}" \
     >"${TMP_ROOT}/preflight-first.out" 2>&1 &
 FIRST_PID=$!
 for _ in $(seq 1 100); do
@@ -135,6 +152,7 @@ if "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${LOCK_STAGE_ARG}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
     --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    "${GATEWAY_ARGS[@]}" \
     >"${TMP_ROOT}/preflight-second.out" 2>&1; then
   echo 'competing deployment unexpectedly succeeded while stage lock was held' >&2
   exit 1
@@ -158,6 +176,7 @@ fixture_deploy() {
     --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
     --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    "${GATEWAY_ARGS[@]}" \
     "$@"
 }
 

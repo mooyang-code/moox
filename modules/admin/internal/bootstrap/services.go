@@ -4,11 +4,12 @@ import (
 	"context"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
+	setupservice "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
@@ -30,6 +31,9 @@ type Services struct {
 
 	// 秘钥管理服务
 	SecretService secret.Service
+
+	// Setup is exposed only through the loopback setup listener.
+	Setup *setupservice.Service
 
 	// 系统服务部署信息
 	SysDeploy sysdeploy.Service
@@ -85,12 +89,10 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 
 	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
 	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
-	sysDeployService := sysdeploy.NewService(dbManager)
+	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
 	if err := sysDeployService.SeedDefaults(ctx); err != nil {
 		return nil, err
 	}
-	gateway.SetServiceDetailResolver(sysDeployService.ResolveGatewayServiceDetail)
-
 	db := dbManager.GetDB()
 
 	// 初始化DNSProxy实例（全局单例，供定时器使用）
@@ -107,6 +109,11 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	log.Info("[Bootstrap] 正在创建秘钥管理服务...")
 	secretDAO := secretdao.NewSecretDAO(db)
 	secretService := secret.NewService(secretDAO)
+	encryptionKey, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return nil, err
+	}
+	setupService := setupservice.NewService(db, encryptionKey)
 
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
@@ -114,6 +121,7 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		SpaceMgr:      spaceService,
 		SSHService:    sshService,
 		SecretService: secretService,
+		Setup:         setupService,
 		SysDeploy:     sysDeployService,
 	}
 

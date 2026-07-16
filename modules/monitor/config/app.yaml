@@ -28,16 +28,19 @@ sysdeploy:
   target: "ip://127.0.0.1:11109"
   sync_interval_seconds: 60
   service_auth:
-    version: "moox-auth-v2"
-    access_key: "moox-service"
+    key_id: ""
     secret_key: ""
-    expire_seconds: 60
+    target_node: ""
+    ca_file: ""
 
 peer:
   enabled: true
   pull_interval_seconds: 10
   timeout_seconds: 5
-  token: "moox-monitor-peer-token-change-me"
+  service_auth:
+    key_id: ""
+    secret_key: ""
+    ca_file: ""
   peers: []
 
 alert:

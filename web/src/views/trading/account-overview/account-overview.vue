@@ -13,17 +13,13 @@
             @search="loadAccounts"
             @clear="loadAccounts"
           />
-          <a-button type="primary" @click="openCreateAccount">
+          <a-button type="primary" status="success" @click="openCreateAccount">
             <template #icon><icon-plus /></template>
             新增账户
           </a-button>
           <a-button @click="onSyncExchangeAccounts" :loading="syncingAccounts">
             <template #icon><icon-sync /></template>
             同步秘钥账户
-          </a-button>
-          <a-button @click="loadAccounts">
-            <template #icon><icon-refresh /></template>
-            刷新
           </a-button>
         </a-space>
       </div>
@@ -315,7 +311,7 @@
       <!-- API 凭证弹窗 -->
       <a-modal v-model:visible="apiKeyModalVisible" width="860px" :title="`API 凭证 - ${selectedAccount?.account_name || ''}`" :footer="false">
         <div style="margin-bottom: 12px;">
-          <a-button type="primary" size="small" @click="openCreateApiKey">
+          <a-button type="primary" status="success" size="small" @click="openCreateApiKey">
             <template #icon><icon-plus /></template>
             新增凭证
           </a-button>
@@ -1011,7 +1007,7 @@ onMounted(loadAccounts);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {

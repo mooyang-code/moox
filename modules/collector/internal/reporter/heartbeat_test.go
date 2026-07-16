@@ -95,10 +95,14 @@ func TestProcessProbe_UpdatesGatewayAndReturnsResponse(t *testing.T) {
 }
 
 func TestSendSingleHeartbeat_Success(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "test-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "test-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("X-Moox-Target-Node = %q, want gateway-gz-122", got)
+		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(ServerResponse{RetInfo: &ServerRetInfo{Code: 0, Msg: "ok"}})
 	}))

@@ -2,7 +2,9 @@ package command
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"net/http"
@@ -10,10 +12,55 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 )
 
+func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
+	t.Helper()
+	item, err := buildCollectorCreateNodeItem(opts, packageID)
+	require.NoError(t, err)
+	return item
+}
+
+func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	caFile := filepath.Join(t.TempDir(), "peer.pem")
+	require.NoError(t, os.WriteFile(caFile, pemBytes, 0o600))
+	t.Setenv("MOOX_GATEWAY_CA_FILE", caFile)
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(pemBytes), env["MOOX_GATEWAY_CA_PEM_B64"])
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
+}
+
+func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
+	t.Run("missing file", func(t *testing.T) {
+		t.Setenv("MOOX_GATEWAY_CA_FILE", filepath.Join(t.TempDir(), "missing.pem"))
+		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
+		require.Error(t, err)
+	})
+	t.Run("conflict", func(t *testing.T) {
+		t.Setenv("MOOX_GATEWAY_CA_FILE", "one")
+		t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "two")
+		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
+		require.ErrorContains(t, err, "mutually exclusive")
+	})
+	t.Run("invalid material", func(t *testing.T) {
+		t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "not-base64")
+		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
+		require.Error(t, err)
+	})
+	t.Run("explicit serverless path", func(t *testing.T) {
+		_, err := collectorFunctionEnvironment(collectorPublishOptions{Env: []string{"MOOX_GATEWAY_CA_FILE=/host/peer.pem"}})
+		require.ErrorContains(t, err, "must not contain")
+	})
+}
+
 func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
-	item := buildCollectorCreateNodeItem(collectorPublishOptions{
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		CloudAccountID:   "account-a",
 		SpaceID:          "crypto",
 		ServiceAccessKey: "svc-ak",
@@ -40,11 +87,8 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_SPACE_ID"] != "crypto" {
 		t.Fatalf("space env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_ACCESS_KEY"] != "svc-ak" || item.Environment["MOOX_SERVICE_AUTH_SECRET_KEY"] != "svc-sk" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "svc-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "svc-sk" {
 		t.Fatalf("service auth env = %#v", item.Environment)
-	}
-	if item.Environment["MOOX_SERVICE_AUTH_EXPIRE_SECONDS"] != "60" {
-		t.Fatalf("service auth expire env = %#v", item.Environment)
 	}
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
 		t.Fatalf("function_name_prefix = %#v", item.Metadata["function_name_prefix"])
@@ -62,7 +106,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 }
 
 func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {
-	item := buildCollectorCreateNodeItem(collectorPublishOptions{
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
 	}, "moox-collector_dev")
@@ -73,7 +117,7 @@ func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {
 }
 
 func TestCollectorFunctionEnvironmentAllowsExplicitEnvOverride(t *testing.T) {
-	item := buildCollectorCreateNodeItem(collectorPublishOptions{
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		CloudAccountID:   "account-a",
 		SpaceID:          "crypto",
 		ServiceAccessKey: "svc-ak",
@@ -81,19 +125,19 @@ func TestCollectorFunctionEnvironmentAllowsExplicitEnvOverride(t *testing.T) {
 		Region:           "ap-guangzhou",
 		Env: []string{
 			"MOOX_SPACE_ID=override-space",
-			"MOOX_SERVICE_AUTH_ACCESS_KEY=override-ak",
-			"MOOX_SERVICE_AUTH_SECRET_KEY=override-sk",
-			"MOOX_SERVICE_AUTH_EXPIRE_SECONDS=60",
+			"MOOX_GATEWAY_SERVICE_KEY_ID=override-ak",
+			"MOOX_GATEWAY_SERVICE_SECRET_KEY=override-sk",
+			"MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS=60",
 		},
 	}, "moox-collector_dev")
 
 	if item.Environment["MOOX_SPACE_ID"] != "override-space" {
 		t.Fatalf("space env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_ACCESS_KEY"] != "override-ak" || item.Environment["MOOX_SERVICE_AUTH_SECRET_KEY"] != "override-sk" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "override-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "override-sk" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_SERVICE_AUTH_EXPIRE_SECONDS"] != "60" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS"] != "60" {
 		t.Fatalf("expire env = %#v", item.Environment)
 	}
 }

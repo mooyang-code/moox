@@ -158,18 +158,23 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 	assert.Equal(t, "v", env["K"])
 }
 
-func TestCollectorFunctionEnvironmentIncludesServiceGatewayCA(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "Y2E=")
-	env := collectorFunctionEnvironment(collectorPublishOptions{})
-	assert.Equal(t, "Y2E=", env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
+func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
 }
 
 func TestNewControlClientSetsServiceAuth(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "sk")
 	client := newControlClient("http://control", "", "", "", "crypto")
 	require.NotNil(t, client.ServiceAuth)
 	assert.Equal(t, "ak", client.ServiceAuth.AccessKey)
+	assert.Equal(t, "gateway-gz-122", client.ServiceAuth.TargetNode)
 }
 
 func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {

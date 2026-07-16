@@ -35,7 +35,7 @@ export function getDataSource(params: { space_id: string; data_source_id: string
   return callMetadata<typeof params, RetRsp & { data_source: DataSource }>('GetDataSource', params);
 }
 
-export function listDataSources(params: { space_id: string; kind?: string; status?: string; page?: Page }) {
+export function listDataSources(params: { space_id: string; kind?: string; status?: string; keyword?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { data_sources: DataSource[]; page_result: PageResult }>('ListDataSources', params);
 }
 
@@ -48,7 +48,7 @@ export function getSubject(params: { space_id: string; subject_id: string }) {
   return callMetadata<typeof params, RetRsp & { subject: Subject }>('GetSubject', params);
 }
 
-export function listSubjects(params: { space_id: string; subject_type?: string; market?: string; status?: string; page?: Page }) {
+export function listSubjects(params: { space_id: string; subject_type?: string; market?: string; status?: string; keyword?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { subjects: Subject[]; page_result: PageResult }>('ListSubjects', params);
 }
 

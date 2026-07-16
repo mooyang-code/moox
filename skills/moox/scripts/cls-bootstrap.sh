@@ -554,13 +554,18 @@ cleanup() {
 
 run_local_prepare() {
   local deploy=$1
-  [[ -r "${deploy}/secrets/service-auth.env" ]] || fail "missing service-auth.env"
+  [[ -r "${deploy}/secrets/gateway-service.env" ]] || fail "missing gateway-service.env"
+  [[ -r "${deploy}/certs/gateway/peers.pem" ]] || fail "missing Gateway CA bundle"
   mkdir -p "${deploy}/secrets"
   rm -f "${NEXT_PATH}"
   set -a
   # shellcheck disable=SC1090
-  source "${deploy}/secrets/service-auth.env"
+  source "${deploy}/secrets/gateway-service.env"
+  MOOX_GATEWAY_CA_FILE="${deploy}/certs/gateway/peers.pem"
   set +a
+  [[ -n "${MOOX_GATEWAY_NODE_ID:-}" ]] || fail "missing MOOX_GATEWAY_NODE_ID in gateway-service.env"
+  [[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_KEY_ID in gateway-service.env"
+  [[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_SECRET_KEY in gateway-service.env"
   if [[ -n "${CLOUD_ACCOUNT_ID}" ]]; then
     if ! "${STAGE_DIR}/bin/moox-cli" ops tencent cls prepare \
       --control-url "${ADMIN_URL}" --credentials-output "${NEXT_PATH}" \
@@ -603,10 +608,15 @@ esac
 mkdir -p "${deploy}/secrets"
 next="${deploy}/secrets/.cls.env.${token}.next"
 trap 'status=$?; if [[ ${status} -ne 0 ]]; then rm -f "${next}"; fi; exit ${status}' EXIT
-[[ -r "${deploy}/secrets/service-auth.env" ]]
+[[ -r "${deploy}/secrets/gateway-service.env" ]] || { echo "missing gateway-service.env" >&2; exit 1; }
+[[ -r "${deploy}/certs/gateway/peers.pem" ]] || { echo "missing Gateway CA bundle" >&2; exit 1; }
 set -a
-source "${deploy}/secrets/service-auth.env"
+source "${deploy}/secrets/gateway-service.env"
+MOOX_GATEWAY_CA_FILE="${deploy}/certs/gateway/peers.pem"
 set +a
+[[ -n "${MOOX_GATEWAY_NODE_ID:-}" ]] || { echo "missing MOOX_GATEWAY_NODE_ID in gateway-service.env" >&2; exit 1; }
+[[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || { echo "missing MOOX_GATEWAY_SERVICE_KEY_ID in gateway-service.env" >&2; exit 1; }
+[[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || { echo "missing MOOX_GATEWAY_SERVICE_SECRET_KEY in gateway-service.env" >&2; exit 1; }
 chmod 0700 "${cli}"
 rm -f "${next}"
 if [[ -n "${account_id}" ]]; then

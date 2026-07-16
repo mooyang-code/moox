@@ -21,6 +21,7 @@ import (
 
 type Options struct {
 	InstanceID       string
+	BaseURL          string
 	Runner           probe.Runner
 	OnResult         func(context.Context, domain.Check, domain.CheckResult)
 	SyncSystem       func(context.Context) (int, error)
@@ -47,6 +48,7 @@ type Service struct {
 	hostReader       *hostmetrics.StorageReader
 	hostStorageReady func() bool
 	instance         string
+	baseURL          string
 }
 
 func New(repos *store.Repositories, opts Options) *Service {
@@ -76,7 +78,38 @@ func New(repos *store.Repositories, opts Options) *Service {
 		hostReader:       opts.HostReader,
 		hostStorageReady: opts.HostStorageReady,
 		instance:         instance,
+		baseURL:          opts.BaseURL,
 	}
+}
+
+// GetPeerSnapshot returns the local repository state used by another Monitor
+// instance to participate in alert ownership and failure detection.
+func (s *Service) GetPeerSnapshot(ctx context.Context, _ *monitorpb.GetPeerSnapshotReq) (*monitorpb.GetPeerSnapshotRsp, error) {
+	results, err := s.results.Latest(ctx, 500)
+	if err != nil {
+		return &monitorpb.GetPeerSnapshotRsp{RetInfo: inner(err)}, nil
+	}
+	events, err := s.alerts.ListRecentEvents(ctx, 100)
+	if err != nil {
+		return &monitorpb.GetPeerSnapshotRsp{RetInfo: inner(err)}, nil
+	}
+	rsp := &monitorpb.GetPeerSnapshotRsp{
+		RetInfo:     success(),
+		InstanceId:  s.instance,
+		BaseUrl:     s.baseURL,
+		ObservedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Checks:      make([]*monitorpb.PeerCheckSnapshot, 0, len(results)),
+		AlertEvents: make([]*monitorpb.PeerAlertEventSnapshot, 0, len(events)),
+	}
+	for _, result := range results {
+		rsp.Checks = append(rsp.Checks, &monitorpb.PeerCheckSnapshot{CheckId: result.CheckID, Status: result.Status})
+	}
+	for _, event := range events {
+		rsp.AlertEvents = append(rsp.AlertEvents, &monitorpb.PeerAlertEventSnapshot{
+			EventId: event.EventID, EventType: event.EventType, CreatedAt: event.CreatedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	return rsp, nil
 }
 
 func (s *Service) CreateCheck(ctx context.Context, req *monitorpb.CreateCheckReq) (*monitorpb.CreateCheckRsp, error) {

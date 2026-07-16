@@ -1,6 +1,7 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
+      <div class="page-head"><h2>持仓详情</h2></div>
       <section class="positions-panel">
         <div v-if="positionAccountTabs.length" class="account-tabs-block">
           <div
@@ -93,7 +94,7 @@
           </a-table>
         </div>
 
-        <div class="page-head">
+        <div class="position-toolbar">
           <a-space>
             <a-input
               v-model="positionFilter.symbol"
@@ -111,10 +112,6 @@
               同步持仓
             </a-button>
           </a-space>
-          <a-button @click="loadPositions">
-            <template #icon><icon-refresh /></template>
-            刷新
-          </a-button>
         </div>
 
         <a-table
@@ -565,21 +562,18 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  margin-bottom: 8px;
 }
+
+.page-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.position-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 
 @media (max-width: 760px) {
   .account-tabs-block,
   .account-balance-head,
-  .page-head {
+  .position-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
-}
-
-.page-head h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
 }
 </style>

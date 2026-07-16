@@ -11,6 +11,40 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
+func TestValidateSetupListenerRequiresLoopback(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		address string
+		wantErr bool
+	}{
+		{name: "ipv4 loopback", address: "127.0.0.1"},
+		{name: "ipv6 loopback", address: "::1"},
+		{name: "all interfaces", address: "0.0.0.0", wantErr: true},
+		{name: "public address", address: "192.0.2.10", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "trpc_go.yaml")
+			body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: " + tt.address + "\n      port: 11110\n      network: tcp\n      protocol: http\n"
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+			err := validateSetupListener(path)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "loopback")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateSetupListenerRequiresDedicatedService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trpc_go.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("server:\n  service: []\n"), 0o600))
+	err := validateSetupListener(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trpc.moox.admin.Setup")
+}
+
 func TestGatewayContainsWildcardOrigin_HasWildcard_ShouldReturnTrue(t *testing.T) {
 	assert.True(t, gatewayContainsWildcardOrigin([]string{"https://a.com", "*"}))
 }
@@ -100,12 +134,21 @@ cors:
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "dnsproxy.yaml"), []byte(`dns:
   local_resolve_enabled: false
 `), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte(`server:
+  service:
+    - name: trpc.moox.admin.Setup
+      ip: 127.0.0.1
+      port: 11110
+      network: tcp
+      protocol: http
+`), 0o644))
 
 	origWD, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-test")
 	return dir
 }
 
@@ -117,7 +160,18 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	assert.NotNil(t, cfg.App)
 	assert.NotNil(t, cfg.Auth)
 	assert.NotNil(t, cfg.Gateway)
+	assert.Equal(t, "admin-node-test", cfg.AdminNodeID)
 	assert.Equal(t, "test-secret-key-32bytes-long-123456", cfg.Gateway.JWT.SecretKey)
+}
+
+func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
+	setupBootstrapConfigDir(t)
+	t.Setenv("MOOX_ADMIN_NODE_ID", "")
+
+	_, err := LoadConfigs(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MOOX_ADMIN_NODE_ID")
 }
 
 func TestLoadConfigs_EmptyJWTSecret_ShouldError(t *testing.T) {
@@ -138,12 +192,21 @@ cors:
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "dnsproxy.yaml"), []byte(`dns:
   local_resolve_enabled: false
 `), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte(`server:
+  service:
+    - name: trpc.moox.admin.Setup
+      ip: 127.0.0.1
+      port: 11110
+      network: tcp
+      protocol: http
+`), 0o644))
 
 	origWD, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-test")
 
 	_, err = LoadConfigs(context.Background())
 	require.Error(t, err)

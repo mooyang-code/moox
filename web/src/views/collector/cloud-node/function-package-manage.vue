@@ -39,10 +39,6 @@
             <template #icon><icon-search /></template>
             搜索
           </a-button>
-          <a-button @click="resetSearch">
-            <template #icon><icon-refresh /></template>
-            重置
-          </a-button>
         </a-space>
         <a-button class="package-upload-button" type="primary" @click="onAdd">
           <template #icon><icon-plus /></template>
@@ -536,19 +532,6 @@ const loadCloudAccounts = async () => {
     cloudAccountOptions.value = [];
     Message.error(error instanceof Error ? error.message : '加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署');
   }
-};
-
-// 重置搜索
-const resetSearch = () => {
-  Object.assign(searchForm, {
-    page: 1,
-    page_size: 10,
-    package_name: '',
-    runtime: '',
-    biz_type: props.bizType || '', // 保持传入的 bizType
-    status: undefined
-  });
-  loadPackageList();
 };
 
 // 分页处理

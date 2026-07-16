@@ -43,6 +43,56 @@ func TestLoadMetadataSeed_ParsesMinimalYAML(t *testing.T) {
 	}
 }
 
+func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
+	t.Parallel()
+	seed := metadataSeed{
+		Spaces:            []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}, {SpaceID: "crypto_binance", Name: "币安市场"}},
+		DataSources:       []seedDataSource{{SpaceID: "stock_cn", DataSourceID: "stock"}, {SpaceID: "crypto_binance", DataSourceID: "binance"}},
+		FieldGroups:       []seedFieldGroup{{SpaceID: "stock_cn", GroupID: "quote"}, {SpaceID: "crypto_binance", GroupID: "quote"}},
+		Fields:            []seedField{{SpaceID: "stock_cn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto_binance", FieldID: "close", GroupID: "quote"}},
+		Datasets:          []seedDataset{{SpaceID: "stock_cn", DatasetID: "kline"}, {SpaceID: "crypto_binance", DatasetID: "kline"}},
+		DatasetColumns:    []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto_binance", DatasetID: "kline", ColumnName: "close"}},
+		Views:             []seedView{{SpaceID: "stock_cn", ViewID: "kline"}, {SpaceID: "crypto_binance", ViewID: "kline"}},
+		ViewColumns:       []seedViewColumn{{SpaceID: "stock_cn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto_binance", ViewID: "kline", ColumnName: "close"}},
+		PrimaryStoreNodes: []seedPrimaryStoreNode{{NodeID: "storage"}},
+		Devices:           []seedDevice{{DeviceID: "duckdb"}},
+	}
+
+	selected, err := selectMetadataSpaces(seed, []string{" A股市场 "})
+	require.NoError(t, err)
+	require.Equal(t, []string{"stock_cn"}, metadataSeedSpaceIDs(selected))
+	require.Len(t, selected.DataSources, 1)
+	require.Len(t, selected.FieldGroups, 1)
+	require.Len(t, selected.Fields, 1)
+	require.Len(t, selected.Datasets, 1)
+	require.Len(t, selected.DatasetColumns, 1)
+	require.Len(t, selected.Views, 1)
+	require.Len(t, selected.ViewColumns, 1)
+	require.Len(t, selected.PrimaryStoreNodes, 1, "global storage topology is preserved")
+	require.Len(t, selected.Devices, 1, "global devices are preserved")
+}
+
+func TestSelectMetadataSpacesRejectsUnknownAndDuplicateSelection(t *testing.T) {
+	t.Parallel()
+	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}}}
+	_, err := selectMetadataSpaces(seed, []string{"stock_us"})
+	require.EqualError(t, err, `unknown metadata space "stock_us"`)
+	_, err = selectMetadataSpaces(seed, []string{"stock_cn", "A股市场"})
+	require.EqualError(t, err, `duplicate metadata space "stock_cn"`)
+}
+
+func TestMetadataSpaceCatalogIsStableAndSanitized(t *testing.T) {
+	t.Parallel()
+	seed := metadataSeed{Spaces: []seedSpace{
+		{SpaceID: "stock_cn", Name: "A股市场", Description: "A股数据"},
+		{SpaceID: "crypto_binance", Name: "币安市场", Description: "Binance"},
+	}}
+	require.Equal(t, []metadataSpaceChoice{
+		{SpaceID: "stock_cn", Name: "A股市场", Description: "A股数据"},
+		{SpaceID: "crypto_binance", Name: "币安市场", Description: "Binance"},
+	}, metadataSpaceCatalog(seed))
+}
+
 func TestBuildMetadataImportCalls_AcceptsEmptySeed(t *testing.T) {
 	calls, err := buildMetadataImportCalls(metadataSeed{})
 	if err != nil || len(calls) != 0 {

@@ -15,21 +15,24 @@ CLI，不再是占位模块。
 
 仓库有两个入口：
 
-- `make release`：生成二进制归档包，包含核心二进制、admin/eventbus/cloudnode/collector/factor/trade/monitor/storage 配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
-- `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端，包含 admin/cli/web-host/eventbus 以及按开关启用的 cloudnode/collector/storage，附带配置、Storage schema、`examples` 示例元数据，以及 `start.sh`、`stop.sh`、`status.sh`。
+- `make release`：生成二进制归档包，包含 Gateway、核心服务二进制与配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
+- `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端。Gateway 默认部署到每台机器；`--no-admin` 生成不含 Admin、浏览器资源、Admin schema 和 Admin 凭据的数据面节点。
 
-`make release` 会打包 `cli/admin/web-host/eventbus/cloudnode/collector/collector-scf/factor/trade/monitor/storage/archive` 二进制；配置目录随包包含 admin、eventbus、cloudnode、collector、factor、trade、monitor、storage、archive。`make deploy` 默认负责 admin、web-host、eventbus、cloudnode、collector、factor、monitor、storage、archive 的可运行部署，可用 `--no-monitor`、`--no-eventbus` 等开关关闭独立模块。Trade 当前通过 release 制品或模块构建单独部署，不在 `make deploy` 的默认进程编排中。
+`make release` 会打包 `cli/admin/gateway/gateway-cli/web-host/eventbus/cloudnode/collector/collector-scf/factor/trade/monitor/storage/archive` 等二进制。`make deploy` 默认编排 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Monitor、Storage 和 Archive，可用 `--no-monitor`、`--no-eventbus` 等开关关闭独立模块；Trade 当前通过 release 制品或模块构建单独部署。
 
-提交前统一运行 `make verify`，它会检查模块边界，遍历 `go.work` 执行所有
-Go 测试和 vet，并完成管理台测试、生产构建、文档构建及发布契约检查。
+部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
+
+提交前统一运行 `make verify`，它会检查模块边界，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway 部署和 Caddy 契约检查。
 
 Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
 ## 管理面入口
 
-MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供：EdgeOne 负责 CNAME、WAF、CC/Bot 和缓存；浏览器使用 `https://<host>:9527`，后台/SCF 使用 `https://<host>:11001/api/service/*`。Caddy 把站点请求转发到 `127.0.0.1:9528`，把 `/api/admin/*` 转发到 `127.0.0.1:11000`，把 `/api/service/*` 转发到 `127.0.0.1:11002`。web-host 仅提供静态文件，不代理 API；其余端口必须保持私有。接入与回滚见 [EdgeOne 运维手册](docs/运维/EdgeOne接入与应急回滚.md)。
+MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点把 `/api/admin/*` 和 `/api/gateway-control/*` 转发到 Admin `127.0.0.1:11000`；每台机器都把 `/api/service/*` 转发到本机独立 Gateway `127.0.0.1:11002`。Gateway 健康端口固定为 `127.0.0.1:11012`。`--no-admin` 节点只启用 service HTTPS site，不启用浏览器 site 或控制面路由。
 
 管理台登录使用 bcrypt 密码、一次性登录挑战、24 小时 JWT/session，登录后每个管理请求还必须带 nonce 防重放的会话 HMAC。后台接口使用独立 service HMAC，诊断端口使用独立 health HMAC。详见 [认证鉴权](docs/认证鉴权.md) 和 [管理台 HTTPS 与证书](docs/运维/管理台HTTPS与证书.md)。
+
+中央控制面、每台机器独立 Gateway、节点路由和可用性边界见[节点服务网关架构](docs/节点服务网关架构.md)；两节点部署与互检操作见[Node Gateway 运维手册](docs/ops/node-gateway.md)。
 
 ## EventBus 与指标监控
 
@@ -55,19 +58,19 @@ Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指
 本机发布并拉起：
 
 ```bash
-make deploy ARGS="--target localhost --dir ~/moox/dev"
+make deploy ARGS="--target localhost --dir ~/moox/dev --node-id gateway-dev --gateway-control-url http://127.0.0.1:11000 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 只生成发布目录，不启动服务：
 
 ```bash
-make deploy ARGS="--target localhost --dir /tmp/moox --skip-build --no-start"
+make deploy ARGS="--target localhost --dir /tmp/moox --skip-build --no-start --node-id gateway-dev --gateway-control-url http://127.0.0.1:11000 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 远端发布并拉起：
 
 ```bash
-make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd64"
+make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd64 --public-host node.example.com --node-id gateway-node-1 --gateway-control-url https://admin.example.com:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 公开部署应加 `--public-host <IP-or-DNS>`。部署会自动安装 checksum 校验的固定版本 Caddy、创建私有 CA、配置同机后端信任并做 HTTPS 验收；浏览器所在机器仍需使用 `skills/moox/scripts/caddy-ca.sh` 显式安装 CA 信任。

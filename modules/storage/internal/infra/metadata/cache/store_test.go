@@ -39,13 +39,13 @@ func (stubMetadataReader) ListViewColumns(context.Context, string, string, *pb.P
 func (stubMetadataReader) GetDataSource(context.Context, string, string) (*pb.DataSource, error) {
 	return nil, nil
 }
-func (stubMetadataReader) ListDataSources(context.Context, string, string, string, *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+func (stubMetadataReader) ListDataSources(context.Context, string, string, string, string, *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 func (stubMetadataReader) GetSubject(context.Context, string, string) (*pb.Subject, error) {
 	return nil, nil
 }
-func (stubMetadataReader) ListSubjects(context.Context, string, string, string, []string, *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
+func (stubMetadataReader) ListSubjects(context.Context, string, string, string, []string, string, *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 func (stubMetadataReader) ListSubjectSymbols(context.Context, string, string, string, string, *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {

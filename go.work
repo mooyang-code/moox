@@ -13,6 +13,7 @@ use (
 	./modules/eventbus/proto/eventbusgen
 	./modules/factor
 	./modules/factor/proto/factorgen
+	./modules/gateway
 	./modules/hostagent
 	./modules/hostagent/proto/hostagentgen
 	./modules/monitor
@@ -23,8 +24,11 @@ use (
 	./modules/trade
 	./modules/trade/proto/tradegen
 	./packages/cloudruntime
+	./packages/cloudprovider
 	./packages/commonpb
 	./packages/crypto
+	./packages/gatewayauth
+	./packages/gatewayproxy
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
@@ -33,7 +37,6 @@ use (
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
-	./packages/servicegateway
 	./packages/trpcplugintest
 	./packages/trpcretry
 	./web-host

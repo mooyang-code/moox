@@ -16,7 +16,8 @@ security:
 control_gateway:
   base_url: "https://106.53.107.122:11001"
   service_auth:
-    version: "moox-auth-v2"
+    target_node: ""
+    ca_file: ""
     access_key: "moox-service"
     secret_key: ""
     expire_seconds: 60

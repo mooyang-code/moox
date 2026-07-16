@@ -1,56 +1,49 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div>
-        <h2>主存路由</h2>
+      <div class="page-actions">
+        <a-space>
+          <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            新增路由
+          </a-button>
+        </a-space>
       </div>
-      <a-space>
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增路由
-        </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
-      </a-space>
-    </div>
 
-    <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
-    <a-table
-      v-else
-      row-key="route_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="rows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="路由ID" data-index="route_id" :width="170" />
-        <a-table-column title="数据集" data-index="dataset_id" :width="160" />
-        <a-table-column title="对象ID" data-index="subject_id" :width="160" />
-        <a-table-column title="对象模式" data-index="subject_pattern" :width="160" />
-        <a-table-column title="Hash 规则" data-index="hash_rule" :width="140" />
-        <a-table-column title="节点ID" data-index="node_id" :width="170" />
-        <a-table-column title="优先级" data-index="priority" :width="90" />
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
+      <a-table
+        v-else
+        row-key="route_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="rows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="路由ID" data-index="route_id" :width="170" />
+          <a-table-column title="数据集" data-index="dataset_id" :width="160" />
+          <a-table-column title="对象ID" data-index="subject_id" :width="160" />
+          <a-table-column title="对象模式" data-index="subject_pattern" :width="160" />
+          <a-table-column title="Hash 规则" data-index="hash_rule" :width="140" />
+          <a-table-column title="节点ID" data-index="node_id" :width="170" />
+          <a-table-column title="优先级" data-index="priority" :width="90" />
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
 
     </div>
 
@@ -227,20 +220,9 @@ onMounted(load);
 </script>
 
 <style scoped>
-.page-head {
+.page-actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
+  justify-content: flex-start;
+  margin-bottom: 8px;
 }
 </style>

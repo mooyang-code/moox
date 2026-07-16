@@ -1,0 +1,21 @@
+[admin]
+username = "admin"
+password = ""
+
+[tencent_cloud]
+secret_id = ""
+secret_key = ""
+
+[control_host]
+name = "control"
+address = ""
+port = 22
+username = "ubuntu"
+password = ""
+
+[[other_hosts]]
+name = "compute-1"
+address = ""
+port = 22
+username = "ubuntu"
+password = ""

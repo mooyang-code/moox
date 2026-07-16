@@ -117,6 +117,9 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 	var invoked bool
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
+			t.Fatalf("X-Moox-Target-Node = %q, want gateway-gz-122", got)
+		}
 		if r.Header.Get("X-Space-Id") != "crypto" {
 			t.Fatalf("X-Space-Id = %q, want crypto", r.Header.Get("X-Space-Id"))
 		}
@@ -172,8 +175,9 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 		StorageMetadataTarget: "127.0.0.1:20100",
 		StorageAccessTarget:   "127.0.0.1:20102",
 		Auth: AuthConfig{
-			AccessKey: "ak",
-			SecretKey: "sk",
+			AccessKey:  "ak",
+			SecretKey:  "sk",
+			TargetNode: "gateway-gz-122",
 		},
 	})
 
@@ -237,8 +241,9 @@ func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
 	client := New(Config{
 		ServiceGatewayTarget: server.URL,
 		Auth: AuthConfig{
-			AccessKey: "ak",
-			SecretKey: "sk",
+			AccessKey:  "ak",
+			SecretKey:  "sk",
+			TargetNode: "gateway-gz-122",
 		},
 	})
 
@@ -297,8 +302,9 @@ func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 	client := New(Config{
 		ServiceGatewayTarget: server.URL,
 		Auth: AuthConfig{
-			AccessKey: "ak",
-			SecretKey: "sk",
+			AccessKey:  "ak",
+			SecretKey:  "sk",
+			TargetNode: "gateway-gz-122",
 		},
 	})
 

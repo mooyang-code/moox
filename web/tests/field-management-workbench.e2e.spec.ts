@@ -75,7 +75,7 @@ test.beforeEach(async ({ page }) => {
 
 test('supports the approved desktop governance workflow', async ({ page }, testInfo) => {
   await page.goto('/#/data/fields');
-  await expect(page.getByRole('heading', { name: '字段管理' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '字段管理' })).toBeVisible();
   const searchBox = page.getByPlaceholder('搜索字段 ID、中文名或描述');
   const createButton = page.getByRole('button', { name: '新建字段' });
   const [searchBounds, createBounds] = await Promise.all([searchBox.boundingBox(), createButton.boundingBox()]);

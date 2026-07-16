@@ -17,9 +17,9 @@ Environment variables:
 - `MOOX_DEV_SSH_TARGET`: optional SSH target for developer scripts.
 - `scripts/deploy-moox.sh --target user@host`: preferred explicit deploy target.
 - `REMOTE_ROOT`: default `~/moox`.
-- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`: optional same-host control-plane override; current deployment contract uses loopback Admin control `http://127.0.0.1:11000`.
-- `MOOX_SERVICE_AUTH_ACCESS_KEY` / `MOOX_SERVICE_AUTH_SECRET_KEY`: backend service auth used by Admin, Collector, Factor, Monitor, CLI, and SCF calls to `/api/service/*`. Deployment generates and persists the shared credential in mode-`0600` `secrets/service-auth.env`; repository configs contain no default secret.
-- `MOOX_SERVICE_GATEWAY_CA_FILE`: public Caddy root CA for backend callers; SCF uses the equivalent `MOOX_SERVICE_GATEWAY_CA_PEM_B64` contract.
+- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`: optional same-host service-directory override; current deployment contract uses the independent Gateway at `http://127.0.0.1:11002`.
+- `MOOX_GATEWAY_NODE_ID`, `MOOX_GATEWAY_SERVICE_KEY_ID`, and `MOOX_GATEWAY_SERVICE_SECRET_KEY`: node-scoped HMAC identity for machine calls to `/api/service/*`. Deployment persists it in mode-`0600` `secrets/gateway-service.env`.
+- `MOOX_GATEWAY_CA_FILE`: CA bundle path for host processes. Serverless runtimes receive the same public certificates as base64 in `MOOX_GATEWAY_CA_PEM_B64`; file and material inputs are mutually exclusive.
 
 `make release` creates a binary archive with binaries, docs, configs, schemas, and examples.
 
@@ -27,9 +27,9 @@ Environment variables:
 
 Public deployments require `--public-host`. Deployment installs pinned, checksum-verified, rootless Caddy `v2.11.4` automatically before acceptance; package-manager Caddy is not a prerequisite. It rejects non-loopback upstream overrides, starts web-host `127.0.0.1:9528`, Admin control `127.0.0.1:11000`, and Admin service `127.0.0.1:11002`, then starts or reloads the MooX-managed edge without touching unrelated processes. `--target-ca auto` attempts target trust-store installation and downgrades only a recognized lack of elevated permission; other installation failures stop deployment. Browser HTTPS `9527` exposes the site and `/api/admin/*`; service HTTPS `11001` is restricted to `/api/service/*`. Public diagnostics return `404`.
 
-Browser control requests use a 24-hour JWT/session plus per-request HMAC. Deployment generates and persists the JWT signing secret in mode-`0600` `secrets/admin-jwt.env`. Backend and SCF calls use nonce-protected service HMAC and must trust the Caddy CA. Dedicated health endpoints use a separate health HMAC; deployment writes its generated credential to `secrets/health-auth.env` and unsigned probes fail with `401`.
+Browser control requests use a 24-hour JWT/session plus per-request HMAC. Deployment generates and persists the JWT signing secret in mode-`0600` `secrets/admin-jwt.env`. Backend and SCF calls use the independent Gateway's nonce-protected service HMAC. Dedicated health endpoints use a separate health HMAC; deployment writes its generated credential to `secrets/health-auth.env` and unsigned probes fail with `401`.
 
-Use `skills/moox/scripts/caddy-ca.sh` to fetch, inspect, or explicitly install trust on each browser machine. Public deployment also checks the operator trust store every time and installs the missing CA automatically unless `--local-ca skip` is explicitly selected. The default local filename is `~/.moox/certs/moox-caddy-root-<public-host>.crt`, including the target IP/DNS for migration and multi-server identification. Same-host backend configuration receives `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF receives CA PEM in configuration. Caddy data and its CA persist across ordinary redeployments and data resets, leaf certificates renew automatically, and unrelated Caddy processes or occupied edge ports fail closed. Never export `root.key` or disable TLS verification. See `references/caddy-https.md` and `docs/运维/管理台HTTPS与证书.md`.
+Use `skills/moox/scripts/caddy-ca.sh` to fetch, inspect, or explicitly install trust on each browser machine. Public deployment also checks the operator trust store every time and installs the missing CA automatically unless `--local-ca skip` is explicitly selected. The default local filename is `~/.moox/certs/moox-caddy-root-<public-host>.crt`, including the target IP/DNS for migration and multi-server identification. Same-host Gateway callers receive `MOOX_GATEWAY_CA_FILE`; SCF receives `MOOX_GATEWAY_CA_PEM_B64`. Caddy data and its CA persist across ordinary redeployments and data resets, leaf certificates renew automatically, and unrelated Caddy processes or occupied edge ports fail closed. Never export `root.key` or disable TLS verification. See `references/caddy-https.md` and `docs/运维/管理台HTTPS与证书.md`.
 
 Runtime data can be deleted and rebuilt from `examples/` and service flows after deployment.
 

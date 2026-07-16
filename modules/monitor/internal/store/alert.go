@@ -191,6 +191,19 @@ func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit 
 	return events, err
 }
 
+// ListRecentEvents returns recent alert transitions across all spaces for peer snapshots.
+func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]domain.AlertEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var events []domain.AlertEvent
+	err := r.db.WithContext(ctx).
+		Order("c_created_at DESC, c_id DESC").
+		Limit(limit).
+		Find(&events).Error
+	return events, err
+}
+
 func (r *AlertRepository) DeleteEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	tx := r.db.WithContext(ctx).
 		Where("c_created_at < ?", cutoff).

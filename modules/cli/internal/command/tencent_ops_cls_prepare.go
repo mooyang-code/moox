@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
-	"github.com/mooyang-code/moox/modules/cli/internal/tencentcloud"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
@@ -75,8 +75,8 @@ func runCLSPrepare(cmd *cobra.Command, opts clsPrepareOptions) error {
 	if client.ServiceAuth == nil {
 		return fmt.Errorf("service authentication is required for CLS account reveal")
 	}
-	factory := func(secretID, secretKey string) (tencentcloud.CLSAPI, error) {
-		return tencentcloud.NewCLSSDKAPI(tencentcloud.CLSSDKOptions{
+	factory := func(secretID, secretKey string) (tencent.CLSAPI, error) {
+		return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 			SecretID:  secretID,
 			SecretKey: secretKey,
 			Region:    clsprepare.Region,

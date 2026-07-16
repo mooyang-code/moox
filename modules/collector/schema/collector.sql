@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_subject_id TEXT NOT NULL DEFAULT '',
     c_symbol TEXT NOT NULL DEFAULT '',
     c_interval TEXT NOT NULL DEFAULT 'default',
-    c_planned_exec_node TEXT NOT NULL DEFAULT '',
     c_last_exec_node TEXT NOT NULL DEFAULT '',
     c_last_exec_status INTEGER NOT NULL DEFAULT 1,
     c_task_params TEXT NOT NULL DEFAULT '{}',
@@ -53,7 +52,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_task ON t_collec
 CREATE INDEX IF NOT EXISTS idx_collector_instances_job_item ON t_collector_task_instances(c_space_id, c_cloud_job_item_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_rule ON t_collector_task_instances(c_space_id, c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_subject ON t_collector_task_instances(c_space_id, c_dataset_id, c_subject_id);
-CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances(c_planned_exec_node, c_last_exec_status);
+CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances(c_last_exec_status);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances(c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances(c_ctime DESC);
 

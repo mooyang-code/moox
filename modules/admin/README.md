@@ -6,7 +6,7 @@ MooX 管理入口：统一 HTTP 网关 + 认证、Space、运维等**本地基�
 
 | 类别 | 内容 |
 |------|------|
-| 网关 | JWT 鉴权、限流、CORS、`/api/admin/*` 与 `/api/service/*` 路由转发 |
+| 网关 | JWT 鉴权、限流、CORS、`/api/admin/*` 浏览器控制路由与 `/api/gateway-control/*` 节点控制接口 |
 | 本进程服务 | Auth、SpaceMgr、Dns、Ssh、SecretMgr、SysDeploy |
 | 转发目标 | collectmgr、cloudnode、storage、trade 等独立进程 |
 | 定时任务 | DNS 代理/探测、Admin 自身指标上报 |
@@ -18,7 +18,7 @@ cmd/server/               服务入口
 cmd/cli/                  模块 CLI（init）
 config/
   trpc_go.yaml            tRPC 服务与定时器端口
-  gateway.yaml            网关 JWT、限流、CORS、后台签名与免鉴权配置
+  gateway.yaml            管理网关 JWT、限流、CORS 与免鉴权配置
   app.yaml                应用级配置
 internal/
   bootstrap/              启动编排、TRPC 注册

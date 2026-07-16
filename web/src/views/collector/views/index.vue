@@ -13,7 +13,9 @@
       :exclude-likely-factor-datasets="true"
     >
       <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据视图" @change="syncRoute" />
+        <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
+          <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
+        </a-tabs>
       </template>
     </ViewDefinitions>
     <ViewBrowse
@@ -26,7 +28,9 @@
       :exclude-likely-factor-datasets="true"
     >
       <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据视图" @change="syncRoute" />
+        <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
+          <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
+        </a-tabs>
       </template>
     </ViewBrowse>
   </div>
@@ -35,7 +39,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import { listFactorBindings } from '@/api/factor';
 import type { FactorBinding } from '@/api/factor/types';
 import { useSpaceStore } from '@/store/modules/space';
@@ -44,6 +47,17 @@ import ViewDefinitions from '@/views/data/views/index.vue';
 import ViewBrowse from '@/views/data/view-browse/index.vue';
 
 defineOptions({ name: 'CollectorViews' });
+
+const props = withDefaults(
+  defineProps<{
+    queryKey?: string;
+    routePath?: string;
+  }>(),
+  {
+    queryKey: 'tab',
+    routePath: '/collector/views',
+  },
+);
 
 const route = useRoute();
 const router = useRouter();
@@ -58,17 +72,20 @@ const tabs = [
   { key: 'browse', label: '查看数据' },
 ] as const;
 
-const normalizedQuery = computed(() => String(route.query.tab || ''));
+const normalizedQuery = computed(() => String(route.query[props.queryKey] || ''));
 const excludedFactorDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
 
 function tabFromRoute() {
-  return route.query.tab === 'browse' ? 'browse' : 'definitions';
+  return route.query[props.queryKey] === 'browse' ? 'browse' : 'definitions';
 }
 
 function syncRoute(key: string | number) {
   const tab: CollectorViewTab = key === 'browse' ? 'browse' : 'definitions';
   activeTab.value = tab;
-  router.replace({ path: '/collector/views', query: tab === 'browse' ? { tab } : {} });
+  const query = { ...route.query };
+  if (tab === 'browse') query[props.queryKey] = tab;
+  else delete query[props.queryKey];
+  void router.replace({ path: props.routePath, query });
 }
 
 async function loadBindings() {

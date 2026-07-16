@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
@@ -31,76 +30,105 @@ func TestRunInitCommandAppliesAdminSchema(t *testing.T) {
 		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
 	}
 	assertTableExists(t, dbPath, "t_users")
+	assertTableExists(t, dbPath, "t_gateway_nodes")
+	assertTableExists(t, dbPath, "t_service_deployments")
 	if stdout.String() == "" {
 		t.Fatalf("runInitCommand() wrote empty stdout")
 	}
 }
 
-func TestApplySchemaMigratesLegacyServiceDeployments(t *testing.T) {
+func TestRunInitCommandIsIdempotent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacySQL := `
-CREATE TABLE t_service_deployments (
-  c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-  c_service_name TEXT NOT NULL,
-  c_service_kind TEXT NOT NULL DEFAULT '',
-  c_protocol TEXT NOT NULL DEFAULT 'http',
-  c_host TEXT NOT NULL DEFAULT '',
-  c_port INTEGER NOT NULL DEFAULT 0,
-  c_base_url TEXT NOT NULL DEFAULT '',
-  c_rpc_address TEXT NOT NULL DEFAULT '',
-  c_gateway_path TEXT NOT NULL DEFAULT '',
-  c_scope TEXT NOT NULL DEFAULT 'public',
-  c_status TEXT NOT NULL DEFAULT 'active',
-  c_description TEXT NOT NULL DEFAULT '',
-  c_extra_config TEXT NOT NULL DEFAULT '{}',
-  c_is_deleted INTEGER NOT NULL DEFAULT 0,
-  c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-  c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX idx_service_deployments_name_deleted
-ON t_service_deployments(c_service_name, c_is_deleted);
-INSERT INTO t_service_deployments(c_service_name, c_host, c_port, c_is_deleted)
-VALUES ('service-a', '127.0.0.1', 10001, 0), ('service-a', '127.0.0.9', 10009, 1);`
-	if err := db.Exec(legacySQL).Error; err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatal(err)
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := runInitCommand([]string{"init", "--db-path", dbPath}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("runInitCommand() attempt %d error = %v", attempt, err)
+		}
 	}
 
-	if err := applySchema(dbPath, adminschema.AdminSQL()); err != nil {
-		t.Fatalf("applySchema() migration error = %v", err)
-	}
-	migrated, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(initSQLiteDSN(dbPath)), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []struct {
-		ServiceName string `gorm:"column:c_service_name"`
-		Host        string `gorm:"column:c_host"`
-	}
-	if err := migrated.Table("t_service_deployments").Find(&rows).Error; err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].ServiceName != "service-a" || rows[0].Host != "127.0.0.1" {
-		t.Fatalf("migrated rows = %+v", rows)
-	}
-	for _, removed := range []string{"c_is_deleted", "c_base_url", "c_rpc_address"} {
+	for _, object := range []struct {
+		typ  string
+		name string
+	}{
+		{typ: "table", name: "t_gateway_nodes"},
+		{typ: "table", name: "t_service_deployments"},
+		{typ: "index", name: "idx_gateway_nodes_host_id"},
+		{typ: "index", name: "idx_service_deployments_node_name"},
+		{typ: "index", name: "idx_service_deployments_node_gateway_service"},
+	} {
 		var count int64
-		if err := migrated.Raw("SELECT COUNT(*) FROM pragma_table_info('t_service_deployments') WHERE name = ?", removed).Scan(&count).Error; err != nil {
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?", object.typ, object.name).Scan(&count).Error; err != nil {
 			t.Fatal(err)
 		}
-		if count != 0 {
-			t.Fatalf("legacy column %s remains", removed)
+		if count != 1 {
+			t.Fatalf("%s %s count = %d, want 1", object.typ, object.name, count)
 		}
+	}
+	var foreignKeyErrors int64
+	if err := db.Raw("SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&foreignKeyErrors).Error; err != nil {
+		t.Fatal(err)
+	}
+	if foreignKeyErrors != 0 {
+		t.Fatalf("foreign_key_check returned %d errors", foreignKeyErrors)
+	}
+	var integrity string
+	if err := db.Raw("PRAGMA integrity_check").Scan(&integrity).Error; err != nil {
+		t.Fatal(err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("integrity_check = %q, want ok", integrity)
+	}
+}
+
+func TestRunInitCommandCreatesNodeScopedDeploymentConstraints(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "admin.db")
+	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	db, err := gorm.Open(sqlite.Open(initSQLiteDSN(dbPath)), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foreignKeys int
+	if err := db.Raw("PRAGMA foreign_keys").Scan(&foreignKeys).Error; err != nil || foreignKeys != 1 {
+		t.Fatalf("foreign_keys = %d, err = %v", foreignKeys, err)
+	}
+
+	insertNode := `INSERT INTO t_gateway_nodes(c_node_id, c_name, c_public_address) VALUES (?, ?, ?)`
+	if err := db.Exec(insertNode, "node-a", "Node A", "https://node-a.example").Error; err != nil {
+		t.Fatalf("insert node with nullable host: %v", err)
+	}
+	if err := db.Exec(insertNode, "node-b", "Node B", "https://node-b.example").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO t_gateway_nodes(c_node_id, c_host_id, c_name, c_public_address) VALUES ('bad-node', 999, 'Bad', 'https://bad.example')`).Error; err == nil {
+		t.Fatal("gateway node with unknown host must violate its foreign key")
+	}
+
+	insertDeployment := `INSERT INTO t_service_deployments(c_node_id, c_service_name, c_gateway_service_id, c_gateway_enabled) VALUES (?, ?, ?, ?)`
+	if err := db.Exec(insertDeployment, "node-a", "eventbus", "gateway-eventbus", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(insertDeployment, "node-b", "eventbus", "gateway-eventbus", 1).Error; err != nil {
+		t.Fatalf("same service name and gateway ID on another node must be accepted: %v", err)
+	}
+	if err := db.Exec(insertDeployment, "node-a", "eventbus", "other-id", 1).Error; err == nil {
+		t.Fatal("duplicate service name on one node must be rejected")
+	}
+	if err := db.Exec(insertDeployment, "node-a", "archive", "gateway-eventbus", 1).Error; err == nil {
+		t.Fatal("duplicate enabled gateway service ID on one node must be rejected")
+	}
+	if err := db.Exec(insertDeployment, "node-a", "disabled-empty-id", "", 0).Error; err != nil {
+		t.Fatalf("disabled deployment with empty gateway service ID must be accepted: %v", err)
+	}
+	if err := db.Exec(insertDeployment, "node-a", "enabled-empty-id", "", 1).Error; err == nil {
+		t.Fatal("enabled deployment with empty gateway service ID must be rejected")
+	}
+	if err := db.Exec(insertDeployment, "missing-node", "archive", "gateway-archive", 1).Error; err == nil {
+		t.Fatal("deployment with unknown node must violate its foreign key")
 	}
 }
 

@@ -4,13 +4,17 @@
     <div class="page-head">
       <h2>数据源</h2>
       <a-space>
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+        <a-input-search
+          v-model="searchKeyword"
+          allow-clear
+          placeholder="搜索来源ID、名称或类型"
+          style="width: 280px"
+          @search="onSearch"
+          @clear="onSearch"
+        />
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增来源
-        </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
@@ -98,6 +102,7 @@ const rows = ref<DataSource[]>([]);
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
+const searchKeyword = ref('');
 const pagination = reactive(defaultPagination());
 
 const form = reactive<DataSource>({
@@ -122,6 +127,7 @@ async function load() {
   try {
     const rsp = await listDataSources({
       space_id: selectedSpaceId.value,
+      keyword: searchKeyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize },
     });
     rows.value = rsp.data_sources || [];
@@ -129,6 +135,11 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function onSearch() {
+  pagination.current = 1;
+  void load();
 }
 
 function resetForm() {
@@ -196,7 +207,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
@@ -204,4 +215,5 @@ onMounted(load);
   font-size: 20px;
   font-weight: 600;
 }
+
 </style>

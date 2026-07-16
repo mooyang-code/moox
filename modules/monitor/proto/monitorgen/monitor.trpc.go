@@ -57,6 +57,8 @@ type MonitorMgrService interface {
 
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error)
 
+	GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq) (*GetPeerSnapshotRsp, error)
+
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error)
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error)
@@ -430,6 +432,24 @@ func MonitorMgrService_SyncSystemChecks_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
+func MonitorMgrService_GetPeerSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetPeerSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetPeerSnapshot(ctx, reqbody.(*GetPeerSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MonitorMgrService_ListHostAgents_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListHostAgentsReq{}
 	filters, err := f(req)
@@ -782,6 +802,10 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_SyncSystemChecks_Handler,
 		},
 		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetPeerSnapshot",
+			Func: MonitorMgrService_GetPeerSnapshot_Handler,
+		},
+		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListHostAgents",
 			Func: MonitorMgrService_ListHostAgents_Handler,
 		},
@@ -912,6 +936,9 @@ func (s *UnimplementedMonitorMgr) ListMonitorInstances(ctx context.Context, req 
 func (s *UnimplementedMonitorMgr) SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error) {
 	return nil, errors.New("rpc SyncSystemChecks of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq) (*GetPeerSnapshotRsp, error) {
+	return nil, errors.New("rpc GetPeerSnapshot of service MonitorMgr is not implemented")
+}
 func (s *UnimplementedMonitorMgr) ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error) {
 	return nil, errors.New("rpc ListHostAgents of service MonitorMgr is not implemented")
 }
@@ -1003,6 +1030,8 @@ type MonitorMgrClientProxy interface {
 	ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq, opts ...client.Option) (rsp *ListMonitorInstancesRsp, err error)
 
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq, opts ...client.Option) (rsp *SyncSystemChecksRsp, err error)
+
+	GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq, opts ...client.Option) (rsp *GetPeerSnapshotRsp, err error)
 
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq, opts ...client.Option) (rsp *ListHostAgentsRsp, err error)
 
@@ -1418,6 +1447,26 @@ func (c *MonitorMgrClientProxyImpl) SyncSystemChecks(ctx context.Context, req *S
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncSystemChecksRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq, opts ...client.Option) (*GetPeerSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetPeerSnapshot")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetPeerSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetPeerSnapshotRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

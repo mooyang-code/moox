@@ -162,6 +162,10 @@ const closeOther = (type: string) => {
   justify-content: space-between;
   height: 40px;
   border-bottom: $border-1 solid $color-border-2;
+  :deep(.arco-tabs) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
   .tabs_setting {
     margin: 0 0 0 $margin;
     .setting {

@@ -723,6 +723,8 @@ message ListDataSourcesReq {
   string market = 4;
   // page 是分页参数。
   common.Page page = 5;
+  // keyword 是按来源 ID、名称、类型或市场进行模糊搜索的关键词。
+  string keyword = 6;
 }
 
 // ListDataSourcesRsp 表示列出数据来源的响应。
@@ -809,6 +811,8 @@ message ListSubjectsReq {
   repeated string subject_ids = 5;
   // page 是分页参数。
   common.Page page = 6;
+  // keyword 是按对象 ID、类型、名称、市场或币种进行模糊搜索的关键词。
+  string keyword = 7;
 }
 
 // ListSubjectsRsp 表示列出数据对象的响应。

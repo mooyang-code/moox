@@ -55,11 +55,19 @@ func New(ctx context.Context, cfg *config.Config, version string) (*Agent, error
 		return nil, err
 	}
 	hostname, _ := os.Hostname()
+	hostname = resolveHostName(hostname, cfg.HostName)
 	boot := ""
 	if b, readErr := os.ReadFile("/proc/sys/kernel/random/boot_id"); readErr == nil {
 		boot = strings.TrimSpace(string(b))
 	}
 	return &Agent{cfg: cfg, id: id, collector: collector.New(), hostname: hostname, bootID: boot, version: version}, nil
+}
+
+func resolveHostName(systemName, configuredName string) string {
+	if name := strings.TrimSpace(configuredName); name != "" {
+		return name
+	}
+	return systemName
 }
 
 func (a *Agent) Run(ctx context.Context) {

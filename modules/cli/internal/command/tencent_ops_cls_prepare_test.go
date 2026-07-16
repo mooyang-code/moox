@@ -21,8 +21,9 @@ func (f prepareRunnerFunc) Prepare(ctx context.Context, source clsprepare.Accoun
 }
 
 func TestRunCLSPrepareUsesSignedControlClientAndExplicitAccount(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -46,8 +47,9 @@ func TestRunCLSPrepareUsesSignedControlClientAndExplicitAccount(t *testing.T) {
 }
 
 func TestRunCLSPreparePassesEmptyAccountForDefaultSelection(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
@@ -75,8 +77,9 @@ func TestCLSPrepareRequiresControlURLAndCredentialOutput(t *testing.T) {
 }
 
 func TestCLSPrepareRequiresSignedServiceAuthentication(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "")
 	cmd := newCLSPrepareCommand()
 	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
 	err := cmd.Execute()
@@ -85,8 +88,9 @@ func TestCLSPrepareRequiresSignedServiceAuthentication(t *testing.T) {
 
 func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
 	const credential = "sid=account-id key=account-key Auth=signature body=credential-payload"
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
@@ -104,8 +108,9 @@ func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
 }
 
 func TestCLSPreparePreservesKnownSafeRunnerDiagnostics(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
-	t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
@@ -123,8 +128,9 @@ func TestCLSPrepareUnknownContextErrorsKeepIdentityWithoutLeakingText(t *testing
 		"deadline": context.DeadlineExceeded,
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("MOOX_SERVICE_AUTH_ACCESS_KEY", "svc-ak")
-			t.Setenv("MOOX_SERVICE_AUTH_SECRET_KEY", "svc-sk")
+			t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+			t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
+			t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 			cmd := newCLSPrepareCommand()
 			oldRunner := clsPrepareRunner
 			t.Cleanup(func() { clsPrepareRunner = oldRunner })

@@ -13,6 +13,7 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestQueryHostMetricHistoryOutsideRetentionReturnsGap(t *testing.T) {
@@ -25,6 +26,30 @@ func TestQueryHostMetricHistoryOutsideRetentionReturnsGap(t *testing.T) {
 	if err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS || !rsp.GetDataGap() || len(rsp.GetPoints()) != 0 {
 		t.Fatalf("rsp=%+v err=%v, want successful empty gap", rsp, err)
 	}
+}
+
+func TestGetPeerSnapshotReturnsRepositoryData(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Nanosecond)
+	require.NoError(t, svc.checks.Create(ctx, &domain.Check{
+		CheckID: "peer-check", Name: "Peer check", Kind: domain.CheckKindHTTP, URL: "http://127.0.0.1", Enabled: true,
+	}))
+	require.NoError(t, svc.results.Insert(ctx, &domain.CheckResult{
+		ResultID: "peer-result", CheckID: "peer-check", Status: domain.CheckStatusDown, CheckedAt: now,
+	}))
+	require.NoError(t, svc.alerts.CreateEvent(ctx, &domain.AlertEvent{
+		EventID: "peer-event", EventType: domain.AlertEventTriggered, CreatedAt: now,
+	}))
+
+	rsp, err := svc.GetPeerSnapshot(ctx, &monitorpb.GetPeerSnapshotReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "monitor-test", rsp.GetInstanceId())
+	require.Equal(t, "http://monitor-test", rsp.GetBaseUrl())
+	require.NotEmpty(t, rsp.GetObservedAt())
+	require.Equal(t, []*monitorpb.PeerCheckSnapshot{{CheckId: "peer-check", Status: domain.CheckStatusDown}}, rsp.GetChecks())
+	require.Equal(t, []*monitorpb.PeerAlertEventSnapshot{{EventId: "peer-event", EventType: domain.AlertEventTriggered, CreatedAt: now.Format(time.RFC3339Nano)}}, rsp.GetAlertEvents())
 }
 
 func TestMonitorRPCValidation(t *testing.T) {
@@ -251,6 +276,7 @@ func newTestService(t *testing.T) *Service {
 	}
 	return New(mgr.Repositories(), Options{
 		InstanceID: "monitor-test",
+		BaseURL:    "http://monitor-test",
 		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
 			return domain.CheckResult{
 				SpaceID:   check.SpaceID,

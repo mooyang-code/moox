@@ -27,7 +27,7 @@ func TestServiceDeploymentsStoresOnlyCurrentRows(t *testing.T) {
 	if start < 0 {
 		t.Fatal("service deployment schema block missing")
 	}
-	end := strings.Index(sql[start:], "-- ************ 用户表")
+	end := strings.Index(sql[start:], "-- ************ SSH 会话表")
 	if end < 0 {
 		t.Fatal("service deployment schema block terminator missing")
 	}
@@ -37,8 +37,53 @@ func TestServiceDeploymentsStoresOnlyCurrentRows(t *testing.T) {
 			t.Fatalf("service deployment schema must not persist %s", unwanted)
 		}
 	}
-	if !strings.Contains(block, "idx_service_deployments_name") {
-		t.Fatal("service deployment schema must enforce one current row per service_name")
+	for _, required := range []string{
+		"c_node_id TEXT NOT NULL",
+		"c_gateway_service_id TEXT NOT NULL DEFAULT ''",
+		"c_gateway_enabled INTEGER NOT NULL DEFAULT 0",
+		"CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0)",
+		"FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes(c_node_id)",
+		"ON t_service_deployments(c_node_id, c_service_name)",
+		"WHERE c_gateway_enabled = 1 AND c_gateway_service_id <> ''",
+	} {
+		if !strings.Contains(block, required) {
+			t.Fatalf("service deployment schema missing %q", required)
+		}
+	}
+	if strings.Contains(block, "ON t_service_deployments(c_service_name);") {
+		t.Fatal("service deployment name must be unique only within a gateway node")
+	}
+}
+
+func TestAdminSchemaDefinesGatewayNodes(t *testing.T) {
+	sql := AdminSQL()
+	start := strings.Index(sql, "CREATE TABLE IF NOT EXISTS t_gateway_nodes")
+	if start < 0 {
+		t.Fatal("gateway node schema block missing")
+	}
+	end := strings.Index(sql[start:], "CREATE TABLE IF NOT EXISTS t_service_deployments")
+	if end < 0 {
+		t.Fatal("gateway nodes must be declared before service deployments")
+	}
+	block := sql[start : start+end]
+	for _, required := range []string{
+		"c_node_id TEXT NOT NULL",
+		"c_host_id INTEGER",
+		"c_name TEXT NOT NULL",
+		"c_public_address TEXT NOT NULL",
+		"c_status TEXT NOT NULL DEFAULT 'enabled'",
+		"CHECK (c_status IN ('enabled', 'disabled'))",
+		"c_route_hash TEXT NOT NULL DEFAULT ''",
+		"c_applied_route_hash TEXT NOT NULL DEFAULT ''",
+		"c_route_count INTEGER NOT NULL DEFAULT 0",
+		"c_last_seen_at DATETIME",
+		"c_last_error TEXT NOT NULL DEFAULT ''",
+		"FOREIGN KEY (c_host_id) REFERENCES t_ssh_host(c_id)",
+		"update_gateway_nodes_mtime",
+	} {
+		if !strings.Contains(block, required) {
+			t.Fatalf("gateway node schema missing %q", required)
+		}
 	}
 }
 
@@ -55,5 +100,22 @@ func TestAdminSchemaDropsLegacyUserActionsTable(t *testing.T) {
 func TestAdminSchemaExcludesLegacyHostMonitorHistory(t *testing.T) {
 	if strings.Contains(AdminSQL(), "t_host_monitor_history") {
 		t.Fatal("admin schema must not create the legacy host monitor history table")
+	}
+}
+
+func TestAdminSchemaSupportsSetupWithoutStateTable(t *testing.T) {
+	sql := AdminSQL()
+	if strings.Contains(sql, "t_system_setup") {
+		t.Fatal("setup status must be derived from domain records, not t_system_setup")
+	}
+	for _, required := range []string{
+		"idx_users_username",
+		"idx_ssh_host_address",
+		"idx_secrets_secret_id_deleted",
+		"cloud=云厂商凭据",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("admin schema setup contract missing %q", required)
+		}
 	}
 }

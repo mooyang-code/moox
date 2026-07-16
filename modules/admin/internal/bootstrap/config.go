@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,15 +12,17 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
+	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Config 应用配置集合
 type Config struct {
-	App     *config.AppConfig
-	Auth    *authcfg.Config
-	Gateway *gateway.Config
+	App         *config.AppConfig
+	Auth        *authcfg.Config
+	Gateway     *gateway.Config
+	AdminNodeID string
 }
 
 // LoadConfigs 加载系统中各个模块配置
@@ -34,6 +37,13 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	config.SetGlobalConfig(appCfg) // 设置全局配置，供其他模块使用
 	if err := loadEncryptionKey(); err != nil {
 		return nil, err
+	}
+	if err := validateSetupListener("./config/trpc_go.yaml"); err != nil {
+		return nil, err
+	}
+	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
+	if adminNodeID == "" {
+		return nil, fmt.Errorf("MOOX_ADMIN_NODE_ID is required in server mode")
 	}
 	log.Info("应用配置加载成功")
 
@@ -69,11 +79,47 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 
 	// 5. 创建配置对象
 	cfg := &Config{
-		App:     appCfg,
-		Auth:    authCfg,
-		Gateway: gatewayCfg,
+		App:         appCfg,
+		Auth:        authCfg,
+		Gateway:     gatewayCfg,
+		AdminNodeID: adminNodeID,
 	}
 	return cfg, nil
+}
+
+func validateSetupListener(path string) error {
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return fmt.Errorf("read setup listener config: %w", err)
+	}
+	var document struct {
+		Server struct {
+			Services []struct {
+				Name     string `yaml:"name"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
+				Network  string `yaml:"network"`
+				Protocol string `yaml:"protocol"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("decode setup listener config")
+	}
+	for _, service := range document.Server.Services {
+		if service.Name != "trpc.moox.admin.Setup" {
+			continue
+		}
+		address := net.ParseIP(strings.TrimSpace(service.IP))
+		if address == nil || !address.IsLoopback() {
+			return fmt.Errorf("setup listener must bind to loopback")
+		}
+		if service.Port != 11110 || service.Network != "tcp" || service.Protocol != "http" {
+			return fmt.Errorf("setup listener must use tcp http on port 11110")
+		}
+		return nil
+	}
+	return fmt.Errorf("setup listener trpc.moox.admin.Setup is required")
 }
 
 func loadEncryptionKey() error {

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicegateway"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -426,16 +426,17 @@ func classifyError(err error) (int, string) {
 }
 
 func postService(ctx context.Context, cfg Config, module string, method string, body any, out any) error {
+	auth := normalizeAuthConfig(cfg.Auth)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
 	url := fmt.Sprintf("%s/api/service/%s/%s", cfg.ServiceGatewayTarget, module, method)
-	req, err := newSignedRequestWithContext(ctx, http.MethodPost, url, raw, cfg.Auth)
+	req, err := newSignedRequestWithNormalizedAuth(ctx, http.MethodPost, url, raw, auth)
 	if err != nil {
 		return err
 	}
-	httpClient, err := servicegateway.NewClient(cfg.HTTPTimeout)
+	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.HTTPTimeout, CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64})
 	if err != nil {
 		return err
 	}

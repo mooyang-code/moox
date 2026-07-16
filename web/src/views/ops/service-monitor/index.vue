@@ -1,7 +1,7 @@
 <template>
   <div class="monitor-page">
     <div class="page-head">
-      <div>
+      <div v-if="!embedded">
         <h2>服务监控</h2>
         <span>HTTP/TCP 可用性、告警与多实例协同状态。</span>
       </div>
@@ -18,13 +18,9 @@
           <template #icon><icon-settings /></template>
           Webhook
         </a-button>
-        <a-button type="primary" @click="openCreateCheck">
+        <a-button type="primary" status="success" @click="openCreateCheck">
           <template #icon><icon-plus /></template>
           新增探测
-        </a-button>
-        <a-button @click="refreshAll" :loading="loading">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
@@ -243,12 +239,14 @@
     <a-drawer
       v-model:visible="detailDrawerVisible"
       width="980px"
+      class="detail-drawer"
       :title="detailTitle"
       :footer="false"
-      :body-style="{ padding: '18px 24px 20px' }"
+      :body-style="{ padding: 0 }"
       unmount-on-close
     >
-      <a-tabs default-active-key="results" type="rounded">
+      <div class="detail-drawer-content">
+      <a-tabs default-active-key="results" type="rounded" class="detail-tabs">
         <a-tab-pane key="results" title="结果">
           <a-descriptions :column="2" bordered size="small" v-if="selectedCheck">
             <a-descriptions-item label="类型">{{ kindLabel(selectedCheck.kind) }}</a-descriptions-item>
@@ -258,7 +256,7 @@
             <a-descriptions-item label="状态码">{{ selectedCheck.expected_status || '-' }}</a-descriptions-item>
             <a-descriptions-item label="正文包含">{{ selectedCheck.body_contains || '-' }}</a-descriptions-item>
           </a-descriptions>
-          <a-table class="detail-table" size="small" row-key="result_id" :pagination="false" :data="detailResults" :scroll="{ x: 'max-content' }">
+          <a-table class="detail-table" size="small" row-key="result_id" :pagination="false" :data="detailResults" :scroll="{ x: 'max-content', y: detailTableHeight }">
             <template #columns>
               <a-table-column title="时间" :width="190">
                 <template #cell="{ record }">{{ formatTime(record.checked_at) }}</template>
@@ -282,12 +280,12 @@
         </a-tab-pane>
         <a-tab-pane key="alerts" title="告警">
           <a-space class="tab-actions">
-            <a-button type="primary" @click="openRuleDrawer(selectedCheck)">
+            <a-button type="primary" status="success" @click="openRuleDrawer(selectedCheck)">
               <template #icon><icon-plus /></template>
               新增规则
             </a-button>
           </a-space>
-          <a-table size="small" row-key="event_id" :pagination="false" :data="detailEvents" :scroll="{ x: 'max-content' }">
+          <a-table size="small" row-key="event_id" :pagination="false" :data="detailEvents" :scroll="{ x: 'max-content', y: detailTableHeight }">
             <template #columns>
               <a-table-column title="时间" :width="190">
                 <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
@@ -306,7 +304,7 @@
           </a-table>
         </a-tab-pane>
         <a-tab-pane key="peers" title="实例">
-          <a-table size="small" row-key="instance_id" :pagination="false" :data="instances">
+          <a-table size="small" row-key="instance_id" :pagination="false" :data="instances" :scroll="{ x: 'max-content', y: detailTableHeight }">
             <template #columns>
               <a-table-column title="实例" data-index="instance_id" :width="180" />
               <a-table-column title="Base URL" data-index="base_url" :width="260" />
@@ -325,6 +323,7 @@
           </a-table>
         </a-tab-pane>
       </a-tabs>
+      </div>
     </a-drawer>
 
     <a-drawer
@@ -340,7 +339,7 @@
           <a-radio value="system">系统</a-radio>
           <a-radio value="space">当前空间</a-radio>
         </a-radio-group>
-        <a-button type="primary" @click="openCreateWebhook">
+        <a-button type="primary" status="success" @click="openCreateWebhook">
           <template #icon><icon-plus /></template>
           新增通道
         </a-button>
@@ -403,7 +402,7 @@
       unmount-on-close
     >
       <div class="drawer-toolbar">
-        <a-button type="primary" @click="openCreateRule">
+        <a-button type="primary" status="success" @click="openCreateRule">
           <template #icon><icon-plus /></template>
           新增规则
         </a-button>
@@ -516,6 +515,8 @@ import { useSpaceStore } from '@/store/modules/space';
 import { applyPageResult, defaultPagination, formatTime, jsonText } from '@/views/data/shared/metadata-utils';
 
 defineOptions({ name: 'OpsServiceMonitor' });
+const props = defineProps<{ embedded?: boolean }>();
+const embedded = computed(() => props.embedded === true);
 
 const CHECK_KIND_HTTP = 1;
 const CHECK_KIND_TCP = 2;
@@ -612,6 +613,7 @@ const successRateText = computed(() => `${((overview.value.success_rate_24h || 0
 const failingChecks = computed(() => checks.value.filter((item) => ['down', 'degraded'].includes(statusToneOf(item))).slice(0, 6));
 const checkDrawerTitle = computed(() => (editingCheck.value ? '编辑探测' : '新增探测'));
 const detailTitle = computed(() => (selectedCheck.value ? `探测详情：${selectedCheck.value.name || selectedCheck.value.check_id}` : '探测详情'));
+const detailTableHeight = computed(() => Math.max(220, (typeof window === 'undefined' ? 900 : window.innerHeight) - 430));
 const ruleDrawerTitle = computed(() => (selectedCheck.value ? `告警规则：${selectedCheck.value.name || selectedCheck.value.check_id}` : '告警规则'));
 const isHttpForm = computed(() => isHttpKind(checkForm.kind));
 const isTcpForm = computed(() => isTcpKind(checkForm.kind));
@@ -1137,9 +1139,11 @@ onUnmounted(() => {
 
 <style scoped lang="less">
 .monitor-page {
+  height: 100%;
   min-height: 100%;
   padding: 20px;
   background: #f5f7fb;
+  overflow-y: auto;
 }
 
 .page-head {
@@ -1342,6 +1346,37 @@ onUnmounted(() => {
 
 .detail-table {
   margin-top: 14px;
+}
+
+.detail-drawer :deep(.arco-drawer-body) {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detail-drawer-content {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 18px 24px 20px;
+}
+
+.detail-tabs {
+  min-height: 0;
+  flex: 1;
+}
+
+.detail-tabs :deep(.arco-tabs-content) {
+  min-height: 0;
+  height: calc(100% - 44px);
+  overflow: hidden;
+}
+
+.detail-tabs :deep(.arco-tabs-content-list),
+.detail-tabs :deep(.arco-tabs-pane) {
+  height: 100%;
+  min-height: 0;
 }
 
 .monitor-form {

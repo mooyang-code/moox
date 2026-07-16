@@ -23,7 +23,7 @@ import (
 type requestAuthStore interface {
 	GetSigningSession(context.Context, string) (*authmodel.RequestSigningSession, error)
 	ConsumeSessionNonce(context.Context, string, string, time.Duration) (bool, error)
-	ConsumeServiceNonce(context.Context, string, string, time.Duration) (bool, error)
+	ConsumeGatewayControlNonce(context.Context, string, string, time.Duration) (bool, error)
 	ConsumeRawSessionTicket(context.Context, string) (*authmodel.RawSessionTicket, error)
 }
 
@@ -145,7 +145,6 @@ func sessionIDForLog(r *http.Request) string {
 	return claims.SessionID
 }
 
-func isAdminRequestPath(path string) bool         { return strings.HasPrefix(path, "/api/admin/") }
 func shouldSkipAdminRequestAuth(path string) bool { return ShouldSkipAuth(path) }
 
 func writeAdminAuthFailure(w http.ResponseWriter) {

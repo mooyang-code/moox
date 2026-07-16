@@ -13,6 +13,40 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
+func TestMetadataKeywordSearch(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	if _, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: "space", Name: "测试空间"}); err != nil {
+		t.Fatalf("UpsertSpace: %v", err)
+	}
+
+	for _, item := range []*pb.DataSource{
+		{SpaceId: "space", DataSourceId: "binance", Name: "Binance", Kind: "exchange", Market: "crypto"},
+		{SpaceId: "space", DataSourceId: "tushare", Name: "Tushare", Kind: "vendor_api", Market: "stock"},
+	} {
+		if _, err := store.UpsertDataSource(ctx, item); err != nil {
+			t.Fatalf("UpsertDataSource(%s): %v", item.GetDataSourceId(), err)
+		}
+	}
+	for _, item := range []*pb.Subject{
+		{SpaceId: "space", SubjectId: "BTC-USDT", SubjectType: "crypto_pair", Name: "比特币", Market: "crypto", Currency: "USDT"},
+		{SpaceId: "space", SubjectId: "000001.SZ", SubjectType: "stock", Name: "平安银行", Market: "stock", Currency: "CNY"},
+	} {
+		if _, err := store.UpsertSubject(ctx, item); err != nil {
+			t.Fatalf("UpsertSubject(%s): %v", item.GetSubjectId(), err)
+		}
+	}
+
+	sources, sourcePage, err := store.ListDataSources(ctx, "space", "", "", "binance", &pb.Page{Page: 1, Size: 20})
+	if err != nil || len(sources) != 1 || sources[0].GetDataSourceId() != "binance" || sourcePage.GetTotal() != 1 {
+		t.Fatalf("source keyword search = %+v page=%+v err=%v", sources, sourcePage, err)
+	}
+	subjects, subjectPage, err := store.ListSubjects(ctx, "space", "", "", nil, "平安", &pb.Page{Page: 1, Size: 20})
+	if err != nil || len(subjects) != 1 || subjects[0].GetSubjectId() != "000001.SZ" || subjectPage.GetTotal() != 1 {
+		t.Fatalf("subject keyword search = %+v page=%+v err=%v", subjects, subjectPage, err)
+	}
+}
+
 func TestFieldGovernanceQueryAndCounts(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)

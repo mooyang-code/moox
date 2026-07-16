@@ -2,12 +2,12 @@
 
 ## 范围
 
-仅将浏览器域名转发至 Caddy `:9527`，服务调用域名转发至 Caddy `:11001`。web-host、Admin、健康检查、metrics 和模块 RPC 均不得直接暴露。首期采用 CNAME 接入；变更前记录原 DNS 记录、TTL、源站 IP、安全组、预算告警和回滚负责人。
+只将中央浏览器入口和各节点 service HTTPS 入口接入 EdgeOne。浏览器域名的 `/api/admin/*`、`/api/gateway-control/*` 进入中央 Admin；服务域名的 `/api/service/*` 进入目标节点 Gateway。具体端口由部署参数决定。web-host、Admin、Gateway、健康检查、metrics 和模块 RPC 均不得直接暴露。首期采用 CNAME 接入；变更前记录原 DNS 记录、TTL、源站 IP、安全组、预算告警和回滚负责人。
 
 ## 上线步骤
 
 1. 在 EdgeOne 添加已完成 ICP 备案的两个主机名，选择 CNAME 接入，并保留原记录作为回滚值。
-2. 在 EdgeOne 配置 HTTPS 证书；源站协议选 HTTPS，分别使用源站 `:9527` 和 `:11001`。首期接受默认源站证书行为；付费套餐启用专用 CA 后，再导入 CA 并开启源站证书校验。
+2. 在 EdgeOne 配置 HTTPS 证书；源站协议选 HTTPS，并使用各节点实际的 browser/service 端口。首期接受默认源站证书行为；付费套餐启用专用 CA 后，再导入 CA 并开启源站证书校验。
 3. 安全组仅允许经过审核的 EdgeOne 回源 IP 段访问两个 Caddy 端口，拒绝所有其他入站端口。审核 IP 段来源、版本和生效时间后，才可生成 Caddy trusted-proxy 配置；在此之前，授权、限流和审计不得相信 `X-Forwarded-*`。
 4. 在 EdgeOne 事件中心和费用中心建立 WAF、CC、带宽、请求数与缓存命中率告警，设置预算阈值与通知负责人。
 5. 先在 staging 切换 CNAME，等待证书可用后运行外部探测。确认 DNS TTL 内可以恢复原记录，再切 production。
@@ -33,7 +33,7 @@ WAF 使用托管规则、CC/Bot 防护与速率规则；认证和请求签名仍
 ```bash
 bash scripts/test-edgeone-origin-contract.sh
 bash scripts/test-caddy-config.sh
-curl -fsS https://$MOOX_PUBLIC_HOST:9527/ -o /dev/null
+curl -fsS "https://$MOOX_PUBLIC_HOST:${MOOX_BROWSER_HTTPS_PORT:-9527}/" -o /dev/null
 curl -fsS http://$MOOX_PUBLIC_HOST:9528/ && exit 1 || true
 curl -fsS http://$MOOX_PUBLIC_HOST:11000/healthz && exit 1 || true
 ```

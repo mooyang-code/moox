@@ -16,7 +16,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"gorm.io/gorm"
 
-	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -25,6 +24,7 @@ var validCategories = map[string]bool{
 	"ssh":      true,
 	"exchange": true,
 	"database": true,
+	"cloud":    true,
 	"jwt":      true,
 	"eventbus": true,
 	"other":    true,
@@ -93,11 +93,8 @@ func (s *Service) GetSecret(ctx context.Context, req *pb.GetSecretReq) (*pb.GetS
 	return &pb.GetSecretRsp{RetInfo: retOK(), Secret: secretModelToPB(secretRecord)}, nil
 }
 
-// RevealSecret 返回明文 secret_value，仅允许后台服务签名路径调用。
+// RevealSecret returns the plaintext value. Gateway route method allowlists protect machine access.
 func (s *Service) RevealSecret(ctx context.Context, req *pb.RevealSecretReq) (*pb.RevealSecretRsp, error) {
-	if !isServiceAuthCall(ctx) {
-		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "RevealSecret仅允许后台服务调用")}, nil
-	}
 	if req.GetSecretId() == "" {
 		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
@@ -315,13 +312,6 @@ func secretModelToPlainPB(s *model.Secret) *pb.RevealedSecret {
 		Provider: s.Provider, KeyId: s.KeyID, SecretValue: s.SecretValue,
 		ExtraConfig: s.ExtraConfig,
 	}
-}
-
-func isServiceAuthCall(ctx context.Context) bool {
-	if r := thttp.Request(ctx); r != nil {
-		return strings.EqualFold(r.Header.Get("X-Moox-Service-Auth"), "true")
-	}
-	return false
 }
 
 // secretPBToModel pb.Secret → model.Secret（创建时用，不含 ID/时间戳）。

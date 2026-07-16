@@ -2,15 +2,10 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <div class="page-head">
-          <h2>任务实例</h2>
-        </div>
-
-        <section class="task-query-panel">
-          <a-space wrap class="task-filter-row">
+        <div class="task-toolbar">
+          <a-space wrap class="task-filters">
             <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
             <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
-            <a-input v-model="form.plannedExecNode" placeholder="计划节点" allow-clear style="width: 150px" />
             <a-input v-model="form.lastExecNode" placeholder="最后执行节点" allow-clear style="width: 150px" />
             <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
             <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
@@ -25,100 +20,88 @@
               <template #icon><icon-search /></template>
               <span>查询</span>
             </a-button>
-            <a-button @click="reset">
-              <template #icon><icon-refresh /></template>
-              <span>重置</span>
-            </a-button>
           </a-space>
-        </section>
+        </div>
 
-        <section class="task-result-pane">
-          <a-table
-            row-key="TaskID"
-            size="small"
-            :data="instanceList"
-            :bordered="{ cell: true }"
-            :loading="loading"
-            :scroll="{ x: 1810, y: 500 }"
-            :pagination="paginationConfig"
-            :row-selection="{ type: 'checkbox', showCheckedAll: true }"
-            :selected-keys="selectedKeys"
-            @select="select"
-            @select-all="selectAll"
-            @page-change="onPageChange"
-            @page-size-change="onPageSizeChange"
-          >
-            <template #columns>
-              <a-table-column title="任务ID" data-index="TaskID" :width="200">
-                <template #cell="{ record }">
-                  <a-link @click="onViewDetails(record)">{{ record.TaskID }}</a-link>
-                </template>
-              </a-table-column>
-              <a-table-column title="规则ID" data-index="RuleID" :width="190">
-                <template #cell="{ record }">
-                  <a-tooltip :content="record.RuleID">
-                    <span class="ellipsis-text">{{ record.RuleID }}</span>
-                  </a-tooltip>
-                </template>
-              </a-table-column>
-              <a-table-column title="交易标的" data-index="Symbol" :width="180">
-                <template #cell="{ record }">
-                  <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="计划节点" data-index="PlannedExecNode" :width="160">
-                <template #cell="{ record }">
-                  <a-tooltip :content="record.PlannedExecNode">
-                    <span class="ellipsis-text">{{ record.PlannedExecNode }}</span>
-                  </a-tooltip>
-                </template>
-              </a-table-column>
-              <a-table-column title="最后执行节点" data-index="LastExecNode" :width="300">
-                <template #cell="{ record }">
-                  <a-tooltip :content="getLastExecNode(record)">
-                    <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
-                  </a-tooltip>
-                </template>
-              </a-table-column>
-              <a-table-column title="执行状态" :width="100" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" :color="getStatusColor(record.LastExecStatus)">
-                    {{ getStatusText(record.LastExecStatus) }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="有效性" :width="80" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" :color="record.IsDeleted ? 'red' : 'green'">
-                    {{ record.IsDeleted ? "无效" : "有效" }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="数据类型" :width="100" align="center">
-                <template #cell="{ record }">
-                  <a-tag color="purple" size="small">{{ record.DataType || "-" }}</a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="最后执行时间" :width="180">
-                <template #cell="{ record }">
-                  {{ formatDateTime(record.LastExecTime) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="任务创建时间" :width="180">
-                <template #cell="{ record }">
-                  {{ formatDateTime(record.CreateTime) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="操作" :width="100" align="center" fixed="right">
-                <template #cell="{ record }">
-                  <a-space>
-                    <a-button type="text" size="mini" @click="onViewDetails(record)">查看</a-button>
-                  </a-space>
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
-        </section>
+        <a-table
+          row-key="TaskID"
+          size="small"
+          :data="instanceList"
+          :bordered="{ cell: true }"
+          :loading="loading"
+          :scroll="{ x: 1650 }"
+          :pagination="paginationConfig"
+          @page-change="onPageChange"
+          @page-size-change="onPageSizeChange"
+        >
+          <template #columns>
+            <a-table-column title="任务ID" data-index="TaskID" :width="200">
+              <template #cell="{ record }">
+                <a-button class="task-id-button" type="text" @click="onViewDetails(record)">
+                  {{ record.TaskID }}
+                </a-button>
+              </template>
+            </a-table-column>
+            <a-table-column title="规则ID" data-index="RuleID" :width="190">
+              <template #cell="{ record }">
+                <a-tooltip :content="record.RuleID">
+                  <span class="ellipsis-text">{{ record.RuleID }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="交易标的" data-index="Symbol" :width="180">
+              <template #cell="{ record }">
+                <a-tag color="arcoblue" size="small">{{ record.Symbol }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="最后执行节点" data-index="LastExecNode" :width="300">
+              <template #cell="{ record }">
+                <a-tooltip :content="getLastExecNode(record)">
+                  <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="执行状态" :width="100" align="center">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="getStatusColor(record.LastExecStatus)">
+                  {{ getStatusText(record.LastExecStatus) }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="有效性" :width="80" align="center">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="record.IsDeleted ? 'red' : 'green'">
+                  {{ record.IsDeleted ? "无效" : "有效" }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="数据类型" :width="100" align="center">
+              <template #cell="{ record }">
+                <a-tag color="purple" size="small">{{ record.DataType || "-" }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="最后执行时间" :width="180">
+              <template #cell="{ record }">
+                {{ formatDateTime(record.LastExecTime) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="任务创建时间" :width="180">
+              <template #cell="{ record }">
+                {{ formatDateTime(record.CreateTime) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" :width="100" align="center" fixed="right">
+              <template #cell="{ record }">
+                <a-space>
+                  <a-button type="primary" size="mini" @click="onViewDetails(record)">
+                    <template #icon><icon-eye /></template>
+                    查看
+                  </a-button>
+                </a-space>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
       </div>
     </a-spin>
 
@@ -134,7 +117,6 @@
         <a-descriptions-item label="周期">{{ detailData.Interval || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据集">{{ detailData.DatasetID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="标的ID">{{ detailData.SubjectID || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="计划节点">{{ detailData.PlannedExecNode }}</a-descriptions-item>
         <a-descriptions-item label="最后执行节点">{{ getLastExecNode(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="交易标的">
           <a-tag color="arcoblue">{{ detailData.Symbol }}</a-tag>
@@ -185,7 +167,6 @@ interface TaskInstance {
   SubjectID: string;
   Symbol: string;
   Interval: string;
-  PlannedExecNode: string; // v2.0: 计划执行节点
   LastExecNode: string; // v2.0: 最后执行节点
   LastExecStatus: number; // v2.0: 最后执行状态
   TaskParams: Record<string, any>;
@@ -202,14 +183,12 @@ type TaskInstanceRecord = Partial<TaskInstance>;
 
 const loading = ref(false);
 const instanceList = ref<TaskInstance[]>([]);
-const selectedKeys = ref<string[]>([]);
 const detailVisible = ref(false);
 const detailData = ref<Partial<TaskInstance>>({});
 
 const form = ref({
   taskId: "",
   ruleId: "",
-  plannedExecNode: "", // v2.0: 计划节点
   lastExecNode: "", // v2.0: 执行节点
   symbol: "",
   lastExecStatus: null as number | null, // v2.0: 执行状态
@@ -218,7 +197,7 @@ const form = ref({
 
 const pagination = ref({
   current: 1,
-  pageSize: 10,
+  pageSize: 20,
   total: 0,
   showTotal: true,
   showPageSize: true
@@ -280,7 +259,6 @@ const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
     SubjectID: raw.SubjectID ?? raw.subject_id ?? "",
     Symbol: raw.Symbol ?? raw.symbol ?? "",
     Interval: raw.Interval ?? raw.interval ?? "",
-    PlannedExecNode: raw.PlannedExecNode ?? raw.planned_exec_node ?? "",
     LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? "",
     LastExecStatus: Number(lastExecStatus),
     TaskParams: normalizeObject(raw.TaskParams ?? raw.task_params),
@@ -329,14 +307,6 @@ const formatDateTime = (dateTime: string | null | undefined) => {
   }
 };
 
-const select = (list: string[]) => {
-  selectedKeys.value = list;
-};
-
-const selectAll = (state: boolean) => {
-  selectedKeys.value = state ? instanceList.value.map(el => el.TaskID) : [];
-};
-
 const onPageChange = (current: number) => {
   pagination.value.current = current;
   getInstanceList();
@@ -350,19 +320,6 @@ const onPageSizeChange = (pageSize: number) => {
 
 const search = () => {
   pagination.value.current = 1;
-  getInstanceList();
-};
-
-const reset = () => {
-  form.value = {
-    taskId: "",
-    ruleId: "",
-    plannedExecNode: "", // v2.0: 计划节点
-    lastExecNode: "", // v2.0: 执行节点
-    symbol: "",
-    lastExecStatus: null, // v2.0: 执行状态
-    includeDeleted: false
-  };
   getInstanceList();
 };
 
@@ -386,7 +343,6 @@ const getInstanceList = async () => {
 
     if (form.value.taskId) filter.task_id = form.value.taskId;
     if (form.value.ruleId) filter.rule_id = form.value.ruleId;
-    if (form.value.plannedExecNode) filter.planned_exec_node = form.value.plannedExecNode;
     if (form.value.lastExecNode) filter.last_exec_node = form.value.lastExecNode;
     if (form.value.symbol) filter.symbol = form.value.symbol;
     if (form.value.lastExecStatus !== null) filter.last_exec_status = form.value.lastExecStatus;
@@ -429,40 +385,30 @@ onMounted(() => {
   min-width: 0;
 }
 
-.page-head {
+.task-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+.task-filters {
+  flex: 1 1 auto;
 }
 
-.task-query-panel {
-  margin-bottom: 12px;
-}
-
-.task-filter-row {
+.task-id-button {
+  display: block;
+  height: auto;
   width: 100%;
-}
-
-.task-result-pane {
-  width: 100%;
-  min-width: 0;
   max-width: 100%;
-  box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
-}
-
-.task-result-pane :deep(.arco-pagination) {
-  margin-top: 12px;
+  overflow: hidden;
+  padding: 0;
+  color: #165dff;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ellipsis-text {
@@ -472,20 +418,6 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.params-preview {
-  margin: 0;
-  font-family: monospace;
-  font-size: 12px;
-  background: #f5f5f5;
-  padding: 12px;
-  border-radius: 4px;
-  max-width: 400px;
-  max-height: 300px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-wrap: break-word;
 }
 
 .detail-json {

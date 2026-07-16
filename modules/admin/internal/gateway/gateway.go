@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,20 +53,21 @@ var NewGatewayHandle = func() *GatewayHandle {
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	gateway *GatewayHandle
+	gateway              *GatewayHandle
+	controlProvider      GatewayProvider
+	adminServiceProvider AdminServiceDetailProvider
+	adminNodeID          string
 }
 
 // NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(gateway *GatewayHandle) *HTTPRouter {
-	return &HTTPRouter{
-		gateway: gateway,
-	}
+func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider, adminNodeID string) *HTTPRouter {
+	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider, adminNodeID: adminNodeID}
 }
 
 // RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server) error {
+func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider, adminNodeID string) error {
 	gateway := GetGatewayHandleInstance()
-	router := NewHTTPRouter(gateway)
+	router := NewHTTPRouter(gateway, provider, adminNodeID)
 	return router.setupRoutes(s)
 }
 
@@ -74,11 +76,16 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
 	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.control"), hr.buildControlRouter()); err != nil {
 		return err
 	}
-	return healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.service"), hr.buildServiceRouter())
+	return nil
 }
 
-func (hr *HTTPRouter) buildControlRouter() http.Handler {
+func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	router := mux.NewRouter()
+	router.MethodNotAllowedHandler = http.NotFoundHandler()
+	if hr.controlProvider != nil {
+		router.HandleFunc("/api/gateway-control/routes", hr.handleGatewayRoutes).Methods(http.MethodGet)
+		router.HandleFunc("/api/gateway-control/status", hr.handleGatewayStatus).Methods(http.MethodPost)
+	}
 
 	// 注册新控制台 API 路由: /api/admin/{service}/{method}
 	router.Handle(
@@ -89,29 +96,15 @@ func (hr *HTTPRouter) buildControlRouter() http.Handler {
 	return router
 }
 
-func (hr *HTTPRouter) buildServiceRouter() http.Handler {
-	router := mux.NewRouter()
-	router.HandleFunc(
-		"/api/service/{service}/{method}",
-		hr.handleServiceRequest).
-		Methods("GET", "POST", "PUT", "DELETE")
-	return router
-}
-
 // buildRouter remains the control-router test helper.
-func (hr *HTTPRouter) buildRouter() http.Handler { return hr.buildControlRouter() }
+func (hr *HTTPRouter) buildRouter() *mux.Router { return hr.buildControlRouter() }
 
 // handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
 func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
-	hr.handleGatewayRequest(w, r, false)
+	hr.handleGatewayRequest(w, r)
 }
 
-// handleServiceRequest 处理后台服务请求，使用 Auth HMAC 签名鉴权。
-func (hr *HTTPRouter) handleServiceRequest(w http.ResponseWriter, r *http.Request) {
-	hr.handleGatewayRequest(w, r, true)
-}
-
-func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request, requireServiceAuth bool) {
+func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	handler := hr.gateway.requestHandler
 
@@ -122,8 +115,12 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if isMachineOnlyAdminMethod(serviceID, method) {
+		http.NotFound(w, r)
+		return
+	}
 
-	if !requireServiceAuth && !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
+	if !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
 		if _, usesTicket := rawRouteOperations[serviceID+"/"+method]; usesTicket {
 			claims, err := validateRawRouteTicket(r, serviceID, method)
 			if err != nil {
@@ -169,37 +166,63 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 
 	// 裸 HTTP 处理器分派（用于 multipart/流式等不适合 PB RPC 的场景）。
 	// 必须在读取请求体之前分派，避免 multipart body 被网关读干。
-	// 仅管理台侧（JWT）支持裸处理器；后台服务侧（HMAC）需先读 body 验签，不走此路径。
-	if !requireServiceAuth {
-		if rawAndServe(ctx, w, r, serviceID, method, headers) {
-			return
-		}
+	// 裸处理器仍使用管理台 JWT 或一次性 raw ticket 鉴权。
+	if rawAndServe(ctx, w, r, serviceID, method, headers) {
+		return
 	}
 
 	// 读取请求体
-	rawBody, body, err := handler.readRequestBodyWithRaw(r)
+	_, body, err := handler.readRequestBodyWithRaw(r)
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
 		writeRequestBodyError(w, err)
 		return
 	}
-	if requireServiceAuth {
-		if err := handler.validateServiceAuth(r, rawBody); err != nil {
-			log.WarnContextf(ctx, "后台服务请求鉴权失败: %v", err)
-			http.Error(w, "service auth failed", http.StatusUnauthorized)
-			return
-		}
-		headers["service_auth"] = "true"
+	detail, err := resolveAdminServiceDetail(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID)
+	if err != nil {
+		writeForwardError(ctx, w, err, headers)
+		return
 	}
-
+	if isMachineOnlyResolvedMethod(detail, method) {
+		http.NotFound(w, r)
+		return
+	}
 	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），
 	// 框架服务端自动 JSON↔PB，网关不加工 body；未配置 serviceID 返回 404。
-	respBody, err := forwardHTTP(ctx, serviceID, method, body, headers)
+	respBody, err := forwardHTTPToDetail(ctx, serviceID, method, detail, body, headers)
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
 		return
 	}
 	writeForwardResponse(w, respBody, headers)
+}
+
+func isMachineOnlyAdminMethod(serviceID, method string) bool {
+	if canonicalAdminSegment(method) != "revealsecret" {
+		return false
+	}
+	switch canonicalAdminSegment(serviceID) {
+	case "secret", "secretmgr", "trpcmooxopssecretmgr":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMachineOnlyResolvedMethod(detail ServiceDetail, method string) bool {
+	return canonicalAdminSegment(method) == "revealsecret" &&
+		canonicalAdminSegment(detail.Path) == "trpcmooxopssecretmgr"
+}
+
+func canonicalAdminSegment(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '.', '-', '_':
+			return -1
+		default:
+			return r
+		}
+	}, strings.ToLower(strings.TrimSpace(value)))
 }
 
 // handleHealthCheck 处理健康检查请求
@@ -246,14 +269,6 @@ func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []
 	defer r.Body.Close()
 	rawBody := append([]byte(nil), body...)
 	return rawBody, body, nil
-}
-
-func (h *HTTPRequestHandler) validateServiceAuth(r *http.Request, rawBody []byte) error {
-	cfg, err := currentServiceAuthConfig()
-	if err != nil {
-		return err
-	}
-	return validateServiceAuthHeader(r.Context(), r.Header.Get("Auth"), r.Method, r.URL.EscapedPath(), rawBody, signedGatewayHeaders(r), time.Now(), cfg)
 }
 
 func signedGatewayHeaders(r *http.Request) map[string]string {

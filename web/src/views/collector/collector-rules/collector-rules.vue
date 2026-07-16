@@ -2,7 +2,11 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <a-space wrap>
+        <a-space class="rule-toolbar" wrap>
+          <a-button type="primary" status="success" @click="onAdd">
+            <template #icon><icon-plus /></template>
+            <span>新建任务</span>
+          </a-button>
           <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear />
           <a-select v-model="form.dataType" placeholder="请选择数据类型" style="width: 150px" allow-clear>
             <a-option 
@@ -24,21 +28,8 @@
             <template #icon><icon-search /></template>
             <span>查询</span>
           </a-button>
-          <a-button @click="reset">
-            <template #icon><icon-refresh /></template>
-            <span>重置</span>
-          </a-button>
           <a-switch v-model="form.enabled" :checked-text="'启用'" :unchecked-text="'禁用'" @change="onEnabledChange" />
         </a-space>
-
-        <a-row>
-          <a-col>
-            <a-button type="primary" status="success" @click="onAdd">
-              <template #icon><icon-plus /></template>
-              <span>新建任务</span>
-            </a-button>
-          </a-col>
-        </a-row>
 
         <a-table
           row-key="rule_id"
@@ -813,16 +804,6 @@ const onEnabledChange = () => {
   search();
 };
 
-const reset = () => {
-  form.value = {
-    ruleId: '',
-    dataType: '',
-    dataSource: '',
-    enabled: true
-  };
-  getTaskList();
-};
-
 const getTaskList = async () => {
   const spaceId = selectedSpaceId.value || '';
   if (!spaceId) {
@@ -1282,12 +1263,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.moox-inner {
-  min-height: 100%;
+.rule-toolbar {
+  margin-bottom: 8px;
 }
 
-.moox-inner .a-row {
-  margin-top: 16px;
+.moox-inner {
+  min-height: 100%;
 }
 
 .moox-inner .a-table {
