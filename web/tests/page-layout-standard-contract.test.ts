@@ -144,7 +144,7 @@ describe('page layout standards', () => {
       ['max-width', '100%'],
       ['min-width', '0'],
       ['justify-content', 'flex-start'],
-      ['margin-bottom', 'var(--moox-space-2)'],
+      ['margin-bottom', 'var(--moox-space-tight)'],
     ]) {
       expect(toolbarDeclarations).toContain(`${property}: ${value};`);
     }

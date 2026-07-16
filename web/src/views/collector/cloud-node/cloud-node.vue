@@ -2415,6 +2415,6 @@ const handleEditNodeOk = async () => {
   max-width: 100%;
   min-width: 0;
   justify-content: flex-start;
-  margin-bottom: var(--moox-space-2);
+  margin-bottom: var(--moox-space-tight);
 }
 </style>
