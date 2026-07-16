@@ -7,7 +7,10 @@
       </div>
     </header>
 
-    <PageTitleTabs v-model="activeTab" :items="metricTabs" class="metric-tabs" aria-label="应用指标" />
+    <a-tabs v-model:active-key="activeTab" type="rounded" size="small" class="metric-subtabs">
+      <a-tab-pane key="explorer" title="指标看板" />
+      <a-tab-pane key="rules" title="告警规则" />
+    </a-tabs>
 
     <div class="metric-tab-content">
       <section v-if="activeTab === 'explorer'" class="metric-tab-panel">
@@ -125,7 +128,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import MetricChart, { type ChartPoint } from './metric-chart.vue';
 import MetricRuleEditor from './metric-rule-editor.vue';
 import { metricMonitorApi } from '@/api/metric-monitor';
@@ -137,10 +139,6 @@ const embedded = computed(() => props.embedded === true);
 const MAX_DISPLAY_SERIES = 50;
 const MAX_CHART_SERIES = 10;
 const activeTab = ref('explorer');
-const metricTabs = [
-  { key: 'explorer', label: '指标看板' },
-  { key: 'rules', label: '告警规则' },
-] as const;
 const loading = ref(false);
 const catalogLoading = ref(false);
 const latestLoading = ref(false);
@@ -353,7 +351,11 @@ onMounted(refreshAll);
 .page-head { margin-bottom: 8px; }
 .page-head h2 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
 .page-head span, .section-meta, .cardinality-note { color: var(--color-text-3); font-size: 12px; }
-.metric-tabs { margin-bottom: 12px; }
+.metric-subtabs { margin-bottom: 12px; }
+.metric-subtabs :deep(.arco-tabs-content) { display: none; }
+.metric-subtabs :deep(.arco-tabs-tab:first-child) { margin-left: 0; }
+.metric-subtabs :deep(.arco-tabs-tab) { border-radius: 4px; }
+.metric-subtabs :deep(.arco-tabs-tab-active) { color: rgb(var(--primary-6)); background-color: var(--color-fill-2); }
 .filter-band { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; padding: 0; }
 .option-count { color: var(--color-text-3); }
 .state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: 8px; padding: 16px; border: 1px solid var(--color-border-2); background: var(--color-bg-2); }

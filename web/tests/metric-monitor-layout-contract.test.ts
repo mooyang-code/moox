@@ -17,8 +17,10 @@ const editorSource = fs.readFileSync(
 
 describe('metric monitor layout', () => {
   it('uses the data-management tab treatment and compact action order', () => {
-    expect(source).toContain('<PageTitleTabs v-model="activeTab" :items="metricTabs" class="metric-tabs" aria-label="应用指标" />');
-    expect(source).not.toContain('<a-tabs v-model:active-key="activeTab" type="rounded">');
+    expect(source).toContain('<a-tabs v-model:active-key="activeTab" type="rounded" size="small" class="metric-subtabs">');
+    expect(source).toContain('<a-tab-pane key="explorer" title="指标看板" />');
+    expect(source).toContain('<a-tab-pane key="rules" title="告警规则" />');
+    expect(source).not.toContain('PageTitleTabs');
     expect(source).not.toContain('新建规则');
 
     const actionIndex = source.indexOf('新建指标');
@@ -37,7 +39,8 @@ describe('metric monitor layout', () => {
     expect(chartSource).not.toContain('chart-error');
     expect(editorSource).not.toContain('<a-alert v-if="previewError"');
     expect(source).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*8px;/);
-    expect(source).toMatch(/\.metric-tabs\s*\{[\s\S]*?margin-bottom:\s*12px;/);
+    expect(source).toMatch(/\.metric-subtabs\s*\{[\s\S]*?margin-bottom:\s*12px;/);
+    expect(source).toMatch(/\.metric-subtabs\s*:deep\(\.arco-tabs-tab-active\)\s*\{[\s\S]*?background-color:\s*var\(--color-fill-2\);/);
     expect(source).toMatch(/\.filter-band\s*\{[\s\S]*?gap:\s*8px;[\s\S]*?margin-bottom:\s*8px;/);
   });
 });
