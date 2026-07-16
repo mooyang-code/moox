@@ -49,7 +49,7 @@ onMounted(load);
 </script>
 
 <style scoped>
-.performance-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.performance-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--moox-space-2); }
 .as-of { color: var(--color-text-3); font-size: 12px; }
-.metrics { margin: 8px 0; }
+.metrics { margin: var(--moox-space-2) 0; }
 </style>

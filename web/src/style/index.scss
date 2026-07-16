@@ -19,6 +19,15 @@ html {
   overflow: hidden;
 }
 
+:root {
+  --moox-space-1: #{$space-1};
+  --moox-space-2: #{$space-2};
+  --moox-space-3: #{$space-3};
+  --moox-space-4: #{$space-4};
+  --moox-space-5: #{$space-5};
+  --moox-space-6: #{$space-6};
+}
+
 // 设置全局颜色-关联黑暗模式
 // 全局取一级容器背景色$color-bg-2，main窗口取边框色浅色$color-border-1
 body {

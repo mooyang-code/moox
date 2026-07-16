@@ -562,11 +562,11 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
-.position-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.position-toolbar { display: flex; align-items: center; gap: var(--moox-space-3); margin-bottom: var(--moox-space-2); }
 
 @media (max-width: 760px) {
   .account-tabs-block,

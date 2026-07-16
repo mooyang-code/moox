@@ -1230,7 +1230,7 @@ watch(klineVisible, (visible) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head__title {
@@ -1247,7 +1247,7 @@ watch(klineVisible, (visible) => {
 
 .view-tabs-row {
   min-width: 0;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .view-tabs :deep(.arco-tabs-content) {
@@ -1259,12 +1259,12 @@ watch(klineVisible, (visible) => {
   align-items: center;
   gap: 8px;
   min-height: 34px;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
   color: var(--color-text-3);
 }
 
 .query-alert {
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .view-query-panel {
@@ -1272,7 +1272,7 @@ watch(klineVisible, (visible) => {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px 18px;
   align-items: start;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
   padding: 18px 20px;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
@@ -1382,7 +1382,7 @@ watch(klineVisible, (visible) => {
 }
 
 .result-pane :deep(.arco-pagination) {
-  margin-top: 12px;
+  margin-top: var(--moox-space-3);
 }
 
 .preview-pager {
@@ -1391,7 +1391,7 @@ watch(klineVisible, (visible) => {
   gap: 10px 16px;
   align-items: center;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: var(--moox-space-3);
   color: var(--color-text-2);
   font-size: 13px;
 }

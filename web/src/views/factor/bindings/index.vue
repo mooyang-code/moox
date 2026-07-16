@@ -280,7 +280,7 @@ onMounted(load);
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head h2 {
@@ -289,7 +289,7 @@ onMounted(load);
   font-weight: 600;
 }
 
-.top-alert { margin-bottom: 8px; }
+.top-alert { margin-bottom: var(--moox-space-2); }
 
 .binding-form {
   display: grid;

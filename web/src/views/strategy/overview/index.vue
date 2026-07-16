@@ -87,8 +87,8 @@ onUnmounted(() => store.stopPolling());
 
 <style scoped>
 .strategy-page { min-height: 100%; background: var(--color-fill-2); }
-.summary-grid { margin-bottom: 8px; }
+.summary-grid { margin-bottom: var(--moox-space-2); }
 .summary-card, .table-card { border-radius: 6px; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.top-alert { margin-bottom: 8px; }
+.filters { display: flex; flex-wrap: wrap; gap: var(--moox-space-2); margin-bottom: var(--moox-space-2); }
+.top-alert { margin-bottom: var(--moox-space-2); }
 </style>

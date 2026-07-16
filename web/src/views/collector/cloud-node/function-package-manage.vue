@@ -1039,10 +1039,10 @@ const formatTime = (time: string | undefined) => {
 .package-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .package-filters {

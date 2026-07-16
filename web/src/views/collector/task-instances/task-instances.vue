@@ -391,7 +391,7 @@ onMounted(() => {
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .task-filters {

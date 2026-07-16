@@ -122,7 +122,7 @@ onMounted(load);
 .page-actions {
   display: flex;
   justify-content: flex-start;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 </style>

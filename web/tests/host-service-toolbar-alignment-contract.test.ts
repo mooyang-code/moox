@@ -17,7 +17,7 @@ describe('host and service toolbar alignment', () => {
     expect(hosts.indexOf('搜索主机名称或地址')).toBeLessThan(hosts.indexOf('<span>查询</span>'));
     expect(hosts.indexOf('<span>查询</span>')).toBeLessThan(hosts.indexOf('<span>批量删除</span>'));
     expect(hosts).toMatch(/\.host-list-toolbar\s*\{[\s\S]*?margin-bottom:\s*8px;/);
-    expect(hostWorkbench).toMatch(/\.workbench-content\s*\{[\s\S]*?margin-top:\s*12px;/);
+    expect(hostWorkbench).toMatch(/\.workbench-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
   });
 
   it('uses one create-first gateway toolbar with matching spacing', () => {
@@ -27,7 +27,7 @@ describe('host and service toolbar alignment', () => {
     expect(gateway.indexOf('新增节点')).toBeLessThan(gateway.indexOf('placeholder="节点 ID"'));
     expect(gateway.indexOf('placeholder="节点 ID"')).toBeLessThan(gateway.indexOf('placeholder="配置状态"'));
     expect(gateway.indexOf('placeholder="配置状态"')).toBeLessThan(gateway.indexOf('<icon-search />'));
-    expect(gateway).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(gateway).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(gateway).not.toContain('justify-content: space-between');
   });
 });

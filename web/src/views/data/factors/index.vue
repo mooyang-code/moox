@@ -201,7 +201,7 @@ onMounted(load);
 .metadata-page {
   height: 100%;
   box-sizing: border-box;
-  padding: 16px 16px 72px;
+  padding: var(--moox-space-4) var(--moox-space-4) 72px;
   overflow-y: auto;
 }
 
@@ -209,7 +209,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head h2 {

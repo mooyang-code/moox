@@ -346,23 +346,23 @@ onMounted(refreshAll);
 </script>
 
 <style scoped lang="scss">
-.metric-monitor-page { height: 100%; overflow-y: auto; padding: 0 0 20px; color: var(--color-text-1); }
+.metric-monitor-page { height: 100%; overflow-y: auto; padding: 0 0 var(--moox-space-5); color: var(--color-text-1); }
 .page-head, .section-head, .filter-band { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.page-head { margin-bottom: 8px; }
+.page-head { margin-bottom: var(--moox-space-2); }
 .page-head h2 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
 .page-head span, .section-meta, .cardinality-note { color: var(--color-text-3); font-size: 12px; }
-.metric-subtabs { margin-bottom: 12px; }
+.metric-subtabs { margin-bottom: var(--moox-space-3); }
 .metric-subtabs :deep(.arco-tabs-content) { display: none; }
 .metric-subtabs :deep(.arco-tabs-tab:first-child) { margin-left: 0; }
 .metric-subtabs :deep(.arco-tabs-tab) { border-radius: 4px; }
 .metric-subtabs :deep(.arco-tabs-tab-active) { color: rgb(var(--primary-6)); background-color: var(--color-fill-2); }
-.filter-band { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; padding: 0; }
+.filter-band { justify-content: flex-start; flex-wrap: wrap; gap: var(--moox-space-2); margin-bottom: var(--moox-space-2); padding: 0; }
 .option-count { color: var(--color-text-3); }
-.state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: 8px; padding: 16px; border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
+.state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: var(--moox-space-2); padding: var(--moox-space-4); border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
 .state-band { min-height: 220px; display: grid; place-items: center; }
-.explorer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.explorer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--moox-space-4); }
 .latest-panel, .chart-panel { min-width: 0; }
-.section-head { margin-bottom: 12px; }
+.section-head { margin-bottom: var(--moox-space-3); }
 .section-head > div { display: flex; align-items: baseline; gap: 10px; }
 .cardinality-note { color: var(--color-warning-6); }
 .inline-empty { padding: 28px; text-align: center; color: var(--color-text-3); }

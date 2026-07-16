@@ -16,7 +16,7 @@ describe('page toolbar cleanup contract', () => {
     const services = read('settings/service-deployments/index.vue');
     expect(services).not.toContain('class="top-alert"');
     expect(services).not.toContain('<icon-refresh />');
-    expect(services).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(services).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
 
     const serviceManagement = read('ops/service-management/index.vue');
     expect(serviceManagement).toMatch(/\.management-content\s*\{[\s\S]*?margin-top:\s*12px;/);
