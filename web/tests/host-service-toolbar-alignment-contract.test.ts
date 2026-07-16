@@ -16,7 +16,7 @@ describe('host and service toolbar alignment', () => {
     expect(hosts.indexOf('新增主机')).toBeLessThan(hosts.indexOf('搜索主机名称或地址'));
     expect(hosts.indexOf('搜索主机名称或地址')).toBeLessThan(hosts.indexOf('<span>查询</span>'));
     expect(hosts.indexOf('<span>查询</span>')).toBeLessThan(hosts.indexOf('<span>批量删除</span>'));
-    expect(hosts).toMatch(/\.host-list-toolbar\s*\{[\s\S]*?margin-bottom:\s*12px;/);
+    expect(hosts).toMatch(/\.host-list-toolbar\s*\{[\s\S]*?margin-bottom:\s*4px;/);
     expect(hostWorkbench).toMatch(/\.workbench-content\s*\{[\s\S]*?margin-top:\s*12px;/);
   });
 
