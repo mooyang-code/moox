@@ -94,5 +94,6 @@ cover.out.tmp
 
 # VitePress
 node_modules/
+/.pnpm-store/
 docs/.vitepress/dist/
 docs/.vitepress/cache/

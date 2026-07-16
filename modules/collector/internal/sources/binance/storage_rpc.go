@@ -9,6 +9,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type storageWriter struct {
@@ -19,8 +20,11 @@ type storageWriter struct {
 
 func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo) *storageWriter {
 	return &storageWriter{
-		access:   storagepb.NewAccessClientProxy(client.WithTarget(normalizeStorageTarget(accessTarget, "20102"))),
-		metadata: storagepb.NewMetadataClientProxy(client.WithTarget(normalizeStorageTarget(metadataTarget, "20100"))),
+		access: storagepb.NewAccessClientProxy(client.WithTarget(normalizeStorageTarget(accessTarget, "20102"))),
+		metadata: storagepb.NewMetadataClientProxy(
+			client.WithTarget(normalizeStorageTarget(metadataTarget, "20100")),
+			client.WithTransport(transport.DefaultClientTransport),
+		),
 		authInfo: authInfo,
 	}
 }

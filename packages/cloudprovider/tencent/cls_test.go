@@ -2,6 +2,7 @@ package tencent
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +100,34 @@ func TestBootstrapCLSReusesExistingResources(t *testing.T) {
 	}
 	if len(api.calls) != 3 {
 		t.Fatalf("calls = %v", api.calls)
+	}
+}
+
+func TestResolveExistingCLSReturnsExistingResourcesWithoutCreating(t *testing.T) {
+	api := &fakeCLSAPI{
+		serviceOpen: true,
+		logset:      CLSLogset{ID: "logset-existing", Name: "moox"},
+		topic:       CLSTopic{ID: "topic-existing", LogsetID: "logset-existing", Name: "moox-application", IndexEnabled: true},
+	}
+
+	result, err := ResolveExistingCLS(context.Background(), api, "moox", "moox-application")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LogsetID != "logset-existing" || result.TopicID != "topic-existing" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestResolveExistingCLSReturnsActionableErrorWhenTopicMissing(t *testing.T) {
+	api := &fakeCLSAPI{
+		serviceOpen: true,
+		logset:      CLSLogset{ID: "logset-existing", Name: "moox"},
+	}
+
+	_, err := ResolveExistingCLS(context.Background(), api, "moox", "moox-application")
+	if err == nil || !strings.Contains(err.Error(), "moox skill") {
+		t.Fatalf("error = %v, want moox skill guidance", err)
 	}
 }
 

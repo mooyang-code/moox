@@ -2,6 +2,7 @@ package collectorpackager
 
 import (
 	"archive/zip"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,7 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 		BinaryPath: binaryPath,
 		ConfigDir:  configDir,
 		OutPath:    outPath,
+		CLSTopicID: "topic-unified",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -48,6 +50,29 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 	names := make([]string, 0, len(reader.File))
 	for _, file := range reader.File {
 		names = append(names, file.Name)
+		if file.Name == "trpc_go.yaml" {
+			stream, openErr := file.Open()
+			require.NoError(t, openErr)
+			content, readErr := io.ReadAll(stream)
+			require.NoError(t, readErr)
+			require.NoError(t, stream.Close())
+			assert.Contains(t, string(content), "writer: cls")
+			assert.Contains(t, string(content), "topic_id: topic-unified")
+			assert.Contains(t, string(content), "secret_id: ${MOOX_CLS_SECRET_ID}")
+		}
 	}
 	assert.ElementsMatch(t, []string{"main", "config.yaml", "trpc_go.yaml", "sources/binance/kline.yaml"}, names)
+}
+
+func TestBuildSCFPackage_MissingCLSTopicID_ShouldReturnError(t *testing.T) {
+	tmp := t.TempDir()
+	binaryPath := filepath.Join(tmp, "collector")
+	require.NoError(t, os.WriteFile(binaryPath, []byte("binary"), 0o755))
+
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{
+		BinaryPath: binaryPath,
+		ConfigDir:  tmp,
+		OutPath:    filepath.Join(tmp, "package.zip"),
+	})
+	require.ErrorContains(t, err, "CLS topic ID is required")
 }

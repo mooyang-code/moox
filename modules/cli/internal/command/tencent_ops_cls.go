@@ -43,9 +43,34 @@ Describe/CreateTopic、CreateIndex。未显式传密钥时，使用腾讯云 SDK
 	},
 }
 
+func newCLSResolveCommand() *cobra.Command {
+	opts := clsBootstrapOptions{
+		Region:     "ap-guangzhou",
+		Endpoint:   "cls.tencentcloudapi.com",
+		LogsetName: "moox",
+		TopicName:  "moox-application",
+	}
+	cmd := &cobra.Command{
+		Use:   "resolve",
+		Short: "查询既有 MooX CLS 资源，不创建或修改资源",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runCLSResolve(cmd, opts)
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&opts.SecretID, "secret-id", "", "腾讯云 SecretId；默认使用 SDK 凭证链")
+	f.StringVar(&opts.SecretKey, "secret-key", "", "腾讯云 SecretKey；默认使用 SDK 凭证链")
+	f.StringVar(&opts.Region, "region", opts.Region, "CLS 地域")
+	f.StringVar(&opts.Endpoint, "endpoint", opts.Endpoint, "CLS API endpoint")
+	f.StringVar(&opts.LogsetName, "logset-name", opts.LogsetName, "日志集名称")
+	f.StringVar(&opts.TopicName, "topic-name", opts.TopicName, "日志主题名称")
+	return cmd
+}
+
 func init() {
 	tencentOpsCmd.AddCommand(clsOpsCmd)
 	clsOpsCmd.AddCommand(clsBootstrapCmd)
+	clsOpsCmd.AddCommand(newCLSResolveCommand())
 	clsOpsCmd.AddCommand(newCLSPrepareCommand())
 	f := clsBootstrapCmd.Flags()
 	f.StringVar(&clsBootstrapFlags.SecretID, "secret-id", "", "腾讯云 SecretId；默认使用 SDK 凭证链")
@@ -57,6 +82,27 @@ func init() {
 	f.Int64Var(&clsBootstrapFlags.RetentionDays, "retention-days", 30, "日志保留天数（1-3600，3640 表示永久）")
 	f.Int64Var(&clsBootstrapFlags.Partitions, "partitions", 1, "初始分区数（1-10）")
 	f.BoolVar(&clsBootstrapFlags.DryRun, "dry-run", false, "仅输出初始化计划，不访问凭证或调用云 API")
+}
+
+func runCLSResolve(cmd *cobra.Command, opts clsBootstrapOptions) error {
+	opts.SecretID = firstNonEmpty(opts.SecretID, os.Getenv("TENCENTCLOUD_SECRET_ID"), os.Getenv("TENCENT_SECRET_ID"))
+	opts.SecretKey = firstNonEmpty(opts.SecretKey, os.Getenv("TENCENTCLOUD_SECRET_KEY"), os.Getenv("TENCENT_SECRET_KEY"))
+	opts.Region = firstNonEmpty(opts.Region, os.Getenv("TENCENTCLOUD_REGION"), "ap-guangzhou")
+	api, err := tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
+		SecretID: opts.SecretID, SecretKey: opts.SecretKey, Region: opts.Region, Endpoint: opts.Endpoint,
+	})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+	defer cancel()
+	resources, err := tencent.ResolveExistingCLS(ctx, api, opts.LogsetName, opts.TopicName)
+	if err != nil {
+		return err
+	}
+	return writeJSON(cmd, map[string]any{
+		"status": "resolved", "region": opts.Region, "resources": resources,
+	})
 }
 
 func runCLSBootstrap(cmd *cobra.Command, opts clsBootstrapOptions) error {

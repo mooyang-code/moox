@@ -60,11 +60,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
-		AdminGatewayURL:       deps.AdminGatewayURL,
-		ServiceGatewayTarget:  deps.ServiceGatewayTarget,
-		ServiceAuth:           taskpublisherAuth(deps.ServiceAuth),
-		StorageMetadataTarget: deps.StorageMetadataTarget,
-		StorageAccessTarget:   deps.StorageAccessTarget,
+		AdminGatewayURL:              deps.AdminGatewayURL,
+		ServiceGatewayTarget:         deps.ServiceGatewayTarget,
+		ServiceAuth:                  taskpublisherAuth(deps.ServiceAuth),
+		StorageMetadataTarget:        deps.StorageMetadataTarget,
+		PlannerStorageMetadataTarget: cfg.Storage.MetadataTarget,
+		StorageAccessTarget:          deps.StorageAccessTarget,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)

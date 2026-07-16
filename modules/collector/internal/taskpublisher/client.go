@@ -10,18 +10,26 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const wakeNodeListPageSize uint32 = 200
+
+const (
+	submitJobItemBatchSize   = 25
+	submitJobItemConcurrency = 8
+	wakeNodeConcurrency      = 8
+)
 
 // AuthConfig describes HMAC auth for /api/service/cloudnode/* calls.
 type AuthConfig struct {
@@ -35,22 +43,25 @@ type AuthConfig struct {
 
 // Config configures the CloudNode gateway client.
 type Config struct {
-	// ServiceGatewayTarget is the public /api/service gateway used by collector and SCF callbacks.
-	ServiceGatewayTarget  string
-	GatewayURL            string // Deprecated: use ServiceGatewayTarget.
-	StorageMetadataTarget string
-	StorageAccessTarget   string
-	Auth                  AuthConfig
+	// ServiceGatewayTarget is the control-plane /api/service gateway used by Collector.
+	ServiceGatewayTarget string
+	// EventServiceGatewayTarget is the gateway target passed to SCF wake events.
+	EventServiceGatewayTarget string
+	GatewayURL                string // Deprecated: use ServiceGatewayTarget.
+	StorageMetadataTarget     string
+	StorageAccessTarget       string
+	Auth                      AuthConfig
 }
 
 // Client submits collector work to CloudNode through the admin service gateway.
 type Client struct {
-	serviceGatewayTarget  string
-	storageMetadataTarget string
-	storageAccessTarget   string
-	auth                  AuthConfig
-	httpClient            *http.Client
-	httpClientErr         error
+	serviceGatewayTarget      string
+	eventServiceGatewayTarget string
+	storageMetadataTarget     string
+	storageAccessTarget       string
+	auth                      AuthConfig
+	httpClient                *http.Client
+	httpClientErr             error
 }
 
 // WakeOptions describes which Collector runtime nodes should be nudged to poll queued work.
@@ -61,18 +72,30 @@ type WakeOptions struct {
 
 // New creates a CloudNode client.
 func New(cfg Config) *Client {
-	target := strings.TrimSpace(cfg.ServiceGatewayTarget)
-	if target == "" {
-		target = strings.TrimSpace(cfg.GatewayURL)
+	controlTarget := strings.TrimSpace(cfg.ServiceGatewayTarget)
+	if controlTarget == "" {
+		controlTarget = strings.TrimSpace(cfg.GatewayURL)
 	}
-	httpClient, httpClientErr := runtimeapp.NewGatewayHTTPClient(8*time.Second, runtimeapp.AuthConfig{AccessKey: cfg.Auth.AccessKey, SecretKey: cfg.Auth.SecretKey, TargetNode: cfg.Auth.TargetNode, CAFile: cfg.Auth.CAFile, CAPEMBase64: cfg.Auth.CAPEMBase64, ExpireSec: cfg.Auth.ExpireSec})
+	eventTarget := strings.TrimSpace(cfg.EventServiceGatewayTarget)
+	if eventTarget == "" {
+		eventTarget = controlTarget
+	}
+	httpClient, httpClientErr := runtimeapp.NewGatewayHTTPClient(8*time.Second, runtimeapp.AuthConfig{
+		AccessKey:   cfg.Auth.AccessKey,
+		SecretKey:   cfg.Auth.SecretKey,
+		TargetNode:  cfg.Auth.TargetNode,
+		CAFile:      cfg.Auth.CAFile,
+		CAPEMBase64: cfg.Auth.CAPEMBase64,
+		ExpireSec:   cfg.Auth.ExpireSec,
+	})
 	return &Client{
-		serviceGatewayTarget:  normalizeGatewayTarget(target),
-		storageMetadataTarget: strings.TrimSpace(cfg.StorageMetadataTarget),
-		storageAccessTarget:   strings.TrimSpace(cfg.StorageAccessTarget),
-		auth:                  cfg.Auth,
-		httpClient:            httpClient,
-		httpClientErr:         httpClientErr,
+		serviceGatewayTarget:      normalizeGatewayTarget(controlTarget),
+		eventServiceGatewayTarget: normalizeGatewayTarget(eventTarget),
+		storageMetadataTarget:     strings.TrimSpace(cfg.StorageMetadataTarget),
+		storageAccessTarget:       strings.TrimSpace(cfg.StorageAccessTarget),
+		auth:                      cfg.Auth,
+		httpClient:                httpClient,
+		httpClientErr:             httpClientErr,
 	}
 }
 
@@ -85,18 +108,56 @@ func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain
 	if len(jobItems) == 0 {
 		return map[string]string{}, nil
 	}
-	raw, err := protojson.Marshal(&pb.SubmitJobItemsReq{Items: jobItems})
+	idsByTaskID := make(map[string]string, len(jobItems))
+	var idsMu sync.Mutex
+	group, groupCtx := errgroup.WithContext(ctx)
+	semaphore := make(chan struct{}, submitJobItemConcurrency)
+	for start := 0; start < len(jobItems); start += submitJobItemBatchSize {
+		end := start + submitJobItemBatchSize
+		if end > len(jobItems) {
+			end = len(jobItems)
+		}
+		batchStart, batchEnd := start, end
+		batch := append([]*pb.JobItem(nil), jobItems[start:end]...)
+		group.Go(func() error {
+			select {
+			case semaphore <- struct{}{}:
+			case <-groupCtx.Done():
+				return groupCtx.Err()
+			}
+			defer func() { <-semaphore }()
+
+			ids, err := c.submitCollectorJobItemBatch(groupCtx, batch, batchStart, batchEnd)
+			if err != nil {
+				return err
+			}
+			idsMu.Lock()
+			for taskID, jobItemID := range ids {
+				idsByTaskID[taskID] = jobItemID
+			}
+			idsMu.Unlock()
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	return idsByTaskID, nil
+}
+
+func (c *Client) submitCollectorJobItemBatch(ctx context.Context, batch []*pb.JobItem, start, end int) (map[string]string, error) {
+	raw, err := protojson.Marshal(&pb.SubmitJobItemsReq{Items: batch})
 	if err != nil {
 		return nil, fmt.Errorf("marshal submit job items request: %w", err)
 	}
 	var rsp pb.SubmitJobItemsRsp
 	if err := c.postService(ctx, "cloudnode", "SubmitJobItems", raw, &rsp); err != nil {
-		return nil, fmt.Errorf("submit cloud job items: %w", err)
+		return nil, fmt.Errorf("submit cloud job items batch %d-%d: %w", start, end, err)
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return nil, fmt.Errorf("submit cloud job items: %s", rsp.GetRetInfo().GetMsg())
+		return nil, fmt.Errorf("submit cloud job items batch %d-%d: %s", start, end, rsp.GetRetInfo().GetMsg())
 	}
-	return jobItemIDsByTaskID(jobItems, rsp.GetAcks()), nil
+	return jobItemIDsByTaskID(batch, rsp.GetAcks()), nil
 }
 
 // WakeCollectorNodes invokes matching Collector SCF nodes so they poll queued JobItems.
@@ -115,40 +176,64 @@ func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int,
 	}
 	woken := 0
 	var wakeErrors []error
+	var wakeMu sync.Mutex
+	group, groupCtx := errgroup.WithContext(ctx)
+	semaphore := make(chan struct{}, wakeNodeConcurrency)
 	for _, node := range nodes {
 		if !supportsAnyJobType(node.GetSupportedWorkloads(), opts.JobTypes) {
 			continue
 		}
-		wakeStruct, err := structpb.NewStruct(wakeEventWithNodeID(wakeEvent, node.GetNodeId()))
-		if err != nil {
-			wakeErrors = append(wakeErrors, fmt.Errorf("build wake event for %s: %w", node.GetNodeId(), err))
-			continue
-		}
-		req := &pb.InvokeFunctionReq{
-			NodeId:        node.GetNodeId(),
-			EventData:     wakeStruct,
-			ScfInvokeType: pb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT,
-		}
-		raw, err := protojson.Marshal(req)
-		if err != nil {
-			wakeErrors = append(wakeErrors, fmt.Errorf("marshal invoke function request for %s: %w", node.GetNodeId(), err))
-			continue
-		}
-		var rsp pb.InvokeFunctionRsp
-		if err := c.postServiceWithHeaders(ctx, "cloudnode", "InvokeFunction", raw, &rsp, spaceHeaders(spaceID)); err != nil {
-			wakeErrors = append(wakeErrors, fmt.Errorf("invoke collector node %s: %w", node.GetNodeId(), err))
-			continue
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			wakeErrors = append(wakeErrors, fmt.Errorf("invoke collector node %s: %s", node.GetNodeId(), rsp.GetRetInfo().GetMsg()))
-			continue
-		}
-		if rsp.GetScf().GetCode() != 0 {
-			wakeErrors = append(wakeErrors, fmt.Errorf("invoke collector node %s: %s", node.GetNodeId(), rsp.GetScf().GetMessage()))
-			continue
-		}
-		woken++
+		node := node
+		group.Go(func() error {
+			select {
+			case semaphore <- struct{}{}:
+			case <-groupCtx.Done():
+				return nil
+			}
+			defer func() { <-semaphore }()
+			recordWakeError := func(err error) {
+				wakeMu.Lock()
+				wakeErrors = append(wakeErrors, err)
+				wakeMu.Unlock()
+			}
+			nodeID := node.GetNodeId()
+			wakeStruct, err := structpb.NewStruct(wakeEventWithNodeID(wakeEvent, nodeID))
+			if err != nil {
+				recordWakeError(fmt.Errorf("build wake event for %s: %w", nodeID, err))
+				return nil
+			}
+			req := &pb.InvokeFunctionReq{
+				NodeId:        nodeID,
+				EventData:     wakeStruct,
+				ScfInvokeType: pb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT,
+			}
+			raw, err := protojson.Marshal(req)
+			if err != nil {
+				recordWakeError(fmt.Errorf("marshal invoke function request for %s: %w", nodeID, err))
+				return nil
+			}
+			var rsp pb.InvokeFunctionRsp
+			if err := c.postServiceWithHeaders(groupCtx, "cloudnode", "InvokeFunction", raw, &rsp, spaceHeaders(spaceID)); err != nil {
+				recordWakeError(fmt.Errorf("invoke collector node %s: %w", nodeID, err))
+				return nil
+			}
+			if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+				recordWakeError(fmt.Errorf("invoke collector node %s: %s", nodeID, rsp.GetRetInfo().GetMsg()))
+				return nil
+			}
+			if rsp.GetScf().GetCode() != 0 {
+				recordWakeError(fmt.Errorf("invoke collector node %s: %s", nodeID, rsp.GetScf().GetMessage()))
+				return nil
+			}
+			wakeMu.Lock()
+			woken++
+			wakeMu.Unlock()
+			return nil
+		})
 	}
+	_ = group.Wait()
+	wakeMu.Lock()
+	defer wakeMu.Unlock()
 	if woken == 0 && len(wakeErrors) > 0 {
 		return 0, errors.Join(wakeErrors...)
 	}
@@ -244,14 +329,14 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 }
 
 func (c *Client) buildWakeEvent() (map[string]any, error) {
-	if c.serviceGatewayTarget == "" {
-		return nil, fmt.Errorf("service gateway target is required")
+	if c.eventServiceGatewayTarget == "" {
+		return nil, fmt.Errorf("event service gateway target is required")
 	}
 	return map[string]any{
 		"action":                  "keepalive",
 		"source":                  "collector_schedule",
 		"timestamp":               time.Now().UTC().Format(time.RFC3339),
-		"service_gateway_target":  c.serviceGatewayTarget,
+		"service_gateway_target":  c.eventServiceGatewayTarget,
 		"storage_metadata_target": c.storageMetadataTarget,
 		"storage_access_target":   c.storageAccessTarget,
 		"data": map[string]any{

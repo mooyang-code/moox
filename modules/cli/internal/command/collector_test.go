@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
@@ -59,8 +60,46 @@ func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T)
 	})
 }
 
+type collectorCLSAPI struct{}
+
+func (collectorCLSAPI) GetService(context.Context) (bool, error)    { return true, nil }
+func (collectorCLSAPI) OpenService(context.Context) (string, error) { return "", nil }
+func (collectorCLSAPI) FindLogset(context.Context, string) (tencent.CLSLogset, bool, error) {
+	return tencent.CLSLogset{ID: "logset-from-api", Name: "moox"}, true, nil
+}
+func (collectorCLSAPI) CreateLogset(context.Context, string) (tencent.CLSLogset, string, error) {
+	panic("unexpected CreateLogset")
+}
+func (collectorCLSAPI) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
+	return tencent.CLSTopic{ID: "topic-from-api", LogsetID: "logset-from-api", Name: "moox-application", IndexEnabled: true}, true, nil
+}
+func (collectorCLSAPI) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
+	panic("unexpected CreateTopic")
+}
+func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
+	panic("unexpected CreateIndex")
+}
+
+func TestResolveCollectorCLSResourcesUsesTencentCloudAPI(t *testing.T) {
+	original := newCollectorCLSAPI
+	newCollectorCLSAPI = func() (tencent.CLSAPI, error) { return collectorCLSAPI{}, nil }
+	t.Cleanup(func() { newCollectorCLSAPI = original })
+
+	resources, err := resolveCollectorCLSResources(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "logset-from-api", resources.LogsetID)
+	assert.Equal(t, "topic-from-api", resources.TopicID)
+}
+
 func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
+	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
+	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
+	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
 	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		collectorPackageOptions: collectorPackageOptions{
+			CLSLogsetID: "logset-unified",
+			CLSTopicID:  "topic-unified",
+		},
 		CloudAccountID:   "account-a",
 		SpaceID:          "crypto",
 		ServiceAccessKey: "svc-ak",
@@ -81,6 +120,9 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Config["timeout"] != "60" {
 		t.Fatalf("config = %#v", item.Config)
 	}
+	if item.Config["cls_logset_id"] != "logset-unified" || item.Config["cls_topic_id"] != "topic-unified" {
+		t.Fatalf("CLS function config = %#v", item.Config)
+	}
 	if item.Environment["MOOX_ENV"] != "prod" {
 		t.Fatalf("env = %#v", item.Environment)
 	}
@@ -89,6 +131,9 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	}
 	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "svc-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "svc-sk" {
 		t.Fatalf("service auth env = %#v", item.Environment)
+	}
+	if item.Environment["MOOX_CLS_HOST"] != "ap-guangzhou.cls.tencentyun.com" || item.Environment["MOOX_CLS_SECRET_ID"] != "cls-id" || item.Environment["MOOX_CLS_SECRET_KEY"] != "cls-key" {
+		t.Fatalf("CLS env = %#v", item.Environment)
 	}
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
 		t.Fatalf("function_name_prefix = %#v", item.Metadata["function_name_prefix"])

@@ -53,6 +53,44 @@ type CLSBootstrapResult struct {
 	RequestIDs    []string `json:"request_ids,omitempty"`
 }
 
+// ResolveExistingCLS returns fixed CLS resources without creating or changing them.
+func ResolveExistingCLS(ctx context.Context, api CLSAPI, logsetName, topicName string) (CLSBootstrapResult, error) {
+	if api == nil {
+		return CLSBootstrapResult{}, fmt.Errorf("cls api is required")
+	}
+	logsetName = strings.TrimSpace(logsetName)
+	topicName = strings.TrimSpace(topicName)
+	if logsetName == "" || topicName == "" {
+		return CLSBootstrapResult{}, fmt.Errorf("CLS logset and topic names are required")
+	}
+
+	opened, err := api.GetService(ctx)
+	if err != nil {
+		return CLSBootstrapResult{}, fmt.Errorf("query CLS service: %w", err)
+	}
+	if !opened {
+		return CLSBootstrapResult{}, fmt.Errorf("CLS service is not open; use the moox skill to create fixed CLS resources before packaging")
+	}
+	logset, found, err := api.FindLogset(ctx, logsetName)
+	if err != nil {
+		return CLSBootstrapResult{}, fmt.Errorf("find CLS logset: %w", err)
+	}
+	if !found || strings.TrimSpace(logset.ID) == "" {
+		return CLSBootstrapResult{}, fmt.Errorf("fixed CLS logset %q was not found; use the moox skill to create it before packaging", logsetName)
+	}
+	topic, found, err := api.FindTopic(ctx, logset.ID, topicName)
+	if err != nil {
+		return CLSBootstrapResult{}, fmt.Errorf("find CLS topic: %w", err)
+	}
+	if !found || strings.TrimSpace(topic.ID) == "" {
+		return CLSBootstrapResult{}, fmt.Errorf("fixed CLS topic %q/%q was not found; use the moox skill to create it before packaging", logsetName, topicName)
+	}
+	if !topic.IndexEnabled {
+		return CLSBootstrapResult{}, fmt.Errorf("fixed CLS topic %q/%q has no enabled index; use the moox skill to repair it before packaging", logsetName, topicName)
+	}
+	return CLSBootstrapResult{LogsetID: logset.ID, TopicID: topic.ID}, nil
+}
+
 // BootstrapCLS idempotently opens CLS and prepares one indexed log topic.
 func BootstrapCLS(ctx context.Context, api CLSAPI, opts CLSBootstrapOptions) (CLSBootstrapResult, error) {
 	if api == nil {

@@ -5,6 +5,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestSymbolReportConcurrencyIsSerialForMetadataRefresh(t *testing.T) {
@@ -59,4 +60,6 @@ func TestBuildSymbolRecordRows(t *testing.T) {
 	assert.Equal(t, "crypto", rows[0].GetKey().GetSpaceId())
 	assert.Equal(t, "ds-1", rows[0].GetKey().GetDatasetId())
 	assert.Equal(t, "BTC-USDT", rows[0].GetKey().GetRecordId())
+	_, err = time.Parse(time.RFC3339Nano, rows[0].GetKey().GetVersion())
+	assert.NoError(t, err)
 }

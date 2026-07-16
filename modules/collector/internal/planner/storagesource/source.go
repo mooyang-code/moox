@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const storagePageSize = 500
@@ -27,7 +28,10 @@ type DatasetSource struct {
 // NewDatasetSource creates a storage metadata backed dataset source.
 func NewDatasetSource(metadataTarget string) *DatasetSource {
 	return &DatasetSource{
-		metadata: storagepb.NewMetadataClientProxy(client.WithTarget(normalizeTRPCTarget(metadataTarget, "20100"))),
+		metadata: storagepb.NewMetadataClientProxy(
+			client.WithTarget(normalizeTRPCTarget(metadataTarget, "20100")),
+			client.WithTransport(transport.DefaultClientTransport),
+		),
 	}
 }
 

@@ -23,8 +23,6 @@ const (
 	// maxConcurrency 最大并发请求数。
 	// RegisterDataSubject 会触发 metadata snapshot refresh，串行上报避免并发刷新冲突。
 	maxConcurrency = 1
-	// symbolRecordVersionLatest is the fixed symbol record version.
-	symbolRecordVersionLatest = "latest"
 )
 
 // SymbolCollector 标的同步采集器
@@ -280,6 +278,7 @@ func buildSymbolRegisterRequest(symbol *exchange.SymbolInfo, binding StorageBind
 // buildSymbolRecordRows 构建标的结构化记录行列表。
 func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBinding) ([]*storagepb.RecordRow, error) {
 	rows := make([]*storagepb.RecordRow, 0, len(symbols))
+	version := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, s := range symbols {
 		subjectID := normalizedSubjectID(s)
 		columns := []*storagepb.ColumnValue{
@@ -312,7 +311,7 @@ func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBindin
 				SpaceId:   binding.SpaceID,
 				DatasetId: binding.RecordDatasetID,
 				RecordId:  subjectID,
-				Version:   symbolRecordVersionLatest,
+				Version:   version,
 			},
 			Columns: columns,
 		}

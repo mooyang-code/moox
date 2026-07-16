@@ -26,7 +26,10 @@ type Dependencies struct {
 	ServiceGatewayTarget  string
 	ServiceAuth           taskpublisher.AuthConfig
 	StorageMetadataTarget string
-	StorageAccessTarget   string
+	// PlannerStorageMetadataTarget is the control-plane's local metadata target.
+	// The public target remains in StorageMetadataTarget for SCF wake events.
+	PlannerStorageMetadataTarget string
+	StorageAccessTarget          string
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -41,17 +44,21 @@ type Service struct {
 
 // New creates a collector management service.
 func New(persistence *store.Store, deps Dependencies) *Service {
+	plannerMetadataTarget := deps.PlannerStorageMetadataTarget
+	if strings.TrimSpace(plannerMetadataTarget) == "" {
+		plannerMetadataTarget = deps.StorageMetadataTarget
+	}
 	return &Service{
 		ruleRepo:     persistence.TaskRules(),
 		instanceRepo: persistence.TaskInstances(),
 		builder:      planner.NewTaskBuilder(),
-		datasetSrc:   storagesource.NewDatasetSource(deps.StorageMetadataTarget),
+		datasetSrc:   storagesource.NewDatasetSource(plannerMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
-			ServiceGatewayTarget:  deps.ServiceGatewayTarget,
-			GatewayURL:            deps.AdminGatewayURL,
-			StorageMetadataTarget: deps.StorageMetadataTarget,
-			StorageAccessTarget:   deps.StorageAccessTarget,
-			Auth:                  deps.ServiceAuth,
+			ServiceGatewayTarget:      deps.AdminGatewayURL,
+			EventServiceGatewayTarget: deps.ServiceGatewayTarget,
+			StorageMetadataTarget:     deps.StorageMetadataTarget,
+			StorageAccessTarget:       deps.StorageAccessTarget,
+			Auth:                      deps.ServiceAuth,
 		}),
 	}
 }

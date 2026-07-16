@@ -57,6 +57,8 @@ make package-scf        # 打包 SCF 部署 zip
 ./scripts/build-collector-scf-package.sh
 ```
 
+SCF 打包会通过腾讯云 API 查询固定的 `moox/moox-application` 资源，并将实时返回的 Topic ID 写入包内 `trpc_go.yaml`，不接受写死的 Topic ID。资源不存在或未启用索引时构建会报错，并提示先使用 MooX Skill 自动建立或修复资源。
+
 ## 端口与网关
 
 - CollectMgr HTTP：`:11402`（`config/trpc_go.yaml`）

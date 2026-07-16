@@ -67,6 +67,28 @@ func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullCo
 	}, false)
 }
 
+// DeleteConsumer removes a durable consumer. Removing an absent consumer is successful.
+func (c *Client) DeleteConsumer(ctx context.Context, stream, durable string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stream = strings.TrimSpace(stream)
+	durable = strings.TrimSpace(durable)
+	if stream == "" || durable == "" {
+		return fmt.Errorf("%w: stream and durable are required", ErrInvalidConsumer)
+	}
+	if err := contextErr(ctx, "before consumer deletion"); err != nil {
+		return err
+	}
+	if err := c.alive(); err != nil {
+		return fmt.Errorf("%w: %w", ErrConnection, err)
+	}
+	if err := c.js.DeleteConsumer(stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return classifyConsumerError("delete consumer", err)
+	}
+	return nil
+}
+
 func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, create bool) (*PullConsumer, error) {
 	if ctx == nil {
 		ctx = context.Background()

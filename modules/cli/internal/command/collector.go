@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/spf13/cobra"
 )
@@ -23,6 +25,8 @@ type collectorPackageOptions struct {
 	Version       string
 	Out           string
 	ConfigDir     string
+	CLSLogsetID   string
+	CLSTopicID    string
 }
 
 type collectorPublishOptions struct {
@@ -195,6 +199,14 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	if configDir == "" {
 		configDir = filepath.Join(collectorRoot, "configs")
 	}
+	clsTopicID := strings.TrimSpace(opts.CLSTopicID)
+	if clsTopicID == "" {
+		resources, err := resolveCollectorCLSResources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		clsTopicID = resources.TopicID
+	}
 	binaryPath := filepath.Join(os.TempDir(), fmt.Sprintf("moox-collector-scf-%d", time.Now().UnixNano()), "main")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
 		return nil, err
@@ -208,7 +220,28 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		BinaryPath: binaryPath,
 		ConfigDir:  configDir,
 		OutPath:    outPath,
+		CLSTopicID: clsTopicID,
 	})
+}
+
+var newCollectorCLSAPI = func() (tencent.CLSAPI, error) {
+	return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
+		SecretID:  firstNonEmpty(os.Getenv("TENCENTCLOUD_SECRET_ID"), os.Getenv("MOOX_CLS_SECRET_ID")),
+		SecretKey: firstNonEmpty(os.Getenv("TENCENTCLOUD_SECRET_KEY"), os.Getenv("MOOX_CLS_SECRET_KEY")),
+		Region:    clsprepare.Region,
+	})
+}
+
+func resolveCollectorCLSResources(ctx context.Context) (tencent.CLSBootstrapResult, error) {
+	api, err := newCollectorCLSAPI()
+	if err != nil {
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("create CLS client for collector package: %w", err)
+	}
+	resources, err := tencent.ResolveExistingCLS(ctx, api, clsprepare.LogsetName, clsprepare.TopicName)
+	if err != nil {
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("resolve CLS topic for collector package: %w", err)
+	}
+	return resources, nil
 }
 
 func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions) (collectorPublishSummary, error) {
@@ -221,6 +254,12 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.Region == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
+	clsResources, err := resolveCollectorCLSResources(ctx)
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	opts.CLSLogsetID = clsResources.LogsetID
+	opts.CLSTopicID = clsResources.TopicID
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
@@ -272,12 +311,15 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
+	config := parseCollectorOverrides(opts.Config)
+	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
+	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
 		Runtime:        defaultFlag(opts.Runtime, "Go1"),
 		Handler:        defaultFlag(opts.Handler, "main"),
-		Config:         parseCollectorOverrides(opts.Config),
+		Config:         config,
 		Environment:    environment,
 		Region:         opts.Region,
 		PackageID:      packageID,
@@ -295,6 +337,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions) (map[string]stri
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", os.Getenv("MOOX_GATEWAY_NODE_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")))
+	setDefaultEnv(env, "MOOX_CLS_HOST", os.Getenv("MOOX_CLS_HOST"))
+	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", os.Getenv("MOOX_CLS_SECRET_ID"))
+	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", os.Getenv("MOOX_CLS_SECRET_KEY"))
 	overrides := parseCollectorOverrides(opts.Env)
 	if strings.TrimSpace(overrides["MOOX_GATEWAY_CA_FILE"]) != "" {
 		return nil, fmt.Errorf("serverless environment must not contain MOOX_GATEWAY_CA_FILE")

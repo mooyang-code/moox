@@ -18,7 +18,7 @@ func ReadOnly() filter.ClientFilter {
 }
 
 func mustReadOnlyFilter() filter.ClientFilter {
-	r, err := retry.New(2, []int{int(errs.RetClientNetErr), int(errs.RetClientTimeout)}, retry.WithLinearBackoff(20*time.Millisecond))
+	r, err := retry.New(2, []int{int(errs.RetClientNetErr), int(errs.RetClientTimeout)}, retry.WithLinearBackoff(100*time.Millisecond))
 	if err != nil {
 		panic(fmt.Sprintf("build read-only retry filter: %v", err))
 	}

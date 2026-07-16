@@ -47,7 +47,7 @@ func StartRuntime(t *testing.T, cfg config.JetStreamConfig) *jobqueue.Runtime {
 		t.Fatal(err)
 	}
 	js, _ := nc.JetStream()
-	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.ExecStream, Subjects: []string{jobqueue.JobRequestedTopic}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy})
+	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.ExecStream, Subjects: []string{jobqueue.JobRequestedSubjectWildcard}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy})
 	if err != nil && !errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
 		nc.Close()
 		_ = rt.Close()

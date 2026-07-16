@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +115,58 @@ func TestJobItemIDsByTaskIDUsesAckedJobItemID(t *testing.T) {
 	}
 }
 
+func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
+	requestSizes := []int{}
+	var requestSizesMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req cloudnodepb.SubmitJobItemsReq
+		if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
+			t.Fatal(err)
+		}
+		requestSizesMu.Lock()
+		requestSizes = append(requestSizes, len(req.GetItems()))
+		requestSizesMu.Unlock()
+		acks := make([]*cloudnodepb.JobItemAck, 0, len(req.GetItems()))
+		for _, item := range req.GetItems() {
+			acks = append(acks, &cloudnodepb.JobItemAck{
+				JobItemId: item.GetJobItemId(),
+				Status:    cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED,
+			})
+		}
+		writeProtoJSON(t, w, &cloudnodepb.SubmitJobItemsRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Acks:    acks,
+		})
+	}))
+	defer server.Close()
+
+	instances := make([]domain.TaskInstance, 0, submitJobItemBatchSize+1)
+	for i := 0; i < submitJobItemBatchSize+1; i++ {
+		instances = append(instances, domain.TaskInstance{
+			SpaceID:    "crypto",
+			RuleID:     "binance_spot_kline_1m",
+			TaskID:     fmt.Sprintf("task-%d", i),
+			TaskParams: `{"data_type":"kline","job_type":"collect.kline","code_package_id":"moox-collector_dev","schedule_interval":"1m"}`,
+		})
+	}
+	client := New(Config{
+		ServiceGatewayTarget: server.URL,
+		Auth:                 AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"},
+	})
+
+	ids, err := client.SubmitCollectorJobItems(context.Background(), instances)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Ints(requestSizes)
+	if len(requestSizes) != 2 || requestSizes[0] != 1 || requestSizes[1] != submitJobItemBatchSize {
+		t.Fatalf("request sizes = %v, want [%d 1]", requestSizes, submitJobItemBatchSize)
+	}
+	if len(ids) != len(instances) {
+		t.Fatalf("acked task ids = %d, want %d", len(ids), len(instances))
+	}
+}
+
 func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) {
 	var invoked bool
 	var server *httptest.Server
@@ -196,6 +250,7 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
 	pages := []uint32{}
 	invoked := []string{}
+	var invokedMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/service/cloudnode/GetNodeList":
@@ -227,7 +282,9 @@ func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
 			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
 				t.Fatal(err)
 			}
+			invokedMu.Lock()
 			invoked = append(invoked, req.GetNodeId())
+			invokedMu.Unlock()
 			writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
 				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
 				Scf:     &cloudnodepb.ScfInvokeResult{},
@@ -257,6 +314,7 @@ func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("wake count=%d, want 2", count)
 	}
+	sort.Strings(invoked)
 	if strings.Join(invoked, ",") != "node-a,node-b" {
 		t.Fatalf("invoked=%v, want both pages", invoked)
 	}
@@ -267,6 +325,7 @@ func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
 
 func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 	invoked := []string{}
+	var invokedMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/service/cloudnode/GetNodeList":
@@ -282,7 +341,9 @@ func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
 				t.Fatal(err)
 			}
+			invokedMu.Lock()
 			invoked = append(invoked, req.GetNodeId())
+			invokedMu.Unlock()
 			if req.GetNodeId() == "bad-node" {
 				writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
 					RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_INNER_ERR, Msg: "cloud account not found"},
@@ -315,6 +376,7 @@ func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sort.Strings(invoked)
 	if count != 1 || strings.Join(invoked, ",") != "bad-node,good-node" {
 		t.Fatalf("count=%d invoked=%v, want both attempted with one success", count, invoked)
 	}
