@@ -81,7 +81,7 @@ mkdir -p "${TMP}/debian"
 run_mock Linux 0 "${TMP}/linux.log" >/dev/null
 run_mock Linux 0 "${TMP}/linux.log" >"${TMP}/linux-two.out"
 grep -Fq 'already trusted' "${TMP}/linux-two.out"
-[[ $(grep -c 'update-ca-certificates' "${TMP}/linux.log") -eq 1 ]]
+[[ $(grep -c '^update-ca-certificates$' "${TMP}/linux.log") -eq 1 ]]
 
 # A failed trust database update must remove the copied anchor so a retry can run.
 rm -f "${TMP}/debian"/*.crt
@@ -93,7 +93,7 @@ if MOCK_UPDATE_FAIL=1 run_mock Linux 0 "${TMP}/linux-fail.log" >/dev/null 2>&1; 
 fi
 [[ -z $(find "${TMP}/debian" -type f -print -quit) ]]
 run_mock Linux 0 "${TMP}/linux-fail.log" >/dev/null
-[[ $(grep -c 'update-ca-certificates' "${TMP}/linux-fail.log") -eq 2 ]]
+[[ $(grep -c '^update-ca-certificates$' "${TMP}/linux-fail.log") -eq 2 ]]
 
 # A stale source anchor alone is not proof that the system trust store was updated.
 rm -f "${TMP}/system"/*.crt
