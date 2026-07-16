@@ -40,9 +40,12 @@ describe('collector task management workbench', () => {
     const rules = fs.readFileSync(path.resolve(__dirname, '../collector-rules/collector-rules.vue'), 'utf8');
     const firstToolbarEnd = rules.indexOf('</a-space>');
     const tableStart = rules.indexOf('<a-table');
+    const createPosition = rules.indexOf('<span>新建任务</span>');
+    const searchPosition = rules.indexOf('<span>查询</span>');
 
-    expect(rules.indexOf('<span>新建任务</span>')).toBeGreaterThan(0);
-    expect(rules.indexOf('<span>新建任务</span>')).toBeLessThan(firstToolbarEnd);
+    expect(createPosition).toBeGreaterThan(0);
+    expect(createPosition).toBeLessThan(searchPosition);
+    expect(createPosition).toBeLessThan(firstToolbarEnd);
     expect(rules.slice(firstToolbarEnd, tableStart)).not.toContain('新建任务');
   });
 });

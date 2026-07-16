@@ -3,6 +3,10 @@
     <a-spin :loading="loading">
       <div class="moox-inner">
         <a-space wrap>
+          <a-button type="primary" status="success" @click="onAdd">
+            <template #icon><icon-plus /></template>
+            <span>新建任务</span>
+          </a-button>
           <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear />
           <a-select v-model="form.dataType" placeholder="请选择数据类型" style="width: 150px" allow-clear>
             <a-option 
@@ -29,10 +33,6 @@
             <span>重置</span>
           </a-button>
           <a-switch v-model="form.enabled" :checked-text="'启用'" :unchecked-text="'禁用'" @change="onEnabledChange" />
-          <a-button type="primary" status="success" @click="onAdd">
-            <template #icon><icon-plus /></template>
-            <span>新建任务</span>
-          </a-button>
         </a-space>
 
         <a-table
