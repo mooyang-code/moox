@@ -339,9 +339,9 @@ go 1.24.0
 
 require (
     github.com/stretchr/testify v1.11.1
-    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls v1.3.131
-    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.131
-    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.3.131
+    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls v1.3.135
+    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.135
+    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.1.11
 )
 ```
 

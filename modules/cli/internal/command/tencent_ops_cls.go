@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/tencentcloud"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
@@ -92,7 +92,7 @@ func runCLSBootstrap(cmd *cobra.Command, opts clsBootstrapOptions) error {
 		})
 	}
 
-	api, err := tencentcloud.NewCLSSDKAPI(tencentcloud.CLSSDKOptions{
+	api, err := tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 		SecretID: opts.SecretID, SecretKey: opts.SecretKey,
 		Region: opts.Region, Endpoint: opts.Endpoint,
 	})
@@ -101,7 +101,7 @@ func runCLSBootstrap(cmd *cobra.Command, opts clsBootstrapOptions) error {
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), 90*time.Second)
 	defer cancel()
-	result, err := tencentcloud.BootstrapCLS(ctx, api, tencentcloud.CLSBootstrapOptions{
+	result, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
 		LogsetName: opts.LogsetName, TopicName: opts.TopicName,
 		RetentionDays: opts.RetentionDays, Partitions: opts.Partitions,
 	})

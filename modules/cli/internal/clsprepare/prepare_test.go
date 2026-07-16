@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/tencentcloud"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,18 +35,18 @@ type fakeCLS struct{}
 
 func (fakeCLS) GetService(context.Context) (bool, error)    { return true, nil }
 func (fakeCLS) OpenService(context.Context) (string, error) { return "", nil }
-func (fakeCLS) FindLogset(context.Context, string) (tencentcloud.CLSLogset, bool, error) {
-	return tencentcloud.CLSLogset{ID: "logset-1", Name: LogsetName}, true, nil
+func (fakeCLS) FindLogset(context.Context, string) (tencent.CLSLogset, bool, error) {
+	return tencent.CLSLogset{ID: "logset-1", Name: LogsetName}, true, nil
 }
-func (fakeCLS) CreateLogset(context.Context, string) (tencentcloud.CLSLogset, string, error) {
+func (fakeCLS) CreateLogset(context.Context, string) (tencent.CLSLogset, string, error) {
 	panic("unexpected CreateLogset")
 }
-func (fakeCLS) FindTopic(context.Context, string, string) (tencentcloud.CLSTopic, bool, error) {
-	return tencentcloud.CLSTopic{
+func (fakeCLS) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
+	return tencent.CLSTopic{
 		ID: "topic-1", LogsetID: "logset-1", Name: TopicName, IndexEnabled: true,
 	}, true, nil
 }
-func (fakeCLS) CreateTopic(context.Context, tencentcloud.CLSCreateTopicOptions) (tencentcloud.CLSTopic, string, error) {
+func (fakeCLS) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
 	panic("unexpected CreateTopic")
 }
 func (fakeCLS) CreateIndex(context.Context, string) (string, error) {
@@ -59,16 +59,16 @@ type failingCLS struct {
 
 func (f failingCLS) GetService(context.Context) (bool, error)    { return false, f.err }
 func (f failingCLS) OpenService(context.Context) (string, error) { panic("unexpected OpenService") }
-func (f failingCLS) FindLogset(context.Context, string) (tencentcloud.CLSLogset, bool, error) {
+func (f failingCLS) FindLogset(context.Context, string) (tencent.CLSLogset, bool, error) {
 	panic("unexpected FindLogset")
 }
-func (f failingCLS) CreateLogset(context.Context, string) (tencentcloud.CLSLogset, string, error) {
+func (f failingCLS) CreateLogset(context.Context, string) (tencent.CLSLogset, string, error) {
 	panic("unexpected CreateLogset")
 }
-func (f failingCLS) FindTopic(context.Context, string, string) (tencentcloud.CLSTopic, bool, error) {
+func (f failingCLS) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
 	panic("unexpected FindTopic")
 }
-func (f failingCLS) CreateTopic(context.Context, tencentcloud.CLSCreateTopicOptions) (tencentcloud.CLSTopic, string, error) {
+func (f failingCLS) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
 	panic("unexpected CreateTopic")
 }
 func (f failingCLS) CreateIndex(context.Context, string) (string, error) {
@@ -93,7 +93,7 @@ func testSource() *fakeAccounts {
 func TestPrepareDefaultsToFirstActiveTencentAccount(t *testing.T) {
 	source := testSource()
 	path := filepath.Join(t.TempDir(), "cls.env")
-	result, err := Prepare(context.Background(), source, func(secretID, secretKey string) (tencentcloud.CLSAPI, error) {
+	result, err := Prepare(context.Background(), source, func(secretID, secretKey string) (tencent.CLSAPI, error) {
 		require.Equal(t, "sid-new", secretID)
 		require.Equal(t, "skey-new", secretKey)
 		return fakeCLS{}, nil
@@ -105,7 +105,7 @@ func TestPrepareDefaultsToFirstActiveTencentAccount(t *testing.T) {
 
 func TestPrepareUsesExplicitCloudAccountID(t *testing.T) {
 	source := testSource()
-	_, err := Prepare(context.Background(), source, func(secretID, secretKey string) (tencentcloud.CLSAPI, error) {
+	_, err := Prepare(context.Background(), source, func(secretID, secretKey string) (tencent.CLSAPI, error) {
 		require.Equal(t, "sid-old", secretID)
 		require.Equal(t, "skey-old", secretKey)
 		return fakeCLS{}, nil
@@ -117,7 +117,7 @@ func TestPrepareUsesExplicitCloudAccountID(t *testing.T) {
 }
 
 func TestPrepareRejectsUnknownExplicitAccount(t *testing.T) {
-	_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+	_, err := Prepare(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 		return fakeCLS{}, nil
 	}, Options{
 		CloudAccountID: "missing", CredentialsOutput: filepath.Join(t.TempDir(), "cls.env"),
@@ -128,7 +128,7 @@ func TestPrepareRejectsUnknownExplicitAccount(t *testing.T) {
 func TestPrepareWritesProtectedCredentialsWithoutReturningThem(t *testing.T) {
 	source := testSource()
 	path := filepath.Join(t.TempDir(), "cls.env")
-	result, err := Prepare(context.Background(), source, func(string, string) (tencentcloud.CLSAPI, error) {
+	result, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 		return fakeCLS{}, nil
 	}, Options{CredentialsOutput: path})
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestPrepareAtomicallyReplacesExistingCredentialFile(t *testing.T) {
 	path := filepath.Join(dir, "cls.env")
 	require.NoError(t, os.WriteFile(path, []byte("stale"), 0o644))
 
-	_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+	_, err := Prepare(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 		return fakeCLS{}, nil
 	}, Options{CredentialsOutput: path})
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestPrepareQuotesCredentialValuesForShellEnv(t *testing.T) {
 	source.secrets["newest"].SecretKey = "key'with spaces"
 	path := filepath.Join(t.TempDir(), "cls.env")
 
-	_, err := Prepare(context.Background(), source, func(string, string) (tencentcloud.CLSAPI, error) {
+	_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 		return fakeCLS{}, nil
 	}, Options{CredentialsOutput: path})
 	require.NoError(t, err)
@@ -187,7 +187,7 @@ func TestPrepareRejectsIncompleteCredentialsBeforeCallingCLS(t *testing.T) {
 	source := testSource()
 	source.secrets["newest"] = &adminclient.COSAccountInfo{AccountID: "newest", Provider: "tencent"}
 	called := false
-	_, err := Prepare(context.Background(), source, func(string, string) (tencentcloud.CLSAPI, error) {
+	_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 		called = true
 		return fakeCLS{}, nil
 	}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
@@ -201,7 +201,7 @@ func TestPrepareRejectsCredentialsForDifferentAccountBeforeCallingCLS(t *testing
 			source := testSource()
 			source.secrets["newest"].AccountID = returnedAccountID
 			called := false
-			_, err := Prepare(context.Background(), source, func(string, string) (tencentcloud.CLSAPI, error) {
+			_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 				called = true
 				return fakeCLS{}, nil
 			}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
@@ -225,7 +225,7 @@ func TestPrepareDoesNotExposeSensitiveUpstreamErrors(t *testing.T) {
 	t.Run("list accounts", func(t *testing.T) {
 		source := testSource()
 		source.listErr = errors.New(upstream)
-		_, err := Prepare(context.Background(), source, func(string, string) (tencentcloud.CLSAPI, error) {
+		_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 			return fakeCLS{}, nil
 		}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 		assertSanitized(t, err, "list Tencent cloud accounts")
@@ -234,21 +234,21 @@ func TestPrepareDoesNotExposeSensitiveUpstreamErrors(t *testing.T) {
 	t.Run("reveal account", func(t *testing.T) {
 		source := testSource()
 		source.revealErr = errors.New(upstream)
-		_, err := Prepare(context.Background(), source, func(string, string) (tencentcloud.CLSAPI, error) {
+		_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 			return fakeCLS{}, nil
 		}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 		assertSanitized(t, err, `reveal cloud account "newest"`)
 	})
 
 	t.Run("create client", func(t *testing.T) {
-		_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+		_, err := Prepare(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 			return nil, errors.New(upstream)
 		}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 		assertSanitized(t, err, "create CLS client")
 	})
 
 	t.Run("bootstrap resources", func(t *testing.T) {
-		_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+		_, err := Prepare(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 			return failingCLS{err: errors.New(upstream)}, nil
 		}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 		assertSanitized(t, err, "prepare fixed CLS resources")
@@ -262,7 +262,7 @@ func TestPreparePreservesContextErrorIdentityWithoutExposingUpstreamText(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			upstreamErr := fmt.Errorf("sid-new skey-new Authorization: private request-body: %w", contextErr)
-			_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+			_, err := Prepare(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 				return nil, upstreamErr
 			}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 
@@ -277,7 +277,7 @@ func TestPreparePreservesContextErrorIdentityWithoutExposingUpstreamText(t *test
 }
 
 func TestPrepareValidatesDependenciesAndOutput(t *testing.T) {
-	factory := func(string, string) (tencentcloud.CLSAPI, error) { return fakeCLS{}, nil }
+	factory := func(string, string) (tencent.CLSAPI, error) { return fakeCLS{}, nil }
 	_, err := Prepare(context.Background(), nil, factory, Options{CredentialsOutput: "unused"})
 	require.ErrorContains(t, err, "account source")
 	_, err = Prepare(context.Background(), testSource(), nil, Options{CredentialsOutput: "unused"})
@@ -290,7 +290,7 @@ func TestPrepareDoesNotReplaceCredentialsWhenBootstrapFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cls.env")
 	require.NoError(t, os.WriteFile(path, []byte("preserve-me"), 0o600))
 
-	_, err := Prepare(context.Background(), testSource(), func(string, string) (tencentcloud.CLSAPI, error) {
+	_, err := Prepare(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 		return nil, errors.New("client unavailable")
 	}, Options{CredentialsOutput: path})
 	require.ErrorContains(t, err, "create CLS client")
