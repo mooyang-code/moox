@@ -160,8 +160,7 @@ Admin executes one database transaction that:
 1. creates the first active super administrator with a bcrypt password hash;
 2. creates the fixed `tencent-default` credential in Admin Secret Management;
 3. creates the control host in SSH Host Management;
-4. creates every additional host;
-5. records a keyed manifest fingerprint and marks setup complete.
+4. creates every additional host.
 
 The Tencent credential uses:
 
@@ -178,14 +177,15 @@ status:       active
 
 Admin encrypts `secret_value` and every SSH password with the existing Admin
 encryption key. The setup service must use transaction-scoped repositories
-so encrypted values and the setup state commit together.
+so all initial records commit or roll back together.
 
 ### `setup status`
 
-Status uses the same SSH tunnel but sends no Admin or Tencent credential
-values. It returns only `not_initialized` or `initialized` and sanitized
-counts. The stored keyed fingerprint never leaves Admin. Same-manifest
-verification happens inside `ApplySetup` when `apply` is retried.
+Status loads the same immutable `custom.toml` snapshot and sends it through the
+SSH tunnel for a read-only comparison against the actual Admin records. It
+returns only `completed`, `incomplete`, or `conflict` plus sanitized counts.
+Credentials are used only for bcrypt or decrypted-value comparison and never
+appear in the response or logs.
 
 ## Admin Setup Service
 
@@ -197,28 +197,37 @@ The service exposes two methods:
 
 ```text
 ApplySetup(SetupManifest) -> SetupResult
-GetSetupStatus() -> SetupStatus
+GetSetupStatus(SetupManifest) -> SetupStatus
 ```
 
 The listener validates that the accepted connection is local. Deployment
 configuration binds it to `127.0.0.1`; startup fails if configuration attempts
 to bind it to a non-loopback address.
 
-`ApplySetup` has three states:
+`ApplySetup` derives state from the actual user, secret, and host rows; it does
+not maintain a separate setup-state table:
 
-- no setup record: validate all records and commit the complete manifest;
-- completed with the same keyed fingerprint: return `unchanged`;
-- completed with a different fingerprint: return `setup_conflict` without
-  changing any row.
+- every expected row is absent: create all rows and return `created`;
+- existing rows match and some expected rows are absent: create only the
+  missing rows in the same transaction and return `created`;
+- every expected row exists and matches: return `unchanged`;
+- any existing expected row conflicts: return `setup_conflict` and change
+  nothing.
 
-The fingerprint is `HMAC-SHA256(admin-encryption-key, canonical-manifest)`. The
-canonical representation has fixed field order, normalized host order, and
-length-prefixed values. Plain SHA-256 is not stored or returned.
+The configured Admin account must be the first active super administrator. If
+the configured row is absent while another active super administrator exists,
+setup reports a conflict instead of creating a second initial Admin. Once the
+configured Admin exists, unrelated administrators created later are ignored.
+Admin passwords are compared with bcrypt; Tencent SecretKey and SSH passwords
+are decrypted only in memory for constant-time comparison. Existing unique
+constraints protect usernames, host addresses, and the fixed Tencent credential.
+Concurrent apply calls re-read after uniqueness conflicts so they resolve to
+`unchanged` or `setup_conflict`, never duplicate rows.
 
-Admin does not permit partial state. If legacy or manually inserted user,
-Tencent credential, or host rows exist before the first setup, the apply
-operation verifies that every existing row matches. Any mismatch aborts the
-transaction. Exact matches may be adopted into the completed setup record.
+`GetSetupStatus` runs the same comparisons without writes. Missing rows produce
+`incomplete`; mismatched rows produce `conflict`; only a complete exact match
+produces `completed`. Unrelated records added later through Admin do not affect
+the result.
 
 ## Deployment Boundary
 
@@ -264,9 +273,9 @@ or Admin password.
 ## Failure Handling
 
 Validation failures stop before build or deployment. A failed control-plane
-deployment does not call `init`. A failed `init` transaction changes no Admin
-data. A lost response after commit is resolved by rerunning the same command;
-the keyed fingerprint returns `unchanged`.
+deployment does not call `setup apply`. A failed apply transaction changes no
+Admin data. A lost response after commit is resolved by rerunning the same
+command; comparison with the stored records returns `unchanged`.
 
 Stable error classes are:
 
@@ -325,15 +334,15 @@ Automated tests must cover:
 - control profile contents and proof that the deploy script no longer creates
   an Admin user;
 - loopback-only setup binding and absence from Caddy/Admin/Gateway routes;
-- one-transaction creation of the user, cloud secret, all hosts, and setup
-  state;
+- one-transaction creation of the user, cloud secret, and all hosts without a
+  separate setup-state table;
 - rollback at every write boundary;
-- same-manifest retry, different-manifest rejection, adoption of exact existing
-  records, and rejection of conflicting existing rows;
+- exact retry, partial completion, adoption of matching existing records, and
+  rejection of conflicting existing rows;
 - encrypted database values and bcrypt password hashing;
 - `custom.toml` byte-for-byte stability across every command;
 - Skill contract checks that forbid direct file-reading commands and enforce
-  validate, deploy, init, and status ordering.
+  validate, deploy, apply, and status ordering.
 
 End-to-end acceptance uses disposable local SSH and Tencent validator fakes,
 then a real remote control host:

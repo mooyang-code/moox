@@ -4,7 +4,7 @@
 
 **Goal:** Add a repository-root `custom.toml` workflow that validates user credentials, deploys the minimal control plane, and atomically initializes the first Admin user, Tencent Cloud credential, and SSH hosts without exposing secrets to an Agent.
 
-**Architecture:** `moox-cli setup` owns strict TOML loading, Tencent/SSH validation, control-plane deployment, SSH tunneling, and sanitized output. Admin owns a loopback-only setup RPC and one transaction that writes all initial records plus an HMAC manifest fingerprint. The MooX Skill invokes only the high-level commands and never reads `custom.toml`.
+**Architecture:** `moox-cli setup` owns strict TOML loading, Tencent/SSH validation, control-plane deployment, SSH tunneling, and sanitized output. Admin owns a loopback-only setup RPC and one transaction that reconciles the initial records directly, without a separate setup-state table. The MooX Skill invokes only the high-level commands and never reads `custom.toml`.
 
 **Tech Stack:** Go 1.24, Cobra, BurntSushi TOML, `golang.org/x/crypto/ssh`, tRPC-Go HTTP/PB, GORM/SQLite, Tencent Cloud SDK, Bash deployment contract tests, MooX Skill Markdown.
 
@@ -31,8 +31,8 @@ lifecycle and may consume those adapters later.
 
 - Create `custom.toml.example`: exact user-facing setup template with empty secrets.
 - Modify `.gitignore`: ignore only repository-root `/custom.toml`.
-- Create `modules/cli/internal/setup/config/config.go`: secure file snapshot, strict TOML decode, canonical manifest, and field validation.
-- Create `modules/cli/internal/setup/config/config_test.go`: file security, parsing, uniqueness, canonicalization, and mutation tests.
+- Create `modules/cli/internal/setup/config/config.go`: secure file snapshot, strict TOML decode, and field validation.
+- Create `modules/cli/internal/setup/config/config_test.go`: file security, parsing, uniqueness, and mutation tests.
 - Create `modules/cli/internal/setup/ssh/client.go`: password SSH, dedicated known-hosts policy, connection validation, and local forwarding.
 - Create `modules/cli/internal/setup/ssh/client_test.go`: SSH fixture, unknown-key behavior, auth failure redaction, and forwarding tests.
 - Create `modules/cli/internal/setup/validate/validate.go`: ordered local, Tencent, and SSH validation with stable result codes.
@@ -50,9 +50,9 @@ lifecycle and may consume those adapters later.
 - Delete `modules/cli/internal/tencentcloud`: remove the CLI-private provider implementation after callers migrate.
 - Create `modules/admin/proto/setup_service.proto`: loopback setup apply/status contract.
 - Regenerate `modules/admin/proto/admingen/setup_service*.go`: generated PB and tRPC bindings.
-- Modify `modules/admin/schema/admin.sql`: add singleton setup state and cloud-secret uniqueness.
+- Modify `modules/admin/schema/admin.sql`: document `cloud` as a Secret Management category; do not add a setup-state table.
 - Create `modules/admin/internal/service/setup/service.go`: transactional create-or-verify domain.
-- Create `modules/admin/internal/service/setup/service_test.go`: commit, rollback, retry, conflict, hash/encryption, and adoption tests.
+- Create `modules/admin/internal/service/setup/service_test.go`: commit, rollback, retry, partial completion, conflict, encryption, and adoption tests.
 - Create `modules/admin/internal/service/setup/rpc/service.go`: PB mapping with sanitized errors.
 - Create `modules/admin/internal/service/setup/rpc/service_test.go`: RPC result and redaction tests.
 - Modify `modules/admin/internal/bootstrap/services.go`: construct the setup service with the shared DB and encryption key.
@@ -141,7 +141,7 @@ go test -count=1 ./internal/setup/config
 
 Expected: FAIL because `config.Load` and its types do not exist.
 
-- [ ] **Step 4: Implement strict loading and canonicalization**
+- [ ] **Step 4: Implement strict loading and immutable snapshots**
 
 Use `toml.Decode` and reject undecoded keys:
 
@@ -174,8 +174,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 ```
 
 Open with `os.Open` after `Lstat`, reject symlinks and non-regular files, compare `os.SameFile` after opening, require current-user ownership and `0600`, read through a size-limited buffer, and retain only the immutable bytes, SHA-256, and file metadata needed by `VerifyUnchanged`.
-
-Canonicalize with length-prefixed fields and hosts sorted by `(name,address,port,username)`; never log or expose the canonical bytes.
 
 - [ ] **Step 5: Promote dependencies and run tests**
 
@@ -473,34 +471,38 @@ git commit -m "refactor(cloud): share provider implementations"
 - Create: `modules/admin/internal/service/setup/service.go`
 - Create: `modules/admin/internal/service/setup/service_test.go`
 
-- [ ] **Step 1: Write the schema failure test**
+- [ ] **Step 1: Lock the no-state-table schema contract**
 
-Require a singleton state table and a unique active Tencent setup credential:
+Add a schema regression test that requires `t_system_setup` to be absent and
+documents the existing uniqueness constraints used by reconciliation:
 
 ```sql
-CREATE TABLE IF NOT EXISTS t_system_setup (
-    c_id INTEGER NOT NULL PRIMARY KEY CHECK (c_id = 1),
-    c_status TEXT NOT NULL CHECK (c_status = 'completed'),
-    c_manifest_hmac TEXT NOT NULL,
-    c_completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username
+ON t_users(c_username);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_tencent_default_active
-ON t_secrets(c_secret_id, c_is_deleted)
-WHERE c_secret_id = 'tencent-default' AND c_is_deleted = 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_host_address
+ON t_ssh_host(c_address);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_secret_id_deleted
+ON t_secrets(c_secret_id, c_is_deleted);
 ```
 
-Run `go test -count=1 ./schema`; expect failure before editing `admin.sql`.
+Update the `t_secrets.c_category` schema comment to include `cloud`; no new
+setup-specific table or index is introduced. Run `go test -count=1 ./schema`;
+expect PASS because setup reuses the current domain constraints.
 
 - [ ] **Step 2: Write transactional domain tests**
 
-Test `created`, identical `unchanged`, different-manifest `ErrConflict`, exact preexisting-row adoption, conflicting-row rejection, and rollback after injected failures at user, secret, each host, and state writes. Verify:
+Test empty-state `created`, exact retry `unchanged`, matching partial-state
+completion, exact preexisting-row adoption, conflicting-row rejection, a
+different active super administrator, and rollback after injected failures at
+the user, secret, and each host write. Verify:
 
 ```go
 assert.True(t, mooxcrypto.VerifyPassword(input.Admin.Password, user.PasswordHash))
 assert.NotEqual(t, input.TencentCloud.SecretKey, storedSecret.SecretValue)
 assert.NotEqual(t, input.ControlHost.Password, storedHost.Password)
-assert.Equal(t, hmacHex(encryptionKey, canonical), state.ManifestHMAC)
+assert.NoError(t, compareStoredManifest(ctx, db, encryptionKey, input))
 ```
 
 - [ ] **Step 3: Implement transaction-scoped repositories**
@@ -511,28 +513,40 @@ Do not call DAO methods bound to the outer DB. Construct repositories from the t
 func (s *Service) Apply(ctx context.Context, in Manifest) (Result, error) {
     var out Result
     err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-        fingerprint := manifestHMAC(s.encryptionKey, canonicalManifest(in))
-        state, err := loadState(tx)
+        created := 0
+        n, err := ensureAdmin(tx, in.Admin)
         if err != nil { return err }
-        if state != nil {
-            if subtle.ConstantTimeCompare([]byte(state.ManifestHMAC), []byte(fingerprint)) == 1 {
-                out.Action = "unchanged"
-                return nil
-            }
-            return ErrConflict
-        }
-        if err := ensureAdmin(tx, in.Admin); err != nil { return err }
-        if err := ensureTencentSecret(tx, in.TencentCloud, s.encryptionKey); err != nil { return err }
-        if err := ensureHosts(tx, in.Hosts(), s.encryptionKey); err != nil { return err }
-        if err := insertState(tx, fingerprint); err != nil { return err }
-        out.Action = "created"
+        created += n
+        n, err = ensureTencentSecret(tx, in.TencentCloud, s.encryptionKey)
+        if err != nil { return err }
+        created += n
+        n, err = ensureHosts(tx, in.Hosts(), s.encryptionKey)
+        if err != nil { return err }
+        created += n
+        out.Action = "unchanged"
+        if created > 0 { out.Action = "created" }
         return nil
     })
     return out, err
 }
 ```
 
-Reuse `packages/crypto` for bcrypt and encryption. Add `cloud` to the accepted SecretMgr category set so later management operations recognize the record.
+Each `ensure` function returns `ErrConflict` when an existing expected row does
+not match. When the configured Admin row is absent, `ensureAdmin` must reject an
+existing active super administrator rather than create a second initial Admin;
+after the configured Admin exists, unrelated administrators are ignored.
+Compare bcrypt hashes with `VerifyPassword`; decrypt Tencent SecretKey and SSH
+passwords only in memory and compare secret bytes in constant time. On a
+uniqueness race, re-read inside the transaction and map the result to
+`unchanged` or `ErrConflict`.
+
+Implement `Inspect` with the same comparison helpers but no writes. It returns
+`completed` when every expected record matches, `incomplete` when records are
+missing without conflicts, and `conflict` on any mismatch. Unrelated records do
+not affect setup status.
+
+Reuse `packages/crypto` for bcrypt and encryption. Add `cloud` to the accepted
+SecretMgr category set so later management operations recognize the record.
 
 - [ ] **Step 4: Run Admin domain tests**
 
@@ -547,7 +561,7 @@ Expected: PASS.
 
 ```bash
 git add modules/admin/schema modules/admin/internal/service/setup modules/admin/internal/service/secret/rpc
-git commit -m "feat(admin): add atomic system setup domain"
+git commit -m "feat(admin): add atomic setup domain"
 ```
 
 ## Task 5: Expose A Loopback-Only Setup RPC
@@ -566,7 +580,10 @@ git commit -m "feat(admin): add atomic system setup domain"
 
 - [ ] **Step 1: Define the private protocol**
 
-Add messages with `password`, `secret_id`, and `secret_key` fields only in requests. Responses contain action and counts; the stored HMAC never leaves Admin:
+Add messages with `password`, `secret_id`, and `secret_key` fields only in
+requests. Apply and status both accept the manifest because status compares it
+with the real records. Responses contain only state, action, and sanitized
+counts:
 
 ```proto
 service Setup {
@@ -575,6 +592,13 @@ service Setup {
 }
 
 message ApplySetupReq {
+  SetupAdmin admin = 1;
+  SetupTencentCloud tencent_cloud = 2;
+  SetupHost control_host = 3;
+  repeated SetupHost other_hosts = 4;
+}
+
+message GetSetupStatusReq {
   SetupAdmin admin = 1;
   SetupTencentCloud tencent_cloud = 2;
   SetupHost control_host = 3;
@@ -605,7 +629,7 @@ Register only on the dedicated service:
 ```go
 adminpb.RegisterSetupService(
     s.Service("trpc.moox.admin.Setup"),
-    setuprpc.NewService(services.SystemSetup),
+    setuprpc.NewService(services.Setup),
 )
 ```
 
@@ -638,8 +662,8 @@ git commit -m "feat(admin): expose loopback setup API"
 - [ ] **Step 1: Write failing forwarded-client tests**
 
 Use a fake SSH forwarder and HTTP server to assert the request reaches
-`/trpc.moox.admin.Setup/ApplySetup`, status uses
-`GetSetupStatus`, context cancellation closes the forward, and remote
+`/trpc.moox.admin.Setup/ApplySetup`, status sends the same in-memory manifest
+to `GetSetupStatus`, context cancellation closes the forward, and remote
 responses containing unexpected text are converted to stable errors.
 
 - [ ] **Step 2: Run and verify failure**
@@ -979,7 +1003,7 @@ git commit -m "docs(skill): guide custom setup initialization"
 ## Task 11: Run Cross-Module Security And Acceptance Verification
 
 **Files:**
-- Create: `modules/admin/test/system_setup_e2e_test.go`
+- Create: `modules/admin/test/setup_e2e_test.go`
 - Create: `modules/cli/test/setup_e2e_test.go`
 - Modify: `Makefile`
 
@@ -987,8 +1011,9 @@ git commit -m "docs(skill): guide custom setup initialization"
 
 Start Admin with a temporary database, `0600` encryption-key file, and
 loopback setup listener. Send a manifest through HTTP and verify database
-rows, bcrypt, ciphertext, state HMAC, retry, and conflict. Attempt the same path
-through browser Admin and node Gateway ports and require route-not-found.
+rows, bcrypt, ciphertext, exact retry, partial completion, and conflict. Assert
+that no `t_system_setup` table exists. Attempt the same path through browser
+Admin and node Gateway ports and require route-not-found.
 
 - [ ] **Step 2: Add the CLI workflow E2E**
 
@@ -1046,13 +1071,13 @@ With a user-created `0600 custom.toml` that the Agent never reads:
 ```
 
 Verify signed health, public Web access, browser login, encrypted Admin rows,
-same-manifest `unchanged`, public setup route rejection, and byte-for-byte
-manifest stability.
+exact retry `unchanged`, record-derived `completed` status, public setup route
+rejection, and byte-for-byte manifest stability.
 
 - [ ] **Step 7: Commit acceptance coverage**
 
 ```bash
-git add Makefile modules/admin/test/system_setup_e2e_test.go modules/cli/test/setup_e2e_test.go
+git add Makefile modules/admin/test/setup_e2e_test.go modules/cli/test/setup_e2e_test.go
 git commit -m "test: verify custom setup workflow"
 ```
 
