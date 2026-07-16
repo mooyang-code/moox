@@ -8,7 +8,7 @@ const readStyle = (relativePath: string) => fs.readFileSync(path.resolve(__dirna
 
 const expectMargin = (source: string, selector: string, property: 'margin-top' | 'margin-bottom', value: number) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const token = { 8: '--moox-space-2', 12: '--moox-space-3', 20: '--moox-space-5' }[value];
+  const token = { 5: '--moox-space-toolbar-table', 8: '--moox-space-2', 12: '--moox-space-3', 20: '--moox-space-5' }[value];
   const expected = token ? `(?:${value}px|var\\(${token}\\))` : `${value}px`;
   expect(source).toMatch(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?${property}:\\s*${expected};`));
 };
@@ -56,12 +56,12 @@ describe('page layout standards', () => {
     expect(definitions).not.toContain('维护生产计算用的 Python 因子源码');
     expect(definitions).not.toContain('本页管理的是 factor 服务自己的计算定义');
     expect(definitions).not.toContain('class="filters"');
-    expectMargin(definitions, '.page-head', 'margin-bottom', 8);
+    expectMargin(definitions, '.page-head', 'margin-bottom', 5);
     expect(definitions).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
 
     expect(bindings).not.toContain('把启用的因子绑定到 K 线数据集');
     expect(bindings).not.toContain('class="filters"');
-    expectMargin(bindings, '.page-head', 'margin-bottom', 8);
+    expectMargin(bindings, '.page-head', 'margin-bottom', 5);
     expect(bindings).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
     expect(bindings).not.toContain('.top-alert {');
   });
@@ -82,7 +82,7 @@ describe('page layout standards', () => {
     expectMargin(taskManagement, '.task-management-content', 'margin-top', 12);
     expectMargin(taskInstances, '.task-toolbar', 'margin-bottom', 8);
     expect(collectorRules).toContain('class="rule-toolbar"');
-    expectMargin(collectorRules, '.rule-toolbar', 'margin-bottom', 8);
+    expectMargin(collectorRules, '.rule-toolbar', 'margin-bottom', 5);
     expect(dataManagement).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
 
     expectMargin(gatewayNodes, '.toolbar', 'margin-bottom', 8);

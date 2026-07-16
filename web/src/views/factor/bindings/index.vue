@@ -279,7 +279,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--moox-space-2);
+  margin-bottom: var(--moox-space-toolbar-table);
 }
 
 .page-head h2 {

@@ -1264,7 +1264,7 @@ onMounted(() => {
 
 <style scoped>
 .rule-toolbar {
-  margin-bottom: var(--moox-space-2);
+  margin-bottom: var(--moox-space-toolbar-table);
 }
 
 .moox-inner {
