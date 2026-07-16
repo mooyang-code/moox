@@ -31,7 +31,9 @@ describe('create button style', () => {
       if (!ast) continue;
 
       walk(ast, (node) => {
-        if (node.type !== 1 || node.tag !== 'a-button' || !createWords.test(node.loc.source)) return;
+        if (node.type !== 1 || node.tag !== 'a-button') return;
+        const visibleContent = (node.children || []).map((child: any) => child.loc.source).join(' ');
+        if (!createWords.test(visibleContent)) return;
         const attributes = Object.fromEntries(
           node.props
             .filter((prop: any) => prop.type === 6)
@@ -44,5 +46,13 @@ describe('create button style', () => {
     }
 
     expect(violations, `create buttons without type="primary" status="success":\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps compact header space launchers as blue icon buttons', () => {
+    const header = readFileSync(resolve(srcRoot, 'layout/components/Header/components/header-left/index.vue'), 'utf8');
+    const layoutHead = readFileSync(resolve(srcRoot, 'layout/layout-head/index.vue'), 'utf8');
+
+    expect(header).toContain('<a-button type="text" size="small" title="新建空间"');
+    expect(layoutHead).toContain('class="space-setting-button" type="text" size="small" title="新建空间"');
   });
 });

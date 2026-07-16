@@ -20,7 +20,7 @@
           </div>
         </template>
       </a-select>
-      <a-button type="primary" status="success" size="small" title="新建空间" style="margin-left: 8px;" @click="openCreate">
+      <a-button type="text" size="small" title="新建空间" style="margin-left: 8px;" @click="openCreate">
         <template #icon><icon-plus /></template>
       </a-button>
     </div>

@@ -46,7 +46,7 @@
               {{ space.name || space.space_id }}
             </a-option>
           </a-select>
-          <a-button class="space-setting-button" type="primary" status="success" size="small" title="新建空间" @click="openCreate">
+          <a-button class="space-setting-button" type="text" size="small" title="新建空间" @click="openCreate">
             <template #icon><icon-plus /></template>
           </a-button>
           <a-button class="space-setting-button" type="text" size="small" title="空间管理" @click="goSpaceSettings">
