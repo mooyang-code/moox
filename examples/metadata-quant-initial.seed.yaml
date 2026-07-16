@@ -7,8 +7,6 @@ spaces:
   - { space_id: stock_us, name: 美股市场, description: 美股证券、指数、行情与公司行动数据, owner: quant, status: active }
   - { space_id: crypto_binance, name: 币安市场, description: 币安现货、永续合约及数字资产基本面数据, owner: quant, status: active }
   - { space_id: crypto_okx, name: 欧易市场, description: OKX现货与永续合约行情数据, owner: quant, status: active }
-  - { space_id: macro_global, name: 全球宏观, description: 汇率、利率与大类资产数据, owner: quant, status: active }
-  - { space_id: quant_research, name: 量化研究, description: 因子、策略、组合及研究结果, owner: quant, status: active }
 
 data_sources:
   - { space_id: stock_cn, data_source_id: quantclass_stock, name: QuantClass股票数据, kind: file_import, market: CN, timezone: Asia/Shanghai, config_json: '{}', status: active }
@@ -17,8 +15,6 @@ data_sources:
   - { space_id: crypto_binance, data_source_id: binance, name: Binance, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
   - { space_id: crypto_binance, data_source_id: coinmarketcap, name: CoinMarketCap, kind: vendor_api, market: crypto, timezone: UTC, config_json: '{}', status: active }
   - { space_id: crypto_okx, data_source_id: okx, name: OKX, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
-  - { space_id: macro_global, data_source_id: quantclass_macro, name: QuantClass宏观数据, kind: file_import, market: global, timezone: UTC, config_json: '{}', status: active }
-  - { space_id: quant_research, data_source_id: quantclass_research, name: QuantClass研究数据, kind: file_import, market: CN, timezone: Asia/Shanghai, config_json: '{}', status: active }
 
 field_groups:
   - { space_id: stock_cn, group_id: identity, name: 标识信息, sort_order: 10, status: active }
@@ -42,10 +38,6 @@ field_groups:
   - { space_id: crypto_okx, group_id: identity, name: 标识信息, sort_order: 10, status: active }
   - { space_id: crypto_okx, group_id: quote, name: 行情价格, sort_order: 20, status: active }
   - { space_id: crypto_okx, group_id: derivatives, name: 合约指标, sort_order: 30, status: active }
-  - { space_id: macro_global, group_id: identity, name: 标识信息, sort_order: 10, status: active }
-  - { space_id: macro_global, group_id: macro, name: 宏观指标, sort_order: 20, status: active }
-  - { space_id: quant_research, group_id: identity, name: 标识信息, sort_order: 10, status: active }
-  - { space_id: quant_research, group_id: strategy, name: 策略组合, sort_order: 20, status: active }
 
 fields:
   # A股公共字段
@@ -137,38 +129,6 @@ fields:
   - { space_id: crypto_okx, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
   - { space_id: crypto_okx, group_id: derivatives, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
 
-  # 宏观与研究字段
-  - { space_id: macro_global, group_id: identity, field_id: indicator_id, name: 指标ID, value_type: string, sort_order: 10, status: active }
-  - { space_id: macro_global, group_id: identity, field_id: data_time, name: 数据时间, value_type: time, sort_order: 20, status: active }
-  - { space_id: macro_global, group_id: macro, field_id: value, name: 指标值, value_type: double, sort_order: 10, status: active }
-  - { space_id: macro_global, group_id: macro, field_id: yield_rate, name: 到期收益率, value_type: double, unit: percent, sort_order: 20, status: active }
-  - { space_id: macro_global, group_id: macro, field_id: change_pct, name: 涨跌幅, value_type: double, unit: percent, sort_order: 30, status: active }
-  - { space_id: macro_global, group_id: macro, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
-  - { space_id: quant_research, group_id: identity, field_id: security_code, name: 证券代码, value_type: string, sort_order: 10, status: active }
-  - { space_id: quant_research, group_id: identity, field_id: data_time, name: 数据时间, value_type: time, sort_order: 20, status: active }
-  - { space_id: quant_research, group_id: strategy, field_id: strategy_id, name: 策略ID, value_type: string, sort_order: 10, status: active }
-  - { space_id: quant_research, group_id: strategy, field_id: strategy_name, name: 策略名称, value_type: string, sort_order: 20, status: active }
-  - { space_id: quant_research, group_id: strategy, field_id: equity_curve, name: 资金曲线, value_type: double, sort_order: 30, status: active }
-  - { space_id: quant_research, group_id: strategy, field_id: benchmark, name: 基准曲线, value_type: double, sort_order: 40, status: active }
-  - { space_id: quant_research, group_id: strategy, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
-
-factors:
-  - { space_id: quant_research, factor_id: atr, name: 真实波幅, algorithm: ATR, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: bias, name: 乖离率, algorithm: BIAS, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: cci, name: 顺势指标, algorithm: CCI, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: rsi, name: 相对强弱, algorithm: RSI, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: macd, name: 指数平滑异同, algorithm: MACD, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: mtm_ma, name: 动量均线, algorithm: MTM_MA, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: acd, name: 收集派发, algorithm: ACD, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: vr, name: 成交量比率, algorithm: VR, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: br, name: 人气指标, algorithm: BR, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: cr, name: 中间意愿, algorithm: CR, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: coppock, name: 估波曲线, algorithm: COPPOCK, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: srmi, name: 随机动量, algorithm: SRMI, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: eom, name: 简易波动, algorithm: EOM, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: money_flow, name: 资金流量, algorithm: MONEY_FLOW, value_type: double, status: active }
-  - { space_id: quant_research, factor_id: pvt, name: 价量趋势, algorithm: PVT, value_type: double, status: active }
-
 datasets:
   # stock_cn：attributes.source_directories 覆盖本地原始目录，避免把来源文件结构误当领域边界。
   - { space_id: stock_cn, dataset_id: security_master_daily, data_source_id: quantclass_stock, name: 证券日汇总, data_kind: record, freqs: [1d], status: active, attributes: { source_directories: 每日A股股票汇总 } }
@@ -197,11 +157,6 @@ datasets:
   - { space_id: crypto_binance, dataset_id: asset_fundamental_daily, data_source_id: coinmarketcap, name: 币种基本面, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 市值数据-BN币对|coinmarketcap基本面数据-仅币安币对 } }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, data_source_id: okx, name: 现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX现货1小时数据-币对分类 } }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, data_source_id: okx, name: 永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX永续合约1小时数据-币对分类 } }
-  - { space_id: macro_global, dataset_id: cny_exchange_rate, data_source_id: quantclass_macro, name: 人民币汇率, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: CNY汇率数据 } }
-  - { space_id: macro_global, dataset_id: treasury_yield, data_source_id: quantclass_macro, name: 国债收益率, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 国债到期收益率数据 } }
-  - { space_id: macro_global, dataset_id: asset_class_kline, data_source_id: quantclass_macro, name: 大类资产行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 大类资产 } }
-  - { space_id: quant_research, dataset_id: factor_observation, data_source_id: quantclass_research, name: 因子观测值, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 反趋向指标因子|技术指标因子|摆动指标因子|能量指标因子|趋向指标因子|量价指标因子|多因子系列 } }
-  - { space_id: quant_research, dataset_id: strategy_equity, data_source_id: quantclass_research, name: 策略资金曲线, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: QuantClass选股策略汇总|指数成分股资金曲线 } }
 
 dataset_columns:
   # 每个 Dataset 都提供 raw_payload，承接尚未标准化但必须无损保留的原始列。
@@ -231,11 +186,6 @@ dataset_columns:
   - { space_id: crypto_binance, dataset_id: asset_fundamental_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: macro_global, dataset_id: cny_exchange_rate, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: macro_global, dataset_id: treasury_yield, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: macro_global, dataset_id: asset_class_kline, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: quant_research, dataset_id: strategy_equity, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
 
   # 所有行情数据集统一使用 subject_id + data_time 作为粒度；这里只声明可写业务列。
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: time, required: true, status: active }
@@ -309,26 +259,6 @@ dataset_columns:
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
-  - { space_id: macro_global, dataset_id: treasury_yield, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
-  - { space_id: macro_global, dataset_id: treasury_yield, column_name: yield_rate, origin_type: field, origin_id: yield_rate, value_type: double, required: true, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: atr, origin_type: factor, origin_id: atr, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: bias, origin_type: factor, origin_id: bias, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: cci, origin_type: factor, origin_id: cci, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: rsi, origin_type: factor, origin_id: rsi, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: macd, origin_type: factor, origin_id: macd, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: mtm_ma, origin_type: factor, origin_id: mtm_ma, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: acd, origin_type: factor, origin_id: acd, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: vr, origin_type: factor, origin_id: vr, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: br, origin_type: factor, origin_id: br, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: cr, origin_type: factor, origin_id: cr, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: coppock, origin_type: factor, origin_id: coppock, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: srmi, origin_type: factor, origin_id: srmi, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: eom, origin_type: factor, origin_id: eom, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: money_flow, origin_type: factor, origin_id: money_flow, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: factor_observation, column_name: pvt, origin_type: factor, origin_id: pvt, value_type: double, status: active }
-  - { space_id: quant_research, dataset_id: strategy_equity, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
-  - { space_id: quant_research, dataset_id: strategy_equity, column_name: equity_curve, origin_type: field, origin_id: equity_curve, value_type: double, required: true, status: active }
 
 views:
   - { space_id: stock_cn, view_id: stock_kline_view, name: 股票行情查询, primary_dataset_id: stock_kline, dataset_ids: [stock_kline], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
@@ -337,5 +267,3 @@ views:
   - { space_id: stock_us, view_id: us_kline_view, name: 美股行情查询, primary_dataset_id: stock_kline_daily, dataset_ids: [stock_kline_daily], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
   - { space_id: crypto_binance, view_id: spot_kline_view, name: 币安现货查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
   - { space_id: crypto_okx, view_id: spot_kline_view, name: 欧易现货查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: macro_global, view_id: macro_view, name: 宏观指标查询, primary_dataset_id: treasury_yield, dataset_ids: [treasury_yield, cny_exchange_rate, asset_class_kline], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, status: active }
-  - { space_id: quant_research, view_id: factor_view, name: 因子结果查询, primary_dataset_id: factor_observation, dataset_ids: [factor_observation], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
