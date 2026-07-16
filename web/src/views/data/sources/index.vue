@@ -207,7 +207,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 4px;
 }
 
 .page-head h2 {
