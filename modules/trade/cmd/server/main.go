@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/masking"

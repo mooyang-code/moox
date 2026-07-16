@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	_ "github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"

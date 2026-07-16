@@ -77,19 +77,19 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
 	return healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.service"), hr.buildServiceRouter())
 }
 
-func (hr *HTTPRouter) buildControlRouter() *mux.Router {
+func (hr *HTTPRouter) buildControlRouter() http.Handler {
 	router := mux.NewRouter()
 
 	// 注册新控制台 API 路由: /api/admin/{service}/{method}
-	router.HandleFunc(
+	router.Handle(
 		"/api/admin/{service}/{method}",
-		hr.handleControlRequest).
-		Methods("GET", "POST", "PUT", "DELETE")
+		corsMiddleware(http.HandlerFunc(hr.handleControlRequest))).
+		Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
 
 	return router
 }
 
-func (hr *HTTPRouter) buildServiceRouter() *mux.Router {
+func (hr *HTTPRouter) buildServiceRouter() http.Handler {
 	router := mux.NewRouter()
 	router.HandleFunc(
 		"/api/service/{service}/{method}",
@@ -99,7 +99,7 @@ func (hr *HTTPRouter) buildServiceRouter() *mux.Router {
 }
 
 // buildRouter remains the control-router test helper.
-func (hr *HTTPRouter) buildRouter() *mux.Router { return hr.buildControlRouter() }
+func (hr *HTTPRouter) buildRouter() http.Handler { return hr.buildControlRouter() }
 
 // handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
 func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {

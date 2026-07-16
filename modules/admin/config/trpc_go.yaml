@@ -8,7 +8,6 @@ server:
     - validation
     - masking
     - opentelemetry
-    - cors
     - prometheus
   timeout: 5000
   admin:
@@ -99,9 +98,6 @@ plugins:
       path: /metrics
       enablepush: false
   auth:
-    cors:
-      apply_to_all_path:
-        - insecure_allow_all
     validation:
       enable_error_log: false
       server_validate_err_code: 100101

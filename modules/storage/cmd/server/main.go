@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mooyang-code/go-commlib/trpc-filter/cors"
 	bootstrapeventbus "github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"

@@ -8,7 +8,6 @@ require (
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/matoous/go-nanoid/v2 v2.1.0
-	github.com/mooyang-code/go-commlib/trpc-filter/cors v0.0.1
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
