@@ -56,6 +56,7 @@ const ops = findDirectory('ops');
 
 assert(zhCN.includes('["compute-collector"]: "数据采集"'), 'compute-collector zh-CN label must be 数据采集');
 assert(zhCN.includes('["factor-definitions"]: "因子定义"'), 'factor-definitions zh-CN label must be 因子定义');
+assert(zhCN.includes('["collector-data-management"]: "数据管理"'), 'collector-data-management zh-CN label must be 数据管理');
 assert(zhCN.includes('["collector-datasets"]: "数据集合"'), 'collector-datasets zh-CN label must be 数据集合');
 assert(zhCN.includes('["collector-views"]: "数据视图"'), 'collector-views zh-CN label must be 数据视图');
 assert(zhCN.includes('["factor-results"]: "因子结果"'), 'factor-results zh-CN label must be 因子结果');
@@ -63,7 +64,7 @@ assert(zhCN.includes('["factor-results"]: "因子结果"'), 'factor-results zh-C
 assert(dataAssets.parentId === '0', 'data-assets must remain a root menu');
 assert(dataAssets.path === '/data/sources', 'data-assets default path must be /data/sources');
 assert(dataCollection.parentId === '0', 'compute-collector must be a root menu');
-assert(dataCollection.path === '/collector/datasets', 'compute-collector default path must be /collector/datasets');
+assert(dataCollection.path === '/collector/data-management', 'compute-collector default path must be /collector/data-management');
 assert(factorCompute.parentId === '0', 'factor-compute must be a root menu');
 assert(factorCompute.sort > dataCollection.sort, 'factor-compute must appear after data collection');
 assert(factorCompute.sort < trading.sort, 'factor-compute must appear before trading');
@@ -84,16 +85,14 @@ assert(dataSources.parentId === dataAssets.id, 'data-sources must be under data-
 assert(dataSubjects.parentId === dataAssets.id, 'data-subjects must be under data-assets');
 assert(dataFields.parentId === dataAssets.id, 'data-fields must be under data-assets');
 
-const collectorDatasets = findMenu('collector-datasets');
-const collectorViews = findMenu('collector-views');
+const collectorDataManagement = findMenu('collector-data-management');
 const collectorRules = findMenu('collector-rules');
 const collectorCloudnodes = findMenu('collector-cloudnodes');
-assert(collectorDatasets.parentId === dataCollection.id, 'collector-datasets must be under data collection');
-assert(collectorViews.parentId === dataCollection.id, 'collector-views must be under data collection');
+assert(collectorDataManagement.parentId === dataCollection.id, 'collector-data-management must be under data collection');
+assert(collectorDataManagement.path === '/collector/data-management', 'collector-data-management path must be canonical');
 assert(collectorRules.parentId === dataCollection.id, 'collector-rules must be under data collection');
 assert(collectorCloudnodes.parentId === dataCollection.id, 'collector-cloudnodes must be under data collection');
-assert(collectorDatasets.sort < collectorViews.sort, 'data collections must appear before data views');
-assert(collectorViews.sort < collectorRules.sort, 'data views must appear before collection rules');
+assert(collectorDataManagement.sort < collectorRules.sort, 'data management must appear before collection rules');
 assert(!staticMenu.includes('menu("0304"'), 'task instances must not remain a separate visible menu');
 assert(!staticMenu.includes('menu("0302"'), 'code packages must not remain a separate visible menu');
 
@@ -113,5 +112,7 @@ assertNotVisible('data-overview');
 assertNotVisible('data-browse');
 assertNotVisible('data-view-list');
 assertNotVisible('data-view-browse');
+assertNotVisible('collector-datasets');
+assertNotVisible('collector-views');
 
 console.log('menu structure ok');

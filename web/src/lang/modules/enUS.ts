@@ -44,6 +44,7 @@ export default {
     ["data-view-list"]: "view list",
     ["data-view-browse"]: "view browse",
     ["compute-collector"]: "data collection",
+    ["collector-data-management"]: "data management",
     ["collector-datasets"]: "data collections",
     ["collector-views"]: "data views",
     ["collector-cloudnodes"]: "cloud nodes",

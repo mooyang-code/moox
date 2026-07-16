@@ -1,6 +1,28 @@
 import { HOME_PATH } from "@/config/index";
 import Layout from "@/layout/index.vue";
 
+const collectorDataManagementPath = "/collector/data-management";
+
+function redirectCollectorDatasets(to: { query?: Record<string, unknown> }) {
+  return {
+    path: collectorDataManagementPath,
+    query: {
+      tab: "datasets",
+      datasetTab: to.query?.tab === "browse" ? "browse" : "definitions"
+    }
+  };
+}
+
+function redirectCollectorViews(to: { query?: Record<string, unknown> }) {
+  return {
+    path: collectorDataManagementPath,
+    query: {
+      tab: "views",
+      viewTab: to.query?.tab === "browse" ? "browse" : "definitions"
+    }
+  };
+}
+
 export const staticRoutes = [
   {
     path: "/",
@@ -55,7 +77,7 @@ export const staticRoutes = [
       },
       {
         path: "/data/datasets",
-        redirect: { path: "/collector/datasets", query: { tab: "definitions" } },
+        redirect: redirectCollectorDatasets,
         meta: { title: "collector-datasets", hide: true }
       },
       {
@@ -107,27 +129,36 @@ export const staticRoutes = [
       },
       {
         path: "/data/views",
-        redirect: { path: "/collector/views", query: { tab: "definitions" } },
+        redirect: redirectCollectorViews,
         meta: { title: "collector-views", hide: true }
       },
       {
         path: "/data/view-browse",
-        redirect: { path: "/collector/views", query: { tab: "browse" } },
+        redirect: () => ({
+          path: collectorDataManagementPath,
+          query: { tab: "views", viewTab: "browse" }
+        }),
         meta: { title: "collector-views", hide: true }
       },
       {
         path: "/data/overview",
-        redirect: "/collector/datasets",
+        redirect: redirectCollectorDatasets,
         meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/list",
-        redirect: { path: "/collector/datasets", query: { tab: "browse" } },
+        redirect: () => ({
+          path: collectorDataManagementPath,
+          query: { tab: "datasets", datasetTab: "browse" }
+        }),
         meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/data/browse",
-        redirect: { path: "/collector/datasets", query: { tab: "browse" } },
+        redirect: () => ({
+          path: collectorDataManagementPath,
+          query: { tab: "datasets", datasetTab: "browse" }
+        }),
         meta: { title: "collector-datasets", hide: true }
       },
       {
@@ -142,16 +173,20 @@ export const staticRoutes = [
         meta: { title: "collector-cloudnodes", hide: true }
       },
       {
+        path: "/collector/data-management",
+        name: "collector-data-management",
+        component: () => import("@/views/collector/data-management/index.vue"),
+        meta: { title: "collector-data-management" }
+      },
+      {
         path: "/collector/datasets",
-        name: "collector-datasets",
-        component: () => import("@/views/collector/datasets/index.vue"),
-        meta: { title: "collector-datasets" }
+        redirect: redirectCollectorDatasets,
+        meta: { title: "collector-datasets", hide: true }
       },
       {
         path: "/collector/views",
-        name: "collector-views",
-        component: () => import("@/views/collector/views/index.vue"),
-        meta: { title: "collector-views" }
+        redirect: redirectCollectorViews,
+        meta: { title: "collector-views", hide: true }
       },
       {
         path: "/collector/cloudnodes",
