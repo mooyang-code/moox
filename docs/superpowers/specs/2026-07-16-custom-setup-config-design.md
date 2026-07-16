@@ -104,6 +104,10 @@ moox-cli setup trust-host --file ./custom.toml --host control --fingerprint <sha
 moox-cli setup deploy-control --file ./custom.toml
 moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
+moox-cli setup hosts --file ./custom.toml
+moox-cli setup deploy-storage --file ./custom.toml --host <host-name>
+moox-cli metadata spaces --file ./examples/metadata-quant-initial.seed.yaml
+moox-cli setup metadata-import --file ./custom.toml --storage-host <host-name> --spaces <space-id,...>
 ```
 
 `--file` defaults to `./custom.toml`, but the resolved path must still be the
@@ -186,6 +190,37 @@ SSH tunnel for a read-only comparison against the actual Admin records. It
 returns only `completed`, `incomplete`, or `conflict` plus sanitized counts.
 Credentials are used only for bcrypt or decrypted-value comparison and never
 appear in the response or logs.
+
+### `setup hosts` And `setup deploy-storage`
+
+Storage placement begins only after `setup status` reports `completed`.
+`setup hosts` returns the manifest host name, address, port, username, and role;
+it never returns an SSH password. The Skill asks the user to choose one of these
+hosts. The CLI does not infer a default, so `setup deploy-storage --host` is
+required even when the user chooses `control_host`.
+
+The Storage deployment is one indivisible initial unit containing
+`storage-access`, `storage-view-index`, `storage-view-builder`, and
+`storage-view-query`. All four components run on the selected host. The unit is
+installed under `~/moox/storage`, separate from the control deployment at
+`~/moox/prod`, so choosing the control host cannot replace Admin, Gateway, or
+Web. After readiness succeeds, the CLI updates the Storage service placement
+through the private SysDeploy endpoint on the control host.
+
+### Metadata Space Selection And Import
+
+Business metadata initialization is a separate, optional step. It does not add
+fields to or modify `custom.toml`. `metadata spaces` lists the stable Space IDs,
+names, and descriptions in the default seed without connecting to a server.
+The Skill presents that list in natural language and lets the user select all,
+some, or none.
+
+For a non-empty selection, `setup metadata-import` first verifies that control
+setup is complete, then connects to the explicitly named Storage host and
+forwards its loopback Metadata API through SSH. Filtering retains the complete
+dependency closure for each selected Space, including its data sources,
+datasets, views, fields, columns, subjects, routes, and shared global storage
+resources. Unknown or duplicate Space selections fail before any import call.
 
 ## Admin Setup Service
 
@@ -318,8 +353,16 @@ The Skill must:
    ask the user to confirm interactive browser login when required.
 9. Tell the user that `custom.toml` remains unchanged and still contains
    plaintext credentials.
-10. Start the second-stage conversation, selecting hosts and service placement
-    incrementally rather than requesting the complete topology at once.
+10. Run `setup hosts` and ask the user in natural language which listed host
+    should run Storage. Do not silently default to the control host.
+11. Run `setup deploy-storage --host <selected-name>` and require readiness for
+    all four Storage components before continuing.
+12. Run `metadata spaces` against the default seed, present the available
+    business spaces, and let the user choose all, some, or no spaces.
+13. If the selection is non-empty, translate names to stable Space IDs and run
+    `setup metadata-import` with the selected Storage host and Space IDs.
+14. Keep `custom.toml` initialization and metadata import as visibly separate
+    steps. Never write deployment placement or metadata choices into the file.
 
 ## Tests And Acceptance
 
@@ -341,8 +384,14 @@ Automated tests must cover:
   rejection of conflicting existing rows;
 - encrypted database values and bcrypt password hashing;
 - `custom.toml` byte-for-byte stability across every command;
+- sanitized host listing and mandatory explicit Storage placement;
+- one-unit Storage packaging, separate remote directory, readiness checks, and
+  private SysDeploy placement updates;
+- metadata Space catalog output, selection dependency closure, unknown and
+  duplicate selection rejection, and SSH-tunneled import;
 - Skill contract checks that forbid direct file-reading commands and enforce
-  validate, deploy, apply, and status ordering.
+  validate, control deploy, apply, status, Storage placement, and metadata
+  selection/import ordering.
 
 End-to-end acceptance uses disposable local SSH and Tencent validator fakes,
 then a real remote control host:
@@ -357,3 +406,10 @@ then a real remote control host:
 6. The public login API accepts the configured account, and the user can log in
    through the browser.
 7. `custom.toml` has the same bytes, owner, and `0600` mode after the workflow.
+8. The user can choose control or another listed host; all four Storage
+   components become ready there without replacing the control deployment.
+9. The metadata catalog is shown only after Storage readiness, and importing a
+   subset creates resources only for the selected Spaces and their complete
+   dependencies.
+10. Choosing no metadata Spaces performs no import and leaves `custom.toml`
+    unchanged.

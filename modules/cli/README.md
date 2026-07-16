@@ -11,7 +11,7 @@ moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
-moox-cli setup ...                  # 校验、部署并初始化控制面
+moox-cli setup ...                  # 初始化控制面、部署 Storage、导入初始元数据
 ```
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
@@ -32,6 +32,33 @@ moox-cli setup status --file ./custom.toml
 再执行 `setup trust-host --host <name> --fingerprint <SHA256:...>`。初始化命令只在
 进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`custom.toml`
 是用户维护的只读输入，CLI 不修改或删除该文件。
+
+控制面初始化完成后，再单独选择 Storage 主机和业务元数据。Admin、Gateway、
+Web 固定部署在 `control_host`；Storage 的四个初始组件作为一个单元部署到明确
+选择的 `control_host` 或 `other_hosts` 主机：
+
+```bash
+# 只输出主机名、地址、端口、用户名和角色，不输出密码
+moox-cli setup hosts --file ./custom.toml
+
+# --host 必须显式指定 custom.toml 中的主机名
+moox-cli setup deploy-storage --file ./custom.toml --host compute
+
+# 展示默认 seed 中可选的业务空间
+moox-cli metadata spaces --file ./examples/metadata-quant-initial.seed.yaml
+
+# 用户确认空间后，通过 Storage 主机的 SSH 隧道导入完整依赖闭包
+moox-cli setup metadata-import \
+  --file ./custom.toml \
+  --storage-host compute \
+  --seed ./examples/metadata-quant-initial.seed.yaml \
+  --spaces stock_cn,crypto_binance
+```
+
+`deploy-storage` 同机部署 `storage-access`、`storage-view-index`、
+`storage-view-builder` 和 `storage-view-query`，并更新控制面的 Storage 服务
+位置。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
+自然语言理解由 MooX Skill 负责，CLI 始终接收明确的主机名和稳定 Space ID。
 
 ## 构建
 
@@ -78,7 +105,8 @@ storage:
 moox-cli metadata import \
   --file ../../examples/metadata-crypto.seed.yaml \
   --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
+  --if-not-exists \
+  --spaces crypto
 
 moox-cli metadata import --file ../../examples/metadata-crypto.seed.yaml --dry-run
 

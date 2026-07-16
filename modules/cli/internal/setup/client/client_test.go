@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -105,6 +106,46 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.State)
 	assert.Equal(t, "recognizable-admin-password", capturedRequest.GetAdmin().GetPassword())
+}
+
+func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy(t *testing.T) {
+	t.Parallel()
+	updated := map[string]string{}
+	healthURLs := map[string]string{}
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			var input pb.GetServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
+				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
+				Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: input.GetServiceName(), Host: "127.0.0.1", Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:20210/readyz","monitor_enabled":true}`},
+			})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
+			var input pb.UpdateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			updated[input.GetServiceName()] = input.GetDeployment().GetHost()
+			var extra map[string]any
+			_ = json.Unmarshal([]byte(input.GetDeployment().GetExtraConfig()), &extra)
+			healthURLs[input.GetServiceName()], _ = extra["health_url"].(string)
+			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
+			_, _ = w.Write(response)
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+
+	result, err := New(forwarder).ApplyStoragePlacement(context.Background(), "203.0.113.9")
+	require.NoError(t, err)
+	require.Equal(t, len(storageDeploymentNames), result.Deployments)
+	require.Equal(t, "127.0.0.1:11109", forwarder.remote)
+	for _, name := range storageDeploymentNames {
+		require.Equal(t, "203.0.113.9", updated[name], name)
+		require.Equal(t, "http://203.0.113.9:20210/readyz", healthURLs[name], name)
+	}
 }
 
 func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {

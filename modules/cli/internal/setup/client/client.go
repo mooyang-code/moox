@@ -3,10 +3,12 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,9 +19,15 @@ import (
 )
 
 const (
-	setupRemoteAddress = "127.0.0.1:11110"
-	maxResponseBytes   = 1 << 20
+	setupRemoteAddress     = "127.0.0.1:11110"
+	sysDeployRemoteAddress = "127.0.0.1:11109"
+	maxResponseBytes       = 1 << 20
 )
+
+var storageDeploymentNames = []string{
+	"storage_metadata", "storage_access", "storage_view", "storage_view_builder", "storage_view_query", "storage_view_index",
+	"storage_metadata_trpc", "storage_primary_trpc", "storage_access_trpc", "storage_view_trpc",
+}
 
 type Forwarder interface {
 	ForwardLocal(context.Context, string) (net.Listener, error)
@@ -44,6 +52,10 @@ type StatusResult struct {
 	Hosts     int    `json:"hosts"`
 	Missing   int    `json:"missing"`
 	Conflicts int    `json:"conflicts"`
+}
+
+type StoragePlacementResult struct {
+	Deployments int `json:"deployments"`
 }
 
 func New(forwarder Forwarder) *Client {
@@ -98,15 +110,78 @@ func (c *Client) Status(ctx context.Context, snapshot *setupconfig.Snapshot) (St
 	}, nil
 }
 
+func (c *Client) ApplyStoragePlacement(ctx context.Context, host string) (StoragePlacementResult, error) {
+	host = strings.TrimSpace(host)
+	if c == nil || c.forwarder == nil || host == "" {
+		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
+	}
+	for _, serviceName := range storageDeploymentNames {
+		getResponse := &pb.GetServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+			&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: serviceName}, getResponse); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		if err := checkRetInfo(getResponse.GetRetInfo()); err != nil || getResponse.GetDeployment() == nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		deployment := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
+		deployment.Host = host
+		extraConfig, err := storageExtraConfigForHost(deployment.GetExtraConfig(), host)
+		if err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		deployment.ExtraConfig = extraConfig
+		updateResponse := &pb.UpdateServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment",
+			&pb.UpdateServiceDeploymentReq{NodeId: "control", ServiceName: serviceName, Deployment: deployment}, updateResponse); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		if err := checkRetInfo(updateResponse.GetRetInfo()); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+	}
+	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
+}
+
+func storageExtraConfigForHost(raw, host string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return raw, nil
+	}
+	var extra map[string]any
+	if err := json.Unmarshal([]byte(raw), &extra); err != nil {
+		return "", err
+	}
+	healthURL, ok := extra["health_url"].(string)
+	if !ok || strings.TrimSpace(healthURL) == "" {
+		return raw, nil
+	}
+	parsed, err := url.Parse(healthURL)
+	if err != nil {
+		return "", err
+	}
+	_, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		return "", err
+	}
+	parsed.Host = net.JoinHostPort(host, port)
+	extra["health_url"] = parsed.String()
+	encoded, err := json.Marshal(extra)
+	return string(encoded), err
+}
+
 func (c *Client) forwardedPost(ctx context.Context, method string, request, response proto.Message) error {
+	return c.forwardedPostTo(ctx, setupRemoteAddress, "trpc.moox.admin.Setup", method, request, response)
+}
+
+func (c *Client) forwardedPostTo(ctx context.Context, remoteAddress, service, method string, request, response proto.Message) error {
 	forwardContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	listener, err := c.forwarder.ForwardLocal(forwardContext, setupRemoteAddress)
+	listener, err := c.forwarder.ForwardLocal(forwardContext, remoteAddress)
 	if err != nil {
 		return fmt.Errorf("setup_not_reachable")
 	}
 	defer listener.Close()
-	endpoint := "http://" + listener.Addr().String() + "/trpc.moox.admin.Setup/" + method
+	endpoint := "http://" + listener.Addr().String() + "/" + service + "/" + method
 	return postProto(ctx, endpoint, request, response, c.timeout)
 }
 

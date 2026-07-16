@@ -16,7 +16,10 @@ import (
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 )
 
-const remoteArchiveNext = "/tmp/moox-control.tar.gz.next"
+const (
+	remoteArchiveNext        = "/tmp/moox-control.tar.gz.next"
+	remoteStorageArchiveNext = "/tmp/moox-storage.tar.gz.next"
+)
 
 type Options struct {
 	RepositoryRoot string
@@ -33,15 +36,80 @@ type Packager interface {
 type ReadinessStage string
 
 const (
-	AdminReady        ReadinessStage = "admin_ready"
-	SetupReady        ReadinessStage = "setup_ready"
-	GatewayReady      ReadinessStage = "gateway_ready"
-	WebReady          ReadinessStage = "web_ready"
-	BrowserHTTPSReady ReadinessStage = "browser_https_ready"
+	AdminReady              ReadinessStage = "admin_ready"
+	SetupReady              ReadinessStage = "setup_ready"
+	GatewayReady            ReadinessStage = "gateway_ready"
+	WebReady                ReadinessStage = "web_ready"
+	BrowserHTTPSReady       ReadinessStage = "browser_https_ready"
+	StorageAccessReady      ReadinessStage = "storage_access_ready"
+	StorageViewIndexReady   ReadinessStage = "storage_view_index_ready"
+	StorageViewBuilderReady ReadinessStage = "storage_view_builder_ready"
+	StorageViewQueryReady   ReadinessStage = "storage_view_query_ready"
 )
 
 type Probe interface {
 	Wait(context.Context, setupssh.Client, ReadinessStage, Options) error
+}
+
+// Storage deploys the four Storage processes as one independently managed unit.
+// It uses a separate install directory so selecting the control host cannot
+// replace the Admin/Gateway/Web deployment.
+func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps Dependencies) (returnErr error) {
+	if transport == nil || strings.TrimSpace(opts.RepositoryRoot) == "" || strings.TrimSpace(opts.PublicHost) == "" {
+		return fmt.Errorf("storage_deploy_invalid")
+	}
+	if deps.Packager == nil {
+		deps.Packager = StoragePackager{}
+	}
+	if deps.Probe == nil {
+		deps.Probe = CommandProbe{}
+	}
+	if err := detectPlatform(ctx, transport, &opts); err != nil {
+		return fmt.Errorf("storage_platform_unsupported")
+	}
+	archive, err := deps.Packager.Package(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("storage_package_failed")
+	}
+	defer os.Remove(archive)
+	file, err := os.Open(archive)
+	if err != nil {
+		return fmt.Errorf("storage_package_failed")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return fmt.Errorf("storage_package_failed")
+	}
+	if err := transport.Upload(ctx, file, info.Size(), remoteStorageArchiveNext, fs.FileMode(0o600)); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("storage_upload_failed")
+	}
+	_ = file.Close()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteStorageArchiveNext}, nil)
+	}()
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", installStorageScript, "moox-install-storage"}, nil); err != nil {
+		return fmt.Errorf("storage_install_failed")
+	}
+	installed := true
+	defer func() {
+		if returnErr != nil && installed {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript}, nil)
+		}
+	}()
+	for _, stage := range []ReadinessStage{StorageAccessReady, StorageViewIndexReady, StorageViewBuilderReady, StorageViewQueryReady} {
+		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
+			return fmt.Errorf("storage_deploy_not_ready")
+		}
+	}
+	installed = false
+	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript}, nil)
+	return nil
 }
 
 type Dependencies struct {
@@ -188,6 +256,35 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	return archive, nil
 }
 
+type StoragePackager struct{}
+
+func (StoragePackager) Package(ctx context.Context, opts Options) (string, error) {
+	root, err := filepath.Abs(opts.RepositoryRoot)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp("", "moox-storage-*.tar.gz")
+	if err != nil {
+		return "", err
+	}
+	archive := file.Name()
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	_ = os.Remove(archive)
+	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"),
+		"--profile", "storage", "--package-only", "--archive", archive,
+		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
+		"--public-host", opts.PublicHost, "--node-id", "storage", "--gateway-control-url", "http://127.0.0.1:11000",
+	)
+	command.Dir = root
+	if err := command.Run(); err != nil {
+		_ = os.Remove(archive)
+		return "", err
+	}
+	return archive, nil
+}
+
 type FileCAStore struct{}
 
 func CAPath(publicHost string) string {
@@ -275,10 +372,55 @@ func probeCommand(stage ReadinessStage) string {
 		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
 	case BrowserHTTPSReady:
 		return `curl -fsS --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null`
+	case StorageAccessReady:
+		return `"$HOME/moox/storage/status.sh" storage-access >/dev/null`
+	case StorageViewIndexReady:
+		return `"$HOME/moox/storage/status.sh" storage-view-index >/dev/null`
+	case StorageViewBuilderReady:
+		return `"$HOME/moox/storage/status.sh" storage-view-builder >/dev/null`
+	case StorageViewQueryReady:
+		return `"$HOME/moox/storage/status.sh" storage-view-query >/dev/null`
 	default:
 		return "false"
 	}
 }
+
+const installStorageScript = `set -eu
+install_storage() {
+  root="$HOME/moox"
+  deploy="$root/storage"
+  next="$root/storage.next"
+  previous="$root/storage.previous"
+  archive=/tmp/moox-storage.tar.gz.next
+  rm -rf "$next" "$previous"
+  mkdir -p "$next"
+  tar -C "$next" -xzf "$archive"
+  if [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
+  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
+  if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
+  mv "$next" "$deploy"
+  if ! "$deploy/start.sh"; then
+    "$deploy/stop.sh" || true
+    rm -rf "$deploy"
+    if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+    return 1
+  fi
+}
+install_storage
+`
+
+const rollbackStorageScript = `set -eu
+deploy="$HOME/moox/storage"
+previous="$HOME/moox/storage.previous"
+if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
+rm -rf "$deploy"
+if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+`
+
+const finalizeStorageScript = `set -eu
+rm -rf "$HOME/moox/storage.previous"
+`
 
 // The script is constant. Positional arguments contain only public deployment metadata.
 const installControlScript = `set -eu

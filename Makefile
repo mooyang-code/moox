@@ -38,6 +38,7 @@ verify-custom-setup:
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
 	bash scripts/test-deploy-moox-admin-bootstrap.sh
 	bash scripts/test-deploy-moox-control-profile.sh
+	bash scripts/test-deploy-moox-storage-profile.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 
 test-caddy:

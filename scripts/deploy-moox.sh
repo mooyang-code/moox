@@ -15,6 +15,7 @@ WITH_STORAGE=1
 WITH_ARCHIVE=1
 WITH_EVENTBUS=1
 WITH_WEB_HOST=1
+STORAGE_EXTERNAL_LISTEN=0
 WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
 WITH_FACTOR=1
@@ -70,7 +71,7 @@ Options:
   --stage <path>                  Local staging directory. Default: release/deploy-stage/moox.
   --skip-build                    Reuse binaries from ./bin.
   --no-start                      Deploy package only, do not start services.
-  --profile <control>             Package only Admin, Gateway, and Web for initial setup.
+  --profile <control|storage>     Package an initial setup deployment unit.
   --package-only                  Build the selected deployment archive without transport or install.
   --archive <path>                Output archive required by --package-only.
   --no-storage                    Do not package/stop/start moox-storage; preserve existing remote storage files.
@@ -123,6 +124,19 @@ apply_profile() {
       WITH_COLLECTOR=0
       WITH_FACTOR=0
       WITH_MONITOR=0
+      ;;
+    storage)
+      WITH_ADMIN=0
+      WITH_GATEWAY=0
+      WITH_WEB_HOST=0
+      WITH_STORAGE=1
+      WITH_ARCHIVE=0
+      WITH_EVENTBUS=0
+      WITH_CLOUDNODE=0
+      WITH_COLLECTOR=0
+      WITH_FACTOR=0
+      WITH_MONITOR=0
+      STORAGE_EXTERNAL_LISTEN=1
       ;;
     *) fail "unsupported deployment profile: $1" ;;
   esac
@@ -838,6 +852,11 @@ PY
       perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${conf}"
     fi
   done
+  if [[ "${STORAGE_EXTERNAL_LISTEN}" -eq 1 ]]; then
+    for conf in "${STAGE_DIR}"/storage/config/trpc_go.*.yaml; do
+      perl -pi -e 'if (/^server:/) { $server = 1 } if (/^(client|plugins):/) { $server = 0 } if ($server && /^      ip:\s*127\.0\.0\.1\s*$/) { s#127\.0\.0\.1#0.0.0.0# }' "${conf}"
+    done
+  fi
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-access#g' \

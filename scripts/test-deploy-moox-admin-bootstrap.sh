@@ -14,7 +14,7 @@ for forbidden in BOOTSTRAP_ADMIN ADMIN_PASSWORD ADMIN_USERNAME ADMIN_PASSWORD_FI
   fi
 done
 
-grep -Fq -- '--profile <control>' "${DEPLOY_SCRIPT}"
+grep -Fq -- '--profile <control|storage>' "${DEPLOY_SCRIPT}"
 grep -Fq -- '--package-only' "${DEPLOY_SCRIPT}"
 grep -Fq 'WITH_ADMIN=1' "${DEPLOY_SCRIPT}"
 grep -Fq 'WITH_STORAGE=0' "${DEPLOY_SCRIPT}"

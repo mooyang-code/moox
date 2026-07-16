@@ -20,13 +20,15 @@ import (
 const defaultSetupFile = "./custom.toml"
 
 type setupDeps struct {
-	load          func(string) (*setupconfig.Snapshot, error)
-	validate      func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	trustHost     func(context.Context, *setupconfig.Snapshot, string, string) error
-	deployControl func(context.Context, *setupconfig.Snapshot) error
-	apply         func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status        func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	login         func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	load           func(string) (*setupconfig.Snapshot, error)
+	validate       func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	trustHost      func(context.Context, *setupconfig.Snapshot, string, string) error
+	deployControl  func(context.Context, *setupconfig.Snapshot) error
+	apply          func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
+	status         func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	login          func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	deployStorage  func(context.Context, *setupconfig.Snapshot, string) error
+	importMetadata func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
 }
 
 func init() {
@@ -41,12 +43,48 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.AddCommand(
+		newSetupHostsCommand(deps),
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupDeployCommand(deps),
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
+		newSetupDeployStorageCommand(deps),
+		newSetupMetadataImportCommand(deps),
 	)
+	return cmd
+}
+
+type setupHostChoice struct {
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+func newSetupHostsCommand(deps setupDeps) *cobra.Command {
+	var file string
+	cmd := &cobra.Command{Use: "hosts", Short: "列出可选的部署主机（不输出密码）", RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts()))
+		for index, host := range snapshot.Manifest.Hosts() {
+			role := "other"
+			if index == 0 {
+				role = "control"
+			}
+			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: role})
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, map[string]any{"hosts": hosts})
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	return cmd
 }
 
@@ -166,6 +204,62 @@ func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
+func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
+	var file, host string
+	cmd := &cobra.Command{Use: "deploy-storage", Short: "将 Storage 组件部署到用户选择的主机", RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
+			return err
+		}
+		status, err := deps.status(cmd.Context(), snapshot)
+		if err != nil || status.State != "completed" {
+			return fmt.Errorf("setup_incomplete")
+		}
+		if err := deps.deployStorage(cmd.Context(), snapshot, host); err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, map[string]string{"host": host, "status": "ready"})
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
+	_ = cmd.MarkFlagRequired("host")
+	return cmd
+}
+
+func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
+	var file, seed, storageHost string
+	var spaces []string
+	cmd := &cobra.Command{Use: "metadata-import", Short: "通过 Storage SSH 隧道导入选定业务空间", RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		result, err := deps.importMetadata(cmd.Context(), snapshot, storageHost, seed, spaces)
+		if err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, result)
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&seed, "seed", "examples/metadata-quant-initial.seed.yaml", "metadata seed YAML")
+	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
+	cmd.Flags().StringSliceVar(&spaces, "spaces", nil, "要导入的 Space ID 或中文名")
+	_ = cmd.MarkFlagRequired("storage-host")
+	_ = cmd.MarkFlagRequired("spaces")
+	return cmd
+}
+
 func completeSetupDeps(deps setupDeps) setupDeps {
 	defaults := defaultSetupDeps()
 	if deps.load == nil {
@@ -189,6 +283,12 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.login == nil {
 		deps.login = defaults.login
 	}
+	if deps.deployStorage == nil {
+		deps.deployStorage = defaults.deployStorage
+	}
+	if deps.importMetadata == nil {
+		deps.importMetadata = defaults.importMetadata
+	}
 	return deps
 }
 
@@ -201,16 +301,80 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
-		validate:      defaultSetupValidate,
-		trustHost:     defaultSetupTrustHost,
-		deployControl: defaultSetupDeploy,
-		apply:         defaultSetupApply,
-		status:        defaultSetupStatus,
+		validate:       defaultSetupValidate,
+		trustHost:      defaultSetupTrustHost,
+		deployControl:  defaultSetupDeploy,
+		apply:          defaultSetupApply,
+		status:         defaultSetupStatus,
+		deployStorage:  defaultSetupDeployStorage,
+		importMetadata: defaultSetupImportMetadata,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))
 		},
 	}
+}
+
+func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string) error {
+	host, err := findSetupHost(snapshot.Manifest, name)
+	if err != nil {
+		return err
+	}
+	transport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return err
+	}
+	defer transport.Close()
+	root, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("storage_deploy_invalid")
+	}
+	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address}, setupdeploy.Dependencies{}); err != nil {
+		return err
+	}
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return err
+	}
+	defer control.Close()
+	_, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Address)
+	return err
+}
+
+func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {
+	status, err := defaultSetupStatus(ctx, snapshot)
+	if err != nil || status.State != "completed" {
+		return metadataImportSummary{}, fmt.Errorf("setup_incomplete")
+	}
+	seed, err := loadMetadataSeed(seedPath)
+	if err != nil {
+		return metadataImportSummary{}, err
+	}
+	seed, err = selectMetadataSpaces(seed, spaces)
+	if err != nil {
+		return metadataImportSummary{}, err
+	}
+	calls, err := buildMetadataImportCalls(seed)
+	if err != nil {
+		return metadataImportSummary{}, err
+	}
+	host, err := findSetupHost(snapshot.Manifest, hostName)
+	if err != nil {
+		return metadataImportSummary{}, err
+	}
+	transport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return metadataImportSummary{}, err
+	}
+	defer transport.Close()
+	forwardContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	listener, err := transport.ForwardLocal(forwardContext, "127.0.0.1:20200")
+	if err != nil {
+		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable")
+	}
+	defer listener.Close()
+	return runMetadataImport(ctx, "http://"+listener.Addr().String(), calls, true)
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (setupvalidate.Result, error) {

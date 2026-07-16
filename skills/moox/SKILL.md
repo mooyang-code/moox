@@ -236,10 +236,13 @@ whether it exists and must never read, parse, print, copy, or source it outside
 `moox-cli setup`.
 
 Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
-deploy later services until setup is complete and the public login API is
-verified. Keep `custom.toml` unchanged. Afterward, ask for service placement
-incrementally and write it through SysDeploy; do not ask the user to redesign
-the initialization manifest.
+ask about Storage until setup is complete and the public login API is verified.
+Then use `setup hosts`, ask the user in natural language for exactly one Storage
+host, and run `setup deploy-storage`; the four initial Storage processes stay on
+that machine. Only after Storage is ready, list `metadata spaces`, ask which
+business spaces to import (including all or none), and invoke
+`setup metadata-import` with stable Space IDs. Keep `custom.toml` unchanged and
+never parse either its secrets or a generated filtered seed in Agent context.
 
 `t_service_deployments` remains the source of truth for service addresses.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never

@@ -48,6 +48,26 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	}
 }
 
+func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	opts := Options{RepositoryRoot: dir, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64"}
+
+	err := Storage(context.Background(), transport, opts, Dependencies{
+		Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"package", "upload", "install_storage", "storage_access_ready", "storage_view_index_ready",
+		"storage_view_builder_ready", "storage_view_query_ready", "finalize_storage", "cleanup",
+	}, events)
+	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
+}
+
 func TestControlCleansRemoteArchiveAfterFailure(t *testing.T) {
 	t.Parallel()
 	archive := filepath.Join(t.TempDir(), "control.tar.gz")
@@ -96,6 +116,7 @@ func TestFinalizeResponseLossNeverRollsBackHealthyDeployment(t *testing.T) {
 func TestRemoteInstallerScriptsParse(t *testing.T) {
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
+		"install-storage": installStorageScript, "rollback-storage": rollbackStorageScript, "finalize-storage": finalizeStorageScript,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), name+".sh")
@@ -176,6 +197,10 @@ func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setu
 	}
 	if len(argv) >= 3 && strings.Contains(argv[2], "install_control") {
 		*f.events = append(*f.events, "install", "start")
+	} else if len(argv) >= 3 && strings.Contains(argv[2], "install_storage") {
+		*f.events = append(*f.events, "install_storage")
+	} else if len(argv) >= 3 && strings.Contains(argv[2], "storage.previous") && strings.Contains(argv[2], "rm -rf") && !strings.Contains(argv[2], "stop.sh") {
+		*f.events = append(*f.events, "finalize_storage")
 	} else if len(argv) >= 3 && strings.Contains(argv[2], "prod.previous") && strings.Contains(argv[2], "rm -rf") && !strings.Contains(argv[2], "stop.sh") {
 		*f.events = append(*f.events, "finalize")
 		if f.failFinalize {

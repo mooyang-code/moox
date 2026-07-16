@@ -46,7 +46,7 @@ Only `control_host` determines the first control-plane deployment. `other_hosts`
 are imported as available hosts, but later service placement is decided after
 Admin is working.
 
-## Agent-Safe Sequence
+## Phase 1: custom.toml And Control Initialization
 
 The Agent may inspect existence only, then invoke these commands in order:
 
@@ -65,9 +65,57 @@ reported it.
 
 `apply` is successful only when its JSON includes `login_api: valid`. Ask the
 user to confirm browser login when interactive browser acceptance is required.
-Begin incremental service placement only after status 返回 completed 后. Ask for
-each later service host when that deployment step begins rather than expanding
-`custom.toml`.
+Do not ask about Storage or business metadata until status 返回 `completed`.
+This phase ends after Admin, Gateway, and Web are ready, the manifest records are
+written, and the public login API is valid.
+
+## Phase 2: Storage Host Selection
+
+List the sanitized host choices through the CLI. This command may display host
+names, addresses, ports, usernames, and roles, but never passwords:
+
+```bash
+./bin/moox-cli setup hosts --file ./custom.toml
+```
+
+Use 自然语言 to ask the user where Storage should run. Accept answers such
+as "Storage 放到 compute-1" or "就放 control" and map only the selected host
+name into the deterministic command:
+
+```bash
+./bin/moox-cli setup deploy-storage --file ./custom.toml --host <host-name>
+```
+
+The initial Storage unit contains `storage-access`, `storage-view-index`,
+`storage-view-builder`, and `storage-view-query` on the same selected machine.
+Admin, Gateway, and Web remain on `control_host`. The command also updates the
+Storage endpoints in SysDeploy. Never silently choose a Storage host.
+
+## Phase 3: Optional Business Metadata
+
+Storage deployment and metadata selection are separate from `custom.toml`
+initialization. First list the selectable spaces from the checked-in seed:
+
+```bash
+./bin/moox-cli metadata spaces --file examples/metadata-quant-initial.seed.yaml
+```
+
+Ask which spaces the user wants. Support natural-language answers including
+"全部", "只导入 A 股和币安", and "暂不导入". For a concrete
+selection, map the names to the IDs returned by `metadata spaces`, then run:
+
+```bash
+./bin/moox-cli setup metadata-import \
+  --file ./custom.toml \
+  --seed examples/metadata-quant-initial.seed.yaml \
+  --storage-host <host-name> \
+  --spaces stock_cn,crypto_binance
+```
+
+Only `setup metadata-import` may use the manifest to open the SSH tunnel to the
+selected Storage host. It imports the selected Space dependency closure and
+uses create-if-missing semantics. Never construct a filtered YAML file in the
+Agent context. If the user chooses "暂不导入", stop after Storage is ready.
 
 ## Secret Boundary
 
