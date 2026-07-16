@@ -244,7 +244,7 @@ CREATE TABLE IF NOT EXISTS t_secrets (
     c_name TEXT NOT NULL,                                       -- 秘钥名称
     c_description TEXT NOT NULL DEFAULT '',                     -- 秘钥描述/备注
     c_category TEXT NOT NULL,                                   -- 秘钥分类: ssh=SSH凭证, exchange=交易所,
-                                                                --           database=数据库,
+                                                                --           cloud=云厂商凭据, database=数据库,
                                                                 --           jwt=系统令牌, other=其他
     c_provider TEXT NOT NULL DEFAULT '',                        -- 提供方/来源 (binance/okx/mysql/postgres等)
     c_secret_type TEXT NOT NULL DEFAULT 'api_key',              -- 秘钥类型: api_key=API密钥对, password=密码,

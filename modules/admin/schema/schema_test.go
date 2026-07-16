@@ -102,3 +102,20 @@ func TestAdminSchemaExcludesLegacyHostMonitorHistory(t *testing.T) {
 		t.Fatal("admin schema must not create the legacy host monitor history table")
 	}
 }
+
+func TestAdminSchemaSupportsSetupWithoutStateTable(t *testing.T) {
+	sql := AdminSQL()
+	if strings.Contains(sql, "t_system_setup") {
+		t.Fatal("setup status must be derived from domain records, not t_system_setup")
+	}
+	for _, required := range []string{
+		"idx_users_username",
+		"idx_ssh_host_address",
+		"idx_secrets_secret_id_deleted",
+		"cloud=云厂商凭据",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("admin schema setup contract missing %q", required)
+		}
+	}
+}
