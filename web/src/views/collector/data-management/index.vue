@@ -94,6 +94,15 @@ watch(
   margin-left: 0;
 }
 
+.management-content :deep(.collector-subtabs .arco-tabs-tab) {
+  border-radius: 4px;
+}
+
+.management-content :deep(.collector-subtabs .arco-tabs-tab-active) {
+  color: rgb(var(--primary-6));
+  background-color: var(--color-fill-2);
+}
+
 .management-content :deep(.collector-workbench),
 .management-content :deep(.moox-page),
 .management-content :deep(.data-browse-page),

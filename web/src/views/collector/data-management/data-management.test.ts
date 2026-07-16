@@ -32,6 +32,9 @@ describe('collector data management workbench', () => {
     expect(management).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*12px;/);
     expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-content\)\s*\{[\s\S]*?display:\s*none;/);
     expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-tab:first-child\)\s*\{[\s\S]*?margin-left:\s*0;/);
+    expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-tab\)\s*\{[\s\S]*?border-radius:\s*4px;/);
+    expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-tab-active\)\s*\{[\s\S]*?color:\s*rgb\(var\(--primary-6\)\);/);
+    expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-tab-active\)\s*\{[\s\S]*?background-color:\s*var\(--color-fill-2\);/);
   });
 
   it('keeps legacy data routes pointed at the unified workbench', () => {
