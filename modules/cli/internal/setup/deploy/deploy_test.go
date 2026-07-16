@@ -80,6 +80,19 @@ func TestControlDetectsARM64BeforePackaging(t *testing.T) {
 	require.Equal(t, "arm64", packager.opts.TargetGOARCH)
 }
 
+func TestFinalizeResponseLossNeverRollsBackHealthyDeployment(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "control.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events, failFinalize: true}
+	err := Control(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
+		TargetGOOS: "linux", TargetGOARCH: "amd64",
+	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events}, CAStore: &fakeCAStore{events: &events}})
+	require.NoError(t, err)
+	require.NotContains(t, events, "rollback")
+}
+
 func TestRemoteInstallerScriptsParse(t *testing.T) {
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
@@ -91,6 +104,31 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 			require.NoError(t, err, string(output))
 		})
 	}
+}
+
+func TestRollbackScriptRestoresAndStartsPreviousDeployment(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "prod")
+	previous := filepath.Join(home, "moox", "prod.previous")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	require.NoError(t, os.MkdirAll(previous, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(previous, "start.sh"), []byte("#!/bin/sh\nprintf started >\"$HOME/rollback-event\"\n"), 0o700))
+	command := exec.Command("bash", "-c", rollbackControlScript)
+	command.Env = append(os.Environ(), "HOME="+home)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, "started", string(requireFile(t, filepath.Join(home, "rollback-event"))))
+	_, err = os.Stat(previous)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.FileExists(t, filepath.Join(deploy, "start.sh"))
+}
+
+func requireFile(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return raw
 }
 
 type fakePackager struct {
@@ -108,13 +146,14 @@ func (f *fakePackager) Package(_ context.Context, opts Options) (string, error) 
 }
 
 type fakeTransport struct {
-	events     *[]string
-	uploadPath string
-	uploadMode fs.FileMode
-	uploaded   bytes.Buffer
-	commands   [][]string
-	unameOS    string
-	unameArch  string
+	events       *[]string
+	uploadPath   string
+	uploadMode   fs.FileMode
+	uploaded     bytes.Buffer
+	commands     [][]string
+	unameOS      string
+	unameArch    string
+	failFinalize bool
 }
 
 func (f *fakeTransport) Check(context.Context) error { return nil }
@@ -139,6 +178,9 @@ func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setu
 		*f.events = append(*f.events, "install", "start")
 	} else if len(argv) >= 3 && strings.Contains(argv[2], "prod.previous") && strings.Contains(argv[2], "rm -rf") && !strings.Contains(argv[2], "stop.sh") {
 		*f.events = append(*f.events, "finalize")
+		if f.failFinalize {
+			return setupssh.Result{}, os.ErrDeadlineExceeded
+		}
 	} else if len(argv) >= 3 && strings.Contains(argv[2], "stop.sh") && strings.Contains(argv[2], "prod.previous") {
 		*f.events = append(*f.events, "rollback")
 	} else if len(argv) > 0 && argv[0] == "rm" {

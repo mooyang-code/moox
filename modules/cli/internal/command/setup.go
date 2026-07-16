@@ -136,6 +136,9 @@ func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
 		return writeSetupJSON(cmd, struct {
 			setupclient.ApplyResult
 			LoginAPI string `json:"login_api"`

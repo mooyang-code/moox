@@ -123,10 +123,10 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if err != nil || deps.CAStore.Save(opts.PublicHost, []byte(ca.Stdout)) != nil {
 		return fmt.Errorf("control_ca_unavailable")
 	}
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript}, nil); err != nil {
-		return fmt.Errorf("control_finalize_failed")
-	}
+	// Once readiness and CA persistence succeed, the new deployment is authoritative.
+	// A lost finalize response must never roll it back after previous was removed.
 	installed = false
+	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript}, nil)
 	return nil
 }
 
