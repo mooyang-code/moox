@@ -74,6 +74,8 @@ const hosts = findMenu('ops-hosts');
 assert(services.parentId === ops.id, 'ops-services must be under ops');
 assert(hosts.parentId === ops.id, 'ops-hosts must be under ops');
 assert(hosts.sort < services.sort, 'host workbench must appear before service management');
+assert(!staticMenu.includes('menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1, {'), 'ops-hosts must not have a custom icon');
+assert(!staticMenu.includes('menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 2, {'), 'ops-services must not have a custom icon');
 assert(staticMenu.includes('svgIcon: "experiment"'), 'factor icon must be unique');
 assert(staticMenu.includes('svgIcon: "mind-mapping"'), 'strategy icon must be unique');
 assert(!staticMenu.includes('menu("0600", "06", "/ops/service-monitor"'), 'legacy service monitor must not remain visible');

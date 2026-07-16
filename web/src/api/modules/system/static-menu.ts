@@ -76,8 +76,8 @@ export const systemMenu = [
   menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 3),
 
   directory("06", "0", "/ops/hosts", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
-  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1, { svgIcon: "computer", icon: "" }),
-  menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 2, { svgIcon: "cloud-server", icon: "" }),
+  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1),
+  menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 2),
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 3),
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),
