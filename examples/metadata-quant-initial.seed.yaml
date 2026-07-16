@@ -1,19 +1,18 @@
-# MooX 量化系统初始元数据。该文件是可直接导入的机器事实源。
+# MooX 量化系统最小可用元数据。只收录字段契约完整、可直接写入和查询的数据集。
 # 导入：moox-cli metadata import --file examples/metadata-quant-initial.seed.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
 
 spaces:
   - { space_id: stock_cn, name: A股市场, description: A股、ETF、可转债、指数及基本面数据, owner: quant, status: active }
   - { space_id: stock_hk, name: 港股市场, description: 港股证券与行情数据, owner: quant, status: active }
-  - { space_id: stock_us, name: 美股市场, description: 美股证券、指数、行情与公司行动数据, owner: quant, status: active }
-  - { space_id: crypto_binance, name: 币安市场, description: 币安现货、永续合约及数字资产基本面数据, owner: quant, status: active }
-  - { space_id: crypto_okx, name: 欧易市场, description: OKX现货与永续合约行情数据, owner: quant, status: active }
+  - { space_id: stock_us, name: 美股市场, description: 美股证券、指数与行情数据, owner: quant, status: active }
+  - { space_id: crypto_binance, name: 币安市场, description: 币安现货与永续合约行情数据, owner: quant, status: active }
+  - { space_id: crypto_okx, name: 欧易市场, description: OKX 现货与永续合约行情数据, owner: quant, status: active }
 
 data_sources:
   - { space_id: stock_cn, data_source_id: quantclass_stock, name: QuantClass股票数据, kind: file_import, market: CN, timezone: Asia/Shanghai, config_json: '{}', status: active }
   - { space_id: stock_hk, data_source_id: quantclass_hk, name: QuantClass港股数据, kind: file_import, market: HK, timezone: Asia/Hong_Kong, config_json: '{}', status: active }
   - { space_id: stock_us, data_source_id: quantclass_us, name: QuantClass美股数据, kind: file_import, market: US, timezone: America/New_York, config_json: '{}', status: active }
   - { space_id: crypto_binance, data_source_id: binance, name: Binance, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
-  - { space_id: crypto_binance, data_source_id: coinmarketcap, name: CoinMarketCap, kind: vendor_api, market: crypto, timezone: UTC, config_json: '{}', status: active }
   - { space_id: crypto_okx, data_source_id: okx, name: OKX, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
 
 field_groups:
@@ -22,41 +21,29 @@ field_groups:
   - { space_id: stock_cn, group_id: quote, name: 行情价格, parent_group_id: market, sort_order: 10, status: active }
   - { space_id: stock_cn, group_id: trading, name: 成交估值, parent_group_id: market, sort_order: 20, status: active }
   - { space_id: stock_cn, group_id: finance, name: 财务数据, sort_order: 30, status: active }
-  - { space_id: stock_cn, group_id: corporate, name: 公司事件, sort_order: 40, status: active }
-  - { space_id: stock_cn, group_id: flow, name: 资金筹码, sort_order: 50, status: active }
-  - { space_id: stock_cn, group_id: text, name: 文本信息, sort_order: 60, status: active }
   - { space_id: stock_hk, group_id: identity, name: 标识信息, sort_order: 10, status: active }
   - { space_id: stock_hk, group_id: quote, name: 行情价格, sort_order: 20, status: active }
   - { space_id: stock_us, group_id: identity, name: 标识信息, sort_order: 10, status: active }
   - { space_id: stock_us, group_id: quote, name: 行情价格, sort_order: 20, status: active }
   - { space_id: stock_us, group_id: valuation, name: 估值指标, sort_order: 30, status: active }
-  - { space_id: stock_us, group_id: corporate, name: 公司事件, sort_order: 40, status: active }
   - { space_id: crypto_binance, group_id: identity, name: 标识信息, sort_order: 10, status: active }
   - { space_id: crypto_binance, group_id: quote, name: 行情价格, sort_order: 20, status: active }
   - { space_id: crypto_binance, group_id: derivatives, name: 合约指标, sort_order: 30, status: active }
-  - { space_id: crypto_binance, group_id: fundamental, name: 基本面, sort_order: 40, status: active }
   - { space_id: crypto_okx, group_id: identity, name: 标识信息, sort_order: 10, status: active }
   - { space_id: crypto_okx, group_id: quote, name: 行情价格, sort_order: 20, status: active }
   - { space_id: crypto_okx, group_id: derivatives, name: 合约指标, sort_order: 30, status: active }
 
 fields:
-  # A股公共字段
+  # data_time、subject_id、freq 属于 Storage 系统维度，不重复定义为业务字段。
   - { space_id: stock_cn, group_id: identity, field_id: security_code, name: 证券代码, value_type: string, sort_order: 10, status: active }
-  - { space_id: stock_cn, group_id: identity, field_id: security_name, name: 证券名称, value_type: string, sort_order: 20, status: active }
-  - { space_id: stock_cn, group_id: identity, field_id: trade_date, name: 交易日期, value_type: time, sort_order: 30, status: active }
-  - { space_id: stock_cn, group_id: identity, field_id: data_time, name: 数据时间, value_type: time, sort_order: 40, status: active }
-  - { space_id: stock_cn, group_id: identity, field_id: index_code, name: 指数代码, value_type: string, sort_order: 50, status: active }
-  - { space_id: stock_cn, group_id: quote, field_id: pre_close, name: 前收盘价, value_type: double, unit: CNY, sort_order: 10, status: active }
-  - { space_id: stock_cn, group_id: quote, field_id: open, name: 开盘价, value_type: double, unit: CNY, sort_order: 20, status: active }
-  - { space_id: stock_cn, group_id: quote, field_id: high, name: 最高价, value_type: double, unit: CNY, sort_order: 30, status: active }
-  - { space_id: stock_cn, group_id: quote, field_id: low, name: 最低价, value_type: double, unit: CNY, sort_order: 40, status: active }
-  - { space_id: stock_cn, group_id: quote, field_id: close, name: 收盘价, value_type: double, unit: CNY, sort_order: 50, status: active }
-  - { space_id: stock_cn, group_id: quote, field_id: change_pct, name: 涨跌幅, value_type: double, unit: percent, sort_order: 60, status: active }
+  - { space_id: stock_cn, group_id: identity, field_id: index_code, name: 指数代码, value_type: string, sort_order: 20, status: active }
+  - { space_id: stock_cn, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
+  - { space_id: stock_cn, group_id: quote, field_id: open, name: 开盘价, value_type: double, unit: CNY, sort_order: 10, status: active }
+  - { space_id: stock_cn, group_id: quote, field_id: high, name: 最高价, value_type: double, unit: CNY, sort_order: 20, status: active }
+  - { space_id: stock_cn, group_id: quote, field_id: low, name: 最低价, value_type: double, unit: CNY, sort_order: 30, status: active }
+  - { space_id: stock_cn, group_id: quote, field_id: close, name: 收盘价, value_type: double, unit: CNY, sort_order: 40, status: active }
   - { space_id: stock_cn, group_id: trading, field_id: volume, name: 成交量, value_type: double, sort_order: 10, status: active }
   - { space_id: stock_cn, group_id: trading, field_id: amount, name: 成交额, value_type: double, unit: CNY, sort_order: 20, status: active }
-  - { space_id: stock_cn, group_id: trading, field_id: turnover_rate, name: 换手率, value_type: double, unit: percent, sort_order: 30, status: active }
-  - { space_id: stock_cn, group_id: trading, field_id: market_cap, name: 总市值, value_type: double, unit: CNY, sort_order: 40, status: active }
-  - { space_id: stock_cn, group_id: trading, field_id: float_market_cap, name: 流通市值, value_type: double, unit: CNY, sort_order: 50, status: active }
   - { space_id: stock_cn, group_id: finance, field_id: report_date, name: 报告期, value_type: time, sort_order: 10, status: active }
   - { space_id: stock_cn, group_id: finance, field_id: publish_date, name: 发布日期, value_type: time, sort_order: 20, status: active }
   - { space_id: stock_cn, group_id: finance, field_id: statement_format, name: 报表格式, value_type: string, sort_order: 30, status: active }
@@ -69,29 +56,16 @@ fields:
   - { space_id: stock_cn, group_id: finance, field_id: total_liabilities, name: 总负债, value_type: double, unit: CNY, sort_order: 100, status: active }
   - { space_id: stock_cn, group_id: finance, field_id: operating_cash_flow, name: 经营现金流, value_type: double, unit: CNY, sort_order: 110, status: active }
   - { space_id: stock_cn, group_id: finance, field_id: roe_ttm, name: 净资产收益率, value_type: double, unit: percent, sort_order: 120, status: active }
-  - { space_id: stock_cn, group_id: corporate, field_id: announcement_title, name: 公告标题, value_type: string, sort_order: 10, status: active }
-  - { space_id: stock_cn, group_id: corporate, field_id: dividend_per_share, name: 每股派息, value_type: double, unit: CNY, sort_order: 20, status: active }
-  - { space_id: stock_cn, group_id: corporate, field_id: target_price, name: 目标价位, value_type: double, unit: CNY, sort_order: 30, status: active }
-  - { space_id: stock_cn, group_id: corporate, field_id: rating, name: 投资评级, value_type: string, sort_order: 40, status: active }
-  - { space_id: stock_cn, group_id: flow, field_id: institutional_buy, name: 机构买入额, value_type: double, unit: CNY, sort_order: 10, status: active }
-  - { space_id: stock_cn, group_id: flow, field_id: institutional_sell, name: 机构卖出额, value_type: double, unit: CNY, sort_order: 20, status: active }
-  - { space_id: stock_cn, group_id: flow, field_id: weighted_cost, name: 加权平均成本, value_type: double, unit: CNY, sort_order: 30, status: active }
-  - { space_id: stock_cn, group_id: flow, field_id: winner_rate, name: 获利比例, value_type: double, unit: percent, sort_order: 40, status: active }
-  - { space_id: stock_cn, group_id: text, field_id: concept_names, name: 所属概念, value_type: string, sort_order: 10, status: active }
-  - { space_id: stock_cn, group_id: text, field_id: activity_summary, name: 调研摘要, value_type: string, sort_order: 20, status: active }
-  - { space_id: stock_cn, group_id: text, field_id: raw_payload, name: 原始扩展字段, description: 未完成标准化的原始列键值, value_type: json, sort_order: 30, status: active }
 
-  # 港股、美股字段
-  - { space_id: stock_hk, group_id: identity, field_id: security_code, name: 港股代码, value_type: string, sort_order: 10, status: active }
-  - { space_id: stock_hk, group_id: identity, field_id: trade_date, name: 交易日期, value_type: time, sort_order: 20, status: active }
+  - { space_id: stock_hk, group_id: identity, field_id: security_code, name: 证券代码, value_type: string, sort_order: 10, status: active }
+  - { space_id: stock_hk, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
   - { space_id: stock_hk, group_id: quote, field_id: open, name: 开盘价, value_type: double, unit: HKD, sort_order: 10, status: active }
   - { space_id: stock_hk, group_id: quote, field_id: high, name: 最高价, value_type: double, unit: HKD, sort_order: 20, status: active }
   - { space_id: stock_hk, group_id: quote, field_id: low, name: 最低价, value_type: double, unit: HKD, sort_order: 30, status: active }
   - { space_id: stock_hk, group_id: quote, field_id: close, name: 收盘价, value_type: double, unit: HKD, sort_order: 40, status: active }
-  - { space_id: stock_hk, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
-  - { space_id: stock_us, group_id: identity, field_id: security_code, name: 股票代码, value_type: string, sort_order: 10, status: active }
-  - { space_id: stock_us, group_id: identity, field_id: security_name, name: 股票名称, value_type: string, sort_order: 20, status: active }
-  - { space_id: stock_us, group_id: identity, field_id: trade_date, name: 交易日期, value_type: time, sort_order: 30, status: active }
+
+  - { space_id: stock_us, group_id: identity, field_id: security_code, name: 证券代码, value_type: string, sort_order: 10, status: active }
+  - { space_id: stock_us, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
   - { space_id: stock_us, group_id: quote, field_id: open, name: 开盘价, value_type: double, unit: USD, sort_order: 10, status: active }
   - { space_id: stock_us, group_id: quote, field_id: high, name: 最高价, value_type: double, unit: USD, sort_order: 20, status: active }
   - { space_id: stock_us, group_id: quote, field_id: low, name: 最低价, value_type: double, unit: USD, sort_order: 30, status: active }
@@ -99,103 +73,47 @@ fields:
   - { space_id: stock_us, group_id: quote, field_id: volume, name: 成交量, value_type: double, sort_order: 50, status: active }
   - { space_id: stock_us, group_id: valuation, field_id: market_cap, name: 总市值, value_type: double, unit: USD, sort_order: 10, status: active }
   - { space_id: stock_us, group_id: valuation, field_id: pe_ttm, name: 市盈率, value_type: double, sort_order: 20, status: active }
-  - { space_id: stock_us, group_id: corporate, field_id: dividend_per_share, name: 每股分红, value_type: double, unit: USD, sort_order: 10, status: active }
-  - { space_id: stock_us, group_id: corporate, field_id: split_ratio, name: 拆分比例, value_type: double, sort_order: 20, status: active }
-  - { space_id: stock_us, group_id: corporate, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
 
-  # 数字资产字段
   - { space_id: crypto_binance, group_id: identity, field_id: symbol, name: 交易对, value_type: string, sort_order: 10, status: active }
-  - { space_id: crypto_binance, group_id: identity, field_id: data_time, name: 数据时间, value_type: time, sort_order: 20, status: active }
+  - { space_id: crypto_binance, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
   - { space_id: crypto_binance, group_id: quote, field_id: open, name: 开盘价, value_type: double, sort_order: 10, status: active }
   - { space_id: crypto_binance, group_id: quote, field_id: high, name: 最高价, value_type: double, sort_order: 20, status: active }
   - { space_id: crypto_binance, group_id: quote, field_id: low, name: 最低价, value_type: double, sort_order: 30, status: active }
   - { space_id: crypto_binance, group_id: quote, field_id: close, name: 收盘价, value_type: double, sort_order: 40, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: volume, name: 基础成交量, value_type: double, sort_order: 50, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: quote_volume, name: 计价成交量, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto_binance, group_id: quote, field_id: volume, name: 成交量, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto_binance, group_id: quote, field_id: quote_volume, name: 成交额, value_type: double, sort_order: 60, status: active }
   - { space_id: crypto_binance, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
-  - { space_id: crypto_binance, group_id: derivatives, field_id: trade_count, name: 成交笔数, value_type: int, sort_order: 20, status: active }
-  - { space_id: crypto_binance, group_id: fundamental, field_id: usd_price, name: 美元价格, value_type: double, unit: USD, sort_order: 10, status: active }
-  - { space_id: crypto_binance, group_id: fundamental, field_id: market_cap, name: 流通市值, value_type: double, unit: USD, sort_order: 20, status: active }
-  - { space_id: crypto_binance, group_id: fundamental, field_id: circulating_supply, name: 流通供应量, value_type: double, sort_order: 30, status: active }
-  - { space_id: crypto_binance, group_id: fundamental, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
+
   - { space_id: crypto_okx, group_id: identity, field_id: symbol, name: 交易对, value_type: string, sort_order: 10, status: active }
-  - { space_id: crypto_okx, group_id: identity, field_id: data_time, name: 数据时间, value_type: time, sort_order: 20, status: active }
+  - { space_id: crypto_okx, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
   - { space_id: crypto_okx, group_id: quote, field_id: open, name: 开盘价, value_type: double, sort_order: 10, status: active }
   - { space_id: crypto_okx, group_id: quote, field_id: high, name: 最高价, value_type: double, sort_order: 20, status: active }
   - { space_id: crypto_okx, group_id: quote, field_id: low, name: 最低价, value_type: double, sort_order: 30, status: active }
   - { space_id: crypto_okx, group_id: quote, field_id: close, name: 收盘价, value_type: double, sort_order: 40, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: volume, name: 基础成交量, value_type: double, sort_order: 50, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: quote_volume, name: 计价成交量, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto_okx, group_id: quote, field_id: volume, name: 成交量, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto_okx, group_id: quote, field_id: quote_volume, name: 成交额, value_type: double, sort_order: 60, status: active }
   - { space_id: crypto_okx, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
-  - { space_id: crypto_okx, group_id: derivatives, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
 
 datasets:
-  # stock_cn：attributes.source_directories 覆盖本地原始目录，避免把来源文件结构误当领域边界。
-  - { space_id: stock_cn, dataset_id: security_master_daily, data_source_id: quantclass_stock, name: 证券日汇总, data_kind: record, freqs: [1d], status: active, attributes: { source_directories: 每日A股股票汇总 } }
   - { space_id: stock_cn, dataset_id: stock_kline, data_source_id: quantclass_stock, name: 股票行情, data_kind: time_series, freqs: [5m, 15m, 1h, 1d], status: active, attributes: { source_directories: 股票历史日线数据|股票历史全息日线数据|股票1小时K线数据|股票1小时k线数据Pro|股票5分钟收盘价|股票15分钟收盘价 } }
   - { space_id: stock_cn, dataset_id: index_kline, data_source_id: quantclass_stock, name: 指数行情, data_kind: time_series, freqs: [1h, 1d], status: active, attributes: { source_directories: 主要指数历史日线数据|指数1小时K线数据 } }
-  - { space_id: stock_cn, dataset_id: etf_kline_daily, data_source_id: quantclass_stock, name: 基金日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: etf基金日线数据 } }
-  - { space_id: stock_cn, dataset_id: convertible_bond_daily, data_source_id: quantclass_stock, name: 转债日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 可转债行情数据 } }
-  - { space_id: stock_cn, dataset_id: call_auction_daily, data_source_id: quantclass_stock, name: 集合竞价, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 股票集合竞价日线数据 } }
-  - { space_id: stock_cn, dataset_id: money_flow_daily, data_source_id: quantclass_stock, name: 资金流向, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 资金流数据|邢不行资金流数据 } }
-  - { space_id: stock_cn, dataset_id: chip_distribution_daily, data_source_id: quantclass_stock, name: 筹码分布, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 筹码分布市场数据 } }
-  - { space_id: stock_cn, dataset_id: financial_statement_metric, data_source_id: quantclass_stock, name: 财报指标明细, data_kind: record, freqs: [quarter], status: active, attributes: { source_directories: 邢不行财务数据, storage_model: long_form, note: 每个原始财务列转为metric_id和metric_value } }
+  - { space_id: stock_cn, dataset_id: financial_statement_metric, data_source_id: quantclass_stock, name: 财报指标明细, data_kind: record, freqs: [quarter], status: active, attributes: { source_directories: 邢不行财务数据, storage_model: long_form } }
   - { space_id: stock_cn, dataset_id: financial_summary, data_source_id: quantclass_stock, name: 财务摘要, data_kind: record, freqs: [quarter], status: active, attributes: { source_directories: 财务预处理数据, storage_model: wide_common_metrics } }
-  - { space_id: stock_cn, dataset_id: earnings_forecast, data_source_id: quantclass_stock, name: 业绩预告, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 邢不行财务预告数据 } }
-  - { space_id: stock_cn, dataset_id: dividend_action, data_source_id: quantclass_stock, name: 分红事件, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 个股分红数据 } }
-  - { space_id: stock_cn, dataset_id: analyst_rating, data_source_id: quantclass_stock, name: 分析师评级, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 分析师评级数据|机构预测数据 } }
-  - { space_id: stock_cn, dataset_id: institution_research, data_source_id: quantclass_stock, name: 机构调研, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 机构调研数据 } }
-  - { space_id: stock_cn, dataset_id: announcement, data_source_id: quantclass_stock, name: 公司公告, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 股票公告标题汇总 } }
-  - { space_id: stock_cn, dataset_id: popularity_daily, data_source_id: quantclass_stock, name: 股票热度, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 热门股票数据|股票人气概念数据 } }
-  - { space_id: stock_cn, dataset_id: dragon_tiger_record, data_source_id: quantclass_stock, name: 龙虎榜记录, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 龙虎榜机构持仓数据 } }
   - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, data_source_id: quantclass_hk, name: 港股日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: AH港股数据 } }
   - { space_id: stock_us, dataset_id: stock_kline_daily, data_source_id: quantclass_us, name: 美股日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 美股日线数据 } }
-  - { space_id: stock_us, dataset_id: index_kline_daily, data_source_id: quantclass_us, name: 美股指数行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 美股主要指数历史日线数据 } }
-  - { space_id: stock_us, dataset_id: dividend_action, data_source_id: quantclass_us, name: 美股分红事件, data_kind: record, freqs: [event], status: active, attributes: { source_directories: 美股分红数据 } }
   - { space_id: crypto_binance, dataset_id: spot_kline_1h, data_source_id: binance, name: 现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 现货1小时数据-币对分类 } }
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, data_source_id: binance, name: 永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 永续合约1小时数据-币对分类 } }
-  - { space_id: crypto_binance, dataset_id: asset_fundamental_daily, data_source_id: coinmarketcap, name: 币种基本面, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 市值数据-BN币对|coinmarketcap基本面数据-仅币安币对 } }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, data_source_id: okx, name: 现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX现货1小时数据-币对分类 } }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, data_source_id: okx, name: 永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX永续合约1小时数据-币对分类 } }
 
 dataset_columns:
-  # 每个 Dataset 都提供 raw_payload，承接尚未标准化但必须无损保留的原始列。
-  - { space_id: stock_cn, dataset_id: security_master_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: stock_kline, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: index_kline, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: etf_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: convertible_bond_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: call_auction_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: money_flow_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: chip_distribution_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: financial_summary, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: earnings_forecast, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: dividend_action, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: analyst_rating, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: institution_research, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: announcement, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: popularity_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_cn, dataset_id: dragon_tiger_record, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_us, dataset_id: index_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: stock_us, dataset_id: dividend_action, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_binance, dataset_id: asset_fundamental_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-
-  # 所有行情数据集统一使用 subject_id + data_time 作为粒度；这里只声明可写业务列。
-  - { space_id: stock_cn, dataset_id: stock_kline, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: time, required: true, status: active }
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, status: active }
-  - { space_id: stock_cn, dataset_id: index_kline, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
+  - { space_id: stock_cn, dataset_id: stock_kline, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: stock_cn, dataset_id: index_kline, column_name: index_code, origin_type: field, origin_id: index_code, value_type: string, required: true, status: active }
   - { space_id: stock_cn, dataset_id: index_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: index_kline, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
@@ -203,12 +121,14 @@ dataset_columns:
   - { space_id: stock_cn, dataset_id: index_kline, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
   - { space_id: stock_cn, dataset_id: index_kline, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: index_kline, column_name: amount, origin_type: field, origin_id: amount, value_type: double, status: active }
+  - { space_id: stock_cn, dataset_id: index_kline, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: report_date, origin_type: field, origin_id: report_date, value_type: time, required: true, status: active }
   - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: publish_date, origin_type: field, origin_id: publish_date, value_type: time, status: active }
   - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: statement_format, origin_type: field, origin_id: statement_format, value_type: string, status: active }
   - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: metric_id, origin_type: field, origin_id: metric_id, value_type: string, required: true, status: active }
   - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: metric_name, origin_type: field, origin_id: metric_name, value_type: string, status: active }
   - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: metric_value, origin_type: field, origin_id: metric_value, value_type: double, status: active }
+  - { space_id: stock_cn, dataset_id: financial_statement_metric, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: stock_cn, dataset_id: financial_summary, column_name: report_date, origin_type: field, origin_id: report_date, value_type: time, required: true, status: active }
   - { space_id: stock_cn, dataset_id: financial_summary, column_name: revenue, origin_type: field, origin_id: revenue, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: financial_summary, column_name: net_profit_parent, origin_type: field, origin_id: net_profit_parent, value_type: double, status: active }
@@ -216,27 +136,29 @@ dataset_columns:
   - { space_id: stock_cn, dataset_id: financial_summary, column_name: total_liabilities, origin_type: field, origin_id: total_liabilities, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: financial_summary, column_name: operating_cash_flow, origin_type: field, origin_id: operating_cash_flow, value_type: double, status: active }
   - { space_id: stock_cn, dataset_id: financial_summary, column_name: roe_ttm, origin_type: field, origin_id: roe_ttm, value_type: double, status: active }
-  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: time, required: true, status: active }
-  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: stock_cn, dataset_id: financial_summary, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
-  - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: trade_date, origin_type: field, origin_id: trade_date, value_type: time, required: true, status: active }
-  - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: market_cap, origin_type: field, origin_id: market_cap, value_type: double, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: pe_ttm, origin_type: field, origin_id: pe_ttm, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
+
+  # 四个数字货币行情 Dataset 共享同一结构，但 Field 仍归属各自 Space。
   - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
   - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
+  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
@@ -244,14 +166,14 @@ dataset_columns:
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
   - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: data_time, origin_type: field, origin_id: data_time, value_type: time, required: true, status: active }
+  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
@@ -259,11 +181,84 @@ dataset_columns:
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
   - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
+  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
 
 views:
-  - { space_id: stock_cn, view_id: stock_kline_view, name: 股票行情查询, primary_dataset_id: stock_kline, dataset_ids: [stock_kline], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: stock_cn, view_id: financial_view, name: 财务指标查询, primary_dataset_id: financial_statement_metric, dataset_ids: [financial_statement_metric, financial_summary], grain_keys: [subject_id, report_date, metric_id], engine: duckdb, status: active }
-  - { space_id: stock_hk, view_id: hk_kline_view, name: 港股行情查询, primary_dataset_id: ah_stock_kline_daily, dataset_ids: [ah_stock_kline_daily], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: stock_us, view_id: us_kline_view, name: 美股行情查询, primary_dataset_id: stock_kline_daily, dataset_ids: [stock_kline_daily], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: crypto_binance, view_id: spot_kline_view, name: 币安现货查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto_okx, view_id: spot_kline_view, name: 欧易现货查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, name: A股日行情查询, primary_dataset_id: stock_kline, dataset_ids: [stock_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, name: A股指数日行情查询, primary_dataset_id: index_kline, dataset_ids: [index_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, name: 财报指标明细查询, primary_dataset_id: financial_statement_metric, dataset_ids: [financial_statement_metric], grain_keys: [record_id, version], engine: bleve, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, name: 财务摘要查询, primary_dataset_id: financial_summary, dataset_ids: [financial_summary], grain_keys: [record_id, version], engine: bleve, status: active }
+  - { space_id: stock_hk, view_id: stock_kline_1d_view, name: 港股日行情查询, primary_dataset_id: ah_stock_kline_daily, dataset_ids: [ah_stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, name: 美股日行情查询, primary_dataset_id: stock_kline_daily, dataset_ids: [stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, name: 币安现货小时行情查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, name: 币安永续小时行情查询, primary_dataset_id: perpetual_kline_1h, dataset_ids: [perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, name: 欧易现货小时行情查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, name: 欧易永续小时行情查询, primary_dataset_id: perpetual_kline_1h, dataset_ids: [perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+
+view_columns:
+  # View 只投影结构化业务列；subject_id、freq、data_time、record_id、version 由系统 Key 提供。
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, column_name: stock_kline.open, origin_type: dataset_column, origin_id: stock_kline.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, column_name: stock_kline.high, origin_type: dataset_column, origin_id: stock_kline.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, column_name: stock_kline.low, origin_type: dataset_column, origin_id: stock_kline.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, column_name: stock_kline.close, origin_type: dataset_column, origin_id: stock_kline.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, column_name: stock_kline.volume, origin_type: dataset_column, origin_id: stock_kline.volume, value_type: double, sort_order: 50, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, column_name: stock_kline.amount, origin_type: dataset_column, origin_id: stock_kline.amount, value_type: double, sort_order: 60, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.index_code, origin_type: dataset_column, origin_id: index_kline.index_code, value_type: string, sort_order: 10, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.open, origin_type: dataset_column, origin_id: index_kline.open, value_type: double, sort_order: 20, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.high, origin_type: dataset_column, origin_id: index_kline.high, value_type: double, sort_order: 30, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.low, origin_type: dataset_column, origin_id: index_kline.low, value_type: double, sort_order: 40, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.close, origin_type: dataset_column, origin_id: index_kline.close, value_type: double, sort_order: 50, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.volume, origin_type: dataset_column, origin_id: index_kline.volume, value_type: double, sort_order: 60, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, column_name: index_kline.amount, origin_type: dataset_column, origin_id: index_kline.amount, value_type: double, sort_order: 70, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, column_name: financial_statement_metric.report_date, origin_type: dataset_column, origin_id: financial_statement_metric.report_date, value_type: time, sort_order: 10, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, column_name: financial_statement_metric.publish_date, origin_type: dataset_column, origin_id: financial_statement_metric.publish_date, value_type: time, sort_order: 20, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, column_name: financial_statement_metric.statement_format, origin_type: dataset_column, origin_id: financial_statement_metric.statement_format, value_type: string, sort_order: 30, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, column_name: financial_statement_metric.metric_id, origin_type: dataset_column, origin_id: financial_statement_metric.metric_id, value_type: string, sort_order: 40, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, column_name: financial_statement_metric.metric_name, origin_type: dataset_column, origin_id: financial_statement_metric.metric_name, value_type: string, sort_order: 50, status: active }
+  - { space_id: stock_cn, view_id: financial_metric_view, column_name: financial_statement_metric.metric_value, origin_type: dataset_column, origin_id: financial_statement_metric.metric_value, value_type: double, sort_order: 60, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.report_date, origin_type: dataset_column, origin_id: financial_summary.report_date, value_type: time, sort_order: 10, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.revenue, origin_type: dataset_column, origin_id: financial_summary.revenue, value_type: double, sort_order: 20, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.net_profit_parent, origin_type: dataset_column, origin_id: financial_summary.net_profit_parent, value_type: double, sort_order: 30, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.total_assets, origin_type: dataset_column, origin_id: financial_summary.total_assets, value_type: double, sort_order: 40, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.total_liabilities, origin_type: dataset_column, origin_id: financial_summary.total_liabilities, value_type: double, sort_order: 50, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.operating_cash_flow, origin_type: dataset_column, origin_id: financial_summary.operating_cash_flow, value_type: double, sort_order: 60, status: active }
+  - { space_id: stock_cn, view_id: financial_summary_view, column_name: financial_summary.roe_ttm, origin_type: dataset_column, origin_id: financial_summary.roe_ttm, value_type: double, sort_order: 70, status: active }
+  - { space_id: stock_hk, view_id: stock_kline_1d_view, column_name: ah_stock_kline_daily.open, origin_type: dataset_column, origin_id: ah_stock_kline_daily.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: stock_hk, view_id: stock_kline_1d_view, column_name: ah_stock_kline_daily.high, origin_type: dataset_column, origin_id: ah_stock_kline_daily.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: stock_hk, view_id: stock_kline_1d_view, column_name: ah_stock_kline_daily.low, origin_type: dataset_column, origin_id: ah_stock_kline_daily.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: stock_hk, view_id: stock_kline_1d_view, column_name: ah_stock_kline_daily.close, origin_type: dataset_column, origin_id: ah_stock_kline_daily.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.open, origin_type: dataset_column, origin_id: stock_kline_daily.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.high, origin_type: dataset_column, origin_id: stock_kline_daily.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.low, origin_type: dataset_column, origin_id: stock_kline_daily.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.close, origin_type: dataset_column, origin_id: stock_kline_daily.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.volume, origin_type: dataset_column, origin_id: stock_kline_daily.volume, value_type: double, sort_order: 50, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.market_cap, origin_type: dataset_column, origin_id: stock_kline_daily.market_cap, value_type: double, sort_order: 60, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.pe_ttm, origin_type: dataset_column, origin_id: stock_kline_daily.pe_ttm, value_type: double, sort_order: 70, status: active }
+
+  # 数字货币 View 列与各自 Dataset 显式绑定，避免跨 Space 暗式复用。
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.open, origin_type: dataset_column, origin_id: spot_kline_1h.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.high, origin_type: dataset_column, origin_id: spot_kline_1h.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.low, origin_type: dataset_column, origin_id: spot_kline_1h.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.close, origin_type: dataset_column, origin_id: spot_kline_1h.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.volume, origin_type: dataset_column, origin_id: spot_kline_1h.volume, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.quote_volume, origin_type: dataset_column, origin_id: spot_kline_1h.quote_volume, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.open, origin_type: dataset_column, origin_id: perpetual_kline_1h.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.high, origin_type: dataset_column, origin_id: perpetual_kline_1h.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.low, origin_type: dataset_column, origin_id: perpetual_kline_1h.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.close, origin_type: dataset_column, origin_id: perpetual_kline_1h.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.volume, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.quote_volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.quote_volume, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.open, origin_type: dataset_column, origin_id: spot_kline_1h.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.high, origin_type: dataset_column, origin_id: spot_kline_1h.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.low, origin_type: dataset_column, origin_id: spot_kline_1h.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.close, origin_type: dataset_column, origin_id: spot_kline_1h.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.volume, origin_type: dataset_column, origin_id: spot_kline_1h.volume, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.quote_volume, origin_type: dataset_column, origin_id: spot_kline_1h.quote_volume, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.open, origin_type: dataset_column, origin_id: perpetual_kline_1h.open, value_type: double, sort_order: 10, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.high, origin_type: dataset_column, origin_id: perpetual_kline_1h.high, value_type: double, sort_order: 20, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.low, origin_type: dataset_column, origin_id: perpetual_kline_1h.low, value_type: double, sort_order: 30, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.close, origin_type: dataset_column, origin_id: perpetual_kline_1h.close, value_type: double, sort_order: 40, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.volume, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.quote_volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.quote_volume, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70, status: active }
