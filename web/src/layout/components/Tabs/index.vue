@@ -11,7 +11,7 @@
     >
       <a-tab-pane v-for="item of tabsList" :key="item.name" :title="$t(`menu.${item.meta.title}`)" :closable="!item.meta.affix" />
     </a-tabs>
-    <div id="page-tab-actions" class="tabs_page_actions" aria-label="当前页面操作"></div>
+    <div id="page-tab-actions" class="tabs_page_actions" role="group" aria-label="当前页面操作"></div>
     <div class="tabs_setting">
       <a-space>
         <a-tooltip :content="$t(`system.refresh`)" position="bottom" mini>
