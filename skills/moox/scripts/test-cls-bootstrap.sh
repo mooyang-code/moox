@@ -84,7 +84,12 @@ new_deploy() {
 }
 
 file_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+  local mode
+  if mode=$(stat -f '%Lp' "$1" 2>/dev/null); then
+    printf '%s\n' "${mode}"
+    return
+  fi
+  stat -c '%a' "$1"
 }
 
 tree_digest() {

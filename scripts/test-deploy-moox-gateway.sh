@@ -11,6 +11,14 @@ NO_ADMIN_CADDY="${ROOT}/deploy/caddy/Caddyfile.no-admin"
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_contains() { grep -Fq -- "$2" "$1" || fail "$1 does not contain: $2"; }
 assert_absent() { ! grep -Fq -- "$2" "$1" || fail "$1 unexpectedly contains: $2"; }
+file_mode() {
+  local mode
+  if mode=$(stat -f '%Lp' "$1" 2>/dev/null); then
+    printf '%s\n' "${mode}"
+    return
+  fi
+  stat -c '%a' "$1"
+}
 
 assert_contains "${BUILD}" 'gateway)'
 assert_contains "${BUILD}" 'modules/gateway ./cmd/server moox-gateway'
@@ -181,7 +189,7 @@ grep -Fq 'base_url: "https://admin.example.com:9527/"' "${DEPLOYED}/gateway/conf
 cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
 ! grep -Rqs -- 'PRIVATE KEY' "${DEPLOYED}/certs" || fail 'a private CA key was staged'
 for secret in gateway-control.env gateway-service.env gateway-control.key gateway-service.key; do
-  mode=$(stat -f '%Lp' "${DEPLOYED}/secrets/${secret}" 2>/dev/null || stat -c '%a' "${DEPLOYED}/secrets/${secret}")
+  mode=$(file_mode "${DEPLOYED}/secrets/${secret}")
   [[ "${mode}" == 600 ]] || fail "${secret} mode is ${mode}, want 600"
 done
 grep -Fq 'MOOX_GATEWAY_NODE_ID=gateway-test' "${DEPLOYED}/secrets/gateway-service.env" || fail 'Gateway node ID was not scoped with service credentials'
@@ -343,7 +351,11 @@ case "${cmd}" in
     cat >/dev/null
     remote_path=$(cat "${FAKE_REMOTE_DIR}/current")
     archive="${FAKE_REMOTE_DIR}/$(basename "${remote_path}")"
-    mode=$(stat -f '%Lp' "${archive}" 2>/dev/null || stat -c '%a' "${archive}")
+    if mode=$(stat -f '%Lp' "${archive}" 2>/dev/null); then
+      :
+    else
+      mode=$(stat -c '%a' "${archive}")
+    fi
     printf '%s %s\n' "${mode}" "${remote_path}" >>"${FAKE_REMOTE_DIR}/observed"
     if [[ "${FAKE_REMOTE_SUCCESS:-0}" == 1 ]]; then
       rm -f "${archive}"

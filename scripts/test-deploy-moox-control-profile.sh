@@ -7,6 +7,15 @@ FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/control.tar.gz"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
+file_mode() {
+  local mode
+  if mode=$(stat -f '%Lp' "$1" 2>/dev/null); then
+    printf '%s\n' "${mode}"
+    return
+  fi
+  stat -c '%a' "$1"
+}
+
 mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
   "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
@@ -48,7 +57,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
 
 [[ -f "${ARCHIVE}" ]]
-mode=$(stat -f '%Lp' "${ARCHIVE}" 2>/dev/null || stat -c '%a' "${ARCHIVE}")
+mode=$(file_mode "${ARCHIVE}")
 [[ "${mode}" == 600 ]]
 
 mkdir "${TMP_ROOT}/unpacked"
