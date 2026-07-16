@@ -1,10 +1,10 @@
-# Custom Bootstrap Configuration Implementation Plan
+# Custom Setup Configuration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a repository-root `custom.toml` workflow that validates user credentials, deploys the minimal control plane, and atomically initializes the first Admin user, Tencent Cloud credential, and SSH hosts without exposing secrets to an Agent.
 
-**Architecture:** `moox-cli bootstrap` owns strict TOML loading, Tencent/SSH validation, control-plane deployment, SSH tunneling, and sanitized output. Admin owns a loopback-only bootstrap RPC and one transaction that writes all initial records plus an HMAC manifest fingerprint. The MooX Skill invokes only the high-level commands and never reads `custom.toml`.
+**Architecture:** `moox-cli setup` owns strict TOML loading, Tencent/SSH validation, control-plane deployment, SSH tunneling, and sanitized output. Admin owns a loopback-only setup RPC and one transaction that writes all initial records plus an HMAC manifest fingerprint. The MooX Skill invokes only the high-level commands and never reads `custom.toml`.
 
 **Tech Stack:** Go 1.24, Cobra, BurntSushi TOML, `golang.org/x/crypto/ssh`, tRPC-Go HTTP/PB, GORM/SQLite, Tencent Cloud SDK, Bash deployment contract tests, MooX Skill Markdown.
 
@@ -12,50 +12,50 @@
 
 ## File Map
 
-- Create `custom.toml.example`: exact user-facing bootstrap template with empty secrets.
+- Create `custom.toml.example`: exact user-facing setup template with empty secrets.
 - Modify `.gitignore`: ignore only repository-root `/custom.toml`.
-- Create `modules/cli/internal/bootstrapconfig/config.go`: secure file snapshot, strict TOML decode, canonical manifest, and field validation.
-- Create `modules/cli/internal/bootstrapconfig/config_test.go`: file security, parsing, uniqueness, canonicalization, and mutation tests.
-- Create `modules/cli/internal/bootstrapssh/client.go`: password SSH, dedicated known-hosts policy, connection validation, and local forwarding.
-- Create `modules/cli/internal/bootstrapssh/client_test.go`: SSH fixture, unknown-key behavior, auth failure redaction, and forwarding tests.
-- Create `modules/cli/internal/bootstrapvalidate/validate.go`: ordered local, Tencent, and SSH validation with stable result codes.
-- Create `modules/cli/internal/bootstrapvalidate/validate_test.go`: validator ordering, per-host results, and output secrecy.
-- Create `modules/admin/proto/bootstrap_service.proto`: loopback bootstrap apply/status contract.
-- Regenerate `modules/admin/proto/admingen/bootstrap_service*.go`: generated PB and tRPC bindings.
-- Modify `modules/admin/schema/admin.sql`: add singleton bootstrap state and cloud-secret uniqueness.
-- Create `modules/admin/internal/service/systembootstrap/service.go`: transactional create-or-verify domain.
-- Create `modules/admin/internal/service/systembootstrap/service_test.go`: commit, rollback, retry, conflict, hash/encryption, and adoption tests.
-- Create `modules/admin/internal/service/systembootstrap/rpc/service.go`: PB mapping with sanitized errors.
-- Create `modules/admin/internal/service/systembootstrap/rpc/service_test.go`: RPC result and redaction tests.
-- Modify `modules/admin/internal/bootstrap/services.go`: construct the bootstrap service with the shared DB and encryption key.
+- Create `modules/cli/internal/setupconfig/config.go`: secure file snapshot, strict TOML decode, canonical manifest, and field validation.
+- Create `modules/cli/internal/setupconfig/config_test.go`: file security, parsing, uniqueness, canonicalization, and mutation tests.
+- Create `modules/cli/internal/setupssh/client.go`: password SSH, dedicated known-hosts policy, connection validation, and local forwarding.
+- Create `modules/cli/internal/setupssh/client_test.go`: SSH fixture, unknown-key behavior, auth failure redaction, and forwarding tests.
+- Create `modules/cli/internal/setupvalidate/validate.go`: ordered local, Tencent, and SSH validation with stable result codes.
+- Create `modules/cli/internal/setupvalidate/validate_test.go`: validator ordering, per-host results, and output secrecy.
+- Create `modules/admin/proto/setup_service.proto`: loopback setup apply/status contract.
+- Regenerate `modules/admin/proto/admingen/setup_service*.go`: generated PB and tRPC bindings.
+- Modify `modules/admin/schema/admin.sql`: add singleton setup state and cloud-secret uniqueness.
+- Create `modules/admin/internal/service/systemsetup/service.go`: transactional create-or-verify domain.
+- Create `modules/admin/internal/service/systemsetup/service_test.go`: commit, rollback, retry, conflict, hash/encryption, and adoption tests.
+- Create `modules/admin/internal/service/systemsetup/rpc/service.go`: PB mapping with sanitized errors.
+- Create `modules/admin/internal/service/systemsetup/rpc/service_test.go`: RPC result and redaction tests.
+- Modify `modules/admin/internal/bootstrap/services.go`: construct the setup service with the shared DB and encryption key.
 - Modify `modules/admin/internal/bootstrap/trpc.go`: register the private service.
-- Modify `modules/admin/config/trpc_go.yaml`: bind the bootstrap listener to `127.0.0.1:11110`.
+- Modify `modules/admin/config/trpc_go.yaml`: bind the setup listener to `127.0.0.1:11110`.
 - Modify `modules/admin/internal/bootstrap/config_test.go`: enforce loopback binding.
-- Create `modules/cli/internal/bootstrapclient/client.go`: SSH-forwarded Admin bootstrap apply/status client.
-- Create `modules/cli/internal/bootstrapclient/login.go`: public GetLoginSalt/Login verification without token output.
-- Create `modules/cli/internal/bootstrapclient/client_test.go`: forwarded requests, timeout, conflict, and secret-free errors.
-- Create `modules/cli/internal/bootstrapclient/login_test.go`: browser-path login protocol and response redaction.
-- Create `modules/cli/internal/bootstrapdeploy/deploy.go`: minimal control profile orchestration and safe Go SSH/SFTP transport.
-- Create `modules/cli/internal/bootstrapdeploy/deploy_test.go`: profile arguments, upload behavior, readiness ordering, and no-secret output.
+- Create `modules/cli/internal/setupclient/client.go`: SSH-forwarded Admin setup apply/status client.
+- Create `modules/cli/internal/setupclient/login.go`: public GetLoginSalt/Login verification without token output.
+- Create `modules/cli/internal/setupclient/client_test.go`: forwarded requests, timeout, conflict, and secret-free errors.
+- Create `modules/cli/internal/setupclient/login_test.go`: browser-path login protocol and response redaction.
+- Create `modules/cli/internal/setupdeploy/deploy.go`: minimal control profile orchestration and safe Go SSH/SFTP transport.
+- Create `modules/cli/internal/setupdeploy/deploy_test.go`: profile arguments, upload behavior, readiness ordering, and no-secret output.
 - Modify `scripts/deploy-moox.sh`: add `control` profile and remove deploy-time Admin user creation.
-- Modify `scripts/test-deploy-moox-admin-bootstrap.sh`: enforce the new deployment/bootstrap boundary.
+- Modify `scripts/test-deploy-moox-admin-bootstrap.sh`: enforce the new deployment/setup boundary.
 - Create `scripts/test-deploy-moox-control-profile.sh`: verify exact control-profile contents and service startup.
-- Create `modules/cli/internal/command/bootstrap.go`: register `validate`, `deploy-control`, `init`, `status`, and host trust commands.
-- Create `modules/cli/internal/command/bootstrap_test.go`: CLI contract and stdout/stderr secrecy.
-- Modify `modules/cli/internal/command/root.go`: show the bootstrap command without eager unrelated YAML warnings.
+- Create `modules/cli/internal/command/setup.go`: register `validate`, `deploy-control`, `init`, `status`, and host trust commands.
+- Create `modules/cli/internal/command/setup_test.go`: CLI contract and stdout/stderr secrecy.
+- Modify `modules/cli/internal/command/root.go`: show the setup command without eager unrelated YAML warnings.
 - Modify `modules/cli/go.mod` and `modules/cli/go.sum`: make TOML and SSH dependencies direct.
-- Create `skills/moox/references/custom-bootstrap.md`: operator contract and exact template.
-- Modify `skills/moox/SKILL.md`: mandatory two-stage bootstrap sequence and prohibition on Agent file reads.
-- Create `skills/moox/scripts/test-custom-bootstrap-contract.sh`: check template, ignore rule, command order, and forbidden secret-reading patterns.
-- Modify `modules/cli/README.md`: document `bootstrap` commands and the read-only manifest contract.
+- Create `skills/moox/references/custom-setup.md`: operator contract and exact template.
+- Modify `skills/moox/SKILL.md`: mandatory two-stage setup sequence and prohibition on Agent file reads.
+- Create `skills/moox/scripts/test-custom-setup-contract.sh`: check template, ignore rule, command order, and forbidden secret-reading patterns.
+- Modify `modules/cli/README.md`: document `setup` commands and the read-only manifest contract.
 
 ## Task 1: Define And Secure The Manifest
 
 **Files:**
 - Create: `custom.toml.example`
 - Modify: `.gitignore`
-- Create: `modules/cli/internal/bootstrapconfig/config.go`
-- Create: `modules/cli/internal/bootstrapconfig/config_test.go`
+- Create: `modules/cli/internal/setupconfig/config.go`
+- Create: `modules/cli/internal/setupconfig/config_test.go`
 - Modify: `modules/cli/go.mod`
 - Modify: `modules/cli/go.sum`
 
@@ -108,10 +108,10 @@ Run:
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapconfig
+go test -count=1 ./internal/setupconfig
 ```
 
-Expected: FAIL because `bootstrapconfig.Load` and its types do not exist.
+Expected: FAIL because `setupconfig.Load` and its types do not exist.
 
 - [ ] **Step 4: Implement strict loading and canonicalization**
 
@@ -156,7 +156,7 @@ Make `github.com/BurntSushi/toml v1.3.2` a direct dependency. Run:
 ```bash
 cd modules/cli
 go mod tidy
-go test -count=1 ./internal/bootstrapconfig
+go test -count=1 ./internal/setupconfig
 ```
 
 Expected: PASS.
@@ -164,15 +164,15 @@ Expected: PASS.
 - [ ] **Step 6: Commit the manifest loader**
 
 ```bash
-git add .gitignore custom.toml.example modules/cli/go.mod modules/cli/go.sum modules/cli/internal/bootstrapconfig
-git commit -m "feat(cli): define secure bootstrap manifest"
+git add .gitignore custom.toml.example modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setupconfig
+git commit -m "feat(cli): define secure setup manifest"
 ```
 
 ## Task 2: Add SSH Trust, Authentication, And Forwarding
 
 **Files:**
-- Create: `modules/cli/internal/bootstrapssh/client.go`
-- Create: `modules/cli/internal/bootstrapssh/client_test.go`
+- Create: `modules/cli/internal/setupssh/client.go`
+- Create: `modules/cli/internal/setupssh/client_test.go`
 - Modify: `modules/cli/go.mod`
 - Modify: `modules/cli/go.sum`
 
@@ -192,7 +192,7 @@ func TestForwardConnectsOnlyThroughSSH(t *testing.T) {
     client := dialTrustedFixture(t)
     listener, err := client.ForwardLocal(context.Background(), "127.0.0.1:11110")
     require.NoError(t, err)
-    assertBootstrapHTTPRoundTrip(t, listener.Addr().String())
+    assertSetupHTTPRoundTrip(t, listener.Addr().String())
 }
 ```
 
@@ -202,7 +202,7 @@ Also assert that wrong passwords produce `ssh_auth_failed`, unreachable ports pr
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapssh
+go test -count=1 ./internal/setupssh
 ```
 
 Expected: FAIL because the package does not exist.
@@ -238,7 +238,7 @@ The forwarder listens on `127.0.0.1:0`, accepts local connections, opens `client
 ```bash
 cd modules/cli
 go mod tidy
-go test -count=1 ./internal/bootstrapssh
+go test -count=1 ./internal/setupssh
 ```
 
 Expected: PASS; `golang.org/x/crypto` is a direct dependency.
@@ -246,15 +246,15 @@ Expected: PASS; `golang.org/x/crypto` is a direct dependency.
 - [ ] **Step 6: Commit SSH support**
 
 ```bash
-git add modules/cli/go.mod modules/cli/go.sum modules/cli/internal/bootstrapssh
-git commit -m "feat(cli): add trusted bootstrap SSH transport"
+git add modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setupssh
+git commit -m "feat(cli): add trusted setup SSH transport"
 ```
 
 ## Task 3: Build Sanitized Preflight Validation
 
 **Files:**
-- Create: `modules/cli/internal/bootstrapvalidate/validate.go`
-- Create: `modules/cli/internal/bootstrapvalidate/validate_test.go`
+- Create: `modules/cli/internal/setupvalidate/validate.go`
+- Create: `modules/cli/internal/setupvalidate/validate_test.go`
 - Modify: `modules/cli/internal/tencentcloud/lighthouse.go`
 - Modify: `modules/cli/internal/tencentcloud/lighthouse_test.go`
 
@@ -295,38 +295,38 @@ Implement it with Tencent STS `GetCallerIdentity`. Map SDK authentication failur
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapvalidate ./internal/tencentcloud
+go test -count=1 ./internal/setupvalidate ./internal/tencentcloud
 ```
 
 Expected: FAIL until the validator and identity seam exist.
 
 - [ ] **Step 4: Implement ordered validation**
 
-`Validate` receives an already-secure `bootstrapconfig.Snapshot`. It returns stable codes and host names only. Use bounded concurrency for `other_hosts`, but preserve configured order in output. Always call `snapshot.VerifyUnchanged()` before returning.
+`Validate` receives an already-secure `setupconfig.Snapshot`. It returns stable codes and host names only. Use bounded concurrency for `other_hosts`, but preserve configured order in output. Always call `snapshot.VerifyUnchanged()` before returning.
 
 - [ ] **Step 5: Run and commit**
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapvalidate ./internal/tencentcloud
-git add modules/cli/internal/bootstrapvalidate modules/cli/internal/tencentcloud
-git commit -m "feat(cli): validate bootstrap credentials safely"
+go test -count=1 ./internal/setupvalidate ./internal/tencentcloud
+git add modules/cli/internal/setupvalidate modules/cli/internal/tencentcloud
+git commit -m "feat(cli): validate setup credentials safely"
 ```
 
-## Task 4: Add The Transactional Admin Bootstrap Domain
+## Task 4: Add The Transactional Admin Setup Domain
 
 **Files:**
 - Modify: `modules/admin/schema/admin.sql`
 - Modify: `modules/admin/schema/schema_test.go`
-- Create: `modules/admin/internal/service/systembootstrap/service.go`
-- Create: `modules/admin/internal/service/systembootstrap/service_test.go`
+- Create: `modules/admin/internal/service/systemsetup/service.go`
+- Create: `modules/admin/internal/service/systemsetup/service_test.go`
 
 - [ ] **Step 1: Write the schema failure test**
 
-Require a singleton state table and a unique active Tencent bootstrap credential:
+Require a singleton state table and a unique active Tencent setup credential:
 
 ```sql
-CREATE TABLE IF NOT EXISTS t_system_bootstrap (
+CREATE TABLE IF NOT EXISTS t_system_setup (
     c_id INTEGER NOT NULL PRIMARY KEY CHECK (c_id = 1),
     c_status TEXT NOT NULL CHECK (c_status = 'completed'),
     c_manifest_hmac TEXT NOT NULL,
@@ -386,7 +386,7 @@ Reuse `packages/crypto` for bcrypt and encryption. Add `cloud` to the accepted S
 
 ```bash
 cd modules/admin
-go test -count=1 ./schema ./internal/service/systembootstrap ./internal/service/secret/rpc
+go test -count=1 ./schema ./internal/service/systemsetup ./internal/service/secret/rpc
 ```
 
 Expected: PASS.
@@ -394,18 +394,18 @@ Expected: PASS.
 - [ ] **Step 5: Commit the domain**
 
 ```bash
-git add modules/admin/schema modules/admin/internal/service/systembootstrap modules/admin/internal/service/secret/rpc
-git commit -m "feat(admin): add atomic system bootstrap domain"
+git add modules/admin/schema modules/admin/internal/service/systemsetup modules/admin/internal/service/secret/rpc
+git commit -m "feat(admin): add atomic system setup domain"
 ```
 
-## Task 5: Expose A Loopback-Only Bootstrap RPC
+## Task 5: Expose A Loopback-Only Setup RPC
 
 **Files:**
-- Create: `modules/admin/proto/bootstrap_service.proto`
-- Regenerate: `modules/admin/proto/admingen/bootstrap_service.pb.go`
-- Regenerate: `modules/admin/proto/admingen/bootstrap_service.trpc.go`
-- Create: `modules/admin/internal/service/systembootstrap/rpc/service.go`
-- Create: `modules/admin/internal/service/systembootstrap/rpc/service_test.go`
+- Create: `modules/admin/proto/setup_service.proto`
+- Regenerate: `modules/admin/proto/admingen/setup_service.pb.go`
+- Regenerate: `modules/admin/proto/admingen/setup_service.trpc.go`
+- Create: `modules/admin/internal/service/systemsetup/rpc/service.go`
+- Create: `modules/admin/internal/service/systemsetup/rpc/service_test.go`
 - Modify: `modules/admin/internal/bootstrap/services.go`
 - Modify: `modules/admin/internal/bootstrap/trpc.go`
 - Modify: `modules/admin/config/trpc_go.yaml`
@@ -417,16 +417,16 @@ git commit -m "feat(admin): add atomic system bootstrap domain"
 Add messages with `password`, `secret_id`, and `secret_key` fields only in requests. Responses contain action and counts; the stored HMAC never leaves Admin:
 
 ```proto
-service Bootstrap {
-  rpc ApplyBootstrap(ApplyBootstrapReq) returns (ApplyBootstrapRsp);
-  rpc GetBootstrapStatus(GetBootstrapStatusReq) returns (GetBootstrapStatusRsp);
+service Setup {
+  rpc ApplySetup(ApplySetupReq) returns (ApplySetupRsp);
+  rpc GetSetupStatus(GetSetupStatusReq) returns (GetSetupStatusRsp);
 }
 
-message ApplyBootstrapReq {
-  BootstrapAdmin admin = 1;
-  BootstrapTencentCloud tencent_cloud = 2;
-  BootstrapHost control_host = 3;
-  repeated BootstrapHost other_hosts = 4;
+message ApplySetupReq {
+  SetupAdmin admin = 1;
+  SetupTencentCloud tencent_cloud = 2;
+  SetupHost control_host = 3;
+  repeated SetupHost other_hosts = 4;
 }
 ```
 
@@ -438,32 +438,32 @@ Do not add this service to any public gateway service-ID map.
 make proto
 ```
 
-Expected: generated `bootstrap_service.pb.go` and `bootstrap_service.trpc.go` compile.
+Expected: generated `setup_service.pb.go` and `setup_service.trpc.go` compile.
 
 - [ ] **Step 3: Write failing RPC and binding tests**
 
-Test successful mapping, `bootstrap_conflict`, storage failure, and status. Marshal every response and assert it contains none of the request secrets.
+Test successful mapping, `setup_conflict`, storage failure, and status. Marshal every response and assert it contains none of the request secrets.
 
-Add a config test that changes the bootstrap bind address to `0.0.0.0:11110` and expects `bootstrap listener must bind to loopback`.
+Add a config test that changes the setup bind address to `0.0.0.0:11110` and expects `setup listener must bind to loopback`.
 
 - [ ] **Step 4: Implement RPC mapping and service wiring**
 
 Register only on the dedicated service:
 
 ```go
-adminpb.RegisterBootstrapService(
-    s.Service("trpc.moox.admin.Bootstrap"),
-    bootstraprpc.NewService(services.SystemBootstrap),
+adminpb.RegisterSetupService(
+    s.Service("trpc.moox.admin.Setup"),
+    setuprpc.NewService(services.SystemSetup),
 )
 ```
 
-Add `trpc.moox.admin.Bootstrap` to `trpc_go.yaml` with `network: tcp`, `protocol: http`, and `ip: 127.0.0.1`, `port: 11110`. Validate the listener during config load before server startup.
+Add `trpc.moox.admin.Setup` to `trpc_go.yaml` with `network: tcp`, `protocol: http`, and `ip: 127.0.0.1`, `port: 11110`. Validate the listener during config load before server startup.
 
 - [ ] **Step 5: Run narrow and module tests**
 
 ```bash
 cd modules/admin
-go test -count=1 ./internal/service/systembootstrap/... ./internal/bootstrap ./schema
+go test -count=1 ./internal/service/systemsetup/... ./internal/bootstrap ./schema
 ```
 
 Expected: PASS.
@@ -471,37 +471,37 @@ Expected: PASS.
 - [ ] **Step 6: Commit the private API**
 
 ```bash
-git add modules/admin/proto modules/admin/internal/service/systembootstrap modules/admin/internal/bootstrap modules/admin/config/trpc_go.yaml
-git commit -m "feat(admin): expose loopback bootstrap API"
+git add modules/admin/proto modules/admin/internal/service/systemsetup modules/admin/internal/bootstrap modules/admin/config/trpc_go.yaml
+git commit -m "feat(admin): expose loopback setup API"
 ```
 
-## Task 6: Add The SSH-Forwarded Bootstrap Client
+## Task 6: Add The SSH-Forwarded Setup Client
 
 **Files:**
-- Create: `modules/cli/internal/bootstrapclient/client.go`
-- Create: `modules/cli/internal/bootstrapclient/login.go`
-- Create: `modules/cli/internal/bootstrapclient/client_test.go`
-- Create: `modules/cli/internal/bootstrapclient/login_test.go`
+- Create: `modules/cli/internal/setupclient/client.go`
+- Create: `modules/cli/internal/setupclient/login.go`
+- Create: `modules/cli/internal/setupclient/client_test.go`
+- Create: `modules/cli/internal/setupclient/login_test.go`
 
 - [ ] **Step 1: Write failing forwarded-client tests**
 
 Use a fake SSH forwarder and HTTP server to assert the request reaches
-`/trpc.moox.admin.Bootstrap/ApplyBootstrap`, status uses
-`GetBootstrapStatus`, context cancellation closes the forward, and remote
+`/trpc.moox.admin.Setup/ApplySetup`, status uses
+`GetSetupStatus`, context cancellation closes the forward, and remote
 responses containing unexpected text are converted to stable errors.
 
 - [ ] **Step 2: Run and verify failure**
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapclient
+go test -count=1 ./internal/setupclient
 ```
 
 Expected: FAIL because the client does not exist.
 
 - [ ] **Step 3: Implement apply and status**
 
-Use `bootstrapssh.Client.ForwardLocal(ctx, "127.0.0.1:11110")`, a private
+Use `setupssh.Client.ForwardLocal(ctx, "127.0.0.1:11110")`, a private
 `http.Client` with a fixed timeout, and PB JSON names. Map responses into:
 
 ```go
@@ -533,9 +533,9 @@ or signing key appears in the result or error.
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapclient
-git add modules/cli/internal/bootstrapclient/client.go modules/cli/internal/bootstrapclient/client_test.go \
-  modules/cli/internal/bootstrapclient/login.go modules/cli/internal/bootstrapclient/login_test.go
+go test -count=1 ./internal/setupclient
+git add modules/cli/internal/setupclient/client.go modules/cli/internal/setupclient/client_test.go \
+  modules/cli/internal/setupclient/login.go modules/cli/internal/setupclient/login_test.go
 git commit -m "feat(cli): initialize Admin through SSH forwarding"
 ```
 
@@ -560,7 +560,7 @@ test ! -e "${stage}/bin/moox-cloudnode"
 test ! -e "${stage}/bin/moox-collector"
 ```
 
-Update the Admin bootstrap test to fail if the script contains or accepts
+Update the Admin setup test to fail if the script contains or accepts
 `--admin-username`, `--admin-password-file`, `BOOTSTRAP_ADMIN`, or `user ensure`.
 
 - [ ] **Step 2: Run and confirm failure**
@@ -608,14 +608,14 @@ Expected: PASS.
 
 ```bash
 git add scripts/deploy-moox.sh scripts/test-deploy-moox-admin-bootstrap.sh scripts/test-deploy-moox-control-profile.sh
-git commit -m "refactor(deploy): separate control bootstrap profile"
+git commit -m "refactor(deploy): separate control setup profile"
 ```
 
 ## Task 8: Orchestrate Control Deployment Without Shell Password Exposure
 
 **Files:**
-- Create: `modules/cli/internal/bootstrapdeploy/deploy.go`
-- Create: `modules/cli/internal/bootstrapdeploy/deploy_test.go`
+- Create: `modules/cli/internal/setupdeploy/deploy.go`
+- Create: `modules/cli/internal/setupdeploy/deploy_test.go`
 - Modify: `scripts/deploy-moox.sh`
 
 - [ ] **Step 1: Add a package-only deploy contract**
@@ -627,17 +627,17 @@ remote command is invoked.
 
 - [ ] **Step 2: Write failing Go orchestration tests**
 
-Inject a `Packager`, `bootstrapssh.Client`, and readiness probe. Assert the
+Inject a `Packager`, `setupssh.Client`, and readiness probe. Assert the
 order:
 
 ```text
-package -> upload .next -> atomic install -> start -> admin ready -> bootstrap ready -> gateway ready -> web ready -> browser HTTPS ready
+package -> upload .next -> atomic install -> start -> admin ready -> setup ready -> gateway ready -> web ready -> browser HTTPS ready
 ```
 
 Assert captured argv, environment, stdout, stderr, remote commands, and uploaded
 archive do not contain any manifest credential.
 
-- [ ] **Step 3: Implement `bootstrapdeploy.DeployControl`**
+- [ ] **Step 3: Implement `setupdeploy.DeployControl`**
 
 Use the SSH/SFTP client from Task 2. The packager receives only non-sensitive
 deployment values:
@@ -660,7 +660,7 @@ headers or secrets.
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/bootstrapdeploy ./internal/bootstrapssh
+go test -count=1 ./internal/setupdeploy ./internal/setupssh
 cd ../..
 bash scripts/test-deploy-moox-control-profile.sh
 ```
@@ -670,15 +670,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit deployment orchestration**
 
 ```bash
-git add modules/cli/internal/bootstrapdeploy scripts/deploy-moox.sh scripts/test-deploy-moox-control-profile.sh
-git commit -m "feat(cli): deploy bootstrap control plane safely"
+git add modules/cli/internal/setupdeploy scripts/deploy-moox.sh scripts/test-deploy-moox-control-profile.sh
+git commit -m "feat(cli): deploy setup control plane safely"
 ```
 
 ## Task 9: Register The Public CLI Contract
 
 **Files:**
-- Create: `modules/cli/internal/command/bootstrap.go`
-- Create: `modules/cli/internal/command/bootstrap_test.go`
+- Create: `modules/cli/internal/command/setup.go`
+- Create: `modules/cli/internal/command/setup_test.go`
 - Modify: `modules/cli/internal/command/root.go`
 - Modify: `modules/cli/README.md`
 
@@ -687,23 +687,23 @@ git commit -m "feat(cli): deploy bootstrap control plane safely"
 Construct the command with injected dependencies and test:
 
 ```text
-bootstrap validate --file
-bootstrap trust-host --file --host control --fingerprint
-bootstrap deploy-control --file
-bootstrap init --file
-bootstrap status --file
+setup validate --file
+setup trust-host --file --host control --fingerprint
+setup deploy-control --file
+setup apply --file
+setup status --file
 ```
 
 Require JSON output with stable fields. Capture both streams and assert no test
 Admin password, SSH password, Tencent SecretId, or SecretKey occurs. Also prove
-bootstrap commands do not emit the unrelated legacy YAML-load warning from
+setup commands do not emit the unrelated legacy YAML-load warning from
 `loadGlobalConfig`.
 
 - [ ] **Step 2: Run and verify failure**
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/command -run Bootstrap
+go test -count=1 ./internal/command -run Setup
 ```
 
 Expected: FAIL because the command is not registered.
@@ -713,16 +713,16 @@ Expected: FAIL because the command is not registered.
 Use a shared file flag default:
 
 ```go
-const defaultBootstrapFile = "./custom.toml"
+const defaultSetupFile = "./custom.toml"
 
-func newBootstrapCommand(deps bootstrapDeps) *cobra.Command {
-    cmd := &cobra.Command{Use: "bootstrap", Short: "初始化 MooX 控制面"}
+func newSetupCommand(deps setupDeps) *cobra.Command {
+    cmd := &cobra.Command{Use: "setup", Short: "初始化 MooX 控制面"}
     cmd.AddCommand(
-        newBootstrapValidateCommand(deps),
-        newBootstrapTrustHostCommand(deps),
-        newBootstrapDeployCommand(deps),
-        newBootstrapInitCommand(deps),
-        newBootstrapStatusCommand(deps),
+        newSetupValidateCommand(deps),
+        newSetupTrustHostCommand(deps),
+        newSetupDeployCommand(deps),
+        newSetupApplyCommand(deps),
+        newSetupStatusCommand(deps),
     )
     return cmd
 }
@@ -732,7 +732,7 @@ Load `custom.toml` inside each `RunE`, never during package initialization.
 Print only typed result structs through `json.Encoder`. Mark all secret-bearing
 variables as local and clear mutable copies in `defer` blocks.
 
-After `init` returns `created` or `unchanged`, run the existing public
+After `apply` returns `created` or `unchanged`, run the existing public
 GetLoginSalt/Login exchange from inside the CLI using the in-memory Admin
 credentials. Discard the access token and request-signing key, and report only
 `login_api: valid`. This proves the Web-facing authentication path without
@@ -741,32 +741,32 @@ exposing the password to the Agent.
 - [ ] **Step 4: Make global YAML loading lazy**
 
 Move `loadGlobalConfig()` out of root `init()` and invoke it only from commands
-that consume the legacy operational YAML. Bootstrap commands must start with no
+that consume the legacy operational YAML. Setup commands must start with no
 unrelated warning or file lookup.
 
 - [ ] **Step 5: Run CLI tests and help smoke test**
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/command ./internal/bootstrapconfig ./internal/bootstrapvalidate ./internal/bootstrapclient ./internal/bootstrapdeploy
-go run ./cmd/moox-cli bootstrap --help
+go test -count=1 ./internal/command ./internal/setupconfig ./internal/setupvalidate ./internal/setupclient ./internal/setupdeploy
+go run ./cmd/moox-cli setup --help
 ```
 
-Expected: all tests PASS; help lists five bootstrap subcommands.
+Expected: all tests PASS; help lists five setup subcommands.
 
 - [ ] **Step 6: Commit the command surface**
 
 ```bash
 git add modules/cli/internal/command modules/cli/README.md
-git commit -m "feat(cli): add custom bootstrap workflow"
+git commit -m "feat(cli): add custom setup workflow"
 ```
 
 ## Task 10: Encode The Workflow In The MooX Skill
 
 **Files:**
-- Create: `skills/moox/references/custom-bootstrap.md`
+- Create: `skills/moox/references/custom-setup.md`
 - Modify: `skills/moox/SKILL.md`
-- Create: `skills/moox/scripts/test-custom-bootstrap-contract.sh`
+- Create: `skills/moox/scripts/test-custom-setup-contract.sh`
 
 - [ ] **Step 1: Write the failing Skill contract test**
 
@@ -779,12 +779,12 @@ The script must verify that the Skill/reference:
 - says the file remains unchanged and contains plaintext credentials;
 - prohibits Agent use of `cat`, `sed`, `rg`, Python, or shell `source` on
   `custom.toml`;
-- starts later service placement only after bootstrap status succeeds.
+- starts later service placement only after setup status succeeds.
 
 - [ ] **Step 2: Run and verify failure**
 
 ```bash
-bash skills/moox/scripts/test-custom-bootstrap-contract.sh
+bash skills/moox/scripts/test-custom-setup-contract.sh
 ```
 
 Expected: FAIL because the reference and flow are absent.
@@ -795,10 +795,10 @@ Document this exact Agent-safe sequence:
 
 ```bash
 test -e ./custom.toml || exit 2
-./bin/moox-cli bootstrap validate --file ./custom.toml
-./bin/moox-cli bootstrap deploy-control --file ./custom.toml
-./bin/moox-cli bootstrap init --file ./custom.toml
-./bin/moox-cli bootstrap status --file ./custom.toml
+./bin/moox-cli setup validate --file ./custom.toml
+./bin/moox-cli setup deploy-control --file ./custom.toml
+./bin/moox-cli setup apply --file ./custom.toml
+./bin/moox-cli setup status --file ./custom.toml
 ```
 
 The `test -e` check may inspect existence only. The Skill must never show a
@@ -811,7 +811,7 @@ Replace the current first-stage host interrogation with:
 1. show `custom.toml.example` when the manifest is absent;
 2. wait for the user to fill and protect `custom.toml`;
 3. run the four high-level commands;
-4. require the `bootstrap init` public-login check to pass and ask the user to
+4. require the `setup apply` public-login check to pass and ask the user to
    confirm interactive browser login when needed;
 5. remind the user the plaintext file remains unchanged;
 6. begin incremental service placement from registered hosts.
@@ -819,29 +819,29 @@ Replace the current first-stage host interrogation with:
 - [ ] **Step 5: Run and commit**
 
 ```bash
-bash skills/moox/scripts/test-custom-bootstrap-contract.sh
-git add skills/moox/SKILL.md skills/moox/references/custom-bootstrap.md skills/moox/scripts/test-custom-bootstrap-contract.sh
-git commit -m "docs(skill): guide custom bootstrap initialization"
+bash skills/moox/scripts/test-custom-setup-contract.sh
+git add skills/moox/SKILL.md skills/moox/references/custom-setup.md skills/moox/scripts/test-custom-setup-contract.sh
+git commit -m "docs(skill): guide custom setup initialization"
 ```
 
 ## Task 11: Run Cross-Module Security And Acceptance Verification
 
 **Files:**
-- Create: `modules/admin/test/system_bootstrap_e2e_test.go`
-- Create: `modules/cli/test/bootstrap_e2e_test.go`
+- Create: `modules/admin/test/system_setup_e2e_test.go`
+- Create: `modules/cli/test/setup_e2e_test.go`
 - Modify: `Makefile`
 
 - [ ] **Step 1: Add the Admin transaction E2E**
 
 Start Admin with a temporary database, `0600` encryption-key file, and
-loopback bootstrap listener. Send a manifest through HTTP and verify database
+loopback setup listener. Send a manifest through HTTP and verify database
 rows, bcrypt, ciphertext, state HMAC, retry, and conflict. Attempt the same path
 through browser Admin and node Gateway ports and require route-not-found.
 
 - [ ] **Step 2: Add the CLI workflow E2E**
 
 Use a temporary `0600 custom.toml`, an SSH fixture, fake Tencent identity
-server, package-only control archive, and Admin bootstrap server. Capture every
+server, package-only control archive, and Admin setup server. Capture every
 process stream and scan all generated files:
 
 ```go
@@ -854,20 +854,20 @@ assert.Equal(t, beforeBytes, afterBytes)
 
 - [ ] **Step 3: Add the focused verification target**
 
-Add `verify-custom-bootstrap` to the root Makefile. It runs:
+Add `verify-custom-setup` to the root Makefile. It runs:
 
 ```bash
-cd modules/admin && go test -count=1 ./internal/service/systembootstrap/... ./internal/bootstrap ./test -run Bootstrap
-cd modules/cli && go test -count=1 ./internal/bootstrap... ./internal/command ./test -run Bootstrap
+cd modules/admin && go test -count=1 ./internal/service/systemsetup/... ./internal/bootstrap ./test -run Setup
+cd modules/cli && go test -count=1 ./internal/setup... ./internal/command ./test -run Setup
 bash scripts/test-deploy-moox-admin-bootstrap.sh
 bash scripts/test-deploy-moox-control-profile.sh
-bash skills/moox/scripts/test-custom-bootstrap-contract.sh
+bash skills/moox/scripts/test-custom-setup-contract.sh
 ```
 
 - [ ] **Step 4: Run focused verification**
 
 ```bash
-make verify-custom-bootstrap
+make verify-custom-setup
 ```
 
 Expected: PASS with no credential values in output or generated artifacts.
@@ -879,28 +879,28 @@ make verify
 ```
 
 Expected: PASS. If an unrelated suite fails, record the exact pre-existing
-failure and keep `make verify-custom-bootstrap` green before proceeding.
+failure and keep `make verify-custom-setup` green before proceeding.
 
 - [ ] **Step 6: Run a real remote acceptance**
 
 With a user-created `0600 custom.toml` that the Agent never reads:
 
 ```bash
-./bin/moox-cli bootstrap validate --file ./custom.toml
-./bin/moox-cli bootstrap deploy-control --file ./custom.toml
-./bin/moox-cli bootstrap init --file ./custom.toml
-./bin/moox-cli bootstrap status --file ./custom.toml
+./bin/moox-cli setup validate --file ./custom.toml
+./bin/moox-cli setup deploy-control --file ./custom.toml
+./bin/moox-cli setup apply --file ./custom.toml
+./bin/moox-cli setup status --file ./custom.toml
 ```
 
 Verify signed health, public Web access, browser login, encrypted Admin rows,
-same-manifest `unchanged`, public bootstrap route rejection, and byte-for-byte
+same-manifest `unchanged`, public setup route rejection, and byte-for-byte
 manifest stability.
 
 - [ ] **Step 7: Commit acceptance coverage**
 
 ```bash
-git add Makefile modules/admin/test/system_bootstrap_e2e_test.go modules/cli/test/bootstrap_e2e_test.go
-git commit -m "test: verify custom bootstrap workflow"
+git add Makefile modules/admin/test/system_setup_e2e_test.go modules/cli/test/setup_e2e_test.go
+git commit -m "test: verify custom setup workflow"
 ```
 
 ## Task 12: Final Review And Delivery
@@ -933,7 +933,7 @@ tracked.
 - [ ] **Step 3: Run final fresh verification**
 
 ```bash
-make verify-custom-bootstrap
+make verify-custom-setup
 make verify
 ```
 

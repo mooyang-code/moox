@@ -1,4 +1,4 @@
-# Custom Bootstrap Configuration Design
+# Custom Setup Configuration Design
 
 ## Context
 
@@ -13,11 +13,11 @@ rest of the system can be configured:
 Today these values are collected through separate commands and deployment
 flags. That exposes credentials to whichever operator or Agent assembles the
 commands. The new flow makes the repository-root `custom.toml` the only
-user-authored bootstrap input. High-level CLI commands consume the file without
+user-authored setup input. High-level CLI commands consume the file without
 printing its sensitive fields.
 
 `custom.toml` is not an application runtime configuration file. It is a
-persistent, user-owned bootstrap manifest. MooX never modifies, renames, or
+persistent, user-owned setup manifest. MooX never modifies, renames, or
 deletes it.
 
 ## Goals
@@ -30,7 +30,7 @@ deletes it.
   and other hosts atomically in Admin.
 - Make initialization safe to retry with the same manifest and reject changed
   manifests after completion.
-- Keep bootstrap write access off the public Admin and Gateway routes.
+- Keep setup write access off the public Admin and Gateway routes.
 - Update the MooX Skill so it leads the user through this exact sequence before
   asking where to deploy the remaining services.
 
@@ -39,8 +39,8 @@ deletes it.
 - Defining the placement of Storage, CloudNode, Collector, Factor, Monitor,
   Trade, or other data-plane services.
 - Supporting SSH certificate authentication in `custom.toml`.
-- Supporting multiple bootstrap file formats or format versions.
-- Rotating credentials through `bootstrap init`.
+- Supporting multiple setup file formats or format versions.
+- Rotating credentials through `setup apply`.
 - Preserving compatibility with existing deployment flags that create the
   first Admin user.
 - Copying `custom.toml` to a deployment host.
@@ -99,18 +99,18 @@ after the operation. They never repair its permissions or rewrite its content.
 The CLI adds one top-level command group:
 
 ```text
-moox-cli bootstrap validate --file ./custom.toml
-moox-cli bootstrap trust-host --file ./custom.toml --host control --fingerprint <sha256>
-moox-cli bootstrap deploy-control --file ./custom.toml
-moox-cli bootstrap init --file ./custom.toml
-moox-cli bootstrap status --file ./custom.toml
+moox-cli setup validate --file ./custom.toml
+moox-cli setup trust-host --file ./custom.toml --host control --fingerprint <sha256>
+moox-cli setup deploy-control --file ./custom.toml
+moox-cli setup apply --file ./custom.toml
+moox-cli setup status --file ./custom.toml
 ```
 
 `--file` defaults to `./custom.toml`, but the resolved path must still be the
 repository-root file. This prevents an Agent from silently substituting a
 different manifest.
 
-### `bootstrap validate`
+### `setup validate`
 
 Validation performs four ordered phases:
 
@@ -126,14 +126,14 @@ the configured host name and a stable status or error code. Tencent results may
 contain the account UIN returned by the identity endpoint, but no request
 signature or credential fragment.
 
-### `bootstrap deploy-control`
+### `setup deploy-control`
 
 This command runs `validate`, builds the release, and deploys only:
 
 - `moox-admin` and `moox-admin-cli`;
 - `moox-gateway` and `moox-gateway-cli`;
 - `moox-web-host` and managed Caddy assets;
-- the bootstrap loopback listener and generated server-side encryption keys.
+- the setup loopback listener and generated server-side encryption keys.
 
 The command uses `control_host` for target address, port, username, and
 password. It does not pass the password through argv. The deployment transport
@@ -142,16 +142,16 @@ is split so packaging remains reusable while remote transport no longer
 depends on shell `ssh`/`scp` password handling.
 
 The control deployment does not create the first Admin user. It waits for
-Admin readiness, bootstrap listener readiness, Gateway readiness, Web
+Admin readiness, setup listener readiness, Gateway readiness, Web
 readiness, and the browser HTTPS endpoint before returning success.
 The remote deployment directory is fixed to `~/moox/prod` for this first-stage
 workflow. Later deployment commands may expose explicit placement options, but
-the bootstrap manifest does not grow deployment-tuning fields.
+the setup manifest does not grow deployment-tuning fields.
 
-### `bootstrap init`
+### `setup apply`
 
 The CLI validates the manifest again, establishes an SSH connection to the
-control host, and opens a local port forward to the Admin bootstrap listener on
+control host, and opens a local port forward to the Admin setup listener on
 `127.0.0.1`. The manifest is serialized directly from memory into the forwarded
 request. It is never uploaded as a file.
 
@@ -161,7 +161,7 @@ Admin executes one database transaction that:
 2. creates the fixed `tencent-default` credential in Admin Secret Management;
 3. creates the control host in SSH Host Management;
 4. creates every additional host;
-5. records a keyed manifest fingerprint and marks bootstrap complete.
+5. records a keyed manifest fingerprint and marks setup complete.
 
 The Tencent credential uses:
 
@@ -177,38 +177,38 @@ status:       active
 ```
 
 Admin encrypts `secret_value` and every SSH password with the existing Admin
-encryption key. The bootstrap service must use transaction-scoped repositories
-so encrypted values and the bootstrap state commit together.
+encryption key. The setup service must use transaction-scoped repositories
+so encrypted values and the setup state commit together.
 
-### `bootstrap status`
+### `setup status`
 
 Status uses the same SSH tunnel but sends no Admin or Tencent credential
 values. It returns only `not_initialized` or `initialized` and sanitized
 counts. The stored keyed fingerprint never leaves Admin. Same-manifest
-verification happens inside `ApplyBootstrap` when `init` is retried.
+verification happens inside `ApplySetup` when `apply` is retried.
 
-## Admin Bootstrap Service
+## Admin Setup Service
 
-Admin gains a dedicated `trpc.moox.admin.Bootstrap` service on a fixed
+Admin gains a dedicated `trpc.moox.admin.Setup` service on a fixed
 loopback-only HTTP listener. Managed Caddy, the browser Admin gateway, and the
 node Gateway must not route to this service.
 
 The service exposes two methods:
 
 ```text
-ApplyBootstrap(BootstrapManifest) -> BootstrapResult
-GetBootstrapStatus() -> BootstrapStatus
+ApplySetup(SetupManifest) -> SetupResult
+GetSetupStatus() -> SetupStatus
 ```
 
 The listener validates that the accepted connection is local. Deployment
 configuration binds it to `127.0.0.1`; startup fails if configuration attempts
 to bind it to a non-loopback address.
 
-`ApplyBootstrap` has three states:
+`ApplySetup` has three states:
 
-- no bootstrap record: validate all records and commit the complete manifest;
+- no setup record: validate all records and commit the complete manifest;
 - completed with the same keyed fingerprint: return `unchanged`;
-- completed with a different fingerprint: return `bootstrap_conflict` without
+- completed with a different fingerprint: return `setup_conflict` without
   changing any row.
 
 The fingerprint is `HMAC-SHA256(admin-encryption-key, canonical-manifest)`. The
@@ -216,16 +216,16 @@ canonical representation has fixed field order, normalized host order, and
 length-prefixed values. Plain SHA-256 is not stored or returned.
 
 Admin does not permit partial state. If legacy or manually inserted user,
-Tencent credential, or host rows exist before the first bootstrap, the apply
+Tencent credential, or host rows exist before the first setup, the apply
 operation verifies that every existing row matches. Any mismatch aborts the
-transaction. Exact matches may be adopted into the completed bootstrap record.
+transaction. Exact matches may be adopted into the completed setup record.
 
 ## Deployment Boundary
 
 The current `scripts/deploy-moox.sh` creates the first Admin user before service
 startup. That behavior moves out of deployment. The deprecated
 `--admin-username` and `--admin-password-file` flags are removed rather than
-retained as a second bootstrap path.
+retained as a second setup path.
 
 Control-plane packaging becomes an explicit profile instead of a long list of
 negative flags:
@@ -254,11 +254,11 @@ or Admin password.
 - Zero mutable secret byte slices when a command finishes where practical.
 - Wrap Tencent and SSH errors in stable, sanitized error codes.
 - Reject symlinks and permission changes observed during execution.
-- Keep the bootstrap API outside all public route tables.
+- Keep the setup API outside all public route tables.
 - Require host key verification. On first use, show the control host SHA-256
   fingerprint and require the user to add it to the local MooX known-hosts file;
   non-interactive Agent execution must never auto-accept an unknown host key.
-- Store MooX bootstrap known hosts under `~/.config/moox/known_hosts` with mode
+- Store MooX setup known hosts under `~/.config/moox/known_hosts` with mode
   `0600`; do not modify the user's global OpenSSH file.
 
 ## Failure Handling
@@ -280,9 +280,9 @@ ssh_auth_failed
 ssh_unreachable
 control_deploy_failed
 control_not_ready
-bootstrap_not_reachable
-bootstrap_conflict
-bootstrap_storage_failed
+setup_not_reachable
+setup_conflict
+setup_storage_failed
 verification_failed
 ```
 
@@ -298,14 +298,14 @@ The Skill must:
    fill it and set mode `0600`.
 2. Never read the file with `cat`, `sed`, `rg`, a language parser, or an Agent
    tool. Only the high-level CLI may open it.
-3. Run `moox-cli bootstrap validate` and report sanitized results.
+3. Run `moox-cli setup validate` and report sanitized results.
 4. Stop for an unknown SSH host key and ask the user to verify and trust the
    displayed fingerprint through the dedicated trust command.
-5. Run `moox-cli bootstrap deploy-control`.
+5. Run `moox-cli setup deploy-control`.
 6. Require signed readiness success for Admin, Gateway, Web, and the managed
    browser edge.
-7. Run `moox-cli bootstrap init`, then `bootstrap status`.
-8. Let `bootstrap init` verify the public login API from the in-memory manifest;
+7. Run `moox-cli setup apply`, then `setup status`.
+8. Let `setup apply` verify the public login API from the in-memory manifest;
    ask the user to confirm interactive browser login when required.
 9. Tell the user that `custom.toml` remains unchanged and still contains
    plaintext credentials.
@@ -324,8 +324,8 @@ Automated tests must cover:
   no credential bytes in captured stdout/stderr;
 - control profile contents and proof that the deploy script no longer creates
   an Admin user;
-- loopback-only bootstrap binding and absence from Caddy/Admin/Gateway routes;
-- one-transaction creation of the user, cloud secret, all hosts, and bootstrap
+- loopback-only setup binding and absence from Caddy/Admin/Gateway routes;
+- one-transaction creation of the user, cloud secret, all hosts, and setup
   state;
 - rollback at every write boundary;
 - same-manifest retry, different-manifest rejection, adoption of exact existing
@@ -338,11 +338,11 @@ Automated tests must cover:
 End-to-end acceptance uses disposable local SSH and Tencent validator fakes,
 then a real remote control host:
 
-1. `bootstrap validate` reports every section valid without exposing a secret.
+1. `setup validate` reports every section valid without exposing a secret.
 2. `deploy-control` publishes only Admin, Gateway, Web, and Caddy.
-3. The bootstrap listener is reachable through SSH forwarding and unreachable
+3. The setup listener is reachable through SSH forwarding and unreachable
    through public HTTPS routes.
-4. `bootstrap init` returns `created`; a second run returns `unchanged`.
+4. `setup apply` returns `created`; a second run returns `unchanged`.
 5. Admin contains one super administrator, one active Tencent credential, and
    all configured hosts with encrypted sensitive columns.
 6. The public login API accepts the configured account, and the user can log in
