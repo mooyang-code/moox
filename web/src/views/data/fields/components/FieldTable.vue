@@ -91,9 +91,10 @@ function onSorterChange(field: string, direction: string) {
 </script>
 
 <style scoped>
-.field-name { display: flex; min-width: 0; flex-direction: column; line-height: 1.35; }
-.field-name strong { overflow: hidden; color: var(--color-text-1); text-overflow: ellipsis; white-space: nowrap; }
-.field-name span { overflow: hidden; color: var(--color-text-3); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.field-name { display: flex; min-width: 0; align-items: baseline; gap: var(--moox-space-1); line-height: 1.35; white-space: nowrap; }
+.field-name strong, .field-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-name strong { min-width: 0; color: var(--color-text-1); }
+.field-name span { min-width: 0; color: var(--color-text-3); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :deep(.arco-table-tr) { cursor: pointer; }
 </style>
