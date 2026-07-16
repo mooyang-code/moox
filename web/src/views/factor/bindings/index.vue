@@ -279,7 +279,6 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--moox-space-3);
   margin-bottom: var(--moox-space-2);
 }
 
@@ -288,8 +287,6 @@ onMounted(load);
   font-size: 20px;
   font-weight: 600;
 }
-
-.top-alert { margin-bottom: var(--moox-space-2); }
 
 .binding-form {
   display: grid;
@@ -305,7 +302,6 @@ onMounted(load);
   .page-head {
     align-items: flex-start;
     flex-direction: column;
-    gap: var(--moox-space-3);
   }
 
   .binding-form {

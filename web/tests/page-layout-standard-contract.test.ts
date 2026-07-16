@@ -57,10 +57,13 @@ describe('page layout standards', () => {
     expect(definitions).not.toContain('本页管理的是 factor 服务自己的计算定义');
     expect(definitions).not.toContain('class="filters"');
     expectMargin(definitions, '.page-head', 'margin-bottom', 8);
+    expect(definitions).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
 
     expect(bindings).not.toContain('把启用的因子绑定到 K 线数据集');
     expect(bindings).not.toContain('class="filters"');
     expectMargin(bindings, '.page-head', 'margin-bottom', 8);
+    expect(bindings).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
+    expect(bindings).not.toContain('.top-alert {');
   });
 
   it('uses the multi-tab spacing standard', () => {
