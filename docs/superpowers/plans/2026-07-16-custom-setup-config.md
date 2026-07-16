@@ -24,6 +24,11 @@ modules/cli/internal/setup/
 └── deploy/
 ```
 
+Cloud SDK adapters live in `packages/cloudprovider`, not under the CLI and not
+inside `modules/cloudnode`. `cloudprovider` is reusable infrastructure for
+vendor API access; `cloudnode` remains the business module that manages node
+lifecycle and may consume those adapters later.
+
 - Create `custom.toml.example`: exact user-facing setup template with empty secrets.
 - Modify `.gitignore`: ignore only repository-root `/custom.toml`.
 - Create `modules/cli/internal/setup/config/config.go`: secure file snapshot, strict TOML decode, canonical manifest, and field validation.
@@ -32,6 +37,17 @@ modules/cli/internal/setup/
 - Create `modules/cli/internal/setup/ssh/client_test.go`: SSH fixture, unknown-key behavior, auth failure redaction, and forwarding tests.
 - Create `modules/cli/internal/setup/validate/validate.go`: ordered local, Tencent, and SSH validation with stable result codes.
 - Create `modules/cli/internal/setup/validate/validate_test.go`: validator ordering, per-host results, and output secrecy.
+- Create `packages/cloudprovider/go.mod`: reusable cloud-provider module boundary.
+- Modify `go.work`: include the new shared cloud-provider module.
+- Create `packages/cloudprovider/provider.go`: provider-neutral identity result and narrow capability interfaces.
+- Create `packages/cloudprovider/tencent/client.go`: shared Tencent credential and SDK client construction.
+- Create `packages/cloudprovider/tencent/identity_test.go`: STS success, authentication mapping, timeout, and secret-redaction tests.
+- Move `modules/cli/internal/tencentcloud/lighthouse.go` to `packages/cloudprovider/tencent/lighthouse.go`.
+- Move `modules/cli/internal/tencentcloud/cls.go` and `cls_sdk.go` to `packages/cloudprovider/tencent/cls.go` and `cls_sdk.go`.
+- Create `packages/cloudprovider/tencent/identity.go`: read-only Tencent caller identity validation.
+- Move the Tencent provider tests to `packages/cloudprovider/tencent/*_test.go`.
+- Modify `modules/cli/internal/clsprepare/*.go` and `modules/cli/internal/command/tencent_ops*.go`: consume the shared Tencent provider package.
+- Delete `modules/cli/internal/tencentcloud`: remove the CLI-private provider implementation after callers migrate.
 - Create `modules/admin/proto/setup_service.proto`: loopback setup apply/status contract.
 - Regenerate `modules/admin/proto/admingen/setup_service*.go`: generated PB and tRPC bindings.
 - Modify `modules/admin/schema/admin.sql`: add singleton setup state and cloud-secret uniqueness.
@@ -265,22 +281,44 @@ git add modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setup/ssh
 git commit -m "feat(cli): add trusted setup SSH transport"
 ```
 
-## Task 3: Build Sanitized Preflight Validation
+## Task 3: Extract Cloud Providers And Build Sanitized Validation
 
 **Files:**
 - Create: `modules/cli/internal/setup/validate/validate.go`
 - Create: `modules/cli/internal/setup/validate/validate_test.go`
-- Modify: `modules/cli/internal/tencentcloud/lighthouse.go`
-- Modify: `modules/cli/internal/tencentcloud/lighthouse_test.go`
+- Create: `packages/cloudprovider/go.mod`
+- Create: `packages/cloudprovider/go.sum`
+- Create: `packages/cloudprovider/provider.go`
+- Modify: `go.work`
+- Create: `packages/cloudprovider/tencent/client.go`
+- Create: `packages/cloudprovider/tencent/identity.go`
+- Create: `packages/cloudprovider/tencent/identity_test.go`
+- Move: `modules/cli/internal/tencentcloud/lighthouse.go` to `packages/cloudprovider/tencent/lighthouse.go`
+- Move: `modules/cli/internal/tencentcloud/lighthouse_test.go` to `packages/cloudprovider/tencent/lighthouse_test.go`
+- Move: `modules/cli/internal/tencentcloud/cls.go` to `packages/cloudprovider/tencent/cls.go`
+- Move: `modules/cli/internal/tencentcloud/cls_sdk.go` to `packages/cloudprovider/tencent/cls_sdk.go`
+- Move: `modules/cli/internal/tencentcloud/cls_test.go` to `packages/cloudprovider/tencent/cls_test.go`
+- Modify: `modules/cli/internal/clsprepare/prepare.go`
+- Modify: `modules/cli/internal/clsprepare/prepare_test.go`
+- Modify: `modules/cli/internal/command/tencent_ops.go`
+- Modify: `modules/cli/internal/command/tencent_ops_cls.go`
+- Modify: `modules/cli/internal/command/tencent_ops_cls_prepare.go`
+- Modify: `modules/cli/go.mod`
+- Modify: `modules/cli/go.sum`
 
 - [ ] **Step 1: Write failing validation-order tests**
 
-Define fakes and assert local config failure makes no network calls, Tencent failure prevents SSH, and successful validation checks control first then other hosts in file order:
+Define fakes and assert local config failure makes no network calls, Tencent
+failure prevents SSH, and successful validation checks control first and then
+other hosts in file order:
 
 ```go
-result, err := Validate(ctx, snapshot, Dependencies{Tencent: tc, SSH: sshFactory})
+result, err := validate.Run(ctx, snapshot, validate.Dependencies{
+    Identity: identity,
+    SSH:      sshFactory,
+})
 require.NoError(t, err)
-assert.Equal(t, []Check{
+assert.Equal(t, []validate.Check{
     {Name: "config", Status: "valid"},
     {Name: "tencent_cloud", Status: "valid"},
     {Name: "host:control", Status: "valid"},
@@ -288,47 +326,143 @@ assert.Equal(t, []Check{
 }, result.Checks)
 ```
 
-Feed recognizable secret strings through every fake error and assert they do not occur in `Result`, returned errors, stdout, or stderr.
+Feed recognizable secret strings through every fake error and assert they do
+not occur in results, returned errors, stdout, or stderr.
 
-- [ ] **Step 2: Add a read-only Tencent identity seam**
+- [ ] **Step 2: Define provider-neutral capabilities**
 
-Introduce:
+Create a small shared module. Do not define one large interface that every
+vendor must implement:
 
 ```go
-type IdentityAPI interface {
-    GetCallerIdentity(context.Context) (CallerIdentity, error)
-}
+module github.com/mooyang-code/moox/packages/cloudprovider
+
+go 1.24.0
+
+require (
+    github.com/stretchr/testify v1.11.1
+    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls v1.3.131
+    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.131
+    github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.3.131
+)
+```
+
+```go
+package cloudprovider
+
+import "context"
 
 type CallerIdentity struct {
-    UIN string `json:"uin"`
+    Provider  string
+    AccountID string
+    RequestID string
+}
+
+type IdentityValidator interface {
+    GetCallerIdentity(context.Context) (CallerIdentity, error)
 }
 ```
 
-Implement it with Tencent STS `GetCallerIdentity`. Map SDK authentication failures to `tencent_auth_failed` and discard the SDK error text after logging only a non-sensitive request ID.
+Keep Lighthouse firewall and CLS interfaces in the Tencent subpackage. They
+are provider-specific capabilities, not requirements for Aliyun, AWS, or other
+future providers.
 
-- [ ] **Step 3: Run the failing tests**
+- [ ] **Step 3: Move the existing Tencent implementation**
 
-```bash
-cd modules/cli
-go test -count=1 ./internal/setup/validate ./internal/tencentcloud
+Move Lighthouse and CLS code without leaving forwarding wrappers under
+`modules/cli/internal/tencentcloud`. Introduce shared constructor options:
+
+```go
+package tencent
+
+import (
+    "net/http"
+
+    cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
+)
+
+type Credentials struct {
+    SecretID  string
+    SecretKey string
+}
+
+type IdentityOptions struct {
+    Credentials Credentials
+    Endpoint    string
+    HTTPClient  *http.Client
+}
+
+func NewIdentityValidator(options IdentityOptions) (cloudprovider.IdentityValidator, error)
+func NewLighthouseClient(credentials Credentials, region string) (*LighthouseClient, error)
+func NewCLSAPI(credentials Credentials, region string) (CLSAPI, error)
 ```
 
-Expected: FAIL until the validator and identity seam exist.
+Implement Tencent STS `GetCallerIdentity` in `identity.go`. Map SDK
+authentication failures to `tencent_auth_failed`; retain only a non-sensitive
+request ID in wrapped diagnostics. Use the injectable endpoint and HTTP client
+only in provider tests; production setup uses the SDK's HTTPS endpoint and a
+bounded timeout.
 
-- [ ] **Step 4: Implement ordered validation**
+- [ ] **Step 4: Migrate CLI callers to the shared package**
 
-`validate.Run` receives an already-secure `config.Snapshot`. It returns stable
-codes and host names only. Use bounded concurrency for `other_hosts`, but
-preserve configured order in output. Always call
-`snapshot.VerifyUnchanged()` before returning.
+Add the local module dependency:
 
-- [ ] **Step 5: Run and commit**
+```go
+require github.com/mooyang-code/moox/packages/cloudprovider v0.0.0
+
+replace github.com/mooyang-code/moox/packages/cloudprovider => ../../packages/cloudprovider
+```
+
+Add `./packages/cloudprovider` to the root `go.work` use list so repository-wide
+commands resolve the shared module consistently.
+
+Update imports in `clsprepare`, `tencent_ops*.go`, and the setup validator as
+needed:
+
+```go
+cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
+tencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+```
+
+Delete `modules/cli/internal/tencentcloud` only after this command returns no
+callers:
 
 ```bash
-cd modules/cli
-go test -count=1 ./internal/setup/validate ./internal/tencentcloud
-git add modules/cli/internal/setup/validate modules/cli/internal/tencentcloud
-git commit -m "feat(cli): validate setup credentials safely"
+rg -n 'internal/tencentcloud' modules/cli
+```
+
+- [ ] **Step 5: Run provider tests and verify the validator still fails**
+
+```bash
+cd packages/cloudprovider
+go test -count=1 ./...
+cd ../../modules/cli
+go test -count=1 ./internal/setup/validate
+```
+
+Expected: provider tests PASS; validation FAILS until `validate.Run` exists.
+
+- [ ] **Step 6: Implement ordered validation**
+
+`validate.Run` receives a secure `config.Snapshot` and a
+`cloudprovider.IdentityValidator`. It returns stable codes and host names only.
+Use bounded concurrency for `other_hosts`, preserve configured order in output,
+and call `snapshot.VerifyUnchanged()` before returning.
+
+- [ ] **Step 7: Run cross-module tests and commit**
+
+```bash
+cd packages/cloudprovider
+go test -count=1 ./...
+cd ../../modules/cli
+go test -count=1 ./internal/setup/validate ./internal/clsprepare
+go test -count=1 ./internal/command -run 'Tencent|CLS|Firewall|Setup'
+cd ../..
+test -z "$(rg -l 'internal/tencentcloud' modules/cli || true)"
+git add go.work packages/cloudprovider modules/cli/go.mod modules/cli/go.sum \
+  modules/cli/internal/setup/validate modules/cli/internal/clsprepare \
+  modules/cli/internal/command modules/cli/internal/tencentcloud
+git commit -m "refactor(cloud): share provider implementations"
 ```
 
 ## Task 4: Add The Transactional Admin Setup Domain
@@ -875,8 +1009,9 @@ assert.Equal(t, beforeBytes, afterBytes)
 Add `verify-custom-setup` to the root Makefile. It runs:
 
 ```bash
-cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./test -run Setup
-cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command ./test -run Setup
+(cd packages/cloudprovider && go test -count=1 ./...)
+(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap && go test -count=1 ./test -run Setup)
+(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
 bash scripts/test-deploy-moox-admin-bootstrap.sh
 bash scripts/test-deploy-moox-control-profile.sh
 bash skills/moox/scripts/test-custom-setup-contract.sh
@@ -930,7 +1065,8 @@ git commit -m "test: verify custom setup workflow"
 
 ```bash
 rg -n "custom\.toml|password|secret_id|secret_key|InsecureIgnoreHostKey|admin-password" \
-  modules/cli modules/admin scripts skills/moox .gitignore custom.toml.example
+  packages/cloudprovider modules/cli modules/admin scripts skills/moox \
+  .gitignore custom.toml.example
 ```
 
 Confirm every occurrence follows the design: no secret argv/env/temp files, no
