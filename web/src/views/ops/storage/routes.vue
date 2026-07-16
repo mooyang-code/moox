@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <PageTabActions>
+      <div class="page-actions">
         <a-space>
           <a-tooltip content="刷新路由列表">
             <a-button aria-label="刷新路由列表" :disabled="!selectedSpaceId" @click="load">
@@ -13,7 +13,7 @@
             新增路由
           </a-button>
         </a-space>
-      </PageTabActions>
+      </div>
 
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
@@ -104,7 +104,6 @@ import {
   updatePrimaryStoreRoute,
 } from '@/api/storage/metadata';
 import type { Dataset, PrimaryStoreNode, PrimaryStoreRoute } from '@/api/storage/types';
-import PageTabActions from '@/components/page-tab-actions/index.vue';
 import { useSpaceStore } from '@/store/modules/space';
 import { applyPageResult, defaultPagination, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
 
@@ -224,3 +223,11 @@ watch(selectedSpaceId, () => {
 });
 onMounted(load);
 </script>
+
+<style scoped>
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+</style>

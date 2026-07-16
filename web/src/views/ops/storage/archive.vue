@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <PageTabActions>
+      <div class="page-actions">
         <a-space>
           <a-input v-model="datasetFilter" class="archive-dataset-filter" allow-clear placeholder="dataset_id" />
           <a-switch v-model="debugMode" size="small">
@@ -14,7 +14,7 @@
             </a-button>
           </a-tooltip>
         </a-space>
-      </PageTabActions>
+      </div>
 
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
@@ -78,7 +78,6 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { listArchiveFiles } from '@/api/storage/metadata';
 import type { ArchiveFile } from '@/api/storage/types';
-import PageTabActions from '@/components/page-tab-actions/index.vue';
 import { useSpaceStore } from '@/store/modules/space';
 import { applyPageResult, defaultPagination, formatTime, joinList, statusColor } from '@/views/data/shared/metadata-utils';
 
@@ -148,6 +147,12 @@ onMounted(load);
 </script>
 
 <style scoped>
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
 .archive-dataset-filter {
   width: 180px;
 }

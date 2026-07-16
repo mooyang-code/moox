@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <PageTabActions>
+      <div class="page-actions">
         <a-space>
           <a-tooltip content="刷新节点列表">
             <a-button aria-label="刷新节点列表" @click="load">
@@ -13,11 +13,7 @@
             新增节点
           </a-button>
         </a-space>
-      </PageTabActions>
-
-      <a-alert class="topology-alert" type="warning" show-icon>
-        主存节点是 storage 数据拓扑配置，不等同于系统服务部署信息。若在“系统设置 / 服务部署信息”修改了 storage_* 服务 IP/端口，请同步检查这里的 Endpoint。
-      </a-alert>
+      </div>
 
       <a-table
         row-key="node_id"
@@ -85,7 +81,6 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { createPrimaryStoreNode, listPrimaryStoreNodes, updatePrimaryStoreNode } from '@/api/storage/metadata';
 import type { PrimaryStoreNode } from '@/api/storage/types';
-import PageTabActions from '@/components/page-tab-actions/index.vue';
 import { applyPageResult, defaultPagination, formatTime, jsonText, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
 
 defineOptions({ name: 'OpsStorageNodes' });
@@ -172,7 +167,9 @@ onMounted(load);
 </script>
 
 <style scoped>
-.topology-alert {
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
   margin-bottom: 14px;
 }
 </style>
