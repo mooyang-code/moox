@@ -49,7 +49,7 @@ export default {
     ["collector-cloudnodes"]: "cloud nodes",
     ["collector-functions"]: "cloud nodes",
     ["collector-packages"]: "code packages",
-    ["collector-rules"]: "collection rules",
+    ["collector-rules"]: "collection tasks",
     ["collector-tasks"]: "task instances",
     ["trading-accounts"]: "accounts",
     ["trading-positions"]: "positions",

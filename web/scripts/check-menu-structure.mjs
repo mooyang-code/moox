@@ -87,17 +87,16 @@ assert(dataFields.parentId === dataAssets.id, 'data-fields must be under data-as
 const collectorDatasets = findMenu('collector-datasets');
 const collectorViews = findMenu('collector-views');
 const collectorRules = findMenu('collector-rules');
-const collectorTasks = findMenu('collector-tasks');
 const collectorCloudnodes = findMenu('collector-cloudnodes');
 const collectorPackages = findMenu('collector-packages');
 assert(collectorDatasets.parentId === dataCollection.id, 'collector-datasets must be under data collection');
 assert(collectorViews.parentId === dataCollection.id, 'collector-views must be under data collection');
 assert(collectorRules.parentId === dataCollection.id, 'collector-rules must be under data collection');
-assert(collectorTasks.parentId === dataCollection.id, 'collector-tasks must be under data collection');
 assert(collectorCloudnodes.parentId === dataCollection.id, 'collector-cloudnodes must be under data collection');
 assert(collectorPackages.parentId === dataCollection.id, 'collector-packages must be under data collection');
 assert(collectorDatasets.sort < collectorViews.sort, 'data collections must appear before data views');
 assert(collectorViews.sort < collectorRules.sort, 'data views must appear before collection rules');
+assert(!staticMenu.includes('menu("0304"'), 'task instances must not remain a separate visible menu');
 
 const factorDefinitions = findMenu('factor-definitions');
 const factorBindings = findMenu('factor-bindings');

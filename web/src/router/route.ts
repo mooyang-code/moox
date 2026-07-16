@@ -168,14 +168,13 @@ export const staticRoutes = [
       {
         path: "/collector/rules",
         name: "collector-rules",
-        component: () => import("@/views/collector/collector-rules/collector-rules.vue"),
+        component: () => import("@/views/collector/task-management/index.vue"),
         meta: { title: "collector-rules" }
       },
       {
         path: "/collector/tasks",
-        name: "collector-tasks",
-        component: () => import("@/views/collector/task-instances/task-instances.vue"),
-        meta: { title: "collector-tasks" }
+        redirect: { path: "/collector/rules", query: { tab: "instances" } },
+        meta: { title: "collector-rules", hide: true }
       },
       {
         path: "/trading/accounts",

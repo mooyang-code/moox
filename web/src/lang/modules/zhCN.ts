@@ -49,7 +49,7 @@ export default {
     ["collector-cloudnodes"]: "云节点",
     ["collector-functions"]: "云节点",
     ["collector-packages"]: "代码包",
-    ["collector-rules"]: "采集规则",
+    ["collector-rules"]: "采集任务",
     ["collector-tasks"]: "任务实例",
     ["trading-accounts"]: "账户总览",
     ["trading-positions"]: "持仓详情",

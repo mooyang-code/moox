@@ -59,8 +59,7 @@ export const systemMenu = [
   directory("03", "0", "/collector/datasets", "compute-collector", "compute-collector", 3, { svgIcon: "functions", icon: "" }),
   menu("0305", "03", "/collector/datasets", "collector-datasets", "collector-datasets", "collector/datasets/index", 1),
   menu("0306", "03", "/collector/views", "collector-views", "collector-views", "collector/views/index", 2),
-  menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/collector-rules/collector-rules", 3),
-  menu("0304", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-instances/task-instances", 4),
+  menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/task-management/index", 3),
   menu("0301", "03", "/collector/cloudnodes", "collector-cloudnodes", "collector-cloudnodes", "collector/cloud-node/cloud-node", 5),
   menu("0302", "03", "/collector/packages", "collector-packages", "collector-packages", "collector/cloud-node/function-package-manage", 6),
 
