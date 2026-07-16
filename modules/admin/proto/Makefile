@@ -1,4 +1,4 @@
-PROTO_FILES := admin_service.proto ops_service.proto infra_service.proto secret_service.proto sysdeploy_service.proto
+PROTO_FILES := admin_service.proto ops_service.proto infra_service.proto secret_service.proto setup_service.proto sysdeploy_service.proto
 OUTPUT_DIR := ./admingen
 COMMON_PROTO_DIR := ../../../packages/commonpb
 
