@@ -2,9 +2,12 @@ package client
 
 import (
 	"context"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -55,6 +58,30 @@ func TestVerifyPublicLoginMatchesBrowserProtocolAndDiscardsSession(t *testing.T)
 	assert.Equal(t, password, plain)
 	assert.NotContains(t, result.LoginAPI, "recognizable-access-token")
 	assert.NotContains(t, result.LoginAPI, "recognizable-signing-key")
+}
+
+func TestVerifyPublicLoginTrustsOnlyFetchedCaddyCA(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/admin/auth/GetLoginSalt":
+			body, _ := protojson.Marshal(&pb.GetLoginSaltRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Salt: "salt", Timestamp: 1})
+			_, _ = w.Write(body)
+		case "/api/admin/auth/Login":
+			body, _ := protojson.Marshal(&pb.LoginRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+			_, _ = w.Write(body)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	_, err := VerifyPublicLogin(context.Background(), server.URL, "admin", "password")
+	require.Error(t, err)
+	caPath := filepath.Join(t.TempDir(), "root.crt")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	require.NoError(t, os.WriteFile(caPath, caPEM, 0o600))
+	result, err := VerifyPublicLoginWithCAFile(context.Background(), server.URL, "admin", "password", caPath)
+	require.NoError(t, err)
+	assert.Equal(t, "valid", result.LoginAPI)
 }
 
 func TestVerifyPublicLoginReturnsStableSecretFreeError(t *testing.T) {

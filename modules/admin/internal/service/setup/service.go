@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,6 +76,7 @@ type Service struct {
 	db            *gorm.DB
 	encryptionKey string
 	writeHook     func(string) error
+	applyMu       sync.Mutex
 }
 
 func NewService(db *gorm.DB, encryptionKey string) *Service {
@@ -82,6 +84,8 @@ func NewService(db *gorm.DB, encryptionKey string) *Service {
 }
 
 func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	result := expectedResult(manifest)
 	if err := validateManifest(manifest, s.db, s.encryptionKey); err != nil {
 		return Result{}, err
@@ -108,7 +112,18 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 		return nil
 	})
 	if err != nil {
-		return Result{}, normalizeError(err)
+		normalized := normalizeError(err)
+		if errors.Is(normalized, ErrStorage) {
+			status, inspectErr := s.Inspect(ctx, manifest)
+			if inspectErr == nil && status.State == "completed" {
+				result.Action = "unchanged"
+				return result, nil
+			}
+			if inspectErr == nil && status.State == "conflict" {
+				return Result{}, ErrConflict
+			}
+		}
+		return Result{}, normalized
 	}
 	result.Action = "unchanged"
 	if created > 0 {

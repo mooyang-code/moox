@@ -23,7 +23,7 @@ grep -Fq '禁止 Agent' "${REFERENCE}"
 for forbidden in 'cat custom.toml' 'sed custom.toml' 'rg custom.toml' 'Python 读取' 'source custom.toml'; do
   grep -Fq "${forbidden}" "${REFERENCE}"
 done
-grep -Fq 'status 返回 complete 后' "${REFERENCE}"
+grep -Fq 'status 返回 completed 后' "${REFERENCE}"
 grep -Fq 'references/custom-setup.md' "${SKILL}"
 
 template_block=$(awk '/^```toml$/{inside=1; next} inside && /^```$/{exit} inside{print}' "${REFERENCE}")

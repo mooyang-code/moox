@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,13 +26,13 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	packager := &fakePackager{path: archive, events: &events}
 	transport := &fakeTransport{events: &events}
 	probe := &fakeProbe{events: &events}
-	opts := Options{RepositoryRoot: dir, PublicHost: "203.0.113.8", BrowserPort: 9527}
+	opts := Options{RepositoryRoot: dir, PublicHost: "203.0.113.8", BrowserPort: 9527, TargetGOOS: "linux", TargetGOARCH: "amd64"}
 
-	err := Control(context.Background(), transport, opts, Dependencies{Packager: packager, Probe: probe})
+	err := Control(context.Background(), transport, opts, Dependencies{Packager: packager, Probe: probe, CAStore: &fakeCAStore{events: &events}})
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"package", "upload", "install", "start", "admin_ready", "setup_ready",
-		"gateway_ready", "web_ready", "browser_https_ready", "cleanup",
+		"gateway_ready", "web_ready", "browser_https_ready", "ca", "finalize", "cleanup",
 	}, events)
 	require.Equal(t, remoteArchiveNext, transport.uploadPath)
 	require.Equal(t, fs.FileMode(0o600), transport.uploadMode)
@@ -56,22 +57,52 @@ func TestControlCleansRemoteArchiveAfterFailure(t *testing.T) {
 	probe := &fakeProbe{events: &events, failAt: AdminReady}
 
 	err := Control(context.Background(), transport, Options{
-		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
-	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: probe})
+		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527, TargetGOOS: "linux", TargetGOARCH: "amd64",
+	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: probe, CAStore: &fakeCAStore{events: &events}})
 	require.EqualError(t, err, "control_deploy_not_ready")
+	require.Contains(t, events, "rollback")
 	require.Equal(t, "cleanup", events[len(events)-1])
 	_, statErr := os.Stat(archive)
 	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestControlDetectsARM64BeforePackaging(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "control.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	packager := &fakePackager{path: archive, events: &events}
+	transport := &fakeTransport{events: &events, unameOS: "Linux\n", unameArch: "aarch64\n"}
+	err := Control(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
+	}, Dependencies{Packager: packager, Probe: &fakeProbe{events: &events}, CAStore: &fakeCAStore{events: &events}})
+	require.NoError(t, err)
+	require.Equal(t, "linux", packager.opts.TargetGOOS)
+	require.Equal(t, "arm64", packager.opts.TargetGOARCH)
+}
+
+func TestRemoteInstallerScriptsParse(t *testing.T) {
+	for name, script := range map[string]string{
+		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name+".sh")
+			require.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+			output, err := exec.Command("bash", "-n", path).CombinedOutput()
+			require.NoError(t, err, string(output))
+		})
+	}
 }
 
 type fakePackager struct {
 	path     string
 	events   *[]string
 	captured string
+	opts     Options
 }
 
 func (f *fakePackager) Package(_ context.Context, opts Options) (string, error) {
 	*f.events = append(*f.events, "package")
+	f.opts = opts
 	f.captured = opts.RepositoryRoot + opts.PublicHost
 	return f.path, nil
 }
@@ -82,6 +113,8 @@ type fakeTransport struct {
 	uploadMode fs.FileMode
 	uploaded   bytes.Buffer
 	commands   [][]string
+	unameOS    string
+	unameArch  string
 }
 
 func (f *fakeTransport) Check(context.Context) error { return nil }
@@ -96,12 +129,29 @@ func (f *fakeTransport) Upload(_ context.Context, src io.Reader, _ int64, dst st
 }
 func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	f.commands = append(f.commands, append([]string(nil), argv...))
+	if len(argv) == 2 && argv[0] == "uname" && argv[1] == "-s" {
+		return setupssh.Result{Stdout: f.unameOS}, nil
+	}
+	if len(argv) == 2 && argv[0] == "uname" && argv[1] == "-m" {
+		return setupssh.Result{Stdout: f.unameArch}, nil
+	}
 	if len(argv) >= 3 && strings.Contains(argv[2], "install_control") {
 		*f.events = append(*f.events, "install", "start")
-	} else {
+	} else if len(argv) >= 3 && strings.Contains(argv[2], "prod.previous") && strings.Contains(argv[2], "rm -rf") && !strings.Contains(argv[2], "stop.sh") {
+		*f.events = append(*f.events, "finalize")
+	} else if len(argv) >= 3 && strings.Contains(argv[2], "stop.sh") && strings.Contains(argv[2], "prod.previous") {
+		*f.events = append(*f.events, "rollback")
+	} else if len(argv) > 0 && argv[0] == "rm" {
 		*f.events = append(*f.events, "cleanup")
 	}
 	return setupssh.Result{}, nil
+}
+
+type fakeCAStore struct{ events *[]string }
+
+func (f *fakeCAStore) Save(string, []byte) error {
+	*f.events = append(*f.events, "ca")
+	return nil
 }
 func (f *fakeTransport) Close() error { return nil }
 

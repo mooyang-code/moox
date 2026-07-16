@@ -79,6 +79,9 @@ func newSetupTrustHostCommand(deps setupDeps) *cobra.Command {
 		if err := deps.trustHost(cmd.Context(), snapshot, host, fingerprint); err != nil {
 			return err
 		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
 		return writeSetupJSON(cmd, map[string]string{"host": host, "status": "trusted"})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -96,8 +99,14 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
+		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
+			return err
+		}
 		if err := deps.deployControl(cmd.Context(), snapshot); err != nil {
 			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
 		}
 		return writeSetupJSON(cmd, map[string]string{"host": snapshot.Manifest.ControlHost.Name, "status": "ready"})
 	}}
@@ -113,9 +122,15 @@ func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
+		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
+			return err
+		}
 		applied, err := deps.apply(cmd.Context(), snapshot)
 		if err != nil {
 			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
 		}
 		login, err := deps.login(cmd.Context(), snapshot)
 		if err != nil {
@@ -190,7 +205,7 @@ func defaultSetupDeps() setupDeps {
 		status:        defaultSetupStatus,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
-			return setupclient.VerifyPublicLogin(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
+			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))
 		},
 	}
 }

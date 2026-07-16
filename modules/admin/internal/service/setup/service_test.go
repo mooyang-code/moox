@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -93,6 +94,41 @@ func TestApplyExactRetryIsUnchanged(t *testing.T) {
 	result, err := service.Apply(context.Background(), manifest)
 	require.NoError(t, err)
 	assert.Equal(t, "unchanged", result.Action)
+}
+
+func TestApplyConcurrentCallsConvergeToOneCreated(t *testing.T) {
+	service := NewService(setupDB(t), testEncryptionKey)
+	manifest := testManifest()
+	const workers = 8
+	actions := make(chan string, workers)
+	errorsSeen := make(chan error, workers)
+	var group sync.WaitGroup
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			result, err := service.Apply(context.Background(), manifest)
+			if err != nil {
+				errorsSeen <- err
+				return
+			}
+			actions <- result.Action
+		}()
+	}
+	group.Wait()
+	close(actions)
+	close(errorsSeen)
+	require.Empty(t, errorsSeen)
+	created, unchanged := 0, 0
+	for action := range actions {
+		if action == "created" {
+			created++
+		} else if action == "unchanged" {
+			unchanged++
+		}
+	}
+	assert.Equal(t, 1, created)
+	assert.Equal(t, workers-1, unchanged)
 }
 
 func TestApplyCompletesMatchingPartialState(t *testing.T) {

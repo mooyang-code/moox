@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -16,9 +17,10 @@ const maxHostWorkers = 4
 var ErrValidationFailed = errors.New("setup_validation_failed")
 
 type Check struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Code   string `json:"code,omitempty"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Code        string `json:"code,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type Result struct {
@@ -103,8 +105,20 @@ func hostCheck(ctx context.Context, checker SSHChecker, host setupconfig.Host) C
 	if err := checker.Check(ctx, host); err != nil {
 		check.Status = "invalid"
 		check.Code = sshErrorCode(err)
+		if check.Code == "host_key_unknown" {
+			check.Fingerprint = sshFingerprint(err)
+		}
 	}
 	return check
+}
+
+func sshFingerprint(err error) string {
+	message := err.Error()
+	index := strings.LastIndex(message, "SHA256:")
+	if index < 0 {
+		return ""
+	}
+	return strings.TrimSpace(message[index:])
 }
 
 func sshErrorCode(err error) string {

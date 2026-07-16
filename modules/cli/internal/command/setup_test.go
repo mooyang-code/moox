@@ -18,9 +18,11 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
 	secrets := []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"}
+	validateCalls := 0
 	deps := setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
 		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+			validateCalls++
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
 		trustHost:     func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
@@ -29,7 +31,7 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1, Hosts: 2}, nil
 		},
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-			return setupclient.StatusResult{State: "complete", Users: 1, Secrets: 1, Hosts: 2}, nil
+			return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1, Hosts: 2}, nil
 		},
 		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			return setupclient.LoginResult{LoginAPI: "valid"}, nil
@@ -65,6 +67,7 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			require.NotContains(t, combined, "将使用默认配置")
 		})
 	}
+	require.Equal(t, 3, validateCalls, "validate, deploy-control, and apply must each validate the full manifest")
 }
 
 func TestSetupHelpListsFiveCommands(t *testing.T) {

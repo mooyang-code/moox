@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,17 @@ import (
 type fakeIdentity struct {
 	err   error
 	calls int
+}
+
+func TestRunReportsUnknownHostFingerprint(t *testing.T) {
+	snapshot := validationSnapshot(t)
+	checker := &fakeSSHChecker{errs: map[string]error{
+		"control": fmt.Errorf("%w: SHA256:verified-out-of-band", setupssh.ErrHostKeyUnknown),
+	}}
+	result, err := Run(context.Background(), snapshot, Dependencies{Identity: &fakeIdentity{}, SSH: checker})
+	require.Error(t, err)
+	assert.Equal(t, "host_key_unknown", result.Checks[2].Code)
+	assert.Equal(t, "SHA256:verified-out-of-band", result.Checks[2].Fingerprint)
 }
 
 func (f *fakeIdentity) GetCallerIdentity(context.Context) (cloudprovider.CallerIdentity, error) {

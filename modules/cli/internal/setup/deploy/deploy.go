@@ -2,6 +2,8 @@ package deploy
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io/fs"
 	"os"
@@ -20,6 +22,8 @@ type Options struct {
 	RepositoryRoot string
 	PublicHost     string
 	BrowserPort    int
+	TargetGOOS     string
+	TargetGOARCH   string
 }
 
 type Packager interface {
@@ -43,7 +47,10 @@ type Probe interface {
 type Dependencies struct {
 	Packager Packager
 	Probe    Probe
+	CAStore  CAStore
 }
+
+type CAStore interface{ Save(string, []byte) error }
 
 func Control(ctx context.Context, transport setupssh.Client, opts Options, deps Dependencies) (returnErr error) {
 	if transport == nil || strings.TrimSpace(opts.RepositoryRoot) == "" || strings.TrimSpace(opts.PublicHost) == "" {
@@ -60,6 +67,12 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	if deps.Probe == nil {
 		deps.Probe = CommandProbe{}
+	}
+	if deps.CAStore == nil {
+		deps.CAStore = FileCAStore{}
+	}
+	if err := detectPlatform(ctx, transport, &opts); err != nil {
+		return fmt.Errorf("control_platform_unsupported")
 	}
 
 	archive, err := deps.Packager.Package(ctx, opts)
@@ -89,14 +102,58 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 
 	if _, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
-		opts.PublicHost, strconv.Itoa(opts.BrowserPort),
+		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH,
 	}, nil); err != nil {
 		return fmt.Errorf("control_install_failed")
 	}
+	installed := true
+	defer func() {
+		if returnErr != nil && installed {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript}, nil)
+		}
+	}()
 	for _, stage := range []ReadinessStage{AdminReady, SetupReady, GatewayReady, WebReady, BrowserHTTPSReady} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
 			return fmt.Errorf("control_deploy_not_ready")
 		}
+	}
+	ca, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/moox/prod/certs/caddy/root.crt"`}, nil)
+	if err != nil || deps.CAStore.Save(opts.PublicHost, []byte(ca.Stdout)) != nil {
+		return fmt.Errorf("control_ca_unavailable")
+	}
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript}, nil); err != nil {
+		return fmt.Errorf("control_finalize_failed")
+	}
+	installed = false
+	return nil
+}
+
+func detectPlatform(ctx context.Context, transport setupssh.Client, opts *Options) error {
+	if opts.TargetGOOS == "" {
+		result, err := transport.Run(ctx, []string{"uname", "-s"}, nil)
+		if err != nil || strings.TrimSpace(strings.ToLower(result.Stdout)) != "linux" {
+			return fmt.Errorf("unsupported")
+		}
+		opts.TargetGOOS = "linux"
+	}
+	if opts.TargetGOARCH == "" {
+		result, err := transport.Run(ctx, []string{"uname", "-m"}, nil)
+		if err != nil {
+			return err
+		}
+		switch strings.TrimSpace(strings.ToLower(result.Stdout)) {
+		case "x86_64", "amd64":
+			opts.TargetGOARCH = "amd64"
+		case "aarch64", "arm64":
+			opts.TargetGOARCH = "arm64"
+		default:
+			return fmt.Errorf("unsupported")
+		}
+	}
+	if opts.TargetGOOS != "linux" || (opts.TargetGOARCH != "amd64" && opts.TargetGOARCH != "arm64") {
+		return fmt.Errorf("unsupported")
 	}
 	return nil
 }
@@ -119,7 +176,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	_ = os.Remove(archive)
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"),
 		"--profile", "control", "--package-only", "--archive", archive,
-		"--target", "localhost", "--dir", "~/moox/prod", "--goos", "linux", "--goarch", "amd64",
+		"--target", "localhost", "--dir", "~/moox/prod", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		"--public-host", opts.PublicHost, "--browser-https-port", strconv.Itoa(opts.BrowserPort),
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
 	)
@@ -129,6 +186,53 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	return archive, nil
+}
+
+type FileCAStore struct{}
+
+func CAPath(publicHost string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	safe := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+			return r
+		}
+		return '_'
+	}, publicHost)
+	return filepath.Join(home, ".moox", "certs", "moox-caddy-root-"+safe+".crt")
+}
+
+func (FileCAStore) Save(publicHost string, raw []byte) error {
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(strings.TrimSpace(string(rest))) != 0 {
+		return fmt.Errorf("invalid ca")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !certificate.IsCA {
+		return fmt.Errorf("invalid ca")
+	}
+	path := CAPath(publicHost)
+	if path == "" {
+		return fmt.Errorf("invalid ca path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	temporary := path + ".next"
+	if err := os.WriteFile(temporary, raw, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(temporary, 0o600); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
 }
 
 type CommandProbe struct {
@@ -170,17 +274,18 @@ func probeCommand(stage ReadinessStage) string {
 	case WebReady:
 		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
 	case BrowserHTTPSReady:
-		return `curl -fkSs "https://$1:$2/" >/dev/null`
+		return `curl -fsS --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null`
 	default:
 		return "false"
 	}
 }
 
-// The script is constant. Positional arguments contain only the public host and port.
+// The script is constant. Positional arguments contain only public deployment metadata.
 const installControlScript = `set -eu
 install_control() {
   public_host="$1"
   browser_port="$2"
+  target_arch="$3"
   root="$HOME/moox"
   deploy="$root/prod"
   next="$root/prod.next"
@@ -214,18 +319,32 @@ install_control() {
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$secret" >"$next/secrets/admin-jwt.env"
   fi
   chmod 600 "$next/secrets/"*
+  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
   mv "$next" "$deploy"
   if ! MOOX_PUBLIC_HOST="$public_host" MOOX_BROWSER_HTTPS_PORT="$browser_port" MOOX_SERVICE_HTTPS_PORT=11001 \
     MOOX_CADDY_CHECKSUMS="$deploy/lib/caddy-v2.11.4-checksums.txt" \
-    MOOX_CADDY_ARCHIVE="$deploy/lib/caddy_2.11.4_linux_amd64.tar.gz" \
-    "$deploy/lib/caddy-managed.sh" ensure --deploy-dir "$deploy" --os linux --arch amd64 \
+    MOOX_CADDY_ARCHIVE="$deploy/lib/caddy_2.11.4_linux_${target_arch}.tar.gz" \
+    "$deploy/lib/caddy-managed.sh" ensure --deploy-dir "$deploy" --os linux --arch "$target_arch" \
       --ports "$browser_port,11001" --config "$deploy/config/caddy/Caddyfile.next"; then
     rm -rf "$deploy"
-    if [ -d "$previous" ]; then mv "$previous" "$deploy"; fi
+    if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
     return 1
   fi
-  "$deploy/start.sh"
-  rm -rf "$previous"
+  if ! "$deploy/start.sh"; then
+    "$deploy/stop.sh" || true
+    rm -rf "$deploy"
+    if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+    return 1
+  fi
 }
-install_control "$1" "$2"`
+install_control "$1" "$2" "$3"`
+
+const rollbackControlScript = `set -eu
+deploy="$HOME/moox/prod"
+previous="$HOME/moox/prod.previous"
+if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
+rm -rf "$deploy"
+if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh"; fi`
+
+const finalizeControlScript = `rm -rf "$HOME/moox/prod.previous"`

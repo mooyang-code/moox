@@ -65,7 +65,7 @@ reported it.
 
 `apply` is successful only when its JSON includes `login_api: valid`. Ask the
 user to confirm browser login when interactive browser acceptance is required.
-Begin incremental service placement only after status 返回 complete 后. Ask for
+Begin incremental service placement only after status 返回 completed 后. Ask for
 each later service host when that deployment step begins rather than expanding
 `custom.toml`.
 

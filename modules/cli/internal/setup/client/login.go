@@ -3,9 +3,12 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -26,13 +29,34 @@ type LoginResult struct {
 }
 
 func VerifyPublicLogin(ctx context.Context, baseURL, username, password string) (LoginResult, error) {
+	return verifyPublicLogin(ctx, baseURL, username, password, &http.Client{Timeout: 30 * time.Second})
+}
+
+func VerifyPublicLoginWithCAFile(ctx context.Context, baseURL, username, password, caPath string) (LoginResult, error) {
+	info, err := os.Lstat(caPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return LoginResult{}, fmt.Errorf("login_verification_failed")
+	}
+	pem, err := os.ReadFile(caPath)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("login_verification_failed")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return LoginResult{}, fmt.Errorf("login_verification_failed")
+	}
+	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}
+	return verifyPublicLogin(ctx, baseURL, username, password, httpClient)
+}
+
+func verifyPublicLogin(ctx context.Context, baseURL, username, password string, httpClient *http.Client) (LoginResult, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" || strings.TrimSpace(username) == "" || password == "" {
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
 	}
 	appInfo := &pb.AppInfo{AppId: frontendAppID, AppKey: frontendAppKey}
 	saltResponse := &pb.GetLoginSaltRsp{}
-	if err := postPublicProto(ctx, baseURL+"/api/admin/auth/GetLoginSalt", &pb.GetLoginSaltReq{
+	if err := postPublicProto(ctx, httpClient, baseURL+"/api/admin/auth/GetLoginSalt", &pb.GetLoginSaltReq{
 		AppInfo: appInfo, Username: username,
 	}, saltResponse); err != nil || !retInfoSuccess(saltResponse.GetRetInfo()) || saltResponse.GetSalt() == "" || saltResponse.GetTimestamp() <= 0 {
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
@@ -42,7 +66,7 @@ func VerifyPublicLogin(ctx context.Context, baseURL, username, password string) 
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
 	}
 	loginResponse := &pb.LoginRsp{}
-	if err := postPublicProto(ctx, baseURL+"/api/admin/auth/Login", &pb.LoginReq{
+	if err := postPublicProto(ctx, httpClient, baseURL+"/api/admin/auth/Login", &pb.LoginReq{
 		AppInfo: appInfo, Username: username, PasswordHash: encryptedPassword,
 		Salt: saltResponse.GetSalt(), Timestamp: saltResponse.GetTimestamp(),
 		DeviceId: "moox-cli-setup-verification", UserAgent: "moox-cli/setup", ClientIp: "127.0.0.1",
@@ -52,7 +76,7 @@ func VerifyPublicLogin(ctx context.Context, baseURL, username, password string) 
 	return LoginResult{LoginAPI: "valid"}, nil
 }
 
-func postPublicProto(ctx context.Context, endpoint string, request, response proto.Message) error {
+func postPublicProto(ctx context.Context, httpClient *http.Client, endpoint string, request, response proto.Message) error {
 	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("login_verification_failed")
@@ -62,7 +86,7 @@ func postPublicProto(ctx context.Context, endpoint string, request, response pro
 		return fmt.Errorf("login_verification_failed")
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
-	httpResponse, err := (&http.Client{Timeout: 30 * time.Second}).Do(httpRequest)
+	httpResponse, err := httpClient.Do(httpRequest)
 	if err != nil {
 		return fmt.Errorf("login_verification_failed")
 	}

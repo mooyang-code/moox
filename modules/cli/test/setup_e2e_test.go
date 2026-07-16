@@ -68,7 +68,7 @@ password = "compute-e2e-password"
 	assert.Equal(t, "created", apply.Action)
 	status, err := privateClient.Status(context.Background(), snapshot)
 	require.NoError(t, err)
-	assert.Equal(t, "complete", status.State)
+	assert.Equal(t, "completed", status.State)
 
 	archive := filepath.Join(root, "control.tar.gz")
 	require.NoError(t, os.WriteFile(archive, []byte("safe-control-package"), 0o600))
@@ -76,9 +76,11 @@ password = "compute-e2e-password"
 	events := []setupdeploy.ReadinessStage{}
 	err = setupdeploy.Control(context.Background(), transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: snapshot.Manifest.ControlHost.Address, BrowserPort: 9527,
+		TargetGOOS: "linux", TargetGOARCH: "amd64",
 	}, setupdeploy.Dependencies{
 		Packager: staticPackager{path: archive},
 		Probe:    captureProbe{events: &events},
+		CAStore:  discardCAStore{},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []setupdeploy.ReadinessStage{
@@ -141,7 +143,7 @@ func setupAdminHandler() http.Handler {
 	mux.HandleFunc("/trpc.moox.admin.Setup/GetSetupStatus", func(writer http.ResponseWriter, request *http.Request) {
 		writeSetupResponse(writer, &pb.GetSetupStatusRsp{
 			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "ok"},
-			State:   "complete", Users: 1, Secrets: 1, Hosts: 2,
+			State:   "completed", Users: 1, Secrets: 1, Hosts: 2,
 		})
 	})
 	return mux
@@ -162,6 +164,10 @@ type staticPackager struct{ path string }
 func (p staticPackager) Package(context.Context, setupdeploy.Options) (string, error) {
 	return p.path, nil
 }
+
+type discardCAStore struct{}
+
+func (discardCAStore) Save(string, []byte) error { return nil }
 
 type captureProbe struct{ events *[]setupdeploy.ReadinessStage }
 
