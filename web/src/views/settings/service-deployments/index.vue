@@ -7,7 +7,7 @@
         <span>按节点维护本机服务与 Gateway 暴露状态。</span>
       </div>
       <a-space>
-        <a-button type="primary" @click="openCreate">
+        <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增实例
         </a-button>

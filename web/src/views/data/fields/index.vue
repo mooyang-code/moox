@@ -3,6 +3,7 @@
     <div class="moox-inner fields-inner">
       <div class="toolbar">
         <div class="toolbar-main">
+          <h2 class="page-title">字段管理</h2>
           <a-button class="mobile-group-trigger" @click="mobileGroupVisible = true"><template #icon><icon-menu /></template>字段组</a-button>
           <div class="keyword-control">
             <a-input-search v-model="searchKeyword" class="keyword-input" allow-clear placeholder="搜索字段 ID、中文名或描述" @input="scheduleSearch" @search="commitSearch" />
@@ -21,7 +22,7 @@
         <div class="toolbar-actions">
           <span v-if="selectedSpaceId" class="field-total">{{ totalFieldCount }} 个字段</span>
           <a-tooltip content="刷新"><a-button :disabled="!selectedSpaceId" @click="loadAll"><icon-refresh /></a-button></a-tooltip>
-          <a-button type="primary" :disabled="!selectedSpaceId || !groups.length" @click="openCreateField">
+          <a-button type="primary" status="success" :disabled="!selectedSpaceId || !groups.length" @click="openCreateField">
             <template #icon><icon-plus /></template>新建字段
           </a-button>
         </div>
@@ -401,6 +402,7 @@ onMounted(async () => {
 .fields-inner { display: flex; min-height: calc(100vh - 116px); flex-direction: column; }
 .toolbar { display: flex; min-height: 48px; margin-bottom: 8px; align-items: center; justify-content: space-between; gap: 16px; }
 .toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
+.page-title { flex: 0 0 auto; margin: 0 8px 0 0; font-size: 20px; font-weight: 600; }
 .toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; white-space: nowrap; }
 .field-total { color: var(--color-text-3); font-size: 13px; }
 .keyword-control { min-width: 220px; flex: 1 1 360px; }

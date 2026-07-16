@@ -10,7 +10,7 @@
           <template #icon><icon-refresh /></template>
           刷新
         </a-button>
-        <a-button type="primary" @click="openCreateRule">
+        <a-button type="primary" status="success" @click="openCreateRule">
           <template #icon><icon-plus /></template>
           新建规则
         </a-button>
@@ -88,7 +88,7 @@
         <section class="rules-panel">
           <div class="section-head">
             <div><strong>指标告警规则</strong><span class="section-meta">平面 A-H 条件，仅支持单层 AND / OR</span></div>
-            <a-button type="primary" size="small" @click="openCreateRule">新增规则</a-button>
+            <a-button type="primary" status="success" size="small" @click="openCreateRule">新增规则</a-button>
           </div>
           <a-table row-key="rule_id" size="small" :loading="rulesLoading" :data="rules" :pagination="false" :scroll="{ x: 'max-content' }">
             <template #columns>

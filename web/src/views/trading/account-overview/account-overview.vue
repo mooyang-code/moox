@@ -13,7 +13,7 @@
             @search="loadAccounts"
             @clear="loadAccounts"
           />
-          <a-button type="primary" @click="openCreateAccount">
+          <a-button type="primary" status="success" @click="openCreateAccount">
             <template #icon><icon-plus /></template>
             新增账户
           </a-button>
@@ -315,7 +315,7 @@
       <!-- API 凭证弹窗 -->
       <a-modal v-model:visible="apiKeyModalVisible" width="860px" :title="`API 凭证 - ${selectedAccount?.account_name || ''}`" :footer="false">
         <div style="margin-bottom: 12px;">
-          <a-button type="primary" size="small" @click="openCreateApiKey">
+          <a-button type="primary" status="success" size="small" @click="openCreateApiKey">
             <template #icon><icon-plus /></template>
             新增凭证
           </a-button>

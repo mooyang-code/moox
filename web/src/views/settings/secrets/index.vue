@@ -7,7 +7,7 @@
         <span>统一管理 admin 本地秘钥（SSH、交易所、数据库、系统令牌等）</span>
       </div>
       <a-space>
-        <a-button type="primary" @click="openCreate">
+        <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增秘钥
         </a-button>

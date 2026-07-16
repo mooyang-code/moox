@@ -9,7 +9,7 @@
   >
     <div class="cloud-account-manage">
       <a-row>
-        <a-button type="primary" @click="onAdd">
+        <a-button type="primary" status="success" @click="onAdd">
           <template #icon><icon-plus /></template>
           新增云账户
         </a-button>

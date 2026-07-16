@@ -12,7 +12,7 @@
           @search="onSearch"
           @clear="onSearch"
         />
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增对象
         </a-button>
@@ -95,7 +95,7 @@
       <template #title>外部符号：{{ activeSubject?.subject_id }}</template>
       <div class="drawer-toolbar">
         <a-space>
-          <a-button type="primary" @click="openSymbolCreate">
+          <a-button type="primary" status="success" @click="openSymbolCreate">
             <template #icon><icon-plus /></template>
             新增符号
           </a-button>

@@ -15,7 +15,7 @@
 
     <div class="conditions-head">
       <div><strong>检测条件</strong><span>最多 8 条，使用同一个 AND / OR 连接符</span></div>
-      <a-button size="small" type="outline" :disabled="draft.conditions.length >= MAX_CONDITIONS" @click="addCondition"><icon-plus /> 添加条件</a-button>
+      <a-button size="small" type="primary" status="success" :disabled="draft.conditions.length >= MAX_CONDITIONS" @click="addCondition"><icon-plus /> 添加条件</a-button>
     </div>
     <div v-if="!draft.conditions.length" class="condition-empty">请添加至少一个检测条件。</div>
     <metric-condition-row

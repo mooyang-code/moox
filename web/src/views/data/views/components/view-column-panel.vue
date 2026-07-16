@@ -2,7 +2,7 @@
   <div class="panel">
     <div class="panel-toolbar">
       <a-space>
-        <a-button type="primary" :disabled="!viewId" @click="openCreate">
+        <a-button type="primary" status="success" :disabled="!viewId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增结果列
         </a-button>

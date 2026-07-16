@@ -8,7 +8,7 @@
         </slot>
       </div>
       <a-space>
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增数据集
         </a-button>

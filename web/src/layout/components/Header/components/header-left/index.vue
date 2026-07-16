@@ -14,13 +14,13 @@
         <template #empty>
           <div style="text-align: center; padding: 12px;">
             <div>暂无空间</div>
-            <a-button type="text" size="small" @click="openCreate" style="margin-top: 8px;">
+            <a-button type="primary" status="success" size="small" @click="openCreate" style="margin-top: 8px;">
               新建空间
             </a-button>
           </div>
         </template>
       </a-select>
-      <a-button type="text" size="small" title="新建空间" style="margin-left: 8px;" @click="openCreate">
+      <a-button type="primary" status="success" size="small" title="新建空间" style="margin-left: 8px;" @click="openCreate">
         <template #icon><icon-plus /></template>
       </a-button>
     </div>

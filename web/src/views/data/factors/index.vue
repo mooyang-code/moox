@@ -3,7 +3,7 @@
     <div class="page-head">
       <h2>因子管理</h2>
       <a-space>
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增因子
         </a-button>

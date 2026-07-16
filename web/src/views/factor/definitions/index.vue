@@ -7,7 +7,7 @@
         <span>维护生产计算用的 Python 因子源码、参数与启停状态。</span>
       </div>
       <a-space>
-        <a-button type="primary" @click="openCreate">
+        <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增因子
         </a-button>

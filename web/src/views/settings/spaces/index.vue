@@ -6,7 +6,7 @@
         <h2>空间管理</h2>
       </div>
       <a-space>
-        <a-button type="primary" @click="openCreate">
+        <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           创建空间
         </a-button>

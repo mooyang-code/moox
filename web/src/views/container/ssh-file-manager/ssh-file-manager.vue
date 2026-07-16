@@ -21,7 +21,7 @@
           <template #icon><icon-left /></template>
           返回上级
         </a-button>
-        <a-button type="primary" @click="onMkdirClick">
+        <a-button type="primary" status="success" @click="onMkdirClick">
           <template #icon><icon-folder-add /></template>
           新建目录
         </a-button>

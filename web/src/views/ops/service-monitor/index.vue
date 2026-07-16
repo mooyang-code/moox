@@ -18,7 +18,7 @@
           <template #icon><icon-settings /></template>
           Webhook
         </a-button>
-        <a-button type="primary" @click="openCreateCheck">
+        <a-button type="primary" status="success" @click="openCreateCheck">
           <template #icon><icon-plus /></template>
           新增探测
         </a-button>
@@ -284,7 +284,7 @@
         </a-tab-pane>
         <a-tab-pane key="alerts" title="告警">
           <a-space class="tab-actions">
-            <a-button type="primary" @click="openRuleDrawer(selectedCheck)">
+            <a-button type="primary" status="success" @click="openRuleDrawer(selectedCheck)">
               <template #icon><icon-plus /></template>
               新增规则
             </a-button>
@@ -343,7 +343,7 @@
           <a-radio value="system">系统</a-radio>
           <a-radio value="space">当前空间</a-radio>
         </a-radio-group>
-        <a-button type="primary" @click="openCreateWebhook">
+        <a-button type="primary" status="success" @click="openCreateWebhook">
           <template #icon><icon-plus /></template>
           新增通道
         </a-button>
@@ -406,7 +406,7 @@
       unmount-on-close
     >
       <div class="drawer-toolbar">
-        <a-button type="primary" @click="openCreateRule">
+        <a-button type="primary" status="success" @click="openCreateRule">
           <template #icon><icon-plus /></template>
           新增规则
         </a-button>

@@ -7,7 +7,7 @@
         <span>把启用的因子绑定到 K 线数据集、频率和标的范围。</span>
       </div>
       <a-space>
-        <a-button type="primary" :disabled="!selectedSpaceId" @click="openCreate">
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增绑定
         </a-button>

@@ -8,7 +8,7 @@
           MOOX 把行情采集、时序存储、因子计算与宽表查询串成一条链路。
           先创建一个<strong>空间</strong>，所有数据资产与采集配置都在空间内隔离管理。
         </p>
-        <a-button type="primary" size="large" @click="go('/settings/spaces')">
+        <a-button type="primary" status="success" size="large" @click="go('/settings/spaces')">
           创建第一个空间
         </a-button>
       </div>
