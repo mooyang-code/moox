@@ -229,28 +229,25 @@ before trying a CQL predicate on that field; the fixed Topic may not have a
 the Topic ID, time range, result count, RequestId, service name values, and any
 indexing or delivery errors, but never print CLS credentials.
 
-When initializing a fresh MooX system, use a strict two-stage deployment flow. Do not ask for every service placement up front.
+When initializing a fresh MooX system, follow
+[`references/custom-setup.md`](references/custom-setup.md) exactly. The user
+creates repository-root `custom.toml` before deployment. The Agent may test only
+whether it exists and must never read, parse, print, copy, or source it outside
+`moox-cli setup`.
 
-1. Stage 1 starts with admin only.
-   Ask the user where to deploy the admin management plane. Collect only the target SSH host, admin gateway public IP, fixed admin gateway port, and admin frontend/web-host port needed to publish the management console.
+Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
+ask about Storage until setup is complete and the public login API is verified.
+Then use `setup hosts`, ask the user in natural language for exactly one Storage
+host, and run `setup deploy-storage`; the four initial Storage processes stay on
+that machine. Only after Storage is ready, list `metadata spaces`, ask which
+business spaces to import (including all or none), and invoke
+`setup metadata-import` with stable Space IDs. Keep `custom.toml` unchanged and
+never parse either its secrets or a generated filtered seed in Agent context.
 
-2. Deploy the admin backend and frontend before anything else.
-   Build and deploy the Admin loopback upstreams and frontend/web-host before starting or reloading managed Caddy. Browser calls use same-origin `/api/admin/*` through Caddy `:9527`; web-host serves static files at `127.0.0.1:9528` and does not proxy API traffic. Backend `/api/service/*` calls use the separate Caddy `:11001` edge.
-
-3. Stop if the admin management plane is not reachable.
-   Confirm that the admin page can be opened and that the gateway health endpoint answers from the expected gateway port. If either check fails, fix admin deployment first and do not ask about other services yet.
-
-4. Stage 2 starts only after admin succeeds.
-   After the admin backend and frontend are deployed and reachable, ask where to deploy the remaining services. Cover storage metadata/access/view, service gateway exposure, collector-related services, trade services, and any internal admin RPC ports that differ from defaults. Prefer explicit IP and port for every service.
-
-5. Write service deployment information through SysDeploy.
-   Use `t_service_deployments` via the admin `sysdeploy` API as the single source of truth for service IP/port/base URL. Do not derive deployment topology from local files.
-
-6. Preserve the storage topology boundary.
-   `/#/ops/storage/nodes` remains the PrimaryStore topology. If a storage service deployment address changes, remind the user to inspect and update the storage topology endpoint separately; do not silently synchronize it.
-
-7. SCF runtime address propagation.
-   Do not inject storage/admin addresses while building SCF packages. The control plane keepalive probe must pass active `service_deployments` to SCF, and SCF should use `storage_access` directly for storage writes while using `/api/service/*` for backend gateway calls.
+`t_service_deployments` remains the source of truth for service addresses.
+`/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never
+silently synchronized. SCF receives active service deployments from the control
+plane rather than embedding addresses at package time.
 Host Agent deployment and server-resource monitoring are supported for Linux
 amd64/arm64. Use `scripts/hostagent-release.sh` and
 `scripts/hostagent-deploy.sh` for rootless user-systemd deployment. EventBus

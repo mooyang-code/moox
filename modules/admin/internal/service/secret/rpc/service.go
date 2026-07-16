@@ -24,6 +24,7 @@ var validCategories = map[string]bool{
 	"ssh":      true,
 	"exchange": true,
 	"database": true,
+	"cloud":    true,
 	"jwt":      true,
 	"eventbus": true,
 	"other":    true,

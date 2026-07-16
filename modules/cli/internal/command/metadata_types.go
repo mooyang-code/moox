@@ -18,6 +18,8 @@ var (
 	metadataImportURL         string
 	metadataImportDryRun      bool
 	metadataImportIfNotExists bool
+	metadataImportSpaces      []string
+	metadataSpacesFile        string
 	metadataApplyFile         string
 	metadataApplyURL          string
 	metadataApplyDryRun       bool
@@ -45,6 +47,10 @@ var metadataImportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		seed, err = selectMetadataSpaces(seed, metadataImportSpaces)
+		if err != nil {
+			return err
+		}
 		calls, err := buildMetadataImportCalls(seed)
 		if err != nil {
 			return err
@@ -64,6 +70,21 @@ var metadataImportCmd = &cobra.Command{
 			return err
 		}
 		return writeMetadataImportSummary(summary)
+	},
+}
+
+var metadataSpacesCmd = &cobra.Command{
+	Use:   "spaces",
+	Short: "列出 metadata seed 可导入的业务空间",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		if strings.TrimSpace(metadataSpacesFile) == "" {
+			return fmt.Errorf("必须指定 --file")
+		}
+		seed, err := loadMetadataSeed(metadataSpacesFile)
+		if err != nil {
+			return err
+		}
+		return writeSetupJSON(cmd, map[string]any{"spaces": metadataSpaceCatalog(seed)})
 	},
 }
 

@@ -51,6 +51,10 @@ func TestMaskSecretValue(t *testing.T) {
 	assert.True(t, strings.HasSuffix(veryLong, "wxyz"))
 }
 
+func TestCloudIsValidSecretCategory(t *testing.T) {
+	assert.True(t, validCategories["cloud"])
+}
+
 func TestFormatTimeHelpers(t *testing.T) {
 	assert.Equal(t, "", formatTime(time.Time{}))
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)

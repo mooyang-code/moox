@@ -41,6 +41,7 @@ func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 	require.NotNil(t, services.SpaceMgr)
 	require.NotNil(t, services.SSHService)
 	require.NotNil(t, services.SecretService)
+	require.NotNil(t, services.Setup)
 	require.NotNil(t, services.SysDeploy)
 }
 

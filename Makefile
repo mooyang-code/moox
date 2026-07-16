@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries release deploy test test-go test-web test-release verify test-caddy test-gateway-deploy package-skill clean proto
+.PHONY: build build-gateway check-boundaries release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -31,6 +31,15 @@ test-release:
 verify: check-boundaries test test-release test-gateway-deploy test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
+
+verify-custom-setup:
+	(cd packages/cloudprovider && go test -count=1 ./...)
+	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
+	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
+	bash scripts/test-deploy-moox-admin-bootstrap.sh
+	bash scripts/test-deploy-moox-control-profile.sh
+	bash scripts/test-deploy-moox-storage-profile.sh
+	bash skills/moox/scripts/test-custom-setup-contract.sh
 
 test-caddy:
 	bash scripts/test-caddy-config.sh

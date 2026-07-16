@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package trpc.moox.admin;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
+
+message SetupAdmin {
+  string username = 1;
+  string password = 2;
+}
+
+message SetupTencentCloud {
+  string secret_id = 1;
+  string secret_key = 2;
+}
+
+message SetupHost {
+  string name = 1;
+  string address = 2;
+  int32 port = 3;
+  string username = 4;
+  string password = 5;
+}
+
+message ApplySetupReq {
+  SetupAdmin admin = 1;
+  SetupTencentCloud tencent_cloud = 2;
+  SetupHost control_host = 3;
+  repeated SetupHost other_hosts = 4;
+}
+
+message ApplySetupRsp {
+  common.RetInfo ret_info = 1;
+  string action = 2;
+  int32 users = 3;
+  int32 secrets = 4;
+  int32 hosts = 5;
+}
+
+message GetSetupStatusReq {
+  SetupAdmin admin = 1;
+  SetupTencentCloud tencent_cloud = 2;
+  SetupHost control_host = 3;
+  repeated SetupHost other_hosts = 4;
+}
+
+message GetSetupStatusRsp {
+  common.RetInfo ret_info = 1;
+  string state = 2;
+  int32 users = 3;
+  int32 secrets = 4;
+  int32 hosts = 5;
+  int32 missing = 6;
+  int32 conflicts = 7;
+}
+
+service Setup {
+  rpc ApplySetup(ApplySetupReq) returns (ApplySetupRsp);
+  rpc GetSetupStatus(GetSetupStatusReq) returns (GetSetupStatusRsp);
+}

@@ -7,10 +7,15 @@ DEPLOY_DIR="${MOOX_DEPLOY_DIR:-${HOME}/moox}"
 STAGE_DIR=""
 SKIP_BUILD=0
 NO_START=0
+PACKAGE_ONLY=0
+PACKAGE_ARCHIVE=""
+DEPLOY_PROFILE=""
+AUTO_GATEWAY_INPUTS=0
 WITH_STORAGE=1
 WITH_ARCHIVE=1
 WITH_EVENTBUS=1
 WITH_WEB_HOST=1
+STORAGE_EXTERNAL_LISTEN=0
 WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
 WITH_FACTOR=1
@@ -33,10 +38,6 @@ LOCAL_CA=auto
 LOCAL_CA_OUTPUT=""
 FETCHED_CA_FILE=""
 TARGET_CA=auto
-ADMIN_USERNAME="admin"
-ADMIN_PASSWORD_FILE=""
-ADMIN_PASSWORD=""
-BOOTSTRAP_ADMIN=0
 ENABLE_CLS=0
 CLOUD_ACCOUNT_ID=""
 NODE_ID=""
@@ -70,6 +71,9 @@ Options:
   --stage <path>                  Local staging directory. Default: release/deploy-stage/moox.
   --skip-build                    Reuse binaries from ./bin.
   --no-start                      Deploy package only, do not start services.
+  --profile <control|storage>     Package an initial setup deployment unit.
+  --package-only                  Build the selected deployment archive without transport or install.
+  --archive <path>                Output archive required by --package-only.
   --no-storage                    Do not package/stop/start moox-storage; preserve existing remote storage files.
   --no-archive                    Do not package/start moox-archive.
   --no-eventbus                   Do not package/stop/start moox-eventbus; preserve existing remote EventBus files.
@@ -82,8 +86,6 @@ Options:
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
   --reset-data                    Remove target data directory before deploying. Use when rebuilding from examples.
-  --admin-username <name>         Initial Admin username. Default: admin.
-  --admin-password-file <path>    Local 0600 password file for non-interactive first deployment.
   --public-host <ip-or-dns>       Certificate SAN and public HTTPS host; enables managed Caddy.
   --browser-https-port <port>     Browser HTTPS edge. Default: 9527.
   --service-https-port <port>     Service HTTPS edge. Default: 11001.
@@ -107,6 +109,37 @@ Examples:
   scripts/deploy-moox.sh --target user@host --dir ~/moox/prod --goos linux --goarch amd64
   scripts/deploy-moox.sh --target localhost --dir /tmp/moox --skip-build --no-start
 EOF
+}
+
+apply_profile() {
+  case "$1" in
+    control)
+      WITH_ADMIN=1
+      WITH_GATEWAY=1
+      WITH_WEB_HOST=1
+      WITH_STORAGE=0
+      WITH_ARCHIVE=0
+      WITH_EVENTBUS=0
+      WITH_CLOUDNODE=0
+      WITH_COLLECTOR=0
+      WITH_FACTOR=0
+      WITH_MONITOR=0
+      ;;
+    storage)
+      WITH_ADMIN=0
+      WITH_GATEWAY=0
+      WITH_WEB_HOST=0
+      WITH_STORAGE=1
+      WITH_ARCHIVE=0
+      WITH_EVENTBUS=0
+      WITH_CLOUDNODE=0
+      WITH_COLLECTOR=0
+      WITH_FACTOR=0
+      WITH_MONITOR=0
+      STORAGE_EXTERNAL_LISTEN=1
+      ;;
+    *) fail "unsupported deployment profile: $1" ;;
+  esac
 }
 
 log() {
@@ -304,6 +337,18 @@ if parsed.scheme == "http":
 PY
 }
 
+expect_profile=0
+for argument in "$@"; do
+  if [[ "${expect_profile}" -eq 1 ]]; then
+    DEPLOY_PROFILE="${argument}"
+    expect_profile=0
+    continue
+  fi
+  [[ "${argument}" != "--profile" ]] || expect_profile=1
+done
+[[ "${expect_profile}" -eq 0 ]] || fail "--profile requires a value"
+[[ -z "${DEPLOY_PROFILE}" ]] || apply_profile "${DEPLOY_PROFILE}"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)
@@ -333,6 +378,18 @@ while [[ $# -gt 0 ]]; do
     --no-start)
       NO_START=1
       shift
+      ;;
+    --profile)
+      shift 2
+      ;;
+    --package-only)
+      PACKAGE_ONLY=1
+      NO_START=1
+      shift
+      ;;
+    --archive)
+      PACKAGE_ARCHIVE="${2:-}"
+      shift 2
       ;;
     --no-storage)
       WITH_STORAGE=0
@@ -383,8 +440,6 @@ while [[ $# -gt 0 ]]; do
       RESET_DATA=1
       shift
       ;;
-    --admin-username) ADMIN_USERNAME="${2:-}"; shift 2 ;;
-    --admin-password-file) ADMIN_PASSWORD_FILE="${2:-}"; shift 2 ;;
     --public-host) PUBLIC_HOST="${2:-}"; shift 2 ;;
     --browser-https-port) BROWSER_HTTPS_PORT="${2:-}"; shift 2 ;;
     --service-https-port) SERVICE_HTTPS_PORT="${2:-}"; shift 2 ;;
@@ -417,7 +472,10 @@ done
 
 [[ -n "${TARGET}" ]] || fail "--target cannot be empty"
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
-[[ -n "${ADMIN_USERNAME}" ]] || fail "--admin-username cannot be empty"
+if [[ "${PACKAGE_ONLY}" -eq 1 ]]; then
+  [[ -n "${PACKAGE_ARCHIVE}" ]] || fail "--archive is required with --package-only"
+  PACKAGE_ARCHIVE="$(cd "$(dirname "${PACKAGE_ARCHIVE}")" && pwd)/$(basename "${PACKAGE_ARCHIVE}")"
+fi
 [[ "${NODE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail "--node-id is required and must be a stable identifier"
 validate_gateway_control_url "${GATEWAY_CONTROL_URL}" || fail "--gateway-control-url must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
 if [[ "${WITH_MONITOR}" -eq 1 ]]; then
@@ -517,37 +575,6 @@ local_file_mode() {
   stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
 }
 
-target_admin_db_exists() {
-  [[ "${RESET_DATA}" -eq 0 ]] || return 1
-  if is_local_target; then
-    [[ -f "$(expand_local_path "${DEPLOY_DIR}")/data/admin.db" ]]
-    return
-  fi
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "DEPLOY_DIR=$(shell_quote "${DEPLOY_DIR}"); if [[ \"\${DEPLOY_DIR}\" == '~' ]]; then DEPLOY_DIR=\"\${HOME}\"; elif [[ \"\${DEPLOY_DIR}\" == '~/'* ]]; then DEPLOY_DIR=\"\${HOME}/\${DEPLOY_DIR#\~/}\"; fi; test -f \"\${DEPLOY_DIR%/}/data/admin.db\""
-}
-
-read_admin_password() {
-  [[ "${WITH_ADMIN}" -eq 1 ]] || return 0
-  target_admin_db_exists && return 0
-  BOOTSTRAP_ADMIN=1
-  if [[ -n "${ADMIN_PASSWORD_FILE}" ]]; then
-    ADMIN_PASSWORD_FILE="$(expand_local_path "${ADMIN_PASSWORD_FILE}")"
-    [[ -f "${ADMIN_PASSWORD_FILE}" ]] || fail "--admin-password-file must name a local regular file"
-    [[ "$(local_file_mode "${ADMIN_PASSWORD_FILE}")" == "600" ]] || fail "--admin-password-file must have mode 0600"
-    IFS= read -r ADMIN_PASSWORD <"${ADMIN_PASSWORD_FILE}" || [[ -n "${ADMIN_PASSWORD}" ]]
-  elif [[ -t 0 && -t 1 ]]; then
-    local confirmation
-    read -r -s -p "Initial Admin password: " ADMIN_PASSWORD </dev/tty
-    printf '\n' >/dev/tty
-    read -r -s -p "Confirm Admin password: " confirmation </dev/tty
-    printf '\n' >/dev/tty
-    [[ "${ADMIN_PASSWORD}" == "${confirmation}" ]] || fail "Admin passwords do not match"
-  else
-    fail "first deployment and --reset-data require a 0600 local --admin-password-file in non-interactive mode"
-  fi
-  [[ -n "${ADMIN_PASSWORD}" ]] || fail "Admin password cannot be empty"
-}
-
 TARGET_GOOS="${TARGET_GOOS:-$(detect_os)}"
 TARGET_GOARCH="${TARGET_GOARCH:-$(detect_arch)}"
 TARGET_GOOS="$(normalize_os "${TARGET_GOOS}")"
@@ -562,13 +589,16 @@ require_gateway_input_file() {
     fail "${option} must have mode 0600"
   fi
 }
-require_gateway_input_file --gateway-control-key-file "${GATEWAY_CONTROL_KEY_FILE}"
-require_gateway_input_file --gateway-service-key-file "${GATEWAY_SERVICE_KEY_FILE}"
-require_gateway_input_file --gateway-ca-bundle "${GATEWAY_CA_BUNDLE}" 0
-GATEWAY_CONTROL_KEY_FILE="$(expand_local_path "${GATEWAY_CONTROL_KEY_FILE}")"
-GATEWAY_SERVICE_KEY_FILE="$(expand_local_path "${GATEWAY_SERVICE_KEY_FILE}")"
-GATEWAY_CA_BUNDLE="$(expand_local_path "${GATEWAY_CA_BUNDLE}")"
-read_admin_password
+if [[ "${PACKAGE_ONLY}" -eq 1 && -z "${GATEWAY_CONTROL_KEY_FILE}" && -z "${GATEWAY_SERVICE_KEY_FILE}" && -z "${GATEWAY_CA_BUNDLE}" ]]; then
+  AUTO_GATEWAY_INPUTS=1
+else
+  require_gateway_input_file --gateway-control-key-file "${GATEWAY_CONTROL_KEY_FILE}"
+  require_gateway_input_file --gateway-service-key-file "${GATEWAY_SERVICE_KEY_FILE}"
+  require_gateway_input_file --gateway-ca-bundle "${GATEWAY_CA_BUNDLE}" 0
+  GATEWAY_CONTROL_KEY_FILE="$(expand_local_path "${GATEWAY_CONTROL_KEY_FILE}")"
+  GATEWAY_SERVICE_KEY_FILE="$(expand_local_path "${GATEWAY_SERVICE_KEY_FILE}")"
+  GATEWAY_CA_BUNDLE="$(expand_local_path "${GATEWAY_CA_BUNDLE}")"
+fi
 
 validate_gateway_ca_bundle() {
   local bundle="$1" tmp count cert fingerprint distinct
@@ -822,6 +852,11 @@ PY
       perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${conf}"
     fi
   done
+  if [[ "${STORAGE_EXTERNAL_LISTEN}" -eq 1 ]]; then
+    for conf in "${STAGE_DIR}"/storage/config/trpc_go.*.yaml; do
+      perl -pi -e 'if (/^server:/) { $server = 1 } if (/^(client|plugins):/) { $server = 0 } if ($server && /^      ip:\s*127\.0\.0\.1\s*$/) { s#127\.0\.0\.1#0.0.0.0# }' "${conf}"
+    done
+  fi
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-access#g' \
@@ -1930,8 +1965,24 @@ prepare_stage() {
     "${STAGE_DIR}/run"
   mkdir -p "${STAGE_DIR}/secrets" "${STAGE_DIR}/certs/gateway"
   local gateway_control_secret gateway_service_secret
-  gateway_control_secret="$(cat "${GATEWAY_CONTROL_KEY_FILE}")"
-  gateway_service_secret="$(cat "${GATEWAY_SERVICE_KEY_FILE}")"
+  if [[ "${AUTO_GATEWAY_INPUTS}" -eq 1 ]]; then
+    gateway_control_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" gateway-control)"
+    gateway_service_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" gateway-service)"
+    command -v openssl >/dev/null 2>&1 || fail "openssl is required to generate the control package trust bundle"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -subj /CN=moox-control-package-one -keyout /dev/null \
+      -out "${STAGE_DIR}/certs/gateway/peer-one.pem" >/dev/null 2>&1
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -subj /CN=moox-control-package-two -keyout /dev/null \
+      -out "${STAGE_DIR}/certs/gateway/peer-two.pem" >/dev/null 2>&1
+    cat "${STAGE_DIR}/certs/gateway/peer-one.pem" "${STAGE_DIR}/certs/gateway/peer-two.pem" \
+      >"${STAGE_DIR}/certs/gateway/peers.pem"
+    rm -f "${STAGE_DIR}/certs/gateway/peer-one.pem" "${STAGE_DIR}/certs/gateway/peer-two.pem"
+  else
+    gateway_control_secret="$(cat "${GATEWAY_CONTROL_KEY_FILE}")"
+    gateway_service_secret="$(cat "${GATEWAY_SERVICE_KEY_FILE}")"
+    install -m 0644 "${GATEWAY_CA_BUNDLE}" "${STAGE_DIR}/certs/gateway/peers.pem"
+  fi
   [[ -n "${gateway_control_secret}" && -n "${gateway_service_secret}" ]] || fail "Gateway key files cannot be empty"
   [[ "${gateway_control_secret}" != *$'\n'* && "${gateway_control_secret}" != *$'\r'* && \
      "${gateway_service_secret}" != *$'\n'* && "${gateway_service_secret}" != *$'\r'* ]] || \
@@ -1939,7 +1990,7 @@ prepare_stage() {
   [[ "${gateway_control_secret}" == "$(printf '%s' "${gateway_control_secret}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" && \
      "${gateway_service_secret}" == "$(printf '%s' "${gateway_service_secret}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')" ]] || \
     fail "Gateway keys cannot have leading or trailing whitespace"
-  validate_gateway_ca_bundle "${GATEWAY_CA_BUNDLE}"
+  validate_gateway_ca_bundle "${STAGE_DIR}/certs/gateway/peers.pem"
   (umask 077; printf '%s\n' "${gateway_control_secret}" >"${STAGE_DIR}/secrets/gateway-control.key")
   (umask 077; printf '%s\n' "${gateway_service_secret}" >"${STAGE_DIR}/secrets/gateway-service.key")
   {
@@ -1952,7 +2003,6 @@ prepare_stage() {
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
   chmod 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${STAGE_DIR}/secrets/gateway-service.env"
-  install -m 0644 "${GATEWAY_CA_BUNDLE}" "${STAGE_DIR}/certs/gateway/peers.pem"
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"
@@ -2238,12 +2288,6 @@ sync_local_stage() {
     umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${key_file}"; chmod 600 "${key_file}"
   fi
 
-  if [[ "${BOOTSTRAP_ADMIN}" -eq 1 ]]; then
-    printf '%s\n' "${ADMIN_PASSWORD}" | "${deploy_dir}/bin/moox-admin-cli" user ensure \
-      --db-path "${deploy_dir}/data/admin.db" --username "${ADMIN_USERNAME}" --password-stdin >/dev/null
-    ADMIN_PASSWORD=""
-  fi
-
   if [[ "${NO_START}" -eq 0 ]]; then
     if [[ -n "${PUBLIC_HOST}" ]]; then
       local caddy_ports="${SERVICE_HTTPS_PORT}"
@@ -2451,11 +2495,6 @@ chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/ga
   "${DEPLOY_DIR}/start.sh"
 fi
 EOF
-  if [[ "${BOOTSTRAP_ADMIN}" -eq 1 ]]; then
-    printf '%s\n' "${ADMIN_PASSWORD}" | ssh "${TARGET}" \
-      "DEPLOY_DIR=$(shell_quote "${DEPLOY_DIR}"); if [[ \"\${DEPLOY_DIR}\" == '~' ]]; then DEPLOY_DIR=\"\${HOME}\"; elif [[ \"\${DEPLOY_DIR}\" == '~/'* ]]; then DEPLOY_DIR=\"\${HOME}/\${DEPLOY_DIR#\~/}\"; fi; \"\${DEPLOY_DIR%/}/bin/moox-admin-cli\" user ensure --db-path \"\${DEPLOY_DIR%/}/data/admin.db\" --username $(shell_quote "${ADMIN_USERNAME}") --password-stdin" >/dev/null
-    ADMIN_PASSWORD=""
-  fi
   log "deployed to ${TARGET}:${DEPLOY_DIR}"
   rm -f "${LOCAL_DEPLOY_ARCHIVE}"
   LOCAL_DEPLOY_ARCHIVE=""
@@ -2468,6 +2507,14 @@ build_web_host_binary
 acquire_stage_deploy_lock
 prepare_stage
 prepare_cls_preflight
+
+if [[ "${PACKAGE_ONLY}" -eq 1 ]]; then
+  umask 077
+  tar -C "${STAGE_DIR}" -czf "${PACKAGE_ARCHIVE}" .
+  chmod 0600 "${PACKAGE_ARCHIVE}"
+  log "wrote deployment archive ${PACKAGE_ARCHIVE}"
+  exit 0
+fi
 
 if is_local_target; then
   sync_local_stage

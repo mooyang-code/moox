@@ -195,8 +195,6 @@ func init() {
 	// 禁用默认的completion命令
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
-	// 在初始化阶段加载配置，确保所有子命令都能使用
-	loadGlobalConfig()
 }
 
 // loadGlobalConfig 加载全局配置

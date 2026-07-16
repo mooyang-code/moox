@@ -65,6 +65,12 @@ server:
       network: tcp
       protocol: http
       timeout: 10000
+    - name: trpc.moox.admin.Setup
+      ip: 127.0.0.1
+      port: 11110
+      network: tcp
+      protocol: http
+      timeout: 30000
     - name: trpc.dnsproxy.timer
       port: 11301
       network: "0 */5 * * * *?scheduler=dnsproxySchedule"

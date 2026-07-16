@@ -17,7 +17,7 @@ func TestImportQuantInitialSeedIntoEmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportSeed: %v", err)
 	}
-	if result.Spaces != 7 || result.FieldGroups != 25 || result.Fields != 96 || result.Datasets != 31 || result.DatasetColumns != 122 {
+	if result.Spaces != 5 || result.FieldGroups != 16 || result.Fields != 54 || result.Datasets != 10 || result.DatasetColumns != 73 || result.Views != 10 || result.ViewColumns != 63 {
 		t.Fatalf("unexpected import result: %+v", result)
 	}
 }

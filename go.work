@@ -24,6 +24,7 @@ use (
 	./modules/trade
 	./modules/trade/proto/tradegen
 	./packages/cloudruntime
+	./packages/cloudprovider
 	./packages/commonpb
 	./packages/crypto
 	./packages/gatewayauth
