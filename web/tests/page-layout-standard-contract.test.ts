@@ -4,10 +4,13 @@ import { describe, expect, it } from 'vitest';
 
 const viewsRoot = path.resolve(__dirname, '../src/views');
 const read = (relativePath: string) => fs.readFileSync(path.join(viewsRoot, relativePath), 'utf8');
+const readStyle = (relativePath: string) => fs.readFileSync(path.resolve(__dirname, '../src/style', relativePath), 'utf8');
 
 const expectMargin = (source: string, selector: string, property: 'margin-top' | 'margin-bottom', value: number) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  expect(source).toMatch(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?${property}:\\s*${value}px;`));
+  const token = { 8: '--moox-space-2', 12: '--moox-space-3', 20: '--moox-space-5' }[value];
+  const expected = token ? `(?:${value}px|var\\(${token}\\))` : `${value}px`;
+  expect(source).toMatch(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?${property}:\\s*${expected};`));
 };
 
 const extractBlock = (source: string, opening: string, closing: string) => {
@@ -77,7 +80,7 @@ describe('page layout standards', () => {
     expectMargin(taskInstances, '.task-toolbar', 'margin-bottom', 8);
     expect(collectorRules).toContain('class="rule-toolbar"');
     expectMargin(collectorRules, '.rule-toolbar', 'margin-bottom', 8);
-    expect(dataManagement).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(dataManagement).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
 
     expectMargin(gatewayNodes, '.toolbar', 'margin-bottom', 8);
     expect(serviceInstances).not.toContain('class="page-head"');
@@ -141,9 +144,9 @@ describe('page layout standards', () => {
       ['max-width', '100%'],
       ['min-width', '0'],
       ['justify-content', 'flex-start'],
-      ['margin-bottom', '8px'],
+      ['margin-bottom', 'var(--moox-space-2)'],
     ]) {
-      expect(toolbarDeclarations).toMatch(new RegExp(`(?:^|;)\\s*${property}:\\s*${value}\\s*;`));
+      expect(toolbarDeclarations).toContain(`${property}: ${value};`);
     }
     expect(cloudNodes).toMatch(/\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
     expect(cloudNodes).toMatch(/\.moox-page :deep\(\.arco-spin\),\s*\.moox-page :deep\(\.arco-spin-children\)\s*\{[^}]*overflow-x:\s*hidden;/);
@@ -169,6 +172,8 @@ describe('page layout standards', () => {
   });
 
   it('keeps dashboard page boundaries on the compact spacing rhythm', () => {
+    const theme = readStyle('var/global-theme.scss');
+    const globalStyle = readStyle('index.scss');
     const serviceMonitor = read('ops/service-monitor/index.vue');
     const resourceMonitor = read('container/resource-monitor/resource-monitor.vue');
     const factors = read('data/factors/index.vue');
@@ -179,7 +184,11 @@ describe('page layout standards', () => {
     const hostMonitor = read('ops/host-workbench/host-monitor.vue');
     const packageManage = read('collector/cloud-node/function-package-manage.vue');
 
-    expect(serviceMonitor).toMatch(/\.monitor-page\s*\{[\s\S]*?padding:\s*16px;/);
+    expect(theme).toMatch(/\$space-2:\s*8px;/);
+    expect(theme).toMatch(/\$space-4:\s*16px;/);
+    expect(globalStyle).toContain('--moox-space-2: #{$space-2};');
+    expect(globalStyle).toContain('--moox-space-4: #{$space-4};');
+    expect(serviceMonitor).toMatch(/\.monitor-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\);/);
     expectMargin(serviceMonitor, '.page-head', 'margin-bottom', 8);
     expect(serviceMonitor).toMatch(/\.page-head h2\s*\{[\s\S]*?font-size:\s*20px;[\s\S]*?font-weight:\s*600;/);
     expectMargin(serviceMonitor, '.status-grid', 'margin-bottom', 8);
@@ -187,26 +196,26 @@ describe('page layout standards', () => {
     expectMargin(serviceMonitor, '.failing-band', 'margin-bottom', 8);
     expectMargin(serviceMonitor, '.detail-table', 'margin-top', 8);
 
-    expect(resourceMonitor).toMatch(/\.resource-monitor-page\s*\{\s*padding:\s*16px;\s*\}/);
-    expect(resourceMonitor).toMatch(/\.page-header\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(resourceMonitor).toMatch(/\.resource-monitor-page\s*\{\s*padding:\s*var\(--moox-space-4\);\s*\}/);
+    expect(resourceMonitor).toMatch(/\.page-header\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(resourceMonitor).toMatch(/\.page-header h2\s*\{[\s\S]*?font-size:\s*20px;/);
-    expect(resourceMonitor).toMatch(/\.summary-band\s*\{[\s\S]*?margin-bottom:\s*8px;/);
-    expect(resourceMonitor).toMatch(/\.page-alert,\s*\.history-alert\s*\{\s*margin-bottom:\s*8px;\s*\}/);
+    expect(resourceMonitor).toMatch(/\.summary-band\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    expect(resourceMonitor).toMatch(/\.page-alert,\s*\.history-alert\s*\{\s*margin-bottom:\s*var\(--moox-space-2\);\s*\}/);
 
-    expect(factors).toMatch(/\.metadata-page\s*\{[\s\S]*?padding:\s*16px 16px 72px;/);
+    expect(factors).toMatch(/\.metadata-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\) var\(--moox-space-4\) 72px;/);
     expectMargin(factors, '.page-head', 'margin-bottom', 8);
-    expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*8px;/);
-    expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*8px 0;\s*\}/);
-    expect(overview).toMatch(/\.overview-page\s*\{[\s\S]*?padding:\s*16px 16px 72px;/);
+    expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
+    expect(overview).toMatch(/\.overview-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\) var\(--moox-space-4\) 72px;/);
     expectMargin(overview, '.page-head', 'margin-bottom', 8);
-    expect(overview).toMatch(/\.overview-hero\s*\{[\s\S]*?margin-bottom:\s*8px;/);
+    expect(overview).toMatch(/\.overview-hero\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
 
     expectMargin(strategyOverview, '.summary-grid', 'margin-bottom', 8);
-    expect(strategyOverview).toMatch(/\.filters\s*\{[\s\S]*?gap:\s*8px;[\s\S]*?margin-bottom:\s*8px;/);
+    expect(strategyOverview).toMatch(/\.filters\s*\{[\s\S]*?gap:\s*var\(--moox-space-2\);[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expectMargin(strategyOverview, '.top-alert', 'margin-bottom', 8);
     expectMargin(strategyPerformance, '.performance-toolbar', 'margin-bottom', 8);
-    expect(strategyPerformance).toMatch(/\.metrics\s*\{\s*margin:\s*8px 0;\s*\}/);
-    expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:0 0 20px;/);
+    expect(strategyPerformance).toMatch(/\.metrics\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
+    expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:0 0 var\(--moox-space-5\);/);
     expectMargin(hostMonitor, '.monitor-toolbar', 'margin-bottom', 8);
     expectMargin(hostMonitor, '.monitor-summary', 'margin-bottom', 8);
     expectMargin(hostMonitor, '.monitor-alert', 'margin-bottom', 8);

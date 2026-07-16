@@ -271,7 +271,7 @@ onUnmounted(() => { stopRefreshTimer(); loadGuard.invalidate(); });
 
 <style scoped>
 .gateway-nodes { min-width: 0; }
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.toolbar { display: flex; align-items: center; gap: var(--moox-space-3); margin-bottom: var(--moox-space-2); }
 .status-filter { width: 140px; }
 .node-identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .node-name { display: flex; min-width: 0; align-items: center; gap: 6px; }

@@ -350,7 +350,7 @@ onUnmounted(() => {
 }
 
 .service-deployments-table {
-  margin-bottom: 20px;
+  margin-bottom: var(--moox-space-5);
 }
 
 .service-deployments-table :deep(.arco-table-container) {
@@ -442,6 +442,6 @@ onUnmounted(() => {
 }
 
 .filters {
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 </style>

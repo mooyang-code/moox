@@ -131,11 +131,11 @@ onMounted(async () => {
 <style scoped lang="scss">
 .host-workbench-page { height: 100%; min-height: 0; }
 .host-workbench-page > .moox-inner { min-height: 100%; }
-.workbench-content { min-width:0; margin-top:12px; }
+.workbench-content { min-width:0; margin-top:var(--moox-space-3); }
 .workbench-content :deep(.moox-page) { height:auto; padding:0; overflow:visible; background:transparent; }
 .workbench-content :deep(.moox-page > .moox-inner) { min-height:0; padding:0; border:0; border-radius:0; box-shadow:none; }
 .monitor-table-wrap { margin-top:4px; }
-.ssh-management { margin-top:16px; border-top:1px solid var(--color-border-2); padding-top:12px; }
+.ssh-management { margin-top:var(--moox-space-4); border-top:1px solid var(--color-border-2); padding-top:var(--moox-space-3); }
 .ssh-management :deep(.moox-page) { padding:0; }
 .terminal-modal-body { height: min(68vh, 720px); overflow:hidden; }
 .terminal-modal-body :deep(.ssh-terminal-page) { height:100%; }

@@ -3,6 +3,15 @@
 $margin: 14px; // 盒子间距
 $margin-text: 8px; // 文字间距-行内
 $padding: 16px; // 盒子和内容的间距
+
+// 页面与组件间距等级，页面级布局统一引用对应 token
+$space-1: 4px;
+$space-2: 8px;
+$space-3: 12px;
+$space-4: 16px;
+$space-5: 20px;
+$space-6: 24px;
+
 $icon-box: 24px; // icon盒子通用大小
 $icon-size: 18px; // icon通用大小
 

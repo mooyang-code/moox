@@ -664,7 +664,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head__title {
@@ -683,7 +683,7 @@ onMounted(load);
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--moox-space-2);
 }
 
 .draft-columns-head {

@@ -38,9 +38,9 @@ describe('metric monitor layout', () => {
     expect(source).not.toContain('chartPartial');
     expect(chartSource).not.toContain('chart-error');
     expect(editorSource).not.toContain('<a-alert v-if="previewError"');
-    expect(source).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*8px;/);
-    expect(source).toMatch(/\.metric-subtabs\s*\{[\s\S]*?margin-bottom:\s*12px;/);
+    expect(source).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    expect(source).toMatch(/\.metric-subtabs\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-3\);/);
     expect(source).toMatch(/\.metric-subtabs\s*:deep\(\.arco-tabs-tab-active\)\s*\{[\s\S]*?background-color:\s*var\(--color-fill-2\);/);
-    expect(source).toMatch(/\.filter-band\s*\{[\s\S]*?gap:\s*8px;[\s\S]*?margin-bottom:\s*8px;/);
+    expect(source).toMatch(/\.filter-band\s*\{[\s\S]*?gap:\s*var\(--moox-space-2\);[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
   });
 });

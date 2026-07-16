@@ -395,7 +395,7 @@ onMounted(loadDatasets);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head h2 {
@@ -411,8 +411,8 @@ onMounted(loadDatasets);
 
 .sync-form,
 .preview-panel {
-  padding: 16px 0;
+  padding: var(--moox-space-4) 0;
 }
 
-.sync-alert { margin: 8px 0; }
+.sync-alert { margin: var(--moox-space-2) 0; }
 </style>

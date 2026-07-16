@@ -112,7 +112,7 @@ onMounted(loadBindings);
   min-height: 0;
   flex-direction: column;
 }
-.factor-results-content { min-height: 0; flex: 1; margin-top: 12px; overflow: hidden; }
+.factor-results-content { min-height: 0; flex: 1; margin-top: var(--moox-space-3); overflow: hidden; }
 .factor-results-content :deep(.moox-page) { height: 100%; min-height: 0; padding: 0; overflow: auto; background: transparent; }
 .factor-results-content :deep(.moox-page > .moox-inner) { min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
 </style>

@@ -1141,7 +1141,7 @@ onUnmounted(() => {
 .monitor-page {
   height: 100%;
   min-height: 100%;
-  padding: 16px;
+  padding: var(--moox-space-4);
   background: #f5f7fb;
   overflow-y: auto;
 }
@@ -1150,8 +1150,8 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 8px;
+  gap: var(--moox-space-4);
+  margin-bottom: var(--moox-space-2);
 }
 
 .page-head h2 {
@@ -1168,8 +1168,8 @@ onUnmounted(() => {
 .status-grid {
   display: grid;
   grid-template-columns: minmax(220px, 1.5fr) repeat(5, minmax(130px, 1fr));
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
 }
 
 .status-hero,
@@ -1219,7 +1219,7 @@ onUnmounted(() => {
 
 .metric-card {
   min-height: 118px;
-  padding: 16px;
+  padding: var(--moox-space-4);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -1249,8 +1249,8 @@ onUnmounted(() => {
 .group-band {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
 }
 
 .group-card {
@@ -1261,8 +1261,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
 }
 
 .group-card-body {
@@ -1273,11 +1273,11 @@ onUnmounted(() => {
 }
 
 .failing-band {
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
 }
 
 .band-title {
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
   color: #4e5969;
   font-weight: 600;
 }
@@ -1345,7 +1345,7 @@ onUnmounted(() => {
 }
 
 .detail-table {
-  margin-top: 8px;
+  margin-top: var(--moox-space-2);
 }
 
 .detail-drawer :deep(.arco-drawer-body) {
@@ -1422,7 +1422,7 @@ onUnmounted(() => {
 
 @media (max-width: 760px) {
   .monitor-page {
-    padding: 12px;
+    padding: var(--moox-space-3);
   }
 
   .page-head,

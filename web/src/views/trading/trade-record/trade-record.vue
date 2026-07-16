@@ -497,13 +497,13 @@ onMounted(async () => {
 
 <style scoped>
 .record-view-tabs {
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .account-tabs-block {
   position: relative;
-  padding-bottom: 12px;
-  margin-bottom: 12px;
+  padding-bottom: var(--moox-space-3);
+  margin-bottom: var(--moox-space-3);
 }
 
 .record-account-tabs {
