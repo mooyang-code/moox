@@ -11,9 +11,27 @@ moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
+moox-cli setup ...                  # 校验、部署并初始化控制面
 ```
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
+
+## 控制面初始化
+
+在仓库根目录根据 `custom.toml.example` 创建权限为 `0600` 的
+`custom.toml`，然后依次执行：
+
+```bash
+moox-cli setup validate --file ./custom.toml
+moox-cli setup deploy-control --file ./custom.toml
+moox-cli setup apply --file ./custom.toml
+moox-cli setup status --file ./custom.toml
+```
+
+首次连接未知 SSH 主机时，先通过独立渠道核验命令报告的 SHA256 指纹，
+再执行 `setup trust-host --host <name> --fingerprint <SHA256:...>`。初始化命令只在
+进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`custom.toml`
+是用户维护的只读输入，CLI 不修改或删除该文件。
 
 ## 构建
 
@@ -133,6 +151,7 @@ cmd/
   tencent_ops*.go       腾讯云运维与控制面凭证模式
 internal/
   config/               配置加载
+  setup/                安全初始化、SSH、部署和 Admin 私有客户端
   adminclient/          Admin / CloudNode HTTP 客户端
 config/cli.yaml         默认配置
 ```
