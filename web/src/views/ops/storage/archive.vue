@@ -1,75 +1,75 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <PageTabActions>
-      <a-space>
-        <a-input v-model="datasetFilter" class="archive-dataset-filter" allow-clear placeholder="dataset_id" />
-        <a-switch v-model="debugMode" size="small">
-          <template #checked>调试</template>
-          <template #unchecked>调试</template>
-        </a-switch>
-        <a-tooltip content="刷新归档列表">
-          <a-button aria-label="刷新归档列表" :disabled="!selectedSpaceId" @click="load">
-            <template #icon><icon-refresh /></template>
-          </a-button>
-        </a-tooltip>
-      </a-space>
-    </PageTabActions>
+      <PageTabActions>
+        <a-space>
+          <a-input v-model="datasetFilter" class="archive-dataset-filter" allow-clear placeholder="dataset_id" />
+          <a-switch v-model="debugMode" size="small">
+            <template #checked>调试</template>
+            <template #unchecked>调试</template>
+          </a-switch>
+          <a-tooltip content="刷新归档列表">
+            <a-button aria-label="刷新归档列表" :disabled="!selectedSpaceId" @click="load">
+              <template #icon><icon-refresh /></template>
+            </a-button>
+          </a-tooltip>
+        </a-space>
+      </PageTabActions>
 
-    <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
-    <a-table
-      v-else
-      row-key="archive_file_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="rows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="归档ID" data-index="archive_file_id" :width="180" />
-        <a-table-column title="数据集" data-index="dataset_id" :width="150" />
-        <a-table-column title="分区" data-index="partition_key" :width="160" />
-        <a-table-column title="文件URI" data-index="file_uri" :width="360" />
-        <a-table-column title="格式" data-index="file_format" :width="100" />
-        <a-table-column title="最小时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.min_time) }}</template>
-        </a-table-column>
-        <a-table-column title="最大时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.max_time) }}</template>
-        </a-table-column>
-        <a-table-column title="行数" data-index="row_count" :width="100" />
-        <a-table-column title="内容Hash" data-index="content_hash" :width="220" />
-        <a-table-column title="列" :width="220">
-          <template #cell="{ record }">{{ joinList(record.columns) || '-' }}</template>
-        </a-table-column>
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="创建时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-        </a-table-column>
-        <a-table-column v-if="debugMode" title="技术详情" :width="180" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-popover title="技术详情">
-              <a-button size="mini" type="text">查看</a-button>
-              <template #content>
-                <pre>{{ technicalDetails(record) }}</pre>
-              </template>
-            </a-popover>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
+      <a-table
+        v-else
+        row-key="archive_file_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="rows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="归档ID" data-index="archive_file_id" :width="180" />
+          <a-table-column title="数据集" data-index="dataset_id" :width="150" />
+          <a-table-column title="分区" data-index="partition_key" :width="160" />
+          <a-table-column title="文件URI" data-index="file_uri" :width="360" />
+          <a-table-column title="格式" data-index="file_format" :width="100" />
+          <a-table-column title="最小时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.min_time) }}</template>
+          </a-table-column>
+          <a-table-column title="最大时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.max_time) }}</template>
+          </a-table-column>
+          <a-table-column title="行数" data-index="row_count" :width="100" />
+          <a-table-column title="内容Hash" data-index="content_hash" :width="220" />
+          <a-table-column title="列" :width="220">
+            <template #cell="{ record }">{{ joinList(record.columns) || '-' }}</template>
+          </a-table-column>
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="创建时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+          </a-table-column>
+          <a-table-column v-if="debugMode" title="技术详情" :width="180" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-popover title="技术详情">
+                <a-button size="mini" type="text">查看</a-button>
+                <template #content>
+                  <pre>{{ technicalDetails(record) }}</pre>
+                </template>
+              </a-popover>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
     </div>
   </div>
 </template>
