@@ -12,35 +12,47 @@
 
 ## File Map
 
+The CLI setup implementation is grouped by capability rather than flattened
+into prefixed package names:
+
+```text
+modules/cli/internal/setup/
+├── config/
+├── ssh/
+├── validate/
+├── client/
+└── deploy/
+```
+
 - Create `custom.toml.example`: exact user-facing setup template with empty secrets.
 - Modify `.gitignore`: ignore only repository-root `/custom.toml`.
-- Create `modules/cli/internal/setupconfig/config.go`: secure file snapshot, strict TOML decode, canonical manifest, and field validation.
-- Create `modules/cli/internal/setupconfig/config_test.go`: file security, parsing, uniqueness, canonicalization, and mutation tests.
-- Create `modules/cli/internal/setupssh/client.go`: password SSH, dedicated known-hosts policy, connection validation, and local forwarding.
-- Create `modules/cli/internal/setupssh/client_test.go`: SSH fixture, unknown-key behavior, auth failure redaction, and forwarding tests.
-- Create `modules/cli/internal/setupvalidate/validate.go`: ordered local, Tencent, and SSH validation with stable result codes.
-- Create `modules/cli/internal/setupvalidate/validate_test.go`: validator ordering, per-host results, and output secrecy.
+- Create `modules/cli/internal/setup/config/config.go`: secure file snapshot, strict TOML decode, canonical manifest, and field validation.
+- Create `modules/cli/internal/setup/config/config_test.go`: file security, parsing, uniqueness, canonicalization, and mutation tests.
+- Create `modules/cli/internal/setup/ssh/client.go`: password SSH, dedicated known-hosts policy, connection validation, and local forwarding.
+- Create `modules/cli/internal/setup/ssh/client_test.go`: SSH fixture, unknown-key behavior, auth failure redaction, and forwarding tests.
+- Create `modules/cli/internal/setup/validate/validate.go`: ordered local, Tencent, and SSH validation with stable result codes.
+- Create `modules/cli/internal/setup/validate/validate_test.go`: validator ordering, per-host results, and output secrecy.
 - Create `modules/admin/proto/setup_service.proto`: loopback setup apply/status contract.
 - Regenerate `modules/admin/proto/admingen/setup_service*.go`: generated PB and tRPC bindings.
 - Modify `modules/admin/schema/admin.sql`: add singleton setup state and cloud-secret uniqueness.
-- Create `modules/admin/internal/service/systemsetup/service.go`: transactional create-or-verify domain.
-- Create `modules/admin/internal/service/systemsetup/service_test.go`: commit, rollback, retry, conflict, hash/encryption, and adoption tests.
-- Create `modules/admin/internal/service/systemsetup/rpc/service.go`: PB mapping with sanitized errors.
-- Create `modules/admin/internal/service/systemsetup/rpc/service_test.go`: RPC result and redaction tests.
+- Create `modules/admin/internal/service/setup/service.go`: transactional create-or-verify domain.
+- Create `modules/admin/internal/service/setup/service_test.go`: commit, rollback, retry, conflict, hash/encryption, and adoption tests.
+- Create `modules/admin/internal/service/setup/rpc/service.go`: PB mapping with sanitized errors.
+- Create `modules/admin/internal/service/setup/rpc/service_test.go`: RPC result and redaction tests.
 - Modify `modules/admin/internal/bootstrap/services.go`: construct the setup service with the shared DB and encryption key.
 - Modify `modules/admin/internal/bootstrap/trpc.go`: register the private service.
 - Modify `modules/admin/config/trpc_go.yaml`: bind the setup listener to `127.0.0.1:11110`.
 - Modify `modules/admin/internal/bootstrap/config_test.go`: enforce loopback binding.
-- Create `modules/cli/internal/setupclient/client.go`: SSH-forwarded Admin setup apply/status client.
-- Create `modules/cli/internal/setupclient/login.go`: public GetLoginSalt/Login verification without token output.
-- Create `modules/cli/internal/setupclient/client_test.go`: forwarded requests, timeout, conflict, and secret-free errors.
-- Create `modules/cli/internal/setupclient/login_test.go`: browser-path login protocol and response redaction.
-- Create `modules/cli/internal/setupdeploy/deploy.go`: minimal control profile orchestration and safe Go SSH/SFTP transport.
-- Create `modules/cli/internal/setupdeploy/deploy_test.go`: profile arguments, upload behavior, readiness ordering, and no-secret output.
+- Create `modules/cli/internal/setup/client/client.go`: SSH-forwarded Admin setup apply/status client.
+- Create `modules/cli/internal/setup/client/login.go`: public GetLoginSalt/Login verification without token output.
+- Create `modules/cli/internal/setup/client/client_test.go`: forwarded requests, timeout, conflict, and secret-free errors.
+- Create `modules/cli/internal/setup/client/login_test.go`: browser-path login protocol and response redaction.
+- Create `modules/cli/internal/setup/deploy/deploy.go`: minimal control profile orchestration and safe Go SSH/SFTP transport.
+- Create `modules/cli/internal/setup/deploy/deploy_test.go`: profile arguments, upload behavior, readiness ordering, and no-secret output.
 - Modify `scripts/deploy-moox.sh`: add `control` profile and remove deploy-time Admin user creation.
 - Modify `scripts/test-deploy-moox-admin-bootstrap.sh`: enforce the new deployment/setup boundary.
 - Create `scripts/test-deploy-moox-control-profile.sh`: verify exact control-profile contents and service startup.
-- Create `modules/cli/internal/command/setup.go`: register `validate`, `deploy-control`, `init`, `status`, and host trust commands.
+- Create `modules/cli/internal/command/setup.go`: register `validate`, `deploy-control`, `apply`, `status`, and host trust commands.
 - Create `modules/cli/internal/command/setup_test.go`: CLI contract and stdout/stderr secrecy.
 - Modify `modules/cli/internal/command/root.go`: show the setup command without eager unrelated YAML warnings.
 - Modify `modules/cli/go.mod` and `modules/cli/go.sum`: make TOML and SSH dependencies direct.
@@ -54,8 +66,8 @@
 **Files:**
 - Create: `custom.toml.example`
 - Modify: `.gitignore`
-- Create: `modules/cli/internal/setupconfig/config.go`
-- Create: `modules/cli/internal/setupconfig/config_test.go`
+- Create: `modules/cli/internal/setup/config/config.go`
+- Create: `modules/cli/internal/setup/config/config_test.go`
 - Modify: `modules/cli/go.mod`
 - Modify: `modules/cli/go.sum`
 
@@ -108,10 +120,10 @@ Run:
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupconfig
+go test -count=1 ./internal/setup/config
 ```
 
-Expected: FAIL because `setupconfig.Load` and its types do not exist.
+Expected: FAIL because `config.Load` and its types do not exist.
 
 - [ ] **Step 4: Implement strict loading and canonicalization**
 
@@ -156,7 +168,7 @@ Make `github.com/BurntSushi/toml v1.3.2` a direct dependency. Run:
 ```bash
 cd modules/cli
 go mod tidy
-go test -count=1 ./internal/setupconfig
+go test -count=1 ./internal/setup/config
 ```
 
 Expected: PASS.
@@ -164,15 +176,15 @@ Expected: PASS.
 - [ ] **Step 6: Commit the manifest loader**
 
 ```bash
-git add .gitignore custom.toml.example modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setupconfig
+git add .gitignore custom.toml.example modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setup/config
 git commit -m "feat(cli): define secure setup manifest"
 ```
 
 ## Task 2: Add SSH Trust, Authentication, And Forwarding
 
 **Files:**
-- Create: `modules/cli/internal/setupssh/client.go`
-- Create: `modules/cli/internal/setupssh/client_test.go`
+- Create: `modules/cli/internal/setup/ssh/client.go`
+- Create: `modules/cli/internal/setup/ssh/client_test.go`
 - Modify: `modules/cli/go.mod`
 - Modify: `modules/cli/go.sum`
 
@@ -202,14 +214,17 @@ Also assert that wrong passwords produce `ssh_auth_failed`, unreachable ports pr
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupssh
+go test -count=1 ./internal/setup/ssh
 ```
 
 Expected: FAIL because the package does not exist.
 
 - [ ] **Step 3: Implement known-hosts and password SSH**
 
-Build `ssh.ClientConfig` with `ssh.Password`, a context deadline, and `knownhosts.New`. Never use `ssh.InsecureIgnoreHostKey`. Wrap callback failures:
+Inside the `setup/ssh` package, import `golang.org/x/crypto/ssh` as `xssh`.
+Build `xssh.ClientConfig` with `xssh.Password`, a context deadline, and
+`knownhosts.New`. Never use `xssh.InsecureIgnoreHostKey`. Wrap callback
+failures:
 
 ```go
 var (
@@ -238,7 +253,7 @@ The forwarder listens on `127.0.0.1:0`, accepts local connections, opens `client
 ```bash
 cd modules/cli
 go mod tidy
-go test -count=1 ./internal/setupssh
+go test -count=1 ./internal/setup/ssh
 ```
 
 Expected: PASS; `golang.org/x/crypto` is a direct dependency.
@@ -246,15 +261,15 @@ Expected: PASS; `golang.org/x/crypto` is a direct dependency.
 - [ ] **Step 6: Commit SSH support**
 
 ```bash
-git add modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setupssh
+git add modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setup/ssh
 git commit -m "feat(cli): add trusted setup SSH transport"
 ```
 
 ## Task 3: Build Sanitized Preflight Validation
 
 **Files:**
-- Create: `modules/cli/internal/setupvalidate/validate.go`
-- Create: `modules/cli/internal/setupvalidate/validate_test.go`
+- Create: `modules/cli/internal/setup/validate/validate.go`
+- Create: `modules/cli/internal/setup/validate/validate_test.go`
 - Modify: `modules/cli/internal/tencentcloud/lighthouse.go`
 - Modify: `modules/cli/internal/tencentcloud/lighthouse_test.go`
 
@@ -295,21 +310,24 @@ Implement it with Tencent STS `GetCallerIdentity`. Map SDK authentication failur
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupvalidate ./internal/tencentcloud
+go test -count=1 ./internal/setup/validate ./internal/tencentcloud
 ```
 
 Expected: FAIL until the validator and identity seam exist.
 
 - [ ] **Step 4: Implement ordered validation**
 
-`Validate` receives an already-secure `setupconfig.Snapshot`. It returns stable codes and host names only. Use bounded concurrency for `other_hosts`, but preserve configured order in output. Always call `snapshot.VerifyUnchanged()` before returning.
+`validate.Run` receives an already-secure `config.Snapshot`. It returns stable
+codes and host names only. Use bounded concurrency for `other_hosts`, but
+preserve configured order in output. Always call
+`snapshot.VerifyUnchanged()` before returning.
 
 - [ ] **Step 5: Run and commit**
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupvalidate ./internal/tencentcloud
-git add modules/cli/internal/setupvalidate modules/cli/internal/tencentcloud
+go test -count=1 ./internal/setup/validate ./internal/tencentcloud
+git add modules/cli/internal/setup/validate modules/cli/internal/tencentcloud
 git commit -m "feat(cli): validate setup credentials safely"
 ```
 
@@ -318,8 +336,8 @@ git commit -m "feat(cli): validate setup credentials safely"
 **Files:**
 - Modify: `modules/admin/schema/admin.sql`
 - Modify: `modules/admin/schema/schema_test.go`
-- Create: `modules/admin/internal/service/systemsetup/service.go`
-- Create: `modules/admin/internal/service/systemsetup/service_test.go`
+- Create: `modules/admin/internal/service/setup/service.go`
+- Create: `modules/admin/internal/service/setup/service_test.go`
 
 - [ ] **Step 1: Write the schema failure test**
 
@@ -386,7 +404,7 @@ Reuse `packages/crypto` for bcrypt and encryption. Add `cloud` to the accepted S
 
 ```bash
 cd modules/admin
-go test -count=1 ./schema ./internal/service/systemsetup ./internal/service/secret/rpc
+go test -count=1 ./schema ./internal/service/setup ./internal/service/secret/rpc
 ```
 
 Expected: PASS.
@@ -394,7 +412,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit the domain**
 
 ```bash
-git add modules/admin/schema modules/admin/internal/service/systemsetup modules/admin/internal/service/secret/rpc
+git add modules/admin/schema modules/admin/internal/service/setup modules/admin/internal/service/secret/rpc
 git commit -m "feat(admin): add atomic system setup domain"
 ```
 
@@ -404,8 +422,8 @@ git commit -m "feat(admin): add atomic system setup domain"
 - Create: `modules/admin/proto/setup_service.proto`
 - Regenerate: `modules/admin/proto/admingen/setup_service.pb.go`
 - Regenerate: `modules/admin/proto/admingen/setup_service.trpc.go`
-- Create: `modules/admin/internal/service/systemsetup/rpc/service.go`
-- Create: `modules/admin/internal/service/systemsetup/rpc/service_test.go`
+- Create: `modules/admin/internal/service/setup/rpc/service.go`
+- Create: `modules/admin/internal/service/setup/rpc/service_test.go`
 - Modify: `modules/admin/internal/bootstrap/services.go`
 - Modify: `modules/admin/internal/bootstrap/trpc.go`
 - Modify: `modules/admin/config/trpc_go.yaml`
@@ -463,7 +481,7 @@ Add `trpc.moox.admin.Setup` to `trpc_go.yaml` with `network: tcp`, `protocol: ht
 
 ```bash
 cd modules/admin
-go test -count=1 ./internal/service/systemsetup/... ./internal/bootstrap ./schema
+go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema
 ```
 
 Expected: PASS.
@@ -471,17 +489,17 @@ Expected: PASS.
 - [ ] **Step 6: Commit the private API**
 
 ```bash
-git add modules/admin/proto modules/admin/internal/service/systemsetup modules/admin/internal/bootstrap modules/admin/config/trpc_go.yaml
+git add modules/admin/proto modules/admin/internal/service/setup modules/admin/internal/bootstrap modules/admin/config/trpc_go.yaml
 git commit -m "feat(admin): expose loopback setup API"
 ```
 
 ## Task 6: Add The SSH-Forwarded Setup Client
 
 **Files:**
-- Create: `modules/cli/internal/setupclient/client.go`
-- Create: `modules/cli/internal/setupclient/login.go`
-- Create: `modules/cli/internal/setupclient/client_test.go`
-- Create: `modules/cli/internal/setupclient/login_test.go`
+- Create: `modules/cli/internal/setup/client/client.go`
+- Create: `modules/cli/internal/setup/client/login.go`
+- Create: `modules/cli/internal/setup/client/client_test.go`
+- Create: `modules/cli/internal/setup/client/login_test.go`
 
 - [ ] **Step 1: Write failing forwarded-client tests**
 
@@ -494,14 +512,14 @@ responses containing unexpected text are converted to stable errors.
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupclient
+go test -count=1 ./internal/setup/client
 ```
 
 Expected: FAIL because the client does not exist.
 
 - [ ] **Step 3: Implement apply and status**
 
-Use `setupssh.Client.ForwardLocal(ctx, "127.0.0.1:11110")`, a private
+Use `ssh.Client.ForwardLocal(ctx, "127.0.0.1:11110")`, a private
 `http.Client` with a fixed timeout, and PB JSON names. Map responses into:
 
 ```go
@@ -533,9 +551,9 @@ or signing key appears in the result or error.
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupclient
-git add modules/cli/internal/setupclient/client.go modules/cli/internal/setupclient/client_test.go \
-  modules/cli/internal/setupclient/login.go modules/cli/internal/setupclient/login_test.go
+go test -count=1 ./internal/setup/client
+git add modules/cli/internal/setup/client/client.go modules/cli/internal/setup/client/client_test.go \
+  modules/cli/internal/setup/client/login.go modules/cli/internal/setup/client/login_test.go
 git commit -m "feat(cli): initialize Admin through SSH forwarding"
 ```
 
@@ -614,8 +632,8 @@ git commit -m "refactor(deploy): separate control setup profile"
 ## Task 8: Orchestrate Control Deployment Without Shell Password Exposure
 
 **Files:**
-- Create: `modules/cli/internal/setupdeploy/deploy.go`
-- Create: `modules/cli/internal/setupdeploy/deploy_test.go`
+- Create: `modules/cli/internal/setup/deploy/deploy.go`
+- Create: `modules/cli/internal/setup/deploy/deploy_test.go`
 - Modify: `scripts/deploy-moox.sh`
 
 - [ ] **Step 1: Add a package-only deploy contract**
@@ -627,7 +645,7 @@ remote command is invoked.
 
 - [ ] **Step 2: Write failing Go orchestration tests**
 
-Inject a `Packager`, `setupssh.Client`, and readiness probe. Assert the
+Inject a `Packager`, `ssh.Client`, and readiness probe. Assert the
 order:
 
 ```text
@@ -637,7 +655,7 @@ package -> upload .next -> atomic install -> start -> admin ready -> setup ready
 Assert captured argv, environment, stdout, stderr, remote commands, and uploaded
 archive do not contain any manifest credential.
 
-- [ ] **Step 3: Implement `setupdeploy.DeployControl`**
+- [ ] **Step 3: Implement `deploy.Control`**
 
 Use the SSH/SFTP client from Task 2. The packager receives only non-sensitive
 deployment values:
@@ -660,7 +678,7 @@ headers or secrets.
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/setupdeploy ./internal/setupssh
+go test -count=1 ./internal/setup/deploy ./internal/setup/ssh
 cd ../..
 bash scripts/test-deploy-moox-control-profile.sh
 ```
@@ -670,7 +688,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit deployment orchestration**
 
 ```bash
-git add modules/cli/internal/setupdeploy scripts/deploy-moox.sh scripts/test-deploy-moox-control-profile.sh
+git add modules/cli/internal/setup/deploy scripts/deploy-moox.sh scripts/test-deploy-moox-control-profile.sh
 git commit -m "feat(cli): deploy setup control plane safely"
 ```
 
@@ -748,7 +766,7 @@ unrelated warning or file lookup.
 
 ```bash
 cd modules/cli
-go test -count=1 ./internal/command ./internal/setupconfig ./internal/setupvalidate ./internal/setupclient ./internal/setupdeploy
+go test -count=1 ./internal/command ./internal/setup/config ./internal/setup/validate ./internal/setup/client ./internal/setup/deploy
 go run ./cmd/moox-cli setup --help
 ```
 
@@ -775,7 +793,7 @@ The script must verify that the Skill/reference:
 - shows the exact `custom.toml.example` template;
 - says the user writes the file before deployment;
 - requires mode `0600`;
-- orders `validate`, `deploy-control`, `init`, then `status`;
+- orders `validate`, `deploy-control`, `apply`, then `status`;
 - says the file remains unchanged and contains plaintext credentials;
 - prohibits Agent use of `cat`, `sed`, `rg`, Python, or shell `source` on
   `custom.toml`;
@@ -857,8 +875,8 @@ assert.Equal(t, beforeBytes, afterBytes)
 Add `verify-custom-setup` to the root Makefile. It runs:
 
 ```bash
-cd modules/admin && go test -count=1 ./internal/service/systemsetup/... ./internal/bootstrap ./test -run Setup
-cd modules/cli && go test -count=1 ./internal/setup... ./internal/command ./test -run Setup
+cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./test -run Setup
+cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command ./test -run Setup
 bash scripts/test-deploy-moox-admin-bootstrap.sh
 bash scripts/test-deploy-moox-control-profile.sh
 bash skills/moox/scripts/test-custom-setup-contract.sh
