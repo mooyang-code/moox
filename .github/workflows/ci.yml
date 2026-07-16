@@ -43,6 +43,25 @@ jobs:
       GOPRIVATE: ""
       GONOSUMDB: ""
     steps:
+      - name: Select a reachable GitHub route
+        shell: bash
+        run: |
+          if curl -fsSI --connect-timeout 3 --max-time 5 https://github.com/ >/dev/null; then
+            exit 0
+          fi
+          for ip in 140.82.112.3 140.82.113.3 140.82.114.3 140.82.116.3 20.201.28.151; do
+            if curl -fsSI --connect-timeout 3 --max-time 6 \
+              --resolve "github.com:443:${ip}" https://github.com/ >/dev/null; then
+              {
+                echo 'GIT_CONFIG_COUNT=1'
+                echo 'GIT_CONFIG_KEY_0=http.curloptResolve'
+                echo "GIT_CONFIG_VALUE_0=github.com:443:${ip}"
+              } >>"${GITHUB_ENV}"
+              exit 0
+            fi
+          done
+          echo 'No reachable official GitHub web endpoint found' >&2
+          exit 1
       - uses: actions/checkout@v4
       - name: Add preinstalled tools to PATH
         run: |
