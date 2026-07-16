@@ -29,16 +29,11 @@
             <span>重置</span>
           </a-button>
           <a-switch v-model="form.enabled" :checked-text="'启用'" :unchecked-text="'禁用'" @change="onEnabledChange" />
+          <a-button type="primary" status="success" @click="onAdd">
+            <template #icon><icon-plus /></template>
+            <span>新建任务</span>
+          </a-button>
         </a-space>
-
-        <a-row>
-          <a-col>
-            <a-button type="primary" status="success" @click="onAdd">
-              <template #icon><icon-plus /></template>
-              <span>新建任务</span>
-            </a-button>
-          </a-col>
-        </a-row>
 
         <a-table
           row-key="rule_id"
@@ -1284,10 +1279,6 @@ onMounted(() => {
 <style scoped>
 .moox-inner {
   min-height: 100%;
-}
-
-.moox-inner .a-row {
-  margin-top: 16px;
 }
 
 .moox-inner .a-table {

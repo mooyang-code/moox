@@ -23,4 +23,26 @@ describe('collector task management workbench', () => {
     expect(routes).toContain('component: () => import("@/views/collector/task-management/index.vue")');
     expect(routes).toContain('redirect: { path: "/collector/rules", query: { tab: "instances" } }');
   });
+
+  it('removes the standalone package page and keeps package management on cloud nodes', () => {
+    const menu = fs.readFileSync(path.resolve(__dirname, '../../../api/modules/system/static-menu.ts'), 'utf8');
+    const routes = fs.readFileSync(path.resolve(__dirname, '../../../router/route.ts'), 'utf8');
+    const cloudNodes = fs.readFileSync(path.resolve(__dirname, '../cloud-node/cloud-node.vue'), 'utf8');
+
+    expect(menu).not.toContain('menu("0302"');
+    expect(routes).toContain('path: "/collector/packages"');
+    expect(routes).toContain('redirect: "/collector/cloudnodes"');
+    expect(routes).not.toContain('component: () => import("@/views/collector/cloud-node/function-package-manage.vue")');
+    expect(cloudNodes).toContain("import FunctionPackageManage from './function-package-manage.vue'");
+  });
+
+  it('places the create action in the collection rule search row', () => {
+    const rules = fs.readFileSync(path.resolve(__dirname, '../collector-rules/collector-rules.vue'), 'utf8');
+    const firstToolbarEnd = rules.indexOf('</a-space>');
+    const tableStart = rules.indexOf('<a-table');
+
+    expect(rules.indexOf('<span>新建任务</span>')).toBeGreaterThan(0);
+    expect(rules.indexOf('<span>新建任务</span>')).toBeLessThan(firstToolbarEnd);
+    expect(rules.slice(firstToolbarEnd, tableStart)).not.toContain('新建任务');
+  });
 });

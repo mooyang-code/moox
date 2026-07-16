@@ -161,9 +161,8 @@ export const staticRoutes = [
       },
       {
         path: "/collector/packages",
-        name: "collector-packages",
-        component: () => import("@/views/collector/cloud-node/function-package-manage.vue"),
-        meta: { title: "collector-packages" }
+        redirect: "/collector/cloudnodes",
+        meta: { title: "collector-cloudnodes", hide: true }
       },
       {
         path: "/collector/rules",

@@ -61,7 +61,6 @@ export const systemMenu = [
   menu("0306", "03", "/collector/views", "collector-views", "collector-views", "collector/views/index", 2),
   menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/task-management/index", 3),
   menu("0301", "03", "/collector/cloudnodes", "collector-cloudnodes", "collector-cloudnodes", "collector/cloud-node/cloud-node", 5),
-  menu("0302", "03", "/collector/packages", "collector-packages", "collector-packages", "collector/cloud-node/function-package-manage", 6),
 
   directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 4, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),
