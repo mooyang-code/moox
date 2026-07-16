@@ -391,7 +391,7 @@ onMounted(() => {
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .task-filters {

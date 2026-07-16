@@ -2,7 +2,7 @@
   <div class="moox-page">
     <div class="moox-inner">
     <div class="page-head">
-      <div class="page-head__title">
+      <div v-if="!props.embedded" class="page-head__title">
         <slot name="page-title">
           <h2>{{ props.pageTitle }}</h2>
         </slot>
@@ -202,6 +202,7 @@ import {
 defineOptions({ name: "DataViews" });
 
 const props = withDefaults(defineProps<{
+  embedded?: boolean;
   pageTitle?: string;
   ownerModule?: OwnerModule;
   viewRole?: ViewRole;
@@ -214,6 +215,7 @@ const props = withDefaults(defineProps<{
   excludedPrimaryDatasetIds?: string[];
   excludeLikelyFactorDatasets?: boolean;
 }>(), {
+  embedded: false,
   pageTitle: "视图列表",
   ownerModule: undefined,
   viewRole: undefined,
@@ -662,7 +664,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head__title {

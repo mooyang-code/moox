@@ -29,7 +29,7 @@ describe('collector data management workbench', () => {
     }
 
     expect(management).toMatch(/\.management-content\s*\{[\s\S]*?margin-top:\s*12px;/);
-    expect(management).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*12px;/);
+    expect(management).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*8px;/);
     expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-content\)\s*\{[\s\S]*?display:\s*none;/);
     expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-tab:first-child\)\s*\{[\s\S]*?margin-left:\s*0;/);
     expect(management).toMatch(/:deep\(\.collector-subtabs \.arco-tabs-tab\)\s*\{[\s\S]*?border-radius:\s*4px;/);

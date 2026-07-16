@@ -2,7 +2,7 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <a-space wrap>
+        <a-space class="rule-toolbar" wrap>
           <a-button type="primary" status="success" @click="onAdd">
             <template #icon><icon-plus /></template>
             <span>新建任务</span>
@@ -1263,6 +1263,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.rule-toolbar {
+  margin-bottom: 8px;
+}
+
 .moox-inner {
   min-height: 100%;
 }

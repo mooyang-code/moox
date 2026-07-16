@@ -1,30 +1,29 @@
 <template>
-  <div class="factor-results-workbench">
-    <ViewDefinitions
-      v-if="activeTab === 'definitions'"
-      owner-module="factor"
-      view-role="factor_result"
-      managed-by="factor"
-      :filter-owner-modules="['factor']"
-      :filter-dataset-roles="['factor_result']"
-      :filter-view-roles="['factor_result']"
-      :allowed-primary-dataset-ids="targetDatasetIds"
-    >
-      <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
-      </template>
-    </ViewDefinitions>
-    <ViewBrowse
-      v-else
-      empty-description="暂无因子结果视图，请先在“结果视图”中创建一个结果视图"
-      :allowed-primary-dataset-ids="targetDatasetIds"
-      :view-owner-modules="['factor']"
-      :view-roles="['factor_result']"
-    >
-      <template #page-title>
-        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
-      </template>
-    </ViewBrowse>
+  <div class="moox-page factor-results-workbench">
+    <div class="moox-inner">
+      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
+      <section class="factor-results-content">
+        <ViewDefinitions
+          v-if="activeTab === 'definitions'"
+          :embedded="true"
+          owner-module="factor"
+          view-role="factor_result"
+          managed-by="factor"
+          :filter-owner-modules="['factor']"
+          :filter-dataset-roles="['factor_result']"
+          :filter-view-roles="['factor_result']"
+          :allowed-primary-dataset-ids="targetDatasetIds"
+        />
+        <ViewBrowse
+          v-else
+          :embedded="true"
+          empty-description="暂无因子结果视图，请先在“结果视图”中创建一个结果视图"
+          :allowed-primary-dataset-ids="targetDatasetIds"
+          :view-owner-modules="['factor']"
+          :view-roles="['factor_result']"
+        />
+      </section>
+    </div>
   </div>
 </template>
 
@@ -106,4 +105,14 @@ onMounted(loadBindings);
   min-height: 0;
   overflow: hidden;
 }
+
+.factor-results-workbench > .moox-inner {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.factor-results-content { min-height: 0; flex: 1; margin-top: 12px; overflow: hidden; }
+.factor-results-content :deep(.moox-page) { height: 100%; min-height: 0; padding: 0; overflow: auto; background: transparent; }
+.factor-results-content :deep(.moox-page > .moox-inner) { min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
 </style>

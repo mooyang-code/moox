@@ -3,7 +3,7 @@
     <div class="moox-inner">
     <div class="page-head">
       <h2>秘钥管理</h2>
-      <a-space>
+      <a-space wrap>
         <a-input-search
           v-model="filters.keyword"
           placeholder="搜索名称或描述"
@@ -12,21 +12,18 @@
           @search="onSearch"
           @clear="onSearch"
         />
+        <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="load">
+          <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+        </a-select>
+        <a-select v-model="filters.status" placeholder="状态" style="width: 120px" allow-clear @change="load">
+          <a-option value="active">启用</a-option>
+          <a-option value="inactive">禁用</a-option>
+        </a-select>
         <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增秘钥
         </a-button>
       </a-space>
-    </div>
-
-    <div class="filter-bar">
-      <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="load">
-        <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-      </a-select>
-      <a-select v-model="filters.status" placeholder="状态" style="width: 120px" allow-clear @change="load">
-        <a-option value="active">启用</a-option>
-        <a-option value="inactive">禁用</a-option>
-      </a-select>
     </div>
 
     <a-table
@@ -364,7 +361,8 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
@@ -373,9 +371,8 @@ onMounted(load);
   font-weight: 600;
 }
 
-.filter-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
+@media (max-width: 900px) {
+  .page-head { align-items: stretch; flex-direction: column; }
+  .page-head :deep(.arco-space) { justify-content: flex-end; }
 }
 </style>

@@ -83,7 +83,7 @@ watch(
 }
 
 .management-content :deep(.page-head) {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .management-content :deep(.collector-subtabs .arco-tabs-content) {

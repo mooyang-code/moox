@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page view-browse-page">
     <div class="moox-inner">
-    <div class="page-head">
+    <div v-if="!props.embedded" class="page-head">
       <div class="page-head__title">
         <slot name="page-title">
           <h2>{{ props.pageTitle }}</h2>
@@ -348,6 +348,7 @@ import { viewBuildTimeLabel } from './view-build-time';
 defineOptions({ name: 'DataViewBrowse' });
 
 const props = withDefaults(defineProps<{
+  embedded?: boolean;
   pageTitle?: string;
   emptyDescription?: string;
   allowedPrimaryDatasetIds?: string[];
@@ -357,6 +358,7 @@ const props = withDefaults(defineProps<{
   includeUnowned?: boolean;
   excludeLikelyFactorDatasets?: boolean;
 }>(), {
+  embedded: false,
   pageTitle: '视图数据浏览',
   emptyDescription: '暂无查询视图',
   allowedPrimaryDatasetIds: undefined,
@@ -1228,7 +1230,7 @@ watch(klineVisible, (visible) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head__title {

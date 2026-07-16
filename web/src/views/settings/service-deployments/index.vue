@@ -1,39 +1,33 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div v-if="!embedded">
-        <h2>服务实例</h2>
-        <span>按节点维护本机服务与 Gateway 暴露状态。</span>
-      </div>
-      <a-space>
-        <a-button type="primary" status="success" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增实例
-        </a-button>
-      </a-space>
-    </div>
-
     <a-space class="filters" wrap>
-      <a-select v-model="filters.node_id" allow-clear placeholder="网关节点" style="width: 190px" @change="reloadFirstPage">
+      <a-button type="primary" status="success" @click="openCreate">
+        <template #icon><icon-plus /></template>
+        新增实例
+      </a-button>
+      <a-select v-model="filters.node_id" allow-clear placeholder="网关节点" style="width: 160px" @change="reloadFirstPage">
         <a-option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.name }} ({{ node.node_id }})</a-option>
       </a-select>
-      <a-input v-model="filters.service_name" allow-clear placeholder="服务名" @press-enter="reloadFirstPage" />
-      <a-select v-model="filters.service_kind" allow-clear placeholder="服务类型" style="width: 150px" @change="reloadFirstPage">
+      <a-input v-model="filters.service_name" allow-clear placeholder="服务名" style="width: 160px" @press-enter="reloadFirstPage" />
+      <a-select v-model="filters.service_kind" allow-clear placeholder="服务类型" style="width: 130px" @change="reloadFirstPage">
         <a-option v-for="item in kindOptions" :key="item" :value="item">{{ item }}</a-option>
       </a-select>
-      <a-select v-model="filters.scope" allow-clear placeholder="作用域" style="width: 130px" @change="reloadFirstPage">
+      <a-select v-model="filters.scope" allow-clear placeholder="作用域" style="width: 110px" @change="reloadFirstPage">
         <a-option value="public">public</a-option>
         <a-option value="internal">internal</a-option>
       </a-select>
-      <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
+      <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 110px" @change="reloadFirstPage">
         <a-option value="active">active</a-option>
         <a-option value="disabled">disabled</a-option>
       </a-select>
-      <a-select v-model="filters.gateway_enabled" allow-clear placeholder="Gateway 暴露" style="width: 150px" @change="reloadFirstPage">
+      <a-select v-model="filters.gateway_enabled" allow-clear placeholder="Gateway 暴露" style="width: 130px" @change="reloadFirstPage">
         <a-option :value="true">已暴露</a-option><a-option :value="false">未暴露</a-option>
       </a-select>
-      <a-button @click="reloadFirstPage">查询</a-button>
+      <a-button type="primary" @click="reloadFirstPage">
+        <template #icon><icon-search /></template>
+        查询
+      </a-button>
     </a-space>
 
     <a-table
@@ -167,8 +161,7 @@ import { applyPageResult, defaultPagination, formatTime, statusColor } from '@/v
 import { createLatestRequestGuard, runModalSubmission, serviceDeploymentRowKey, validateGatewayDeployment } from './health';
 
 defineOptions({ name: 'SettingsServiceDeployments' });
-const props = defineProps<{ embedded?: boolean }>();
-const embedded = computed(() => props.embedded === true);
+defineProps<{ embedded?: boolean }>();
 
 const kindOptions = ['gateway', 'frontend', 'storage', 'storage_rpc', 'admin_rpc', 'collector', 'cloudnode', 'trade'];
 const rows = ref<ServiceDeployment[]>([]);
@@ -356,23 +349,6 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
-}
-
 .service-deployments-table {
   margin-bottom: 20px;
 }
@@ -446,12 +422,6 @@ onUnmounted(() => {
     grid-column: auto;
   }
 
-  .page-head {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
-  }
-
   .service-deployments-table :deep(th:nth-child(1)),
   .service-deployments-table :deep(td:nth-child(1)),
   .service-deployments-table :deep(th:nth-child(3)),
@@ -472,6 +442,6 @@ onUnmounted(() => {
 }
 
 .filters {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 </style>

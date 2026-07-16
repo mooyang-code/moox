@@ -5,12 +5,15 @@
         <template #icon><icon-plus /></template>
         新增节点
       </a-button>
-      <a-input v-model="filters.node_id" allow-clear placeholder="节点 ID" @press-enter="reloadFirstPage" />
+      <a-input v-model="filters.node_id" allow-clear placeholder="节点 ID" style="width: 280px" @press-enter="reloadFirstPage" />
       <a-select v-model="filters.status" allow-clear placeholder="配置状态" class="status-filter" @change="reloadFirstPage">
         <a-option value="enabled">enabled</a-option>
         <a-option value="disabled">disabled</a-option>
       </a-select>
-      <a-button @click="reloadFirstPage">查询</a-button>
+      <a-button type="primary" @click="reloadFirstPage">
+        <template #icon><icon-search /></template>
+        查询
+      </a-button>
     </a-space>
 
     <a-table
@@ -268,7 +271,7 @@ onUnmounted(() => { stopRefreshTimer(); loadGuard.invalidate(); });
 
 <style scoped>
 .gateway-nodes { min-width: 0; }
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .status-filter { width: 140px; }
 .node-identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .node-name { display: flex; min-width: 0; align-items: center; gap: 6px; }

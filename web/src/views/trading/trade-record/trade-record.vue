@@ -497,7 +497,7 @@ onMounted(async () => {
 
 <style scoped>
 .record-view-tabs {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .account-tabs-block {
@@ -593,7 +593,7 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
 }
 

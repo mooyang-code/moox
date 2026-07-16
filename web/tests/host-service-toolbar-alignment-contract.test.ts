@@ -26,8 +26,8 @@ describe('host and service toolbar alignment', () => {
     expect(gateway).toContain('class="toolbar"');
     expect(gateway.indexOf('新增节点')).toBeLessThan(gateway.indexOf('placeholder="节点 ID"'));
     expect(gateway.indexOf('placeholder="节点 ID"')).toBeLessThan(gateway.indexOf('placeholder="配置状态"'));
-    expect(gateway.indexOf('placeholder="配置状态"')).toBeLessThan(gateway.indexOf('>查询</a-button>'));
-    expect(gateway).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*12px;/);
+    expect(gateway.indexOf('placeholder="配置状态"')).toBeLessThan(gateway.indexOf('<icon-search />'));
+    expect(gateway).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*8px;/);
     expect(gateway).not.toContain('justify-content: space-between');
   });
 });
