@@ -6,7 +6,7 @@
 
 **Architecture:** Every tRPC process keeps the stable Prometheus exporter for local `/metrics` debugging and adds one local tRPC timer that gathers the same default Prometheus registry every 30 seconds. The timer encodes a bounded compressed snapshot, wraps it in `MooxMessage`, and publishes it to `MOOX_METRICS`; `moox-monitor` durably consumes, deduplicates, parses, projects latest series into SQLite, writes historical samples into MooX Storage, serves metric queries, and runs a structured rule evaluator. No Prometheus server, Pushgateway, central HTTP scraper, manually configured target, or shared `packages/metricreporter` is introduced.
 
-**Tech Stack:** Go 1.24, tRPC-Go, `github.com/mooyang-code/go-commlib/trpc-database/timer` v0.0.2, `trpc.group/trpc-go/trpc-metrics-prometheus` v1.0.0, Prometheus `client_golang`, `client_model`, and `common/expfmt`, MooX Message Protocol, `packages/jetstream`, NATS JetStream, MooX Storage TimeSeries APIs, SQLite/GORM, Vue 3, Arco Design, and VChart.
+**Tech Stack:** Go 1.24, tRPC-Go, `trpc.group/trpc-go/trpc-database/timer` v1.0.0, `trpc.group/trpc-go/trpc-metrics-prometheus` v1.0.0, Prometheus `client_golang`, `client_model`, and `common/expfmt`, MooX Message Protocol, `packages/jetstream`, NATS JetStream, MooX Storage TimeSeries APIs, SQLite/GORM, Vue 3, Arco Design, and VChart.
 
 ---
 

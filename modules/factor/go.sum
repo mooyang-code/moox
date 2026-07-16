@@ -120,8 +120,6 @@ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
-github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2 h1:n5nI/+Jw9FRhGQBUZBXr5DLSZ9hHyCEYnGFrxI5ZGkc=
-github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2/go.mod h1:L8JbvCKwtHzPote6enLHEnS2NqyR3U9L1/v90xHjmb4=
 github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f h1:2AnSiNBKVEKC86Bcrz/BNh1oBnihnN2Ou1aa1crV0Gk=
 github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f/go.mod h1:58orV9pzBNVI3KLe+b6bEkbpt5Elftc395yTVMrwmcg=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=

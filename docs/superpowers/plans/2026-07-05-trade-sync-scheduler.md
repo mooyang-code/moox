@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the current three-layer shape: tRPC timer handler -> service coordinator -> DAO/exchange adapters. The timer only parses params and invokes a coordinator; all persistence remains behind `service.Store`, and all exchange calls continue through `exchange.ExchangeAdapter`.
 
-**Tech Stack:** Go 1.24, tRPC-Go, `github.com/mooyang-code/go-commlib/trpc-database/timer`, GORM, SQLite, existing Binance/OKX adapters, existing `t_accounts/t_account_balances/t_orders/t_trades/t_positions`.
+**Tech Stack:** Go 1.24, tRPC-Go, `trpc.group/trpc-go/trpc-database/timer` v1.0.0, GORM, SQLite, existing Binance/OKX adapters, existing `t_accounts/t_account_balances/t_orders/t_trades/t_positions`.
 
 ---
 
@@ -39,7 +39,7 @@ Do not change admin or backend API trading calls to "call exchange only and wait
 ## Target Files
 
 - Modify: `modules/trade/go.mod`
-  Add `github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2` if absent.
+  Add `trpc.group/trpc-go/trpc-database/timer v1.0.0` if absent.
 
 - Modify: `modules/trade/config/trpc_go.yaml`
   Add `trpc.moox.trade.sync.timer`.
@@ -1135,7 +1135,7 @@ If `sync.Mutex.TryLock` is not available in the project Go version, replace it w
 Modify `modules/trade/internal/bootstrap/bootstrap.go`:
 
 ```go
-import "github.com/mooyang-code/go-commlib/trpc-database/timer"
+import "trpc.group/trpc-go/trpc-database/timer"
 ```
 
 After `rpc.RegisterAll(s, svc)`:
@@ -1178,7 +1178,7 @@ Run:
 
 ```bash
 cd modules/trade
-go get github.com/mooyang-code/go-commlib/trpc-database/timer@v0.0.2
+go get trpc.group/trpc-go/trpc-database/timer@v1.0.0
 go mod tidy
 ```
 

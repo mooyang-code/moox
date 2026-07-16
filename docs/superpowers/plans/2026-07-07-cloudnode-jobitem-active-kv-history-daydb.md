@@ -64,7 +64,7 @@
 - `modules/cloudnode/config/trpc_go.yaml`
   - Add `trpc.moox.cloudnode.jobhistory.timer`, scheduled once per day.
 - `modules/cloudnode/go.mod`
-  - Add `github.com/mooyang-code/go-commlib/trpc-database/timer` for the tRPC timer plugin.
+  - Add `trpc.group/trpc-go/trpc-database/timer` for the tRPC timer plugin.
 - `modules/cloudnode/go.sum`
   - Add timer dependency checksums after `go mod tidy`.
 - `modules/cloudnode/internal/rpc/job_item.go`
@@ -1168,13 +1168,13 @@ func HandleJobHistorySchedule(ctx context.Context, rawParams string) error {
 Add the timer dependency:
 
 ```bash
-go get github.com/mooyang-code/go-commlib/trpc-database/timer@v0.0.2
+go get trpc.group/trpc-go/trpc-database/timer@v1.0.0
 ```
 
 In `modules/cloudnode/internal/bootstrap/bootstrap.go`, import:
 
 ```go
-import "github.com/mooyang-code/go-commlib/trpc-database/timer"
+import "trpc.group/trpc-go/trpc-database/timer"
 ```
 
 Register after the history store is created:

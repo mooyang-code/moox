@@ -19,7 +19,7 @@
 - 已完成：Monitor HostMetric durable consumer、Storage 四 Dataset 直接写入、内存 latest、全局主机 API、页面 API 迁移和 metadata/release/deploy gate。
 - 已完成：Admin 旧 Node Exporter 采集、Monitor RPC、配置、Schema 和部署行已全部删除；Admin 只保留网关和 SysDeploy 路由。
 - 已完成：Storage 分钟级历史、72 小时 bounded retention、资源告警规则缓存，以及页面 unavailable、零值和历史缺口展示。
-- 告警规则决策已补充：Monitor 启动时加载 enabled Host rules 到现有 `github.com/mooyang-code/snapshotcache`，消费链路只读内存缓存；规则新增/修改/删除不主动刷缓存，统一定时刷新，失败时保留上一份有效快照。旧 `go-commlib/dbcache` 仅作为设计参考，不继续兼容扩展。
+- 告警规则决策已补充：Monitor 启动时加载 enabled Host rules 到现有 `github.com/mooyang-code/snapshotcache`，消费链路只读内存缓存；规则新增/修改/删除不主动刷缓存，统一定时刷新，失败时保留上一份有效快照。
 
 ---
 
