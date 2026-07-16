@@ -10,10 +10,6 @@
           <template #icon><icon-plus /></template>
           创建空间
         </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
 
@@ -192,11 +188,11 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 20px;
   font-weight: 600;
 }

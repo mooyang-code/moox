@@ -18,10 +18,11 @@
               <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
             </a-select>
           </div>
+          <a-button type="primary" :disabled="!selectedSpaceId" @click="commitSearch">
+            <template #icon><icon-search /></template>查询
+          </a-button>
         </div>
         <div class="toolbar-actions">
-          <span v-if="selectedSpaceId" class="field-total">{{ totalFieldCount }} 个字段</span>
-          <a-tooltip content="刷新"><a-button :disabled="!selectedSpaceId" @click="loadAll"><icon-refresh /></a-button></a-tooltip>
           <a-button type="primary" status="success" :disabled="!selectedSpaceId || !groups.length" @click="openCreateField">
             <template #icon><icon-plus /></template>新建字段
           </a-button>
@@ -404,7 +405,6 @@ onMounted(async () => {
 .toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
 .page-title { flex: 0 0 auto; margin: 0 8px 0 0; font-size: 20px; font-weight: 600; }
 .toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; white-space: nowrap; }
-.field-total { color: var(--color-text-3); font-size: 13px; }
 .keyword-control { min-width: 220px; flex: 1 1 360px; }
 .filter-control { width: 140px; flex: 0 0 140px; }
 .keyword-input, .filter-select { width: 100%; }

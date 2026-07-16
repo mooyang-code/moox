@@ -20,10 +20,6 @@
               <template #icon><icon-search /></template>
               <span>查询</span>
             </a-button>
-            <a-button @click="reset">
-              <template #icon><icon-refresh /></template>
-              <span>重置</span>
-            </a-button>
           </a-space>
         </div>
 
@@ -327,18 +323,6 @@ const search = () => {
   getInstanceList();
 };
 
-const reset = () => {
-  form.value = {
-    taskId: "",
-    ruleId: "",
-    lastExecNode: "", // v2.0: 执行节点
-    symbol: "",
-    lastExecStatus: null, // v2.0: 执行状态
-    includeDeleted: false
-  };
-  getInstanceList();
-};
-
 const getInstanceList = async () => {
   const spaceId = selectedSpaceId.value || "";
   if (!spaceId) {
@@ -407,7 +391,7 @@ onMounted(() => {
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .task-filters {

@@ -12,10 +12,6 @@
           <template #icon><icon-plus /></template>
           新增数据集
         </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
 
@@ -349,7 +345,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head__title {

@@ -78,8 +78,29 @@ watch(
 .management-content {
   min-height: 0;
   flex: 1;
-  margin-top: 16px;
+  margin-top: 12px;
   overflow: hidden;
+}
+
+.management-content :deep(.page-head) {
+  margin-bottom: 8px;
+}
+
+.management-content :deep(.collector-subtabs .arco-tabs-content) {
+  display: none;
+}
+
+.management-content :deep(.collector-subtabs .arco-tabs-tab:first-child) {
+  margin-left: 0;
+}
+
+.management-content :deep(.collector-subtabs .arco-tabs-tab) {
+  border-radius: 4px;
+}
+
+.management-content :deep(.collector-subtabs .arco-tabs-tab-active) {
+  color: rgb(var(--primary-6));
+  background-color: var(--color-fill-2);
 }
 
 .management-content :deep(.collector-workbench),

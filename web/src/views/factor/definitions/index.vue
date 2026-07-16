@@ -2,37 +2,23 @@
   <div class="moox-page">
     <div class="moox-inner">
     <div class="page-head">
-      <div>
-        <h2>因子计算</h2>
-        <span>维护生产计算用的 Python 因子源码、参数与启停状态。</span>
-      </div>
-      <a-space>
+      <h2>因子计算</h2>
+      <a-space wrap>
+        <a-select v-model="filters.kind" allow-clear placeholder="类型" style="width: 150px" @change="reloadFirstPage">
+          <a-option value="timeseries">timeseries</a-option>
+          <a-option value="cross_section">cross_section</a-option>
+        </a-select>
+        <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
+          <a-option value="enabled">enabled</a-option>
+          <a-option value="disabled">disabled</a-option>
+        </a-select>
+        <a-button @click="reloadFirstPage">查询</a-button>
         <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增因子
         </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
-
-    <a-alert class="top-alert" type="info" show-icon>
-      本页管理的是 factor 服务自己的计算定义；因子结果列会同步到 Storage 元数据字段契约。
-    </a-alert>
-
-    <a-space class="filters" wrap>
-      <a-select v-model="filters.kind" allow-clear placeholder="类型" style="width: 150px" @change="reloadFirstPage">
-        <a-option value="timeseries">timeseries</a-option>
-        <a-option value="cross_section">cross_section</a-option>
-      </a-select>
-      <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
-        <a-option value="enabled">enabled</a-option>
-        <a-option value="disabled">disabled</a-option>
-      </a-select>
-      <a-button @click="reloadFirstPage">查询</a-button>
-    </a-space>
 
     <a-table
       row-key="factor_id"
@@ -260,26 +246,14 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
-  font-size: 13px;
-}
-
-.top-alert {
-  margin-bottom: 14px;
-}
-
-.filters {
-  margin-bottom: 14px;
 }
 
 .factor-form {

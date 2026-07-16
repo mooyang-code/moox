@@ -2,26 +2,8 @@
   <div class="moox-page">
     <div class="moox-inner">
     <div class="page-head">
-      <div>
-        <h2>因子绑定</h2>
-        <span>把启用的因子绑定到 K 线数据集、频率和标的范围。</span>
-      </div>
-      <a-space>
-        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增绑定
-        </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
-      </a-space>
-    </div>
-
-    <a-alert v-if="!selectedSpaceId" class="top-alert" type="warning" show-icon>请先在顶部选择空间</a-alert>
-
-    <template v-else>
-      <a-space class="filters" wrap>
+      <h2>因子绑定</h2>
+      <a-space wrap>
         <a-input v-model="filters.source_dataset" allow-clear placeholder="源数据集" @press-enter="reloadFirstPage" />
         <a-input v-model="filters.freq" allow-clear placeholder="频率" style="width: 120px" @press-enter="reloadFirstPage" />
         <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
@@ -29,8 +11,16 @@
           <a-option value="disabled">disabled</a-option>
         </a-select>
         <a-button @click="reloadFirstPage">查询</a-button>
+        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
+          <template #icon><icon-plus /></template>
+          新增绑定
+        </a-button>
       </a-space>
+    </div>
 
+    <a-alert v-if="!selectedSpaceId" class="top-alert" type="warning" show-icon>请先在顶部选择空间</a-alert>
+
+    <template v-else>
       <a-table
         row-key="binding_id"
         size="small"
@@ -289,7 +279,8 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {
@@ -298,15 +289,7 @@ onMounted(load);
   font-weight: 600;
 }
 
-.page-head span {
-  color: var(--color-text-3);
-  font-size: 13px;
-}
-
-.top-alert,
-.filters {
-  margin-bottom: 14px;
-}
+.top-alert { margin-bottom: 8px; }
 
 .binding-form {
   display: grid;

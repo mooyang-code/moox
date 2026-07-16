@@ -21,10 +21,6 @@
             <template #icon><icon-sync /></template>
             同步秘钥账户
           </a-button>
-          <a-button @click="loadAccounts">
-            <template #icon><icon-refresh /></template>
-            刷新
-          </a-button>
         </a-space>
       </div>
 
@@ -1011,7 +1007,7 @@ onMounted(loadAccounts);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head h2 {

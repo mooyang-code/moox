@@ -2,8 +2,7 @@
   <div class="host-monitor-page">
     <div class="monitor-toolbar">
       <div class="refresh-status">
-        <strong>主机资源状态</strong>
-        <span>{{ lastRefreshAt ? `${formatAge(lastRefreshAt)}更新` : '等待首次更新' }}</span>
+        <strong>资源状态</strong>
       </div>
       <div class="toolbar-actions">
         <a-tooltip content="刷新实时与历史数据">
@@ -60,7 +59,6 @@ const sshHosts = ref<SSHHost[]>([]);
 const storageAvailable = ref(true);
 const dataGap = ref(false);
 const loadError = ref('');
-const lastRefreshAt = ref('');
 const selectedKey = ref('');
 const historyRefreshKey = ref(0);
 const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getItem(VIEW_MODE_KEY)));
@@ -94,7 +92,6 @@ async function refreshData(refreshHistory = false) {
     errors.push('SSH 主机清单加载失败，地址可能显示为 Agent ID');
   }
   loadError.value = errors.join('；');
-  if (monitorResult.status === 'fulfilled' || sshResult.status === 'fulfilled') lastRefreshAt.value = new Date().toISOString();
   if (refreshHistory) historyRefreshKey.value++;
   loading.value = false;
 }
@@ -108,13 +105,6 @@ function stopAutoRefresh() {
   refreshTimer = null;
 }
 function manualRefresh() { return refreshData(true); }
-function formatAge(value: string) {
-  const age = Date.now() - Date.parse(value);
-  if (!Number.isFinite(age) || age < 60_000) return '刚刚';
-  if (age < 3_600_000) return `${Math.floor(age / 60_000)} 分钟前`;
-  return `${Math.floor(age / 3_600_000)} 小时前`;
-}
-
 watch(rows, (value) => {
   if (!value.length) selectedKey.value = '';
   else if (!value.some((row) => row.key === selectedKey.value)) selectedKey.value = value[0].key;
@@ -128,7 +118,7 @@ onUnmounted(() => { requestID++; stopAutoRefresh(); });
 <style scoped lang="scss">
 .host-monitor-page { min-height:0; padding:4px 0 20px; }
 .monitor-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:10px; }
-.refresh-status strong,.refresh-status span { display:block; }.refresh-status strong { font-size:14px; }.refresh-status span { margin-top:2px; color:var(--color-text-3); font-size:12px; }
+.refresh-status strong { display:block; font-size:14px; }
 .toolbar-actions { display:flex; align-items:center; gap:8px; }.auto-label { color:var(--color-text-3); font-size:12px; }
 .monitor-summary { display:flex; flex-wrap:wrap; gap:14px 30px; padding:11px 0; margin-bottom:14px; border-top:1px solid var(--color-border-2); border-bottom:1px solid var(--color-border-2); }
 .monitor-summary div { display:flex; align-items:baseline; gap:7px; min-width:90px; }.monitor-summary span { color:var(--color-text-3); font-size:12px; }.monitor-summary strong { font-size:16px; }.healthy { color:#16803c; }.warning { color:#d97706; }.danger { color:#dc2626; }

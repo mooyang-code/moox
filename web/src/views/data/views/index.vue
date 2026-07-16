@@ -2,7 +2,7 @@
   <div class="moox-page">
     <div class="moox-inner">
     <div class="page-head">
-      <div class="page-head__title">
+      <div v-if="!props.embedded" class="page-head__title">
         <slot name="page-title">
           <h2>{{ props.pageTitle }}</h2>
         </slot>
@@ -11,10 +11,6 @@
         <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增视图
-        </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
@@ -206,6 +202,7 @@ import {
 defineOptions({ name: "DataViews" });
 
 const props = withDefaults(defineProps<{
+  embedded?: boolean;
   pageTitle?: string;
   ownerModule?: OwnerModule;
   viewRole?: ViewRole;
@@ -218,6 +215,7 @@ const props = withDefaults(defineProps<{
   excludedPrimaryDatasetIds?: string[];
   excludeLikelyFactorDatasets?: boolean;
 }>(), {
+  embedded: false,
   pageTitle: "视图列表",
   ownerModule: undefined,
   viewRole: undefined,
@@ -666,7 +664,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .page-head__title {
