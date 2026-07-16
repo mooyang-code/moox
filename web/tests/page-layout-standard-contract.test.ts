@@ -10,6 +10,23 @@ const expectMargin = (source: string, selector: string, property: 'margin-top' |
   expect(source).toMatch(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?${property}:\\s*${value}px;`));
 };
 
+const extractBlock = (source: string, opening: string, closing: string) => {
+  const start = source.indexOf(opening);
+  if (start < 0) throw new Error(`missing opening marker: ${opening}`);
+  const end = source.indexOf(closing, start + opening.length);
+  if (end < 0) throw new Error(`missing closing marker after: ${opening}`);
+  return source.slice(start, end + closing.length);
+};
+
+const expectStrictOrder = (source: string, markers: string[]) => {
+  let previous = -1;
+  for (const marker of markers) {
+    const current = source.indexOf(marker);
+    expect(current, `missing or out-of-order marker: ${marker}`).toBeGreaterThan(previous);
+    previous = current;
+  }
+};
+
 describe('page layout standards', () => {
   it('uses the compact single-tab header standard', () => {
     const subjects = read('data/subjects/index.vue');
@@ -82,41 +99,51 @@ describe('page layout standards', () => {
     const datasetBrowse = read('data/browse/index.vue');
     const viewBrowse = read('data/view-browse/index.vue');
 
-    expect(cloudNodes).toContain('<a-space class="cloud-node-action-bar" wrap>');
-    expect(cloudNodes).toContain('<a-space class="cloud-node-filter-bar" wrap>');
-    expect(cloudNodes).not.toContain('class="cloud-node-toolbar"');
-    expect(cloudNodes).not.toContain('.moox-inner .a-row');
-    const cloudNodeLayoutIndexes = [
-      '<h2>云节点</h2>',
-      'class="cloud-node-action-bar"',
+    const cloudNodeActions = extractBlock(cloudNodes, '<a-space class="cloud-node-action-bar" wrap>', '</a-space>');
+    const cloudNodeFilters = extractBlock(cloudNodes, '<a-space class="cloud-node-filter-bar" wrap>', '</a-space>');
+    expectStrictOrder(cloudNodeActions, [
+      '<a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">',
       '<span>批量新增</span>',
+      '<a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">',
       '<span>批量部署</span>',
+      '<a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">',
       '<span>批量删除</span>',
+      '<a-button type="outline" @click="onCloudAccountManage">',
       '<span>云账户管理</span>',
+      '<a-button type="outline" @click="onFunctionPackageManage">',
       '<span>代码包版本</span>',
-      'class="cloud-node-filter-bar"',
-      'placeholder="请选择云账户"',
-      'placeholder="请输入节点ID"',
-      'placeholder="地区"',
-      'placeholder="节点类型"',
-      'placeholder="节点状态"',
+    ]);
+    expectStrictOrder(cloudNodeFilters, [
+      '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>',
+      '<a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear />',
+      '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>',
+      '<a-select placeholder="节点类型" v-model="form.nodeType" style="width: 180px" allow-clear>',
+      '<a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>',
       '<a-button type="primary" @click="search">',
       '<icon-search />',
       '<span>查询</span>',
+    ]);
+    expect(cloudNodes).not.toContain('class="cloud-node-toolbar"');
+    expect(cloudNodes).not.toContain('.moox-inner .a-row');
+    expectStrictOrder(cloudNodes, [
+      '<h2>云节点</h2>',
+      cloudNodeActions,
+      cloudNodeFilters,
       '<a-table',
-    ].map(marker => cloudNodes.indexOf(marker));
-    for (const index of cloudNodeLayoutIndexes) {
-      expect(index).toBeGreaterThanOrEqual(0);
-    }
-    for (let index = 1; index < cloudNodeLayoutIndexes.length; index += 1) {
-      expect(cloudNodeLayoutIndexes[index - 1]).toBeLessThan(cloudNodeLayoutIndexes[index]);
-    }
+    ]);
     expectMargin(cloudNodes, '.page-head', 'margin-bottom', 8);
-    for (const toolbar of ['.cloud-node-action-bar', '.cloud-node-filter-bar']) {
-      const escapedToolbar = toolbar.replace('.', '\\.');
-      expect(cloudNodes).toMatch(new RegExp(
-        `${escapedToolbar}\\s*\\{[^}]*display:\\s*flex;[^}]*width:\\s*100%;[^}]*max-width:\\s*100%;[^}]*min-width:\\s*0;[^}]*justify-content:\\s*flex-start;[^}]*margin-bottom:\\s*8px;`,
-      ));
+    const toolbarRule = cloudNodes.match(/\.cloud-node-action-bar\s*,\s*\.cloud-node-filter-bar\s*\{([^}]*)\}/);
+    expect(toolbarRule).not.toBeNull();
+    const toolbarDeclarations = toolbarRule?.[1] || '';
+    for (const [property, value] of [
+      ['display', 'flex'],
+      ['width', '100%'],
+      ['max-width', '100%'],
+      ['min-width', '0'],
+      ['justify-content', 'flex-start'],
+      ['margin-bottom', '8px'],
+    ]) {
+      expect(toolbarDeclarations).toMatch(new RegExp(`(?:^|;)\\s*${property}:\\s*${value}\\s*;`));
     }
     expect(cloudNodes).toMatch(/\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
     expect(cloudNodes).toMatch(/\.moox-page :deep\(\.arco-spin\),\s*\.moox-page :deep\(\.arco-spin-children\)\s*\{[^}]*overflow-x:\s*hidden;/);

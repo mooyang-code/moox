@@ -2408,14 +2408,7 @@ const handleEditNodeOk = async () => {
   margin-bottom: 8px;
 }
 .page-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
-.cloud-node-action-bar {
-  display: flex;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  justify-content: flex-start;
-  margin-bottom: 8px;
-}
+.cloud-node-action-bar,
 .cloud-node-filter-bar {
   display: flex;
   width: 100%;
