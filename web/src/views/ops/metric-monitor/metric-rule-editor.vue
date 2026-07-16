@@ -32,7 +32,6 @@
 
     <a-divider />
     <div class="preview-head"><strong>保存前预览</strong><a-button size="small" :loading="previewLoading" @click="previewRule">运行预览</a-button></div>
-    <a-alert v-if="previewError" type="error" class="preview-alert">{{ previewError }}</a-alert>
     <a-table v-if="preview" size="small" :data="preview.conditions || []" :pagination="false" class="preview-table">
       <template #columns>
         <a-table-column title="条件" data-index="condition_id" :width="90" />
@@ -63,7 +62,6 @@ const serviceOptions = ref<string[]>([]);
 const metricNames = ref<Record<string, MetricNameInfo[]>>({});
 const preview = ref<MetricRuleEvaluation>();
 const previewLoading = ref(false);
-const previewError = ref('');
 const saving = ref(false);
 const enabledWebhooks = computed(() => props.webhooks.filter((item) => item.enabled !== false));
 
@@ -91,8 +89,9 @@ async function loadServices() {
     const response = await metricMonitorApi.listMetricServices({ page: { page: 1, size: 200 } });
     serviceOptions.value = [...new Set((response.services || []).map((item) => item.service_name).filter(Boolean) as string[])].sort();
     await Promise.all(draft.value.conditions.map((condition) => loadMetricNames(condition.query.selector.service_name)));
-  } catch {
+  } catch (reason) {
     serviceOptions.value = [];
+    notifyError(reason, '指标服务加载失败');
   }
 }
 async function loadMetricNames(service: string) {
@@ -100,9 +99,14 @@ async function loadMetricNames(service: string) {
   try {
     const response = await metricMonitorApi.listMetricNames({ service_name: service, page: { page: 1, size: 200 } });
     metricNames.value[service] = response.names || [];
-  } catch {
+  } catch (reason) {
     metricNames.value[service] = [];
+    notifyError(reason, '指标名称加载失败');
   }
+}
+function notifyError(reason: unknown, fallback: string) {
+  const message = reason instanceof Error ? reason.message : fallback;
+  if (!/metrics catalog is unavailable/i.test(message)) Message.error(message);
 }
 function validateRule() {
   if (!draft.value.name.trim()) return '规则名称不能为空';
@@ -118,10 +122,9 @@ function validateRule() {
 }
 async function previewRule() {
   const error = validateRule();
-  if (error) { previewError.value = error; return; }
+  if (error) { Message.error(error); return; }
   previewLoading.value = true;
-  previewError.value = '';
-  try { preview.value = (await metricMonitorApi.previewMetricRule(draft.value)).evaluation; } catch (reason) { previewError.value = reason instanceof Error ? reason.message : '预览失败'; } finally { previewLoading.value = false; }
+  try { preview.value = (await metricMonitorApi.previewMetricRule(draft.value)).evaluation; } catch (reason) { notifyError(reason, '预览失败'); } finally { previewLoading.value = false; }
 }
 async function saveRule() {
   const error = validateRule();
@@ -136,7 +139,7 @@ async function saveRule() {
 }
 function formatNumber(value?: number) { return value === undefined || value === null ? '-' : Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 }); }
 
-watch(() => props.rule, (value) => { draft.value = cloneRule(value); renumber(); preview.value = undefined; previewError.value = ''; void loadServices(); }, { immediate: true });
+watch(() => props.rule, (value) => { draft.value = cloneRule(value); renumber(); preview.value = undefined; void loadServices(); }, { immediate: true });
 onMounted(loadServices);
 </script>
 
@@ -149,7 +152,6 @@ onMounted(loadServices);
 .conditions-head span { margin-left: 10px; color: var(--color-text-3); font-size: 12px; }
 .condition-empty { padding: 18px; color: var(--color-text-3); text-align: center; border-left: 2px solid var(--color-border-2); }
 .preview-result { padding: 12px 0; }
-.preview-alert { margin: 10px 0; }
 .editor-actions { justify-content: flex-end; border-top: 1px solid var(--color-border-2); padding-top: 16px; margin-top: 18px; }
 @media (max-width: 900px) { .form-grid { grid-template-columns: 1fr; } .form-grid .wide { grid-column: auto; } }
 </style>

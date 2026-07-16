@@ -1,24 +1,21 @@
 <template>
   <div class="metric-monitor-page">
-    <header class="page-head">
+    <header v-if="!embedded" class="page-head">
       <div v-if="!embedded">
         <h2>应用指标</h2>
         <span>服务实例主动上报的 Prometheus 指标与历史趋势。</span>
       </div>
-      <a-space>
-        <a-button type="primary" status="success" @click="openCreateRule">
-          <template #icon><icon-plus /></template>
-          新建规则
-        </a-button>
-      </a-space>
     </header>
 
-    <a-alert v-if="errorMessage" type="error" closable @close="errorMessage = ''">{{ errorMessage }}</a-alert>
-    <a-alert v-if="partialState" type="warning" class="state-alert">部分序列暂不可用，已保留可查询数据。</a-alert>
+    <PageTitleTabs v-model="activeTab" :items="metricTabs" class="metric-tabs" aria-label="应用指标" />
 
-    <a-tabs v-model:active-key="activeTab" type="rounded">
-      <a-tab-pane key="explorer" title="指标看板">
+    <div class="metric-tab-content">
+      <section v-if="activeTab === 'explorer'" class="metric-tab-panel">
         <section class="filter-band">
+          <a-button type="primary" status="success" @click="openCreateRule">
+            <template #icon><icon-plus /></template>
+            新建指标
+          </a-button>
           <a-select v-model="selectedService" allow-clear placeholder="服务" :loading="catalogLoading" @change="onServiceChange" style="width: 220px">
             <a-option v-for="service in serviceOptions" :key="service" :value="service">{{ service }}</a-option>
           </a-select>
@@ -73,14 +70,13 @@
                 <strong>历史趋势</strong>
                 <span class="section-meta">近 1 小时 · 最多 {{ MAX_CHART_SERIES }} 条序列</span>
               </div>
-              <a-tag v-if="chartPartial" color="orange">部分序列失败</a-tag>
             </div>
-            <metric-chart :series="chartPoints" :loading="historyLoading" :error="historyError" @retry="loadHistory" />
+            <metric-chart :series="chartPoints" :loading="historyLoading" :error="historyError" />
           </div>
         </section>
-      </a-tab-pane>
+      </section>
 
-      <a-tab-pane key="rules" title="告警规则">
+      <section v-else class="metric-tab-panel">
         <section class="rules-panel">
           <div class="section-head">
             <div><strong>指标告警规则</strong><span class="section-meta">平面 A-H 条件，仅支持单层 AND / OR</span></div>
@@ -105,8 +101,8 @@
           </a-table>
           <div v-if="!rulesLoading && !rules.length" class="inline-empty">暂无指标告警规则</div>
         </section>
-      </a-tab-pane>
-    </a-tabs>
+      </section>
+    </div>
 
     <a-drawer v-model:visible="ruleDrawerVisible" width="1060px" :title="editingRule?.rule_id ? '编辑指标告警规则' : '新建指标告警规则'" :footer="false" unmount-on-close>
       <metric-rule-editor :rule="editingRule" :webhooks="webhooks" @saved="onRuleSaved" @cancel="ruleDrawerVisible = false" />
@@ -129,6 +125,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
+import PageTitleTabs from '@/components/page-title-tabs/index.vue';
 import MetricChart, { type ChartPoint } from './metric-chart.vue';
 import MetricRuleEditor from './metric-rule-editor.vue';
 import { metricMonitorApi } from '@/api/metric-monitor';
@@ -140,16 +137,17 @@ const embedded = computed(() => props.embedded === true);
 const MAX_DISPLAY_SERIES = 50;
 const MAX_CHART_SERIES = 10;
 const activeTab = ref('explorer');
+const metricTabs = [
+  { key: 'explorer', label: '指标看板' },
+  { key: 'rules', label: '告警规则' },
+] as const;
 const loading = ref(false);
 const catalogLoading = ref(false);
 const latestLoading = ref(false);
 const historyLoading = ref(false);
 const rulesLoading = ref(false);
 const evaluationLoading = ref(false);
-const errorMessage = ref('');
 const historyError = ref('');
-const chartPartial = ref(false);
-const partialState = ref(false);
 const services = ref<MetricServiceInfo[]>([]);
 const metricOptions = ref<MetricNameInfo[]>([]);
 const series = ref<MetricSeriesInfo[]>([]);
@@ -178,6 +176,11 @@ function normalizeRule(rule?: MetricRule): MetricRule {
   return JSON.parse(JSON.stringify(rule || { name: '', conditions: [], connector: 1, consecutive_trigger_count: 3, consecutive_recovery_count: 1, evaluation_interval_seconds: 30, webhook_ids: [], enabled: true })) as MetricRule;
 }
 
+function notifyError(reason: unknown, fallback: string) {
+  const message = reason instanceof Error ? reason.message : fallback;
+  if (!/metrics catalog is unavailable/i.test(message)) Message.error(message);
+}
+
 async function loadCatalog() {
   catalogLoading.value = true;
   try {
@@ -186,7 +189,7 @@ async function loadCatalog() {
     if (!selectedService.value || !serviceOptions.value.includes(selectedService.value)) selectedService.value = serviceOptions.value[0] || '';
     await loadNames();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '服务指标目录加载失败';
+    notifyError(error, '服务指标目录加载失败');
   } finally {
     catalogLoading.value = false;
   }
@@ -217,12 +220,11 @@ async function loadSeries() {
     series.value = response.series || [];
     await refreshSeriesData();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '指标序列加载失败';
+    notifyError(error, '指标序列加载失败');
   }
 }
 
 async function refreshSeriesData() {
-  partialState.value = false;
   await Promise.all([loadLatest(), loadHistory()]);
 }
 
@@ -231,7 +233,7 @@ async function loadLatest() {
   try {
     const responses = await Promise.allSettled(selectedSeries.value.filter((item) => item.series_id).map((item) => metricMonitorApi.getMetricLatest({ series_id: item.series_id as string })));
     latestRows.value = responses.filter((response): response is PromiseFulfilledResult<{ latest?: MetricLatestPoint }> => response.status === 'fulfilled' && !!response.value.latest).map((response) => response.value.latest as MetricLatestPoint);
-    partialState.value = responses.some((response) => response.status === 'rejected');
+    if (responses.some((response) => response.status === 'rejected')) Message.error('部分指标最新值加载失败，已保留可查询数据。');
   } finally {
     latestLoading.value = false;
   }
@@ -240,7 +242,6 @@ async function loadLatest() {
 async function loadHistory() {
   historyLoading.value = true;
   historyError.value = '';
-  chartPartial.value = false;
   const startAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   try {
     const responses = await Promise.allSettled(selectedSeries.value.slice(0, MAX_CHART_SERIES).filter((item) => item.series_id).map((item) => metricMonitorApi.queryMetricHistory({ series_id: item.series_id as string, start_at: startAt, order: 1, limit: 500 })));
@@ -250,9 +251,9 @@ async function loadHistory() {
       if (response.status === 'fulfilled' && id) next[id] = response.value.points || [];
     });
     historyBySeries.value = next;
-    chartPartial.value = responses.some((response) => response.status === 'rejected');
+    if (responses.some((response) => response.status === 'rejected')) Message.error('部分历史指标加载失败，已保留可查询数据。');
   } catch (error) {
-    historyError.value = error instanceof Error ? error.message : '历史数据加载失败';
+    notifyError(error, '历史数据加载失败');
   } finally {
     historyLoading.value = false;
   }
@@ -266,7 +267,7 @@ async function loadRules() {
     const states = await Promise.allSettled(rules.value.filter((rule) => rule.rule_id).map((rule) => metricMonitorApi.getMetricRuleState({ rule_id: rule.rule_id as string })));
     ruleStates.value = Object.fromEntries(states.map((response, index) => [rules.value[index]?.rule_id, response.status === 'fulfilled' ? response.value.state : undefined]).filter((entry): entry is [string, MetricRuleState] => !!entry[0] && !!entry[1]));
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '告警规则加载失败';
+    notifyError(error, '告警规则加载失败');
   } finally {
     rulesLoading.value = false;
   }
@@ -275,8 +276,9 @@ async function loadRules() {
 async function loadWebhooks() {
   try {
     webhooks.value = (await metricMonitorApi.listWebhookChannels()).channels || [];
-  } catch {
+  } catch (reason) {
     webhooks.value = [];
+    notifyError(reason, '通知通道加载失败');
   }
 }
 
@@ -348,13 +350,13 @@ onMounted(refreshAll);
 <style scoped lang="scss">
 .metric-monitor-page { height: 100%; overflow-y: auto; padding: 0 0 20px; color: var(--color-text-1); }
 .page-head, .section-head, .filter-band { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.page-head { margin-bottom: 16px; }
-.page-head h2 { margin: 0 0 6px; font-size: 22px; }
+.page-head { margin-bottom: 8px; }
+.page-head h2 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
 .page-head span, .section-meta, .cardinality-note { color: var(--color-text-3); font-size: 12px; }
-.state-alert { margin-bottom: 12px; }
-.filter-band { justify-content: flex-start; flex-wrap: wrap; padding: 14px 0; border-bottom: 1px solid var(--color-border-2); }
+.metric-tabs { margin-bottom: 12px; }
+.filter-band { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; padding: 0; }
 .option-count { color: var(--color-text-3); }
-.state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: 16px; padding: 16px; border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
+.state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: 8px; padding: 16px; border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
 .state-band { min-height: 220px; display: grid; place-items: center; }
 .explorer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .latest-panel, .chart-panel { min-width: 0; }

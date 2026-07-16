@@ -1,11 +1,7 @@
 <template>
   <div class="metric-chart" ref="chartRoot">
     <div v-if="loading" class="chart-state"><a-spin /></div>
-    <a-empty v-else-if="!series.length" description="暂无历史数据" />
-    <div v-else-if="error" class="chart-state chart-error">
-      <span>{{ error }}</span>
-      <a-button size="small" type="text" @click="$emit('retry')">重试</a-button>
-    </div>
+    <a-empty v-else-if="error || !series.length" description="暂无历史数据" />
   </div>
 </template>
 
@@ -24,8 +20,6 @@ const props = defineProps<{
   loading?: boolean;
   error?: string;
 }>();
-
-defineEmits<{ retry: [] }>();
 
 const chartRoot = ref<HTMLElement>();
 let chart: VChart | null = null;
@@ -79,7 +73,4 @@ onBeforeUnmount(releaseChart);
   color: var(--color-text-3);
 }
 
-.chart-error {
-  color: var(--color-danger-6);
-}
 </style>
