@@ -11,6 +11,7 @@
     >
       <a-tab-pane v-for="item of tabsList" :key="item.name" :title="$t(`menu.${item.meta.title}`)" :closable="!item.meta.affix" />
     </a-tabs>
+    <div id="page-tab-actions" class="tabs_page_actions" aria-label="当前页面操作"></div>
     <div class="tabs_setting">
       <a-space>
         <a-tooltip :content="$t(`system.refresh`)" position="bottom" mini>
@@ -162,6 +163,21 @@ const closeOther = (type: string) => {
   justify-content: space-between;
   height: 40px;
   border-bottom: $border-1 solid $color-border-2;
+  :deep(.arco-tabs) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .tabs_page_actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    min-width: 0;
+    &:not(:empty) {
+      padding-left: 12px;
+      margin-left: 12px;
+      border-left: $border-1 solid $color-border-2;
+    }
+  }
   .tabs_setting {
     margin: 0 0 0 $margin;
     .setting {
