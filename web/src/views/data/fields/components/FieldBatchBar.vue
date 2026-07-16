@@ -47,6 +47,6 @@ function submitMove() {
 </script>
 
 <style scoped>
-.batch-bar { display: flex; min-height: 44px; padding: 6px 10px; border-bottom: 1px solid var(--color-border-2); align-items: center; flex-wrap: wrap; gap: 8px; background: rgb(var(--primary-1)); }
+.batch-bar { display: flex; min-height: 44px; padding: 6px 10px; border-bottom: 1px solid var(--color-border-2); align-items: center; flex-wrap: wrap; gap: var(--moox-space-2); background: rgb(var(--primary-1)); }
 .batch-bar > span { color: var(--color-text-2); }
 </style>

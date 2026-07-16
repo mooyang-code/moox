@@ -511,7 +511,7 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 6px;
   max-height: 42px;
-  padding: 4px;
+  padding: var(--moox-space-1);
   overflow: hidden;
   border: 1px solid var(--color-border-2);
   border-radius: 6px;
@@ -526,9 +526,9 @@ onMounted(async () => {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--moox-space-2);
   min-height: 32px;
-  padding: 5px 12px;
+  padding: 5px var(--moox-space-3);
   color: var(--color-text-2);
   white-space: nowrap;
   cursor: pointer;
@@ -591,9 +591,9 @@ onMounted(async () => {
 
 .filter-bar {
   display: flex;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
   flex-wrap: wrap;
 }
 

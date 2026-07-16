@@ -48,13 +48,13 @@ function selectTab(key: string) {
 .page-title-tabs {
   display: inline-flex;
   align-items: center;
-  gap: 24px;
+  gap: var(--moox-space-6);
   min-height: 32px;
 }
 
 .page-title-tab {
   position: relative;
-  padding: 0 0 8px;
+  padding: 0 0 var(--moox-space-2);
   color: var(--color-text-3);
   font-size: 20px;
   font-weight: 600;

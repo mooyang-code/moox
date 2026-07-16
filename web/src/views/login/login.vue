@@ -38,7 +38,7 @@ const { isPc } = useDevicesSize();
       box-sizing: border-box;
       width: 350px;
       height: 100%;
-      padding: 40px 30px 30px;
+      padding: var(--moox-space-8) 30px 30px;
       .login_title {
         margin-bottom: $margin-text;
         font-size: $font-size-title-2;

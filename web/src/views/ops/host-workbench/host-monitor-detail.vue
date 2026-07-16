@@ -154,19 +154,19 @@ onUnmounted(() => { historyRequestID++; trendChart?.release(); });
 </script>
 
 <style scoped lang="scss">
-.monitor-detail { min-width:0; padding-top:20px; margin-top:20px; border-top:1px solid var(--color-border-2); }
-.detail-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:14px; }
+.monitor-detail { min-width:0; padding-top:var(--moox-space-5); margin-top:var(--moox-space-5); border-top:1px solid var(--color-border-2); }
+.detail-head { display:flex; align-items:flex-end; justify-content:space-between; gap:var(--moox-space-4); margin-bottom:14px; }
 .detail-head span,.detail-head p { color:var(--color-text-3); font-size:12px; }
 .detail-head h3 { margin:2px 0; font-size:18px; }.detail-head p { margin:0; }
 .detail-alert { margin-bottom:14px; }
-.detail-overview { display:grid; grid-template-columns:minmax(0,2fr) minmax(250px,1fr); gap:20px; }
+.detail-overview { display:grid; grid-template-columns:minmax(0,2fr) minmax(250px,1fr); gap:var(--moox-space-5); }
 h4 { margin:0 0 10px; font-size:14px; }
 .chart-container { position:relative; width:100%; height:270px; border-top:1px solid var(--color-border-2); }
 .chart-overlay { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; background:var(--color-bg-1); }
 .empty-chart { flex-direction:column; gap:6px; color:var(--color-text-3); font-size:28px; }.empty-chart span { font-size:12px; }
 .device-section dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0; background:var(--color-border-2); border:1px solid var(--color-border-2); }
 .device-section dl div { padding:14px; background:var(--color-bg-2); }.device-section dt { color:var(--color-text-3); font-size:12px; }.device-section dd { margin:5px 0 0; font-size:16px; font-weight:600; }
-.tables-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:20px; }
+.tables-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:var(--moox-space-5); }
 .data-section { min-width:0; }
 .table-scroll { max-height:300px; overflow-x:hidden; overflow-y:auto; border-top:1px solid var(--color-border-2); }
 .detail-table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:11px; }

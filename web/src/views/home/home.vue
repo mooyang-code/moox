@@ -736,12 +736,12 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--moox-space-5);
   width: 100%;
   max-width: min(1600px, 100%);
   min-height: 0;
   margin: 0 auto;
-  padding: 16px 24px 56px;
+  padding: var(--moox-space-4) var(--moox-space-6) var(--moox-space-10);
   overflow-x: hidden;
   overflow-y: auto;
   font-family: $display;
@@ -752,7 +752,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--moox-space-4);
 }
 
 .home-top-left {
@@ -762,7 +762,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 }
 
 .home-badge {
-  padding: 3px 8px;
+  padding: 3px var(--moox-space-2);
   border-radius: 6px;
   background: var(--home-accent-soft);
   color: var(--home-accent);
@@ -781,7 +781,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .home-top-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--moox-space-3);
 }
 
 .home-clock {
@@ -801,8 +801,8 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .onboard {
   display: grid;
   grid-template-columns: 1.1fr 1fr;
-  gap: 24px;
-  padding: 32px;
+  gap: var(--moox-space-6);
+  padding: var(--moox-space-7);
   border: 1px solid var(--color-border-2);
   border-radius: 16px;
   background:
@@ -811,7 +811,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 }
 
 .onboard-copy h1 {
-  margin: 0 0 12px;
+  margin: 0 0 var(--moox-space-3);
   font-size: clamp(22px, 3vw, 30px);
   font-weight: 700;
   line-height: 1.25;
@@ -819,7 +819,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 }
 
 .onboard-copy p {
-  margin: 0 0 24px;
+  margin: 0 0 var(--moox-space-6);
   max-width: 480px;
   font-size: 14px;
   line-height: 1.75;
@@ -834,7 +834,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .onboard-steps {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--moox-space-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -842,7 +842,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   li {
     display: flex;
     gap: 14px;
-    padding: 14px 16px;
+    padding: 14px var(--moox-space-4);
     border: 1px solid var(--color-border-2);
     border-radius: 12px;
     background: var(--color-fill-1);
@@ -882,7 +882,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   grid-template-columns: 1fr auto;
   gap: 28px;
   align-items: center;
-  padding: 28px 32px;
+  padding: 28px var(--moox-space-7);
   border: 1px solid var(--color-border-2);
   border-radius: 16px;
   background:
@@ -916,7 +916,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: var(--moox-space-5);
 }
 
 .welcome-readiness {
@@ -978,7 +978,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 0;
+    padding: var(--moox-space-1) 0;
     font-size: 12px;
     color: var(--home-muted);
 
@@ -995,7 +995,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 /* ---------- 数据链路 ---------- */
 .flow-section {
-  padding: 20px 24px;
+  padding: var(--moox-space-5) var(--moox-space-6);
   border: 1px solid var(--color-border-2);
   border-radius: 14px;
   background: var(--color-bg-2);
@@ -1005,7 +1005,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: var(--moox-space-4);
 
   h2 {
     margin: 0;
@@ -1022,9 +1022,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .flow-track {
   display: flex;
-  gap: 4px;
+  gap: var(--moox-space-1);
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding-bottom: var(--moox-space-1);
 }
 
 .flow-node {
@@ -1035,7 +1035,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 14px 16px;
+  padding: 14px var(--moox-space-4);
   border: 1px solid var(--color-border-2);
   border-radius: 12px;
   border-top: 3px solid var(--node-color);
@@ -1104,11 +1104,11 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   grid-template-rows: auto auto;
-  gap: 16px;
+  gap: var(--moox-space-4);
 }
 
 .bento-card {
-  padding: 20px 22px;
+  padding: var(--moox-space-5) 22px;
   border: 1px solid var(--color-border-2);
   border-radius: 14px;
   background: var(--color-bg-2);
@@ -1177,7 +1177,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .ops-metric {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--moox-space-1);
   padding: 14px;
   border: 1px solid var(--color-border-2);
   border-radius: 12px;
@@ -1226,14 +1226,14 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .asset-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--moox-space-2);
 }
 
 .asset-chip {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 12px;
+  padding: var(--moox-space-3);
   border: 1px solid var(--color-border-2);
   border-radius: 10px;
   background: var(--color-fill-1);
@@ -1267,7 +1267,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   overflow: hidden;
 
   :deep(.arco-collapse-item-header) {
-    padding: 14px 20px;
+    padding: 14px var(--moox-space-5);
     font-size: 13px;
     font-weight: 600;
     color: var(--home-muted);
@@ -1282,8 +1282,8 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .infra-body {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  padding: 0 20px 16px;
+  gap: var(--moox-space-4);
+  padding: 0 var(--moox-space-5) var(--moox-space-4);
 }
 
 .infra-panel {
@@ -1309,7 +1309,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .infra-empty {
   margin: 0;
-  padding: 12px 0;
+  padding: var(--moox-space-3) 0;
   font-size: 12px;
   color: var(--home-muted);
   text-align: center;
@@ -1319,9 +1319,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .host-line {
   display: grid;
   grid-template-columns: 8px 1fr auto;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
-  padding: 6px 4px;
+  padding: 6px var(--moox-space-1);
   font-size: 12px;
   border-radius: 6px;
 
@@ -1420,7 +1420,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 @media (max-width: 640px) {
   .moox-home {
-    padding: 12px 12px 40px;
+    padding: var(--moox-space-3) var(--moox-space-3) var(--moox-space-8);
   }
 
   .home-top {
@@ -1499,7 +1499,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 8px 0 2px;
+  padding: var(--moox-space-2) 0 2px;
   background: linear-gradient(180deg, var(--dash-bg) 75%, rgba(248, 250, 252, 0));
 }
 
@@ -1534,7 +1534,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;
-  gap: 16px;
+  gap: var(--moox-space-4);
   align-items: stretch;
   min-height: 132px;
   padding: 18px;
@@ -1586,9 +1586,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .dash-kicker {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--moox-space-2);
   color: var(--dash-muted);
   font-size: 13px;
 }
@@ -1642,7 +1642,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
-  gap: 8px 12px;
+  gap: var(--moox-space-2) var(--moox-space-3);
   min-width: 0;
   padding: 14px;
   border: 1px solid rgba(30, 64, 175, 18%);
@@ -1820,7 +1820,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--moox-space-3);
   align-items: start;
 }
 
@@ -1847,10 +1847,10 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .dash-card-head {
   display: flex;
-  gap: 12px;
+  gap: var(--moox-space-3);
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: var(--moox-space-3);
 }
 
 .dash-card-head.compact {
@@ -1859,7 +1859,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .dash-card-head h2 {
   display: flex;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   margin: 0;
   color: var(--dash-ink);
@@ -1877,7 +1877,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 }
 
 .dash-card-head p {
-  margin: 4px 0 0;
+  margin: var(--moox-space-1) 0 0;
   color: var(--dash-muted);
   font-size: 12px;
   line-height: 1.45;
@@ -1885,7 +1885,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .dash-chip {
   flex: none;
-  padding: 4px 7px;
+  padding: var(--moox-space-1) 7px;
   border: 1px solid var(--dash-border-strong);
   border-radius: 999px;
   background: var(--dash-blue-soft);
@@ -1920,7 +1920,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .service-lines,
 .resource-lines {
   display: grid;
-  gap: 8px;
+  gap: var(--moox-space-2);
 }
 
 .score-line {
@@ -1929,7 +1929,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   gap: 10px;
   align-items: center;
   min-height: 42px;
-  padding: 8px 0;
+  padding: var(--moox-space-2) 0;
   border-bottom: 1px solid rgba(219, 234, 254, 65%);
 }
 
@@ -1991,7 +1991,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .service-line,
 .resource-line {
   display: grid;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   min-width: 0;
   min-height: 44px;
@@ -2073,7 +2073,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .pipeline-compact {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--moox-space-2);
 }
 
 .pipeline-step,
@@ -2117,9 +2117,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .trade-metrics div {
   display: grid;
-  gap: 4px;
+  gap: var(--moox-space-1);
   min-width: 0;
-  padding: 8px;
+  padding: var(--moox-space-2);
   border: 1px solid rgba(219, 234, 254, 72%);
   border-radius: 7px;
   background: var(--dash-surface-soft);
@@ -2160,10 +2160,10 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .pulse-bars {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: end;
   min-height: 176px;
-  padding: 8px 2px 0;
+  padding: var(--moox-space-2) 2px 0;
 }
 
 .pulse-bar {
@@ -2204,8 +2204,8 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 }
 
 .resource-lines {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--moox-space-3);
+  padding-top: var(--moox-space-3);
   border-top: 1px solid rgba(219, 234, 254, 72%);
 }
 
@@ -2218,13 +2218,13 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--moox-space-2);
 }
 
 .action-tile {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
-  gap: 2px 8px;
+  gap: 2px var(--moox-space-2);
   min-height: 64px;
   padding: 10px;
 }
@@ -2331,24 +2331,24 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 @media (max-width: 640px) {
   .dashboard-shell {
-    gap: 12px;
-    padding: 10px 10px 32px;
+    gap: var(--moox-space-3);
+    padding: 10px 10px var(--moox-space-7);
   }
 
   .dashboard-shell .home-top {
-    gap: 8px;
-    padding-top: 4px;
+    gap: var(--moox-space-2);
+    padding-top: var(--moox-space-1);
   }
 
   .dashboard-shell .home-top-right {
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--moox-space-2);
     width: 100%;
   }
 
   .dash-command,
   .dash-card {
-    padding: 12px;
+    padding: var(--moox-space-3);
   }
 
   .dash-command h1 {

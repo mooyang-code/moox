@@ -7,20 +7,20 @@
         :options="spaceOptions"
         @change="onSpaceChange"
         placeholder="请选择空间"
-        style="width: 220px; margin-left: 16px;"
+        style="width: 220px; margin-left: var(--moox-space-4);"
         allow-search
         :loading="loading"
       >
         <template #empty>
-          <div style="text-align: center; padding: 12px;">
+          <div style="text-align: center; padding: var(--moox-space-3);">
             <div>暂无空间</div>
-            <a-button type="primary" status="success" size="small" @click="openCreate" style="margin-top: 8px;">
+            <a-button type="primary" status="success" size="small" @click="openCreate" style="margin-top: var(--moox-space-2);">
               新建空间
             </a-button>
           </div>
         </template>
       </a-select>
-      <a-button type="text" size="small" title="新建空间" style="margin-left: 8px;" @click="openCreate">
+      <a-button type="text" size="small" title="新建空间" style="margin-left: var(--moox-space-2);" @click="openCreate">
         <template #icon><icon-plus /></template>
       </a-button>
     </div>

@@ -416,7 +416,7 @@ onUnmounted(() => {
   justify-content: flex-end;
   height: 44px;
   min-height: 44px;
-  padding: 0 12px;
+  padding: 0 var(--moox-space-3);
   background: #1e1e2e;
   border-bottom: 1px solid #2a2a3e;
 
@@ -470,7 +470,7 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 4px;
+  padding: var(--moox-space-1);
 
   &.hidden {
     visibility: hidden;
@@ -480,7 +480,7 @@ onUnmounted(() => {
 
   :deep(.xterm) {
     height: 100%;
-    padding: 4px;
+    padding: var(--moox-space-1);
   }
 
   :deep(.xterm-viewport) {
@@ -514,7 +514,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: var(--moox-space-4);
   color: #555;
   font-size: 14px;
 }

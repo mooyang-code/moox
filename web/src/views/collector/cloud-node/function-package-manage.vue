@@ -241,10 +241,10 @@
                 <div>
                   <icon-upload style="font-size: 48px; color: #c9cdd4;" />
                 </div>
-                <div style="margin-top: 8px;">
+                <div style="margin-top: var(--moox-space-2);">
                   点击或拖拽上传ZIP文件
                 </div>
-                <div style="color: #86909c; font-size: 12px; margin-top: 4px;">
+                <div style="color: #86909c; font-size: 12px; margin-top: var(--moox-space-1);">
                   支持ZIP格式，文件大小不超过100MB
                 </div>
               </div>
@@ -273,7 +273,7 @@
     >
       <div v-if="packageDetail" class="package-detail">
         <!-- 基本信息 -->
-        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
           <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
           <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
           <a-descriptions-item label="类型">
@@ -297,7 +297,7 @@
         </a-descriptions>
         
         <!-- 存储信息 -->
-        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: 16px;">
+        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
           <a-descriptions-item label="云账户">
             {{ packageDetail.cloud_account_id || '本地存储' }}
           </a-descriptions-item>
@@ -329,7 +329,7 @@
           </a-descriptions-item>
         </a-descriptions>
         
-        <div style="margin-top: 16px; text-align: right;">
+        <div style="margin-top: var(--moox-space-4); text-align: right;">
           <a-space>
             <a-button @click="handleDetailCancel">关闭</a-button>
             <a-button 
@@ -350,9 +350,9 @@
           </a-space>
         </div>
       </div>
-      <div v-else style="text-align: center; padding: 40px;">
+      <div v-else style="text-align: center; padding: var(--moox-space-8);">
         <a-spin :loading="true" />
-        <div style="margin-top: 16px;">加载中...</div>
+        <div style="margin-top: var(--moox-space-4);">加载中...</div>
       </div>
     </a-modal>
   </component>
@@ -1056,7 +1056,7 @@ const formatTime = (time: string | undefined) => {
 .upload-area {
   border: 2px dashed #d0d0d0;
   border-radius: 6px;
-  padding: 40px;
+  padding: var(--moox-space-8);
   text-align: center;
   background: #fafafa;
   cursor: pointer;
@@ -1080,7 +1080,7 @@ const formatTime = (time: string | undefined) => {
 
 :deep(.arco-form-item-feedback) {
   font-size: 12px;
-  margin-top: 4px;
+  margin-top: var(--moox-space-1);
 }
 
 :deep(.arco-form-item-status-error .arco-form-item-feedback) {

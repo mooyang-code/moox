@@ -345,16 +345,16 @@ watch(resolvedSessionId, (id) => {
 .ssh-file-manager-page {
   box-sizing: border-box;
   flex: 1;
-  padding: 20px;
+  padding: var(--moox-space-5);
   overflow-y: auto;
   background: #fff;
 
   .path-input-bar {
-    margin-bottom: 12px;
+    margin-bottom: var(--moox-space-3);
   }
 
   .toolbar {
-    margin-bottom: 16px;
+    margin-bottom: var(--moox-space-4);
   }
 
   :deep(.arco-table-tbody .arco-table-tr) {
@@ -367,8 +367,8 @@ watch(resolvedSessionId, (id) => {
     display: inline-flex;
     align-items: center;
     max-width: 100%;
-    padding: 4px 8px;
-    margin-left: -8px;
+    padding: var(--moox-space-1) var(--moox-space-2);
+    margin-left: calc(-1 * var(--moox-space-2));
     color: var(--color-text-1);
     border-radius: 4px;
     outline: none;

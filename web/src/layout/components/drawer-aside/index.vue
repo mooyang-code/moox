@@ -54,7 +54,7 @@ const handleCancel = () => {
 // 修改左侧滚动条宽度
 :deep(.arco-scrollbar-thumb-direction-vertical .arco-scrollbar-thumb-bar) {
   width: 4px;
-  margin-left: 8px;
+  margin-left: var(--moox-space-2);
 }
 
 // 去掉右侧阴影并替换为边线

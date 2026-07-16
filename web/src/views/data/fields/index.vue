@@ -401,10 +401,10 @@ onMounted(async () => {
 
 <style scoped>
 .fields-inner { display: flex; min-height: calc(100vh - 116px); flex-direction: column; }
-.toolbar { display: flex; min-height: 48px; margin-bottom: 8px; align-items: center; justify-content: space-between; gap: 16px; }
-.toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
-.page-title { flex: 0 0 auto; margin: 0 8px 0 0; font-size: 20px; font-weight: 600; }
-.toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; white-space: nowrap; }
+.toolbar { display: flex; min-height: 48px; margin-bottom: var(--moox-space-2); align-items: center; justify-content: space-between; gap: var(--moox-space-4); }
+.toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: var(--moox-space-2); }
+.page-title { flex: 0 0 auto; margin: 0 var(--moox-space-2) 0 0; font-size: 20px; font-weight: 600; }
+.toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--moox-space-2); white-space: nowrap; }
 .keyword-control { min-width: 220px; flex: 1 1 360px; }
 .filter-control { width: 140px; flex: 0 0 140px; }
 .keyword-input, .filter-select { width: 100%; }
@@ -412,13 +412,13 @@ onMounted(async () => {
 .field-workbench { display: grid; min-height: 560px; flex: 1; grid-template-columns: 240px minmax(0, 1fr); border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
 .group-panel { min-height: 0; overflow: auto; border-right: 1px solid var(--color-border-2); background: var(--color-fill-1); }
 .field-main { min-width: 0; overflow: hidden; }
-.inline-error, .table-error { margin: 8px; }
+.inline-error, .table-error { margin: var(--moox-space-2); }
 .table-error { margin-bottom: 0; }
 @media (max-width: 900px) {
   .group-panel { display: none; }
   .field-workbench { grid-template-columns: minmax(0, 1fr); }
   .mobile-group-trigger { display: inline-flex; }
-  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .toolbar { flex-wrap: wrap; gap: var(--moox-space-2); }
   .toolbar-main { flex: 1 1 100%; flex-wrap: wrap; }
   .toolbar-actions { margin-left: auto; }
   .keyword-control { min-width: 220px; flex: 1 1 260px; }

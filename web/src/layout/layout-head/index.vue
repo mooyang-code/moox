@@ -237,10 +237,10 @@ const onMenuItem = (key: string) => {
     display: flex;
     align-items: center;
     flex-shrink: 0;
-    gap: 8px;
+    gap: var(--moox-space-2);
     min-width: 260px;
     max-width: 340px;
-    margin-left: 16px;
+    margin-left: var(--moox-space-4);
   }
   .space-label {
     flex-shrink: 0;

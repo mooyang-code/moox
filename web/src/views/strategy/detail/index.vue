@@ -55,7 +55,7 @@ onUnmounted(() => store.stopPolling());
 
 <style scoped>
 .strategy-page { min-height: 100%; background: var(--color-fill-2); }
-.detail-tabs { margin-top: 12px; }
-.operation-panel { margin-top: 12px; }
-.top-alert { margin-bottom: 12px; }
+.detail-tabs { margin-top: var(--moox-space-3); }
+.operation-panel { margin-top: var(--moox-space-3); }
+.top-alert { margin-bottom: var(--moox-space-3); }
 </style>

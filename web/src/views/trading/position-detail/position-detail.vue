@@ -398,7 +398,7 @@ onMounted(async () => {
 
 .account-tabs-block {
   position: relative;
-  padding-bottom: 12px;
+  padding-bottom: var(--moox-space-3);
 }
 
 .position-account-tabs {
@@ -406,7 +406,7 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 6px;
   max-height: 42px;
-  padding: 4px;
+  padding: var(--moox-space-1);
   overflow: hidden;
   border: 1px solid var(--color-border-2);
   border-radius: 6px;
@@ -448,9 +448,9 @@ onMounted(async () => {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--moox-space-2);
   min-height: 32px;
-  padding: 5px 12px;
+  padding: 5px var(--moox-space-3);
   color: var(--color-text-2);
   white-space: nowrap;
   cursor: pointer;
@@ -493,7 +493,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px;
+  padding: var(--moox-space-3);
   border: 1px solid var(--color-border-2);
   border-radius: 6px;
   background: var(--color-bg-1);
@@ -501,13 +501,13 @@ onMounted(async () => {
 
 .account-balance-head {
   display: flex;
-  gap: 12px;
+  gap: var(--moox-space-3);
   align-items: center;
   justify-content: space-between;
 }
 
 .account-balance-head strong {
-  margin-left: 8px;
+  margin-left: var(--moox-space-2);
   color: var(--color-text-1);
   font-size: 14px;
 }
@@ -533,7 +533,7 @@ onMounted(async () => {
   gap: 6px;
   align-items: baseline;
   max-width: 220px;
-  padding: 4px 8px;
+  padding: var(--moox-space-1) var(--moox-space-2);
   color: var(--color-text-2);
   background: var(--color-fill-1);
   border: 1px solid var(--color-border-1);

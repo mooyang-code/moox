@@ -1257,7 +1257,7 @@ watch(klineVisible, (visible) => {
 .view-status-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--moox-space-2);
   min-height: 34px;
   margin-bottom: var(--moox-space-3);
   color: var(--color-text-3);
@@ -1273,7 +1273,7 @@ watch(klineVisible, (visible) => {
   gap: 14px 18px;
   align-items: start;
   margin-bottom: var(--moox-space-3);
-  padding: 18px 20px;
+  padding: 18px var(--moox-space-5);
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   background: var(--color-bg-2);
@@ -1289,7 +1289,7 @@ watch(klineVisible, (visible) => {
 .filter-item {
   display: grid;
   grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   min-width: 0;
 }
@@ -1307,7 +1307,7 @@ watch(klineVisible, (visible) => {
 .filter-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   min-width: 0;
 }
@@ -1332,7 +1332,7 @@ watch(klineVisible, (visible) => {
   display: flex;
   align-items: center;
   height: 32px;
-  padding: 0 12px;
+  padding: 0 var(--moox-space-3);
   border: 1px solid var(--color-border-2);
   border-radius: 4px;
   color: var(--color-text-3);
@@ -1364,7 +1364,7 @@ watch(klineVisible, (visible) => {
 
 .query-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--moox-space-2);
   align-items: center;
   justify-content: flex-end;
   min-width: 126px;
@@ -1375,7 +1375,7 @@ watch(klineVisible, (visible) => {
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
-  padding: 12px;
+  padding: var(--moox-space-3);
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   background: var(--color-bg-2);
@@ -1388,7 +1388,7 @@ watch(klineVisible, (visible) => {
 .preview-pager {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 16px;
+  gap: 10px var(--moox-space-4);
   align-items: center;
   justify-content: flex-end;
   margin-top: var(--moox-space-3);
@@ -1421,20 +1421,20 @@ watch(klineVisible, (visible) => {
 .detail-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--moox-space-4);
   max-height: min(680px, calc(100vh - 220px));
-  padding-right: 4px;
+  padding-right: var(--moox-space-1);
   overflow-y: auto;
 }
 
 .detail-table {
-  margin-top: 4px;
+  margin-top: var(--moox-space-1);
 }
 
 .kline-modal-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--moox-space-3);
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -1451,7 +1451,7 @@ watch(klineVisible, (visible) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--moox-space-4);
   min-height: 48px;
   width: 100%;
   padding: 10px 14px;

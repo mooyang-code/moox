@@ -201,7 +201,7 @@ onMounted(load);
 .metadata-page {
   height: 100%;
   box-sizing: border-box;
-  padding: var(--moox-space-4) var(--moox-space-4) 72px;
+  padding: var(--moox-space-4) var(--moox-space-4) var(--moox-space-11);
   overflow-y: auto;
 }
 

@@ -361,7 +361,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--moox-space-3);
   margin-bottom: var(--moox-space-2);
 }
 

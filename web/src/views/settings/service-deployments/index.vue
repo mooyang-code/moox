@@ -89,7 +89,7 @@
       :align-center="false"
       :top="'48px'"
       :modal-style="{ maxWidth: 'calc(100vw - 32px)' }"
-      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '18px 24px 14px' }"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto', padding: '18px var(--moox-space-6) 14px' }"
       :ok-loading="submitting"
       @before-ok="submit"
     >
@@ -388,7 +388,7 @@ onUnmounted(() => {
 .deployment-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 16px;
+  column-gap: var(--moox-space-4);
   row-gap: 10px;
   padding-bottom: 0;
 }
@@ -402,7 +402,7 @@ onUnmounted(() => {
 }
 
 .deployment-form :deep(.arco-form-item-label-col) {
-  margin-bottom: 4px;
+  margin-bottom: var(--moox-space-1);
 }
 
 .deployment-form :deep(.arco-input-number) {

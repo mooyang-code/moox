@@ -206,7 +206,7 @@ onMounted(load);
 .overview-page {
   height: 100%;
   box-sizing: border-box;
-  padding: var(--moox-space-4) var(--moox-space-4) 72px;
+  padding: var(--moox-space-4) var(--moox-space-4) var(--moox-space-11);
   overflow-y: auto;
 }
 
@@ -218,7 +218,7 @@ onMounted(load);
 }
 
 .page-head h2 {
-  margin: 0 0 4px;
+  margin: 0 0 var(--moox-space-1);
   font-size: 20px;
   font-weight: 600;
 }
@@ -240,7 +240,7 @@ onMounted(load);
   align-items: center;
   justify-content: space-between;
   gap: var(--moox-space-4);
-  padding: 18px 20px;
+  padding: 18px var(--moox-space-5);
   margin-bottom: var(--moox-space-2);
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
@@ -253,7 +253,7 @@ onMounted(load);
 }
 
 .overview-hero strong {
-  margin-bottom: 4px;
+  margin-bottom: var(--moox-space-1);
   font-size: 18px;
 }
 
@@ -266,7 +266,7 @@ onMounted(load);
 .stat-card {
   position: relative;
   min-height: 150px;
-  padding: 16px;
+  padding: var(--moox-space-4);
   overflow: hidden;
   text-align: left;
   cursor: pointer;
@@ -308,14 +308,14 @@ onMounted(load);
 
 .stat-label {
   display: block;
-  margin-top: 8px;
+  margin-top: var(--moox-space-2);
   color: var(--color-text-1);
   font-weight: 600;
 }
 
 .stat-card small {
   display: block;
-  margin-top: 8px;
+  margin-top: var(--moox-space-2);
   line-height: 1.5;
 }
 

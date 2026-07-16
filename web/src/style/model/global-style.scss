@@ -9,7 +9,7 @@
   width: 100%;
   height: 100%;
   min-width: 0;
-  padding: $padding $padding 72px;
+  padding: $padding $padding $space-11;
   overflow-y: auto;
   background: $color-fill-1;
 }
@@ -35,7 +35,7 @@
 }
 
 .moox-inner .arco-table-pagination {
-  margin-top: 12px;
+  margin-top: $space-3;
 }
 
 // ==============铺满main窗口==================
