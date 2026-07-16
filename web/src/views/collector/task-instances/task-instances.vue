@@ -20,10 +20,6 @@
               <template #icon><icon-search /></template>
               <span>查询</span>
             </a-button>
-            <a-button @click="reset">
-              <template #icon><icon-refresh /></template>
-              <span>重置</span>
-            </a-button>
           </a-space>
         </div>
 
@@ -324,18 +320,6 @@ const onPageSizeChange = (pageSize: number) => {
 
 const search = () => {
   pagination.value.current = 1;
-  getInstanceList();
-};
-
-const reset = () => {
-  form.value = {
-    taskId: "",
-    ruleId: "",
-    lastExecNode: "", // v2.0: 执行节点
-    symbol: "",
-    lastExecStatus: null, // v2.0: 执行状态
-    includeDeleted: false
-  };
   getInstanceList();
 };
 

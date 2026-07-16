@@ -10,11 +10,6 @@
         <a-button @click="reloadFirstPage">查询</a-button>
       </a-space>
       <a-space>
-        <a-tooltip content="刷新节点状态">
-          <a-button aria-label="刷新节点状态" @click="load">
-            <template #icon><icon-refresh /></template>
-          </a-button>
-        </a-tooltip>
         <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增节点

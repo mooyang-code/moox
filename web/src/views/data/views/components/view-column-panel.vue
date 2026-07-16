@@ -6,10 +6,6 @@
           <template #icon><icon-plus /></template>
           新增结果列
         </a-button>
-        <a-button :disabled="!viewId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
 

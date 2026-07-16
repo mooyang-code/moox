@@ -11,16 +11,8 @@
           <template #icon><icon-plus /></template>
           新增实例
         </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
-
-    <a-alert class="top-alert" type="warning" show-icon>
-      storage_* 部署地址与“主存节点”拓扑可能指向同一组机器；修改 storage 服务 IP/端口后，请同步检查 /#/ops/storage/nodes 的 Endpoint。
-    </a-alert>
 
     <a-space class="filters" wrap>
       <a-select v-model="filters.node_id" allow-clear placeholder="网关节点" style="width: 190px" @change="reloadFirstPage">
@@ -381,10 +373,6 @@ onUnmounted(() => {
   color: var(--color-text-3);
 }
 
-.top-alert {
-  margin-bottom: 14px;
-}
-
 .service-deployments-table {
   margin-bottom: 20px;
 }
@@ -484,6 +472,6 @@ onUnmounted(() => {
 }
 
 .filters {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 </style>

@@ -6,10 +6,6 @@
         <span>服务实例主动上报的 Prometheus 指标与历史趋势。</span>
       </div>
       <a-space>
-        <a-button @click="refreshAll" :loading="loading">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
         <a-button type="primary" status="success" @click="openCreateRule">
           <template #icon><icon-plus /></template>
           新建规则

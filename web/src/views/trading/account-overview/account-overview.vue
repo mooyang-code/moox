@@ -21,10 +21,6 @@
             <template #icon><icon-sync /></template>
             同步秘钥账户
           </a-button>
-          <a-button @click="loadAccounts">
-            <template #icon><icon-refresh /></template>
-            刷新
-          </a-button>
         </a-space>
       </div>
 

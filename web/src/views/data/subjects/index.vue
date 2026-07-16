@@ -16,10 +16,6 @@
           <template #icon><icon-plus /></template>
           新增对象
         </a-button>
-        <a-button :disabled="!selectedSpaceId" @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
 
@@ -98,10 +94,6 @@
           <a-button type="primary" status="success" @click="openSymbolCreate">
             <template #icon><icon-plus /></template>
             新增符号
-          </a-button>
-          <a-button @click="loadSymbols">
-            <template #icon><icon-refresh /></template>
-            刷新
           </a-button>
         </a-space>
       </div>

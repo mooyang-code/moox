@@ -10,10 +10,6 @@
           <template #icon><icon-plus /></template>
           创建空间
         </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
 

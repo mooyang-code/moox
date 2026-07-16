@@ -28,10 +28,6 @@
             <template #icon><icon-search /></template>
             <span>查询</span>
           </a-button>
-          <a-button @click="reset">
-            <template #icon><icon-refresh /></template>
-            <span>重置</span>
-          </a-button>
           <a-switch v-model="form.enabled" :checked-text="'启用'" :unchecked-text="'禁用'" @change="onEnabledChange" />
         </a-space>
 
@@ -806,16 +802,6 @@ const search = () => {
 const onEnabledChange = () => {
   // 当启用状态开关变化时，重新查询列表
   search();
-};
-
-const reset = () => {
-  form.value = {
-    ruleId: '',
-    dataType: '',
-    dataSource: '',
-    enabled: true
-  };
-  getTaskList();
 };
 
 const getTaskList = async () => {

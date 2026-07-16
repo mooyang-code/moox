@@ -15,10 +15,6 @@
           <template #icon><icon-search /></template>
           <span>查询</span>
         </a-button>
-        <a-button @click="reset">
-          <template #icon><icon-refresh /></template>
-          <span>重置</span>
-        </a-button>
       </a-space>
 
       <!-- 操作按钮区域 -->
@@ -405,11 +401,6 @@ const fetchHosts = async () => {
 const onSearch = () => {
   pagination.value.current = 1;
   fetchHosts();
-};
-
-const reset = () => {
-  keyword.value = '';
-  onSearch();
 };
 
 // ---------- 分页 ----------

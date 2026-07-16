@@ -58,10 +58,6 @@
               <template #icon><icon-search /></template>
               查询
             </a-button>
-            <a-button size="small" @click="loadOrders">
-              <template #icon><icon-refresh /></template>
-              刷新
-            </a-button>
             <a-button size="small" :loading="syncingOrders" :disabled="!orderFilter.account_id" @click="onSyncOrders">
               <template #icon><icon-sync /></template>
               同步订单
@@ -169,10 +165,6 @@
             <a-button type="primary" size="small" :disabled="!tradeFilter.account_id" @click="loadTrades">
               <template #icon><icon-search /></template>
               查询
-            </a-button>
-            <a-button size="small" @click="loadTrades">
-              <template #icon><icon-refresh /></template>
-              刷新
             </a-button>
             <a-button size="small" :loading="syncingTrades" :disabled="!tradeFilter.account_id" @click="onSyncTrades">
               <template #icon><icon-sync /></template>

@@ -30,10 +30,6 @@
             <template #icon><icon-search /></template>
             <span>查询</span>
           </a-button>
-          <a-button @click="reset">
-            <template #icon><icon-refresh /></template>
-            <span>重置</span>
-          </a-button>
         </a-space>
 
         <a-row>
@@ -2041,19 +2037,10 @@ const onPageSizeChange = (pageSize: number) => {
   loadData();
 };
 
-// 查询和重置
+// 查询
 const search = () => {
   pagination.value.current = 1;
   loadData(true);
-};
-
-const reset = () => {
-  form.cloudAccountId = '';
-  form.nodeId = '';
-  form.region = '';
-  form.nodeType = defaultNodeType.value; // 重置为路由对应的默认节点类型
-  form.status = '';
-  search();
 };
 
 // 选择处理

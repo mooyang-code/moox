@@ -22,10 +22,6 @@
           <template #icon><icon-plus /></template>
           新增探测
         </a-button>
-        <a-button @click="refreshAll" :loading="loading">
-          <template #icon><icon-refresh /></template>
-          刷新
-        </a-button>
       </a-space>
     </div>
 

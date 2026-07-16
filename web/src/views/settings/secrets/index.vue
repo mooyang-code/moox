@@ -2,30 +2,24 @@
   <div class="moox-page">
     <div class="moox-inner">
     <div class="page-head">
-      <div>
-        <h2>秘钥管理</h2>
-        <span>统一管理 admin 本地秘钥（SSH、交易所、数据库、系统令牌等）</span>
-      </div>
+      <h2>秘钥管理</h2>
       <a-space>
+        <a-input-search
+          v-model="filters.keyword"
+          placeholder="搜索名称或描述"
+          style="width: 240px"
+          allow-clear
+          @search="onSearch"
+          @clear="onSearch"
+        />
         <a-button type="primary" status="success" @click="openCreate">
           <template #icon><icon-plus /></template>
           新增秘钥
-        </a-button>
-        <a-button @click="load">
-          <template #icon><icon-refresh /></template>
-          刷新
         </a-button>
       </a-space>
     </div>
 
     <div class="filter-bar">
-      <a-input-search
-        v-model="filters.keyword"
-        placeholder="搜索名称或描述"
-        style="width: 240px"
-        allow-clear
-        @search="onSearch"
-      />
       <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="load">
         <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
       </a-select>
@@ -374,13 +368,9 @@ onMounted(load);
 }
 
 .page-head h2 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 20px;
   font-weight: 600;
-}
-
-.page-head span {
-  color: var(--color-text-3);
 }
 
 .filter-bar {
