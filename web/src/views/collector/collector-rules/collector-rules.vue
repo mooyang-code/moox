@@ -1271,8 +1271,8 @@ onMounted(() => {
   min-height: 100%;
 }
 
-.moox-inner .a-table {
-  margin-top: var(--moox-space-4);
+.moox-inner :deep(.arco-table) {
+  margin-top: 0;
 }
 
 pre {

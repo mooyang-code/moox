@@ -172,7 +172,7 @@
             </a-table-column>
             <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
               <template #cell="{ record }">
-                <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" style="display: flex; flex-wrap: wrap; gap: var(--moox-space-1);">
+                <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" class="node-workloads">
                   <a-tag
                     v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
                     :key="index"
@@ -2416,5 +2416,15 @@ const handleEditNodeOk = async () => {
   min-width: 0;
   justify-content: flex-start;
   margin-bottom: var(--moox-space-tight);
+}
+.node-workloads {
+  display: flex;
+  min-width: 0;
+  flex-wrap: nowrap;
+  gap: var(--moox-space-1);
+  overflow: hidden;
+}
+.node-workloads :deep(.arco-tag) {
+  flex: 0 0 auto;
 }
 </style>
