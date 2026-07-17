@@ -4,7 +4,7 @@
 
 **Goal:** Replace suitable process-owned tickers with observable, non-overlapping tRPC Timer jobs and rebuild Storage host-metrics cleanup so it deletes data older than 48 hours in bounded multi-batch runs.
 
-**Architecture:** Keep retries, heartbeats, debounce timers, outbox relays, and in-memory state loops as Go timers. Move independent database scans and maintenance jobs behind synchronous tRPC Timer handlers. Every migrated handler uses a shared guard that clones the timer context, applies an explicit timeout, prevents overlap, and emits bounded metrics. Storage owns host-metrics deletion because Pebble is the fact source; Monitor remains only a producer and reader of those datasets.
+**Architecture:** Keep retries, heartbeats, Factor event batching, outbox relays, and in-memory state loops as Go timers. Move independent database scans and maintenance jobs behind synchronous tRPC Timer handlers. Every migrated handler uses a shared guard that clones the timer context, applies an explicit timeout, prevents overlap, and emits bounded metrics. Storage owns host-metrics deletion because Pebble is the fact source; Monitor remains only a producer and reader of those datasets.
 
 **Tech Stack:** Go 1.24, tRPC-Go, `trpc-database/timer`, robfig/cron, Prometheus, Pebble, SQLite, BadgerDB, COS, YAML, testify.
 
@@ -22,6 +22,8 @@
 - Storage host-metrics cleanup deletes rows strictly older than `now - 48h`. It never deletes exactly-at-cutoff or newer rows.
 - One Storage run processes at most 10 batches per configured dataset and at most 1000 rows per resolved target per batch. It stops early when a batch deletes zero rows.
 - A failure in one Storage dataset is recorded but does not prevent cleanup of the remaining configured datasets. The handler returns `errors.Join` after all datasets have been attempted.
+- Factor's current `Debouncer` is a fixed-window event aggregator, not classic debounce: later events do not extend the bucket deadline. Rename it to `trigger.EventBatcher` and rename `debounce_window_ms` to `event_batch_window_ms` without a compatibility alias.
+- Factor event batching remains a process-owned timer. Its buckets belong to one in-memory runtime instance, use a sub-second polling interval, and must stop with that instance; a service-level cron handler would not improve durability or ownership.
 
 ## Timer Migration Inventory
 
@@ -39,7 +41,7 @@
 | Trade fill reconciliation | Migrate | `trpc.moox.trade.fill_reconcile.timer` | every 5 seconds, start immediately |
 | Trade recoverable-order scan | Migrate | `trpc.moox.trade.order_recovery.timer` | every 15 seconds, start immediately |
 
-The following timers stay as Go timers: Storage/Strategy/Trade outbox relays, Gateway route refresh, HostAgent sampling, Factor debounce and binding refresh, CloudNode heartbeat-buffer flush, JetStream ACK heartbeats, exchange listen-key keepalive, retry backoff, request timeout, shutdown drain, and polling used only to wait for an in-memory condition.
+The following timers stay as Go timers: Storage/Strategy/Trade outbox relays, Gateway route refresh, HostAgent sampling, Factor event-batch flush and binding refresh, CloudNode heartbeat-buffer flush, JetStream ACK heartbeats, exchange listen-key keepalive, retry backoff, request timeout, shutdown drain, and polling used only to wait for an in-memory condition.
 
 ## File Map
 
@@ -67,6 +69,7 @@ The following timers stay as Go timers: Storage/Strategy/Trade outbox relays, Ga
 - Modify Monitor bootstrap, scheduler, metrics scheduler, configuration, tests, and `modules/monitor/config/trpc_go.yaml` for four Timer services.
 - Refactor Archive bootstrap/writer ownership and `modules/archive/config/trpc_go.yaml` for two Timer services.
 - Modify Trade bootstrap/kernel workers/tests and `modules/trade/config/trpc_go.yaml` for reconciliation and recovery timers.
+- Rename Factor's fixed-window trigger component and config to `EventBatcher` / `event_batch_window_ms`, while preserving its process-owned flush and binding-refresh tickers.
 - Modify `docs/存储引擎架构.md`, `docs/架构总览.md`, and relevant module README files to describe ownership and Timer semantics.
 
 ### Task 1: Add A Shared Guarded Timer Handler
@@ -554,7 +557,102 @@ git commit -m "refactor(trade): schedule recovery scans with tRPC timers"
 
 Expected: PASS; the outbox and session loops remain intact, while reconciliation/recovery no longer own tickers.
 
-### Task 9: Documentation, Static Audit, And Full Verification
+### Task 9: Rename Factor Debounce To EventBatcher
+
+**Files:**
+- Rename: `modules/factor/internal/trigger/debounce.go` to `modules/factor/internal/trigger/event_batcher.go`
+- Rename: `modules/factor/internal/trigger/debounce_test.go` to `modules/factor/internal/trigger/event_batcher_test.go`
+- Modify: `modules/factor/internal/trigger/nats.go`
+- Modify: `modules/factor/internal/trigger/nats_test.go`
+- Modify: `modules/factor/internal/bootstrap/bootstrap.go`
+- Modify: `modules/factor/internal/bootstrap/bootstrap_test.go`
+- Modify: `modules/factor/internal/bootstrap/config.go`
+- Modify: `modules/factor/internal/bootstrap/config_test.go`
+- Modify: `modules/factor/config/app.yaml`
+- Modify: `modules/factor/docs/realtime-verification.md`
+- Modify: `modules/factor/README.md`
+
+- [ ] **Step 1: Lock the actual fixed-window behavior with characterization tests**
+
+Rename the existing tests and add a case that ingests an event at `t0`, another event for the same bucket at `t0+window-1ms`, then flushes at `t0+window`. The batch must be emitted at the original deadline; the second event must not extend it. Keep coverage proving that batching is keyed by Space, source Dataset, target Dataset, Subject, and frequency; `BarTime` is the maximum event data time; Factor IDs are ordered and deduplicated; and include-mode Subject filtering is preserved.
+
+- [ ] **Step 2: Rename the public and internal vocabulary**
+
+Use this API:
+
+```go
+// EventBatcher groups Storage row-update events by calculation scope and
+// emits one Factor task per scope after a bounded time window.
+type EventBatcher struct {
+    // existing mutex, window, binding snapshot, and buckets
+}
+
+func NewEventBatcher(window time.Duration, bindings []domain.FactorBinding) *EventBatcher
+func (b *EventBatcher) SetBindings(bindings []domain.FactorBinding)
+func (b *EventBatcher) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time)
+func (b *EventBatcher) Flush(now time.Time) []Task
+```
+
+Rename `debounce` fields to `eventBatcher`, `debounceWindow` to `eventBatchWindow`, and `drainDebounced` to `drainEventBatch`. Rename test functions and comments so `Debouncer`, `debounce`, `debounced`, and `coalesces` no longer describe this implementation.
+
+- [ ] **Step 3: Rename the configuration without compatibility decoding**
+
+Replace:
+
+```yaml
+scheduler:
+  debounce_window_ms: 2000
+```
+
+with:
+
+```yaml
+scheduler:
+  event_batch_window_ms: 2000
+```
+
+Rename `SchedulerConfig.DebounceWindowMS` to `SchedulerConfig.EventBatchWindowMS`. Config tests must prove the checked-in YAML loads `2000`, a custom value is honored, and the old YAML key is absent from the file. Do not support both names because this project has no historical compatibility requirement.
+
+- [ ] **Step 4: Keep event-batch flushing process-owned**
+
+Retain the existing runtime loop with these names and semantics:
+
+```go
+flushInterval := deps.eventBatchWindow / 2
+if flushInterval <= 0 {
+    flushInterval = time.Second
+}
+if flushInterval < 200*time.Millisecond {
+    flushInterval = 200 * time.Millisecond
+}
+eventBatchTicker := time.NewTicker(flushInterval)
+bindingReloadTicker := time.NewTicker(30 * time.Second)
+```
+
+The event-batch ticker must call `drainEventBatch`; the binding ticker must refresh the same `EventBatcher` snapshot. Do not add a tRPC Timer service: the buckets are in-memory object state, the flush interval can be sub-second, and shutdown must stop both tickers with the Factor runtime context.
+
+- [ ] **Step 5: Verify terminology and behavior**
+
+```bash
+cd modules/factor
+env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/trigger ./internal/bootstrap
+env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/trigger ./internal/bootstrap
+if rg -n 'Debouncer|NewDebouncer|debounce_window_ms|debounceWindow|drainDebounced|debounced' . \
+  --glob '*.go' --glob '*.yaml' --glob '*.md'; then
+  exit 1
+fi
+```
+
+Expected: both test commands PASS, race detection reports no race, and the terminology scan returns no matches.
+
+- [ ] **Step 6: Commit the Factor naming correction**
+
+```bash
+git add modules/factor
+git commit -m "refactor(factor): rename debounce to event batching"
+```
+
+### Task 10: Documentation, Static Audit, And Full Verification
 
 **Files:**
 - Modify: `docs/存储引擎架构.md`
@@ -622,5 +720,7 @@ Expected: push succeeds, the worktree is clean, and `HEAD` equals `origin/main`.
 - [ ] Cleanup continues across dataset-specific errors and reports partial progress.
 - [ ] No schedule interval is duplicated between application YAML and `trpc_go.yaml`.
 - [ ] Timer service configuration tests lock service name, port, cron, protocol, and timeout.
-- [ ] Remaining Go timers are restricted to lifecycle, retry, heartbeat, debounce, outbox, sampling, or in-memory wait semantics.
+- [ ] Factor uses `trigger.EventBatcher` and `event_batch_window_ms`; no Debouncer/debounce terminology remains.
+- [ ] Factor event-batch flush and binding reload remain process-owned timers with runtime-context shutdown.
+- [ ] Remaining Go timers are restricted to lifecycle, retry, heartbeat, event batching, outbox, sampling, or in-memory wait semantics.
 - [ ] Focused tests, race tests, `make verify`, commit, push, clean-worktree, and `HEAD == origin/main` checks all pass.
