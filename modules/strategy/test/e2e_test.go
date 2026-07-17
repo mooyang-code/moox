@@ -20,6 +20,11 @@ func TestStrategyRunOnceCommitsStateAndOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		t.Fatal(err)
 	}

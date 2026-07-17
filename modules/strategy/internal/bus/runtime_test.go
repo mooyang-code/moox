@@ -1,0 +1,156 @@
+package bus
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
+)
+
+type runtimeTestStore struct {
+	mu        sync.Mutex
+	row       domain.OutboxMessage
+	claimed   bool
+	published bool
+}
+
+func (s *runtimeTestStore) ListPendingOutbox(context.Context, int, time.Time) ([]domain.OutboxMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.published || s.claimed || s.row.MessageID == "" {
+		return nil, nil
+	}
+	return []domain.OutboxMessage{s.row}, nil
+}
+func (s *runtimeTestStore) ClaimOutbox(context.Context, string, string, time.Time, time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed || s.published {
+		return false, nil
+	}
+	s.claimed = true
+	return true, nil
+}
+func (s *runtimeTestStore) ReleaseOutbox(context.Context, string, string) error {
+	s.mu.Lock()
+	s.claimed = false
+	s.mu.Unlock()
+	return nil
+}
+func (s *runtimeTestStore) MarkOutboxPublished(context.Context, string, string) error {
+	s.mu.Lock()
+	s.claimed = false
+	s.published = true
+	s.mu.Unlock()
+	return nil
+}
+func (s *runtimeTestStore) PendingOutboxStats(context.Context) (domain.OutboxStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.published || s.row.MessageID == "" {
+		return domain.OutboxStats{}, nil
+	}
+	return domain.OutboxStats{PendingCount: 1, OldestPending: s.row.CreatedAt}, nil
+}
+func (s *runtimeTestStore) isPublished() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.published
+}
+
+type runtimeTestClient struct {
+	ready atomic.Bool
+	ids   chan string
+}
+
+func newRuntimeTestClient() *runtimeTestClient {
+	client := &runtimeTestClient{ids: make(chan string, 4)}
+	client.ready.Store(true)
+	return client
+}
+func (c *runtimeTestClient) Publish(_ context.Context, message *messagepb.MooxMessage, _ ...jetstream.PublishOption) (*jetstream.PublishAck, error) {
+	if !c.ready.Load() {
+		return nil, errors.New("disconnected")
+	}
+	c.ids <- message.GetMessageId()
+	return &jetstream.PublishAck{}, nil
+}
+func (c *runtimeTestClient) Ready() bool { return c.ready.Load() }
+func (c *runtimeTestClient) Close() error { c.ready.Store(false); return nil }
+
+func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
+	store := &runtimeTestStore{row: domain.OutboxMessage{MessageID: "run-1", Topic: "moox.strategy.action.accepted.v1", Payload: []byte(`{}`), CreatedAt: time.Now().Add(-time.Minute)}}
+	client := newRuntimeTestClient()
+	var attempts atomic.Int32
+	runtime, err := NewRuntime(RuntimeConfig{
+		Store: store, InstanceID: "strategy-test", RelayInterval: 5 * time.Millisecond,
+		ReconnectInterval: 5 * time.Millisecond, BatchSize: 10,
+		Connector: func(context.Context) (JetStreamClient, error) {
+			if attempts.Add(1) < 3 {
+				return nil, errors.New("broker unavailable")
+			}
+			return client, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.Start(context.Background())
+	t.Cleanup(func() { _ = runtime.Close() })
+	eventually(t, time.Second, func() bool { return runtime.Connected() && store.isPublished() })
+	select {
+	case id := <-client.ids:
+		if id != "run-1" {
+			t.Fatalf("message id=%q", id)
+		}
+	default:
+		t.Fatal("pending row was not published")
+	}
+}
+
+func TestRuntimeDetectsBrokerLossAndReconnects(t *testing.T) {
+	store := &runtimeTestStore{}
+	first := newRuntimeTestClient()
+	second := newRuntimeTestClient()
+	var attempts atomic.Int32
+	runtime, err := NewRuntime(RuntimeConfig{
+		Store: store, RelayInterval: 5 * time.Millisecond, ReconnectInterval: 5 * time.Millisecond, BatchSize: 1,
+		Connector: func(context.Context) (JetStreamClient, error) {
+			if attempts.Add(1) == 1 {
+				return first, nil
+			}
+			return second, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.Start(context.Background())
+	eventually(t, time.Second, runtime.Connected)
+	first.ready.Store(false)
+	eventually(t, time.Second, func() bool { return attempts.Load() >= 2 && runtime.Connected() })
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if second.Ready() {
+		t.Fatal("runtime Close left client connected")
+	}
+}
+
+func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("condition was not met")
+}

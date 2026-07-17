@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadAppliesSafeDefaults(t *testing.T) {
@@ -17,6 +18,19 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	}
 	if cfg.PythonBin != "python3" || cfg.Workers != 1 || cfg.LiveEnabled {
 		t.Fatalf("cfg=%+v", cfg)
+	}
+	if cfg.InstanceID != "strategy-1" || cfg.EventBus.RelayInterval != time.Second || cfg.EventBus.RelayBatchSize != 100 || cfg.EventBus.ConnectTimeout != 3*time.Second {
+		t.Fatalf("eventbus defaults=%+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidEventBusRuntimeSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nworker_path: ./worker.py\neventbus:\n  relay_interval: -1s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected invalid EventBus settings to fail")
 	}
 }
 

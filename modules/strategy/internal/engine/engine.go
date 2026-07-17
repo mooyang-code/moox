@@ -25,6 +25,7 @@ import (
 
 type Engine struct {
 	pool      *pool.Pool
+	factory   pool.Factory
 	publisher *moduleregistry.SourcePublisher
 	mu        sync.RWMutex
 	versions  map[string]process.LoadRequest
@@ -33,12 +34,30 @@ type Engine struct {
 var decimalWeight = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
 func New(ctx context.Context, python, workerPath string) (*Engine, error) {
+	return NewWithWorkers(ctx, python, workerPath, 4)
+}
+
+func NewWithWorkers(ctx context.Context, python, workerPath string, workers int) (*Engine, error) {
+	_ = ctx
 	root := filepath.Join(os.TempDir(), "moox-strategy")
 	factory := func(start context.Context) (process.Worker, error) {
 		return process.NewStdioWorker(start, process.Config{PythonBin: python, WorkerPath: workerPath, Hello: protocol.HelloExpectation{ProtocolVersion: protocol.VersionV1}, TaskTimeout: 30 * 1e9})
 	}
-	p := pool.New(4, func(start context.Context) (process.Worker, error) { return factory(start) })
-	return &Engine{pool: p, publisher: moduleregistry.NewSourcePublisher(root), versions: make(map[string]process.LoadRequest)}, nil
+	p := pool.New(workers, factory)
+	return &Engine{pool: p, factory: factory, publisher: moduleregistry.NewSourcePublisher(root), versions: make(map[string]process.LoadRequest)}, nil
+}
+
+// Probe starts a real worker and completes its protocol handshake.
+func (e *Engine) Probe(ctx context.Context) error {
+	if e == nil || e.factory == nil {
+		return errors.New("strategy engine unavailable")
+	}
+	worker, err := e.factory(ctx)
+	if err != nil {
+		return fmt.Errorf("strategy worker handshake: %w", err)
+	}
+	_ = worker.Close()
+	return nil
 }
 
 func versionKey(strategyID, version string) string { return strategyID + "/" + version }

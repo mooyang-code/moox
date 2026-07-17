@@ -3,3 +3,12 @@ worker_path: ./pyworker/worker.py
 database: ./data/strategy.sqlite
 live_enabled: false
 workers: 4
+instance_id: strategy-1
+eventbus:
+  urls:
+    - nats://127.0.0.1:4222
+  credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml
+  relay_interval: 1s
+  relay_batch_size: 100
+  reconnect_interval: 1s
+  connect_timeout: 3s

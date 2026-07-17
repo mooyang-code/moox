@@ -2,11 +2,13 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +23,10 @@ type Store struct {
 }
 
 func New(db *gorm.DB) *Store { return &Store{db: db} }
+
+func (s *Store) CreateInitialState(ctx context.Context, state domain.State) error {
+	return s.db.WithContext(ctx).Create(&state).Error
+}
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 

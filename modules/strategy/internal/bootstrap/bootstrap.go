@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 
+	strategybus "github.com/mooyang-code/moox/modules/strategy/internal/bus"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
@@ -14,6 +18,7 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -32,43 +37,63 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	keepResources := false
 	var eng *engine.Engine
+	var eventRuntime *strategybus.Runtime
 	defer func() {
 		if keepResources {
 			return
 		}
-		_ = db.Close()
+		if eventRuntime != nil {
+			_ = eventRuntime.Close()
+		}
 		if eng != nil {
 			_ = eng.Close()
 		}
+		_ = db.Close()
 	}()
 	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, nil, fmt.Errorf("apply strategy schema: %w", err)
 	}
 	repo := db
 	if cfg.WorkerPath != "" {
-		eng, err = engine.New(ctx, cfg.PythonBin, cfg.WorkerPath)
+		eng, err = engine.NewWithWorkers(ctx, cfg.PythonBin, cfg.WorkerPath, cfg.Workers)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else if cfg.LiveEnabled {
 		return nil, nil, fmt.Errorf("worker_path is required when live is enabled")
 	}
-	// pyruntime workers are started lazily on the first LOAD. Do not report
-	// them as ready before a real handshake has completed.
+	probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
+	err = eng.Probe(probeCtx)
+	probeCancel()
+	if err != nil {
+		return nil, nil, err
+	}
+	eventRuntime, err = newEventBusRuntime(db, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	eventRuntime.Start(ctx)
 	service := newRPCService(repo, eng, cfg)
 	strategypb.RegisterStrategyMgrService(s, service)
 	healthState := health.New("strategy", "strategy", "", "")
-	healthState.SnapshotFunc = strategyHealthSnapshot(db, eng, cfg.Workers, healthState)
+	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, cfg.Workers, healthState)
 	healthState.SetReady(true)
 	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
 		return nil, nil, fmt.Errorf("register strategy health service: %w", err)
 	}
 	closeFn := func() error {
+		var eventBusErr error
+		if eventRuntime != nil {
+			eventBusErr = eventRuntime.Close()
+		}
 		var engineErr error
 		if eng != nil {
 			engineErr = eng.Close()
 		}
 		dbErr := db.Close()
+		if eventBusErr != nil {
+			return eventBusErr
+		}
 		if engineErr != nil {
 			return engineErr
 		}
@@ -78,6 +103,32 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	return s, closeFn, nil
 }
 
+func newEventBusRuntime(repo *store.Store, cfg Config) (*strategybus.Runtime, error) {
+	connector := func(ctx context.Context) (strategybus.JetStreamClient, error) {
+		jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy")
+		if jsConfig.Credentials == "" {
+			jsConfig.Credentials = expandHome(cfg.EventBus.CredentialFile)
+		}
+		jsConfig.ConnectTimeout = cfg.EventBus.ConnectTimeout
+		return jetstream.Connect(ctx, jsConfig)
+	}
+	return strategybus.NewRuntime(strategybus.RuntimeConfig{
+		Connector: connector, Store: repo, InstanceID: cfg.InstanceID,
+		RelayInterval: cfg.EventBus.RelayInterval, ReconnectInterval: cfg.EventBus.ReconnectInterval,
+		BatchSize: cfg.EventBus.RelayBatchSize,
+	})
+}
+
+func expandHome(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	return path
+}
+
 func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Service {
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng,
@@ -85,13 +136,23 @@ func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Servi
 	}
 }
 
-func strategyHealthSnapshot(db *store.Store, eng *engine.Engine, workers int, state *health.State) func(context.Context) healthz.Response {
+func strategyHealthSnapshot(db *store.Store, eventRuntime *strategybus.Runtime, workers int, state *health.State) func(context.Context) healthz.Response {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := db != nil && db.Ping(ctx) == nil
-		engineReady := eng != nil
-		ready := databaseReady && engineReady && state.Ready()
+		workerReady := state.Ready()
+		eventBusConnected := eventRuntime != nil && eventRuntime.Connected()
+		stats, statsErr := db.PendingOutboxStats(ctx)
+		oldestAge := 0.0
+		if !stats.OldestPending.IsZero() {
+			oldestAge = max(0, time.Since(stats.OldestPending).Seconds())
+		}
+		ready := databaseReady && workerReady && eventBusConnected && statsErr == nil
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)
-		rsp.Details = map[string]any{"database_ready": databaseReady, "python_engine_ready": engineReady, "workers": workers}
+		rsp.Details = map[string]any{
+			"database_ready": databaseReady, "python_worker_ready": workerReady, "workers": workers,
+			"eventbus_connected": eventBusConnected, "outbox_pending_count": stats.PendingCount,
+			"oldest_outbox_age_seconds": oldestAge,
+		}
 		return rsp
 	}
 }

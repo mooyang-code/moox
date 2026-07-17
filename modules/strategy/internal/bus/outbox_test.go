@@ -2,21 +2,32 @@ package bus
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"gorm.io/gorm"
-	"testing"
 )
 
-type idempotentPublisher struct{ ids []string }
-
-func (p *idempotentPublisher) Publish(context.Context, string, []byte) error { return nil }
-func (p *idempotentPublisher) PublishWithID(_ context.Context, id, _ string, _ []byte) error {
-	p.ids = append(p.ids, id)
-	return nil
+type recordingPublisher struct {
+	mu   sync.Mutex
+	rows []domain.OutboxMessage
+	err  error
 }
 
-func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
+func (p *recordingPublisher) Publish(_ context.Context, row domain.OutboxMessage) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rows = append(p.rows, row)
+	return p.err
+}
+
+func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -32,15 +43,21 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 	)`).Error; err != nil {
 		t.Fatal(err)
 	}
+	return db, store.New(db)
+}
+
+func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
+	db, repo := openOutboxTestStore(t)
 	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_topic,c_payload) VALUES(?,?,?)", "run-1", "topic", []byte(`{"ok":true}`)).Error; err != nil {
 		t.Fatal(err)
 	}
-	p := &idempotentPublisher{}
-	if err := (&Relay{Store: store.New(db), Publisher: p}).PublishPending(context.Background(), 10); err != nil {
+	publisher := &recordingPublisher{}
+	relay := &Relay{Store: repo, Publisher: publisher, Now: func() time.Time { return time.Unix(100, 0).UTC() }}
+	if err := relay.PublishPending(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.ids) != 1 || p.ids[0] != "run-1" {
-		t.Fatalf("published ids=%v", p.ids)
+	if len(publisher.rows) != 1 || publisher.rows[0].MessageID != "run-1" || publisher.rows[0].Topic != "topic" {
+		t.Fatalf("published rows=%+v", publisher.rows)
 	}
 	var published int
 	if err := db.Table("t_strategy_outbox").Select("c_published").Where("c_message_id=?", "run-1").Scan(&published).Error; err != nil {
@@ -48,5 +65,50 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 	}
 	if published != 1 {
 		t.Fatalf("published=%d", published)
+	}
+}
+
+func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
+	db, repo := openOutboxTestStore(t)
+	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_topic,c_payload) VALUES(?,?,?)", "run-1", "topic", []byte(`{}`)).Error; err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("broker unavailable")
+	publisher := &recordingPublisher{err: want}
+	relay := &Relay{Store: repo, Publisher: publisher}
+	if err := relay.PublishPending(context.Background(), 1); !errors.Is(err, want) {
+		t.Fatalf("error=%v", err)
+	}
+	var claimToken string
+	if err := db.Table("t_strategy_outbox").Select("c_claim_token").Where("c_message_id=?", "run-1").Scan(&claimToken).Error; err != nil {
+		t.Fatal(err)
+	}
+	if claimToken != "" {
+		t.Fatalf("claim token was not released: %q", claimToken)
+	}
+	publisher.err = nil
+	if err := relay.PublishPending(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.rows) != 2 {
+		t.Fatalf("publish attempts=%d", len(publisher.rows))
+	}
+}
+
+func TestRelayRunStopsOnCancellation(t *testing.T) {
+	_, repo := openOutboxTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Relay{Store: repo, Publisher: &recordingPublisher{}}).Run(ctx, time.Millisecond, 1)
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay did not stop")
 	}
 }

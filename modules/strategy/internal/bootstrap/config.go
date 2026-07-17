@@ -2,16 +2,30 @@ package bootstrap
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
+type EventBusConfig struct {
+	URLs              []string      `yaml:"urls"`
+	CredentialFile    string        `yaml:"credential_file"`
+	RelayInterval     time.Duration `yaml:"relay_interval"`
+	RelayBatchSize    int           `yaml:"relay_batch_size"`
+	ReconnectInterval time.Duration `yaml:"reconnect_interval"`
+	ConnectTimeout    time.Duration `yaml:"connect_timeout"`
+}
+
 type Config struct {
-	PythonBin   string `yaml:"python_bin"`
-	WorkerPath  string `yaml:"worker_path"`
-	Database    string `yaml:"database"`
-	LiveEnabled bool   `yaml:"live_enabled"`
-	Workers     int    `yaml:"workers"`
+	PythonBin   string         `yaml:"python_bin"`
+	WorkerPath  string         `yaml:"worker_path"`
+	Database    string         `yaml:"database"`
+	LiveEnabled bool           `yaml:"live_enabled"`
+	Workers     int            `yaml:"workers"`
+	InstanceID  string         `yaml:"instance_id"`
+	EventBus    EventBusConfig `yaml:"eventbus"`
 }
 
 func Load(path string) (Config, error) {
@@ -29,8 +43,34 @@ func Load(path string) (Config, error) {
 	if c.Workers < 1 {
 		c.Workers = 1
 	}
+	if strings.TrimSpace(c.InstanceID) == "" {
+		c.InstanceID = "strategy-1"
+	}
+	if len(c.EventBus.URLs) == 0 {
+		c.EventBus.URLs = []string{"nats://127.0.0.1:4222"}
+	}
+	if c.EventBus.RelayInterval == 0 {
+		c.EventBus.RelayInterval = time.Second
+	}
+	if c.EventBus.RelayBatchSize == 0 {
+		c.EventBus.RelayBatchSize = 100
+	}
+	if c.EventBus.ReconnectInterval == 0 {
+		c.EventBus.ReconnectInterval = time.Second
+	}
+	if c.EventBus.ConnectTimeout == 0 {
+		c.EventBus.ConnectTimeout = 3 * time.Second
+	}
 	if c.WorkerPath == "" {
 		return Config{}, fmt.Errorf("worker_path is required for strategy execution")
+	}
+	for _, rawURL := range c.EventBus.URLs {
+		if strings.TrimSpace(rawURL) == "" {
+			return Config{}, fmt.Errorf("strategy eventbus URLs must not be empty")
+		}
+	}
+	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 {
+		return Config{}, fmt.Errorf("strategy eventbus durations and batch size must be positive")
 	}
 	return c, nil
 }
