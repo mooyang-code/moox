@@ -51,8 +51,8 @@ make deploy
 ```
 
 单独发布或替换已部署的二进制服务时，使用
-[`references/binary-release.md`](references/binary-release.md) 中的发布流程；当前 Web Host
-入口为 `moox-cli setup deploy-web-host`。该流程由 CLI 在进程内读取 `custom.toml`，
+[`references/binary-release.md`](references/binary-release.md) 中的发布流程；通用入口为
+`moox-cli setup deploy-binary`，Web Host 也保留了便捷入口 `deploy-web-host`。该流程由 CLI 在进程内读取 `custom.toml`，
 通过已核验的 SSH 主机指纹完成安全上传、回滚和健康检查；不要在命令行中拼接密码。
 
 Protocol generation:

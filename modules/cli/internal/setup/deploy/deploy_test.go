@@ -104,6 +104,46 @@ func TestWebHostRollsBackWhenRemoteDigestDiffers(t *testing.T) {
 	require.Contains(t, events, "rollback")
 }
 
+func TestBinaryPublishesNamedServiceAndBinary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "moox-admin")
+	payload := []byte("admin-binary")
+	require.NoError(t, os.WriteFile(binary, payload, 0o755))
+	digest := sha256.Sum256(payload)
+	events := []string{}
+	transport := &fakeWebHostTransport{events: &events, home: "/home/ubuntu", digest: hex.EncodeToString(digest[:])}
+
+	result, err := Binary(context.Background(), transport, BinaryOptions{
+		BinaryPath:  binary,
+		BinaryName:  "moox-admin",
+		ServiceName: "admin",
+		DeployDir:   "~/moox/prod",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/home/ubuntu/moox/prod/bin/moox-admin", result.RemotePath)
+	require.Equal(t, []string{"home", "prepare", "upload", "activate", "digest", "finalize"}, events)
+}
+
+func TestBinaryRejectsUnsafeRemoteNames(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "payload")
+	require.NoError(t, os.WriteFile(binary, []byte("payload"), 0o755))
+	for _, test := range []struct {
+		name    string
+		service string
+	}{
+		{name: "../moox-admin", service: "admin"},
+		{name: "moox-admin", service: "web-host;rm"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Binary(context.Background(), &fakeWebHostTransport{}, BinaryOptions{
+				BinaryPath: binary, BinaryName: test.name, ServiceName: test.service, DeployDir: "/home/ubuntu/moox/prod",
+			})
+			require.EqualError(t, err, "binary_deploy_invalid")
+		})
+	}
+}
+
 func TestControlCleansRemoteArchiveAfterFailure(t *testing.T) {
 	t.Parallel()
 	archive := filepath.Join(t.TempDir(), "control.tar.gz")
@@ -163,6 +203,24 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 			require.NoError(t, err, string(output))
 		})
 	}
+}
+
+func TestPrepareBinaryRestoresPreviousWhenStopFails(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "prod")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "bin"), 0o700))
+	binary := filepath.Join(deploy, "bin", "moox-admin")
+	require.NoError(t, os.WriteFile(binary, []byte("previous"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "stop.sh"), []byte("#!/bin/sh\nexit 1\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "healthcheck.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+
+	command := exec.Command("bash", "-c", prepareBinaryScript, "prepare", deploy, "admin", "moox-admin")
+	output, err := command.CombinedOutput()
+	require.Error(t, err, string(output))
+	require.Equal(t, "previous", string(requireFile(t, binary)))
+	_, err = os.Stat(binary + ".previous")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestRollbackScriptRestoresAndStartsPreviousDeployment(t *testing.T) {
@@ -240,13 +298,13 @@ func (f *fakeWebHostTransport) Run(_ context.Context, argv []string, _ io.Reader
 	case len(argv) >= 3 && strings.Contains(command, "printf '%s' \"$HOME\""):
 		*f.events = append(*f.events, "home")
 		return setupssh.Result{Stdout: f.home}, nil
-	case len(argv) >= 3 && strings.Contains(command, "moox-prepare-web-host"):
+	case len(argv) >= 3 && (strings.Contains(command, "moox-prepare-binary") || strings.Contains(command, "moox-prepare-web-host")):
 		*f.events = append(*f.events, "prepare")
-	case len(argv) >= 3 && strings.Contains(command, "moox-activate-web-host"):
+	case len(argv) >= 3 && (strings.Contains(command, "moox-activate-binary") || strings.Contains(command, "moox-activate-web-host")):
 		*f.events = append(*f.events, "activate")
-	case len(argv) >= 3 && strings.Contains(command, "moox-rollback-web-host"):
+	case len(argv) >= 3 && (strings.Contains(command, "moox-rollback-binary") || strings.Contains(command, "moox-rollback-web-host")):
 		*f.events = append(*f.events, "rollback")
-	case len(argv) >= 3 && strings.Contains(command, "moox-finalize-web-host"):
+	case len(argv) >= 3 && (strings.Contains(command, "moox-finalize-binary") || strings.Contains(command, "moox-finalize-web-host")):
 		*f.events = append(*f.events, "finalize")
 	case len(argv) == 2 && argv[0] == "sha256sum":
 		*f.events = append(*f.events, "digest")

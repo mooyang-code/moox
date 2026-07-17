@@ -11,7 +11,7 @@ moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
-moox-cli setup ...                  # 初始化控制面、部署 Storage、导入初始元数据
+moox-cli setup ...                  # 初始化控制面、发布单个二进制、部署 Storage、导入元数据
 ```
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
@@ -28,7 +28,19 @@ moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
 ```
 
-单独发布 `web-host` 二进制时，先构建远端 Linux 目标，再由 CLI 通过 SSH 上传、原子替换、重启并执行健康检查：
+单独发布任意已接入生命周期脚本的二进制服务时，先构建远端 Linux 目标，再由 CLI 通过 SSH 上传、原子替换、重启并执行健康检查：
+
+```bash
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh admin
+moox-cli setup deploy-binary \
+  --file ./custom.toml \
+  --host control \
+  --service admin \
+  --binary ./bin/moox-admin
+```
+
+`--name` 可用于覆盖远端 `bin` 目录中的文件名；默认取本地二进制文件名。Web Host
+也可以使用专用便捷命令：
 
 ```bash
 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host

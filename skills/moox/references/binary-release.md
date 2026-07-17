@@ -1,9 +1,8 @@
 # 单个二进制服务发布
 
 当只需要发布或替换远端某个二进制服务，而不需要重新部署整个控制面时，使用本流程。
-当前 CLI 已提供 Web Host 的 `moox-cli setup deploy-web-host` 入口；其他服务应复用
-相同的凭据读取、SSH 主机校验、原子上传、健康检查和失败回滚原则接入对应命令。
-命令由 CLI 在进程内读取 `custom.toml`，通过 SSH/SFTP 完成上传、原子替换、重启和
+通用入口是 `moox-cli setup deploy-binary`；`deploy-web-host` 是针对 Web Host 的便捷
+命令。CLI 在进程内读取 `custom.toml`，通过 SSH/SFTP 完成上传、原子替换、重启和
 健康检查；不要在 Agent 或 shell 中拼接 SSH 密码。
 
 ## 前置条件
@@ -47,7 +46,30 @@ sha256sum ./bin/moox-web-host
 
 ## 发布命令
 
-默认发布到远端 `~/moox/prod`：
+通用发布命令会默认使用本地二进制的文件名作为远端 `bin` 文件名：
+
+```bash
+./bin/moox-cli setup deploy-binary \
+  --file ./custom.toml \
+  --host control \
+  --service admin \
+  --binary ./bin/moox-admin
+```
+
+如果本地文件名与远端文件名不同，使用 `--name` 显式指定。`--service` 必须是远端
+`start.sh`、`stop.sh` 和 `healthcheck.sh` 支持的服务名称。
+
+默认发布到远端 `~/moox/prod`。Web Host 可以使用通用命令：
+
+```bash
+./bin/moox-cli setup deploy-binary \
+  --file ./custom.toml \
+  --host control \
+  --service web-host \
+  --binary ./bin/moox-web-host
+```
+
+也可以使用等价的 Web Host 便捷命令：
 
 ```bash
 ./bin/moox-cli setup deploy-web-host \
@@ -76,11 +98,11 @@ CLI 会按以下顺序完成发布：
 2. 校验已信任的 SSH 主机指纹，并解析 `~` 对应的远端用户目录。
 3. 校验远端部署目录、`stop.sh`、`start.sh` 和 `healthcheck.sh`。
 4. 备份当前二进制，停止现有 Web Host，通过 SFTP 上传临时文件，再原子替换为新二进制。
-5. 设置二进制权限为 `0755`，启动 Web Host，执行健康检查并比较 SHA-256 摘要。
+5. 设置二进制权限为 `0755`，启动指定服务，执行健康检查并比较 SHA-256 摘要。
 6. 只有所有检查成功后才删除旧版本备份；中途失败时自动回滚并尝试恢复服务。
 
-因此，这个命令只发布 Web Host，不会重新部署 Admin、Gateway、Storage 或其他服务。
-需要完整控制面部署时，继续使用 `setup deploy-control` 或仓库级 `make deploy`。
+单二进制命令只操作指定服务，不会重新部署其他服务；需要完整控制面部署时，继续使用
+`setup deploy-control` 或仓库级 `make deploy`。
 
 ## 安全要求
 
@@ -98,7 +120,9 @@ ssh -o StrictHostKeyChecking=no ...
 ## 常见失败
 
 - `host_key_unknown`：先通过独立渠道核验指纹，再执行 `setup trust-host`。
-- `web_host_prepare_failed`：确认远端目录及 `stop.sh`、`start.sh`、`healthcheck.sh`
+- `binary_prepare_failed`：确认远端目录及 `stop.sh`、`start.sh`、`healthcheck.sh`
   存在且可执行。
-- `web_host_activate_failed`：检查远端服务启动日志和端口占用；CLI 会保留或恢复旧二进制。
-- `web_host_digest_mismatch`：检查构建目标架构、上传结果和远端文件系统；不要直接跳过摘要校验。
+- `binary_activate_failed`：检查远端服务启动日志和端口占用；CLI 会保留或恢复旧二进制。
+- `binary_digest_mismatch`：检查构建目标架构、上传结果和远端文件系统；不要直接跳过摘要校验。
+
+`deploy-web-host` 便捷命令会返回对应的 `web_host_*` 错误码。
