@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Client owns a NATS connection and its JetStream context.
@@ -33,7 +34,7 @@ func (c *Client) Ready() bool {
 // Connect establishes a NATS connection and creates a JetStream context.
 func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, err)

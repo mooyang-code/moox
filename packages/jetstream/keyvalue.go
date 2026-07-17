@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 var (
@@ -132,7 +133,7 @@ func (c *Client) KeyValue(bucket string) (KeyValue, error) {
 // BindKV opens an existing bucket without creating or reconciling it. EventBus owns KV lifecycle.
 func (c *Client) BindKV(ctx context.Context, bucket string) (KVStore, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

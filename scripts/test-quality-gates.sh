@@ -7,7 +7,8 @@ cd "${ROOT}"
 grep -Eq '^check-boundaries:.*check-module-boundaries.*check-package-boundaries' Makefile
 grep -Eq '^check-format:' Makefile
 grep -Eq '^check-lint:' Makefile
-grep -Eq '^verify:.*check-format.*check-lint' Makefile
+grep -Eq '^check-context:' Makefile
+grep -Eq '^verify:.*check-context.*check-format.*check-lint' Makefile
 
 node - <<'NODE'
 const pkg = require('./web/package.json')
@@ -27,6 +28,8 @@ NODE
 grep -Fq 'gofmt -l' scripts/check-gofmt.sh
 grep -Fq 'git ls-files' scripts/check-gofmt.sh
 grep -Fq ':!web-host/internal/statik/statik.go' scripts/check-gofmt.sh
+grep -Fq "' go.work" scripts/check-trpc-context.sh
+grep -Fq 'context\.Background\(\)' scripts/check-trpc-context.sh
 grep -Fxq '/src/auto-import.d.ts' web/.prettierignore
 grep -Fxq '/src/components.d.ts' web/.prettierignore
 

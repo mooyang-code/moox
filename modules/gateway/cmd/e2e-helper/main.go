@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	trpc "trpc.group/trpc-go/trpc-go"
+
 	"github.com/mooyang-code/moox/modules/gateway/internal/router"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -72,13 +74,13 @@ func run(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secret string) e
 	}
 	defer os.Remove(readyFile)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(trpc.BackgroundContext(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 3*time.Second)
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	case err := <-done:

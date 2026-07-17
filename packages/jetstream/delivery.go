@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type Delivery struct {
@@ -66,7 +67,7 @@ func (d *Delivery) withMessage(ctx context.Context, fn func(*nats.Msg, context.C
 		return ErrInvalidDelivery
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDelivery, err)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type publishOptions struct {
@@ -39,7 +40,7 @@ type PublishResult struct {
 
 func (c *Client) Publish(ctx context.Context, msg *messagepb.MooxMessage, opts ...PublishOption) (*PublishAck, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

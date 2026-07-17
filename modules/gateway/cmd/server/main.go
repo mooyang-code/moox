@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"os/signal"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/gateway/internal/config"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load gateway configuration: %v", err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(trpc.BackgroundContext(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := bootstrap.Run(ctx, cfg); err != nil {
 		log.Fatalf("run gateway: %v", err)

@@ -6,21 +6,22 @@ cd "${ROOT}"
 
 violations=()
 
-# Only tRPC-enabled modules are subject to this rule. Transport-neutral modules
-# such as packages/jetstream and modules/gateway intentionally keep the standard
-# library context and must not gain a framework dependency just for this check.
-for module_file in modules/*/go.mod packages/*/go.mod; do
-	[[ -f "${module_file}" ]] || continue
-	rg -q 'trpc\.group/trpc-go/trpc-go' "${module_file}" || continue
-	module_root="${module_file%/go.mod}"
+# MooX standardizes every production entry context on tRPC, including shared
+# packages and standalone binaries, so logging/metrics metadata is initialized.
+while IFS= read -r module_root; do
+	[[ -n "${module_root}" ]] || continue
 	while IFS= read -r match; do
-		violations+=("${match}: use trpc.BackgroundContext() in tRPC-enabled production code")
+		violations+=("${match}: use trpc.BackgroundContext() in production code")
 	done < <(rg -n 'context\.Background\(\)' "${module_root}" \
 		--glob '*.go' \
 		--glob '!**/*_test.go' \
 		--glob '!**/*.pb.go' \
 		--glob '!**/*.trpc.go' || true)
-done
+done < <(awk '
+	/^use \(/ { in_use = 1; next }
+	in_use && /^\)/ { exit }
+	in_use { sub(/^[[:space:]]+/, ""); if ($0 != "") print $0 }
+' go.work)
 
 if (( ${#violations[@]} > 0 )); then
 	{

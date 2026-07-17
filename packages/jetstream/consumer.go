@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // ConsumerRef identifies a predeclared durable consumer for bind-only clients.
@@ -69,7 +70,7 @@ func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullCo
 
 func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, create bool) (*PullConsumer, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	cfg.Stream = strings.TrimSpace(cfg.Stream)
 	cfg.Durable = strings.TrimSpace(cfg.Durable)
@@ -216,7 +217,7 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 		return nil, ErrClosed
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if batch <= 0 {
 		batch = 1
@@ -247,7 +248,7 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 			if !p.cfg.DeliverDecodeErrors {
 				// Poison messages must be terminated even when the caller's fetch context
 				// has expired; otherwise they immediately redeliver forever.
-				termCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+				termCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), time.Second)
 				_ = msg.Term(nats.Context(termCtx))
 				cancel()
 			} else if delivery != nil {

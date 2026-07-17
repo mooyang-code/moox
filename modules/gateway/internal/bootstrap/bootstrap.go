@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type routeStore interface {
@@ -265,7 +266,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	for {
 		select {
 		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 			defer cancel()
 			_ = serviceServer.Shutdown(shutdownCtx)
 			_ = healthServer.Shutdown(shutdownCtx)

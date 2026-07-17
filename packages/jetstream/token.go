@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const maxDeliveryTokenSize = 4096
@@ -74,7 +75,7 @@ func validateAckSubject(stream, consumer, subject string) error {
 
 func (c *Client) sendToken(ctx context.Context, raw string, payload []byte, request bool) error {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := c.alive(); err != nil {
 		return fmt.Errorf("%w: %w", ErrConnection, err)
