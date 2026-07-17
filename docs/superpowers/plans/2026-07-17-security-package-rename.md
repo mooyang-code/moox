@@ -189,4 +189,4 @@ Expected: the push succeeds, the worktree is clean, and `HEAD` equals `origin/ma
 - [x] Cryptocurrency-market terminology and business identifiers are untouched.
 - [x] Focused tests, Race tests, static scans, architecture contracts, and `make verify` pass.
 - [x] A newly started Agent reviews the completed implementation and all actionable findings are fixed.
-- [x] Changes are committed and pushed; the worktree is clean and `HEAD == origin/main`.
+- [x] Task changes are committed and pushed, and `HEAD == origin/main`; unrelated concurrent release-matrix work remains untouched in the shared worktree.
