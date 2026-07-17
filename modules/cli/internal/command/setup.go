@@ -24,6 +24,7 @@ type setupDeps struct {
 	validate       func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
 	trustHost      func(context.Context, *setupconfig.Snapshot, string, string) error
 	deployControl  func(context.Context, *setupconfig.Snapshot) error
+	deployWebHost  func(context.Context, *setupconfig.Snapshot, string, string, string) (setupdeploy.WebHostResult, error)
 	apply          func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
 	status         func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
 	login          func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
@@ -47,6 +48,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupDeployCommand(deps),
+		newSetupDeployWebHostCommand(deps),
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
@@ -149,6 +151,31 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		return writeSetupJSON(cmd, map[string]string{"host": snapshot.Manifest.ControlHost.Name, "status": "ready"})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	return cmd
+}
+
+func newSetupDeployWebHostCommand(deps setupDeps) *cobra.Command {
+	var file, host, binary, deployDir string
+	cmd := &cobra.Command{Use: "deploy-web-host", Short: "通过 SSH 发布并校验单个 Web Host 二进制", RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		result, err := deps.deployWebHost(cmd.Context(), snapshot, host, binary, deployDir)
+		if err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, result)
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&host, "host", "control", "目标主机名称")
+	cmd.Flags().StringVar(&binary, "binary", "", "本地 moox-web-host 二进制路径")
+	cmd.Flags().StringVar(&deployDir, "deploy-dir", "~/moox/prod", "远端部署目录")
+	_ = cmd.MarkFlagRequired("binary")
 	return cmd
 }
 
@@ -274,6 +301,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.deployControl == nil {
 		deps.deployControl = defaults.deployControl
 	}
+	if deps.deployWebHost == nil {
+		deps.deployWebHost = defaults.deployWebHost
+	}
 	if deps.apply == nil {
 		deps.apply = defaults.apply
 	}
@@ -304,6 +334,7 @@ func defaultSetupDeps() setupDeps {
 		validate:       defaultSetupValidate,
 		trustHost:      defaultSetupTrustHost,
 		deployControl:  defaultSetupDeploy,
+		deployWebHost:  defaultSetupDeployWebHost,
 		apply:          defaultSetupApply,
 		status:         defaultSetupStatus,
 		deployStorage:  defaultSetupDeployStorage,
@@ -418,6 +449,19 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot) err
 		return fmt.Errorf("control_deploy_invalid")
 	}
 	return setupdeploy.Control(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address, BrowserPort: 9527}, setupdeploy.Dependencies{})
+}
+
+func defaultSetupDeployWebHost(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, binary, deployDir string) (setupdeploy.WebHostResult, error) {
+	host, err := findSetupHost(snapshot.Manifest, hostName)
+	if err != nil {
+		return setupdeploy.WebHostResult{}, err
+	}
+	transport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return setupdeploy.WebHostResult{}, err
+	}
+	defer transport.Close()
+	return setupdeploy.WebHost(ctx, transport, setupdeploy.WebHostOptions{BinaryPath: binary, DeployDir: deployDir})
 }
 
 func defaultSetupApply(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.ApplyResult, error) {

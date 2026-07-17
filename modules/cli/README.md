@@ -28,6 +28,19 @@ moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
 ```
 
+单独发布 `web-host` 二进制时，先构建远端 Linux 目标，再由 CLI 通过 SSH 上传、原子替换、重启并执行健康检查：
+
+```bash
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+moox-cli setup deploy-web-host \
+  --file ./custom.toml \
+  --host control \
+  --binary ./bin/moox-web-host
+```
+
+命令不会输出或拼接 SSH 密码；密码只在 CLI 进程内读取和使用。默认远端目录为
+`~/moox/prod`，可通过 `--deploy-dir` 覆盖。
+
 首次连接未知 SSH 主机时，先通过独立渠道核验命令报告的 SHA256 指纹，
 再执行 `setup trust-host --host <name> --fingerprint <SHA256:...>`。初始化命令只在
 进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`custom.toml`

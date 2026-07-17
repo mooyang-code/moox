@@ -10,6 +10,7 @@ import (
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/stretchr/testify/require"
 )
@@ -77,8 +78,32 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"hosts", "validate", "trust-host", "deploy-control", "apply", "status", "deploy-storage", "metadata-import"} {
+	for _, name := range []string{"hosts", "validate", "trust-host", "deploy-control", "deploy-web-host", "apply", "status", "deploy-storage", "metadata-import"} {
 		require.Contains(t, output.String(), name)
+	}
+}
+
+func TestSetupDeployWebHostPassesBinaryAndHostWithoutSecrets(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var selectedHost, selectedBinary, selectedDir string
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		deployWebHost: func(_ context.Context, _ *setupconfig.Snapshot, host, binary, deployDir string) (setupdeploy.WebHostResult, error) {
+			selectedHost, selectedBinary, selectedDir = host, binary, deployDir
+			return setupdeploy.WebHostResult{RemotePath: "/home/ubuntu/moox/prod/bin/moox-web-host", LocalSHA256: "local", RemoteSHA256: "local"}, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-web-host", "--file", "custom.toml", "--host", "compute", "--binary", "./bin/moox-web-host", "--deploy-dir", "/home/ubuntu/moox/prod"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "compute", selectedHost)
+	require.Equal(t, "./bin/moox-web-host", selectedBinary)
+	require.Equal(t, "/home/ubuntu/moox/prod", selectedDir)
+	require.JSONEq(t, `{"remote_path":"/home/ubuntu/moox/prod/bin/moox-web-host","local_sha256":"local","remote_sha256":"local"}`, output.String())
+	for _, secret := range []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
+		require.NotContains(t, output.String(), secret)
 	}
 }
 

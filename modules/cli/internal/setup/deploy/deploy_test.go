@@ -3,6 +3,8 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"io/fs"
 	"net"
@@ -67,6 +69,41 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
 }
 
+func TestWebHostPublishesBinaryAndReportsRemoteDigest(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "moox-web-host")
+	payload := []byte("web-host-binary")
+	require.NoError(t, os.WriteFile(binary, payload, 0o755))
+	digest := sha256.Sum256(payload)
+	events := []string{}
+	transport := &fakeWebHostTransport{events: &events, home: "/home/ubuntu", digest: hex.EncodeToString(digest[:])}
+
+	result, err := WebHost(context.Background(), transport, WebHostOptions{
+		BinaryPath: binary,
+		DeployDir:  "~/moox/prod",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"home", "prepare", "upload", "activate", "digest", "finalize"}, events)
+	require.Equal(t, "/home/ubuntu/moox/prod/bin/moox-web-host", transport.uploadPath)
+	require.Equal(t, fs.FileMode(0o755), transport.uploadMode)
+	require.Equal(t, string(payload), transport.uploaded.String())
+	require.Equal(t, hex.EncodeToString(digest[:]), result.LocalSHA256)
+	require.Equal(t, result.LocalSHA256, result.RemoteSHA256)
+}
+
+func TestWebHostRollsBackWhenRemoteDigestDiffers(t *testing.T) {
+	t.Parallel()
+	binary := filepath.Join(t.TempDir(), "moox-web-host")
+	require.NoError(t, os.WriteFile(binary, []byte("web-host-binary"), 0o755))
+	events := []string{}
+	transport := &fakeWebHostTransport{events: &events, home: "/home/ubuntu", digest: strings.Repeat("0", sha256.Size*2)}
+
+	_, err := WebHost(context.Background(), transport, WebHostOptions{BinaryPath: binary, DeployDir: "~/moox/prod"})
+	require.EqualError(t, err, "web_host_digest_mismatch")
+	require.Contains(t, events, "rollback")
+}
+
 func TestControlCleansRemoteArchiveAfterFailure(t *testing.T) {
 	t.Parallel()
 	archive := filepath.Join(t.TempDir(), "control.tar.gz")
@@ -116,6 +153,8 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
 		"install-storage": installStorageScript, "rollback-storage": rollbackStorageScript, "finalize-storage": finalizeStorageScript,
+		"prepare-web-host": prepareWebHostScript, "activate-web-host": activateWebHostScript,
+		"rollback-web-host": rollbackWebHostScript, "finalize-web-host": finalizeWebHostScript,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), name+".sh")
@@ -175,6 +214,47 @@ type fakeTransport struct {
 	unameArch    string
 	failFinalize bool
 }
+
+type fakeWebHostTransport struct {
+	events     *[]string
+	home       string
+	digest     string
+	uploadPath string
+	uploadMode fs.FileMode
+	uploaded   bytes.Buffer
+}
+
+func (f *fakeWebHostTransport) Check(context.Context) error { return nil }
+func (f *fakeWebHostTransport) ForwardLocal(context.Context, string) (net.Listener, error) {
+	return nil, nil
+}
+func (f *fakeWebHostTransport) Upload(_ context.Context, src io.Reader, _ int64, dst string, mode fs.FileMode) error {
+	*f.events = append(*f.events, "upload")
+	f.uploadPath, f.uploadMode = dst, mode
+	_, _ = io.Copy(&f.uploaded, src)
+	return nil
+}
+func (f *fakeWebHostTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
+	command := strings.Join(argv, " ")
+	switch {
+	case len(argv) >= 3 && strings.Contains(command, "printf '%s' \"$HOME\""):
+		*f.events = append(*f.events, "home")
+		return setupssh.Result{Stdout: f.home}, nil
+	case len(argv) >= 3 && strings.Contains(command, "moox-prepare-web-host"):
+		*f.events = append(*f.events, "prepare")
+	case len(argv) >= 3 && strings.Contains(command, "moox-activate-web-host"):
+		*f.events = append(*f.events, "activate")
+	case len(argv) >= 3 && strings.Contains(command, "moox-rollback-web-host"):
+		*f.events = append(*f.events, "rollback")
+	case len(argv) >= 3 && strings.Contains(command, "moox-finalize-web-host"):
+		*f.events = append(*f.events, "finalize")
+	case len(argv) == 2 && argv[0] == "sha256sum":
+		*f.events = append(*f.events, "digest")
+		return setupssh.Result{Stdout: f.digest + "  " + argv[1] + "\n"}, nil
+	}
+	return setupssh.Result{}, nil
+}
+func (f *fakeWebHostTransport) Close() error { return nil }
 
 func (f *fakeTransport) Check(context.Context) error { return nil }
 func (f *fakeTransport) ForwardLocal(context.Context, string) (net.Listener, error) {
