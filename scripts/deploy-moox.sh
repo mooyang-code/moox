@@ -19,6 +19,7 @@ STORAGE_EXTERNAL_LISTEN=0
 WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
 WITH_FACTOR=1
+WITH_STRATEGY=1
 WITH_MONITOR=1
 WITH_ADMIN=1
 WITH_GATEWAY=1
@@ -81,6 +82,7 @@ Options:
   --no-cloudnode                  Do not package/start moox-cloudnode.
   --no-collector                  Do not package/start moox-collector.
   --no-factor                     Do not package/start moox-factor.
+  --no-strategy                   Do not package/start moox-strategy.
   --no-monitor                    Do not package/start moox-monitor.
   --no-admin                      Build a data-plane node without Admin, browser assets, schema, or credentials.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
@@ -123,6 +125,7 @@ apply_profile() {
       WITH_CLOUDNODE=0
       WITH_COLLECTOR=0
       WITH_FACTOR=0
+      WITH_STRATEGY=0
       WITH_MONITOR=0
       ;;
     storage)
@@ -135,6 +138,7 @@ apply_profile() {
       WITH_CLOUDNODE=0
       WITH_COLLECTOR=0
       WITH_FACTOR=0
+      WITH_STRATEGY=0
       WITH_MONITOR=0
       STORAGE_EXTERNAL_LISTEN=1
       ;;
@@ -419,6 +423,10 @@ while [[ $# -gt 0 ]]; do
       WITH_FACTOR=0
       shift
       ;;
+    --no-strategy)
+      WITH_STRATEGY=0
+      shift
+      ;;
     --no-monitor)
       WITH_MONITOR=0
       shift
@@ -687,6 +695,10 @@ build_core_binaries() {
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" factor
     fi
+    if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+        "${ROOT}/scripts/build.sh" strategy
+    fi
     if [[ "${WITH_MONITOR}" -eq 1 ]]; then
       TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
         "${ROOT}/scripts/build.sh" monitor
@@ -797,6 +809,10 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/factor/factor\.db#path: ../data/factor/factor.db#g' \
       "${STAGE_DIR}/factor/config/app.yaml"
   fi
+  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+    perl -0pi -e 's#database:\s*\./data/strategy\.sqlite#database: ../data/strategy/strategy.sqlite#g; s#python_bin:\s*python3#python_bin: ../data/strategy/venv/bin/python#g' \
+      "${STAGE_DIR}/strategy/config/app.yaml"
+  fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
       "${STAGE_DIR}/monitor/config/app.yaml"
@@ -840,10 +856,12 @@ PY
   if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
+    [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
     [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
   else
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
+    [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/strategy/config/app.yaml"
     [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
   fi
 
@@ -928,6 +946,7 @@ WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -939,7 +958,7 @@ if [[ "${WITH_ADMIN}" == "1" ]]; then
   MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-__NODE_ID__}"
 fi
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/monitor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/strategy" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-access" "${ROOT}/logs/storage-view-index" "${ROOT}/logs/storage-view-builder" "${ROOT}/logs/storage-view-query" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/strategy" "${ROOT}/logs/monitor"
 chmod 0700 "${ROOT}/data/gateway"
 
 source "${ROOT}/lib/loopback-listeners.sh"
@@ -1040,6 +1059,7 @@ FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
   "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
+  "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
 )
 
 MONITOR_ENV=(
@@ -1071,8 +1091,23 @@ PY
   FACTOR_ENV+=("MOOX_FACTOR_ENGINE_PYTHON_BIN=${python_bin}")
 }
 
-factor_nats_endpoint() {
-  local url="${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
+ensure_strategy_python() {
+  local venv="${ROOT}/data/strategy/venv"
+  local python_bin="${venv}/bin/python"
+  if [[ ! -x "${python_bin}" ]]; then
+    python3 -m venv "${venv}"
+  fi
+  if ! "${python_bin}" - <<'PY' >/dev/null 2>&1; then
+import numpy  # noqa: F401
+import pandas  # noqa: F401
+PY
+    "${python_bin}" -m pip install --upgrade pip
+    "${python_bin}" -m pip install -r "${ROOT}/strategy/pyworker/runtime-requirements.txt"
+  fi
+}
+
+nats_endpoint() {
+  local url="$1"
   url="${url#nats://}"
   url="${url%%,*}"
   url="${url%%/*}"
@@ -1084,19 +1119,22 @@ factor_nats_endpoint() {
   printf '%s %s\n' "${host}" "${port}"
 }
 
-wait_factor_nats() {
-  local host port
-  read -r host port < <(factor_nats_endpoint)
-  local attempts="${MOOX_WAIT_FACTOR_NATS_SECONDS:-60}"
-  echo "waiting for factor NATS ${host}:${port}"
+wait_nats() {
+  local label="$1" url="$2" attempts="$3" host port
+  read -r host port < <(nats_endpoint "${url}")
+  echo "waiting for ${label} NATS ${host}:${port}"
   for _ in $(seq 1 "${attempts}"); do
     if bash -c ":</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
-  echo "factor NATS ${host}:${port} not ready after ${attempts}s" >&2
+  echo "${label} NATS ${host}:${port} not ready after ${attempts}s" >&2
   return 1
+}
+
+wait_factor_nats() {
+  wait_nats factor "${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_FACTOR_NATS_SECONDS:-60}"
 }
 
 wait_tcp() {
@@ -1149,6 +1187,7 @@ probe_service() {
     collector) url=http://127.0.0.1:11412/readyz ;;
     eventbus) url=http://127.0.0.1:11419/readyz ;;
     factor) url=http://127.0.0.1:11414/readyz ;;
+    strategy) url=http://127.0.0.1:11431/readyz ;;
     monitor) url=http://127.0.0.1:11409/readyz ;;
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-access) url=http://127.0.0.1:20210/readyz ;;
@@ -1407,6 +1446,19 @@ start_factor() {
     env "${GATEWAY_SERVICE_ENV[@]}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
 }
 
+start_strategy() {
+  if [[ "${WITH_STRATEGY}" != "1" ]]; then
+    echo "strategy is disabled in this deployment package" >&2
+    exit 2
+  fi
+  wait_nats strategy "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_STRATEGY_NATS_SECONDS:-60}"
+  ensure_strategy_python
+  start_service "strategy" "${ROOT}/strategy" \
+    env "${GATEWAY_SERVICE_ENV[@]}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+      "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime" \
+      "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
+}
+
 start_monitor() {
   if [[ "${WITH_MONITOR}" != "1" ]]; then
     echo "monitor is disabled in this deployment package" >&2
@@ -1464,6 +1516,9 @@ case "${SERVICE}" in
     if [[ "${WITH_FACTOR}" == "1" ]]; then
       start_factor
     fi
+    if [[ "${WITH_STRATEGY}" == "1" ]]; then
+      start_strategy
+    fi
     if [[ "${WITH_WEB_HOST}" == "1" ]]; then
       start_web_host
     fi
@@ -1513,12 +1568,13 @@ case "${SERVICE}" in
   cloudnode) start_cloudnode ;;
   collector) start_collector ;;
   factor) start_factor ;;
+  strategy) start_strategy ;;
   monitor) start_monitor ;;
   gateway) start_gateway ;;
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor strategy monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1541,6 +1597,7 @@ WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -1642,6 +1699,9 @@ case "${SERVICE}" in
     if [[ "${WITH_FACTOR}" == "1" ]]; then
       stop_service "factor"
     fi
+    if [[ "${WITH_STRATEGY}" == "1" ]]; then
+      stop_service "strategy"
+    fi
     if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
       stop_service "cloudnode"
     fi
@@ -1720,6 +1780,13 @@ case "${SERVICE}" in
     fi
     stop_service "${SERVICE}"
     ;;
+  strategy)
+    if [[ "${WITH_STRATEGY}" != "1" ]]; then
+      echo "strategy is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "${SERVICE}"
+    ;;
   monitor)
     if [[ "${WITH_MONITOR}" != "1" ]]; then
       echo "monitor is disabled in this deployment package" >&2
@@ -1728,7 +1795,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-access storage-view-index storage-view-builder storage-view-query cloudnode collector factor strategy monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1762,6 +1829,7 @@ WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -1798,6 +1866,9 @@ fi
 if [[ "${WITH_FACTOR}" == "1" ]]; then
   services=(factor "${services[@]}")
 fi
+if [[ "${WITH_STRATEGY}" == "1" ]]; then
+  services=(strategy "${services[@]}")
+fi
 
 for name in "${services[@]}"; do
   pid_file="${ROOT}/run/${name}.pid"
@@ -1828,6 +1899,7 @@ WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -1855,6 +1927,7 @@ probe_service() {
     collector) url=http://127.0.0.1:11412/readyz ;;
     eventbus) url=http://127.0.0.1:11419/readyz ;;
     factor) url=http://127.0.0.1:11414/readyz ;;
+    strategy) url=http://127.0.0.1:11431/readyz ;;
     monitor) url=http://127.0.0.1:11409/readyz ;;
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-access) url=http://127.0.0.1:20210/readyz ;;
@@ -1893,6 +1966,9 @@ if [[ "${WITH_COLLECTOR}" == "1" ]]; then
 fi
 if [[ "${WITH_FACTOR}" == "1" ]]; then
   default_services+=(factor)
+fi
+if [[ "${WITH_STRATEGY}" == "1" ]]; then
+  default_services+=(strategy)
 fi
 if [[ "${WITH_WEB_HOST}" == "1" ]]; then
   default_services+=(web-host)
@@ -1945,7 +2021,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -1963,6 +2039,11 @@ prepare_stage() {
     "${STAGE_DIR}/factor/config" \
     "${STAGE_DIR}/factor/factors" \
     "${STAGE_DIR}/factor/sections" \
+    "${STAGE_DIR}/strategy/config" \
+    "${STAGE_DIR}/strategy/pyworker" \
+    "${STAGE_DIR}/strategy/pysdk" \
+    "${STAGE_DIR}/strategy/strategies/example" \
+    "${STAGE_DIR}/python-runtime" \
     "${STAGE_DIR}/monitor/config" \
     "${STAGE_DIR}/examples" \
     "${STAGE_DIR}/data" \
@@ -2066,6 +2147,10 @@ prepare_stage() {
     copy_required_binary "moox-factor"
     copy_required_binary "moox-factor-cli"
   fi
+  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+    copy_required_binary "moox-strategy"
+    copy_required_binary "moox-strategy-cli"
+  fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     copy_required_binary "moox-monitor"
     copy_required_binary "moox-monitor-cli"
@@ -2103,6 +2188,19 @@ prepare_stage() {
     cp -R "${ROOT}/modules/factor/sections/." "${STAGE_DIR}/factor/sections/"
     cp -R "${ROOT}/modules/factor/pyworker" "${STAGE_DIR}/factor/pyworker"
     find "${STAGE_DIR}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
+  fi
+  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/strategy/config/." "${STAGE_DIR}/strategy/config/"
+    cp -R "${ROOT}/modules/strategy/pyworker/." "${STAGE_DIR}/strategy/pyworker/"
+    cp -R "${ROOT}/modules/strategy/pysdk/." "${STAGE_DIR}/strategy/pysdk/"
+    cp -R "${ROOT}/modules/strategy/strategies/example/." "${STAGE_DIR}/strategy/strategies/example/"
+    find "${STAGE_DIR}/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
+    find "${STAGE_DIR}/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -delete
+  fi
+  if [[ "${WITH_FACTOR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 ]]; then
+    cp -R "${ROOT}/packages/pyruntime/python/." "${STAGE_DIR}/python-runtime/"
+    find "${STAGE_DIR}/python-runtime" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
+    find "${STAGE_DIR}/python-runtime" -type f -name '*.pyc' -delete
   fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/monitor/config/." "${STAGE_DIR}/monitor/config/"
@@ -2156,6 +2254,9 @@ sync_local_stage() {
       if [[ "${WITH_FACTOR}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" factor || true
       fi
+      if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" strategy || true
+      fi
       if [[ "${WITH_MONITOR}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" monitor || true
       fi
@@ -2208,6 +2309,12 @@ sync_local_stage() {
     if [[ "${WITH_FACTOR}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli')
     fi
+    if [[ "${WITH_STRATEGY}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/strategy/' --exclude '/bin/moox-strategy' --exclude '/bin/moox-strategy-cli')
+    fi
+    if [[ "${WITH_FACTOR}" -eq 0 && "${WITH_STRATEGY}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/python-runtime/')
+    fi
     if [[ "${WITH_MONITOR}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/monitor/' --exclude '/bin/moox-monitor' --exclude '/bin/moox-monitor-cli')
     fi
@@ -2244,6 +2351,10 @@ sync_local_stage() {
     if [[ "${WITH_FACTOR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/factor"
       rm -f "${deploy_dir}/bin/moox-factor" "${deploy_dir}/bin/moox-factor-cli"
+    fi
+    if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/strategy"
+      rm -f "${deploy_dir}/bin/moox-strategy" "${deploy_dir}/bin/moox-strategy-cli"
     fi
     if [[ "${WITH_MONITOR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/monitor"
@@ -2323,7 +2434,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -2333,6 +2444,7 @@ sync_remote_stage() {
   quoted_with_cloudnode="$(shell_quote "${WITH_CLOUDNODE}")"
   quoted_with_collector="$(shell_quote "${WITH_COLLECTOR}")"
   quoted_with_factor="$(shell_quote "${WITH_FACTOR}")"
+  quoted_with_strategy="$(shell_quote "${WITH_STRATEGY}")"
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_with_admin="$(shell_quote "${WITH_ADMIN}")"
@@ -2348,7 +2460,7 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -2397,6 +2509,9 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     fi
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_FACTOR}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" factor || true
+    fi
+    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_STRATEGY}" == "1" ]]; then
+      "${DEPLOY_DIR}/stop.sh" strategy || true
     fi
     if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_MONITOR}" == "1" ]]; then
       "${DEPLOY_DIR}/stop.sh" monitor || true
@@ -2457,6 +2572,10 @@ fi
 if [[ "${WITH_FACTOR}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/factor"
   rm -f "${DEPLOY_DIR}/bin/moox-factor" "${DEPLOY_DIR}/bin/moox-factor-cli"
+fi
+if [[ "${WITH_STRATEGY}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/strategy"
+  rm -f "${DEPLOY_DIR}/bin/moox-strategy" "${DEPLOY_DIR}/bin/moox-strategy-cli"
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/storage"

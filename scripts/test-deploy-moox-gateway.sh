@@ -128,7 +128,7 @@ deploy_fixture() {
   local bundle="$1" suffix="$2" control_url="${3:-https://admin.example.com:9527/}"
   "${DEPLOY}" --target localhost --dir "${TMP}/deploy-${suffix}" --stage "${TMP}/stage-${suffix}" \
     --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
-    --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
+    --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor --local-ca skip --target-ca skip \
     --node-id gateway-test --gateway-control-url "${control_url}" \
     --gateway-ca-bundle "${bundle}" --gateway-control-key-file "${TMP}/control.key" \
     --gateway-service-key-file "${TMP}/service.key"
@@ -215,7 +215,7 @@ kill -0 "${unrelated_pid}" 2>/dev/null || fail 'Gateway stop killed an unrelated
 # Monitor (not Gateway) may inherit the cluster service credential.
 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-monitor" --stage "${TMP}/stage-monitor" \
   --skip-build --no-start --no-admin --no-storage --no-archive \
-  --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
+  --no-cloudnode --no-collector --no-factor --no-strategy --local-ca skip --target-ca skip \
   --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
   --monitor-instance-id monitor-local --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -277,7 +277,7 @@ grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" 
 # metadata endpoint; the Monitor remains responsible for peer health only.
 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-peer-only" --stage "${TMP}/stage-peer-only" \
   --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
-  --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
+  --no-cloudnode --no-collector --no-factor --no-strategy --local-ca skip --target-ca skip \
   --node-id gateway-peer-only --gateway-control-url 'http://[::1]:11000' \
   --monitor-instance-id monitor-peer-only --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -299,7 +299,7 @@ for mode in no-start missing-public-host; do
   extra_args=()
   [[ "${mode}" != no-start ]] || extra_args+=(--no-start)
   if output=$("${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-${mode}" \
-    --skip-build --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor \
+    --skip-build --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy \
     --local-ca skip --target-ca skip --node-id gateway-peer-only \
     --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
     --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
@@ -315,7 +315,7 @@ expect_monitor_arg_rejected() {
   local output
   if output=$("${DEPLOY}" --target localhost --dir "${TMP}/reject-${label}" --stage "${TMP}/reject-stage-${label}" \
     --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
-    --no-cloudnode --no-collector --no-factor --local-ca skip --target-ca skip \
+    --no-cloudnode --no-collector --no-factor --no-strategy --local-ca skip --target-ca skip \
     --node-id gateway-monitor --gateway-control-url 'http://127.0.0.1:11000' \
     --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
     --gateway-service-key-file "${TMP}/service.key" "$@" 2>&1); then
@@ -389,7 +389,7 @@ for attempt in 1 2; do
   if PATH="${TMP}/fake-bin:${PATH}" FAKE_REMOTE_DIR="${TMP}/fake-remote" \
     "${DEPLOY}" --target fake@example --dir /tmp/moox-test --stage "${TMP}/remote-stage-${attempt}" \
       --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-archive \
-      --no-eventbus --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
+      --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor --local-ca skip --target-ca skip \
       --node-id gateway-remote --gateway-control-url https://admin.example.com:9527 \
       --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
       --gateway-service-key-file "${TMP}/service.key" >/dev/null 2>&1; then
@@ -399,7 +399,7 @@ done
 PATH="${TMP}/fake-bin:${PATH}" FAKE_REMOTE_DIR="${TMP}/fake-remote" FAKE_REMOTE_SUCCESS=1 \
   "${DEPLOY}" --target fake@example --dir /tmp/moox-test --stage "${TMP}/remote-stage-success" \
     --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-archive \
-    --no-eventbus --no-cloudnode --no-collector --no-factor --no-monitor --local-ca skip --target-ca skip \
+    --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor --local-ca skip --target-ca skip \
     --node-id gateway-remote --gateway-control-url https://admin.example.com:9527 \
     --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
     --gateway-service-key-file "${TMP}/service.key" >/dev/null

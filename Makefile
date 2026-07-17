@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries check-context release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy package-skill clean proto
+.PHONY: build build-gateway check-boundaries check-context release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -31,7 +31,7 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries check-context test test-release test-gateway-deploy test-caddy
+verify: check-boundaries check-context test test-release test-gateway-deploy test-strategy-deploy test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
@@ -53,6 +53,12 @@ test-caddy:
 
 test-gateway-deploy:
 	bash scripts/test-deploy-moox-gateway.sh
+
+test-strategy-deploy:
+	bash scripts/test-deploy-moox-strategy.sh
+
+test-strategy-deploy-e2e:
+	bash scripts/test-deploy-moox-strategy-e2e.sh
 
 package-skill:
 	./scripts/package-skill.sh

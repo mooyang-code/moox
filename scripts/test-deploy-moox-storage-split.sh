@@ -77,6 +77,8 @@ ensure_required_binary moox-cli
 ensure_required_binary moox-eventbus
 ensure_required_binary moox-archive
 ensure_required_binary moox-archive-cli
+ensure_required_binary moox-gateway
+ensure_required_binary moox-gateway-cli
 ensure_required_binary moox-storage
 ensure_required_binary moox-storage-cli
 
@@ -93,6 +95,22 @@ printf 'fixture-encryption-key' >"${HOME}/.config/moox/credentials/admin-encrypt
 chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
 : >"${DEPLOY_DIR}/data/admin.db"
 
+printf 'control-secret' >"${TMP_ROOT}/control.key"
+printf 'service-secret' >"${TMP_ROOT}/service.key"
+chmod 0600 "${TMP_ROOT}/control.key" "${TMP_ROOT}/service.key"
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=storage-split-one \
+  -keyout "${TMP_ROOT}/ca-one.key" -out "${TMP_ROOT}/ca-one.crt" -days 1 >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=storage-split-two \
+  -keyout "${TMP_ROOT}/ca-two.key" -out "${TMP_ROOT}/ca-two.crt" -days 1 >/dev/null 2>&1
+cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
+GATEWAY_ARGS=(
+  --node-id storage-split
+  --gateway-control-url http://127.0.0.1:11000
+  --gateway-ca-bundle "${TMP_ROOT}/peers.pem"
+  --gateway-control-key-file "${TMP_ROOT}/control.key"
+  --gateway-service-key-file "${TMP_ROOT}/service.key"
+)
+
 "${ROOT}/scripts/deploy-moox.sh" \
   --target localhost \
   --dir "${DEPLOY_DIR}" \
@@ -102,8 +120,9 @@ chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-  --no-factor \
-  --no-monitor >/dev/null
+  --no-factor --no-strategy \
+  --no-monitor \
+  "${GATEWAY_ARGS[@]}" >/dev/null
 
 for binary in moox-storage-access moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
   assert_file "${DEPLOY_DIR}/bin/${binary}"
@@ -114,7 +133,7 @@ assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
 secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
-"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor >/dev/null
+"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"

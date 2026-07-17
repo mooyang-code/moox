@@ -65,7 +65,7 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli moox-web-host; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
 done
-for binary in moox-storage moox-archive moox-eventbus moox-cloudnode moox-collector moox-factor moox-monitor; do
+for binary in moox-storage moox-archive moox-eventbus moox-cloudnode moox-collector moox-factor moox-strategy moox-monitor; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]

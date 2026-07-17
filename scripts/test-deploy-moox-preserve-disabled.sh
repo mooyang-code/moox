@@ -67,7 +67,10 @@ printf 'keep-this-ca\n' >"${DEPLOY_DIR}/certs/caddy/root.crt"
 seed_disabled_component cloudnode moox-cloudnode moox-cloudnode-cli
 seed_disabled_component collector moox-collector moox-collector-cli moox-collector-scf
 seed_disabled_component factor moox-factor moox-factor-cli
+seed_disabled_component strategy moox-strategy moox-strategy-cli
 seed_disabled_component storage moox-storage moox-storage-cli
+mkdir -p "${DEPLOY_DIR}/python-runtime/moox_pyruntime"
+printf 'keep-runtime\n' >"${DEPLOY_DIR}/python-runtime/moox_pyruntime/keep.txt"
 
 printf 'control-secret' >"${TMP_ROOT}/control.key"
 printf 'service-secret' >"${TMP_ROOT}/service.key"
@@ -88,7 +91,7 @@ cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-  --no-factor \
+  --no-factor --no-strategy \
   --no-monitor \
   --node-id preserve-test \
   --gateway-control-url http://127.0.0.1:11000 \
@@ -100,6 +103,8 @@ for path in \
   cloudnode/config/keep.txt \
   collector/config/keep.txt \
   factor/config/keep.txt \
+  strategy/config/keep.txt \
+  python-runtime/moox_pyruntime/keep.txt \
   storage/config/keep.txt \
   bin/moox-cloudnode \
   bin/moox-cloudnode-cli \
@@ -108,6 +113,8 @@ for path in \
   bin/moox-collector-scf \
   bin/moox-factor \
   bin/moox-factor-cli \
+  bin/moox-strategy \
+  bin/moox-strategy-cli \
   bin/moox-storage \
   bin/moox-storage-cli
 do

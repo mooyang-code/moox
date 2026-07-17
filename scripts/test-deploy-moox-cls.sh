@@ -18,7 +18,7 @@ invalid_account_args=(
   --no-web-host
   --no-cloudnode
   --no-collector
-  --no-factor
+  --no-factor --no-strategy
   --no-monitor
 )
 if output=$("${SCRIPT}" "${invalid_account_args[@]}" --cloud-account-id "" 2>&1); then
@@ -115,7 +115,7 @@ if MOOX_TEST_STOP_MARKER="${STOP_MARKER}" \
   "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
-    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor \
     "${GATEWAY_ARGS[@]}" \
     >"${TMP_ROOT}/fixture.out" 2>&1; then
   echo 'deployment unexpectedly succeeded after CLS preflight failure' >&2
@@ -134,7 +134,7 @@ MOOX_TEST_PREFLIGHT_RELEASE="${PREFLIGHT_RELEASE}" \
   "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${LOCK_STAGE_ARG}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
-    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor \
     "${GATEWAY_ARGS[@]}" \
     >"${TMP_ROOT}/preflight-first.out" 2>&1 &
 FIRST_PID=$!
@@ -151,7 +151,7 @@ printf 'first stage must survive the competing deployment\n' >"${STAGE_DIR}/sent
 if "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${LOCK_STAGE_ARG}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
-    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor \
     "${GATEWAY_ARGS[@]}" \
     >"${TMP_ROOT}/preflight-second.out" 2>&1; then
   echo 'competing deployment unexpectedly succeeded while stage lock was held' >&2
@@ -175,7 +175,7 @@ fixture_deploy() {
   "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
     --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" \
     --skip-build --enable-cls --no-storage --no-archive --no-eventbus \
-    --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor \
+    --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor \
     "${GATEWAY_ARGS[@]}" \
     "$@"
 }
