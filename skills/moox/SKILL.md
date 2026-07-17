@@ -51,9 +51,10 @@ make deploy
 ```
 
 单独发布或替换已部署的二进制服务时，使用
-[`references/service-release.md`](references/service-release.md) 中的服务包发布流程；通用入口为
-`moox-cli setup deploy-service`。服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的
-SSH 主机指纹完成上传、解压、回滚和健康检查；不要在命令行中拼接密码。
+[`references/service-release.md`](references/service-release.md) 中的服务包发布流程；先用
+`scripts/package-service.sh` 生成 ZIP，再通过通用入口 `moox-cli setup deploy-service` 发布。
+服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的 SSH 主机指纹完成上传、解压、
+回滚和健康检查；不要在命令行中拼接密码。
 
 Protocol generation:
 

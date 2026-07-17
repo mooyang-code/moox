@@ -29,11 +29,12 @@ moox-cli setup status --file ./custom.toml
 ```
 
 服务发布以 ZIP 包为单位，包中包含二进制、配置和生命周期脚本。示例包目录必须至少包含
-`bin/`、`config/`、`start.sh`、`stop.sh` 和 `healthcheck.sh`，然后打包：
+`bin/`、`config/`、`start.sh`、`stop.sh` 和 `healthcheck.sh`，使用仓库脚本打包：
 
 ```bash
-cd ./release/service-package
-zip -r ../moox-admin-linux-amd64.zip bin config start.sh stop.sh healthcheck.sh
+./scripts/package-service.sh \
+  --service-dir ./release/service-package \
+  --output ./release/moox-admin-linux-amd64.zip
 moox-cli setup deploy-service \
   --file ./custom.toml \
   --host control \

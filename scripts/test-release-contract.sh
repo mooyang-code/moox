@@ -55,8 +55,10 @@ grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release.sh"
 bash -n \
   "${ROOT}/scripts/build.sh" \
+  "${ROOT}/scripts/package-service.sh" \
   "${ROOT}/scripts/release.sh" \
   "${ROOT}/scripts/release-matrix.sh"
+"${ROOT}/scripts/test-package-service.sh"
 matrix_output="$(VERSION=test RELEASE_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 "${ROOT}/scripts/release-matrix.sh" --dry-run)"
 grep -q 'release test (linux/amd64' <<<"${matrix_output}"
 grep -q 'release test (darwin/arm64' <<<"${matrix_output}"

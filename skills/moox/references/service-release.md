@@ -20,11 +20,13 @@ healthcheck.sh
 `data/`、`logs/`、`run/`、`secrets/`、`certs/`。凭据、数据库、日志和证书由远端现有
 部署保管，不能打入服务包。
 
-示例打包：
+使用仓库脚本打包。脚本会校验必要目录、生命周期脚本、符号链接和运行时目录，并以
+原子方式生成权限为 `0600` 的 ZIP 文件：
 
 ```bash
-cd ./release/service-package
-zip -r ../moox-admin-linux-amd64.zip bin config start.sh stop.sh healthcheck.sh
+./scripts/package-service.sh \
+  --service-dir ./release/service-package \
+  --output ./release/moox-admin-linux-amd64.zip
 ```
 
 ## 前置条件
