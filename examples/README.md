@@ -48,3 +48,8 @@ moox-cli metadata import \
 
 删库重建和端到端验证流程见 [e2e/README.md](./e2e/README.md)。E2E 使用默认量化
 seed，并通过 Metadata API 动态登记测试 Subject 和 DatasetSubject。
+
+## Python 因子
+
+可导入的时序与截面因子示例见 [factors/README.md](./factors/README.md)。因子按
+`timeseries/` 和 `sections/` 分类，未包含策略配置或账户相关文件。
