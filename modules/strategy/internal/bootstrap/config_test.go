@@ -29,3 +29,12 @@ func TestLiveRequiresWorkerPath(t *testing.T) {
 		t.Fatal("expected live worker path validation")
 	}
 }
+
+func TestNewRPCServicePropagatesLiveCapability(t *testing.T) {
+	if !newRPCService(nil, nil, Config{Workers: 2, LiveEnabled: true}).LiveExecutionEnabled {
+		t.Fatal("live execution capability was not propagated")
+	}
+	if newRPCService(nil, nil, Config{Workers: 2, LiveEnabled: false}).LiveExecutionEnabled {
+		t.Fatal("live execution capability must fail closed")
+	}
+}

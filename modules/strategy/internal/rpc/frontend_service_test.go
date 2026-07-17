@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -250,6 +251,40 @@ func TestSetExecutionModeRejectsLiveWhenCapabilityDisabled(t *testing.T) {
 	var mode string
 	require.NoError(t, db.Raw(`SELECT c_mode FROM t_strategy_execution_bindings WHERE c_execution_binding_id = 'exec-1'`).Scan(&mode).Error)
 	assert.Equal(t, "observe", mode)
+}
+
+func TestDisabledLiveCapabilityKeepsObservePaperMutationsAndLiveHistoryAvailable(t *testing.T) {
+	db, repo := newFrontendRPCStore(t)
+	seedFrontendBinding(t, db, repo, "b1")
+	svc := &Service{Repo: repo, LiveExecutionEnabled: false}
+
+	for i, mode := range []string{"paper", "observe"} {
+		rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
+			BindingId: "b1", Mode: mode, OperationId: fmt.Sprintf("op-mode-%d", i), Reason: "capability boundary test",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		assert.Equal(t, mode, rsp.GetStatus())
+	}
+
+	history, err := svc.GetStrategyPerformance(context.Background(), &strategypb.GetStrategyPerformanceReq{
+		BindingId: "b1", PerformanceSource: "live", Interval: "auto",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_SUCCESS, history.GetRetInfo().GetCode())
+	assert.Equal(t, "live", history.GetPerformanceSource())
+}
+
+func TestPerformanceSourceValidationAcceptsEveryDomainSource(t *testing.T) {
+	for _, source := range []string{"backtest", "observe", "paper", "live"} {
+		t.Run(source, func(t *testing.T) {
+			rsp, err := (&Service{}).GetStrategyPerformance(context.Background(), &strategypb.GetStrategyPerformanceReq{
+				BindingId: "b1", PerformanceSource: source, Interval: "auto",
+			})
+			require.NoError(t, err)
+			assert.Contains(t, rsp.GetRetInfo().GetMsg(), "repository")
+		})
+	}
 }
 
 func TestGetEngineStatusExposesLiveCapability(t *testing.T) {

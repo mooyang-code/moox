@@ -195,7 +195,7 @@ func (s *Service) GetStrategyPerformance(ctx context.Context, req *strategypb.Ge
 		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
 	}
 	if !domain.ValidPerformanceSource(req.GetPerformanceSource()) {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("performance_source is required and must be observe, paper, or live"))}, nil
+		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("performance_source must be one of backtest, observe, paper, or live"))}, nil
 	}
 	if interval := req.GetInterval(); interval != "" && interval != "auto" && interval != "daily" {
 		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("interval must be auto or daily"))}, nil

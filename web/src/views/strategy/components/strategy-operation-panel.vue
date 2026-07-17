@@ -17,7 +17,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
+import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { useUserInfoStore } from "@/store/modules/user-info";
@@ -31,9 +31,20 @@ const reason = ref("");
 const pending = ref<"pause" | "resume" | "mode">("pause");
 const reasonVisible = ref(false);
 const loading = ref(false);
-watchEffect(() => {
-  if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
-});
+watch(
+  () => props.currentMode,
+  currentMode => {
+    mode.value = currentMode || "observe";
+    if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
+  },
+  { immediate: true }
+);
+watch(
+  () => store.liveExecutionEnabled,
+  () => {
+    if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
+  }
+);
 function ask(action: "pause" | "resume" | "mode") {
   pending.value = action;
   reason.value = "";

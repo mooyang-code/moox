@@ -21,7 +21,7 @@ describe("strategy operation capability", () => {
         stubs: {
           "a-card": { template: "<section><slot /></section>" },
           "a-space": { template: "<div><slot /></div>" },
-          "a-select": { template: "<select><slot /></select>" },
+          "a-select": { props: ["modelValue"], template: '<select :data-value="modelValue"><slot /></select>' },
           "a-option": { template: "<option><slot /></option>" },
           "a-button": { template: "<button><slot /></button>" },
           "a-modal": true,
@@ -33,6 +33,8 @@ describe("strategy operation capability", () => {
     const store = useStrategyStore();
 
     expect(wrapper.text()).not.toContain("Live");
+    await wrapper.setProps({ currentMode: "paper" });
+    expect(wrapper.find("select").attributes("data-value")).toBe("paper");
     store.liveExecutionEnabled = true;
     await nextTick();
     expect(wrapper.text()).toContain("Live");
