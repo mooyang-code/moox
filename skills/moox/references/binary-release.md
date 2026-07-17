@@ -1,9 +1,10 @@
-# Web Host 单独发布
+# 单个二进制服务发布
 
-当只需要替换远端 `moox-web-host` 二进制，而不需要重新部署整个控制面时，使用
-`moox-cli setup deploy-web-host`。该命令由 CLI 在进程内读取 `custom.toml`，通过
-SSH/SFTP 完成上传、原子替换、重启和健康检查；不要在 Agent 或 shell 中拼接 SSH
-密码。
+当只需要发布或替换远端某个二进制服务，而不需要重新部署整个控制面时，使用本流程。
+当前 CLI 已提供 Web Host 的 `moox-cli setup deploy-web-host` 入口；其他服务应复用
+相同的凭据读取、SSH 主机校验、原子上传、健康检查和失败回滚原则接入对应命令。
+命令由 CLI 在进程内读取 `custom.toml`，通过 SSH/SFTP 完成上传、原子替换、重启和
+健康检查；不要在 Agent 或 shell 中拼接 SSH 密码。
 
 ## 前置条件
 
@@ -25,7 +26,7 @@ SSH/SFTP 完成上传、原子替换、重启和健康检查；不要在 Agent �
 
 ## 构建目标二进制
 
-远端 Linux amd64 主机使用：
+以 Web Host 为例，远端 Linux amd64 主机使用：
 
 ```bash
 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
@@ -101,4 +102,3 @@ ssh -o StrictHostKeyChecking=no ...
   存在且可执行。
 - `web_host_activate_failed`：检查远端服务启动日志和端口占用；CLI 会保留或恢复旧二进制。
 - `web_host_digest_mismatch`：检查构建目标架构、上传结果和远端文件系统；不要直接跳过摘要校验。
-

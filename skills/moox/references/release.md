@@ -40,9 +40,9 @@ Environment variables:
 
 `make deploy` creates or syncs a runnable deployment directory with binaries, configs, schemas, examples, and runtime helper scripts such as `start.sh`, `stop.sh`, and `status.sh`.
 
-仅替换远端 Web Host 时，不必重新发布整个控制面。使用
-[`web-host-release.md`](web-host-release.md) 中的
-`moox-cli setup deploy-web-host`，由 CLI 从用户维护的 `custom.toml` 内部读取凭据，
+仅替换远端单个二进制服务时，不必重新发布整个控制面。使用
+[`binary-release.md`](binary-release.md) 中的发布流程；当前 Web Host 入口为
+`moox-cli setup deploy-web-host`。CLI 从用户维护的 `custom.toml` 内部读取凭据，
 通过已信任的 SSH 主机指纹上传并校验单个二进制。
 
 Public deployments require `--public-host`. Deployment installs pinned, checksum-verified, rootless Caddy `v2.11.4` automatically before acceptance; package-manager Caddy is not a prerequisite. It rejects non-loopback upstream overrides, starts web-host `127.0.0.1:9528`, Admin control `127.0.0.1:11000`, and Admin service `127.0.0.1:11002`, then starts or reloads the MooX-managed edge without touching unrelated processes. `--target-ca auto` attempts target trust-store installation and downgrades only a recognized lack of elevated permission; other installation failures stop deployment. Browser HTTPS `9527` exposes the site and `/api/admin/*`; service HTTPS `11001` is restricted to `/api/service/*`. Public diagnostics return `404`.
