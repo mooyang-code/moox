@@ -26,15 +26,54 @@ type Service struct {
 	maxWorkers int
 	metrics    *observability.ViewMetrics
 
-	mu                sync.Mutex
-	runCtx            context.Context
+	mu  sync.Mutex
+	run *serviceRun
+}
+
+type serviceRun struct {
+	ctx               context.Context
 	cancel            context.CancelFunc
 	timeSeriesSub     eventbus.Subscription
 	recordSub         eventbus.Subscription
 	timeSeriesBatcher *batcher[timeSeriesDeriveItem]
 	recordBatcher     *batcher[recordDeriveItem]
-	startDone         chan struct{}
 	wg                sync.WaitGroup
+	startOnce         sync.Once
+	startDone         chan struct{}
+	stopOnce          sync.Once
+	stopDone          chan struct{}
+	stopErr           error
+}
+
+func newServiceRun(parent context.Context, opts BatchOptions) *serviceRun {
+	ctx, cancel := context.WithCancel(parent)
+	return &serviceRun{
+		ctx: ctx, cancel: cancel,
+		timeSeriesBatcher: newBatcher[timeSeriesDeriveItem](opts),
+		recordBatcher:     newBatcher[recordDeriveItem](opts),
+		startDone:         make(chan struct{}),
+		stopDone:          make(chan struct{}),
+	}
+}
+
+func (r *serviceRun) finishStart() {
+	r.startOnce.Do(func() { close(r.startDone) })
+}
+
+func (r *serviceRun) stop() error {
+	r.stopOnce.Do(func() {
+		if r.timeSeriesSub != nil {
+			r.stopErr = errors.Join(r.stopErr, r.timeSeriesSub.Close())
+		}
+		if r.recordSub != nil {
+			r.stopErr = errors.Join(r.stopErr, r.recordSub.Close())
+		}
+		r.cancel()
+		r.wg.Wait()
+		close(r.stopDone)
+	})
+	<-r.stopDone
+	return r.stopErr
 }
 
 type timeSeriesDeriveItem struct {
@@ -109,75 +148,65 @@ func (s *Service) Start(ctx context.Context) error {
 		return errors.New("view builder service requires view index engines")
 	}
 
+	run := newServiceRun(ctx, s.batchOpts)
 	s.mu.Lock()
-	if s.cancel != nil {
+	if s.run != nil {
 		s.mu.Unlock()
+		run.cancel()
 		return errors.New("view builder service is already started")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	timeSeriesBatcher := newBatcher[timeSeriesDeriveItem](s.batchOpts)
-	recordBatcher := newBatcher[recordDeriveItem](s.batchOpts)
-	startDone := make(chan struct{})
-	s.cancel = cancel
-	s.startDone = startDone
-	s.runCtx = runCtx
-	s.timeSeriesBatcher = timeSeriesBatcher
-	s.recordBatcher = recordBatcher
+	s.run = run
 	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
 	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
-	processCtx := runCtx
-	s.wg.Add(2 + 2*s.maxWorkers)
+	run.wg.Add(2 + 2*s.maxWorkers)
 	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		if s.startDone == startDone {
-			close(startDone)
-			s.startDone = nil
-		}
-		s.mu.Unlock()
-	}()
+	defer run.finishStart()
 
 	go func() {
-		defer s.wg.Done()
+		defer run.wg.Done()
 		defer close(timeSeriesOut)
-		timeSeriesBatcher.run(runCtx, timeSeriesOut)
+		run.timeSeriesBatcher.run(run.ctx, timeSeriesOut)
 	}()
 	go func() {
-		defer s.wg.Done()
+		defer run.wg.Done()
 		defer close(recordOut)
-		recordBatcher.run(runCtx, recordOut)
+		run.recordBatcher.run(run.ctx, recordOut)
 	}()
 	for i := 0; i < s.maxWorkers; i++ {
 		go func() {
-			defer s.wg.Done()
+			defer run.wg.Done()
 			for batch := range timeSeriesOut {
-				s.processTimeSeriesItemBatch(processCtx, batch)
+				s.processTimeSeriesItemBatch(run.ctx, batch)
 			}
 		}()
 		go func() {
-			defer s.wg.Done()
+			defer run.wg.Done()
 			for batch := range recordOut {
-				s.processRecordItemBatch(processCtx, batch)
+				s.processRecordItemBatch(run.ctx, batch)
 			}
 		}()
 	}
 
-	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsUpdated(runCtx, s.enqueueTimeSeries)
+	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsUpdated(run.ctx, func(handlerCtx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+		return s.enqueueTimeSeriesRun(handlerCtx, run, event)
+	})
 	if err != nil {
-		s.clearStartedState(cancel)
+		run.finishStart()
+		_ = run.stop()
+		s.clearRun(run)
 		return err
 	}
-	recordSub, err := s.events.SubscribeRecordRowsUpdated(runCtx, s.enqueueRecord)
+	run.timeSeriesSub = timeSeriesSub
+	recordSub, err := s.events.SubscribeRecordRowsUpdated(run.ctx, func(handlerCtx context.Context, event *pb.RecordRowsUpdated) error {
+		return s.enqueueRecordRun(handlerCtx, run, event)
+	})
 	if err != nil {
-		_ = timeSeriesSub.Close()
-		s.clearStartedState(cancel)
+		run.finishStart()
+		_ = run.stop()
+		s.clearRun(run)
 		return err
 	}
-
-	s.mu.Lock()
-	s.timeSeriesSub = timeSeriesSub
-	s.recordSub = recordSub
-	s.mu.Unlock()
+	run.recordSub = recordSub
 	return nil
 }
 
@@ -186,67 +215,50 @@ func (s *Service) Close() error {
 	if s == nil {
 		return nil
 	}
-	for {
-		s.mu.Lock()
-		startDone := s.startDone
-		cancel := s.cancel
-		if startDone == nil {
-			timeSeriesSub := s.timeSeriesSub
-			recordSub := s.recordSub
-			if cancel == nil {
-				s.mu.Unlock()
-				return nil
-			}
-			s.mu.Unlock()
-			return s.closeStarted(cancel, timeSeriesSub, recordSub)
-		}
-		s.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		<-startDone
-	}
-}
-
-func (s *Service) closeStarted(cancel context.CancelFunc, timeSeriesSub, recordSub eventbus.Subscription) error {
-	var err error
-	if timeSeriesSub != nil {
-		err = errors.Join(err, timeSeriesSub.Close())
-	}
-	if recordSub != nil {
-		err = errors.Join(err, recordSub.Close())
-	}
-	cancel()
-	s.wg.Wait()
-
 	s.mu.Lock()
-	s.cancel = nil
-	s.runCtx = nil
-	s.timeSeriesSub = nil
-	s.recordSub = nil
-	s.timeSeriesBatcher = nil
-	s.recordBatcher = nil
+	run := s.run
 	s.mu.Unlock()
+	if run == nil {
+		return nil
+	}
+	select {
+	case <-run.startDone:
+	default:
+		run.cancel()
+		<-run.startDone
+	}
+	err := run.stop()
+	s.clearRun(run)
 	return err
 }
 
+func (s *Service) clearRun(run *serviceRun) {
+	s.mu.Lock()
+	if s.run == run {
+		s.run = nil
+	}
+	s.mu.Unlock()
+}
+
 func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) (retErr error) {
+	s.mu.Lock()
+	run := s.run
+	s.mu.Unlock()
+	return s.enqueueTimeSeriesRun(ctx, run, event)
+}
+
+func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, event *pb.TimeSeriesRowsUpdated) (retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if event == nil {
 		return nil
 	}
-	s.mu.Lock()
-	batcher := s.timeSeriesBatcher
-	addCtx := s.runCtx
-	s.mu.Unlock()
-	if batcher == nil {
+	if run == nil || run.timeSeriesBatcher == nil {
 		return errors.New("view builder time-series batcher is not started")
 	}
-	if addCtx == nil {
-		addCtx = ctx
-	}
+	batcher := run.timeSeriesBatcher
+	addCtx := run.ctx
 	rows := make([]*pb.TimeSeriesRow, 0, len(event.GetRows()))
 	for _, row := range event.GetRows() {
 		if row == nil {
@@ -276,22 +288,24 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 }
 
 func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) (retErr error) {
+	s.mu.Lock()
+	run := s.run
+	s.mu.Unlock()
+	return s.enqueueRecordRun(ctx, run, event)
+}
+
+func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *pb.RecordRowsUpdated) (retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if event == nil {
 		return nil
 	}
-	s.mu.Lock()
-	batcher := s.recordBatcher
-	addCtx := s.runCtx
-	s.mu.Unlock()
-	if batcher == nil {
+	if run == nil || run.recordBatcher == nil {
 		return errors.New("view builder record batcher is not started")
 	}
-	if addCtx == nil {
-		addCtx = ctx
-	}
+	batcher := run.recordBatcher
+	addCtx := run.ctx
 	rows := make([]*pb.RecordRow, 0, len(event.GetRows()))
 	for _, row := range event.GetRows() {
 		if row == nil {
@@ -318,17 +332,6 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated
 		}
 	}
 	return completion.wait(ctx)
-}
-
-func (s *Service) clearStartedState(cancel context.CancelFunc) {
-	cancel()
-	s.wg.Wait()
-	s.mu.Lock()
-	s.cancel = nil
-	s.runCtx = nil
-	s.timeSeriesBatcher = nil
-	s.recordBatcher = nil
-	s.mu.Unlock()
 }
 
 func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {

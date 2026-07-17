@@ -125,7 +125,7 @@ func processDelivery(ctx context.Context, delivery deliveryControl, opts Subscri
 		case handlerErr = <-handlerResult:
 			goto terminal
 		case <-ctx.Done():
-			handlerErr = ctx.Err()
+			handlerErr = errors.Join(ctx.Err(), <-handlerResult)
 			goto terminal
 		case <-ticker.C:
 			actionCtx, cancel := context.WithTimeout(context.Background(), opts.ActionTimeout)

@@ -169,6 +169,28 @@ func TestServiceCloseCancelsAndWaitsForConcurrentStart(t *testing.T) {
 	require.NoError(t, svc.Close())
 }
 
+func TestServiceConcurrentCloseCanRestartWithoutGenerationRaces(t *testing.T) {
+	bus := eventbus.NewMemoryBus()
+	svc := NewService(Options{
+		Events: bus, Reader: &buildingGuardReader{}, Metadata: newBuildingGuardMetadata(),
+		Engines: map[string]viewindex.ViewIndexEngine{"bleve": newRecordingViewIndexEngine("bleve")},
+	})
+	for generation := 0; generation < 20; generation++ {
+		require.NoError(t, svc.Start(context.Background()))
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		for i := 0; i < 2; i++ {
+			go func() {
+				<-start
+				errs <- svc.Close()
+			}()
+		}
+		close(start)
+		require.NoError(t, <-errs)
+		require.NoError(t, <-errs)
+	}
+}
+
 func TestReadRecordProjectionRowsReturnsRows(t *testing.T) {
 	key := &pb.RecordKey{
 		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "2026-07-10T12:00:00Z",

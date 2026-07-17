@@ -135,17 +135,18 @@ func TestProcessDeliveryHeartbeatsLongHandlerAndStopsBeforeAck(t *testing.T) {
 	}
 }
 
-func TestProcessDeliveryCancellationNaksWithoutWaitingForStuckHandler(t *testing.T) {
+func TestProcessDeliveryCancellationWaitsForContextAwareHandlerBeforeNak(t *testing.T) {
 	delivery := &recordingDelivery{}
-	handlerRelease := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
+	handlerExited := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		done <- processDelivery(ctx, delivery, SubscriberOptions{
 			AckWait: 90 * time.Millisecond, NakDelay: time.Millisecond, ActionTimeout: 20 * time.Millisecond,
-		}, func(context.Context) error {
-			<-handlerRelease
-			return nil
+		}, func(handlerCtx context.Context) error {
+			<-handlerCtx.Done()
+			close(handlerExited)
+			return handlerCtx.Err()
 		})
 	}()
 	time.Sleep(10 * time.Millisecond)
@@ -157,7 +158,11 @@ func TestProcessDeliveryCancellationNaksWithoutWaitingForStuckHandler(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("processDelivery blocked on a cancelled handler")
 	}
-	close(handlerRelease)
+	select {
+	case <-handlerExited:
+	default:
+		t.Fatal("processDelivery returned before the handler exited")
+	}
 	actions, _ := delivery.snapshot()
 	assert.Equal(t, "nak", actions[len(actions)-1])
 }
