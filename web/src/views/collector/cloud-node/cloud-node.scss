@@ -1,0 +1,56 @@
+.moox-page {
+  width: 100%;
+  min-width: 0;
+  contain: inline-size;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.moox-page :deep(.arco-spin),
+.moox-page :deep(.arco-spin-children) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.moox-inner {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.page-head {
+  margin-bottom: var(--moox-space-2);
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.cloud-node-action-bar,
+.cloud-node-filter-bar {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  margin-bottom: var(--moox-space-tight);
+}
+
+.node-workloads {
+  display: flex;
+  min-width: 0;
+  flex-wrap: nowrap;
+  gap: var(--moox-space-1);
+  overflow: hidden;
+}
+
+.node-workloads :deep(.arco-tag) {
+  flex: 0 0 auto;
+}

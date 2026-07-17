@@ -763,91 +763,41 @@ import {
   getFunctionPackageList,
   getFunctionPackageDetail,
   downloadPackageByURL,
-  PACKAGE_STATUS_LABEL,
-  PACKAGE_TYPE_LABEL,
   type FunctionPackage
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
-import {
-  batchCreateNodes,
-  batchDeleteNodes,
-  batchDeployNodes,
-  getNodeList,
-  listCloudRegions,
-  updateNode,
-  NODE_STATUS_LABEL
-} from "@/api/cloud-node";
+import { batchDeleteNodes, batchDeployNodes, getNodeList, listCloudRegions, updateNode } from "@/api/cloud-node";
 import { useSpaceStore } from "@/store/modules/space";
 import { BatchChangeStatus } from "@/utils/cloud-node-batch-change";
-import type { BatchChangeStatusResponse, BatchChangeDetailItem } from "@/utils/cloud-node-batch-change";
+import type { BatchChangeStatusResponse } from "@/utils/cloud-node-batch-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
-
-// 获取当前路由
-
-// 接口定义
-interface CloudNode {
-  node_id: string;
-  cloud_account_id: string;
-  namespace: string;
-  node_type: string;
-  region: string;
-  tag: string; // 标签（国内/海外）
-  ip_address: string;
-  version: string;
-  package_id?: string;
-  package_version?: string; // 代码包版本（包名-版本号）
-  running_version?: string; // 当前运行版本（来自心跳上报）
-  supported_workloads: string[] | string;
-  capacity: string;
-  current_load: string;
-  metadata: string | Record<string, unknown>;
-  status: string | number;
-  enabled: number;
-  // 新增心跳配置字段
-  timeout_threshold: number; // 超时阈值（秒），0表示使用全局默认值
-  heartbeat_interval: number; // 心跳间隔（秒），0表示使用全局默认值
-  probe_enabled: boolean; // 是否启用探测
-  probe_url?: string; // 探测URL
-  cls_topic_id?: string;
-  last_heartbeat?: string;
-  created_at: string;
-  create_time?: string;
-  modify_time?: string;
-  updated_at: string;
-}
-
-const normalizeCloudNodes = (items: Array<Partial<CloudNode> & Record<string, any>>): CloudNode[] => {
-  return items.map(item => ({
-    node_id: item.node_id || "",
-    cloud_account_id: item.cloud_account_id || "",
-    namespace: item.namespace || "",
-    node_type: item.node_type || "",
-    region: item.region || "",
-    tag: item.tag || "",
-    ip_address: item.ip_address || "",
-    version: item.version || item.package_version || item.running_version || "",
-    package_id: item.package_id || "",
-    package_version: item.package_version || "",
-    running_version: item.running_version || "",
-    supported_workloads: normalizeSupportedWorkloads(item.supported_workloads),
-    capacity: item.capacity || "",
-    current_load: item.current_load || "",
-    metadata: item.metadata || "",
-    status: item.status || "offline",
-    enabled: item.enabled ?? 1,
-    timeout_threshold: item.timeout_threshold || 0,
-    heartbeat_interval: item.heartbeat_interval || 0,
-    probe_enabled: item.probe_enabled ?? false,
-    probe_url: item.probe_url || "",
-    cls_topic_id: item.cls_topic_id || "",
-    last_heartbeat: item.last_heartbeat || "",
-    created_at: item.created_at || item.create_time || "",
-    create_time: item.create_time || "",
-    modify_time: item.modify_time || "",
-    updated_at: item.updated_at || item.modify_time || ""
-  }));
-};
+import { makeCompletedBatchChangeStatus, submitCloudNodeBatchChange } from "./cloud-node-batch-service";
+import {
+  computeAggregateStatus,
+  formatDateTime,
+  formatFileSize,
+  formatMetadata,
+  formatTime,
+  getBatchChangeTypeText,
+  getCollectorColor,
+  getCollectorName,
+  getNodeTypeColor,
+  getNodeTypeLabel,
+  getPackageStatusColor,
+  getPackageStatusLabel,
+  getPackageTypeColor,
+  getPackageTypeLabel,
+  getProviderName,
+  getStatusColor,
+  getStatusText,
+  normalizeCloudNodes,
+  normalizeSupportedWorkloads,
+  type BatchChangeViewStatus,
+  type BatchPlanItem,
+  type CloudNode,
+  type RegionInfo
+} from "./cloud-node-model";
 
 // 状态管理
 const spaceStore = useSpaceStore();
@@ -864,28 +814,6 @@ const form = reactive({
   nodeType: "",
   status: ""
 });
-
-// 接口定义 - 地区信息
-interface RegionInfo {
-  code: string;
-  name: string;
-  tag: string; // 标签（国内/海外）
-  max_nodes?: number; // 地区最大节点数
-}
-
-interface BatchPlanItem {
-  regionCode: string;
-  regionName: string;
-  tag: string;
-  maxNodes: number;
-  usedNodes: number;
-  availableNodes: number;
-  planCount: number;
-}
-
-type BatchChangeViewStatus = BatchChangeStatusResponse & {
-  batchIndex: number;
-};
 
 // 数据列表
 const cloudNodeList = ref<CloudNode[]>([]);
@@ -1649,44 +1577,6 @@ const loadRegions = async () => {
   }
 };
 
-// 工具函数
-const getBatchChangeTypeText = (batchChangeType: string) => {
-  const typeMap: Record<string, string> = {
-    CREATE_NODE: "批量创建节点",
-    BATCH_UPDATE_NODE: "批量更新节点",
-    DELETE_NODE: "批量删除节点",
-    DEPLOY_NODE: "批量部署节点"
-  };
-  return typeMap[batchChangeType] || batchChangeType;
-};
-
-const getProviderName = (provider: string) => {
-  const providerMap: Record<string, string> = {
-    tencent: "腾讯云",
-    aliyun: "阿里云",
-    aws: "AWS"
-  };
-  return providerMap[provider] || provider;
-};
-
-const getNodeTypeLabel = (nodeType: string) => {
-  const labelMap: Record<string, string> = {
-    "scf-event": "云函数（事件型）",
-    "scf-web": "云函数（Web型）",
-    server: "服务器"
-  };
-  return labelMap[nodeType] || nodeType;
-};
-
-const getNodeTypeColor = (nodeType: string) => {
-  const colorMap: Record<string, string> = {
-    "scf-event": "blue",
-    "scf-web": "cyan",
-    server: "orange"
-  };
-  return colorMap[nodeType] || "gray";
-};
-
 const getRegionName = (region: string) => {
   if (region === REGION_UNLIMITED) {
     return "不限";
@@ -1722,335 +1612,11 @@ watch(
   }
 );
 
-const getStatusColor = (status: string | number) => {
-  const numeric = typeof status === "number" ? status : Number(status);
-  const colorMap: Record<number, string> = {
-    2: "green",
-    1: "red",
-    3: "orange",
-    4: "orangered"
-  };
-  if (status === "online") return "green";
-  if (status === "offline") return "red";
-  if (status === "timeout") return "orange";
-  if (status === "abnormal") return "orangered";
-  return colorMap[numeric] || "gray";
-};
-
-const getStatusText = (status: string | number) => {
-  if (typeof status === "string" && status) {
-    const legacyMap: Record<string, string> = {
-      online: "在线",
-      offline: "离线",
-      timeout: "超时",
-      abnormal: "异常"
-    };
-    if (legacyMap[status]) return legacyMap[status];
-    if (NODE_STATUS_LABEL[status]) return NODE_STATUS_LABEL[status];
-    return status;
-  }
-  const enumMap: Record<number, string> = {
-    1: "NODE_STATUS_OFFLINE",
-    2: "NODE_STATUS_ONLINE",
-    3: "NODE_STATUS_TIMEOUT",
-    4: "NODE_STATUS_ABNORMAL"
-  };
-  const key = enumMap[Number(status)] || "NODE_STATUS_UNSPECIFIED";
-  return NODE_STATUS_LABEL[key] || "未知";
-};
-
-const parseMetadata = (value: unknown): Record<string, unknown> => {
-  if (!value) {
-    return {};
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {};
-};
-
-const makeCompletedBatchChangeStatus = (batchId: string, batchChangeType: string, total: number): BatchChangeStatusResponse => ({
-  batch_id: batchId,
-  batch_change_type: batchChangeType,
-  batch_change_status: BatchChangeStatus.SUCCESS,
-  total_count: total,
-  success_count: total,
-  failed_count: 0,
-  progress: 100,
-  created_at: new Date().toISOString(),
-  completed_time: new Date().toISOString(),
-  failed_items: []
-});
-
 const completeCloudNodeBatchChange = (batchId: string, batchChangeType: string, total: number) => {
   handleBatchChangeComplete(makeCompletedBatchChangeStatus(batchId, batchChangeType, total));
 };
 
-const submitCloudNodeBatchChange = async (batchChanges: Array<{ batchChangeType: string; requestPayload: any }>) => {
-  if (batchChanges.length === 0) {
-    throw new Error("没有可提交的云节点批量变更");
-  }
-  const batchChangeType = batchChanges[0].batchChangeType;
-  const first = batchChanges[0].requestPayload || {};
-
-  if (batchChangeType === "CREATE_NODE") {
-    const nodes = batchChanges.map((batchChange, index) => {
-      const params = batchChange.requestPayload || {};
-      const functionNamePrefix =
-        params.function_name_prefix ||
-        params.function_name ||
-        first.function_name_prefix ||
-        first.function_name ||
-        "moox-cloudnode";
-      return {
-        cloud_account_id: params.cloud_account_id,
-        node_type: params.node_type,
-        region: params.region,
-        namespace: params.namespace || first.namespace || "default",
-        runtime: params.runtime || first.runtime || "Go1",
-        handler: params.handler || first.handler || "main",
-        package_id: params.package_id || first.package_id,
-        config: params.config,
-        environment: params.environment,
-        metadata: {
-          ...parseMetadata(params.metadata),
-          biz_type: params.biz_type,
-          tag: params.tag,
-          function_name_prefix: functionNamePrefix,
-          timeout_threshold: params.timeout_threshold,
-          heartbeat_interval: params.heartbeat_interval,
-          probe_enabled: params.probe_enabled,
-          index
-        }
-      };
-    });
-    const rsp = await batchCreateNodes({
-      nodes,
-      cloud_account_id: first.cloud_account_id,
-      region: first.region,
-      namespace: first.namespace || "default",
-      node_type: first.node_type,
-      function_name_prefix: first.function_name_prefix || first.function_name || "moox-cloudnode",
-      runtime: first.runtime || "Go1",
-      handler: first.handler || "main",
-      package_id: first.package_id,
-      count: batchChanges.length,
-      config: first.config,
-      environment: first.environment
-    });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-    return rsp.batch_id;
-  }
-
-  if (batchChangeType === "DELETE_NODE") {
-    const rsp = await batchDeleteNodes({
-      node_ids: batchChanges.map(batchChange => batchChange.requestPayload?.node_id).filter(Boolean)
-    });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-    return rsp.batch_id;
-  }
-
-  if (batchChangeType === "DEPLOY_NODE") {
-    const rsp = await batchDeployNodes({
-      node_ids: batchChanges.map(batchChange => batchChange.requestPayload?.node_id).filter(Boolean),
-      package_id: first.package_id
-    });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-    return rsp.batch_id;
-  }
-
-  throw new Error(`unsupported cloud node batch change type: ${batchChangeType}`);
-};
-
-const computeAggregateStatus = (statuses: BatchChangeViewStatus[]): BatchChangeStatusResponse => {
-  const totals = statuses.reduce(
-    (acc, item) => {
-      acc.total += item.total_count || 0;
-      acc.success += item.success_count || 0;
-      acc.failed += item.failed_count || 0;
-      if (item.failed_items?.length) {
-        acc.failedItems.push(...item.failed_items);
-      }
-      return acc;
-    },
-    {
-      total: 0,
-      success: 0,
-      failed: 0,
-      failedItems: [] as BatchChangeDetailItem[]
-    }
-  );
-
-  let status = BatchChangeStatus.SUCCESS;
-  if (totals.failed > 0) {
-    status = totals.success > 0 ? BatchChangeStatus.PARTIAL : BatchChangeStatus.FAILED;
-  }
-
-  return {
-    batch_id: "",
-    batch_change_type: "CREATE_NODE",
-    batch_change_status: status,
-    total_count: totals.total,
-    success_count: totals.success,
-    failed_count: totals.failed,
-    progress: 100,
-    created_at: new Date().toISOString(),
-    completed_time: new Date().toISOString(),
-    failed_items: totals.failedItems
-  };
-};
-
-// 解析支持的工作负载列表
-const normalizeSupportedWorkloads = (value: string[] | string | undefined): string[] => {
-  if (!value) return [];
-  if (Array.isArray(value)) return value;
-  if (value === "[]") return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-};
-
 const getSupportedWorkloads = (value: string[] | string | undefined): string[] => normalizeSupportedWorkloads(value);
-
-// 获取采集器名称
-const getCollectorName = (collector: string) => {
-  const nameMap: Record<string, string> = {
-    kline: "K线",
-    ticker: "行情",
-    orderbook: "订单簿",
-    trade: "逐笔",
-    news: "资讯",
-    symbol: "标的"
-  };
-  return nameMap[collector] || collector;
-};
-
-// 获取采集器颜色
-const getCollectorColor = (collector: string) => {
-  const colorMap: Record<string, string> = {
-    kline: "blue",
-    ticker: "green",
-    orderbook: "orange",
-    trade: "purple",
-    news: "red",
-    symbol: "cyan"
-  };
-  return colorMap[collector] || "gray";
-};
-
-const getPackageTypeColor = (packageType: number | string) => {
-  const normalized = String(packageType);
-  const colorMap: Record<string, string> = {
-    "1": "blue",
-    "2": "green",
-    "3": "gray",
-    PACKAGE_TYPE_COLLECTOR: "blue",
-    PACKAGE_TYPE_FACTOR: "green",
-    PACKAGE_TYPE_CUSTOM: "gray",
-    data_collector: "blue",
-    factor_calculator: "green"
-  };
-  return colorMap[normalized] || "gray";
-};
-
-const getPackageStatusColor = (status: number | string) => {
-  const numeric = typeof status === "number" ? status : Number(status);
-  const colorMap: Record<number, string> = {
-    1: "blue",
-    2: "green",
-    3: "red",
-    4: "gray"
-  };
-  return colorMap[numeric] || "gray";
-};
-
-const getPackageStatusLabel = (status: number | string) => {
-  const numeric = typeof status === "number" ? status : Number(status);
-  const enumMap: Record<number, string> = {
-    1: "PACKAGE_STATUS_PENDING",
-    2: "PACKAGE_STATUS_AVAILABLE",
-    3: "PACKAGE_STATUS_FAILED",
-    4: "PACKAGE_STATUS_DELETED"
-  };
-  const key = enumMap[numeric] || "PACKAGE_STATUS_UNSPECIFIED";
-  return PACKAGE_STATUS_LABEL[key] || "未知";
-};
-
-const getPackageTypeLabel = (packageType: number | string) => {
-  if (typeof packageType === "string" && PACKAGE_TYPE_LABEL[packageType]) {
-    return PACKAGE_TYPE_LABEL[packageType];
-  }
-  const numeric = typeof packageType === "number" ? packageType : Number(packageType);
-  const enumMap: Record<number, string> = {
-    1: "PACKAGE_TYPE_COLLECTOR",
-    2: "PACKAGE_TYPE_FACTOR",
-    3: "PACKAGE_TYPE_CUSTOM"
-  };
-  const key = enumMap[numeric] || "PACKAGE_TYPE_UNSPECIFIED";
-  return PACKAGE_TYPE_LABEL[key] || String(packageType);
-};
-
-const formatFileSize = (size: number) => {
-  if (size < 1024) return size + "B";
-  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + "KB";
-  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + "MB";
-  return (size / (1024 * 1024 * 1024)).toFixed(1) + "GB";
-};
-
-const formatTime = (time: string | undefined) => {
-  if (!time) return "-";
-  return new Date(time).toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-};
-
-const formatDateTime = (dateTime: string | undefined) => {
-  if (!dateTime) return "-";
-  try {
-    return new Date(dateTime).toLocaleString("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  } catch {
-    return dateTime;
-  }
-};
-
-const formatMetadata = (metadata: string | Record<string, unknown>) => {
-  if (!metadata) return "-";
-  if (typeof metadata === "object") {
-    return JSON.stringify(metadata, null, 2);
-  }
-  try {
-    const parsed = JSON.parse(metadata);
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return metadata;
-  }
-};
 
 // 分页相关（使用后端分页）
 const onPageChange = (page: number) => {
@@ -2401,57 +1967,4 @@ const handleEditNodeOk = async () => {
 };
 </script>
 
-<style scoped>
-.moox-page {
-  width: 100%;
-  min-width: 0;
-  contain: inline-size;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-.moox-page :deep(.arco-spin),
-.moox-page :deep(.arco-spin-children) {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  overflow-x: hidden;
-}
-
-.moox-inner {
-  width: 100%;
-  max-width: 100%;
-  min-height: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  overflow-x: hidden;
-}
-
-.page-head {
-  margin-bottom: var(--moox-space-2);
-}
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-.cloud-node-action-bar,
-.cloud-node-filter-bar {
-  display: flex;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  justify-content: flex-start;
-  margin-bottom: var(--moox-space-tight);
-}
-.node-workloads {
-  display: flex;
-  min-width: 0;
-  flex-wrap: nowrap;
-  gap: var(--moox-space-1);
-  overflow: hidden;
-}
-.node-workloads :deep(.arco-tag) {
-  flex: 0 0 auto;
-}
-</style>
+<style scoped src="./cloud-node.scss"></style>
