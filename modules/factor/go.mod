@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/factor
 
-go 1.24.0
+go 1.25.0
 
 require (
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
