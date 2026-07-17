@@ -53,3 +53,8 @@ seed，并通过 Metadata API 动态登记测试 Subject 和 DatasetSubject。
 
 可导入的时序与截面因子示例见 [factors/README.md](./factors/README.md)。因子按
 `timeseries/` 和 `sections/` 分类，未包含策略配置或账户相关文件。
+
+## K 线测试数据
+
+A 股与加密货币的真实行情抽样见 [data/kline/README.md](./data/kline/README.md)。
+样本已经按当前量化元数据中的 Space、Dataset 和 TimeSeriesKey 约定标准化。
