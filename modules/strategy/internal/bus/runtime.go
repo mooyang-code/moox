@@ -18,6 +18,7 @@ type Connector func(context.Context) (JetStreamClient, error)
 
 type RuntimeConfig struct {
 	Connector         Connector
+	Probe             func(context.Context, JetStreamClient) error
 	Store             RuntimeStore
 	InstanceID        string
 	RelayInterval     time.Duration
@@ -32,13 +33,14 @@ type Runtime struct {
 	lastError error
 	cancel    context.CancelFunc
 	done      chan struct{}
-	startOnce sync.Once
-	closeOnce sync.Once
+	started   bool
+	closed    bool
+	validated bool
 }
 
 func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
-	if cfg.Connector == nil || cfg.Store == nil {
-		return nil, errors.New("strategy EventBus runtime connector and store are required")
+	if cfg.Connector == nil || cfg.Probe == nil || cfg.Store == nil {
+		return nil, errors.New("strategy EventBus runtime connector, probe, and store are required")
 	}
 	if cfg.RelayInterval <= 0 || cfg.ReconnectInterval <= 0 || cfg.BatchSize <= 0 {
 		return nil, errors.New("strategy EventBus runtime intervals and batch size must be positive")
@@ -46,14 +48,22 @@ func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
 	return &Runtime{cfg: cfg, done: make(chan struct{})}, nil
 }
 
-func (r *Runtime) Start(parent context.Context) {
-	r.startOnce.Do(func() {
-		ctx, cancel := context.WithCancel(parent)
-		r.mu.Lock()
-		r.cancel = cancel
+func (r *Runtime) Start(parent context.Context) error {
+	r.mu.Lock()
+	if r.closed {
 		r.mu.Unlock()
-		go r.run(ctx)
-	})
+		return errors.New("strategy EventBus runtime is closed")
+	}
+	if r.started {
+		r.mu.Unlock()
+		return nil
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r.cancel = cancel
+	r.started = true
+	r.mu.Unlock()
+	go r.run(ctx)
+	return nil
 }
 
 func (r *Runtime) run(ctx context.Context) {
@@ -76,6 +86,17 @@ func (r *Runtime) run(ctx context.Context) {
 			r.setClient(connected)
 			client = connected
 		}
+		if !r.isValidated() {
+			if err := r.cfg.Probe(ctx, client); err != nil {
+				r.setError(err)
+				r.dropClient(client)
+				if !waitFor(ctx, r.cfg.ReconnectInterval) {
+					return
+				}
+				continue
+			}
+			r.setValidated(true)
+		}
 		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Client: client, InstanceID: r.cfg.InstanceID}}
 		if err := relay.PublishPending(ctx, r.cfg.BatchSize); err != nil {
 			r.setError(err)
@@ -94,7 +115,7 @@ func (r *Runtime) run(ctx context.Context) {
 
 func (r *Runtime) Connected() bool {
 	client := r.currentClient()
-	return client != nil && client.Ready()
+	return client != nil && client.Ready() && r.isValidated()
 }
 
 func (r *Runtime) LastError() error {
@@ -107,25 +128,32 @@ func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
-	var closeErr error
-	r.closeOnce.Do(func() {
-		started := false
-		r.mu.RLock()
-		cancel := r.cancel
-		started = cancel != nil
-		r.mu.RUnlock()
-		if cancel != nil {
-			cancel()
-		}
+	r.mu.Lock()
+	if r.closed {
+		started := r.started
+		done := r.done
+		r.mu.Unlock()
 		if started {
-			<-r.done
+			<-done
 		}
-		client := r.currentClient()
-		if client != nil {
-			closeErr = client.Close()
-		}
-	})
-	return closeErr
+		return nil
+	}
+	r.closed = true
+	started := r.started
+	cancel := r.cancel
+	done := r.done
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if started {
+		<-done
+	}
+	client := r.currentClient()
+	if client != nil {
+		return client.Close()
+	}
+	return nil
 }
 
 func (r *Runtime) currentClient() JetStreamClient {
@@ -138,6 +166,7 @@ func (r *Runtime) setClient(client JetStreamClient) {
 	r.mu.Lock()
 	old := r.client
 	r.client = client
+	r.validated = false
 	r.mu.Unlock()
 	if old != nil && old != client {
 		_ = old.Close()
@@ -149,11 +178,24 @@ func (r *Runtime) dropClient(expected JetStreamClient) {
 	client := r.client
 	if expected == nil || client == expected {
 		r.client = nil
+		r.validated = false
 	}
 	r.mu.Unlock()
 	if client != nil && (expected == nil || client == expected) {
 		_ = client.Close()
 	}
+}
+
+func (r *Runtime) isValidated() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.validated
+}
+
+func (r *Runtime) setValidated(validated bool) {
+	r.mu.Lock()
+	r.validated = validated
+	r.mu.Unlock()
 }
 
 func (r *Runtime) setError(err error) {

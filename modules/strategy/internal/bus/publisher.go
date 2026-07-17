@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -10,6 +11,18 @@ import (
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func ValidateJetStreamPublisher(ctx context.Context, client JetStreamClient, instanceID string) error {
+	if instanceID == "" {
+		instanceID = "strategy"
+	}
+	return (&JetStreamPublisher{Client: client, InstanceID: instanceID}).Publish(ctx, domain.OutboxMessage{
+		MessageID: fmt.Sprintf("strategy-runtime-probe:%s", instanceID),
+		Topic:     "moox.strategy.run.completed.v1",
+		Payload:   []byte(`{"event_type":"runtime_probe","status":"ready"}`),
+		CreatedAt: time.Now().UTC(),
+	})
+}
 
 type JetStreamClient interface {
 	Publish(context.Context, *messagepb.MooxMessage, ...jetstream.PublishOption) (*jetstream.PublishAck, error)

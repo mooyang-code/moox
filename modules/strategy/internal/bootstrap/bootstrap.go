@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,7 +71,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err != nil {
 		return nil, nil, err
 	}
-	eventRuntime.Start(ctx)
+	if err := eventRuntime.Start(ctx); err != nil {
+		return nil, nil, err
+	}
 	service := newRPCService(repo, eng, cfg)
 	strategypb.RegisterStrategyMgrService(s, service)
 	healthState := health.New("strategy", "strategy", "", "")
@@ -106,27 +107,22 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 func newEventBusRuntime(repo *store.Store, cfg Config) (*strategybus.Runtime, error) {
 	connector := func(ctx context.Context) (strategybus.JetStreamClient, error) {
 		jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy")
-		if jsConfig.Credentials == "" {
-			jsConfig.Credentials = expandHome(cfg.EventBus.CredentialFile)
+		if jsConfig.Credentials == "" && jsConfig.Username == "" && strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {
+			if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile)); err != nil {
+				return nil, err
+			}
 		}
 		jsConfig.ConnectTimeout = cfg.EventBus.ConnectTimeout
 		return jetstream.Connect(ctx, jsConfig)
 	}
 	return strategybus.NewRuntime(strategybus.RuntimeConfig{
 		Connector: connector, Store: repo, InstanceID: cfg.InstanceID,
+		Probe: func(ctx context.Context, client strategybus.JetStreamClient) error {
+			return strategybus.ValidateJetStreamPublisher(ctx, client, cfg.InstanceID)
+		},
 		RelayInterval: cfg.EventBus.RelayInterval, ReconnectInterval: cfg.EventBus.ReconnectInterval,
 		BatchSize: cfg.EventBus.RelayBatchSize,
 	})
-}
-
-func expandHome(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
-		}
-	}
-	return path
 }
 
 func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Service {

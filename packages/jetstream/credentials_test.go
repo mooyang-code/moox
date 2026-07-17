@@ -37,3 +37,18 @@ func TestLoadCredentialFileRequiresPrivateRegularFile(t *testing.T) {
 		t.Fatalf("LoadCredentialFile() = %+v, err=%v", file, err)
 	}
 }
+
+func TestApplyCredentialFileResolvesRelativeCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "strategy.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nusername: strategy-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var config Config
+	if err := config.ApplyCredentialFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if config.Username != "strategy-eventbus" || config.Password != "secret" || config.TLSCAFile != filepath.Join(dir, "ca.pem") {
+		t.Fatalf("config=%+v", config)
+	}
+}

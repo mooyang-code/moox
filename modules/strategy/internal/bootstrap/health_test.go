@@ -24,12 +24,15 @@ func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	}
 	runtime, err := strategybus.NewRuntime(strategybus.RuntimeConfig{
 		Store: repo, RelayInterval: time.Millisecond, ReconnectInterval: time.Millisecond, BatchSize: 1,
+		Probe:     func(context.Context, strategybus.JetStreamClient) error { return nil },
 		Connector: func(context.Context) (strategybus.JetStreamClient, error) { return nil, errors.New("unavailable") },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.Start(context.Background())
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	defer runtime.Close()
 	state := strategyhealth.New("strategy", "strategy", "", "")
 	state.SetReady(true)

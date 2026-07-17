@@ -67,6 +67,10 @@ func (c *Config) ApplyCredentialFile(path string) error {
 	if err != nil {
 		return err
 	}
-	c.Username, c.Password, c.TLSCAFile = file.Username, file.Password, file.CAFile
+	caFile := file.CAFile
+	if caFile != "" && !filepath.IsAbs(caFile) {
+		caFile = filepath.Join(filepath.Dir(path), caFile)
+	}
+	c.Username, c.Password, c.TLSCAFile = file.Username, file.Password, caFile
 	return nil
 }

@@ -81,7 +81,7 @@ func (c *runtimeTestClient) Publish(_ context.Context, message *messagepb.MooxMe
 	c.ids <- message.GetMessageId()
 	return &jetstream.PublishAck{}, nil
 }
-func (c *runtimeTestClient) Ready() bool { return c.ready.Load() }
+func (c *runtimeTestClient) Ready() bool  { return c.ready.Load() }
 func (c *runtimeTestClient) Close() error { c.ready.Store(false); return nil }
 
 func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
@@ -91,6 +91,7 @@ func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
 	runtime, err := NewRuntime(RuntimeConfig{
 		Store: store, InstanceID: "strategy-test", RelayInterval: 5 * time.Millisecond,
 		ReconnectInterval: 5 * time.Millisecond, BatchSize: 10,
+		Probe: func(context.Context, JetStreamClient) error { return nil },
 		Connector: func(context.Context) (JetStreamClient, error) {
 			if attempts.Add(1) < 3 {
 				return nil, errors.New("broker unavailable")
@@ -101,7 +102,9 @@ func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.Start(context.Background())
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = runtime.Close() })
 	eventually(t, time.Second, func() bool { return runtime.Connected() && store.isPublished() })
 	select {
@@ -121,6 +124,7 @@ func TestRuntimeDetectsBrokerLossAndReconnects(t *testing.T) {
 	var attempts atomic.Int32
 	runtime, err := NewRuntime(RuntimeConfig{
 		Store: store, RelayInterval: 5 * time.Millisecond, ReconnectInterval: 5 * time.Millisecond, BatchSize: 1,
+		Probe: func(context.Context, JetStreamClient) error { return nil },
 		Connector: func(context.Context) (JetStreamClient, error) {
 			if attempts.Add(1) == 1 {
 				return first, nil
@@ -131,7 +135,9 @@ func TestRuntimeDetectsBrokerLossAndReconnects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.Start(context.Background())
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, time.Second, runtime.Connected)
 	first.ready.Store(false)
 	eventually(t, time.Second, func() bool { return attempts.Load() >= 2 && runtime.Connected() })
@@ -141,6 +147,50 @@ func TestRuntimeDetectsBrokerLossAndReconnects(t *testing.T) {
 	if second.Ready() {
 		t.Fatal("runtime Close left client connected")
 	}
+}
+
+func TestRuntimeCloseBeforeStartRejectsLateStart(t *testing.T) {
+	runtime, err := NewRuntime(RuntimeConfig{
+		Store: &runtimeTestStore{}, RelayInterval: time.Millisecond, ReconnectInterval: time.Millisecond, BatchSize: 1,
+		Connector: func(context.Context) (JetStreamClient, error) { return newRuntimeTestClient(), nil },
+		Probe:     func(context.Context, JetStreamClient) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err == nil {
+		t.Fatal("closed runtime restarted")
+	}
+}
+
+func TestRuntimeDoesNotReportConnectedUntilPublishProbeSucceeds(t *testing.T) {
+	probeAllowed := atomic.Bool{}
+	runtime, err := NewRuntime(RuntimeConfig{
+		Store: &runtimeTestStore{}, RelayInterval: time.Millisecond, ReconnectInterval: time.Millisecond, BatchSize: 1,
+		Connector: func(context.Context) (JetStreamClient, error) { return newRuntimeTestClient(), nil },
+		Probe: func(context.Context, JetStreamClient) error {
+			if !probeAllowed.Load() {
+				return errors.New("stream or ACL unavailable")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	time.Sleep(10 * time.Millisecond)
+	if runtime.Connected() {
+		t.Fatal("runtime reported ready before publish probe")
+	}
+	probeAllowed.Store(true)
+	eventually(t, time.Second, runtime.Connected)
 }
 
 func eventually(t *testing.T, timeout time.Duration, condition func() bool) {

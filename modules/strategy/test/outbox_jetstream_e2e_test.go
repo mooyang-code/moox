@@ -50,6 +50,9 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	runtime, err := strategybus.NewRuntime(strategybus.RuntimeConfig{
 		Store: repo, InstanceID: "strategy-e2e", RelayInterval: 20 * time.Millisecond,
 		ReconnectInterval: 20 * time.Millisecond, BatchSize: 10,
+		Probe: func(ctx context.Context, client strategybus.JetStreamClient) error {
+			return strategybus.ValidateJetStreamPublisher(ctx, client, "strategy-e2e")
+		},
 		Connector: func(ctx context.Context) (strategybus.JetStreamClient, error) {
 			return jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-e2e", ConnectTimeout: 200 * time.Millisecond})
 		},
@@ -57,7 +60,9 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.Start(context.Background())
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_ = runtime.Close()
 		_ = repo.Close()
@@ -95,7 +100,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	}
 	defer subscription.Unsubscribe()
 	seen := map[string]int{}
-	for len(seen) < 2 {
+	for seen["run-1"] == 0 || seen["run-2"] == 0 {
 		message, err := subscription.NextMsg(3 * time.Second)
 		if err != nil {
 			t.Fatal(err)
@@ -111,6 +116,13 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	}
 	if seen["run-1"] != 1 || seen["run-2"] != 1 {
 		t.Fatalf("published ids=%v", seen)
+	}
+	streamInfo, err := verifyJS.StreamInfo("MOOX_STRATEGY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streamInfo.State.Msgs != 3 {
+		t.Fatalf("stream message count=%d, want probe plus two decisions", streamInfo.State.Msgs)
 	}
 }
 
