@@ -40,6 +40,11 @@ Environment variables:
 
 `make deploy` creates or syncs a runnable deployment directory with binaries, configs, schemas, examples, and runtime helper scripts such as `start.sh`, `stop.sh`, and `status.sh`.
 
+仅替换远端 Web Host 时，不必重新发布整个控制面。使用
+[`web-host-release.md`](web-host-release.md) 中的
+`moox-cli setup deploy-web-host`，由 CLI 从用户维护的 `custom.toml` 内部读取凭据，
+通过已信任的 SSH 主机指纹上传并校验单个二进制。
+
 Public deployments require `--public-host`. Deployment installs pinned, checksum-verified, rootless Caddy `v2.11.4` automatically before acceptance; package-manager Caddy is not a prerequisite. It rejects non-loopback upstream overrides, starts web-host `127.0.0.1:9528`, Admin control `127.0.0.1:11000`, and Admin service `127.0.0.1:11002`, then starts or reloads the MooX-managed edge without touching unrelated processes. `--target-ca auto` attempts target trust-store installation and downgrades only a recognized lack of elevated permission; other installation failures stop deployment. Browser HTTPS `9527` exposes the site and `/api/admin/*`; service HTTPS `11001` is restricted to `/api/service/*`. Public diagnostics return `404`.
 
 Browser control requests use a 24-hour JWT/session plus per-request HMAC. Deployment generates and persists the JWT signing secret in mode-`0600` `secrets/admin-jwt.env`. Backend and SCF calls use the independent Gateway's nonce-protected service HMAC. Dedicated health endpoints use a separate health HMAC; deployment writes its generated credential to `secrets/health-auth.env` and unsigned probes fail with `401`.

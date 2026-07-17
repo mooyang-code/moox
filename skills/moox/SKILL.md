@@ -50,6 +50,11 @@ make release
 make deploy
 ```
 
+单独替换已部署的 Web Host 二进制时，使用
+[`references/web-host-release.md`](references/web-host-release.md) 中的
+`moox-cli setup deploy-web-host`。该流程由 CLI 在进程内读取 `custom.toml`，
+通过已核验的 SSH 主机指纹完成安全上传、回滚和健康检查；不要在命令行中拼接密码。
+
 Protocol generation:
 
 ```bash
