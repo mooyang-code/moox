@@ -12,7 +12,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// Task is a debounced event-derived scheduler request.
+// Task is an event-batched scheduler request.
 type Task struct {
 	SpaceID       string
 	SourceDataset string
@@ -23,8 +23,8 @@ type Task struct {
 	FactorIDs     []string
 }
 
-// Debouncer merges Storage row-update messages into per-symbol task requests.
-type Debouncer struct {
+// EventBatcher groups Storage row-update messages into fixed-window per-symbol task requests.
+type EventBatcher struct {
 	mu       sync.Mutex
 	window   time.Duration
 	bindings []domain.FactorBinding
@@ -45,20 +45,20 @@ type bucket struct {
 	factors  map[string]struct{}
 }
 
-// NewDebouncer creates a debouncer with an initial binding snapshot.
-func NewDebouncer(window time.Duration, bindings []domain.FactorBinding) *Debouncer {
-	return &Debouncer{window: window, bindings: append([]domain.FactorBinding(nil), bindings...), buckets: map[bucketKey]*bucket{}}
+// NewEventBatcher creates an event batcher with an initial binding snapshot.
+func NewEventBatcher(window time.Duration, bindings []domain.FactorBinding) *EventBatcher {
+	return &EventBatcher{window: window, bindings: append([]domain.FactorBinding(nil), bindings...), buckets: map[bucketKey]*bucket{}}
 }
 
 // SetBindings replaces the enabled binding snapshot.
-func (d *Debouncer) SetBindings(bindings []domain.FactorBinding) {
+func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.bindings = append([]domain.FactorBinding(nil), bindings...)
 }
 
-// Ingest adds one Storage rows_changed event into debounce buckets.
-func (d *Debouncer) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time) {
+// Ingest adds one Storage rows_changed event into fixed-window buckets.
+func (d *EventBatcher) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, row := range event.GetRows() {
@@ -110,8 +110,8 @@ func (d *Debouncer) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time
 	}
 }
 
-// Flush returns all buckets whose debounce deadline has passed.
-func (d *Debouncer) Flush(now time.Time) []Task {
+// Flush returns all buckets whose fixed-window deadline has passed.
+func (d *EventBatcher) Flush(now time.Time) []Task {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	keys := make([]bucketKey, 0, len(d.buckets))
@@ -135,7 +135,7 @@ func (d *Debouncer) Flush(now time.Time) []Task {
 	return tasks
 }
 
-func (d *Debouncer) matchBindings(key *storagepb.TimeSeriesKey) []domain.FactorBinding {
+func (d *EventBatcher) matchBindings(key *storagepb.TimeSeriesKey) []domain.FactorBinding {
 	out := []domain.FactorBinding{}
 	for _, binding := range d.bindings {
 		if binding.Status != domain.BindingStatusEnabled {

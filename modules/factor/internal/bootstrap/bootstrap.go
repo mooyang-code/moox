@@ -120,7 +120,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 factor binding 快照失败: %v", err)
 		return nil, err
 	}
-	debounce := trigger.NewDebouncer(time.Duration(cfg.Scheduler.DebounceWindowMS)*time.Millisecond, bindings)
+	eventBatcher := trigger.NewEventBatcher(time.Duration(cfg.Scheduler.EventBatchWindowMS)*time.Millisecond, bindings)
 	if cfg.NATS.URL == "" {
 		log.WarnContextf(ctx, "factor nats.url is empty, realtime trigger startup skipped")
 	} else {
@@ -131,7 +131,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Consumer:       cfg.NATS.Consumer,
 			Subject:        cfg.NATS.Subject,
 			CredentialFile: cfg.NATS.CredentialFile,
-		}, debounce)
+		}, eventBatcher)
 		if err := consumer.Start(ctx); err != nil {
 			log.ErrorContextf(ctx, "启动 factor NATS trigger 失败: %v", err)
 			return nil, err
@@ -139,14 +139,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		realtimeCtx, cancelRealtime := context.WithCancel(ctx)
 		stopRealtime = cancelRealtime
 		waitRealtime = startRealtimeLoop(realtimeCtx, realtimeLoopDeps{
-			consumer:       consumer,
-			debounce:       debounce,
-			scheduler:      sched,
-			factors:        factorRepo,
-			meta:           meta,
-			bindings:       bindingRepo,
-			factorsDir:     cfg.Engine.FactorsDir,
-			debounceWindow: time.Duration(cfg.Scheduler.DebounceWindowMS) * time.Millisecond,
+			consumer:         consumer,
+			eventBatcher:     eventBatcher,
+			scheduler:        sched,
+			factors:          factorRepo,
+			meta:             meta,
+			bindings:         bindingRepo,
+			factorsDir:       cfg.Engine.FactorsDir,
+			eventBatchWindow: time.Duration(cfg.Scheduler.EventBatchWindowMS) * time.Millisecond,
 		})
 	}
 	registerReconcileSchedule(s, sched)
@@ -311,14 +311,14 @@ func (c *metadataClientAdapter) CreatePrimaryStoreRoute(ctx context.Context, req
 }
 
 type realtimeLoopDeps struct {
-	consumer       interface{ Close() error }
-	debounce       *trigger.Debouncer
-	scheduler      *scheduler.Service
-	factors        *store.FactorRepository
-	meta           *registry.MetadataSync
-	bindings       *store.BindingRepository
-	debounceWindow time.Duration
-	factorsDir     string
+	consumer         interface{ Close() error }
+	eventBatcher     *trigger.EventBatcher
+	scheduler        *scheduler.Service
+	factors          *store.FactorRepository
+	meta             *registry.MetadataSync
+	bindings         *store.BindingRepository
+	eventBatchWindow time.Duration
+	factorsDir       string
 }
 
 func factorAuthInfo() *commonpb.AuthInfo {
@@ -334,42 +334,42 @@ func listEnabledBindings(ctx context.Context, repo *store.BindingRepository) ([]
 }
 
 func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {
-	interval := deps.debounceWindow / 2
-	if interval <= 0 {
-		interval = time.Second
+	flushInterval := deps.eventBatchWindow / 2
+	if flushInterval <= 0 {
+		flushInterval = time.Second
 	}
-	if interval < 200*time.Millisecond {
-		interval = 200 * time.Millisecond
+	if flushInterval < 200*time.Millisecond {
+		flushInterval = 200 * time.Millisecond
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		flushTicker := time.NewTicker(interval)
-		reloadTicker := time.NewTicker(30 * time.Second)
-		defer flushTicker.Stop()
-		defer reloadTicker.Stop()
+		eventBatchTicker := time.NewTicker(flushInterval)
+		bindingReloadTicker := time.NewTicker(30 * time.Second)
+		defer eventBatchTicker.Stop()
+		defer bindingReloadTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-flushTicker.C:
-				drainDebounced(ctx, deps)
-			case <-reloadTicker.C:
+			case <-eventBatchTicker.C:
+				drainEventBatch(ctx, deps)
+			case <-bindingReloadTicker.C:
 				bindings, err := listEnabledBindings(ctx, deps.bindings)
 				if err != nil {
 					log.WarnContextf(ctx, "刷新 factor binding 快照失败: %v", err)
 					continue
 				}
-				deps.debounce.SetBindings(bindings)
+				deps.eventBatcher.SetBindings(bindings)
 			}
 		}
 	}()
 	return wg.Wait
 }
 
-func drainDebounced(ctx context.Context, deps realtimeLoopDeps) {
-	for _, task := range deps.debounce.Flush(time.Now()) {
+func drainEventBatch(ctx context.Context, deps realtimeLoopDeps) {
+	for _, task := range deps.eventBatcher.Flush(time.Now()) {
 		schedTask, err := buildSchedulerTask(ctx, deps.factors, deps.factorsDir, task)
 		if err != nil {
 			log.WarnContextf(ctx, "构造 factor 调度任务失败: %v", err)

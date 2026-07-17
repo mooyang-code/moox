@@ -23,16 +23,16 @@ type NATSConfig struct {
 }
 
 type NATSConsumer struct {
-	cfg      NATSConfig
-	debounce *Debouncer
-	client   *jetstream.Client
-	consumer *jetstream.PullConsumer
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	cfg          NATSConfig
+	eventBatcher *EventBatcher
+	client       *jetstream.Client
+	consumer     *jetstream.PullConsumer
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
-func NewNATSConsumer(cfg NATSConfig, debounce *Debouncer) *NATSConsumer {
-	return &NATSConsumer{cfg: cfg, debounce: debounce}
+func NewNATSConsumer(cfg NATSConfig, eventBatcher *EventBatcher) *NATSConsumer {
+	return &NATSConsumer{cfg: cfg, eventBatcher: eventBatcher}
 }
 
 func (c *NATSConsumer) Start(ctx context.Context) error {
@@ -106,8 +106,8 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 				_ = delivery.Term(ctx)
 				continue
 			}
-			if c.debounce != nil {
-				c.debounce.Ingest(event, time.Now().UTC())
+			if c.eventBatcher != nil {
+				c.eventBatcher.Ingest(event, time.Now().UTC())
 			}
 			_ = delivery.Ack(ctx)
 		}

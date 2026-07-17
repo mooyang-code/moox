@@ -114,27 +114,27 @@ func TestBuildSchedulerTask_AndSyncMetadata(t *testing.T) {
 	require.NoError(t, syncTaskMetadata(context.Background(), registry.NewMetadataSync(nil, nil), task, repo))
 }
 
-func TestStartRealtimeLoop_AndDrainDebounced(t *testing.T) {
+func TestStartRealtimeLoopAndDrainEventBatch(t *testing.T) {
 	db := openBootstrapTestDB(t)
-	debounce := trigger.NewDebouncer(50*time.Millisecond, nil)
+	eventBatcher := trigger.NewEventBatcher(50*time.Millisecond, nil)
 	sched := scheduler.NewService(scheduler.Config{Workers: 1, MaxRetry: 1}, &bootstrapFakeStorage{}, &bootstrapFakeExecutor{})
 	require.NoError(t, sched.Start(context.Background()))
 	t.Cleanup(func() { _ = sched.Stop() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	wait := startRealtimeLoop(ctx, realtimeLoopDeps{
-		debounce:       debounce,
-		scheduler:      sched,
-		factors:        db.Factors(),
-		bindings:       db.Bindings(),
-		debounceWindow: 50 * time.Millisecond,
-		factorsDir:     t.TempDir(),
+		eventBatcher:     eventBatcher,
+		scheduler:        sched,
+		factors:          db.Factors(),
+		bindings:         db.Bindings(),
+		eventBatchWindow: 50 * time.Millisecond,
+		factorsDir:       t.TempDir(),
 	})
-	drainDebounced(ctx, realtimeLoopDeps{
-		debounce:   debounce,
-		scheduler:  sched,
-		factors:    db.Factors(),
-		factorsDir: t.TempDir(),
+	drainEventBatch(ctx, realtimeLoopDeps{
+		eventBatcher: eventBatcher,
+		scheduler:    sched,
+		factors:      db.Factors(),
+		factorsDir:   t.TempDir(),
 	})
 	cancel()
 	wait()

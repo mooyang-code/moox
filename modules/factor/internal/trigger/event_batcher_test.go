@@ -8,9 +8,9 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func TestDebouncerDropsNonBoundAndResultDatasets(t *testing.T) {
+func TestEventBatcherDropsNonBoundAndResultDatasets(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewDebouncer(2*time.Second, []domain.FactorBinding{
+	d := NewEventBatcher(2*time.Second, []domain.FactorBinding{
 		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
 	})
 
@@ -22,9 +22,9 @@ func TestDebouncerDropsNonBoundAndResultDatasets(t *testing.T) {
 	}
 }
 
-func TestDebouncerCoalescesByScopeAtMaxDataTime(t *testing.T) {
+func TestEventBatcherGroupsByScopeAtMaxDataTime(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewDebouncer(2*time.Second, []domain.FactorBinding{
+	d := NewEventBatcher(2*time.Second, []domain.FactorBinding{
 		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
 		binding("cci", "binance_spot_kline", domain.SubjectModeAll, "[]"),
 	})
@@ -48,9 +48,9 @@ func TestDebouncerCoalescesByScopeAtMaxDataTime(t *testing.T) {
 	}
 }
 
-func TestDebouncerHonorsIncludeModeSubjects(t *testing.T) {
+func TestEventBatcherHonorsIncludeModeSubjects(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewDebouncer(2*time.Second, []domain.FactorBinding{
+	d := NewEventBatcher(2*time.Second, []domain.FactorBinding{
 		binding("bias", "binance_spot_kline", domain.SubjectModeInclude, `["ETH-USDT"]`),
 	})
 
@@ -60,6 +60,25 @@ func TestDebouncerHonorsIncludeModeSubjects(t *testing.T) {
 	tasks := d.Flush(now.Add(3 * time.Second))
 	if len(tasks) != 1 || tasks[0].SubjectID != "ETH-USDT" {
 		t.Fatalf("tasks = %+v", tasks)
+	}
+}
+
+func TestEventBatcherUsesFixedWindowFromFirstEvent(t *testing.T) {
+	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	window := 2 * time.Second
+	d := NewEventBatcher(window, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	d.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now), now)
+	d.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now.Add(time.Minute)), now.Add(window-time.Millisecond))
+
+	tasks := d.Flush(now.Add(window))
+	if len(tasks) != 1 {
+		t.Fatalf("tasks len = %d, want 1", len(tasks))
+	}
+	if tasks[0].BarTime != now.Add(time.Minute) {
+		t.Fatalf("bar time = %s", tasks[0].BarTime)
 	}
 }
 

@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,6 +24,39 @@ func TestDefaultFactorConfig(t *testing.T) {
 	}
 	if cfg.Health.Addr != ":11414" {
 		t.Fatalf("health addr = %q", cfg.Health.Addr)
+	}
+	if cfg.Scheduler.EventBatchWindowMS != 2000 {
+		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
+	}
+}
+
+func TestCheckedInConfigUsesEventBatchWindow(t *testing.T) {
+	path := filepath.Join("..", "..", "config", "app.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read checked-in config: %v", err)
+	}
+	legacyKey := "debounce_" + "window_ms"
+	if bytes.Contains(data, []byte(legacyKey)) {
+		t.Fatalf("checked-in config still contains legacy scheduler key %q", legacyKey)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Scheduler.EventBatchWindowMS != 2000 {
+		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
+	}
+}
+
+func TestLoadHonorsCustomEventBatchWindow(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "scheduler:\n  event_batch_window_ms: 3500\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Scheduler.EventBatchWindowMS != 3500 {
+		t.Fatalf("event batch window = %d, want 3500", cfg.Scheduler.EventBatchWindowMS)
 	}
 }
 

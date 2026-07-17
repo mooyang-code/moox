@@ -33,7 +33,7 @@ engine:
   shm_dir: ""
 
 scheduler:
-  debounce_window_ms: 2000
+  event_batch_window_ms: 2000
   max_retry: 3
   reconcile_interval_min: 10
 

@@ -11,7 +11,7 @@ import (
 func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 	symbols := testkit.Symbols(500)
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewDebouncer(time.Second, []domain.FactorBinding{{
+	d := NewEventBatcher(time.Second, []domain.FactorBinding{{
 		BindingID:     "b1",
 		FactorID:      "bias",
 		SpaceID:       "crypto",
@@ -40,9 +40,9 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 	}
 }
 
-func TestDebouncerSplitsTasksByTargetDataset(t *testing.T) {
+func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewDebouncer(time.Second, []domain.FactorBinding{
+	d := NewEventBatcher(time.Second, []domain.FactorBinding{
 		{
 			BindingID:     "b1",
 			FactorID:      "bias",

@@ -37,6 +37,7 @@ examples/run-once/
 因子定义与结果列已可在 Storage 元数据（`Factor`、`DatasetColumn.origin_type=factor`）中登记；本模块承担：
 
 - 因子任务调度与参数化计算
+- 使用固定窗口 `EventBatcher` 将同一计算范围内的实时 Storage 事件合并为单个任务
 - 结果写回 Storage Access（列级更新）
 - 与 View 物化链路集成
 

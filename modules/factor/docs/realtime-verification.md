@@ -18,6 +18,6 @@
 
 ## Acceptance
 
-- A 500-symbol event storm produces 500 debounced tasks, not more.
+- A 500-symbol event storm produces 500 event-batched tasks, not more.
 - Scheduler drains deterministic 5ms tasks within one bar budget in test mode.
 - Local service logs contain `factor_run_done` lines for success, failed, and superseded terminal states.

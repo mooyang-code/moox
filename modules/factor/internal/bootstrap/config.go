@@ -67,7 +67,7 @@ type EngineConfig struct {
 
 // SchedulerConfig describes runtime scheduling behavior.
 type SchedulerConfig struct {
-	DebounceWindowMS     int `yaml:"debounce_window_ms"`
+	EventBatchWindowMS   int `yaml:"event_batch_window_ms"`
 	MaxRetry             int `yaml:"max_retry"`
 	ReconcileIntervalMin int `yaml:"reconcile_interval_min"`
 }
@@ -144,7 +144,7 @@ func Default() *Config {
 			SnapshotTTLSeconds:  300,
 		},
 		Scheduler: SchedulerConfig{
-			DebounceWindowMS:     2000,
+			EventBatchWindowMS:   2000,
 			MaxRetry:             3,
 			ReconcileIntervalMin: 10,
 		},
@@ -232,8 +232,8 @@ func (c *Config) applyDefaults() {
 	if c.Engine.SnapshotTTLSeconds <= 0 {
 		c.Engine.SnapshotTTLSeconds = 300
 	}
-	if c.Scheduler.DebounceWindowMS == 0 {
-		c.Scheduler.DebounceWindowMS = 2000
+	if c.Scheduler.EventBatchWindowMS == 0 {
+		c.Scheduler.EventBatchWindowMS = 2000
 	}
 	if c.Scheduler.MaxRetry == 0 {
 		c.Scheduler.MaxRetry = 3
