@@ -10,6 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type routeState struct {
@@ -112,6 +115,7 @@ func (state *State) ObserveRequest(service, method string, status int, elapsed t
 
 func (state *State) Handler() http.Handler {
 	mux := http.NewServeMux()
+	prometheusHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{DisableCompression: true})
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		if check := state.storage.Load(); check != nil && check.check() != nil {
 			http.Error(response, "persistent storage unavailable", http.StatusServiceUnavailable)
@@ -128,9 +132,10 @@ func (state *State) Handler() http.Handler {
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write([]byte("ready\n"))
 	})
-	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		state.writeMetrics(response)
+		prometheusHandler.ServeHTTP(response, request)
 	})
 	return mux
 }

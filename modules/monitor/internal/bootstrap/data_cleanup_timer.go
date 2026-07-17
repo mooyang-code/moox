@@ -59,7 +59,7 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if cfg != nil {
 		ops.retention = time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
 	}
-	if runtime != nil && runtime.Store != nil && runtime.Repositories != nil && runtime.Store.Ping(context.Background()) == nil && ops.retention > 0 {
+	if runtime != nil && runtime.Store != nil && runtime.Repositories != nil && ops.retention > 0 {
 		ops.deleteResults = func(ctx context.Context, cutoff time.Time) error {
 			_, err := runtime.Repositories.Results.DeleteOlderThan(ctx, cutoff)
 			return err

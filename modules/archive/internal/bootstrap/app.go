@@ -148,7 +148,9 @@ func (a *App) Run(ctx context.Context) error {
 	flushCtx, flushCancel := context.WithTimeout(trpc.CloneContext(ctx), wait)
 	flushErr := materializer.FlushOnShutdown(flushCtx)
 	flushCancel()
-	if status, err := store.Status(trpc.CloneContext(ctx)); err == nil {
+	statusCtx, statusCancel := context.WithTimeout(trpc.BackgroundContext(), time.Second)
+	defer statusCancel()
+	if status, err := store.Status(statusCtx); err == nil {
 		state.PendingRows.Store(status.PendingRows)
 		state.DirtyPartitions.Store(status.DirtyPartitions)
 	}

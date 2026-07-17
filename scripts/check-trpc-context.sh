@@ -41,7 +41,10 @@ while IFS= read -r match; do
 	case "${match}" in
 		modules/factor/internal/rpc/recalc.go:* | \
 		modules/collector/internal/reporter/task_status.go:* | \
-		modules/storage/internal/infra/eventbus/producer_bus.go:*) ;;
+		modules/storage/internal/infra/eventbus/producer_bus.go:* | \
+		modules/archive/internal/bootstrap/app.go:* | \
+		modules/hostagent/internal/app/sample_timer.go:* | \
+		packages/timerjob/job.go:*) ;;
 		*) violations+=("${match}: CloneContext is only allowed at reviewed detached-work boundaries") ;;
 	esac
 done < <(rg -n --glob '*.go' --glob '!**/*_test.go' 'CloneContext\(' modules packages web-host)

@@ -107,14 +107,12 @@ type MetricsStorageConfig struct {
 }
 
 // HostStorageConfig controls the direct Storage path for host snapshots.
-// Host samples are intentionally best-effort and have a short retention.
 type HostStorageConfig struct {
 	Enabled                 bool          `yaml:"enabled"`
 	AccessTarget            string        `yaml:"access_target"`
 	MetadataTarget          string        `yaml:"metadata_target"`
 	SpaceID                 string        `yaml:"space_id"`
 	Frequency               string        `yaml:"frequency"`
-	Retention               time.Duration `yaml:"retention"`
 	WriteTimeout            time.Duration `yaml:"write_timeout"`
 	ReadLimit               int           `yaml:"read_limit"`
 	MetadataRefreshInterval time.Duration `yaml:"metadata_refresh_interval"`
@@ -131,7 +129,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
@@ -176,7 +176,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", Frequency: "1m", Retention: 72 * time.Hour, WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -288,9 +288,6 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.HostStorage.Frequency == "" {
 		c.Metrics.HostStorage.Frequency = metricsDefaults.HostStorage.Frequency
 	}
-	if c.Metrics.HostStorage.Retention == 0 {
-		c.Metrics.HostStorage.Retention = metricsDefaults.HostStorage.Retention
-	}
 	if c.Metrics.HostStorage.WriteTimeout == 0 {
 		c.Metrics.HostStorage.WriteTimeout = metricsDefaults.HostStorage.WriteTimeout
 	}
@@ -379,9 +376,6 @@ func (c *Config) Validate() error {
 		}
 		if h.Frequency != "1m" {
 			return fmt.Errorf("metrics.host_storage.frequency must be 1m")
-		}
-		if h.Retention < time.Hour || h.Retention > 72*time.Hour {
-			return fmt.Errorf("metrics.host_storage.retention must be between 1h and 72h")
 		}
 		if h.ReadLimit <= 0 || h.ReadLimit > 500 {
 			return fmt.Errorf("metrics.host_storage.read_limit must be between 1 and 500")

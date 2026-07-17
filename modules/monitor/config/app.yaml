@@ -69,7 +69,6 @@ metrics:
     metadata_target: ip://127.0.0.1:20100
     space_id: moox_system
     frequency: 1m
-    retention: 72h
     write_timeout: 5s
     read_limit: 500
     metadata_refresh_interval: 1m

@@ -282,7 +282,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(trpc.CloneContext(ctx), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 	defer cancel()
 	shutdownErr := errors.Join(serviceServer.Shutdown(shutdownCtx), healthServer.Shutdown(shutdownCtx))
 	_ = timerServer.Close(nil)

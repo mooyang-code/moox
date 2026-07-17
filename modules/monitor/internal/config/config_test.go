@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,7 +39,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
 	}
-	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" || cfg.Metrics.HostStorage.Retention != 72*time.Hour {
+	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" {
 		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
 	}
 }
@@ -230,10 +229,12 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want reserved host space error")
 	}
-	cfg = Default()
-	cfg.Metrics.HostStorage.Retention = 73 * time.Hour
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want retention limit error")
+}
+
+func TestMonitorConfigRejectsLegacyHostRetention(t *testing.T) {
+	_, err := Load(writeConfig(t, "metrics:\n  host_storage:\n    retention: 72h\n"))
+	if err == nil {
+		t.Fatal("Load() error = nil, want unknown host retention field")
 	}
 }
 

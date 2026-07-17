@@ -9,7 +9,7 @@ MooX 管理入口：统一 HTTP 网关 + 认证、Space、运维等**本地基�
 | 网关 | JWT 鉴权、限流、CORS、`/api/admin/*` 浏览器控制路由与 `/api/gateway-control/*` 节点控制接口 |
 | 本进程服务 | Auth、SpaceMgr、Dns、Ssh、SecretMgr、SysDeploy |
 | 转发目标 | collectmgr、cloudnode、storage、trade 等独立进程 |
-| 定时任务 | DNS 代理/探测、Admin 自身指标上报 |
+| 定时任务 | DNS 代理/探测、Admin 自身指标上报、Badger Auth 缓存 value-log 清理 |
 
 ## 目录结构
 
@@ -63,7 +63,9 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 | 20200-20202 | moox-storage（转发） | `/api/admin/storage_*/*` |
 | 11200-11208、11211-11212 | moox-trade（转发） | `/api/admin/trade_*/*` |
 | 11001 | `trpc.moox.api.stdhttp` | 保留 HTTP service，当前不作为主网关入口 |
-| 11301 / 11302 / 11305 | 定时器 | dnsproxy / dnsprobe / Admin metrics |
+| 11301 / 11302 / 11305 / 11306 | 定时器 | dnsproxy / dnsprobe / Admin metrics / Auth cache cleanup |
+
+`trpc.moox.admin.auth_cache_cleanup.timer` 每 5 分钟执行一次，单次超时 60 秒；Handler 同步返回真实错误并跳过同进程重入。Badger `ErrNoRewrite` 表示当前无需 GC，按成功处理。该 Timer 使用本地 `DefaultScheduler`，不提供跨进程互斥。
 
 转发映射以 `t_service_deployments` 中的 active 部署记录为准，`config/gateway.yaml` 不再维护服务地址。
 

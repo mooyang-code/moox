@@ -16,21 +16,6 @@ import (
 
 type fakeStorage struct{ rows []*storagepb.TimeSeriesRow }
 
-func (f *fakeStorage) DeleteTimeSeriesRows(_ context.Context, req *storagepb.DeleteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.DeleteTimeSeriesRowsRsp, error) {
-	cutoff := req.GetTimeRange().GetEndTime()
-	kept := f.rows[:0]
-	var deleted uint32
-	for _, row := range f.rows {
-		if row.GetKey().GetDatasetId() == req.GetDatasetId() && row.GetKey().GetDataTime() <= cutoff {
-			deleted++
-			continue
-		}
-		kept = append(kept, row)
-	}
-	f.rows = kept
-	return &storagepb.DeleteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Deleted: deleted}, nil
-}
-
 func (f *fakeStorage) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
 	for _, incoming := range req.GetRows() {
 		replaced := false
@@ -95,8 +80,5 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	}
 	if len(points) != 2 || points[0].Snapshot.GetCpu().GetLogicalCores() != 4 || len(points[0].Snapshot.GetFilesystems()) != 1 || len(points[0].Snapshot.GetDisks()) != 1 || len(points[0].Snapshot.GetNetworks()) != 1 {
 		t.Fatalf("round-trip points=%+v", points)
-	}
-	if deleted, err := hostmetrics.Prune(context.Background(), fake, cfg, observed.Add(73*time.Hour)); err != nil || deleted != 8 {
-		t.Fatalf("retention deleted=%d err=%v", deleted, err)
 	}
 }

@@ -251,49 +251,6 @@ func TestHasHostColumnsIgnoresInactive(t *testing.T) {
 	assert.False(t, hasHostColumns(cfg.ResourceDatasetID, cfg, cols[:2]))
 }
 
-type deleteAccessFake struct {
-	err      error
-	deleted  uint32
-	failCode bool
-	calls    int
-}
-
-func (f *deleteAccessFake) DeleteTimeSeriesRows(_ context.Context, _ *storagepb.DeleteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.DeleteTimeSeriesRowsRsp, error) {
-	f.calls++
-	if f.err != nil {
-		return nil, f.err
-	}
-	if f.failCode {
-		return &storagepb.DeleteTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "fail"}}, nil
-	}
-	return &storagepb.DeleteTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Deleted: f.deleted}, nil
-}
-
-func TestPruneDeletesAcrossDatasets(t *testing.T) {
-	cfg := monconfig.Default().Metrics.HostStorage
-	fake := &deleteAccessFake{deleted: 3}
-	n, err := Prune(context.Background(), fake, cfg, time.Now().UTC())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(12), n)
-	assert.Equal(t, 4, fake.calls)
-}
-
-func TestPruneRejectsBadAccess(t *testing.T) {
-	cfg := monconfig.Default().Metrics.HostStorage
-	_, err := Prune(context.Background(), nil, cfg, time.Now().UTC())
-	require.Error(t, err)
-	_, err = Prune(context.Background(), "not-client", cfg, time.Now().UTC())
-	require.Error(t, err)
-}
-
-func TestPrunePropagatesErrors(t *testing.T) {
-	cfg := monconfig.Default().Metrics.HostStorage
-	_, err := Prune(context.Background(), &deleteAccessFake{err: errors.New("down")}, cfg, time.Now().UTC())
-	require.Error(t, err)
-	_, err = Prune(context.Background(), &deleteAccessFake{failCode: true}, cfg, time.Now().UTC())
-	require.Error(t, err)
-}
-
 func TestStorageWriterNilAndErrorPaths(t *testing.T) {
 	cfg := monconfig.Default().Metrics.HostStorage
 	require.Error(t, (*StorageWriter)(nil).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now(), "m"))

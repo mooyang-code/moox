@@ -23,6 +23,8 @@ test/                     跨组件端到端测试
 
 生产启动器会为存在活动订单的通道维护 Binance/OKX 鉴权私有 WebSocket。私有流负责实时成交，REST `ListFills` 只负责断线缺口修复。两条路径使用相同的交易所成交号和 `FillHandler`，因此重复回报不会重复结算。
 
+成交缺口修复由 `trpc.moox.trade.fill_reconcile.timer` 每 5 秒执行，订单/Saga/调仓恢复由 `trpc.moox.trade.order_recovery.timer` 每 15 秒执行；两者启动时立即运行，并分别设置 5 秒、15 秒超时。Handler 同步返回汇总错误并跳过同进程重入。低延迟 Outbox 投递、退避状态机和私有流 supervisor 仍是进程内生命周期循环，不属于调度 Timer。
+
 ## 配置
 
 - `database.path`：Trade 数据库路径，底层实现不暴露给应用层。

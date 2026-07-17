@@ -28,6 +28,8 @@ from Admin. A node without a valid cache must complete its initial pull. Once a
 valid snapshot has been applied, later control-plane failures keep the Gateway
 ready and leave the last route table active.
 
+The periodic `trpc.moox.gateway.route_refresh.timer` has a 10-second execution timeout, waits for `Refresh` to finish, and skips an overlapping local invocation. It deliberately omits `startAtOnce`: the cache-aware synchronous initialization above is the only startup pull. The 15-second frequency is static deployment configuration and does not hot reload. `DefaultScheduler` provides no cross-process exclusion, so each Gateway process refreshes only its own in-memory route table.
+
 An invalid new snapshot is rejected as a whole. Route changes are made in
 Service Management, not by editing `routes.json`; the cache exists only for
 recovery when Admin is temporarily unavailable.
