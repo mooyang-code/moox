@@ -494,9 +494,12 @@ Expected: scripts validate the two-process default, and CLI status reports Prima
 ### Task 9: Publish The Storage Lifecycle And Failure Model
 
 **Files:**
-- Modify: `docs/存储引擎架构.md`
-- Modify: `docs/存储服务架构与部署.md`
+- Create: `docs/存储层架构.md`
+- Delete: `docs/存储引擎架构.md`
+- Delete: `docs/存储服务架构与部署.md`
 - Modify: `docs/架构总览.md`
+- Modify: `docs/存储概念与设计意图.md`
+- Modify: `docs/存储目标架构与元数据.md`
 - Modify: `modules/storage/README.md`
 - Modify: `modules/cli/README.md`
 - Modify: `skills/moox/references/custom-setup.md`
@@ -504,7 +507,50 @@ Expected: scripts validate the two-process default, and CLI status reports Prima
 - Modify: `skills/moox/references/release.md`
 - Modify: current examples and runbooks returned by the obsolete-name scan
 
-- [ ] **Step 1: Document the public and internal request paths**
+- [ ] **Step 1: Establish one authoritative Storage architecture document**
+
+Create `docs/存储层架构.md` by reconciling current implementation facts from
+the two existing Storage documents, then delete
+`docs/存储引擎架构.md` and `docs/存储服务架构与部署.md`. Do not leave redirect
+stubs, because this repository does not preserve obsolete documentation paths.
+
+Use this exact responsibility split:
+
+| Document | Owns | Must not own |
+| --- | --- | --- |
+| `docs/架构总览.md` | Storage's place in the whole system, public facade, major internal boundaries, link to the detailed document | ports, complete role matrices, config examples, operational procedures |
+| `docs/存储层架构.md` | service architecture, data/event flows, engines, roles, deployment, cleanup/archive, failure model, observability | exhaustive field semantics and SQL table definitions |
+| `docs/存储概念与设计意图.md` | Space, Dataset, Subject, View, fact-row semantics | runtime and deployment instructions |
+| `docs/存储目标架构与元数据.md` | metadata entities, relationships, routing model | process topology and release procedures |
+
+- [ ] **Step 2: Write the complete Storage architecture**
+
+`docs/存储层架构.md` must contain these sections in order:
+
+```text
+1. 文档定位与适用范围
+2. 架构目标与明确不支持的能力
+3. Storage 在 MooX 中的位置
+4. 对外 Storage Facade 与方法路由
+5. Metadata、PrimaryStore、PrimaryStoreScan、DataShard、DataView、ViewIndex、Archive 职责
+6. 事实写入、权威读取、派生查询、事件物化与归档数据流
+7. SQLite、Pebble、DuckDB、Bleve、Parquet、JetStream 的所有权
+8. Runtime Roles 与进程装配
+9. 默认单机部署：storage-primary + storage-view
+10. 可选多机单副本 DataShard 分片
+11. 后台 Timer、历史数据自动清理、归档与磁盘增长控制
+12. 一致性、部分成功、重试、重建与故障恢复
+13. 安全边界、内部服务暴露和鉴权
+14. 健康检查、日志、指标与运维检查
+15. 配置、端口、数据目录和启动/停止顺序
+16. 测试与架构约束
+```
+
+The document must describe current supported behavior, not mix implemented
+behavior with an unlabeled target architecture. Unsupported capabilities belong
+in an explicit limitation section.
+
+- [ ] **Step 3: Document the public and internal request paths**
 
 Show these three paths explicitly:
 
@@ -516,11 +562,11 @@ ViewBuilder -> PrimaryStore/PrimaryStoreScan -> DuckDB/Bleve -> DataView
 
 State that DataView calls do not traverse PrimaryStore.
 
-- [ ] **Step 2: Document the standard deployment**
+- [ ] **Step 4: Document the standard deployment**
 
 Describe `storage-primary` with embedded DataShard and separate `storage-view`, each with one `trpc_go.yaml`. Provide start order, health endpoints, data directories, cleanup policies, backup expectations, and disk-growth controls.
 
-- [ ] **Step 3: Document optional single-copy sharding without overselling it**
+- [ ] **Step 5: Document optional single-copy sharding without overselling it**
 
 State plainly:
 
@@ -529,9 +575,51 @@ State plainly:
 - a failed shard is unavailable until manual repair or restore;
 - operators must back up authoritative Pebble data and archived data.
 
-- [ ] **Step 4: Update all commands and examples**
+- [ ] **Step 6: Synchronize the system architecture overview**
+
+Replace the detailed, stale Storage implementation block in
+`docs/架构总览.md` with a concise system-level summary. It must show:
+
+```text
+External caller -> Admin Gateway storage facade
+                     |-> Metadata
+                     |-> PrimaryStore -> DataShard -> Pebble
+                     `-> DataView -> ViewIndex -> DuckDB/Bleve
+```
+
+Keep the fact-source versus derived-view distinction, the standard two-process
+deployment, and the lack of automatic shard failover. Link prominently to
+`存储层架构.md` for all details.
+
+- [ ] **Step 7: Update concepts, metadata, commands, and examples**
 
 Every active example must use `storage-primary`, `moox-storage-primary`, role `primary`, role `shard` only for advanced private deployment, and `shard_nodes` / `shard_routes` metadata.
+
+Update every active link to either deleted Storage document so it points to
+`docs/存储层架构.md` or the narrower concepts/metadata reference. Use the final
+PrimaryStore and DataShard vocabulary in the two retained reference documents.
+
+- [ ] **Step 8: Add documentation ownership checks**
+
+Extend `scripts/test-storage-boundary-contract.sh` to fail when:
+
+```text
+docs/存储引擎架构.md exists
+docs/存储服务架构与部署.md exists
+docs/存储层架构.md is missing
+an active file links to either deleted path
+docs/架构总览.md does not link to 存储层架构.md
+```
+
+Run:
+
+```bash
+bash scripts/test-storage-boundary-contract.sh
+pnpm docs:build
+```
+
+Expected: the ownership checks pass, all internal Markdown links resolve, and
+the documentation site builds successfully.
 
 ### Task 10: Enforce The Boundary And Deliver Cleanly
 
@@ -608,5 +696,8 @@ Expected: push succeeds and the final status is clean.
 - [ ] Standard deployment starts only `storage-primary` and `storage-view` and reads one YAML per process.
 - [ ] `storage-primary` embeds one local DataShard by default.
 - [ ] Optional remote DataShards are documented as single-copy capacity sharding with manual recovery.
+- [ ] `docs/存储层架构.md` is the only detailed root Storage architecture document.
+- [ ] `docs/架构总览.md` contains a concise Storage summary and links to `docs/存储层架构.md`.
+- [ ] The two superseded Storage documents are deleted and no active link references them.
 - [ ] Old Access and old physical PrimaryStore identities are absent from active source, config, generated code, scripts, tests, examples, and current docs.
 - [ ] All focused tests, `make verify-custom-setup`, `make verify`, frontend checks, and deployment-script tests pass.

@@ -330,9 +330,33 @@ limit merely because they use one public Storage path.
 
 ## Documentation
 
-Update the active Storage architecture, deployment guide, Storage README,
-custom setup guide, service deployment examples, and metadata seed examples.
-Documentation must distinguish:
+Storage architecture documentation has one authoritative root document:
+
+```text
+docs/存储层架构.md
+```
+
+It owns the Storage service boundary, component responsibilities, request and
+event flows, runtime roles, default and optional deployment topologies,
+background cleanup and archive lifecycle, failure model, observability, and
+operational limitations. It replaces and deletes the overlapping
+`docs/存储引擎架构.md` and `docs/存储服务架构与部署.md`; those files must not remain
+as redirects or compatibility documents.
+
+`docs/架构总览.md` owns only the system-level Storage summary: its position in
+MooX, the public `storage` facade, the PrimaryStore/DataShard/DataView boundary,
+and a link to `docs/存储层架构.md`. It must not duplicate detailed role,
+directory, port, configuration, or deployment tables that would drift from the
+authoritative Storage document.
+
+The existing `docs/存储概念与设计意图.md` and
+`docs/存储目标架构与元数据.md` remain focused references for domain concepts
+and metadata modeling. They link back to `docs/存储层架构.md` and use the final
+names, but do not repeat service deployment instructions.
+
+Also update the Storage README, custom setup guide, service deployment
+examples, metadata seed examples, and every active document linking to either
+deleted document. Documentation must distinguish:
 
 - one public Storage facade from internal runtime services;
 - authoritative PrimaryStore data from derived DataView indexes;
@@ -365,3 +389,6 @@ Acceptance requires:
    builds, package boundaries, formatting checks, and `make verify` pass.
 9. The worktree is clean after commit and push, and `HEAD` equals
    `origin/main`.
+10. `docs/存储层架构.md` is the only detailed root Storage architecture
+    document; `docs/架构总览.md` contains a concise system-level summary and
+    links to it, and no active document links to the two deleted Storage docs.
