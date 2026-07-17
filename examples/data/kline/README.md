@@ -7,11 +7,19 @@ Storage、Factor、View 和数据导入测试使用。
 
 | 文件 | 元数据 Dataset | 频率 | 标的 | 数据范围 | 行数 |
 | --- | --- | --- | --- | --- | ---: |
-| `stock_cn/stock_kline_1d.csv` | `stock_cn/stock_kline` | `1d` | `sh600000`、`sh600519`、`sz000001` | 2026-07-02 至 2026-07-15 | 30 |
-| `stock_cn/stock_kline_1h.csv` | `stock_cn/stock_kline` | `1h` | `sh600000`、`sh600519`、`sz000001` | 2026-07-16 | 12 |
-| `crypto/binance_spot_kline_1h.csv` | `crypto/binance_spot_kline_1h` | `1h` | `BTC-USDT`、`ETH-USDT`、`SOL-USDT` | 2026-07-15 | 72 |
-| `crypto/binance_perpetual_kline_1h.csv` | `crypto/binance_perpetual_kline_1h` | `1h` | `BTC-USDT`、`ETH-USDT`、`SOL-USDT` | 2026-07-15 | 72 |
-| `crypto/okx_spot_kline_1h.csv` | `crypto/okx_spot_kline_1h` | `1h` | `BTC-USD`、`ETH-USD`、`SOL-USD` | 2026-07-15 | 72 |
+| `stock_cn/stock_kline_1d.csv` | `stock_cn/stock_kline` | `1d` | 10 只股票 | 2026-07-02 至 2026-07-15 | 100 |
+| `stock_cn/stock_kline_1h.csv` | `stock_cn/stock_kline` | `1h` | 10 只股票 | 2026-07-16 完整交易日 | 40 |
+| `crypto/binance_spot_kline_1h.csv` | `crypto/binance_spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
+| `crypto/binance_perpetual_kline_1h.csv` | `crypto/binance_perpetual_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
+| `crypto/okx_spot_kline_1h.csv` | `crypto/okx_spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
+
+A 股样本覆盖沪深主板和创业板：`sh600000`、`sh600036`、`sh600519`、
+`sh601318`、`sh601398`、`sz000001`、`sz000333`、`sz000651`、`sz000858`、
+`sz300750`。每只股票的小时样本包含当日 4 根完整 K 线。
+
+币安样本覆盖 `ADA`、`AVAX`、`BNB`、`BTC`、`DOGE`、`DOT`、`ETH`、`LINK`、
+`SOL`、`XRP` 的 USDT 交易对。欧易样本选择对应的 USD 交易对，其中以 `LTC`
+替代欧易未提供的 `BNB-USD`。每个交易对均包含当日 24 根小时 K 线。
 
 本机 `OKX永续合约1小时数据-币对分类` 目录中没有可用 CSV，因此没有生成欧易
 永续合约样本。
