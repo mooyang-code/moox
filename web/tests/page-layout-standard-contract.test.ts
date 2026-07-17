@@ -3,7 +3,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const viewsRoot = path.resolve(__dirname, '../src/views');
-const read = (relativePath: string) => fs.readFileSync(path.join(viewsRoot, relativePath), 'utf8');
+const read = (relativePath: string) => {
+  const filePath = path.join(viewsRoot, relativePath);
+  const source = fs.readFileSync(filePath, 'utf8');
+  const externalStyles = [...source.matchAll(/<style\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/g)]
+    .map(match => fs.readFileSync(path.resolve(path.dirname(filePath), match[1]), 'utf8'))
+    .join('\n');
+  return externalStyles ? `${source}\n${externalStyles}` : source;
+};
 const readStyle = (relativePath: string) => fs.readFileSync(path.resolve(__dirname, '../src/style', relativePath), 'utf8');
 
 const expectMargin = (source: string, selector: string, property: 'margin-top' | 'margin-bottom', value: number) => {

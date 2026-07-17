@@ -286,64 +286,21 @@
       </div>
     </a-modal>
 
-    <a-modal v-model:visible="klineVisible" :title="klineTitle" width="1080px" :footer="false">
-      <a-spin class="kline-spin" :loading="klineLoading">
-        <div class="kline-modal-body">
-          <div class="kline-toolbar">
-            <div class="kline-symbol-block">
-              <strong>{{ klineSubjectId }}</strong>
-              <span>{{ klineFreq }}</span>
-              <span>{{ klineCandleCount }} 根</span>
-            </div>
-            <div class="kline-control-strip">
-              <a-tooltip :content="klinePlaying ? '停止播放' : '播放K线'">
-                <a-button
-                  class="kline-play-button"
-                  size="small"
-                  type="outline"
-                  shape="circle"
-                  :disabled="klineRecords.length === 0"
-                  @click="toggleKlinePlayback"
-                >
-                  <template #icon>
-                    <icon-pause v-if="klinePlaying" />
-                    <icon-play-arrow v-else />
-                  </template>
-                </a-button>
-              </a-tooltip>
-              <span>数量</span>
-              <a-input-number
-                v-model="klineLimit"
-                class="kline-limit-input"
-                size="small"
-                :min="klineLimitMin"
-                :max="klineLimitMax"
-                :step="50"
-                :precision="0"
-              />
-              <a-button size="small" type="outline" :loading="klineLoading" @click="reloadKlineRecords">
-                <template #icon><icon-refresh /></template>
-                应用
-              </a-button>
-            </div>
-            <div v-if="klineLatest" class="kline-price-strip">
-              <span class="kline-last-price" :class="klineChangeClass">{{ formatKlineNumber(klineLatest.close) }}</span>
-              <span :class="klineChangeClass">{{ klineChangeText }}</span>
-            </div>
-          </div>
-          <div v-if="klineRecords.length > 0" ref="klineChartHost" class="kline-chart-host"></div>
-          <a-empty v-else description="当前结果缺少 open/high/low/close 字段，无法生成K线图" />
-        </div>
-      </a-spin>
-    </a-modal>
+    <KlineModal
+      v-model:visible="klineVisible"
+      v-model:limit="klineLimit"
+      :subject-id="klineSubjectId"
+      :freq="klineFreq"
+      :records="klineRecords"
+      :loading="klineLoading"
+      @reload="reloadKlineRecords"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { TooltipShowRule, TooltipShowType, dispose as disposeKlineChartInstance, init as initKlineChart } from "klinecharts";
-import type { Chart } from "klinecharts";
 import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViews } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
@@ -375,8 +332,6 @@ import {
   DEFAULT_KLINE_LIMIT,
   klineRowsHaveFreq,
   klineSubjectIdFromFilters,
-  MAX_KLINE_LIMIT,
-  MIN_KLINE_LIMIT,
   normalizeKlineLimit,
   previewPagerText,
   type KlineChartRecord,
@@ -395,6 +350,7 @@ import {
   type ViewRole
 } from "@/views/data/shared/module-attribution";
 import { viewBuildTimeLabel } from "./view-build-time";
+import KlineModal from "./kline-modal.vue";
 
 defineOptions({ name: "DataViewBrowse" });
 
@@ -478,18 +434,11 @@ const hasQueried = ref(false);
 const previewHasMore = ref(false);
 const timeSeriesPageResult = ref<PageResult>();
 const klineVisible = ref(false);
-const klineChartHost = ref<HTMLElement>();
 const klineSubjectId = ref("");
 const klineFreq = ref("");
 const klineRecords = ref<KlineChartRecord[]>([]);
 const klineLoading = ref(false);
 const klineLimit = ref(DEFAULT_KLINE_LIMIT);
-const klinePlaying = ref(false);
-const klinePlaybackCursor = ref(0);
-let klineChart: Chart | null = null;
-let klineResizeObserver: ResizeObserver | null = null;
-let klinePlaybackTimer: ReturnType<typeof setInterval> | null = null;
-const KLINE_PLAYBACK_INTERVAL_MS = 320;
 const VIEW_BROWSE_PREVIEW_LIMIT = 1000;
 const VIEW_BROWSE_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
@@ -596,30 +545,7 @@ const detailColumns = computed(() => {
   const names = rowsToColumnNames([rowToSyntheticRecord(row)], tableColumnNames.value);
   return names.map(name => ({ name: columnTitle(name), value: row.values[name] || "-" }));
 });
-const klineTitle = computed(() => (klineSubjectId.value ? `${klineSubjectId.value} K线` : "K线图"));
-const klineCandleCount = computed(() => klineRecords.value.length);
 const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
-const klineLimitMin = MIN_KLINE_LIMIT;
-const klineLimitMax = MAX_KLINE_LIMIT;
-const klineLatest = computed(() => klineRecords.value[klineRecords.value.length - 1]);
-const klinePrevious = computed(() => klineRecords.value[klineRecords.value.length - 2]);
-const klinePriceChange = computed(() => {
-  if (!klineLatest.value || !klinePrevious.value) return 0;
-  return klineLatest.value.close - klinePrevious.value.close;
-});
-const klinePriceChangePercent = computed(() => {
-  if (!klinePrevious.value?.close) return 0;
-  return (klinePriceChange.value / klinePrevious.value.close) * 100;
-});
-const klineChangeClass = computed(() => {
-  if (klinePriceChange.value > 0) return "is-up";
-  if (klinePriceChange.value < 0) return "is-down";
-  return "is-flat";
-});
-const klineChangeText = computed(() => {
-  const sign = klinePriceChange.value > 0 ? "+" : "";
-  return `${sign}${formatKlineNumber(klinePriceChange.value)} (${sign}${klinePriceChangePercent.value.toFixed(2)}%)`;
-});
 
 async function loadMeta() {
   const space_id = selectedSpaceId.value;
@@ -1012,7 +938,6 @@ async function openKlineModal() {
   const ok = await loadKlineRecords(subjectId);
   if (!ok) return;
   klineVisible.value = true;
-  nextTick(renderKlineChart);
 }
 
 async function reloadKlineRecords() {
@@ -1022,16 +947,12 @@ async function reloadKlineRecords() {
     return;
   }
   klineSubjectId.value = subjectId;
-  const ok = await loadKlineRecords(subjectId);
-  if (ok && klineVisible.value) {
-    nextTick(renderKlineChart);
-  }
+  await loadKlineRecords(subjectId);
 }
 
 async function loadKlineRecords(subjectId: string) {
   const view = activeView.value;
   if (!view) return false;
-  stopKlinePlayback(false);
   klineLoading.value = true;
   try {
     const rows = await fetchKlineTableRows(view.view_id);
@@ -1049,7 +970,6 @@ async function loadKlineRecords(subjectId: string) {
     klineLimit.value = normalizedKlineLimit.value;
     klineFreq.value = firstKlineFreq(subjectId, rows);
     klineRecords.value = records;
-    klinePlaybackCursor.value = records.length;
     return true;
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "加载K线数据失败");
@@ -1086,16 +1006,6 @@ async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]
   }));
 }
 
-function closeKlineModal() {
-  klineVisible.value = false;
-  stopKlinePlayback(false);
-  disposeKlineChart();
-  klineRecords.value = [];
-  klineSubjectId.value = "";
-  klineFreq.value = "";
-  klinePlaybackCursor.value = 0;
-}
-
 function firstKlineFreq(subjectId: string, rows = tableRows.value) {
   const row =
     rows.find(item => item.key === subjectId && item.freq && item.freq !== "-") ||
@@ -1103,144 +1013,11 @@ function firstKlineFreq(subjectId: string, rows = tableRows.value) {
   return row?.freq || "-";
 }
 
-function renderKlineChart() {
-  const host = klineChartHost.value;
-  const records = klineRecords.value;
-  if (!klineVisible.value || !host || records.length === 0) return;
-
-  disposeKlineChart();
-  klineChart = initKlineChart(host, {
-    locale: "zh-CN",
-    timezone: "Asia/Shanghai",
-    styles: {
-      grid: {
-        horizontal: { color: "rgba(160, 174, 192, 0.12)" },
-        vertical: { color: "rgba(160, 174, 192, 0.12)" }
-      },
-      candle: {
-        bar: {
-          upColor: "#ef5350",
-          downColor: "#26a69a",
-          noChangeColor: "#9ba8b7",
-          upBorderColor: "#ef5350",
-          downBorderColor: "#26a69a",
-          noChangeBorderColor: "#9ba8b7",
-          upWickColor: "#ef5350",
-          downWickColor: "#26a69a",
-          noChangeWickColor: "#9ba8b7"
-        },
-        tooltip: {
-          showRule: TooltipShowRule.None,
-          showType: TooltipShowType.Standard,
-          text: { color: "#d9e1ec", size: 12 }
-        }
-      },
-      indicator: {
-        tooltip: {
-          showRule: TooltipShowRule.None,
-          showName: true,
-          showParams: true,
-          text: { color: "#9ba8b7", size: 12 }
-        }
-      },
-      xAxis: {
-        axisLine: { color: "rgba(160, 174, 192, 0.22)" },
-        tickText: { color: "#8c9bab" }
-      },
-      yAxis: {
-        axisLine: { color: "rgba(160, 174, 192, 0.22)" },
-        tickText: { color: "#8c9bab" }
-      },
-      separator: {
-        color: "#222b35"
-      },
-      crosshair: {
-        horizontal: { line: { color: "rgba(217, 225, 236, 0.45)" }, text: { backgroundColor: "#263241" } },
-        vertical: { line: { color: "rgba(217, 225, 236, 0.45)" }, text: { backgroundColor: "#263241" } }
-      }
-    }
-  });
-  if (!klineChart) {
-    Message.error("K线图初始化失败");
-    return;
-  }
-
-  klineChart.setPriceVolumePrecision(8, 2);
-  klineChart.setBarSpace(10);
-  klineChart.applyNewData(records);
-  klineChart.createIndicator("VOL", false, { height: 112, minHeight: 84 });
-  klinePlaybackCursor.value = records.length;
-
-  klineResizeObserver = new ResizeObserver(([entry]) => {
-    const nextWidth = Math.floor(entry.contentRect.width);
-    const nextHeight = Math.floor(entry.contentRect.height);
-    if (klineChart && nextWidth > 0 && nextHeight > 0) {
-      klineChart.resize();
-    }
-  });
-  klineResizeObserver.observe(host);
-}
-
-function toggleKlinePlayback() {
-  if (klinePlaying.value) {
-    stopKlinePlayback(false);
-    return;
-  }
-  startKlinePlayback();
-}
-
-function startKlinePlayback() {
-  if (!klineChart || klineRecords.value.length === 0) return;
-  stopKlinePlayback(false);
-  if (klinePlaybackCursor.value <= 0 || klinePlaybackCursor.value >= klineRecords.value.length) {
-    klinePlaybackCursor.value = 1;
-  }
-  klinePlaying.value = true;
-  applyKlinePlaybackFrame();
-  klinePlaybackTimer = setInterval(() => {
-    if (!klinePlaying.value) return;
-    if (klinePlaybackCursor.value >= klineRecords.value.length) {
-      stopKlinePlayback(false);
-      return;
-    }
-    klinePlaybackCursor.value += 1;
-    applyKlinePlaybackFrame();
-    if (klinePlaybackCursor.value >= klineRecords.value.length) {
-      stopKlinePlayback(false);
-    }
-  }, KLINE_PLAYBACK_INTERVAL_MS);
-}
-
-function stopKlinePlayback(renderFull = false) {
-  if (klinePlaybackTimer) {
-    clearInterval(klinePlaybackTimer);
-    klinePlaybackTimer = null;
-  }
-  klinePlaying.value = false;
-  if (renderFull && klineChart && klineRecords.value.length > 0) {
-    klinePlaybackCursor.value = klineRecords.value.length;
-    klineChart.applyNewData(klineRecords.value);
-  }
-}
-
-function applyKlinePlaybackFrame() {
-  if (!klineChart || klineRecords.value.length === 0) return;
-  const cursor = Math.min(klineRecords.value.length, Math.max(1, klinePlaybackCursor.value));
-  klineChart.applyNewData(klineRecords.value.slice(0, cursor));
-}
-
-function disposeKlineChart() {
-  stopKlinePlayback(false);
-  klineResizeObserver?.disconnect();
-  klineResizeObserver = null;
-  if (klineChart) {
-    disposeKlineChartInstance(klineChart);
-  }
-  klineChart = null;
-}
-
-function formatKlineNumber(value: number) {
-  return Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 8 }) : "-";
+function closeKlineModal() {
+  klineVisible.value = false;
+  klineRecords.value = [];
+  klineSubjectId.value = "";
+  klineFreq.value = "";
 }
 
 function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
@@ -1255,14 +1032,10 @@ function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
 }
 
 onMounted(loadMeta);
-onBeforeUnmount(disposeKlineChart);
 watch(selectedSpaceId, () => {
   activeViewId.value = "";
   clearViewState();
   loadMeta();
-});
-watch(klineVisible, visible => {
-  if (!visible) disposeKlineChart();
 });
 </script>
 
@@ -1484,123 +1257,6 @@ watch(klineVisible, visible => {
   margin-top: var(--moox-space-1);
 }
 
-.kline-modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moox-space-3);
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.kline-spin {
-  display: block;
-  width: 100%;
-  min-width: 0;
-}
-
-.kline-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--moox-space-4);
-  min-height: 48px;
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #222b35;
-  border-radius: 8px;
-  box-sizing: border-box;
-  color: #d9e1ec;
-  background: #151a21;
-  overflow: hidden;
-}
-
-.kline-symbol-block,
-.kline-control-strip,
-.kline-price-strip {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  min-width: 0;
-}
-
-.kline-symbol-block strong {
-  color: #ffffff;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.kline-symbol-block span {
-  color: #9ba8b7;
-  font-size: 12px;
-}
-
-.kline-control-strip {
-  justify-content: center;
-  color: #9ba8b7;
-  font-size: 12px;
-}
-
-.kline-control-strip :deep(.arco-btn-outline) {
-  border-color: #2f3b4a;
-  color: #d9e1ec;
-  background: transparent;
-}
-
-.kline-play-button {
-  flex: 0 0 auto;
-}
-
-.kline-play-button:not(:disabled):hover {
-  border-color: #26a69a;
-  color: #26a69a;
-}
-
-.kline-limit-input {
-  width: 108px;
-}
-
-.kline-limit-input :deep(.arco-input-wrapper) {
-  border-color: #2f3b4a;
-  color: #d9e1ec;
-  background: #101318;
-}
-
-.kline-price-strip {
-  justify-content: flex-end;
-  font-weight: 600;
-}
-
-.kline-last-price {
-  font-size: 20px;
-}
-
-.is-up {
-  color: #ef5350;
-}
-
-.is-down {
-  color: #26a69a;
-}
-
-.is-flat {
-  color: #9ba8b7;
-}
-
-.kline-chart-host {
-  width: 100%;
-  max-width: 100%;
-  height: min(62vh, 560px);
-  min-height: 420px;
-  box-sizing: border-box;
-  overflow: hidden;
-  border: 1px solid #222b35;
-  border-radius: 8px;
-  background: #101318;
-}
-
 .sortable-title {
   display: inline-flex;
   gap: 6px;
@@ -1657,23 +1313,6 @@ watch(klineVisible, visible => {
 
   .query-actions {
     justify-content: flex-start;
-  }
-
-  .kline-toolbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .kline-price-strip {
-    justify-content: flex-start;
-  }
-
-  .kline-control-strip {
-    justify-content: flex-start;
-  }
-
-  .kline-chart-host {
-    min-height: 360px;
   }
 
   .filter-item {
