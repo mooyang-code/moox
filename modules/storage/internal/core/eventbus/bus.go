@@ -41,16 +41,16 @@ type MemoryBus struct {
 	mu                 sync.Mutex
 	closeCond          *sync.Cond
 	nextID             uint64
-	timeSeriesHandlers map[uint64]TimeSeriesRowsUpdatedHandler
-	recordHandlers     map[uint64]RecordRowsUpdatedHandler
+	timeSeriesHandlers map[uint64]*memoryTimeSeriesHandler
+	recordHandlers     map[uint64]*memoryRecordHandler
 	inFlight           int
 	closed             bool
 }
 
 func NewMemoryBus() *MemoryBus {
 	bus := &MemoryBus{
-		timeSeriesHandlers: make(map[uint64]TimeSeriesRowsUpdatedHandler),
-		recordHandlers:     make(map[uint64]RecordRowsUpdatedHandler),
+		timeSeriesHandlers: make(map[uint64]*memoryTimeSeriesHandler),
+		recordHandlers:     make(map[uint64]*memoryRecordHandler),
 	}
 	bus.closeCond = sync.NewCond(&bus.mu)
 	return bus
@@ -67,13 +67,14 @@ func (b *MemoryBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler 
 		return nil, context.Canceled
 	}
 	if b.timeSeriesHandlers == nil {
-		b.timeSeriesHandlers = make(map[uint64]TimeSeriesRowsUpdatedHandler)
+		b.timeSeriesHandlers = make(map[uint64]*memoryTimeSeriesHandler)
 	}
 	b.nextID++
 	id := b.nextID
-	b.timeSeriesHandlers[id] = handler
+	entry := &memoryTimeSeriesHandler{handler: handler, lifecycle: newHandlerLifecycle()}
+	b.timeSeriesHandlers[id] = entry
 	b.mu.Unlock()
-	return &memorySubscription{close: func() { b.deleteTimeSeriesHandler(id) }}, nil
+	return &memorySubscription{close: func() { b.deleteTimeSeriesHandler(id, entry) }}, nil
 }
 
 func (b *MemoryBus) SubscribeRecordRowsUpdated(ctx context.Context, handler RecordRowsUpdatedHandler) (Subscription, error) {
@@ -87,13 +88,14 @@ func (b *MemoryBus) SubscribeRecordRowsUpdated(ctx context.Context, handler Reco
 		return nil, context.Canceled
 	}
 	if b.recordHandlers == nil {
-		b.recordHandlers = make(map[uint64]RecordRowsUpdatedHandler)
+		b.recordHandlers = make(map[uint64]*memoryRecordHandler)
 	}
 	b.nextID++
 	id := b.nextID
-	b.recordHandlers[id] = handler
+	entry := &memoryRecordHandler{handler: handler, lifecycle: newHandlerLifecycle()}
+	b.recordHandlers[id] = entry
 	b.mu.Unlock()
-	return &memorySubscription{close: func() { b.deleteRecordHandler(id) }}, nil
+	return &memorySubscription{close: func() { b.deleteRecordHandler(id, entry) }}, nil
 }
 
 func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
@@ -102,16 +104,19 @@ func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.
 		b.mu.Unlock()
 		return context.Canceled
 	}
-	handlers := make([]TimeSeriesRowsUpdatedHandler, 0, len(b.timeSeriesHandlers))
-	for _, handler := range b.timeSeriesHandlers {
-		handlers = append(handlers, handler)
+	handlers := make([]*memoryTimeSeriesHandler, 0, len(b.timeSeriesHandlers))
+	for _, entry := range b.timeSeriesHandlers {
+		if entry.lifecycle.acquire() {
+			handlers = append(handlers, entry)
+		}
 	}
 	b.inFlight++
 	b.mu.Unlock()
 	defer b.finishPublish()
 	var err error
-	for _, handler := range handlers {
-		err = errors.Join(err, handler(ctx, cloneTimeSeriesRowsUpdated(event)))
+	for _, entry := range handlers {
+		err = errors.Join(err, entry.handler(ctx, cloneTimeSeriesRowsUpdated(event)))
+		entry.lifecycle.release()
 	}
 	return err
 }
@@ -122,16 +127,19 @@ func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.Reco
 		b.mu.Unlock()
 		return context.Canceled
 	}
-	handlers := make([]RecordRowsUpdatedHandler, 0, len(b.recordHandlers))
-	for _, handler := range b.recordHandlers {
-		handlers = append(handlers, handler)
+	handlers := make([]*memoryRecordHandler, 0, len(b.recordHandlers))
+	for _, entry := range b.recordHandlers {
+		if entry.lifecycle.acquire() {
+			handlers = append(handlers, entry)
+		}
 	}
 	b.inFlight++
 	b.mu.Unlock()
 	defer b.finishPublish()
 	var err error
-	for _, handler := range handlers {
-		err = errors.Join(err, handler(ctx, cloneRecordRowsUpdated(event)))
+	for _, entry := range handlers {
+		err = errors.Join(err, entry.handler(ctx, cloneRecordRowsUpdated(event)))
+		entry.lifecycle.release()
 	}
 	return err
 }
@@ -139,12 +147,26 @@ func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.Reco
 func (b *MemoryBus) Close() error {
 	b.mu.Lock()
 	b.closed = true
+	timeSeriesHandlers := b.timeSeriesHandlers
+	recordHandlers := b.recordHandlers
 	b.timeSeriesHandlers = nil
 	b.recordHandlers = nil
+	for _, entry := range timeSeriesHandlers {
+		entry.lifecycle.beginClose()
+	}
+	for _, entry := range recordHandlers {
+		entry.lifecycle.beginClose()
+	}
 	for b.inFlight > 0 {
 		b.closeCond.Wait()
 	}
 	b.mu.Unlock()
+	for _, entry := range timeSeriesHandlers {
+		entry.lifecycle.wait()
+	}
+	for _, entry := range recordHandlers {
+		entry.lifecycle.wait()
+	}
 	return nil
 }
 
@@ -157,16 +179,76 @@ func (b *MemoryBus) finishPublish() {
 	b.mu.Unlock()
 }
 
-func (b *MemoryBus) deleteTimeSeriesHandler(id uint64) {
+func (b *MemoryBus) deleteTimeSeriesHandler(id uint64, entry *memoryTimeSeriesHandler) {
 	b.mu.Lock()
 	delete(b.timeSeriesHandlers, id)
+	entry.lifecycle.beginClose()
 	b.mu.Unlock()
+	entry.lifecycle.wait()
 }
 
-func (b *MemoryBus) deleteRecordHandler(id uint64) {
+func (b *MemoryBus) deleteRecordHandler(id uint64, entry *memoryRecordHandler) {
 	b.mu.Lock()
 	delete(b.recordHandlers, id)
+	entry.lifecycle.beginClose()
 	b.mu.Unlock()
+	entry.lifecycle.wait()
+}
+
+type memoryTimeSeriesHandler struct {
+	handler   TimeSeriesRowsUpdatedHandler
+	lifecycle *handlerLifecycle
+}
+
+type memoryRecordHandler struct {
+	handler   RecordRowsUpdatedHandler
+	lifecycle *handlerLifecycle
+}
+
+type handlerLifecycle struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	closing  bool
+	inFlight int
+}
+
+func newHandlerLifecycle() *handlerLifecycle {
+	lifecycle := &handlerLifecycle{}
+	lifecycle.cond = sync.NewCond(&lifecycle.mu)
+	return lifecycle
+}
+
+func (l *handlerLifecycle) acquire() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closing {
+		return false
+	}
+	l.inFlight++
+	return true
+}
+
+func (l *handlerLifecycle) release() {
+	l.mu.Lock()
+	l.inFlight--
+	if l.inFlight == 0 {
+		l.cond.Broadcast()
+	}
+	l.mu.Unlock()
+}
+
+func (l *handlerLifecycle) beginClose() {
+	l.mu.Lock()
+	l.closing = true
+	l.mu.Unlock()
+}
+
+func (l *handlerLifecycle) wait() {
+	l.mu.Lock()
+	for l.inFlight > 0 {
+		l.cond.Wait()
+	}
+	l.mu.Unlock()
 }
 
 func cloneTimeSeriesRowsUpdated(event *pb.TimeSeriesRowsUpdated) *pb.TimeSeriesRowsUpdated {

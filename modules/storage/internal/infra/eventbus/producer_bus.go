@@ -288,8 +288,8 @@ type SubscriberBus struct {
 	client             *jetstream.Client
 	mu                 sync.Mutex
 	nextID             uint64
-	timeSeriesHandlers map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler
-	recordHandlers     map[uint64]coreeventbus.RecordRowsUpdatedHandler
+	timeSeriesHandlers map[uint64]*subscriberTimeSeriesHandler
+	recordHandlers     map[uint64]*subscriberRecordHandler
 	timeSeriesConsumer *jetstream.PullConsumer
 	recordConsumer     *jetstream.PullConsumer
 	timeSeriesCancel   context.CancelFunc
@@ -312,8 +312,8 @@ func NewSubscriberBus(client *jetstream.Client, prefix string, opts SubscriberOp
 	return &SubscriberBus{
 		ProducerBus:        NewProducerBus(client, prefix),
 		client:             client,
-		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler),
-		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsUpdatedHandler),
+		timeSeriesHandlers: make(map[uint64]*subscriberTimeSeriesHandler),
+		recordHandlers:     make(map[uint64]*subscriberRecordHandler),
 		opts:               normalized,
 	}, nil
 }
@@ -353,8 +353,10 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 	}
 	b.nextID++
 	id := b.nextID
-	b.timeSeriesHandlers[id] = handler
-	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeries(id) }}, nil
+	entryCtx, entryCancel := context.WithCancel(context.Background())
+	entry := &subscriberTimeSeriesHandler{handler: handler, lifecycle: newSubscriberHandlerLifecycle(), ctx: entryCtx, cancel: entryCancel}
+	b.timeSeriesHandlers[id] = entry
+	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeries(id, entry) }}, nil
 }
 
 func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler coreeventbus.RecordRowsUpdatedHandler) (coreeventbus.Subscription, error) {
@@ -379,8 +381,10 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 	}
 	b.nextID++
 	id := b.nextID
-	b.recordHandlers[id] = handler
-	return &subscriberBusSubscription{close: func() error { return b.closeRecord(id) }}, nil
+	entryCtx, entryCancel := context.WithCancel(context.Background())
+	entry := &subscriberRecordHandler{handler: handler, lifecycle: newSubscriberHandlerLifecycle(), ctx: entryCtx, cancel: entryCancel}
+	b.recordHandlers[id] = entry
+	return &subscriberBusSubscription{close: func() error { return b.closeRecord(id, entry) }}, nil
 }
 
 func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries bool) {
@@ -453,50 +457,66 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 	if timeSeries {
 		var event pb.TimeSeriesRowsUpdated
 		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
-		handlers := make([]coreeventbus.TimeSeriesRowsUpdatedHandler, 0, len(b.timeSeriesHandlers))
-		for _, h := range b.timeSeriesHandlers {
-			handlers = append(handlers, h)
+		handlers := make([]*subscriberTimeSeriesHandler, 0, len(b.timeSeriesHandlers))
+		for _, entry := range b.timeSeriesHandlers {
+			if entry.lifecycle.acquire() {
+				handlers = append(handlers, entry)
+			}
 		}
 		b.mu.Unlock()
 		if len(handlers) == 0 {
 			return errors.New("storage event delivery has no time-series handlers")
 		}
-		if err == nil {
-			for _, h := range handlers {
-				err = errors.Join(err, h(ctx, &event))
+		if err != nil {
+			for _, entry := range handlers {
+				entry.lifecycle.release()
 			}
+			return err
+		}
+		for _, entry := range handlers {
+			err = errors.Join(err, entry.call(ctx, &event))
 		}
 	} else {
 		var event pb.RecordRowsUpdated
 		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
-		handlers := make([]coreeventbus.RecordRowsUpdatedHandler, 0, len(b.recordHandlers))
-		for _, h := range b.recordHandlers {
-			handlers = append(handlers, h)
+		handlers := make([]*subscriberRecordHandler, 0, len(b.recordHandlers))
+		for _, entry := range b.recordHandlers {
+			if entry.lifecycle.acquire() {
+				handlers = append(handlers, entry)
+			}
 		}
 		b.mu.Unlock()
 		if len(handlers) == 0 {
 			return errors.New("storage event delivery has no record handlers")
 		}
-		if err == nil {
-			for _, h := range handlers {
-				err = errors.Join(err, h(ctx, &event))
+		if err != nil {
+			for _, entry := range handlers {
+				entry.lifecycle.release()
 			}
+			return err
+		}
+		for _, entry := range handlers {
+			err = errors.Join(err, entry.call(ctx, &event))
 		}
 	}
 	return err
 }
 
-func (b *SubscriberBus) closeTimeSeries(id uint64) error {
+func (b *SubscriberBus) closeTimeSeries(id uint64, entry *subscriberTimeSeriesHandler) error {
 	b.mu.Lock()
 	delete(b.timeSeriesHandlers, id)
+	entry.lifecycle.beginClose()
+	entry.cancel()
 	if len(b.timeSeriesHandlers) != 0 || b.timeSeriesCancel == nil {
 		b.mu.Unlock()
+		entry.lifecycle.wait()
 		return nil
 	}
 	cancel, consumer := b.timeSeriesCancel, b.timeSeriesConsumer
 	b.timeSeriesStopping = true
 	b.timeSeriesCancel, b.timeSeriesConsumer = nil, nil
 	b.mu.Unlock()
+	entry.lifecycle.wait()
 	cancel()
 	b.timeSeriesFetchWG.Wait()
 	b.timeSeriesHandleWG.Wait()
@@ -509,17 +529,21 @@ func (b *SubscriberBus) closeTimeSeries(id uint64) error {
 	b.mu.Unlock()
 	return err
 }
-func (b *SubscriberBus) closeRecord(id uint64) error {
+func (b *SubscriberBus) closeRecord(id uint64, entry *subscriberRecordHandler) error {
 	b.mu.Lock()
 	delete(b.recordHandlers, id)
+	entry.lifecycle.beginClose()
+	entry.cancel()
 	if len(b.recordHandlers) != 0 || b.recordCancel == nil {
 		b.mu.Unlock()
+		entry.lifecycle.wait()
 		return nil
 	}
 	cancel, consumer := b.recordCancel, b.recordConsumer
 	b.recordStopping = true
 	b.recordCancel, b.recordConsumer = nil, nil
 	b.mu.Unlock()
+	entry.lifecycle.wait()
 	cancel()
 	b.recordFetchWG.Wait()
 	b.recordHandleWG.Wait()
@@ -532,6 +556,89 @@ func (b *SubscriberBus) closeRecord(id uint64) error {
 	b.mu.Unlock()
 	return err
 }
+
+type subscriberTimeSeriesHandler struct {
+	handler   coreeventbus.TimeSeriesRowsUpdatedHandler
+	lifecycle *subscriberHandlerLifecycle
+	ctx       context.Context
+	cancel    context.CancelFunc
+}
+
+func (h *subscriberTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+	defer h.lifecycle.release()
+	handlerCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.ctx, cancel)
+	defer func() {
+		stop()
+		cancel()
+	}()
+	return h.handler(handlerCtx, event)
+}
+
+type subscriberRecordHandler struct {
+	handler   coreeventbus.RecordRowsUpdatedHandler
+	lifecycle *subscriberHandlerLifecycle
+	ctx       context.Context
+	cancel    context.CancelFunc
+}
+
+func (h *subscriberRecordHandler) call(ctx context.Context, event *pb.RecordRowsUpdated) error {
+	defer h.lifecycle.release()
+	handlerCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.ctx, cancel)
+	defer func() {
+		stop()
+		cancel()
+	}()
+	return h.handler(handlerCtx, event)
+}
+
+type subscriberHandlerLifecycle struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	closing  bool
+	inFlight int
+}
+
+func newSubscriberHandlerLifecycle() *subscriberHandlerLifecycle {
+	lifecycle := &subscriberHandlerLifecycle{}
+	lifecycle.cond = sync.NewCond(&lifecycle.mu)
+	return lifecycle
+}
+
+func (l *subscriberHandlerLifecycle) acquire() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closing {
+		return false
+	}
+	l.inFlight++
+	return true
+}
+
+func (l *subscriberHandlerLifecycle) release() {
+	l.mu.Lock()
+	l.inFlight--
+	if l.inFlight == 0 {
+		l.cond.Broadcast()
+	}
+	l.mu.Unlock()
+}
+
+func (l *subscriberHandlerLifecycle) beginClose() {
+	l.mu.Lock()
+	l.closing = true
+	l.mu.Unlock()
+}
+
+func (l *subscriberHandlerLifecycle) wait() {
+	l.mu.Lock()
+	for l.inFlight > 0 {
+		l.cond.Wait()
+	}
+	l.mu.Unlock()
+}
+
 func (b *SubscriberBus) Close() error {
 	if b == nil {
 		return nil

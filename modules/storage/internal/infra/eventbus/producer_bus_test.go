@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
@@ -176,13 +175,17 @@ func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 		t.Fatalf("marshal event: %v", err)
 	}
 
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	defer secondCancel()
 	bus := &SubscriberBus{
-		timeSeriesHandlers: map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler{
-			1: func(context.Context, *pb.TimeSeriesRowsUpdated) error { return firstErr },
-			2: func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+		timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{
+			1: {handler: func(context.Context, *pb.TimeSeriesRowsUpdated) error { return firstErr }, lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel},
+			2: {handler: func(context.Context, *pb.TimeSeriesRowsUpdated) error {
 				secondCalled = true
 				return secondErr
-			},
+			}, lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel},
 		},
 	}
 
@@ -195,10 +198,52 @@ func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 	}
 }
 
+func TestSubscriberCloseDrainsItsHandlerWhileOtherHandlerRemains(t *testing.T) {
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
+	require.NoError(t, err)
+	started := make(chan struct{})
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+	first := &subscriberTimeSeriesHandler{
+		handler: func(ctx context.Context, _ *pb.TimeSeriesRowsUpdated) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel,
+	}
+	second := &subscriberTimeSeriesHandler{
+		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil },
+		lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel,
+	}
+	bus := &SubscriberBus{timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{1: first, 2: second}}
+	dispatchDone := make(chan error, 1)
+	go func() {
+		dispatchDone <- bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: payload}}, true)
+	}()
+	<-started
+	if err := bus.closeTimeSeries(1, first); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-dispatchDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("dispatch did not drain the closed handler")
+	}
+	bus.mu.Lock()
+	_, firstPresent := bus.timeSeriesHandlers[1]
+	_, secondPresent := bus.timeSeriesHandlers[2]
+	bus.mu.Unlock()
+	assert.False(t, firstPresent)
+	assert.True(t, secondPresent)
+}
+
 func TestSubscriberBusRejectsDeliveryWithoutHandlers(t *testing.T) {
 	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
 	require.NoError(t, err)
-	bus := &SubscriberBus{timeSeriesHandlers: map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler{}}
+	bus := &SubscriberBus{timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{}}
 
 	err = bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: payload}}, true)
 

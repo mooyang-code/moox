@@ -84,3 +84,39 @@ func TestMemoryBusCloseWaitsForInFlightHandlers(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestMemorySubscriptionCloseWaitsOnlyForItsInFlightHandler(t *testing.T) {
+	bus := NewMemoryBus()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	subscription, err := bus.SubscribeTimeSeriesRowsUpdated(context.Background(), func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+		close(started)
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bus.SubscribeTimeSeriesRowsUpdated(context.Background(), func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{})
+	}()
+	<-started
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- subscription.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("subscription Close returned before its handler: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-publishDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+}
