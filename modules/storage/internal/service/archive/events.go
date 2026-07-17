@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -51,7 +52,7 @@ func (c *EventConsumer) Start(ctx context.Context) error {
 		return errors.New("archive event consumer is nil")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if c.events == nil {
 		return errors.New("archive event consumer requires subscribable event bus")

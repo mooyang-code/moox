@@ -16,7 +16,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	natsserver "github.com/nats-io/nats-server/v2/server"
-	"gopkg.in/yaml.v3"
+	yaml "gopkg.in/yaml.v3"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type Server struct {
@@ -231,7 +232,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("broker server is nil")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -292,7 +293,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() { s.ns.WaitForShutdown(); close(done) }()
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	select {
 	case <-done:

@@ -15,6 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"golang.org/x/sys/unix"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type Collector struct {
@@ -32,7 +33,7 @@ func New() *Collector {
 
 func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -183,7 +184,9 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 func isPartition(name string) bool {
-	if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "fd") || strings.HasPrefix(name, "sr") { return true }
+	if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "fd") || strings.HasPrefix(name, "sr") {
+		return true
+	}
 	_, err := os.Stat(filepath.Join("/sys/class/block", name, "partition"))
 	return err == nil
 }

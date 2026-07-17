@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +8,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 var (
@@ -43,7 +43,7 @@ var dataRowsExportCmd = &cobra.Command{
 			return err
 		}
 		if dataStorageURL != "" {
-			rsp, err := exportRowsRemote(context.Background(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
+			rsp, err := exportRowsRemote(trpc.BackgroundContext(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
 				Keys: []*pb.TimeSeriesKey{{
 					SpaceId:    defaultFlag(dataSpaceID, "default"),
 					DatasetId:  datasetID,

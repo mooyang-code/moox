@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Options 保存 PrimaryStore 服务创建时的依赖与路径配置。
@@ -40,7 +41,7 @@ func NewService(opts Options) *Service {
 	if opts.Publisher != nil {
 		if store, err := svc.client.factStore(); err == nil {
 			svc.relay = NewOutboxRelay(store, opts.Publisher, opts.Outbox)
-			svc.relay.Start(context.Background())
+			svc.relay.Start(trpc.BackgroundContext())
 		}
 	}
 	return svc

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go"
 )
 
 const defaultMaxWorkers = 1
@@ -133,7 +134,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return errors.New("view builder service is nil")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if s.events == nil {
 		return errors.New("view builder service requires subscribable event bus")
@@ -249,7 +250,7 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 
 func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, event *pb.TimeSeriesRowsUpdated) (retErr error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if event == nil {
 		return nil
@@ -296,7 +297,7 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated
 
 func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *pb.RecordRowsUpdated) (retErr error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if event == nil {
 		return nil

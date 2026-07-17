@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type ResultHook func(context.Context, domain.Check, domain.CheckResult)
@@ -75,7 +76,7 @@ func New(repos *store.Repositories, opts Options) *Scheduler {
 
 func (s *Scheduler) Start(ctx context.Context) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel

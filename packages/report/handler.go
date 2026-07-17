@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -80,7 +81,7 @@ func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gather
 
 func (h *Handler) Handle(ctx context.Context) error {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	snapshot, err := h.BuildSnapshot()
 	if err != nil {

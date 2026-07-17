@@ -10,6 +10,7 @@ import (
 
 	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -44,11 +45,19 @@ type TaskStatusServerResponse struct {
 
 // ReportTaskStatusAsync 异步上报任务状态（失败只记录日志，不影响主流程）
 func ReportTaskStatusAsync(ctx context.Context, spaceID string, taskID string, status int, result string) {
+	asyncCtx := cloneAsyncContext(ctx)
 	go func() {
-		if err := ReportTaskStatus(ctx, spaceID, taskID, status, result); err != nil {
-			log.WarnContextf(ctx, "任务状态上报失败: taskID=%s, status=%d, error=%v", taskID, status, err)
+		if err := ReportTaskStatus(asyncCtx, spaceID, taskID, status, result); err != nil {
+			log.WarnContextf(asyncCtx, "任务状态上报失败: taskID=%s, status=%d, error=%v", taskID, status, err)
 		}
 	}()
+}
+
+func cloneAsyncContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return trpc.BackgroundContext()
+	}
+	return trpc.CloneContext(ctx)
 }
 
 // ReportTaskStatus 上报任务状态到服务端

@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"gorm.io/gorm"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "monitor-hostmetrics-consumer", "storage-eventbus", "cloudnode-eventbus", "factor-eventbus", "strategy-eventbus"}
@@ -137,7 +138,7 @@ func loadCLIKey(dbPath, keyFile string) error {
 }
 
 func ensureEventBus(d *dao.SecretDAO, publicIP string, out io.Writer) error {
-	ctx := context.Background()
+	ctx := trpc.BackgroundContext()
 	for _, role := range eventBusRoles {
 		key := eventBusKeys[role]
 		if _, err := ensureToken(ctx, d, key, role); err != nil {
@@ -189,7 +190,7 @@ func listEventbus(d *dao.SecretDAO, ctx context.Context) (map[string]model.Secre
 }
 
 func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error {
-	ctx := context.Background()
+	ctx := trpc.BackgroundContext()
 	rows, err := listEventbus(d, ctx)
 	if err != nil {
 		return err
@@ -325,7 +326,7 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 	if !ok {
 		return fmt.Errorf("unsupported credential %q", credential)
 	}
-	rows, err := listEventbus(d, context.Background())
+	rows, err := listEventbus(d, trpc.BackgroundContext())
 	if err != nil {
 		return err
 	}
@@ -338,7 +339,7 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 		return err
 	}
 	row.SecretValue = base64.RawURLEncoding.EncodeToString(raw)
-	if err := d.Update(context.Background(), &row); err != nil {
+	if err := d.Update(trpc.BackgroundContext(), &row); err != nil {
 		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "rotated": credential, "warning": "redeploy affected clients now; old token is invalid"})

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const (
@@ -87,7 +88,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	_ = file.Close()
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
 		defer cancel()
 		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteStorageArchiveNext}, nil)
 	}()
@@ -97,7 +98,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	installed := true
 	defer func() {
 		if returnErr != nil && installed {
-			rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
 			defer cancel()
 			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript}, nil)
 		}
@@ -163,7 +164,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	_ = file.Close()
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
 		defer cancel()
 		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteArchiveNext}, nil)
 	}()
@@ -177,7 +178,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	installed := true
 	defer func() {
 		if returnErr != nil && installed {
-			rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
 			defer cancel()
 			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript}, nil)
 		}

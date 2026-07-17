@@ -1,7 +1,6 @@
 package testfixture
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,7 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	nats "github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // StartRuntime starts an ephemeral central EventBus fixture and registers the
@@ -35,7 +35,7 @@ func StartRuntime(t *testing.T, cfg config.JetStreamConfig) *jobqueue.Runtime {
 	}
 	cfg.URLs = []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}
 	cfg.NATSURL = cfg.URLs[0]
-	rt, err := jobqueue.Connect(context.Background(), cfg)
+	rt, err := jobqueue.Connect(trpc.BackgroundContext(), cfg)
 	if err != nil {
 		srv.Shutdown()
 		t.Fatal(err)

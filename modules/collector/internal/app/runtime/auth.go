@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const defaultExpireSec = int64(60)
@@ -55,7 +56,7 @@ func GenerateAuthHeader(cfg AuthConfig, method, path string, body []byte) (http.
 }
 
 func NewSignedRequest(method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
-	return NewSignedRequestWithContext(context.Background(), method, url, body, cfg)
+	return NewSignedRequestWithContext(trpc.BackgroundContext(), method, url, body, cfg)
 }
 
 func NewSignedRequestWithContext(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {

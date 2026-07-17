@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-database/timer"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -24,7 +25,7 @@ var collectorStartedAt = time.Now()
 // Initialize loads config, initializes persistence, and registers RPC services.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	log.InfoContextf(ctx, "开始初始化 moox-collector...")
 

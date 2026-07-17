@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type cliResult struct {
@@ -83,7 +83,7 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 	schemaPath := resolveSchemaPath(opts.schemaPath)
-	if err := metadata.InitSchema(context.Background(), metadata.SchemaOptions{
+	if err := metadata.InitSchema(trpc.BackgroundContext(), metadata.SchemaOptions{
 		Storage:    storage,
 		SchemaPath: schemaPath,
 	}); err != nil {
@@ -114,7 +114,7 @@ func runImportSeed(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 	seedPath := resolveSeedPath(opts.seedPath, opts.storageConf)
-	result, err := metadata.ImportSeed(context.Background(), metadata.SeedOptions{
+	result, err := metadata.ImportSeed(trpc.BackgroundContext(), metadata.SeedOptions{
 		Storage:    storage,
 		SchemaPath: resolveSchemaPath(opts.schemaPath),
 		SeedPath:   seedPath,

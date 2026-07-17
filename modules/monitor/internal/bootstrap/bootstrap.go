@@ -29,6 +29,7 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-database/timer"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -62,7 +63,7 @@ func (r *Runtime) Close() error {
 			r.Scheduler.Stop()
 		}
 		if r.HostRuleCache != nil {
-			_ = r.HostRuleCache.Stop(context.Background())
+			_ = r.HostRuleCache.Stop(trpc.BackgroundContext())
 		}
 		if r.MetricScheduler != nil {
 			r.MetricScheduler.Stop()
@@ -88,7 +89,7 @@ func (r *Runtime) Go(fn func()) {
 
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	log.InfoContextf(ctx, "开始初始化 moox-monitor...")
 
@@ -310,7 +311,7 @@ func registerMetricsReporter(s *server.Server) {
 	}
 	h, err := report.NewHandler(report.DefaultConfig("moox_monitor"))
 	if err != nil {
-		log.WarnContextf(context.Background(), "monitor metrics reporter disabled: %v", err)
+		log.WarnContextf(trpc.BackgroundContext(), "monitor metrics reporter disabled: %v", err)
 		return
 	}
 	service := s.Service("trpc.moox.monitor.metrics.timer")

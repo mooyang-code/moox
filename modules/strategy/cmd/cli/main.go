@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 func main() {
@@ -73,15 +73,15 @@ func runCLI(args []string, out, errOut *os.File) error {
 		}
 		sum := sha256.Sum256([]byte(source))
 		definition := domain.StrategyDefinition{StrategyID: m.ID, Version: m.Version, API: m.API, ManifestYAML: manifest, SourceCode: source, SourceHash: hex.EncodeToString(sum[:])}
-		e, err := engine.New(context.Background(), *python, *worker)
+		e, err := engine.New(trpc.BackgroundContext(), *python, *worker)
 		if err != nil {
 			return err
 		}
 		defer e.Close()
-		if err := e.Load(context.Background(), definition); err != nil {
+		if err := e.Load(trpc.BackgroundContext(), definition); err != nil {
 			return err
 		}
-		outValue, _, err := e.Run(context.Background(), domain.Task{RunID: "cli-run", BindingID: "cli", StrategyID: m.ID, Version: m.Version, TriggerBarTime: *trigger, PreviousState: domain.State{StateJSON: mustJSON(state)}}, definition)
+		outValue, _, err := e.Run(trpc.BackgroundContext(), domain.Task{RunID: "cli-run", BindingID: "cli", StrategyID: m.ID, Version: m.Version, TriggerBarTime: *trigger, PreviousState: domain.State{StateJSON: mustJSON(state)}}, definition)
 		if err != nil {
 			return err
 		}

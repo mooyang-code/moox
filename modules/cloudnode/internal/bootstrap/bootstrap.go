@@ -22,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-database/timer"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -40,7 +41,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 		return nil
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	var firstErr error
 	if r.HeartbeatBuffer != nil {
@@ -69,7 +70,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 // Initialize loads config, initializes persistence, and registers tRPC services.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	log.InfoContextf(ctx, "开始初始化 moox-cloudnode...")
 
@@ -90,7 +91,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	keepResources := false
 	defer func() {
 		if !keepResources {
-			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			closeCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 			defer cancel()
 			_ = runtime.Close(closeCtx)
 		}
@@ -163,7 +164,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done
-			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			closeCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 			defer cancel()
 			_ = runtime.Close(closeCtx)
 		}()

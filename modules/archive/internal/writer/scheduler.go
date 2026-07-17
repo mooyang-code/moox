@@ -3,6 +3,8 @@ package writer
 import (
 	"context"
 	"time"
+
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Scheduler periodically materializes dirty partitions and flushes once more on shutdown.
@@ -36,7 +38,7 @@ func (s Scheduler) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			flushCtx, cancel := context.WithTimeout(context.Background(), s.ShutdownTimeout)
+			flushCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), s.ShutdownTimeout)
 			err := s.Writer.WriteDirty(flushCtx, s.PendingRows)
 			cancel()
 			return err

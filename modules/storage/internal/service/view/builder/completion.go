@@ -3,6 +3,8 @@ package builder
 import (
 	"context"
 	"sync"
+
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type deriveCompletion struct {
@@ -49,7 +51,7 @@ func (c *deriveCompletion) wait(ctx context.Context) error {
 		return nil
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	select {
 	case <-c.done:

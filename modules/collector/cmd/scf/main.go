@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/serverless"
 	runtimebootstrap "github.com/mooyang-code/moox/modules/collector/internal/serverless/bootstrap"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskrunner"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 )
@@ -44,7 +45,7 @@ func main() {
 	}
 
 	if *once {
-		ctx := context.Background()
+		ctx := trpc.BackgroundContext()
 		if opts.Timeout > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
@@ -59,7 +60,7 @@ func main() {
 		return
 	}
 
-	if err := initializeServerlessRuntime(context.Background(), cfg); err != nil {
+	if err := initializeServerlessRuntime(trpc.BackgroundContext(), cfg); err != nil {
 		panic("failed to initialize bootstrap: " + err.Error())
 	}
 	serverless.RegisterCloudFunction()

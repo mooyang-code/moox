@@ -12,9 +12,10 @@ import (
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
-	"github.com/nats-io/nats.go"
+	nats "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const defaultFetchMaxWait = 500 * time.Millisecond
@@ -106,7 +107,7 @@ func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) 
 	// request context would close the durable subscription as soon as the first
 	// request returns.
 	consumerCfg := consumerConfigForRoute(q.cfg, spaceID, codePackageID, jobType)
-	consumer, err := q.client.NewPullConsumer(context.Background(), consumerCfg)
+	consumer, err := q.client.NewPullConsumer(trpc.BackgroundContext(), consumerCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +133,13 @@ func fetchRouteConsumer(ctx context.Context, consumer *jetstream.PullConsumer, l
 		return nil, nil
 	}
 	return deliveries, err
+}
+
+func detachedActionContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return trpc.BackgroundContext()
+	}
+	return trpc.CloneContext(ctx)
 }
 
 func tryAcquireFetchLock(lock *sync.Mutex) bool {
@@ -178,13 +186,14 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 
 	out := make([]Delivery, 0, len(deliveries))
 	for _, delivery := range deliveries {
+		actionCtx := detachedActionContext(ctx)
 		item := &pb.JobItem{}
 		if err := proto.Unmarshal(delivery.Message.GetPayload(), item); err != nil {
-			_ = delivery.Term(context.Background())
+			_ = delivery.Term(actionCtx)
 			continue
 		}
 		if item.GetSpaceId() != req.SpaceID || item.GetCodePackageId() != req.CodePackageID || !contains(req.SupportedJobTypes, item.GetJobType()) {
-			_ = delivery.Nak(context.Background(), time.Second)
+			_ = delivery.Nak(actionCtx, time.Second)
 			continue
 		}
 		meta := JobItemMessage{SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(), JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()), Priority: item.GetPriority(), SubmittedAt: delivery.Message.GetOccurredAt().AsTime()}

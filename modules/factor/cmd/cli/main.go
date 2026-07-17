@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type cliConfig struct {
@@ -26,7 +28,7 @@ type cliConfig struct {
 }
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
+	if err := run(trpc.BackgroundContext(), os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "{\"ok\":false,\"error\":%q}\n", err.Error())
 		os.Exit(1)
 	}

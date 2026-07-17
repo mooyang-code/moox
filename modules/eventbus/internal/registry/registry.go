@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
-	"github.com/nats-io/nats.go"
+	nats "github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type Registry struct {
@@ -36,7 +37,7 @@ func New(js nats.JetStreamContext, cfg *config.Config) (*Registry, error) {
 
 func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if err := r.cfg.Validate(); err != nil {
 		return Result{}, err

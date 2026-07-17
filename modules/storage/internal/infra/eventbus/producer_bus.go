@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -92,7 +93,7 @@ type deliveryControl interface {
 
 func processDelivery(ctx context.Context, delivery deliveryControl, opts SubscriberOptions, handler func(context.Context) error) error {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if delivery == nil || handler == nil {
 		return errors.New("storage delivery and handler are required")
@@ -128,10 +129,10 @@ func processDelivery(ctx context.Context, delivery deliveryControl, opts Subscri
 			handlerErr = errors.Join(ctx.Err(), <-handlerResult)
 			goto terminal
 		case <-ticker.C:
-			actionCtx, cancel := context.WithTimeout(context.Background(), opts.ActionTimeout)
+			actionCtx, cancel := context.WithTimeout(trpc.CloneContext(ctx), opts.ActionTimeout)
 			if err := delivery.InProgress(actionCtx); err != nil {
 				opts.Metrics.ObserveDelivery("in_progress", "error")
-				log.ErrorContextf(context.Background(), "[StorageEventBus] delivery heartbeat failed: %v", err)
+				log.ErrorContextf(actionCtx, "[StorageEventBus] delivery heartbeat failed: %v", err)
 			} else {
 				opts.Metrics.ObserveDelivery("in_progress", "success")
 			}
@@ -140,7 +141,7 @@ func processDelivery(ctx context.Context, delivery deliveryControl, opts Subscri
 	}
 
 terminal:
-	actionCtx, cancel := context.WithTimeout(context.Background(), opts.ActionTimeout)
+	actionCtx, cancel := context.WithTimeout(trpc.CloneContext(ctx), opts.ActionTimeout)
 	defer cancel()
 	if handlerErr != nil {
 		nakErr := delivery.Nak(actionCtx, opts.NakDelay)
@@ -353,7 +354,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 	}
 	b.nextID++
 	id := b.nextID
-	entryCtx, entryCancel := context.WithCancel(context.Background())
+	entryCtx, entryCancel := context.WithCancel(trpc.BackgroundContext())
 	entry := &subscriberTimeSeriesHandler{handler: handler, lifecycle: newSubscriberHandlerLifecycle(), ctx: entryCtx, cancel: entryCancel}
 	b.timeSeriesHandlers[id] = entry
 	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeries(id, entry) }}, nil
@@ -381,14 +382,14 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 	}
 	b.nextID++
 	id := b.nextID
-	entryCtx, entryCancel := context.WithCancel(context.Background())
+	entryCtx, entryCancel := context.WithCancel(trpc.BackgroundContext())
 	entry := &subscriberRecordHandler{handler: handler, lifecycle: newSubscriberHandlerLifecycle(), ctx: entryCtx, cancel: entryCancel}
 	b.recordHandlers[id] = entry
 	return &subscriberBusSubscription{close: func() error { return b.closeRecord(id, entry) }}, nil
 }
 
 func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries bool) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
 	fetchWG := &b.recordFetchWG
 	handlerWG := &b.recordHandleWG
 	if timeSeries {
@@ -441,7 +442,7 @@ func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries b
 					if delivery != nil {
 						deliveryCount = delivery.DeliveryCount
 					}
-					log.ErrorContextf(context.Background(), "[StorageEventBus] delivery failed message_id=%s delivery_count=%d: %v", messageID, deliveryCount, err)
+					log.ErrorContextf(ctx, "[StorageEventBus] delivery failed message_id=%s delivery_count=%d: %v", messageID, deliveryCount, err)
 				}
 			}(delivery)
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceinfra "github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const indexTableName = "view_rows"
@@ -136,7 +137,7 @@ func (m *IndexManager) Remove(ctx context.Context, indexID string) error {
 		return err
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	path := viewindex.DuckDBPath(m.root, ref)
 	m.mu.Lock()

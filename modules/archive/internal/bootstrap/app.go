@@ -18,8 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
-	"trpc.group/trpc-go/trpc-go"
+	nats "github.com/nats-io/nats.go"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -35,7 +35,7 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("archive config is required")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -187,7 +187,7 @@ func sourceLists(cfg *config.Config) map[string][]string {
 }
 func RunFromConfig(ctx context.Context, path, version, commit string) error {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -217,6 +217,6 @@ func RunFromConfig(ctx context.Context, path, version, commit string) error {
 }
 
 func mainContext() context.Context {
-	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, _ := signal.NotifyContext(trpc.BackgroundContext(), os.Interrupt)
 	return ctx
 }

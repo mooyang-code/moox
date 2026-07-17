@@ -1,12 +1,13 @@
 package network
 
 import (
-	"context"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // GetInternalIP 获取本机内网IP地址
@@ -54,7 +55,7 @@ func GetPublicIP() string {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := trpc.BackgroundContext()
 	for _, service := range services {
 		req, err := http.NewRequestWithContext(ctx, "GET", service.url, nil)
 		if err != nil {

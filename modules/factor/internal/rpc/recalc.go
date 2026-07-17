@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type recalcState struct {
@@ -52,7 +53,8 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 		tasks[i].Completion = results
 		s.scheduler.Enqueue(ctx, tasks[i])
 	}
-	go s.drainRecalc(recalcID, results, len(tasks))
+	asyncCtx := trpc.CloneContext(ctx)
+	go s.drainRecalc(asyncCtx, recalcID, results, len(tasks))
 	return &factorpb.RecalcFactorRsp{RetInfo: success(), RecalcId: recalcID}, nil
 }
 
@@ -195,11 +197,11 @@ func (s *Service) targetDatasetForFactor(ctx context.Context, spaceID string, so
 	return registry.ResultDataset(sourceDataset), nil
 }
 
-func (s *Service) drainRecalc(recalcID string, results <-chan scheduler.TaskResult, total int) {
+func (s *Service) drainRecalc(ctx context.Context, recalcID string, results <-chan scheduler.TaskResult, total int) {
 	s.updateRecalcState(recalcID, func(state *recalcState) {
 		state.Status = "running"
 	})
-	_ = s.scheduler.Drain(context.Background())
+	_ = s.scheduler.Drain(ctx)
 	failures := make([]string, 0)
 	for i := 0; i < total; i++ {
 		result := <-results

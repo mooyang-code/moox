@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy package-skill clean proto
+.PHONY: build build-gateway check-boundaries check-context release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -8,6 +8,9 @@ build-gateway:
 
 check-boundaries:
 	./scripts/check-module-boundaries.sh
+
+check-context:
+	./scripts/check-trpc-context.sh
 
 release:
 	./scripts/release.sh
@@ -28,7 +31,7 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries test test-release test-gateway-deploy test-caddy
+verify: check-boundaries check-context test test-release test-gateway-deploy test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 

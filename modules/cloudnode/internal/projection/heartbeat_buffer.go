@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -147,7 +148,7 @@ func (b *HeartbeatBuffer) loop() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := b.Flush(context.Background()); err != nil {
+			if err := b.Flush(trpc.BackgroundContext()); err != nil {
 				log.Warnf("[CloudNode] heartbeat buffer flush failed: %v", err)
 			}
 		case <-b.stop:

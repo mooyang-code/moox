@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type OutboxConfig struct {
@@ -69,7 +70,7 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 		return
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	r.stop = make(chan struct{})
 	r.done = make(chan struct{})

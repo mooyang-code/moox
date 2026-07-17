@@ -8,8 +8,9 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
+	nats "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type NATSConfig struct {
@@ -36,7 +37,7 @@ func NewNATSConsumer(cfg NATSConfig, debounce *Debouncer) *NATSConsumer {
 
 func (c *NATSConsumer) Start(ctx context.Context) error {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	urls := append([]string(nil), c.cfg.URLs...)
 	if len(urls) == 0 && strings.TrimSpace(c.cfg.URL) != "" {
@@ -96,19 +97,20 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 			continue
 		}
 		for _, delivery := range deliveries {
+			actionCtx := trpc.CloneContext(ctx)
 			event := &storagepb.TimeSeriesRowsUpdated{}
 			if delivery.Message.GetContentType() != "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated" {
-				_ = delivery.Term(context.Background())
+				_ = delivery.Term(actionCtx)
 				continue
 			}
 			if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
-				_ = delivery.Term(context.Background())
+				_ = delivery.Term(actionCtx)
 				continue
 			}
 			if c.debounce != nil {
 				c.debounce.Ingest(event, time.Now().UTC())
 			}
-			_ = delivery.Ack(context.Background())
+			_ = delivery.Ack(actionCtx)
 		}
 	}
 }

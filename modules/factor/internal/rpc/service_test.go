@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 func TestCreateFactorValidationReturnsInvalidParam(t *testing.T) {
@@ -176,7 +177,10 @@ func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
 		t.Fatalf("UpsertBinding() error = %v", err)
 	}
 
-	rsp, err := svc.RecalcFactor(ctx, &factorpb.RecalcFactorReq{
+	requestCtx, requestMsg := codec.WithNewMessage(ctx)
+	requestMsg.WithCalleeMethod("factor.RecalcFactor")
+	requestCtx, cancelRequest := context.WithCancel(requestCtx)
+	rsp, err := svc.RecalcFactor(requestCtx, &factorpb.RecalcFactorReq{
 		SpaceId:       "crypto",
 		SourceDataset: "binance_spot_kline",
 		SubjectId:     "BTC-USDT",
@@ -186,6 +190,7 @@ func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecalcFactor() error = %v", err)
 	}
+	cancelRequest()
 	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		t.Fatalf("ret = %+v", rsp.GetRetInfo())
 	}
@@ -193,6 +198,12 @@ func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
 	case <-sched.done:
 	case <-time.After(time.Second):
 		t.Fatal("scheduler drain was not called")
+	}
+	if err := sched.drainContextErr(); err != nil {
+		t.Fatalf("asynchronous drain inherited request cancellation: %v", err)
+	}
+	if got := sched.drainCalleeMethod(); got != "factor.RecalcFactor" {
+		t.Fatalf("asynchronous drain callee method = %q", got)
 	}
 	if len(sched.tasks) != 1 {
 		t.Fatalf("tasks = %+v", sched.tasks)
@@ -300,6 +311,7 @@ type fakeRPCScheduler struct {
 	once  sync.Once
 	done  chan struct{}
 	tasks []scheduler.Task
+	ctx   context.Context
 }
 
 func newFakeRPCScheduler() *fakeRPCScheduler {
@@ -316,8 +328,9 @@ func (f *fakeRPCScheduler) Enqueue(_ context.Context, task scheduler.Task) {
 	f.tasks = append(f.tasks, task)
 }
 
-func (f *fakeRPCScheduler) Drain(context.Context) error {
+func (f *fakeRPCScheduler) Drain(ctx context.Context) error {
 	f.mu.Lock()
+	f.ctx = ctx
 	tasks := append([]scheduler.Task(nil), f.tasks...)
 	f.mu.Unlock()
 	for _, task := range tasks {
@@ -329,6 +342,18 @@ func (f *fakeRPCScheduler) Drain(context.Context) error {
 		close(f.done)
 	})
 	return nil
+}
+
+func (f *fakeRPCScheduler) drainContextErr() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ctx.Err()
+}
+
+func (f *fakeRPCScheduler) drainCalleeMethod() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return codec.Message(f.ctx).CalleeMethod()
 }
 
 type externallyDrainedScheduler struct {

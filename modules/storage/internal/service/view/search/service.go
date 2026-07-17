@@ -16,6 +16,7 @@ import (
 	deviceinfra "github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	devicebleve "github.com/mooyang-code/moox/modules/storage/internal/infra/device/bleve"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 var ErrIndexClosing = errors.New("view index is closing")
@@ -131,7 +132,7 @@ func (s *Service) Remove(ctx context.Context, indexID string) error {
 		return err
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	s.mu.Lock()
 	if s.closed {

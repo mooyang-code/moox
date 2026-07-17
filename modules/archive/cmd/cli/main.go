@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -36,7 +37,7 @@ type cliConfig struct {
 }
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
+	if err := run(trpc.BackgroundContext(), os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "{\"ok\":false,\"error\":%q}\n", err)
 		os.Exit(1)
 	}

@@ -15,9 +15,10 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/rpc"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/nats-io/nats.go"
-	"gopkg.in/yaml.v3"
+	nats "github.com/nats-io/nats.go"
+	yaml "gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-database/timer"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -41,7 +42,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, error) {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	// 1. config
 	cfg, err := config.Load(configPath)
@@ -59,25 +60,25 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	// 3. local JetStream client
 	nc, err := connect(ctx, b.URL(), cfg)
 	if err != nil {
-		_ = b.Shutdown(context.Background())
+		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
 	}
 	js, err := nc.JetStream()
 	if err != nil {
 		nc.Close()
-		_ = b.Shutdown(context.Background())
+		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
 	}
 	// 4. topology reconciliation gates readiness
 	reg, err := registry.New(js, cfg)
 	if err != nil {
 		nc.Close()
-		_ = b.Shutdown(context.Background())
+		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
 	}
 	if _, err := reg.Reconcile(ctx); err != nil {
 		nc.Close()
-		_ = b.Shutdown(context.Background())
+		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
 	}
 	// 5. read-only status RPC
@@ -97,12 +98,12 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	if s != nil {
 		if err := hs.Register(s.Service("trpc.moox.eventbus.Health")); err != nil {
 			nc.Close()
-			_ = b.Shutdown(context.Background())
+			_ = b.Shutdown(trpc.BackgroundContext())
 			return nil, err
 		}
 	}
 	rt := &Runtime{Config: cfg, Broker: b, Conn: nc, Registry: reg, Health: hs}
-	go func() { <-ctx.Done(); _ = rt.Shutdown(context.Background()) }()
+	go func() { <-ctx.Done(); _ = rt.Shutdown(trpc.BackgroundContext()) }()
 	return rt, nil
 }
 

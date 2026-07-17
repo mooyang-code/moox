@@ -10,12 +10,12 @@ import (
 	_ "trpc.group/trpc-go/trpc-filter/masking"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
+	trpc "trpc.group/trpc-go/trpc-go"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/bootstrap"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
-	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -39,7 +39,7 @@ func main() {
 }
 
 func shutdownTracing() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 	defer cancel()
 	if err := trpcotel.Shutdown(ctx); err != nil {
 		log.Errorf("flush OpenTelemetry spans: %v", err)

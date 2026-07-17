@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 type recordingDelivery struct {
@@ -22,6 +23,8 @@ type recordingDelivery struct {
 	nakErr      error
 	progressErr error
 	deadlines   []bool
+	contextErrs []error
+	calleeNames []string
 }
 
 func (d *recordingDelivery) record(ctx context.Context, action string) {
@@ -29,6 +32,8 @@ func (d *recordingDelivery) record(ctx context.Context, action string) {
 	defer d.mu.Unlock()
 	_, hasDeadline := ctx.Deadline()
 	d.deadlines = append(d.deadlines, hasDeadline)
+	d.contextErrs = append(d.contextErrs, ctx.Err())
+	d.calleeNames = append(d.calleeNames, codec.Message(ctx).CalleeMethod())
 	d.actions = append(d.actions, action)
 }
 
@@ -51,6 +56,24 @@ func (d *recordingDelivery) snapshot() ([]string, []bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]string(nil), d.actions...), append([]bool(nil), d.deadlines...)
+}
+
+func (d *recordingDelivery) lastContextErr() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.contextErrs) == 0 {
+		return nil
+	}
+	return d.contextErrs[len(d.contextErrs)-1]
+}
+
+func (d *recordingDelivery) lastCalleeName() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.calleeNames) == 0 {
+		return ""
+	}
+	return d.calleeNames[len(d.calleeNames)-1]
 }
 
 func TestSubscriberOptionsBuildConfiguredConsumerRefs(t *testing.T) {
@@ -136,7 +159,9 @@ func TestProcessDeliveryHeartbeatsLongHandlerAndStopsBeforeAck(t *testing.T) {
 
 func TestProcessDeliveryCancellationWaitsForContextAwareHandlerBeforeNak(t *testing.T) {
 	delivery := &recordingDelivery{}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, msg := codec.WithNewMessage(context.Background())
+	msg.WithCalleeMethod("storage.ViewBuilder")
+	ctx, cancel := context.WithCancel(ctx)
 	handlerExited := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -164,6 +189,8 @@ func TestProcessDeliveryCancellationWaitsForContextAwareHandlerBeforeNak(t *test
 	}
 	actions, _ := delivery.snapshot()
 	assert.Equal(t, "nak", actions[len(actions)-1])
+	assert.NoError(t, delivery.lastContextErr(), "terminal NAK context must be detached from upstream cancellation")
+	assert.Equal(t, "storage.ViewBuilder", delivery.lastCalleeName(), "terminal NAK context must retain tRPC metadata")
 }
 
 func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {

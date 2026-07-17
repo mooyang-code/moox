@@ -16,6 +16,7 @@ import (
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const (
@@ -152,7 +153,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		return errors.New("metrics consumer is not initialized")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	c.wg.Add(1)
 	defer c.wg.Done()
@@ -183,7 +184,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 // read-only schema validation succeeds, avoiding a NAK loop on fresh installs.
 func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = trpc.BackgroundContext()
 	}
 	if opts.Storage == nil {
 		return errors.New("metrics storage is not initialized")
@@ -232,21 +233,25 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if d == nil {
 		return errors.New("empty metric delivery")
 	}
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	actionCtx := trpc.CloneContext(ctx)
 	if d.Message == nil {
 		if d.DecodeError == nil {
 			return errors.New("empty metric delivery")
 		}
 		reason := fmt.Errorf("decode metric envelope: %w", d.DecodeError)
 		if c.opts.DLQ == nil {
-			_ = d.Term(context.Background())
+			_ = d.Term(actionCtx)
 			return reason
 		}
 		dlq := malformedRejectionMessage(d, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
 		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
-			_ = d.Nak(context.Background(), time.Second)
+			_ = d.Nak(actionCtx, time.Second)
 			return fmt.Errorf("publish metrics DLQ: %w", err)
 		}
-		if err := d.Term(context.Background()); err != nil {
+		if err := d.Term(actionCtx); err != nil {
 			return fmt.Errorf("term rejected metric: %w", err)
 		}
 		return reason
@@ -254,15 +259,15 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	msg := d.Message
 	permanent := func(reason error) error {
 		if c.opts.DLQ == nil {
-			_ = d.Term(context.Background())
+			_ = d.Term(actionCtx)
 			return reason
 		}
 		dlq := rejectionMessage(msg, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
 		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
-			_ = d.Nak(context.Background(), time.Second)
+			_ = d.Nak(actionCtx, time.Second)
 			return fmt.Errorf("publish metrics DLQ: %w", err)
 		}
-		if err := d.Term(context.Background()); err != nil {
+		if err := d.Term(actionCtx); err != nil {
 			return fmt.Errorf("term rejected metric: %w", err)
 		}
 		return reason
@@ -285,21 +290,21 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if c.opts.Authorizer != nil {
 		ok, err := c.opts.Authorizer.IsRegistered(ctx, msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId())
 		if err != nil {
-			return c.retry(d, fmt.Errorf("authorize metric producer: %w", err))
+			return c.retry(actionCtx, d, fmt.Errorf("authorize metric producer: %w", err))
 		}
 		if !ok {
 			// SysDeploy synchronization is asynchronous on Monitor startup. Keep
 			// a legitimate first snapshot long enough for the registry to converge;
 			// persistently unknown producers still go to the DLQ.
 			if d.DeliveryCount < unknownProducerGraceDeliveries {
-				return c.retry(d, fmt.Errorf("metric producer %s/%s is not registered yet", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
+				return c.retry(actionCtx, d, fmt.Errorf("metric producer %s/%s is not registered yet", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
 			}
 			return permanent(fmt.Errorf("unregistered metric producer %s/%s", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
 		}
 	}
 	duplicate, err := c.opts.MessageStore.IsDuplicate(ctx, msg.GetMessageId())
 	if err != nil {
-		return c.retry(d, err)
+		return c.retry(actionCtx, d, err)
 	}
 	if duplicate {
 		return d.Ack(ctx)
@@ -318,22 +323,22 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 		return permanent(err)
 	}
 	if err := c.opts.Storage.WriteSamples(ctx, samples); err != nil {
-		return c.retry(d, err)
+		return c.retry(actionCtx, d, err)
 	}
 	duplicate, err = c.opts.MessageStore.CommitIngest(ctx, msg, samples)
 	if err != nil {
-		return c.retry(d, err)
+		return c.retry(actionCtx, d, err)
 	}
 	if duplicate {
 		return d.Ack(ctx)
 	}
 	return d.Ack(ctx)
 }
-func (c *Consumer) retry(d *jetstream.Delivery, err error) error {
+func (c *Consumer) retry(ctx context.Context, d *jetstream.Delivery, err error) error {
 	if d == nil {
 		return err
 	}
-	if nakErr := d.Nak(context.Background(), time.Second); nakErr != nil {
+	if nakErr := d.Nak(ctx, time.Second); nakErr != nil {
 		return fmt.Errorf("%v; nak: %w", err, nakErr)
 	}
 	return err
