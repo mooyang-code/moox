@@ -3,8 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,15 +12,38 @@ import (
 
 func TestLoad_ValidConfig_ShouldApplyDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hostagent.yaml")
-	content := "version: 0\ninterval: 0s\nidentity_path: ~/.local/state/moox/hostagent/identity.yaml\neventbus_config: ~/.config/moox/hostagent/eventbus.yaml\n"
+	content := "version: 0\nidentity_path: ~/.local/state/moox/hostagent/identity.yaml\neventbus_config: ~/.config/moox/hostagent/eventbus.yaml\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cfg.Version)
-	assert.Equal(t, 15*time.Second, cfg.Interval)
 	assert.NotContains(t, cfg.IdentityPath, "~")
 	assert.NotContains(t, cfg.EventBusConfig, "~")
+}
+
+func TestCheckedInConfigHasNoSamplingFrequency(t *testing.T) {
+	path := filepath.Join("..", "..", "config", "app.yaml")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	legacyKey := "inter" + "val:"
+	assert.NotContains(t, string(data), legacyKey)
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cfg.Version)
+	assert.Equal(t, "127.0.0.1:11425", cfg.HealthAddr)
+	assert.True(t, strings.HasSuffix(cfg.IdentityPath, filepath.Join("moox", "hostagent", "identity.yaml")))
+	assert.True(t, strings.HasSuffix(cfg.EventBusConfig, filepath.Join("moox", "hostagent", "eventbus.yaml")))
+}
+
+func TestLoadRejectsApplicationOwnedSamplingFrequency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hostagent.yaml")
+	legacySchedule := "inter" + "val: 15s\n"
+	content := legacySchedule + "identity_path: identity.yaml\neventbus_config: eventbus.yaml\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	_, err := Load(path)
+	assert.Error(t, err)
 }
 
 func TestLoad_HostNameOverride_ShouldTrimValue(t *testing.T) {
@@ -73,7 +96,7 @@ func TestLoadEventBus_MissingFields_ShouldReturnError(t *testing.T) {
 
 func TestLoad_InvalidYAML_ShouldReturnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hostagent.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("interval: ["), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("identity_path: ["), 0o600))
 	_, err := Load(path)
 	assert.Error(t, err)
 }

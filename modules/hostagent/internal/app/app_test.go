@@ -35,7 +35,6 @@ func testAgent(t *testing.T) *Agent {
 	dir := t.TempDir()
 	return &Agent{
 		cfg: &config.Config{
-			Interval:       time.Millisecond,
 			IdentityPath:   filepath.Join(dir, "identity.yaml"),
 			EventBusConfig: writeEventBusConfig(t, dir),
 		},
@@ -221,31 +220,10 @@ func TestAgent_Eventbus_InvalidConfig_ShouldReturnError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestAgent_Run_CancelledContext_ShouldExit(t *testing.T) {
-	a := testAgent(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		a.Run(ctx)
-		close(done)
-	}()
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not exit after context cancellation")
-	}
-}
-
 func TestAgent_RunOnce_NilAgent_ShouldReturnError(t *testing.T) {
 	var a *Agent
 	_, err := a.runOnce(context.Background())
 	assert.Error(t, err)
-}
-
-func TestAgent_Run_NilReceiver_ShouldNoop(t *testing.T) {
-	var a *Agent
-	a.Run(context.Background())
 }
 
 func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {

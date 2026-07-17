@@ -39,7 +39,10 @@ func main() {
 		log.Errorf("host-agent health register failed: %v", err)
 		os.Exit(1)
 	}
-	go a.Run(ctx)
+	if err := app.RegisterSampleTimer(s, a); err != nil {
+		log.Errorf("host-agent sample timer register failed: %v", err)
+		os.Exit(1)
+	}
 	if err := s.Serve(); err != nil {
 		log.Errorf("host-agent server failed: %v", err)
 		os.Exit(1)

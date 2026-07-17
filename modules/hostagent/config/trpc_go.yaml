@@ -20,6 +20,12 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+    - name: trpc.moox.hostagent.sample.timer
+      ip: 127.0.0.1
+      port: 11427
+      network: "*/15 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 30000
 
 plugins:
   auth:

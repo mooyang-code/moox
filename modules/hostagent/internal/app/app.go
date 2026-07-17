@@ -70,23 +70,6 @@ func resolveHostName(systemName, configuredName string) string {
 	return systemName
 }
 
-func (a *Agent) Run(ctx context.Context) {
-	if a == nil || ctx == nil {
-		return
-	}
-	ticker := time.NewTicker(a.cfg.Interval)
-	defer ticker.Stop()
-	_, _ = a.runOnceGuarded(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			go func() { _, _ = a.runOnceGuarded(ctx) }()
-		}
-	}
-}
-
 func (a *Agent) runOnceGuarded(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 	if !a.running.CompareAndSwap(false, true) {
 		a.skipped.Add(1)

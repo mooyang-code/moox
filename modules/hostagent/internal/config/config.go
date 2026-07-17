@@ -2,20 +2,19 @@ package config
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Version        int           `yaml:"version"`
-	Interval       time.Duration `yaml:"interval"`
-	IdentityPath   string        `yaml:"identity_path"`
-	EventBusConfig string        `yaml:"eventbus_config"`
-	HealthAddr     string        `yaml:"health_addr"`
-	HostName       string        `yaml:"host_name"`
+	Version        int    `yaml:"version"`
+	IdentityPath   string `yaml:"identity_path"`
+	EventBusConfig string `yaml:"eventbus_config"`
+	HealthAddr     string `yaml:"health_addr"`
+	HostName       string `yaml:"host_name"`
 }
 type EventBusConfig struct {
 	Version       int      `yaml:"version"`
@@ -30,15 +29,14 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read hostagent config: %w", err)
 	}
-	cfg := &Config{Version: 1, Interval: 15 * time.Second, IdentityPath: "~/.local/state/moox/hostagent/identity.yaml", EventBusConfig: "~/.config/moox/hostagent/eventbus.yaml", HealthAddr: "127.0.0.1:11425"}
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	cfg := &Config{Version: 1, IdentityPath: "~/.local/state/moox/hostagent/identity.yaml", EventBusConfig: "~/.config/moox/hostagent/eventbus.yaml", HealthAddr: "127.0.0.1:11425"}
+	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse hostagent config: %w", err)
 	}
 	if cfg.Version == 0 {
 		cfg.Version = 1
-	}
-	if cfg.Interval <= 0 {
-		cfg.Interval = 15 * time.Second
 	}
 	if cfg.IdentityPath == "" || cfg.EventBusConfig == "" {
 		return nil, fmt.Errorf("identity_path and eventbus_config are required")

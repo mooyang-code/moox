@@ -129,6 +129,7 @@ if [[ -d "${RELEASE_ROOT}/hostagent" ]]; then
   cp "${ROOT}/modules/hostagent/config/app.yaml" "${RELEASE_ROOT}/hostagent/config/app.example.yaml"
   cp "${ROOT}/modules/hostagent/config/eventbus.example.yaml" "${RELEASE_ROOT}/hostagent/config/eventbus.example.yaml"
   cp "${ROOT}/modules/hostagent/config/trpc_go.yaml" "${RELEASE_ROOT}/hostagent/config/trpc_go.yaml"
+  grep -q 'trpc.moox.hostagent.sample.timer' "${RELEASE_ROOT}/hostagent/config/trpc_go.yaml" || { echo "missing HostAgent sample Timer schedule" >&2; exit 1; }
 fi
 
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/admin/config/"
