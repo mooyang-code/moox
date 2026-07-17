@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -24,6 +25,7 @@ type Options struct {
 	BatchSize  int
 	BatchWait  time.Duration
 	MaxWorkers int
+	Metrics    *observability.ViewMetrics
 }
 
 // BatchOptions controls batch aggregation.

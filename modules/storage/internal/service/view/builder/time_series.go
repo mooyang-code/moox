@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/service/view"
@@ -72,7 +73,7 @@ func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.Tim
 				}
 				if len(mapped) > 0 {
 					if err := engine.Write(ctx, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, mapped, nil, false)); err != nil {
-						return err
+						return fmt.Errorf("derive engine=duckdb view_id=%s rows=%d active write: %w", item.GetViewId(), len(mapped), err)
 					}
 				}
 			}
@@ -86,7 +87,7 @@ func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.Tim
 				}
 				if len(mapped) > 0 {
 					if err := engine.Write(ctx, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, mapped, nil, true)); err != nil {
-						return err
+						return fmt.Errorf("derive engine=duckdb view_id=%s rows=%d build write: %w", item.GetViewId(), len(mapped), err)
 					}
 				}
 			}

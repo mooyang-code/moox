@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,6 +24,7 @@ type Service struct {
 	engines    map[string]viewindex.ViewIndexEngine
 	batchOpts  BatchOptions
 	maxWorkers int
+	metrics    *observability.ViewMetrics
 
 	mu                sync.Mutex
 	runCtx            context.Context
@@ -34,11 +37,13 @@ type Service struct {
 }
 
 type timeSeriesDeriveItem struct {
-	row *pb.TimeSeriesRow
+	row        *pb.TimeSeriesRow
+	completion *deriveCompletion
 }
 
 type recordDeriveItem struct {
-	row *pb.RecordRow
+	row        *pb.RecordRow
+	completion *deriveCompletion
 }
 
 // NewService creates a standalone view builder service.
@@ -64,7 +69,22 @@ func NewService(opts Options) *Service {
 		engines:    engines,
 		batchOpts:  batchOpts,
 		maxWorkers: maxWorkers,
+		metrics:    defaultViewMetrics(opts.Metrics),
 	}
+}
+
+func defaultViewMetrics(metrics *observability.ViewMetrics) *observability.ViewMetrics {
+	if metrics != nil {
+		return metrics
+	}
+	return observability.DefaultViewMetrics
+}
+
+func (s *Service) viewMetrics() *observability.ViewMetrics {
+	if s != nil && s.metrics != nil {
+		return s.metrics
+	}
+	return observability.DefaultViewMetrics
 }
 
 // Start subscribes the view builder service to row-change events.
@@ -186,7 +206,7 @@ func (s *Service) Close() error {
 	return err
 }
 
-func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) (retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -203,21 +223,35 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 	if addCtx == nil {
 		addCtx = ctx
 	}
+	rows := make([]*pb.TimeSeriesRow, 0, len(event.GetRows()))
 	for _, row := range event.GetRows() {
 		if row == nil {
 			continue
 		}
+		rows = append(rows, proto.Clone(row).(*pb.TimeSeriesRow))
+	}
+	completion := newDeriveCompletion(len(rows))
+	s.viewMetrics().IncDeriveInFlight()
+	defer func() {
+		s.viewMetrics().DecDeriveInFlight()
+		s.viewMetrics().ObserveDerive("time_series", deriveResult(retErr))
+	}()
+	for i, row := range rows {
 		item := timeSeriesDeriveItem{
-			row: proto.Clone(row).(*pb.TimeSeriesRow),
+			row:        row,
+			completion: completion,
 		}
 		if err := batcher.add(addCtx, item); err != nil {
-			return err
+			for range rows[i:] {
+				completion.complete(err)
+			}
+			return completion.wait(ctx)
 		}
 	}
-	return nil
+	return completion.wait(addCtx)
 }
 
-func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) error {
+func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) (retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -234,18 +268,32 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated
 	if addCtx == nil {
 		addCtx = ctx
 	}
+	rows := make([]*pb.RecordRow, 0, len(event.GetRows()))
 	for _, row := range event.GetRows() {
 		if row == nil {
 			continue
 		}
+		rows = append(rows, proto.Clone(row).(*pb.RecordRow))
+	}
+	completion := newDeriveCompletion(len(rows))
+	s.viewMetrics().IncDeriveInFlight()
+	defer func() {
+		s.viewMetrics().DecDeriveInFlight()
+		s.viewMetrics().ObserveDerive("record", deriveResult(retErr))
+	}()
+	for i, row := range rows {
 		item := recordDeriveItem{
-			row: proto.Clone(row).(*pb.RecordRow),
+			row:        row,
+			completion: completion,
 		}
 		if err := batcher.add(addCtx, item); err != nil {
-			return err
+			for range rows[i:] {
+				completion.complete(err)
+			}
+			return completion.wait(ctx)
 		}
 	}
-	return nil
+	return completion.wait(addCtx)
 }
 
 func (s *Service) clearStartedState(cancel context.CancelFunc) {
@@ -260,47 +308,40 @@ func (s *Service) clearStartedState(cancel context.CancelFunc) {
 }
 
 func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {
+	started := time.Now()
 	rows := make([]*pb.TimeSeriesRow, 0, len(items))
 	for _, item := range items {
 		if item.row != nil {
 			rows = append(rows, item.row)
 		}
 	}
-	_ = s.processTimeSeriesRowsBatch(ctx, rows)
+	err := s.processTimeSeriesRowsBatch(ctx, rows)
+	s.viewMetrics().ObserveBatch("duckdb", deriveResult(err), time.Since(started))
+	for _, item := range items {
+		item.completion.complete(err)
+	}
 }
 
 func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
+	started := time.Now()
 	rows := make([]*pb.RecordRow, 0, len(items))
 	for _, item := range items {
 		if item.row != nil {
 			rows = append(rows, item.row)
 		}
 	}
-	_ = s.processRecordRowsBatch(ctx, rows)
+	err := s.processRecordRowsBatch(ctx, rows)
+	s.viewMetrics().ObserveBatch("bleve", deriveResult(err), time.Since(started))
+	for _, item := range items {
+		item.completion.complete(err)
+	}
 }
 
-func completeDeriveItem(done chan error, err error) {
-	if done == nil {
-		return
+func deriveResult(err error) string {
+	if err == nil {
+		return "success"
 	}
-	done <- err
-}
-
-func waitDeriveResults(ctx context.Context, results []chan error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for _, result := range results {
-		select {
-		case err := <-result:
-			if err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
+	return "error"
 }
 
 type projectionDatasetKey struct {

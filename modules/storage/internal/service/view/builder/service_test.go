@@ -2,15 +2,17 @@ package builder
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"errors"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNewServiceNormalizesEngineNamesAndWorkers(t *testing.T) {
@@ -85,6 +87,31 @@ func TestServiceStartSubscribeAndCloseRoundTrip(t *testing.T) {
 	require.NoError(t, svc.Close())
 }
 
+func TestMemoryBusPublishWaitsForAndReturnsDerivedWriteError(t *testing.T) {
+	bus := eventbus.NewMemoryBus()
+	writeErr := errors.New("duckdb temporarily unavailable")
+	engine := newRecordingViewIndexEngine("duckdb")
+	engine.writeErr = writeErr
+	view := &pb.View{
+		SpaceId: "crypto", ViewId: "spot_view", PrimaryDatasetId: "spot", DatasetIds: []string{"spot"},
+		Engine: "duckdb", Status: "active", ViewVersion: 1, ActiveViewVersion: 1,
+		ActiveIndexId: builderIndexID("spot_view", viewindex.SlotA),
+	}
+	svc := NewService(Options{
+		Events: bus, Reader: &buildingGuardReader{}, Metadata: newBuildingGuardMetadata(view),
+		Engines: map[string]viewindex.ViewIndexEngine{"duckdb": engine}, BatchSize: 1, MaxWorkers: 1,
+	})
+	require.NoError(t, svc.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	row := testBuilderTimeSeriesRow(&pb.TimeSeriesKey{
+		SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-09T01:00:00Z",
+	})
+	err := bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{Rows: []*pb.TimeSeriesRow{row}})
+
+	require.ErrorIs(t, err, writeErr)
+}
+
 func TestServiceCloseIdempotentWhenNotStarted(t *testing.T) {
 	svc := NewService(Options{})
 	require.NoError(t, svc.Close())
@@ -124,19 +151,42 @@ func TestProcessRecordItemBatchSkipsNilRows(t *testing.T) {
 	svc.processRecordItemBatch(context.Background(), []recordDeriveItem{{row: nil}})
 }
 
-func TestRetInfoErrorAndWaitDeriveResults(t *testing.T) {
+func TestProcessTimeSeriesItemBatchCompletesEveryItemWithBatchError(t *testing.T) {
+	completion := newDeriveCompletion(2)
+	row := testBuilderTimeSeriesRow(&pb.TimeSeriesKey{
+		SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-09T01:00:00Z",
+	})
+
+	(&Service{}).processTimeSeriesItemBatch(context.Background(), []timeSeriesDeriveItem{
+		{row: row, completion: completion},
+		{row: proto.Clone(row).(*pb.TimeSeriesRow), completion: completion},
+	})
+
+	err := completion.wait(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata")
+}
+
+func TestProcessRecordItemBatchCompletesSuccessfulItems(t *testing.T) {
+	completion := newDeriveCompletion(1)
+	row := testBuilderRecordRow(&pb.RecordKey{
+		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "2026-07-09T01:00:00Z",
+	})
+	svc := &Service{metadata: newBuildingGuardMetadata()}
+
+	svc.processRecordItemBatch(context.Background(), []recordDeriveItem{{row: row, completion: completion}})
+
+	require.NoError(t, completion.wait(context.Background()))
+}
+
+func TestRetInfoErrorAndDeriveCompletionCancellation(t *testing.T) {
 	assert.NoError(t, retInfoError(&pb.RetInfo{Code: pb.ErrorCode_SUCCESS}))
 	assert.Error(t, retInfoError(&pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "boom"}))
 	assert.NoError(t, retInfoError(nil))
 
-	done := make(chan error, 1)
-	completeDeriveItem(done, nil)
-	assert.NoError(t, <-done)
-	completeDeriveItem(nil, nil)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := waitDeriveResults(ctx, []chan error{make(chan error)})
+	err := newDeriveCompletion(1).wait(ctx)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -146,31 +196,6 @@ func TestRetInfoError(t *testing.T) {
 	err := retInfoError(&pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "bad"})
 	require.Error(t, err)
 	assert.Equal(t, "bad", err.Error())
-}
-
-func TestCompleteDeriveItem_SendsError(t *testing.T) {
-	done := make(chan error, 1)
-	completeDeriveItem(done, errors.New("boom"))
-	assert.Equal(t, "boom", (<-done).Error())
-	completeDeriveItem(nil, errors.New("ignored"))
-}
-
-func TestWaitDeriveResults_ReturnsFirstError(t *testing.T) {
-	first := make(chan error, 1)
-	second := make(chan error, 1)
-	first <- errors.New("first")
-	second <- nil
-	err := waitDeriveResults(context.Background(), []chan error{first, second})
-	require.Error(t, err)
-	assert.Equal(t, "first", err.Error())
-}
-
-func TestWaitDeriveResults_HonorsContextCancel(t *testing.T) {
-	pending := make(chan error)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := waitDeriveResults(ctx, []chan error{pending})
-	require.Error(t, err)
 }
 
 func TestWritableIndexSet(t *testing.T) {

@@ -19,6 +19,10 @@ storage:
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
     consumer_name: storage_view_index
+    max_in_flight: 128
+    max_ack_pending: 128
+    ack_wait_ms: 120000
+    max_deliver: -1
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     access_service_name: trpc.moox.storage.Access

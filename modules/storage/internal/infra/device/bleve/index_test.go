@@ -45,6 +45,32 @@ func TestBleveViewIndexStatReturnsRecordVersionBounds(t *testing.T) {
 	}
 }
 
+func TestBleveIndexRowsReplayDoesNotIncreaseEntryCount(t *testing.T) {
+	ctx := context.Background()
+	index, err := Open(Options{Path: filepath.Join(t.TempDir(), "record_view")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer index.Close()
+
+	row := bleveTestRecordRow("news-1", "2026-07-09T01:00:00Z")
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := index.IndexRows(ctx, []*pb.RecordRow{row}, map[string]bool{"title": true}); err != nil {
+			t.Fatalf("IndexRows attempt %d: %v", attempt+1, err)
+		}
+	}
+	stats, err := index.Stat(ctx)
+	if err != nil || stats.EntryCount != 1 {
+		t.Fatalf("stats=%+v err=%v, want one replay-safe document", stats, err)
+	}
+	rows, page, err := index.SearchRecordRows(ctx, SearchRequest{
+		SpaceID: "crypto", DatasetID: "news", Page: &pb.Page{Page: 1, Size: 10},
+	})
+	if err != nil || len(rows) != 1 || page.GetTotal() != 1 {
+		t.Fatalf("rows=%d page=%+v err=%v, want one replay-safe result", len(rows), page, err)
+	}
+}
+
 func TestSearchRecordRowsPaginatesBeforeRowDeserialization(t *testing.T) {
 	ctx := context.Background()
 	index, err := Open(Options{Path: filepath.Join(t.TempDir(), "record_view")})

@@ -52,6 +52,9 @@ func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
 	if cfg.Storage.EventBus.MaxInFlight != 128 {
 		t.Fatalf("EventBus.MaxInFlight = %d, want 128", cfg.Storage.EventBus.MaxInFlight)
 	}
+	if cfg.Storage.EventBus.MaxAckPending != 128 {
+		t.Fatalf("EventBus.MaxAckPending = %d, want 128", cfg.Storage.EventBus.MaxAckPending)
+	}
 	if cfg.Storage.EventBus.AckWaitMS != 120000 {
 		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
 	}
@@ -60,6 +63,35 @@ func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
 	}
 	if cfg.Storage.View.AccessScanServiceName != "trpc.moox.storage.AccessScan" {
 		t.Fatalf("View.AccessScanServiceName = %q, want AccessScan service", cfg.Storage.View.AccessScanServiceName)
+	}
+}
+
+func TestStorageEventBusValidateDeliveryLimits(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     StorageEventBus
+		wantErr string
+	}{
+		{name: "valid", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 4, MaxAckPending: 8, MaxDeliver: -1}},
+		{name: "ack wait", cfg: StorageEventBus{AckWaitMS: 2999, MaxInFlight: 1, MaxAckPending: 1, MaxDeliver: -1}, wantErr: "ack_wait_ms"},
+		{name: "in flight", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: -1, MaxAckPending: 1, MaxDeliver: -1}, wantErr: "max_in_flight"},
+		{name: "ack pending", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 1, MaxAckPending: -1, MaxDeliver: -1}, wantErr: "max_ack_pending"},
+		{name: "in flight exceeds pending", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 9, MaxAckPending: 8, MaxDeliver: -1}, wantErr: "must not exceed"},
+		{name: "max deliver", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 1, MaxAckPending: 1, MaxDeliver: -2}, wantErr: "max_deliver"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

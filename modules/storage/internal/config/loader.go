@@ -57,6 +57,7 @@ type StorageEventBus struct {
 	MaxMsgs        int64    `yaml:"max_msgs"`
 	MaxBytes       int64    `yaml:"max_bytes"`
 	MaxInFlight    int      `yaml:"max_in_flight"`
+	MaxAckPending  int      `yaml:"max_ack_pending"`
 	AckWaitMS      int      `yaml:"ack_wait_ms"`
 	MaxDeliver     int      `yaml:"max_deliver"`
 	// Embedded is retained for decoding old single-process test configurations.
@@ -200,13 +201,16 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.EventBus.MaxBytes <= 0 {
 		c.EventBus.MaxBytes = 256 * 1024 * 1024
 	}
-	if c.EventBus.MaxInFlight <= 0 {
+	if c.EventBus.MaxInFlight == 0 {
 		c.EventBus.MaxInFlight = 128
 	}
-	if c.EventBus.AckWaitMS <= 0 {
+	if c.EventBus.MaxAckPending == 0 {
+		c.EventBus.MaxAckPending = 128
+	}
+	if c.EventBus.AckWaitMS == 0 {
 		c.EventBus.AckWaitMS = 120000
 	}
-	if c.EventBus.MaxDeliver <= 0 {
+	if c.EventBus.MaxDeliver == 0 {
 		// -1 means unlimited redelivery in JetStream. Projection events are
 		// idempotent and must not be dropped after transient owner failures.
 		c.EventBus.MaxDeliver = -1
@@ -331,6 +335,26 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"
 	}
+}
+
+// Validate checks the delivery contract shared with the predeclared durable consumers.
+func (c StorageEventBus) Validate() error {
+	if c.AckWaitMS < 3000 {
+		return fmt.Errorf("storage eventbus ack_wait_ms must be at least 3000")
+	}
+	if c.MaxInFlight < 1 {
+		return fmt.Errorf("storage eventbus max_in_flight must be at least 1")
+	}
+	if c.MaxAckPending < 1 {
+		return fmt.Errorf("storage eventbus max_ack_pending must be at least 1")
+	}
+	if c.MaxInFlight > c.MaxAckPending {
+		return fmt.Errorf("storage eventbus max_in_flight must not exceed max_ack_pending")
+	}
+	if c.MaxDeliver != -1 && c.MaxDeliver < 1 {
+		return fmt.Errorf("storage eventbus max_deliver must be -1 or at least 1")
+	}
+	return nil
 }
 
 // ApplyHomeRoot rebases standard local storage paths when deployment overrides

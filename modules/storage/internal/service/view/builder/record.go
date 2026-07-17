@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/service/view"
@@ -72,7 +73,7 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 				}
 				if len(projected) > 0 {
 					if err := engine.Write(ctx, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, nil, projected, false)); err != nil {
-						return err
+						return fmt.Errorf("derive engine=bleve view_id=%s rows=%d active write: %w", item.GetViewId(), len(projected), err)
 					}
 				}
 			}
@@ -86,7 +87,7 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 				}
 				if len(projected) > 0 {
 					if err := engine.Write(ctx, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, nil, projected, true)); err != nil {
-						return err
+						return fmt.Errorf("derive engine=bleve view_id=%s rows=%d build write: %w", item.GetViewId(), len(projected), err)
 					}
 				}
 			}

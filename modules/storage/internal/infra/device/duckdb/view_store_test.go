@@ -225,6 +225,36 @@ func TestDuckDBViewIndexPrepareWriteStatRemove(t *testing.T) {
 	}
 }
 
+func TestDuckDBViewIndexReplayDoesNotIncreaseEntryCount(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	const indexID = "view_crypto_replay_a"
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "crypto", ViewID: "replay", Engine: "duckdb",
+		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := store.Prepare(ctx, indexID, schema); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	batch := viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{
+		duckDBTestRow("BTC-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 2)),
+	}}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := store.Write(ctx, indexID, batch); err != nil {
+			t.Fatalf("Write attempt %d: %v", attempt+1, err)
+		}
+	}
+	stats, err := store.Stat(ctx, indexID)
+	if err != nil || stats.EntryCount != 1 {
+		t.Fatalf("stats=%+v err=%v, want one replay-safe row", stats, err)
+	}
+}
+
 func TestListResultTablesIncludesViewPrefix(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})

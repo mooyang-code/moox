@@ -9,11 +9,13 @@ import (
 	"time"
 
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -22,7 +24,137 @@ const (
 	DefaultRecordRowsUpdatedSubject     = "moox.storage.record.rows_updated.v1"
 	defaultTimeSeriesRowsUpdatedSuffix  = "time_series.rows_updated.v1"
 	defaultRecordRowsUpdatedSuffix      = "record.rows_updated.v1"
+	defaultStorageStream                = "MOOX_STORAGE"
+	defaultMaxInFlight                  = 128
+	defaultMaxAckPending                = 128
+	defaultAckWait                      = 2 * time.Minute
+	defaultNakDelay                     = time.Second
+	defaultActionTimeout                = 5 * time.Second
 )
+
+// SubscriberOptions is the transport contract for predeclared Storage consumers.
+type SubscriberOptions struct {
+	StreamName    string
+	AckWait       time.Duration
+	MaxDeliver    int
+	MaxInFlight   int
+	MaxAckPending int
+	NakDelay      time.Duration
+	ActionTimeout time.Duration
+	Metrics       *observability.ViewMetrics
+}
+
+func normalizeSubscriberOptions(opts SubscriberOptions) (SubscriberOptions, error) {
+	if strings.TrimSpace(opts.StreamName) == "" {
+		opts.StreamName = defaultStorageStream
+	}
+	if opts.AckWait == 0 {
+		opts.AckWait = defaultAckWait
+	}
+	if opts.MaxDeliver == 0 {
+		opts.MaxDeliver = -1
+	}
+	if opts.MaxInFlight == 0 {
+		opts.MaxInFlight = defaultMaxInFlight
+	}
+	if opts.MaxAckPending == 0 {
+		opts.MaxAckPending = defaultMaxAckPending
+	}
+	if opts.NakDelay == 0 {
+		opts.NakDelay = defaultNakDelay
+	}
+	if opts.ActionTimeout == 0 {
+		opts.ActionTimeout = defaultActionTimeout
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = observability.DefaultViewMetrics
+	}
+	if opts.AckWait < 3*time.Second {
+		return SubscriberOptions{}, errors.New("storage subscriber ack wait must be at least 3s")
+	}
+	if opts.MaxInFlight < 1 || opts.MaxAckPending < 1 || opts.MaxInFlight > opts.MaxAckPending {
+		return SubscriberOptions{}, errors.New("storage subscriber requires 1 <= max in flight <= max ack pending")
+	}
+	if opts.MaxDeliver != -1 && opts.MaxDeliver < 1 {
+		return SubscriberOptions{}, errors.New("storage subscriber max deliver must be -1 or at least 1")
+	}
+	if opts.NakDelay < 0 || opts.ActionTimeout <= 0 {
+		return SubscriberOptions{}, errors.New("storage subscriber action durations are invalid")
+	}
+	return opts, nil
+}
+
+type deliveryControl interface {
+	Ack(context.Context) error
+	Nak(context.Context, time.Duration) error
+	InProgress(context.Context) error
+}
+
+func processDelivery(ctx context.Context, delivery deliveryControl, opts SubscriberOptions, handler func(context.Context) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if delivery == nil || handler == nil {
+		return errors.New("storage delivery and handler are required")
+	}
+	if opts.AckWait <= 0 {
+		opts.AckWait = defaultAckWait
+	}
+	if opts.NakDelay <= 0 {
+		opts.NakDelay = defaultNakDelay
+	}
+	if opts.ActionTimeout <= 0 {
+		opts.ActionTimeout = defaultActionTimeout
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = observability.DefaultViewMetrics
+	}
+	heartbeatEvery := opts.AckWait / 3
+	if heartbeatEvery <= 0 {
+		heartbeatEvery = time.Second
+	}
+
+	handlerResult := make(chan error, 1)
+	go func() { handlerResult <- handler(ctx) }()
+	ticker := time.NewTicker(heartbeatEvery)
+	defer ticker.Stop()
+
+	var handlerErr error
+	for {
+		select {
+		case handlerErr = <-handlerResult:
+			goto terminal
+		case <-ticker.C:
+			actionCtx, cancel := context.WithTimeout(context.Background(), opts.ActionTimeout)
+			if err := delivery.InProgress(actionCtx); err != nil {
+				opts.Metrics.ObserveDelivery("in_progress", "error")
+				log.ErrorContextf(context.Background(), "[StorageEventBus] delivery heartbeat failed: %v", err)
+			} else {
+				opts.Metrics.ObserveDelivery("in_progress", "success")
+			}
+			cancel()
+		}
+	}
+
+terminal:
+	actionCtx, cancel := context.WithTimeout(context.Background(), opts.ActionTimeout)
+	defer cancel()
+	if handlerErr != nil {
+		nakErr := delivery.Nak(actionCtx, opts.NakDelay)
+		opts.Metrics.ObserveDelivery("nak", deriveDeliveryResult(nakErr))
+		return errors.Join(handlerErr, nakErr)
+	}
+	ackErr := delivery.Ack(actionCtx)
+	opts.Metrics.ObserveDelivery("ack", deriveDeliveryResult(ackErr))
+	return ackErr
+}
+
+func deriveDeliveryResult(err error) string {
+	if err == nil {
+		return "success"
+	}
+	return "error"
+}
 
 func TimeSeriesRowsUpdatedSubject(prefix string) string {
 	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsUpdatedSuffix
@@ -160,15 +292,37 @@ type SubscriberBus struct {
 	timeSeriesCancel   context.CancelFunc
 	recordCancel       context.CancelFunc
 	subscribeClosed    bool
-	wg                 sync.WaitGroup
+	opts               SubscriberOptions
+	timeSeriesFetchWG  sync.WaitGroup
+	recordFetchWG      sync.WaitGroup
+	timeSeriesHandleWG sync.WaitGroup
+	recordHandleWG     sync.WaitGroup
 }
 
-func NewSubscriberBus(client *jetstream.Client, prefix string) *SubscriberBus {
+func NewSubscriberBus(client *jetstream.Client, prefix string, opts SubscriberOptions) (*SubscriberBus, error) {
+	normalized, err := normalizeSubscriberOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	return &SubscriberBus{
 		ProducerBus:        NewProducerBus(client, prefix),
 		client:             client,
 		timeSeriesHandlers: make(map[uint64]coreeventbus.TimeSeriesRowsUpdatedHandler),
 		recordHandlers:     make(map[uint64]coreeventbus.RecordRowsUpdatedHandler),
+		opts:               normalized,
+	}, nil
+}
+
+func (b *SubscriberBus) consumerRef(timeSeries bool) jetstream.ConsumerRef {
+	durable := "storage_view_builder_record_rows_updated_v1"
+	subject := b.recordSubject
+	if timeSeries {
+		durable = "storage_view_builder_time_series_rows_updated_v1"
+		subject = b.timeSeriesSubject
+	}
+	return jetstream.ConsumerRef{
+		Stream: b.opts.StreamName, Durable: durable, FilterSubject: subject,
+		AckWait: b.opts.AckWait, MaxDeliver: b.opts.MaxDeliver, MaxAckPending: b.opts.MaxAckPending,
 	}
 }
 
@@ -182,7 +336,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 		return nil, context.Canceled
 	}
 	if b.timeSeriesConsumer == nil {
-		consumer, err := b.client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_time_series_rows_updated_v1", FilterSubject: b.timeSeriesSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
+		consumer, err := b.client.BindPullConsumer(ctx, b.consumerRef(true))
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +359,7 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 		return nil, context.Canceled
 	}
 	if b.recordConsumer == nil {
-		consumer, err := b.client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_record_rows_updated_v1", FilterSubject: b.recordSubject, AckWait: 2 * time.Minute, MaxDeliver: -1, MaxAckPending: 128})
+		consumer, err := b.client.BindPullConsumer(ctx, b.consumerRef(false))
 		if err != nil {
 			return nil, err
 		}
@@ -220,14 +374,19 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 
 func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries bool) {
 	ctx, cancel := context.WithCancel(context.Background())
+	fetchWG := &b.recordFetchWG
+	handlerWG := &b.recordHandleWG
 	if timeSeries {
 		b.timeSeriesCancel = cancel
+		fetchWG = &b.timeSeriesFetchWG
+		handlerWG = &b.timeSeriesHandleWG
 	} else {
 		b.recordCancel = cancel
 	}
-	b.wg.Add(1)
+	fetchWG.Add(1)
 	go func() {
-		defer b.wg.Done()
+		defer fetchWG.Done()
+		semaphore := make(chan struct{}, b.opts.MaxInFlight)
 		for {
 			select {
 			case <-ctx.Done():
@@ -243,12 +402,33 @@ func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries b
 				continue
 			}
 			for _, delivery := range deliveries {
-				handlerErr := b.dispatch(ctx, delivery, timeSeries)
-				if handlerErr != nil {
-					_ = delivery.Nak(context.Background(), time.Second)
-					continue
+				if delivery != nil && delivery.DeliveryCount > 1 {
+					b.opts.Metrics.IncRedelivery()
 				}
-				_ = delivery.Ack(context.Background())
+				select {
+				case semaphore <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				handlerWG.Add(1)
+				go func(delivery *jetstream.Delivery) {
+					defer handlerWG.Done()
+					defer func() { <-semaphore }()
+					err := processDelivery(context.Background(), delivery, b.opts, func(handlerCtx context.Context) error {
+						return b.dispatch(handlerCtx, delivery, timeSeries)
+					})
+					if err != nil {
+						messageID := ""
+						if delivery != nil && delivery.Message != nil {
+							messageID = delivery.Message.GetMessageId()
+						}
+						deliveryCount := uint64(0)
+						if delivery != nil {
+							deliveryCount = delivery.DeliveryCount
+						}
+						log.ErrorContextf(context.Background(), "[StorageEventBus] delivery failed message_id=%s delivery_count=%d: %v", messageID, deliveryCount, err)
+					}
+				}(delivery)
 			}
 		}
 	}()
@@ -268,6 +448,9 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 			handlers = append(handlers, h)
 		}
 		b.mu.Unlock()
+		if len(handlers) == 0 {
+			return errors.New("storage event delivery has no time-series handlers")
+		}
 		if err == nil {
 			for _, h := range handlers {
 				err = errors.Join(err, h(ctx, &event))
@@ -281,6 +464,9 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 			handlers = append(handlers, h)
 		}
 		b.mu.Unlock()
+		if len(handlers) == 0 {
+			return errors.New("storage event delivery has no record handlers")
+		}
 		if err == nil {
 			for _, h := range handlers {
 				err = errors.Join(err, h(ctx, &event))
@@ -292,14 +478,38 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 
 func (b *SubscriberBus) closeTimeSeries(id uint64) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	delete(b.timeSeriesHandlers, id)
+	if len(b.timeSeriesHandlers) != 0 || b.timeSeriesCancel == nil {
+		b.mu.Unlock()
+		return nil
+	}
+	cancel, consumer := b.timeSeriesCancel, b.timeSeriesConsumer
+	b.timeSeriesCancel, b.timeSeriesConsumer = nil, nil
+	b.mu.Unlock()
+	cancel()
+	b.timeSeriesFetchWG.Wait()
+	b.timeSeriesHandleWG.Wait()
+	if consumer != nil {
+		return consumer.Close()
+	}
 	return nil
 }
 func (b *SubscriberBus) closeRecord(id uint64) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	delete(b.recordHandlers, id)
+	if len(b.recordHandlers) != 0 || b.recordCancel == nil {
+		b.mu.Unlock()
+		return nil
+	}
+	cancel, consumer := b.recordCancel, b.recordConsumer
+	b.recordCancel, b.recordConsumer = nil, nil
+	b.mu.Unlock()
+	cancel()
+	b.recordFetchWG.Wait()
+	b.recordHandleWG.Wait()
+	if consumer != nil {
+		return consumer.Close()
+	}
 	return nil
 }
 func (b *SubscriberBus) Close() error {
@@ -318,13 +528,16 @@ func (b *SubscriberBus) Close() error {
 	if recordCancel != nil {
 		recordCancel()
 	}
+	b.timeSeriesFetchWG.Wait()
+	b.recordFetchWG.Wait()
+	b.timeSeriesHandleWG.Wait()
+	b.recordHandleWG.Wait()
 	if ts != nil {
 		_ = ts.Close()
 	}
 	if rec != nil {
 		_ = rec.Close()
 	}
-	b.wg.Wait()
 	return b.ProducerBus.Close()
 }
 

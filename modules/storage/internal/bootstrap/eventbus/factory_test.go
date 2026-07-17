@@ -31,3 +31,12 @@ func TestNewRowsUpdatedBus_UnsupportedType_ShouldReturnError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported storage eventbus type")
 }
+
+func TestNewRowsUpdatedBus_JetStreamRejectsInvalidDeliveryConfigBeforeConnect(t *testing.T) {
+	_, err := NewRowsUpdatedBus(context.Background(), storageconfig.StorageEventBus{
+		Type: "jetstream", NATSURL: "nats://127.0.0.1:1", AckWaitMS: 1000,
+		MaxInFlight: 2, MaxAckPending: 1, MaxDeliver: -1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ack_wait_ms")
+}
