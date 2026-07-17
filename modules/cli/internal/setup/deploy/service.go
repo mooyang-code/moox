@@ -1,0 +1,275 @@
+package deploy
+
+import (
+	"archive/zip"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path"
+	"strings"
+	"time"
+
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	trpc "trpc.group/trpc-go/trpc-go"
+)
+
+const (
+	maxServicePackageSize      = 1 << 30
+	maxServicePackageEntrySize = 512 << 20
+)
+
+type ServiceOptions struct {
+	PackagePath string
+	ServiceName string
+	DeployDir   string
+}
+
+type ServiceResult struct {
+	ServiceName   string `json:"service_name"`
+	DeployDir     string `json:"deploy_dir"`
+	RemoteArchive string `json:"remote_archive"`
+	LocalSHA256   string `json:"local_sha256"`
+	RemoteSHA256  string `json:"remote_sha256"`
+}
+
+func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions) (result ServiceResult, returnErr error) {
+	if transport == nil || strings.TrimSpace(opts.PackagePath) == "" || !validReleaseToken(opts.ServiceName) {
+		return result, fmt.Errorf("service_deploy_invalid")
+	}
+	packageSize, digest, err := inspectServicePackage(opts.PackagePath)
+	if err != nil {
+		return result, err
+	}
+	result.ServiceName = opts.ServiceName
+	result.LocalSHA256 = digest
+
+	deployDir, err := resolveRemoteDeployDir(ctx, transport, opts.DeployDir)
+	if err != nil {
+		return result, fmt.Errorf("service_deploy_invalid")
+	}
+	result.DeployDir = deployDir
+	token, err := randomServiceToken()
+	if err != nil {
+		return result, fmt.Errorf("service_deploy_invalid")
+	}
+	result.RemoteArchive = "/tmp/moox-service-" + token + ".zip"
+
+	file, err := os.Open(opts.PackagePath)
+	if err != nil {
+		return result, fmt.Errorf("service_package_invalid")
+	}
+	defer file.Close()
+	if err := transport.Upload(ctx, file, packageSize, result.RemoteArchive, fs.FileMode(0o600)); err != nil {
+		return result, fmt.Errorf("service_upload_failed")
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
+		defer cancel()
+		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", result.RemoteArchive}, nil)
+	}()
+
+	digestResult, err := transport.Run(ctx, []string{"sha256sum", result.RemoteArchive}, nil)
+	if err != nil {
+		return result, fmt.Errorf("service_digest_failed")
+	}
+	result.RemoteSHA256, err = parseSHA256(digestResult.Stdout)
+	if err != nil {
+		return result, fmt.Errorf("service_digest_failed")
+	}
+	if result.RemoteSHA256 != result.LocalSHA256 {
+		return result, fmt.Errorf("service_digest_mismatch")
+	}
+
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive}, nil); err != nil {
+		return result, fmt.Errorf("service_prepare_failed")
+	}
+	prepared := true
+	defer func() {
+		if returnErr != nil && prepared {
+			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
+			defer cancel()
+			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackServiceScript, "moox-rollback-service", deployDir, opts.ServiceName}, nil)
+		}
+	}()
+
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", activateServiceScript, "moox-activate-service", deployDir, opts.ServiceName}, nil); err != nil {
+		return result, fmt.Errorf("service_activate_failed")
+	}
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", finalizeServiceScript, "moox-finalize-service", deployDir}, nil); err != nil {
+		return result, fmt.Errorf("service_finalize_failed")
+	}
+	prepared = false
+	return result, nil
+}
+
+func inspectServicePackage(packagePath string) (int64, string, error) {
+	info, err := os.Stat(packagePath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxServicePackageSize {
+		return 0, "", fmt.Errorf("service_package_invalid")
+	}
+	file, err := os.Open(packagePath)
+	if err != nil {
+		return 0, "", fmt.Errorf("service_package_invalid")
+	}
+	defer file.Close()
+	reader, err := zip.NewReader(file, info.Size())
+	if err != nil {
+		return 0, "", fmt.Errorf("service_package_invalid")
+	}
+	seen := make(map[string]struct{}, len(reader.File))
+	var uncompressedSize uint64
+	hasBinary, hasConfig := false, false
+	hasStart, hasStop, hasHealth := false, false, false
+	for _, entry := range reader.File {
+		name := entry.Name
+		isDirectory := strings.HasSuffix(name, "/")
+		normalized := strings.TrimSuffix(name, "/")
+		if !validServiceEntry(normalized) || strings.ContainsAny(name, "\x00\r\n\t\\") {
+			return 0, "", fmt.Errorf("service_package_invalid")
+		}
+		if _, exists := seen[normalized]; exists {
+			return 0, "", fmt.Errorf("service_package_invalid")
+		}
+		seen[normalized] = struct{}{}
+		if entry.Mode()&os.ModeSymlink != 0 {
+			return 0, "", fmt.Errorf("service_package_invalid")
+		}
+		if entry.UncompressedSize64 > maxServicePackageEntrySize {
+			return 0, "", fmt.Errorf("service_package_invalid")
+		}
+		uncompressedSize += entry.UncompressedSize64
+		if uncompressedSize > maxServicePackageSize {
+			return 0, "", fmt.Errorf("service_package_invalid")
+		}
+		if isDirectory {
+			continue
+		}
+		switch {
+		case normalized == "start.sh":
+			hasStart = true
+		case normalized == "stop.sh":
+			hasStop = true
+		case normalized == "healthcheck.sh":
+			hasHealth = true
+		case strings.HasPrefix(normalized, "bin/"):
+			hasBinary = true
+		case strings.HasPrefix(normalized, "config/"):
+			hasConfig = true
+		}
+	}
+	if len(reader.File) == 0 || !hasBinary || !hasConfig || !hasStart || !hasStop || !hasHealth {
+		return 0, "", fmt.Errorf("service_package_invalid")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return 0, "", fmt.Errorf("service_package_invalid")
+	}
+	digest, err := sha256File(file)
+	if err != nil {
+		return 0, "", fmt.Errorf("service_package_invalid")
+	}
+	return info.Size(), digest, nil
+}
+
+func validServiceEntry(name string) bool {
+	if name == "" || name == "." || name == ".." || path.IsAbs(name) || path.Clean(name) != name {
+		return false
+	}
+	for _, blocked := range []string{"data", "logs", "run", "secrets", "certs"} {
+		if name == blocked || strings.HasPrefix(name, blocked+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+func randomServiceToken() (string, error) {
+	raw := make([]byte, 12)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+const prepareServiceScript = `set -eu
+deploy=$1
+service=$2
+archive=$3
+stage="$deploy/.moox-service.next"
+previous="$deploy/.moox-service.previous"
+manifest="$previous/manifest"
+rm -rf -- "$stage" "$previous"
+mkdir -p -- "$stage" "$previous"
+command -v unzip >/dev/null 2>&1
+unzip -q -- "$archive" -d "$stage"
+test -f "$stage/start.sh"
+test -f "$stage/stop.sh"
+test -f "$stage/healthcheck.sh"
+test -d "$stage/bin"
+test -d "$stage/config"
+chmod +x "$stage/start.sh" "$stage/stop.sh" "$stage/healthcheck.sh" "$stage/bin/"*
+while IFS= read -r entry; do
+  case "$entry" in
+    ''|data|data/*|logs|logs/*|run|run/*|secrets|secrets/*|certs|certs/*|/*|../*|*/../*|*'/../'*|*'\\'*|*'	'*) exit 1 ;;
+  esac
+done < <(unzip -Z1 -- "$archive")
+if [ -x "$deploy/stop.sh" ]; then
+  if ! "$deploy/stop.sh" "$service"; then
+    "$deploy/start.sh" "$service" >/dev/null 2>&1 || true
+    rm -rf -- "$stage" "$previous"
+    exit 1
+  fi
+fi
+while IFS= read -r entry; do
+  case "$entry" in ''|*/|data|data/*|logs|logs/*|run|run/*|secrets|secrets/*|certs|certs/*) continue ;; esac
+  target="$deploy/$entry"
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    mkdir -p -- "$previous/$(dirname "$entry")"
+    cp -a -- "$target" "$previous/$entry"
+    printf 'existing\t%s\n' "$entry" >>"$manifest"
+  else
+    printf 'new\t%s\n' "$entry" >>"$manifest"
+  fi
+  rm -rf -- "$target"
+  mkdir -p -- "$(dirname "$target")"
+  cp -a -- "$stage/$entry" "$target"
+done < <(unzip -Z1 -- "$archive")
+`
+
+const activateServiceScript = `set -eu
+deploy=$1
+service=$2
+"$deploy/start.sh" "$service"
+"$deploy/healthcheck.sh" "$service"
+`
+
+const rollbackServiceScript = `set -eu
+deploy=$1
+service=$2
+previous="$deploy/.moox-service.previous"
+manifest="$previous/manifest"
+if [ ! -f "$manifest" ]; then
+  rm -rf -- "$deploy/.moox-service.next" "$previous"
+  exit 0
+fi
+"$deploy/stop.sh" "$service" >/dev/null 2>&1 || true
+while IFS="$(printf '\\t')" read -r kind entry; do
+  [ -n "$entry" ] || continue
+  target="$deploy/$entry"
+  rm -rf -- "$target"
+  if [ "$kind" = existing ]; then
+    mkdir -p -- "$(dirname "$target")"
+    cp -a -- "$previous/$entry" "$target"
+  fi
+done <"$manifest"
+rm -rf -- "$deploy/.moox-service.next" "$previous"
+"$deploy/start.sh" "$service" >/dev/null 2>&1 || true
+`
+
+const finalizeServiceScript = `set -eu
+deploy=$1
+rm -rf -- "$deploy/.moox-service.next" "$deploy/.moox-service.previous"
+`

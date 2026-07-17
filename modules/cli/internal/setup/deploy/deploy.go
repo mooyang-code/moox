@@ -34,26 +34,6 @@ type Options struct {
 	TargetGOARCH   string
 }
 
-type BinaryOptions struct {
-	BinaryPath  string
-	BinaryName  string
-	ServiceName string
-	DeployDir   string
-}
-
-type BinaryResult struct {
-	RemotePath   string `json:"remote_path"`
-	LocalSHA256  string `json:"local_sha256"`
-	RemoteSHA256 string `json:"remote_sha256"`
-}
-
-type WebHostOptions struct {
-	BinaryPath string
-	DeployDir  string
-}
-
-type WebHostResult = BinaryResult
-
 type Packager interface {
 	Package(context.Context, Options) (string, error)
 }
@@ -221,84 +201,6 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	return nil
 }
 
-func Binary(ctx context.Context, transport setupssh.Client, opts BinaryOptions) (result BinaryResult, returnErr error) {
-	if transport == nil || strings.TrimSpace(opts.BinaryPath) == "" ||
-		!validReleaseToken(opts.BinaryName) || !validReleaseToken(opts.ServiceName) {
-		return result, fmt.Errorf("binary_deploy_invalid")
-	}
-	file, err := os.Open(opts.BinaryPath)
-	if err != nil {
-		return result, fmt.Errorf("binary_invalid")
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-		return result, fmt.Errorf("binary_invalid")
-	}
-	digest, err := sha256File(file)
-	if err != nil {
-		return result, fmt.Errorf("binary_invalid")
-	}
-	result.LocalSHA256 = digest
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return result, fmt.Errorf("binary_invalid")
-	}
-
-	deployDir, err := resolveRemoteDeployDir(ctx, transport, opts.DeployDir)
-	if err != nil {
-		return result, err
-	}
-	result.RemotePath = path.Join(deployDir, "bin", opts.BinaryName)
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", prepareBinaryScript, "moox-prepare-binary", deployDir, opts.ServiceName, opts.BinaryName}, nil); err != nil {
-		return result, fmt.Errorf("binary_prepare_failed")
-	}
-	prepared := true
-	defer func() {
-		if returnErr != nil && prepared {
-			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
-			defer cancel()
-			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackBinaryScript, "moox-rollback-binary", deployDir, opts.ServiceName, opts.BinaryName}, nil)
-		}
-	}()
-
-	if err := transport.Upload(ctx, file, info.Size(), result.RemotePath, fs.FileMode(0o755)); err != nil {
-		return result, fmt.Errorf("binary_upload_failed")
-	}
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", activateBinaryScript, "moox-activate-binary", deployDir, opts.ServiceName}, nil); err != nil {
-		return result, fmt.Errorf("binary_activate_failed")
-	}
-	digestResult, err := transport.Run(ctx, []string{"sha256sum", result.RemotePath}, nil)
-	if err != nil {
-		return result, fmt.Errorf("binary_digest_failed")
-	}
-	result.RemoteSHA256, err = parseSHA256(digestResult.Stdout)
-	if err != nil {
-		return result, fmt.Errorf("binary_digest_failed")
-	}
-	if result.RemoteSHA256 != result.LocalSHA256 {
-		return result, fmt.Errorf("binary_digest_mismatch")
-	}
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", finalizeBinaryScript, "moox-finalize-binary", deployDir, opts.BinaryName}, nil); err != nil {
-		return result, fmt.Errorf("binary_finalize_failed")
-	}
-	prepared = false
-	return result, nil
-}
-
-func WebHost(ctx context.Context, transport setupssh.Client, opts WebHostOptions) (WebHostResult, error) {
-	result, err := Binary(ctx, transport, BinaryOptions{
-		BinaryPath: opts.BinaryPath, BinaryName: "moox-web-host", ServiceName: "web-host", DeployDir: opts.DeployDir,
-	})
-	if err != nil {
-		message := err.Error()
-		message = strings.Replace(message, "binary_deploy_invalid", "web_host_deploy_invalid", 1)
-		message = strings.Replace(message, "binary_invalid", "web_host_binary_invalid", 1)
-		message = strings.Replace(message, "binary_", "web_host_", 1)
-		return result, fmt.Errorf("%s", message)
-	}
-	return result, nil
-}
-
 func validReleaseToken(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" || value == "." || value == ".." || path.Base(value) != value {
@@ -341,21 +243,21 @@ func resolveRemoteDeployDir(ctx context.Context, transport setupssh.Client, depl
 		deployDir = "~/moox/prod"
 	}
 	if strings.ContainsAny(deployDir, "\x00\r\n") {
-		return "", fmt.Errorf("binary_deploy_invalid")
+		return "", fmt.Errorf("service_deploy_invalid")
 	}
 	if deployDir == "~" || strings.HasPrefix(deployDir, "~/") {
 		home, err := transport.Run(ctx, []string{"sh", "-lc", `printf '%s' "$HOME"`}, nil)
 		if err != nil {
-			return "", fmt.Errorf("binary_deploy_invalid")
+			return "", fmt.Errorf("service_deploy_invalid")
 		}
 		remoteHome := strings.TrimSpace(home.Stdout)
 		if remoteHome == "" || !strings.HasPrefix(remoteHome, "/") {
-			return "", fmt.Errorf("binary_deploy_invalid")
+			return "", fmt.Errorf("service_deploy_invalid")
 		}
 		deployDir = path.Join(remoteHome, strings.TrimPrefix(deployDir, "~"))
 	}
 	if !strings.HasPrefix(deployDir, "/") || path.Clean(deployDir) == "/" {
-		return "", fmt.Errorf("binary_deploy_invalid")
+		return "", fmt.Errorf("service_deploy_invalid")
 	}
 	return path.Clean(deployDir), nil
 }
@@ -542,65 +444,6 @@ func probeCommand(stage ReadinessStage) string {
 		return "false"
 	}
 }
-
-const prepareBinaryScript = `set -eu
-deploy=$1
-service=$2
-binary_name=$3
-binary="$deploy/bin/$binary_name"
-previous="$binary.previous"
-test -d "$deploy/bin"
-test -x "$deploy/stop.sh"
-test -x "$deploy/start.sh"
-test -x "$deploy/healthcheck.sh"
-if [ -e "$binary" ]; then
-  test -f "$binary"
-  rm -f -- "$previous"
-  cp -p -- "$binary" "$previous"
-fi
-if ! "$deploy/stop.sh" "$service"; then
-  if [ -f "$previous" ]; then
-    cp -p -- "$previous" "$binary"
-    rm -f -- "$previous"
-  fi
-  exit 1
-fi
-`
-
-const activateBinaryScript = `set -eu
-deploy=$1
-service=$2
-"$deploy/start.sh" "$service"
-"$deploy/healthcheck.sh" "$service"
-`
-
-const rollbackBinaryScript = `set -eu
-deploy=$1
-service=$2
-binary_name=$3
-binary="$deploy/bin/$binary_name"
-previous="$binary.previous"
-if [ -f "$previous" ]; then
-  "$deploy/stop.sh" "$service" >/dev/null 2>&1 || true
-  cp -p -- "$previous" "$binary"
-  rm -f -- "$previous"
-  "$deploy/start.sh" "$service" >/dev/null 2>&1 || true
-else
-  "$deploy/stop.sh" "$service" >/dev/null 2>&1 || true
-  rm -f -- "$binary"
-fi
-`
-
-const finalizeBinaryScript = `set -eu
-deploy=$1
-binary_name=$2
-rm -f -- "$deploy/bin/$binary_name.previous"
-`
-
-const prepareWebHostScript = prepareBinaryScript
-const activateWebHostScript = activateBinaryScript
-const rollbackWebHostScript = rollbackBinaryScript
-const finalizeWebHostScript = finalizeBinaryScript
 
 const installStorageScript = `set -eu
 install_storage() {

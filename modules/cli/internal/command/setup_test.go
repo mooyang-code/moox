@@ -78,56 +78,31 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"hosts", "validate", "trust-host", "deploy-control", "deploy-binary", "deploy-web-host", "apply", "status", "deploy-storage", "metadata-import"} {
+	for _, name := range []string{"hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "metadata-import"} {
 		require.Contains(t, output.String(), name)
 	}
 }
 
-func TestSetupDeployWebHostPassesBinaryAndHostWithoutSecrets(t *testing.T) {
+func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
-	var selectedHost, selectedBinary, selectedDir string
+	var selectedHost, selectedPackage, selectedService, selectedDir string
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		deployWebHost: func(_ context.Context, _ *setupconfig.Snapshot, host, binary, deployDir string) (setupdeploy.WebHostResult, error) {
-			selectedHost, selectedBinary, selectedDir = host, binary, deployDir
-			return setupdeploy.WebHostResult{RemotePath: "/home/ubuntu/moox/prod/bin/moox-web-host", LocalSHA256: "local", RemoteSHA256: "local"}, nil
+		deployService: func(_ context.Context, _ *setupconfig.Snapshot, host, packagePath, service, deployDir string) (setupdeploy.ServiceResult, error) {
+			selectedHost, selectedPackage, selectedService, selectedDir = host, packagePath, service, deployDir
+			return setupdeploy.ServiceResult{ServiceName: service, DeployDir: deployDir, LocalSHA256: "local", RemoteSHA256: "local"}, nil
 		},
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-web-host", "--file", "custom.toml", "--host", "compute", "--binary", "./bin/moox-web-host", "--deploy-dir", "/home/ubuntu/moox/prod"})
+	cmd.SetArgs([]string{"deploy-service", "--file", "custom.toml", "--host", "compute", "--service", "admin", "--package", "./release/moox-admin.zip", "--deploy-dir", "/home/ubuntu/moox/prod"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", selectedHost)
-	require.Equal(t, "./bin/moox-web-host", selectedBinary)
-	require.Equal(t, "/home/ubuntu/moox/prod", selectedDir)
-	require.JSONEq(t, `{"remote_path":"/home/ubuntu/moox/prod/bin/moox-web-host","local_sha256":"local","remote_sha256":"local"}`, output.String())
-	for _, secret := range []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
-		require.NotContains(t, output.String(), secret)
-	}
-}
-
-func TestSetupDeployBinaryPassesServiceAndDerivedBinaryName(t *testing.T) {
-	t.Parallel()
-	snapshot := setupSnapshot(t)
-	var selectedHost, selectedBinary, selectedService, selectedName, selectedDir string
-	cmd := newSetupCommand(setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		deployBinary: func(_ context.Context, _ *setupconfig.Snapshot, host, binary, service, name, deployDir string) (setupdeploy.BinaryResult, error) {
-			selectedHost, selectedBinary, selectedService, selectedName, selectedDir = host, binary, service, name, deployDir
-			return setupdeploy.BinaryResult{RemotePath: "/home/ubuntu/moox/prod/bin/moox-admin", LocalSHA256: "local", RemoteSHA256: "local"}, nil
-		},
-	})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-binary", "--file", "custom.toml", "--host", "compute", "--service", "admin", "--binary", "./bin/moox-admin", "--deploy-dir", "/home/ubuntu/moox/prod"})
-	require.NoError(t, cmd.Execute())
-	require.Equal(t, "compute", selectedHost)
-	require.Equal(t, "./bin/moox-admin", selectedBinary)
+	require.Equal(t, "./release/moox-admin.zip", selectedPackage)
 	require.Equal(t, "admin", selectedService)
-	require.Equal(t, "moox-admin", selectedName)
 	require.Equal(t, "/home/ubuntu/moox/prod", selectedDir)
-	require.JSONEq(t, `{"remote_path":"/home/ubuntu/moox/prod/bin/moox-admin","local_sha256":"local","remote_sha256":"local"}`, output.String())
+	require.JSONEq(t, `{"service_name":"admin","deploy_dir":"/home/ubuntu/moox/prod","remote_archive":"","local_sha256":"local","remote_sha256":"local"}`, output.String())
 }
 
 func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {

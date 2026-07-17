@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,8 +24,7 @@ type setupDeps struct {
 	validate       func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
 	trustHost      func(context.Context, *setupconfig.Snapshot, string, string) error
 	deployControl  func(context.Context, *setupconfig.Snapshot) error
-	deployBinary   func(context.Context, *setupconfig.Snapshot, string, string, string, string, string) (setupdeploy.BinaryResult, error)
-	deployWebHost  func(context.Context, *setupconfig.Snapshot, string, string, string) (setupdeploy.WebHostResult, error)
+	deployService  func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
 	apply          func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
 	status         func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
 	login          func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
@@ -50,8 +48,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupDeployCommand(deps),
-		newSetupDeployBinaryCommand(deps),
-		newSetupDeployWebHostCommand(deps),
+		newSetupDeployServiceCommand(deps),
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
@@ -157,9 +154,9 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-func newSetupDeployWebHostCommand(deps setupDeps) *cobra.Command {
-	var file, host, binary, deployDir string
-	cmd := &cobra.Command{Use: "deploy-web-host", Short: "通过 SSH 发布并校验单个 Web Host 二进制", RunE: func(cmd *cobra.Command, _ []string) error {
+func newSetupDeployServiceCommand(deps setupDeps) *cobra.Command {
+	var file, host, packagePath, service, deployDir string
+	cmd := &cobra.Command{Use: "deploy-service", Short: "通过 SSH 发布并校验完整服务包", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err
@@ -168,7 +165,7 @@ func newSetupDeployWebHostCommand(deps setupDeps) *cobra.Command {
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
-		result, err := deps.deployWebHost(cmd.Context(), snapshot, host, binary, deployDir)
+		result, err := deps.deployService(cmd.Context(), snapshot, host, packagePath, service, deployDir)
 		if err != nil {
 			return err
 		}
@@ -179,43 +176,10 @@ func newSetupDeployWebHostCommand(deps setupDeps) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&host, "host", "control", "目标主机名称")
-	cmd.Flags().StringVar(&binary, "binary", "", "本地 moox-web-host 二进制路径")
-	cmd.Flags().StringVar(&deployDir, "deploy-dir", "~/moox/prod", "远端部署目录")
-	_ = cmd.MarkFlagRequired("binary")
-	return cmd
-}
-
-func newSetupDeployBinaryCommand(deps setupDeps) *cobra.Command {
-	var file, host, binary, service, name, deployDir string
-	cmd := &cobra.Command{Use: "deploy-binary", Short: "通过 SSH 发布并校验单个二进制服务", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		binaryName := name
-		if strings.TrimSpace(binaryName) == "" {
-			binaryName = filepath.Base(binary)
-		}
-		result, err := deps.deployBinary(cmd.Context(), snapshot, host, binary, service, binaryName, deployDir)
-		if err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		return writeSetupJSON(cmd, result)
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&host, "host", "control", "目标主机名称")
-	cmd.Flags().StringVar(&binary, "binary", "", "本地二进制路径")
+	cmd.Flags().StringVar(&packagePath, "package", "", "本地服务 ZIP 包路径")
 	cmd.Flags().StringVar(&service, "service", "", "远端服务名称")
-	cmd.Flags().StringVar(&name, "name", "", "远端 bin 目录中的二进制名称，默认取本地文件名")
 	cmd.Flags().StringVar(&deployDir, "deploy-dir", "~/moox/prod", "远端部署目录")
-	_ = cmd.MarkFlagRequired("binary")
+	_ = cmd.MarkFlagRequired("package")
 	_ = cmd.MarkFlagRequired("service")
 	return cmd
 }
@@ -342,11 +306,8 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.deployControl == nil {
 		deps.deployControl = defaults.deployControl
 	}
-	if deps.deployBinary == nil {
-		deps.deployBinary = defaults.deployBinary
-	}
-	if deps.deployWebHost == nil {
-		deps.deployWebHost = defaults.deployWebHost
+	if deps.deployService == nil {
+		deps.deployService = defaults.deployService
 	}
 	if deps.apply == nil {
 		deps.apply = defaults.apply
@@ -378,8 +339,7 @@ func defaultSetupDeps() setupDeps {
 		validate:       defaultSetupValidate,
 		trustHost:      defaultSetupTrustHost,
 		deployControl:  defaultSetupDeploy,
-		deployBinary:   defaultSetupDeployBinary,
-		deployWebHost:  defaultSetupDeployWebHost,
+		deployService:  defaultSetupDeployService,
 		apply:          defaultSetupApply,
 		status:         defaultSetupStatus,
 		deployStorage:  defaultSetupDeployStorage,
@@ -496,31 +456,18 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot) err
 	return setupdeploy.Control(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address, BrowserPort: 9527}, setupdeploy.Dependencies{})
 }
 
-func defaultSetupDeployWebHost(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, binary, deployDir string) (setupdeploy.WebHostResult, error) {
+func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, packagePath, service, deployDir string) (setupdeploy.ServiceResult, error) {
 	host, err := findSetupHost(snapshot.Manifest, hostName)
 	if err != nil {
-		return setupdeploy.WebHostResult{}, err
+		return setupdeploy.ServiceResult{}, err
 	}
 	transport, err := dialSetupHost(ctx, host)
 	if err != nil {
-		return setupdeploy.WebHostResult{}, err
+		return setupdeploy.ServiceResult{}, err
 	}
 	defer transport.Close()
-	return setupdeploy.WebHost(ctx, transport, setupdeploy.WebHostOptions{BinaryPath: binary, DeployDir: deployDir})
-}
-
-func defaultSetupDeployBinary(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, binary, service, name, deployDir string) (setupdeploy.BinaryResult, error) {
-	host, err := findSetupHost(snapshot.Manifest, hostName)
-	if err != nil {
-		return setupdeploy.BinaryResult{}, err
-	}
-	transport, err := dialSetupHost(ctx, host)
-	if err != nil {
-		return setupdeploy.BinaryResult{}, err
-	}
-	defer transport.Close()
-	return setupdeploy.Binary(ctx, transport, setupdeploy.BinaryOptions{
-		BinaryPath: binary, BinaryName: name, ServiceName: service, DeployDir: deployDir,
+	return setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
+		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
 	})
 }
 

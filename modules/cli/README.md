@@ -11,7 +11,7 @@ moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
-moox-cli setup ...                  # 初始化控制面、发布单个二进制、部署 Storage、导入元数据
+moox-cli setup ...                  # 初始化控制面、发布服务包、部署 Storage、导入元数据
 ```
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
@@ -28,30 +28,24 @@ moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
 ```
 
-单独发布任意已接入生命周期脚本的二进制服务时，先构建远端 Linux 目标，再由 CLI 通过 SSH 上传、原子替换、重启并执行健康检查：
+服务发布以 ZIP 包为单位，包中包含二进制、配置和生命周期脚本。示例包目录必须至少包含
+`bin/`、`config/`、`start.sh`、`stop.sh` 和 `healthcheck.sh`，然后打包：
 
 ```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh admin
-moox-cli setup deploy-binary \
+cd ./release/service-package
+zip -r ../moox-admin-linux-amd64.zip bin config start.sh stop.sh healthcheck.sh
+moox-cli setup deploy-service \
   --file ./custom.toml \
   --host control \
   --service admin \
-  --binary ./bin/moox-admin
+  --package ./release/moox-admin-linux-amd64.zip
 ```
 
-`--name` 可用于覆盖远端 `bin` 目录中的文件名；默认取本地二进制文件名。Web Host
-也可以使用专用便捷命令：
-
-```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
-moox-cli setup deploy-web-host \
-  --file ./custom.toml \
-  --host control \
-  --binary ./bin/moox-web-host
-```
-
-命令不会输出或拼接 SSH 密码；密码只在 CLI 进程内读取和使用。默认远端目录为
+包内路径必须是相对路径，不能包含 `data/`、`logs/`、`run/`、`secrets/` 或 `certs/`。
+凭据不得打入 ZIP 包；远端已有的凭据和运行数据由 CLI 保留。默认远端目录为
 `~/moox/prod`，可通过 `--deploy-dir` 覆盖。
+
+命令不会输出或拼接 SSH 密码；密码只在 CLI 进程内读取和使用。
 
 首次连接未知 SSH 主机时，先通过独立渠道核验命令报告的 SHA256 指纹，
 再执行 `setup trust-host --host <name> --fingerprint <SHA256:...>`。初始化命令只在
