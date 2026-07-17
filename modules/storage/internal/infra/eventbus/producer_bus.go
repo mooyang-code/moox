@@ -473,9 +473,7 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 			}
 			return err
 		}
-		for _, entry := range handlers {
-			err = errors.Join(err, entry.call(ctx, &event))
-		}
+		err = callTimeSeriesHandlers(ctx, &event, handlers)
 	} else {
 		var event pb.RecordRowsUpdated
 		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
@@ -495,9 +493,37 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 			}
 			return err
 		}
-		for _, entry := range handlers {
-			err = errors.Join(err, entry.call(ctx, &event))
+		err = callRecordHandlers(ctx, &event, handlers)
+	}
+	return err
+}
+
+func callTimeSeriesHandlers(ctx context.Context, event *pb.TimeSeriesRowsUpdated, handlers []*subscriberTimeSeriesHandler) (err error) {
+	next := 0
+	defer func() {
+		for ; next < len(handlers); next++ {
+			handlers[next].lifecycle.release()
 		}
+	}()
+	for next < len(handlers) {
+		entry := handlers[next]
+		next++
+		err = errors.Join(err, entry.call(ctx, event))
+	}
+	return err
+}
+
+func callRecordHandlers(ctx context.Context, event *pb.RecordRowsUpdated, handlers []*subscriberRecordHandler) (err error) {
+	next := 0
+	defer func() {
+		for ; next < len(handlers); next++ {
+			handlers[next].lifecycle.release()
+		}
+	}()
+	for next < len(handlers) {
+		entry := handlers[next]
+		next++
+		err = errors.Join(err, entry.call(ctx, event))
 	}
 	return err
 }

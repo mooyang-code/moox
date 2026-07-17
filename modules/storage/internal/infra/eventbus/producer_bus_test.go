@@ -240,6 +240,33 @@ func TestSubscriberCloseDrainsItsHandlerWhileOtherHandlerRemains(t *testing.T) {
 	assert.True(t, secondPresent)
 }
 
+func TestSubscriberHandlerPanicReleasesUncalledHandlerLeases(t *testing.T) {
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	defer secondCancel()
+	first := &subscriberTimeSeriesHandler{
+		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { panic("boom") },
+		lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel,
+	}
+	second := &subscriberTimeSeriesHandler{
+		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil },
+		lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel,
+	}
+	require.True(t, first.lifecycle.acquire())
+	require.True(t, second.lifecycle.acquire())
+	func() {
+		defer func() { _ = recover() }()
+		_ = callTimeSeriesHandlers(context.Background(), &pb.TimeSeriesRowsUpdated{}, []*subscriberTimeSeriesHandler{first, second})
+	}()
+	for _, entry := range []*subscriberTimeSeriesHandler{first, second} {
+		entry.lifecycle.mu.Lock()
+		inFlight := entry.lifecycle.inFlight
+		entry.lifecycle.mu.Unlock()
+		assert.Zero(t, inFlight)
+	}
+}
+
 func TestSubscriberBusRejectsDeliveryWithoutHandlers(t *testing.T) {
 	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
 	require.NoError(t, err)
