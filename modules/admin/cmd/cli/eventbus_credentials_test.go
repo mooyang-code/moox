@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,8 +44,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 8 {
-		t.Fatalf("eventbus records=%d, want 8", count)
+	if count != 9 {
+		t.Fatalf("eventbus records=%d, want 9", count)
 	}
 }
 
@@ -67,6 +68,11 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "ca.pem"))
 	assert.FileExists(t, filepath.Join(exportDir, "server.pem"))
 	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
+	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
+	assert.FileExists(t, strategyCredential)
+	info, err := os.Stat(strategyCredential)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
 	yaml := usersYAML(map[string]string{
 		"eventbus-internal-admin":      "a",
@@ -75,9 +81,16 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"storage-eventbus":             "d",
 		"cloudnode-eventbus":           "e",
 		"factor-eventbus":              "f",
+		"strategy-eventbus":            "g",
 	})
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
+	assert.Contains(t, yaml, "moox.strategy.signal.generated.v1")
+	assert.Contains(t, yaml, "moox.strategy.action.accepted.v1")
+	assert.Contains(t, yaml, "moox.strategy.run.completed.v1")
+	strategyACL := yaml[strings.Index(yaml, "username: strategy-eventbus"):]
+	assert.NotContains(t, strategyACL, "$JS.API.>")
+	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
 
 	bundle, err := makeTLSBundle("203.0.113.10")
 	require.NoError(t, err)
@@ -98,7 +111,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.GreaterOrEqual(t, count, int64(8))
+	assert.GreaterOrEqual(t, count, int64(9))
 }
 
 func TestEventBusCredentialsHelpers(t *testing.T) {

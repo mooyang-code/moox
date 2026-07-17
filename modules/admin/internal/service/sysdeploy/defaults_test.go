@@ -86,8 +86,8 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("%s health URL = %s, want %s", name, healthURL(byName[name].ExtraConfig), want)
 		}
 	}
-	if monitorEnabled(byName["moox_strategy"].ExtraConfig) {
-		t.Fatal("moox_strategy monitoring must remain disabled until the service is shipped by the deployment scripts")
+	if !monitorEnabled(byName["moox_strategy"].ExtraConfig) {
+		t.Fatal("moox_strategy monitoring must be enabled after standard release integration")
 	}
 	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
