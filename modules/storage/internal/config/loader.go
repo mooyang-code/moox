@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -22,14 +23,15 @@ type RuntimeConfig struct {
 
 // StorageConfig 保存 storage.yaml 中的业务配置。
 type StorageConfig struct {
-	Root     string          `yaml:"root"`
-	Roles    []string        `yaml:"roles"`
-	Metadata StorageMetadata `yaml:"metadata"`
-	Devices  StorageDevices  `yaml:"devices"`
-	Primary  StoragePrimary  `yaml:"primary"`
-	EventBus StorageEventBus `yaml:"eventbus"`
-	View     StorageView     `yaml:"view"`
-	Health   StorageHealth   `yaml:"health"`
+	Root        string             `yaml:"root"`
+	Roles       []string           `yaml:"roles"`
+	Metadata    StorageMetadata    `yaml:"metadata"`
+	Devices     StorageDevices     `yaml:"devices"`
+	Primary     StoragePrimary     `yaml:"primary"`
+	EventBus    StorageEventBus    `yaml:"eventbus"`
+	View        StorageView        `yaml:"view"`
+	Maintenance StorageMaintenance `yaml:"maintenance"`
+	Health      StorageHealth      `yaml:"health"`
 }
 
 // StorageMetadata 保存元数据存储与种子数据配置。
@@ -102,9 +104,53 @@ type StorageViewMaintenance struct {
 	RemoveGrace      string                       `yaml:"remove_grace"`
 	TimeSeries       StorageTimeSeriesMaintenance `yaml:"time_series"`
 	Record           StorageRecordMaintenance     `yaml:"record"`
-	HostDatasetIDs   []string                     `yaml:"host_dataset_ids"`
-	HostRetention    string                       `yaml:"host_retention"`
-	HostInterval     string                       `yaml:"host_interval"`
+}
+
+// StorageMaintenance owns maintenance that applies to authoritative Storage facts.
+type StorageMaintenance struct {
+	HostMetricsCleanup HostMetricsCleanupConfig `yaml:"host_metrics_cleanup"`
+}
+
+// HostMetricsCleanupConfig controls bounded deletion of expired host metric facts.
+type HostMetricsCleanupConfig struct {
+	Enabled          *bool    `yaml:"enabled"`
+	DatasetIDs       []string `yaml:"dataset_ids"`
+	MaxAge           string   `yaml:"max_age"`
+	BatchSize        uint32   `yaml:"batch_size"`
+	MaxBatchesPerRun int      `yaml:"max_batches_per_run"`
+}
+
+func (c HostMetricsCleanupConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// Validate checks cleanup bounds before the timer is registered.
+func (c HostMetricsCleanupConfig) Validate() error {
+	maxAge, err := time.ParseDuration(c.MaxAge)
+	if err != nil || maxAge <= 0 {
+		return fmt.Errorf("storage maintenance.host_metrics_cleanup.max_age must be a positive duration")
+	}
+	if c.BatchSize < 1 || c.BatchSize > 1000 {
+		return fmt.Errorf("storage maintenance.host_metrics_cleanup.batch_size must be between 1 and 1000")
+	}
+	if c.MaxBatchesPerRun <= 0 {
+		return fmt.Errorf("storage maintenance.host_metrics_cleanup.max_batches_per_run must be positive")
+	}
+	if len(c.DatasetIDs) == 0 {
+		return fmt.Errorf("storage maintenance.host_metrics_cleanup.dataset_ids must not be empty")
+	}
+	seen := make(map[string]struct{}, len(c.DatasetIDs))
+	for _, datasetID := range c.DatasetIDs {
+		datasetID = strings.TrimSpace(datasetID)
+		if datasetID == "" {
+			return fmt.Errorf("storage maintenance.host_metrics_cleanup.dataset_ids must not contain blanks")
+		}
+		if _, ok := seen[datasetID]; ok {
+			return fmt.Errorf("storage maintenance.host_metrics_cleanup.dataset_ids contains duplicate %q", datasetID)
+		}
+		seen[datasetID] = struct{}{}
+	}
+	return nil
 }
 
 type StorageTimeSeriesMaintenance struct {
@@ -165,14 +211,22 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.Devices.ParquetPath == "" {
 		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
 	}
-	if len(c.View.Maintenance.HostDatasetIDs) == 0 {
-		c.View.Maintenance.HostDatasetIDs = []string{"host_resource_v1", "host_fs_v1", "host_disk_v1", "host_net_v1"}
+	cleanup := &c.Maintenance.HostMetricsCleanup
+	if cleanup.Enabled == nil {
+		enabled := true
+		cleanup.Enabled = &enabled
 	}
-	if c.View.Maintenance.HostRetention == "" {
-		c.View.Maintenance.HostRetention = "72h"
+	if len(cleanup.DatasetIDs) == 0 {
+		cleanup.DatasetIDs = []string{"host_resource_v1", "host_fs_v1", "host_disk_v1", "host_net_v1"}
 	}
-	if c.View.Maintenance.HostInterval == "" {
-		c.View.Maintenance.HostInterval = "1h"
+	if cleanup.MaxAge == "" {
+		cleanup.MaxAge = "48h"
+	}
+	if cleanup.BatchSize == 0 {
+		cleanup.BatchSize = 1000
+	}
+	if cleanup.MaxBatchesPerRun == 0 {
+		cleanup.MaxBatchesPerRun = 10
 	}
 	if c.EventBus.Type == "" {
 		c.EventBus.Type = "jetstream"

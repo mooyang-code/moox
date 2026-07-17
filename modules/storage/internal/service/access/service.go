@@ -34,6 +34,7 @@ type Service struct {
 	primary           primary.Client
 	events            eventbus.Publisher
 	report            ViewErrorReporter
+	cleanupDeleteRows func(context.Context, *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error)
 	recordVersionMu   sync.Mutex
 	lastRecordVersion time.Time
 }

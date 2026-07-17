@@ -268,6 +268,11 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 }
 
 func validateStorageDeployment(storage storageconfig.StorageConfig) error {
+	if storage.HasRole("access") && storage.Maintenance.HostMetricsCleanup.IsEnabled() {
+		if err := storage.Maintenance.HostMetricsCleanup.Validate(); err != nil {
+			return err
+		}
+	}
 	if shouldStartViewBuilderRole(storage) && !storage.HasRole("access") && isMemoryRowsUpdatedBus(storage.EventBus) {
 		return errors.New("storage view builder role requires non-memory eventbus when access role is not in the same process")
 	}

@@ -92,8 +92,9 @@ func main() {
 		pb.RegisterMetadataService(s, storageService)
 		pb.RegisterAccessService(s, storageService)
 		registerAccessScanService(s, storageService)
-		stopRetention := startHostRetention(storageService, cfg.Storage.View.Maintenance)
-		defer stopRetention()
+	}
+	if err := registerHostMetricsCleanupTimer(s, storageService, cfg.Storage); err != nil {
+		exitWithStartupError("register host metrics cleanup timer", err)
 	}
 
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
@@ -155,44 +156,6 @@ func shutdownTracing() {
 	defer cancel()
 	if err := trpcotel.Shutdown(ctx); err != nil {
 		log.Errorf("flush OpenTelemetry spans: %v", err)
-	}
-}
-
-func startHostRetention(access *storagesvc.Service, maintenance storageconfig.StorageViewMaintenance) func() {
-	noop := func() {}
-	if access == nil || !maintenance.IsEnabled() {
-		return noop
-	}
-	retention, ok := parseStorageDuration(maintenance.HostRetention)
-	if !ok || retention <= 0 {
-		return noop
-	}
-	interval, ok := parseStorageDuration(maintenance.HostInterval)
-	if !ok || interval <= 0 {
-		interval = time.Hour
-	}
-	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			if deleted, err := access.PruneHostDatasets(ctx, "moox_system", maintenance.HostDatasetIDs, retention, time.Now().UTC()); err != nil {
-				log.Warnf("host dataset retention failed: %v", err)
-			} else if deleted > 0 {
-				log.Infof("host dataset retention deleted %d rows", deleted)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return func() {
-		cancel()
-		<-done
 	}
 }
 

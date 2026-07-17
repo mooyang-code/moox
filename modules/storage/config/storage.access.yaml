@@ -55,5 +55,12 @@ storage:
           1d: 730d
       record:
         retention_window: 30d
+  maintenance:
+    host_metrics_cleanup:
+      enabled: true
+      dataset_ids: [host_resource_v1, host_fs_v1, host_disk_v1, host_net_v1]
+      max_age: 48h
+      batch_size: 1000
+      max_batches_per_run: 10
   health:
     addr: ":20210"

@@ -39,5 +39,6 @@ use (
 	./packages/report
 	./packages/requestauth
 	./packages/trpcretry
+	./packages/timerjob
 	./web-host
 )
