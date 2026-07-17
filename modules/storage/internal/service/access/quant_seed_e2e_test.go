@@ -24,14 +24,14 @@ func TestQuantInitialSeedEndToEnd(t *testing.T) {
 		SeedPath:   seedPath,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 5, result.Spaces)
+	require.Equal(t, 4, result.Spaces)
 
 	svc := NewServiceWithOptions(Options{Root: root, MetadataPath: metadataPath, InitSchemaPath: schemaPath})
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
 	spaces, err := svc.ListSpaces(ctx, &pb.ListSpacesReq{Page: &pb.Page{Page: 1, Size: 100}})
 	mustRetOK(t, spaces, err)
-	require.Len(t, spaces.GetSpaces(), 5)
+	require.Len(t, spaces.GetSpaces(), 4)
 
 	groups, err := svc.ListFieldGroups(ctx, &pb.ListFieldGroupsReq{SpaceId: "stock_cn", Page: &pb.Page{Page: 1, Size: 100}})
 	mustRetOK(t, groups, err)
@@ -56,8 +56,8 @@ func TestQuantInitialSeedEndToEnd(t *testing.T) {
 		{"stock_cn", "stock_kline_1d_view"}, {"stock_cn", "index_kline_1d_view"},
 		{"stock_cn", "financial_metric_view"}, {"stock_cn", "financial_summary_view"},
 		{"stock_hk", "stock_kline_1d_view"}, {"stock_us", "stock_kline_1d_view"},
-		{"crypto_binance", "spot_kline_1h_view"}, {"crypto_binance", "perpetual_kline_1h_view"},
-		{"crypto_okx", "spot_kline_1h_view"}, {"crypto_okx", "perpetual_kline_1h_view"},
+		{"crypto", "binance_spot_1h_view"}, {"crypto", "binance_perpetual_1h_view"},
+		{"crypto", "okx_spot_1h_view"}, {"crypto", "okx_perpetual_1h_view"},
 	} {
 		got, getErr := svc.GetView(ctx, &pb.GetViewReq{SpaceId: key[0], ViewId: key[1]})
 		mustRetOK(t, got, getErr)

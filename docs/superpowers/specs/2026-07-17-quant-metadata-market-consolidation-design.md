@@ -66,8 +66,8 @@ Dataset ID 使用以下格式：
 ### View
 
 每个 Dataset 建立一个同来源、同产品类型、同频率的查询 View。View ID 使用
-`<dataset_id>_view`，主 Dataset 和投影列均显式引用完整 Dataset ID，避免同一
-Space 内产生名称碰撞。
+`<data_source>_<instrument_type>_<frequency>_view`，避免超过 30 字符协议限制；
+主 Dataset 和投影列仍显式引用完整 Dataset ID，避免同一 Space 内产生名称碰撞。
 
 ## 变更范围
 

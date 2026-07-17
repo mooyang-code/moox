@@ -57,7 +57,7 @@ okx_spot_kline_1h
 okx_perpetual_kline_1h
 ```
 
-View ID 使用 `<dataset_id>_view`，DatasetColumn 和 ViewColumn 全部更新为完整 Dataset ID。
+View ID 使用 `<data_source>_<instrument_type>_<frequency>_view`，以满足 30 字符限制；DatasetColumn 和 ViewColumn 全部更新为完整 Dataset ID。
 
 - [ ] **Step 4: 更新 Storage seed 集成断言**
 
@@ -204,4 +204,3 @@ git add docs examples modules/cli modules/storage/internal/bootstrap/metadata/qu
 git commit -m "refactor: consolidate quant market metadata"
 git push
 ```
-

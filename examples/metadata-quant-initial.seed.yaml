@@ -5,15 +5,14 @@ spaces:
   - { space_id: stock_cn, name: A股市场, description: A股、ETF、可转债、指数及基本面数据, owner: quant, status: active }
   - { space_id: stock_hk, name: 港股市场, description: 港股证券与行情数据, owner: quant, status: active }
   - { space_id: stock_us, name: 美股市场, description: 美股证券、指数与行情数据, owner: quant, status: active }
-  - { space_id: crypto_binance, name: 币安市场, description: 币安现货与永续合约行情数据, owner: quant, status: active }
-  - { space_id: crypto_okx, name: 欧易市场, description: OKX 现货与永续合约行情数据, owner: quant, status: active }
+  - { space_id: crypto, name: 加密货币市场, description: 加密货币现货与永续合约行情数据, owner: quant, status: active }
 
 data_sources:
   - { space_id: stock_cn, data_source_id: quantclass_stock, name: QuantClass股票数据, kind: file_import, market: CN, timezone: Asia/Shanghai, config_json: '{}', status: active }
   - { space_id: stock_hk, data_source_id: quantclass_hk, name: QuantClass港股数据, kind: file_import, market: HK, timezone: Asia/Hong_Kong, config_json: '{}', status: active }
   - { space_id: stock_us, data_source_id: quantclass_us, name: QuantClass美股数据, kind: file_import, market: US, timezone: America/New_York, config_json: '{}', status: active }
-  - { space_id: crypto_binance, data_source_id: binance, name: Binance, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
-  - { space_id: crypto_okx, data_source_id: okx, name: OKX, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
+  - { space_id: crypto, data_source_id: binance, name: 币安, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
+  - { space_id: crypto, data_source_id: okx, name: 欧易, kind: exchange, market: crypto, timezone: UTC, config_json: '{}', status: active }
 
 field_groups:
   - { space_id: stock_cn, group_id: identity, name: 标识信息, sort_order: 10, status: active }
@@ -26,12 +25,9 @@ field_groups:
   - { space_id: stock_us, group_id: identity, name: 标识信息, sort_order: 10, status: active }
   - { space_id: stock_us, group_id: quote, name: 行情价格, sort_order: 20, status: active }
   - { space_id: stock_us, group_id: valuation, name: 估值指标, sort_order: 30, status: active }
-  - { space_id: crypto_binance, group_id: identity, name: 标识信息, sort_order: 10, status: active }
-  - { space_id: crypto_binance, group_id: quote, name: 行情价格, sort_order: 20, status: active }
-  - { space_id: crypto_binance, group_id: derivatives, name: 合约指标, sort_order: 30, status: active }
-  - { space_id: crypto_okx, group_id: identity, name: 标识信息, sort_order: 10, status: active }
-  - { space_id: crypto_okx, group_id: quote, name: 行情价格, sort_order: 20, status: active }
-  - { space_id: crypto_okx, group_id: derivatives, name: 合约指标, sort_order: 30, status: active }
+  - { space_id: crypto, group_id: identity, name: 标识信息, sort_order: 10, status: active }
+  - { space_id: crypto, group_id: quote, name: 行情价格, sort_order: 20, status: active }
+  - { space_id: crypto, group_id: derivatives, name: 合约指标, sort_order: 30, status: active }
 
 fields:
   # data_time、subject_id、freq 属于 Storage 系统维度，不重复定义为业务字段。
@@ -74,25 +70,15 @@ fields:
   - { space_id: stock_us, group_id: valuation, field_id: market_cap, name: 总市值, value_type: double, unit: USD, sort_order: 10, status: active }
   - { space_id: stock_us, group_id: valuation, field_id: pe_ttm, name: 市盈率, value_type: double, sort_order: 20, status: active }
 
-  - { space_id: crypto_binance, group_id: identity, field_id: symbol, name: 交易对, value_type: string, sort_order: 10, status: active }
-  - { space_id: crypto_binance, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: open, name: 开盘价, value_type: double, sort_order: 10, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: high, name: 最高价, value_type: double, sort_order: 20, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: low, name: 最低价, value_type: double, sort_order: 30, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: close, name: 收盘价, value_type: double, sort_order: 40, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: volume, name: 成交量, value_type: double, sort_order: 50, status: active }
-  - { space_id: crypto_binance, group_id: quote, field_id: quote_volume, name: 成交额, value_type: double, sort_order: 60, status: active }
-  - { space_id: crypto_binance, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
-
-  - { space_id: crypto_okx, group_id: identity, field_id: symbol, name: 交易对, value_type: string, sort_order: 10, status: active }
-  - { space_id: crypto_okx, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: open, name: 开盘价, value_type: double, sort_order: 10, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: high, name: 最高价, value_type: double, sort_order: 20, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: low, name: 最低价, value_type: double, sort_order: 30, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: close, name: 收盘价, value_type: double, sort_order: 40, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: volume, name: 成交量, value_type: double, sort_order: 50, status: active }
-  - { space_id: crypto_okx, group_id: quote, field_id: quote_volume, name: 成交额, value_type: double, sort_order: 60, status: active }
-  - { space_id: crypto_okx, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
+  - { space_id: crypto, group_id: identity, field_id: symbol, name: 交易对, value_type: string, sort_order: 10, status: active }
+  - { space_id: crypto, group_id: identity, field_id: raw_payload, name: 原始扩展字段, value_type: json, sort_order: 90, status: active }
+  - { space_id: crypto, group_id: quote, field_id: open, name: 开盘价, value_type: double, sort_order: 10, status: active }
+  - { space_id: crypto, group_id: quote, field_id: high, name: 最高价, value_type: double, sort_order: 20, status: active }
+  - { space_id: crypto, group_id: quote, field_id: low, name: 最低价, value_type: double, sort_order: 30, status: active }
+  - { space_id: crypto, group_id: quote, field_id: close, name: 收盘价, value_type: double, sort_order: 40, status: active }
+  - { space_id: crypto, group_id: quote, field_id: volume, name: 成交量, value_type: double, sort_order: 50, status: active }
+  - { space_id: crypto, group_id: quote, field_id: quote_volume, name: 成交额, value_type: double, sort_order: 60, status: active }
+  - { space_id: crypto, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
 
 datasets:
   - { space_id: stock_cn, dataset_id: stock_kline, data_source_id: quantclass_stock, name: 股票行情, data_kind: time_series, freqs: [5m, 15m, 1h, 1d], status: active, attributes: { source_directories: 股票历史日线数据|股票历史全息日线数据|股票1小时K线数据|股票1小时k线数据Pro|股票5分钟收盘价|股票15分钟收盘价 } }
@@ -101,10 +87,10 @@ datasets:
   - { space_id: stock_cn, dataset_id: financial_summary, data_source_id: quantclass_stock, name: 财务摘要, data_kind: record, freqs: [quarter], status: active, attributes: { source_directories: 财务预处理数据, storage_model: wide_common_metrics } }
   - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, data_source_id: quantclass_hk, name: 港股日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: AH港股数据 } }
   - { space_id: stock_us, dataset_id: stock_kline_daily, data_source_id: quantclass_us, name: 美股日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 美股日线数据 } }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, data_source_id: binance, name: 现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 现货1小时数据-币对分类 } }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, data_source_id: binance, name: 永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 永续合约1小时数据-币对分类 } }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, data_source_id: okx, name: 现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX现货1小时数据-币对分类 } }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, data_source_id: okx, name: 永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX永续合约1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, data_source_id: binance, name: 币安现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 现货1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, data_source_id: binance, name: 币安永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 永续合约1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, data_source_id: okx, name: 欧易现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX现货1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, data_source_id: okx, name: 欧易永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX永续合约1小时数据-币对分类 } }
 
 dataset_columns:
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
@@ -151,37 +137,37 @@ dataset_columns:
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: pe_ttm, origin_type: field, origin_id: pe_ttm, value_type: double, status: active }
   - { space_id: stock_us, dataset_id: stock_kline_daily, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
 
-  # 四个数字货币行情 Dataset 共享同一结构，但 Field 仍归属各自 Space。
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
-  - { space_id: crypto_binance, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
-  - { space_id: crypto_okx, dataset_id: perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
+  # 四个加密货币行情 Dataset 在同一 Space 内共享字段字典，并保留独立列契约。
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: high, origin_type: field, origin_id: high, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: low, origin_type: field, origin_id: low, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: close, origin_type: field, origin_id: close, value_type: double, required: true, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: volume, origin_type: field, origin_id: volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: quote_volume, origin_type: field, origin_id: quote_volume, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: funding_rate, origin_type: field, origin_id: funding_rate, value_type: double, status: active }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
 
 views:
   - { space_id: stock_cn, view_id: stock_kline_1d_view, name: A股日行情查询, primary_dataset_id: stock_kline, dataset_ids: [stock_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
@@ -190,10 +176,10 @@ views:
   - { space_id: stock_cn, view_id: financial_summary_view, name: 财务摘要查询, primary_dataset_id: financial_summary, dataset_ids: [financial_summary], grain_keys: [record_id, version], engine: bleve, status: active }
   - { space_id: stock_hk, view_id: stock_kline_1d_view, name: 港股日行情查询, primary_dataset_id: ah_stock_kline_daily, dataset_ids: [ah_stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
   - { space_id: stock_us, view_id: stock_kline_1d_view, name: 美股日行情查询, primary_dataset_id: stock_kline_daily, dataset_ids: [stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, name: 币安现货小时行情查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, name: 币安永续小时行情查询, primary_dataset_id: perpetual_kline_1h, dataset_ids: [perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, name: 欧易现货小时行情查询, primary_dataset_id: spot_kline_1h, dataset_ids: [spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, name: 欧易永续小时行情查询, primary_dataset_id: perpetual_kline_1h, dataset_ids: [perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto, view_id: binance_spot_1h_view, name: 币安现货小时行情查询, primary_dataset_id: binance_spot_kline_1h, dataset_ids: [binance_spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, name: 币安永续小时行情查询, primary_dataset_id: binance_perpetual_kline_1h, dataset_ids: [binance_perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto, view_id: okx_spot_1h_view, name: 欧易现货小时行情查询, primary_dataset_id: okx_spot_kline_1h, dataset_ids: [okx_spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, name: 欧易永续小时行情查询, primary_dataset_id: okx_perpetual_kline_1h, dataset_ids: [okx_perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
 
 view_columns:
   # View 只投影结构化业务列；subject_id、freq、data_time、record_id、version 由系统 Key 提供。
@@ -235,30 +221,30 @@ view_columns:
   - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.market_cap, origin_type: dataset_column, origin_id: stock_kline_daily.market_cap, value_type: double, sort_order: 60 }
   - { space_id: stock_us, view_id: stock_kline_1d_view, column_name: stock_kline_daily.pe_ttm, origin_type: dataset_column, origin_id: stock_kline_daily.pe_ttm, value_type: double, sort_order: 70 }
 
-  # 数字货币 View 列与各自 Dataset 显式绑定，避免跨 Space 暗式复用。
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.open, origin_type: dataset_column, origin_id: spot_kline_1h.open, value_type: double, sort_order: 10 }
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.high, origin_type: dataset_column, origin_id: spot_kline_1h.high, value_type: double, sort_order: 20 }
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.low, origin_type: dataset_column, origin_id: spot_kline_1h.low, value_type: double, sort_order: 30 }
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.close, origin_type: dataset_column, origin_id: spot_kline_1h.close, value_type: double, sort_order: 40 }
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.volume, origin_type: dataset_column, origin_id: spot_kline_1h.volume, value_type: double, sort_order: 50 }
-  - { space_id: crypto_binance, view_id: spot_kline_1h_view, column_name: spot_kline_1h.quote_volume, origin_type: dataset_column, origin_id: spot_kline_1h.quote_volume, value_type: double, sort_order: 60 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.open, origin_type: dataset_column, origin_id: perpetual_kline_1h.open, value_type: double, sort_order: 10 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.high, origin_type: dataset_column, origin_id: perpetual_kline_1h.high, value_type: double, sort_order: 20 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.low, origin_type: dataset_column, origin_id: perpetual_kline_1h.low, value_type: double, sort_order: 30 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.close, origin_type: dataset_column, origin_id: perpetual_kline_1h.close, value_type: double, sort_order: 40 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.volume, value_type: double, sort_order: 50 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.quote_volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.quote_volume, value_type: double, sort_order: 60 }
-  - { space_id: crypto_binance, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70 }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.open, origin_type: dataset_column, origin_id: spot_kline_1h.open, value_type: double, sort_order: 10 }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.high, origin_type: dataset_column, origin_id: spot_kline_1h.high, value_type: double, sort_order: 20 }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.low, origin_type: dataset_column, origin_id: spot_kline_1h.low, value_type: double, sort_order: 30 }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.close, origin_type: dataset_column, origin_id: spot_kline_1h.close, value_type: double, sort_order: 40 }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.volume, origin_type: dataset_column, origin_id: spot_kline_1h.volume, value_type: double, sort_order: 50 }
-  - { space_id: crypto_okx, view_id: spot_kline_1h_view, column_name: spot_kline_1h.quote_volume, origin_type: dataset_column, origin_id: spot_kline_1h.quote_volume, value_type: double, sort_order: 60 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.open, origin_type: dataset_column, origin_id: perpetual_kline_1h.open, value_type: double, sort_order: 10 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.high, origin_type: dataset_column, origin_id: perpetual_kline_1h.high, value_type: double, sort_order: 20 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.low, origin_type: dataset_column, origin_id: perpetual_kline_1h.low, value_type: double, sort_order: 30 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.close, origin_type: dataset_column, origin_id: perpetual_kline_1h.close, value_type: double, sort_order: 40 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.volume, value_type: double, sort_order: 50 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.quote_volume, origin_type: dataset_column, origin_id: perpetual_kline_1h.quote_volume, value_type: double, sort_order: 60 }
-  - { space_id: crypto_okx, view_id: perpetual_kline_1h_view, column_name: perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70 }
+  # 加密货币 View 列显式绑定来源明确的 Dataset，避免同一 Space 内名称碰撞。
+  - { space_id: crypto, view_id: binance_spot_1h_view, column_name: binance_spot_kline_1h.open, origin_type: dataset_column, origin_id: binance_spot_kline_1h.open, value_type: double, sort_order: 10 }
+  - { space_id: crypto, view_id: binance_spot_1h_view, column_name: binance_spot_kline_1h.high, origin_type: dataset_column, origin_id: binance_spot_kline_1h.high, value_type: double, sort_order: 20 }
+  - { space_id: crypto, view_id: binance_spot_1h_view, column_name: binance_spot_kline_1h.low, origin_type: dataset_column, origin_id: binance_spot_kline_1h.low, value_type: double, sort_order: 30 }
+  - { space_id: crypto, view_id: binance_spot_1h_view, column_name: binance_spot_kline_1h.close, origin_type: dataset_column, origin_id: binance_spot_kline_1h.close, value_type: double, sort_order: 40 }
+  - { space_id: crypto, view_id: binance_spot_1h_view, column_name: binance_spot_kline_1h.volume, origin_type: dataset_column, origin_id: binance_spot_kline_1h.volume, value_type: double, sort_order: 50 }
+  - { space_id: crypto, view_id: binance_spot_1h_view, column_name: binance_spot_kline_1h.quote_volume, origin_type: dataset_column, origin_id: binance_spot_kline_1h.quote_volume, value_type: double, sort_order: 60 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.open, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.open, value_type: double, sort_order: 10 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.high, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.high, value_type: double, sort_order: 20 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.low, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.low, value_type: double, sort_order: 30 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.close, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.close, value_type: double, sort_order: 40 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.volume, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.volume, value_type: double, sort_order: 50 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.quote_volume, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.quote_volume, value_type: double, sort_order: 60 }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, column_name: binance_perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: binance_perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70 }
+  - { space_id: crypto, view_id: okx_spot_1h_view, column_name: okx_spot_kline_1h.open, origin_type: dataset_column, origin_id: okx_spot_kline_1h.open, value_type: double, sort_order: 10 }
+  - { space_id: crypto, view_id: okx_spot_1h_view, column_name: okx_spot_kline_1h.high, origin_type: dataset_column, origin_id: okx_spot_kline_1h.high, value_type: double, sort_order: 20 }
+  - { space_id: crypto, view_id: okx_spot_1h_view, column_name: okx_spot_kline_1h.low, origin_type: dataset_column, origin_id: okx_spot_kline_1h.low, value_type: double, sort_order: 30 }
+  - { space_id: crypto, view_id: okx_spot_1h_view, column_name: okx_spot_kline_1h.close, origin_type: dataset_column, origin_id: okx_spot_kline_1h.close, value_type: double, sort_order: 40 }
+  - { space_id: crypto, view_id: okx_spot_1h_view, column_name: okx_spot_kline_1h.volume, origin_type: dataset_column, origin_id: okx_spot_kline_1h.volume, value_type: double, sort_order: 50 }
+  - { space_id: crypto, view_id: okx_spot_1h_view, column_name: okx_spot_kline_1h.quote_volume, origin_type: dataset_column, origin_id: okx_spot_kline_1h.quote_volume, value_type: double, sort_order: 60 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.open, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.open, value_type: double, sort_order: 10 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.high, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.high, value_type: double, sort_order: 20 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.low, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.low, value_type: double, sort_order: 30 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.close, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.close, value_type: double, sort_order: 40 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.volume, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.volume, value_type: double, sort_order: 50 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.quote_volume, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.quote_volume, value_type: double, sort_order: 60 }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70 }
