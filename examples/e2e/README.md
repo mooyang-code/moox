@@ -68,33 +68,15 @@ GOWORK=off go run ./cmd/moox-cli metadata import \
   --if-not-exists
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-crypto.seed.yaml \
+  --file ../../examples/metadata-quant-initial.seed.yaml \
   --metadata-url http://127.0.0.1:20200 \
+  --spaces crypto \
   --if-not-exists
 ```
 
-如果要验证 Binance 现货 1m K 线视图，应同时导入现货视图 seed：
-
-```bash
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-crypto-spot-kline-1m-view.seed.yaml \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
-```
-
-如需 A 股或 Binance 合约示例，再导入：
-
-```bash
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-cn-stock.seed.yaml \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
-
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-crypto-binance-swap-kline.seed.yaml \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
-```
+默认 seed 不静态枚举测试币种。E2E 的 prepare 阶段通过 Metadata
+`RegisterDataSubject` API 登记 `BTC-USDT`，同时创建 Binance 外部代码映射和
+`binance_spot_kline_1h` DatasetSubject 绑定。
 
 ## 创建采集规则
 
@@ -106,11 +88,11 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 {
   "rule": {
     "space_id": "crypto",
-    "rule_id": "binance_spot_kline_1m",
+    "rule_id": "binance_spot_kline_1h",
     "biz_type": "data_collector",
     "data_type": "kline",
     "data_source": "binance",
-    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1m\"]},\"target\":{\"dataset_id\":\"binance_spot_kline\",\"job_type\":\"collect.kline\",\"code_package_id\":\"moox-collector_dev\"},\"schedule\":{\"interval\":\"1m\",\"timezone\":\"Asia/Shanghai\"}}",
+    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\",\"job_type\":\"collect.kline\",\"code_package_id\":\"moox-collector_dev\"},\"schedule\":{\"interval\":\"1h\",\"timezone\":\"Asia/Shanghai\"}}",
     "assignment_type": "auto",
     "assigned_nodes": "[]",
     "node_pattern": "",
@@ -121,19 +103,19 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 }
 ```
 
-创建规则后，调用 `/api/admin/collectmgr/RecalculateAllTaskInstances`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode JobItem。
+创建规则后，调用 `/api/admin/collectmgr/RecalculateAllTaskInstances`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline_1h` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode JobItem。
 
 ## 最小可演示闭环
 
 删除所有运行时数据后，一个最小的端到端演示环境应按下面的边界重建：
 
 1. `moox-admin` 启动后，可以登录管理台并看到 `moox_cloudnode`、`moox_collector`、storage access/metadata/view 等服务部署记录。
-2. `moox-storage` metadata/access/primary/view 进程启动后，导入 `platform-local.seed.yaml`、`metadata-crypto.seed.yaml` 和 `metadata-crypto-spot-kline-1m-view.seed.yaml`。
+2. `moox-storage` metadata/access/primary/view 进程启动后，导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space。
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
-5. `moox-collector` 启动后，在采集规则页面创建 Binance 现货 K 线规则，规则根据 `binance_spot_kline` 数据集里的 subject 生成 task instances。
+5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；规则根据 `binance_spot_kline_1h` 数据集里的 Subject 生成 task instances。
 6. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行后通过 storage Access RPC 写入 K 线，并通过 `/api/service/collectmgr/ReportTaskStatus` 回写任务状态。
-7. 通过数据浏览或视图浏览页面确认 `spot_kline_1m_view` 能看到最新现货 K 线。
+7. 通过数据浏览或视图浏览页面确认 `binance_spot_1h_view` 能看到最新现货 K 线。
 
 如果第 7 步没有数据，不要回写 SQLite。按链路依次检查：服务部署地址、SCF 心跳、collector 任务实例、CloudNode JobItem、storage 写入、view rebuild/事件更新。
 
@@ -149,11 +131,10 @@ examples/e2e/run.sh --target localhost --dir /tmp/moox-e2e
 
 ```text
 examples/platform-local.seed.yaml
-examples/metadata-crypto.seed.yaml
-examples/metadata-crypto-spot-kline-1m-view.seed.yaml
+examples/metadata-quant-initial.seed.yaml --spaces crypto
 ```
 
-随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建 `crypto` Space、登记一个本地逻辑 SCF 节点、创建 Binance 现货 1m K 线规则、触发 collector 重算任务实例，再运行一次 `moox-collector-scf -once` 拉取 JobItem 并执行采集。最后断言：
+随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建 `crypto` Space、登记测试 Subject 和本地逻辑 SCF 节点、创建 Binance 现货 1H K 线规则、触发 collector 重算任务实例，再运行一次 `moox-collector-scf -once` 拉取 JobItem 并执行采集。最后断言：
 
 - `9527` 管理台静态页面可访问；
 - `11000` admin gateway health 可访问；
@@ -162,7 +143,7 @@ examples/metadata-crypto-spot-kline-1m-view.seed.yaml
 - collector 生成 task instances 且写入 `cloud_job_item_id`；
 - cloudnode JobItems 全部成功；
 - collector task instances 全部成功；
-- storage access 中能扫描到 `binance_spot_kline` 时序 K 线数据。
+- storage access 中能扫描到 `binance_spot_kline_1h` 时序 K 线数据。
 
 SCF 步骤从部署目录的 `secrets/gateway-service.env` 读取节点和服务身份，将公开 CA 证书以 `MOOX_GATEWAY_CA_PEM_B64` 传入运行时，并通过独立 Gateway `127.0.0.1:11002` 访问 `/api/service/*`。任一身份或 CA 配置缺失时会在调用前失败，不会打印密钥。
 

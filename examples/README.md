@@ -1,62 +1,50 @@
-# MooX 示例元数据
+# MooX 初始化与端到端示例
 
-本目录放置可直接通过 `moox-cli metadata import` 导入的示例元数据文件。文件按交易空间拆分，并保持在 `examples/` 根目录下，避免过深目录。
+`examples/` 只保留默认初始化、部署必需元数据和可执行 E2E。业务运行数据通过模块
+API 或采集流程生成，不在这里维护交易所、标的或历史行情快照。
 
-这些文件导入的是 moox-storage 的元数据。管理台顶部空间选择器来自 Control 服务；如果页面里尚未出现同名空间，请先在管理台空间设置中创建同名空间，或后续接入 Control 侧空间导入。
+## 元数据文件
 
-删库后重建端到端演示环境的流程见 [e2e/README.md](./e2e/README.md)。该流程只通过服务 API/CLI 导入示例数据，不直接写 SQLite 表。
+- `metadata-quant-initial.seed.yaml`：量化业务元数据唯一初始化事实源，包含 A 股、
+  港股、美股和加密货币市场。
+- `platform-local.seed.yaml`：本地开发与演示的单节点存储拓扑。
+- `metadata-monitor-metrics.seed.yaml`：MooX 服务指标逻辑元数据。
+- `metadata-monitor-metrics-local-route.seed.yaml`：服务指标的本地主存路由。
+- `metadata-monitor-host.seed.yaml`：主机资源逻辑元数据。
+- `metadata-monitor-host-local-route.seed.yaml`：主机资源的本地主存路由。
 
-## 文件
-
-- `platform-local.seed.yaml`：本地开发和演示用的平台级默认存储拓扑，包含 `local` 主存节点以及 Pebble、DuckDB、Bleve、Parquet 设备。
-- `metadata-cn-stock.seed.yaml`：A股交易空间示例，包含东方财富、AKShare、日线行情、股票资料、财务指标、字段、因子和 Dataset 默认主存路由。
-- `metadata-crypto.seed.yaml`：加密货币交易空间示例，包含 Binance 现货 K 线、交易对资料、字段、因子、Record 多数据集 Bleve View 和 Dataset 默认主存路由。
-- `metadata-crypto-binance-swap-kline.seed.yaml`：Binance U 本位永续合约 1H K 线示例，匹配 `coin-binance-swap-candle-csv-1h-*` CSV 表头，包含 swap 数据集、常用标的、字段、跨 swap/spot K 线的示例 View 和默认主存路由。
-- `data-crypto-record-symbol-profiles.json`：Record 多数据集 Bleve View 的演示数据，可直接投给 `AccessService.WriteRecordRows`，包含交易对状态和交易对画像两类记录。
-
-## 默认存储拓扑
-
-`platform-local.seed.yaml` 是平台级配置，通常只需要导入一次。它不绑定具体交易空间，也不包含业务 Dataset。
-
-`metadata-*.seed.yaml` 是空间级配置，里面的 `primary_store_routes` 会把每个 Dataset 默认路由到 `local` 主存节点。普通用户不需要手动配置主存节点和设备；只有多节点、迁移或高级运维场景才需要调整这些配置。
+默认量化 seed 使用市场作为 Space。`crypto` 是加密货币市场，`binance` 和 `okx`
+是该 Space 下的 DataSource；单频 Dataset ID 包含来源、产品和频率。
 
 ## 导入
 
 在仓库根目录执行：
 
 ```bash
-cd modules/cli
-
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/platform-local.seed.yaml \
+moox-cli metadata import \
+  --file examples/platform-local.seed.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-cn-stock.seed.yaml \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
-
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-crypto.seed.yaml \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
-
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-crypto-binance-swap-kline.seed.yaml \
+moox-cli metadata import \
+  --file examples/metadata-quant-initial.seed.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists
 ```
 
-`metadata-crypto.seed.yaml` 会先登记 BTC/ETH/SOL/BNB 等基础 Subject，并把它们绑定到现货 K 线数据集；`metadata-crypto-binance-swap-kline.seed.yaml` 再登记合约 K 线数据集和 `合约现货视图`。这样导入合约与现货同一 Subject、同一时间点的数据后，可以直接验证两个 TimeSeries Dataset 的 View Join。
-
-试跑不写入：
+只初始化加密货币市场：
 
 ```bash
-cd modules/cli
-
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-cn-stock.seed.yaml \
+moox-cli metadata import \
+  --file examples/metadata-quant-initial.seed.yaml \
+  --spaces crypto \
   --metadata-url http://127.0.0.1:20200 \
-  --dry-run
+  --if-not-exists
 ```
+
+该 seed 只面向空系统。结构调整后清理旧运行数据并重新导入，不执行旧元数据迁移。
+
+## E2E
+
+删库重建和端到端验证流程见 [e2e/README.md](./e2e/README.md)。E2E 使用默认量化
+seed，并通过 Metadata API 动态登记测试 Subject 和 DatasetSubject。

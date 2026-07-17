@@ -162,11 +162,11 @@ func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"metadata-import", "--file", "custom.toml", "--seed", "seed.yaml", "--storage-host", "compute", "--spaces", "stock_cn,crypto_binance"})
+	cmd.SetArgs([]string{"metadata-import", "--file", "custom.toml", "--seed", "seed.yaml", "--storage-host", "compute", "--spaces", "stock_cn,crypto"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", host)
 	require.Equal(t, "seed.yaml", seed)
-	require.Equal(t, []string{"stock_cn", "crypto_binance"}, spaces)
+	require.Equal(t, []string{"stock_cn", "crypto"}, spaces)
 	var result metadataImportSummary
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.Equal(t, 12, result.Applied)

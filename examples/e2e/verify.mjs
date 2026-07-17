@@ -46,10 +46,10 @@ function parseArgs(argv) {
     web: "http://127.0.0.1:9527",
     host: "127.0.0.1",
     space: "crypto",
-    rule: "binance_spot_kline_1m",
+    rule: "binance_spot_kline_1h",
     node: "e2e-scf-node",
     package: "moox-collector_dev",
-    dataset: "binance_spot_kline",
+    dataset: "binance_spot_kline_1h",
     username: "mooxe2eadmin",
     password: "MooxE2E#20260704!",
     timeoutSeconds: 180,
@@ -105,10 +105,10 @@ Options:
   --web <url>              Web host URL. Default: http://127.0.0.1:9527
   --host <host>            Public host written to SysDeploy public endpoints.
   --space <space_id>       Space ID. Default: crypto
-  --rule <rule_id>         Collector rule ID. Default: binance_spot_kline_1m
+  --rule <rule_id>         Collector rule ID. Default: binance_spot_kline_1h
   --node <node_id>         Cloud runtime node ID. Default: e2e-scf-node
   --package <package_id>   Code package ID. Default: moox-collector_dev
-  --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline
+  --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline_1h
   --timeout-seconds <n>    Poll timeout for assert phase. Default: 180`);
 }
 
@@ -149,6 +149,7 @@ async function prepare(args) {
     return;
   }
   await ensureSpace(args, token);
+  await ensureDatasetSubject(args, token);
 
   await assertManagementRequests(args, token);
   await ensureCloudNode(args, token);
@@ -409,6 +410,29 @@ async function ensureSpace(args, token) {
   log(`created space: ${args.space}`);
 }
 
+async function ensureDatasetSubject(args, token) {
+  await storagePost(args, token, "metadata", "RegisterDataSubject", {
+    space_id: args.space,
+    data_source_id: "binance",
+    external_symbol: "BTCUSDT",
+    subject: {
+      subject_id: "BTC-USDT",
+      subject_type: "crypto_pair",
+      name: "Bitcoin / Tether",
+      market: "crypto",
+      currency: "USDT",
+      timezone: "UTC",
+      status: "active",
+    },
+    dataset_bindings: [{
+      dataset_id: args.dataset,
+      subject_role: "normal",
+      status: "active",
+    }],
+  });
+  log(`dataset subject ready: ${args.dataset}/BTC-USDT`);
+}
+
 async function assertManagementRequests(args, token) {
   const spaces = await adminPost(args, token, "space", "ListSpaces", { page: { page: 1, size: 50 } });
   if (!(spaces.spaces || []).some((item) => item.space_id === args.space)) {
@@ -482,9 +506,9 @@ async function ensureCollectorRule(args, token) {
     exchange: "binance",
     collect_params: {
       source: { kind: "dataset_subjects", dataset_id: args.dataset },
-      collector: { exchange: "binance", market: "spot", data_type: "kline", intervals: ["1m"] },
+      collector: { exchange: "binance", market: "spot", data_type: "kline", intervals: ["1h"] },
       target: { dataset_id: args.dataset, job_type: "collect.kline", code_package_id: args.package },
-      schedule: { interval: "1m", timezone: "Asia/Shanghai" },
+      schedule: { interval: "1h", timezone: "Asia/Shanghai" },
     },
     assignment_type: "auto",
     assigned_nodes: [],

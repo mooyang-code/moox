@@ -52,7 +52,7 @@ moox-cli setup metadata-import \
   --file ./custom.toml \
   --storage-host compute \
   --seed ./examples/metadata-quant-initial.seed.yaml \
-  --spaces stock_cn,crypto_binance
+  --spaces stock_cn,crypto
 ```
 
 `deploy-storage` 同机部署 `storage-access`、`storage-view-index`、
@@ -103,12 +103,12 @@ storage:
 
 ```bash
 moox-cli metadata import \
-  --file ../../examples/metadata-crypto.seed.yaml \
+  --file ../../examples/metadata-quant-initial.seed.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists \
   --spaces crypto
 
-moox-cli metadata import --file ../../examples/metadata-crypto.seed.yaml --dry-run
+moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --dry-run
 
 moox-cli metadata apply \
   --file ../../examples/metadata-monitor-metrics.seed.yaml \

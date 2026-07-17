@@ -46,14 +46,14 @@ func TestLoadMetadataSeed_ParsesMinimalYAML(t *testing.T) {
 func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	t.Parallel()
 	seed := metadataSeed{
-		Spaces:            []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}, {SpaceID: "crypto_binance", Name: "币安市场"}},
-		DataSources:       []seedDataSource{{SpaceID: "stock_cn", DataSourceID: "stock"}, {SpaceID: "crypto_binance", DataSourceID: "binance"}},
-		FieldGroups:       []seedFieldGroup{{SpaceID: "stock_cn", GroupID: "quote"}, {SpaceID: "crypto_binance", GroupID: "quote"}},
-		Fields:            []seedField{{SpaceID: "stock_cn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto_binance", FieldID: "close", GroupID: "quote"}},
-		Datasets:          []seedDataset{{SpaceID: "stock_cn", DatasetID: "kline"}, {SpaceID: "crypto_binance", DatasetID: "kline"}},
-		DatasetColumns:    []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto_binance", DatasetID: "kline", ColumnName: "close"}},
-		Views:             []seedView{{SpaceID: "stock_cn", ViewID: "kline"}, {SpaceID: "crypto_binance", ViewID: "kline"}},
-		ViewColumns:       []seedViewColumn{{SpaceID: "stock_cn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto_binance", ViewID: "kline", ColumnName: "close"}},
+		Spaces:            []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}, {SpaceID: "crypto", Name: "加密货币市场"}},
+		DataSources:       []seedDataSource{{SpaceID: "stock_cn", DataSourceID: "stock"}, {SpaceID: "crypto", DataSourceID: "binance"}},
+		FieldGroups:       []seedFieldGroup{{SpaceID: "stock_cn", GroupID: "quote"}, {SpaceID: "crypto", GroupID: "quote"}},
+		Fields:            []seedField{{SpaceID: "stock_cn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto", FieldID: "close", GroupID: "quote"}},
+		Datasets:          []seedDataset{{SpaceID: "stock_cn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
+		DatasetColumns:    []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
+		Views:             []seedView{{SpaceID: "stock_cn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
+		ViewColumns:       []seedViewColumn{{SpaceID: "stock_cn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto", ViewID: "kline", ColumnName: "close"}},
 		PrimaryStoreNodes: []seedPrimaryStoreNode{{NodeID: "storage"}},
 		Devices:           []seedDevice{{DeviceID: "duckdb"}},
 	}
@@ -85,11 +85,11 @@ func TestMetadataSpaceCatalogIsStableAndSanitized(t *testing.T) {
 	t.Parallel()
 	seed := metadataSeed{Spaces: []seedSpace{
 		{SpaceID: "stock_cn", Name: "A股市场", Description: "A股数据"},
-		{SpaceID: "crypto_binance", Name: "币安市场", Description: "Binance"},
+		{SpaceID: "crypto", Name: "加密货币市场", Description: "多交易所加密货币数据"},
 	}}
 	require.Equal(t, []metadataSpaceChoice{
 		{SpaceID: "stock_cn", Name: "A股市场", Description: "A股数据"},
-		{SpaceID: "crypto_binance", Name: "币安市场", Description: "Binance"},
+		{SpaceID: "crypto", Name: "加密货币市场", Description: "多交易所加密货币数据"},
 	}, metadataSpaceCatalog(seed))
 }
 

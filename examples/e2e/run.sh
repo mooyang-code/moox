@@ -9,10 +9,10 @@ DEPLOY=1
 RESET_DATA=1
 TIMEOUT_SECONDS=180
 SPACE_ID="crypto"
-RULE_ID="binance_spot_kline_1m"
+RULE_ID="binance_spot_kline_1h"
 NODE_ID="e2e-scf-node"
 PACKAGE_ID="moox-collector_dev"
-DATASET_ID="binance_spot_kline"
+DATASET_ID="binance_spot_kline_1h"
 SYSDEPLOY_ONLY=0
 E2E_ADMIN_USERNAME="mooxe2eadmin"
 E2E_ADMIN_PASSWORD="MooxE2E#20260704!"
@@ -138,16 +138,26 @@ run_remote() {
 
 import_seed() {
   local seed="$1"
+  local space="${2:-}"
+  local space_args=()
+  if [[ -n "${space}" ]]; then
+    space_args=(--spaces "${space}")
+  fi
   if is_local_target; then
     local deploy_dir
     deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
     "${deploy_dir}/bin/moox-cli" metadata import \
       --metadata-url "http://127.0.0.1:20200" \
       --file "${deploy_dir}/examples/${seed}" \
+      "${space_args[@]}" \
       --if-not-exists
     return
   fi
-  run_remote "./bin/moox-cli metadata import --metadata-url http://127.0.0.1:20200 --file ./examples/${seed} --if-not-exists"
+  local remote_space=""
+  if [[ -n "${space}" ]]; then
+    remote_space=" --spaces $(shell_quote "${space}")"
+  fi
+  run_remote "./bin/moox-cli metadata import --metadata-url http://127.0.0.1:20200 --file ./examples/${seed}${remote_space} --if-not-exists"
 }
 
 run_scf_once() {
@@ -207,8 +217,7 @@ if [[ "${SYSDEPLOY_ONLY}" -eq 1 ]]; then
   exit 0
 fi
 import_seed "platform-local.seed.yaml"
-import_seed "metadata-crypto.seed.yaml"
-import_seed "metadata-crypto-spot-kline-1m-view.seed.yaml"
+import_seed "metadata-quant-initial.seed.yaml" "${SPACE_ID}"
 
 log "prepare management/backend state"
 verify_phase "prepare"
