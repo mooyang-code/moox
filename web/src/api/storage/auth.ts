@@ -1,6 +1,6 @@
 export const APP_AUTH_INFO = {
-  app_id: 'moox_frontend',
-  app_key: '2521e0d21b6be0347b72bca93904a0dd',
+  app_id: "moox_frontend",
+  app_key: "2521e0d21b6be0347b72bca93904a0dd"
 } as const;
 
 export interface StorageAuthInfo {
@@ -17,14 +17,14 @@ export function getAppInfo() {
 export function appAuthHeaders() {
   return {
     app_id: APP_AUTH_INFO.app_id,
-    app_key: APP_AUTH_INFO.app_key,
+    app_key: APP_AUTH_INFO.app_key
   };
 }
 
 export function getStorageAuthInfo(): StorageAuthInfo {
   return {
     ...APP_AUTH_INFO,
-    operator: 'moox_web',
-    request_id: `web-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    operator: "moox_web",
+    request_id: `web-${Date.now()}-${Math.random().toString(16).slice(2)}`
   };
 }

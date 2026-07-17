@@ -45,7 +45,7 @@ func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
 		return journal.AppendResult{Seq: 1}, nil
 	}}
 	handler := NewHandler(&fakeDecoder{
-		batch: domain.EventBatch{MessageID: "m1", Rows: []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}}}},
+		batch:    domain.EventBatch{MessageID: "m1", Rows: []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}}}},
 		decision: DecisionArchive,
 	}, store, nil)
 	runner := NewRunner(consumer, handler, 1)
@@ -67,7 +67,7 @@ func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {
 		return journal.AppendResult{}, errors.New("journal unavailable")
 	}}
 	handler := NewHandler(&fakeDecoder{
-		batch: domain.EventBatch{MessageID: "m1", Rows: []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}}}},
+		batch:    domain.EventBatch{MessageID: "m1", Rows: []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}}}},
 		decision: DecisionArchive,
 	}, store, nil)
 	runner := NewRunner(consumer, handler, 1)

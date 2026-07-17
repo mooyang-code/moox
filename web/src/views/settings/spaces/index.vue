@@ -1,94 +1,94 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div>
-        <h2>空间管理</h2>
+      <div class="page-head">
+        <div>
+          <h2>空间管理</h2>
+        </div>
+        <a-space>
+          <a-button type="primary" status="success" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            创建空间
+          </a-button>
+        </a-space>
       </div>
-      <a-space>
-        <a-button type="primary" status="success" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          创建空间
-        </a-button>
-      </a-space>
-    </div>
 
-    <a-table
-      row-key="space_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="rows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="空间ID" data-index="space_id" :width="180" />
-        <a-table-column title="名称" data-index="name" :width="180" />
-        <a-table-column title="负责人" data-index="owner" :width="120" />
-        <a-table-column title="市场" data-index="market" :width="110" />
-        <a-table-column title="时区" data-index="timezone" :width="150" />
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-        </a-table-column>
-        <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-space>
-              <a-button size="mini" type="text" @click="spaceStore.setSelectedSpace(record.space_id)">设为当前</a-button>
-              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-            </a-space>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
+      <a-table
+        row-key="space_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="rows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="空间ID" data-index="space_id" :width="180" />
+          <a-table-column title="名称" data-index="name" :width="180" />
+          <a-table-column title="负责人" data-index="owner" :width="120" />
+          <a-table-column title="市场" data-index="market" :width="110" />
+          <a-table-column title="时区" data-index="timezone" :width="150" />
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+          </a-table-column>
+          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-space>
+                <a-button size="mini" type="text" @click="spaceStore.setSelectedSpace(record.space_id)">设为当前</a-button>
+                <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+              </a-space>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
 
-    <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @ok="submit">
-      <a-form :model="form" auto-label-width>
-        <a-form-item field="space_id" label="空间ID" required>
-          <a-input v-model="form.space_id" :disabled="editing" placeholder="例如 cn_stock" />
-        </a-form-item>
-        <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" placeholder="例如 A股交易空间" />
-        </a-form-item>
-        <a-form-item field="description" label="描述">
-          <a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
-        </a-form-item>
-        <a-form-item field="owner" label="负责人">
-          <a-input v-model="form.owner" />
-        </a-form-item>
-        <a-form-item field="market" label="市场">
-          <a-input v-model="form.market" placeholder="例如 CN、US、CRYPTO" />
-        </a-form-item>
-        <a-form-item field="timezone" label="时区">
-          <a-input v-model="form.timezone" placeholder="例如 Asia/Shanghai" />
-        </a-form-item>
-        <a-form-item field="status" label="状态">
-          <a-select v-model="form.status">
-            <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-          </a-select>
-        </a-form-item>
-      </a-form>
-    </a-modal>
+      <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @ok="submit">
+        <a-form :model="form" auto-label-width>
+          <a-form-item field="space_id" label="空间ID" required>
+            <a-input v-model="form.space_id" :disabled="editing" placeholder="例如 cn_stock" />
+          </a-form-item>
+          <a-form-item field="name" label="名称" required>
+            <a-input v-model="form.name" placeholder="例如 A股交易空间" />
+          </a-form-item>
+          <a-form-item field="description" label="描述">
+            <a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
+          </a-form-item>
+          <a-form-item field="owner" label="负责人">
+            <a-input v-model="form.owner" />
+          </a-form-item>
+          <a-form-item field="market" label="市场">
+            <a-input v-model="form.market" placeholder="例如 CN、US、CRYPTO" />
+          </a-form-item>
+          <a-form-item field="timezone" label="时区">
+            <a-input v-model="form.timezone" placeholder="例如 Asia/Shanghai" />
+          </a-form-item>
+          <a-form-item field="status" label="状态">
+            <a-select v-model="form.status">
+              <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
+      </a-modal>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { createSpace, listSpaces, updateSpace } from '@/api/admin/spaces';
-import type { Space } from '@/api/admin/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
+import { computed, onMounted, reactive, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
+import type { Space } from "@/api/admin/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'SettingsSpaces' });
+defineOptions({ name: "SettingsSpaces" });
 
 const spaceStore = useSpaceStore();
 const rows = ref<Space[]>([]);
@@ -98,16 +98,16 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive<Space>({
-  space_id: '',
-  name: '',
-  description: '',
-  owner: '',
-  market: '',
-  timezone: 'Asia/Shanghai',
-  status: 'active',
+  space_id: "",
+  name: "",
+  description: "",
+  owner: "",
+  market: "",
+  timezone: "Asia/Shanghai",
+  status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑空间' : '创建空间'));
+const modalTitle = computed(() => (editing.value ? "编辑空间" : "创建空间"));
 
 async function load() {
   loading.value = true;
@@ -123,13 +123,13 @@ async function load() {
 
 function resetForm() {
   Object.assign(form, {
-    space_id: '',
-    name: '',
-    description: '',
-    owner: '',
-    market: '',
-    timezone: 'Asia/Shanghai',
-    status: 'active',
+    space_id: "",
+    name: "",
+    description: "",
+    owner: "",
+    market: "",
+    timezone: "Asia/Shanghai",
+    status: "active"
   });
 }
 
@@ -144,18 +144,18 @@ function openEdit(record: Space) {
   Object.assign(form, {
     space_id: record.space_id,
     name: record.name,
-    description: record.description || '',
-    owner: record.owner || '',
-    market: record.market || '',
-    timezone: record.timezone || 'Asia/Shanghai',
-    status: record.status || 'active',
+    description: record.description || "",
+    owner: record.owner || "",
+    market: record.market || "",
+    timezone: record.timezone || "Asia/Shanghai",
+    status: record.status || "active"
   });
   visible.value = true;
 }
 
 async function submit() {
   if (!form.space_id || !form.name) {
-    Message.warning('请填写空间ID和名称');
+    Message.warning("请填写空间ID和名称");
     return;
   }
   if (editing.value) {
@@ -163,7 +163,7 @@ async function submit() {
   } else {
     await createSpace({ ...form });
   }
-  Message.success('空间已保存');
+  Message.success("空间已保存");
   visible.value = false;
   await load();
   spaceStore.setSelectedSpace(form.space_id);

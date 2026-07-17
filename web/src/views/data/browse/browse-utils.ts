@@ -9,8 +9,8 @@ import type {
   DatasetSubject,
   Subject,
   TimeSeriesRow,
-  TypedValue,
-} from '@/api/storage/types';
+  TypedValue
+} from "@/api/storage/types";
 
 export interface BrowseDataId {
   id: string;
@@ -25,44 +25,44 @@ export interface BrowseTableRow {
   values: Record<string, string>;
 }
 
-export type BrowseSortDirection = '' | 'asc' | 'desc';
+export type BrowseSortDirection = "" | "asc" | "desc";
 
 const minAdaptiveColumnWidth = 112;
 const maxAdaptiveColumnWidth = 320;
 
 const systemColumnLabels: Record<string, string> = {
-  subject_id: '数据ID',
-  record_id: '记录ID',
-  freq: '频率',
-  data_time: '时间',
-  version: '版本',
+  subject_id: "数据ID",
+  record_id: "记录ID",
+  freq: "频率",
+  data_time: "时间",
+  version: "版本"
 };
 
-export function datasetDisplayName(dataset?: Pick<Dataset, 'dataset_id' | 'name'> | null) {
-  if (!dataset) return '';
-  return dataset.name || dataset.dataset_id || '';
+export function datasetDisplayName(dataset?: Pick<Dataset, "dataset_id" | "name"> | null) {
+  if (!dataset) return "";
+  return dataset.name || dataset.dataset_id || "";
 }
 
-export function adaptiveColumnWidth(columnName: string, label: string, rows: Array<Pick<BrowseTableRow, 'values'>>) {
+export function adaptiveColumnWidth(columnName: string, label: string, rows: Array<Pick<BrowseTableRow, "values">>) {
   const headerWidth = visualTextWidth(label || columnName);
   const valueWidth = rows.reduce((maxWidth, row) => {
     const value = row.values?.[columnName];
-    return Math.max(maxWidth, visualTextWidth(value || ''));
+    return Math.max(maxWidth, visualTextWidth(value || ""));
   }, 0);
   const rawWidth = Math.max(headerWidth, valueWidth) + 48;
   return clamp(roundUp(rawWidth, 8), minAdaptiveColumnWidth, maxAdaptiveColumnWidth);
 }
 
 export function buildSubjectDataIds(datasetSubjects: DatasetSubject[], subjects: Subject[]): BrowseDataId[] {
-  const subjectByID = new Map(subjects.map((item) => [item.subject_id, item]));
+  const subjectByID = new Map(subjects.map(item => [item.subject_id, item]));
   return datasetSubjects
-    .filter((item) => !item.status || item.status === 'active')
-    .map((item) => {
+    .filter(item => !item.status || item.status === "active")
+    .map(item => {
       const subject = subjectByID.get(item.subject_id);
       return {
         id: item.subject_id,
         name: subject?.name || item.subject_id,
-        description: [subject?.subject_type, subject?.market].filter(Boolean).join(' / '),
+        description: [subject?.subject_type, subject?.market].filter(Boolean).join(" / ")
       };
     })
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -73,8 +73,8 @@ export function displayDataIdText(item: BrowseDataId) {
 }
 
 export function buildColumnLabels(columns: DatasetColumn[], fields: Field[], factors: Factor[]) {
-  const fieldByID = new Map(fields.map((item) => [item.field_id, item]));
-  const factorByID = new Map(factors.map((item) => [item.factor_id, item]));
+  const fieldByID = new Map(fields.map(item => [item.field_id, item]));
+  const factorByID = new Map(factors.map(item => [item.factor_id, item]));
   const labels: Record<string, string> = {};
   for (const column of columns) {
     if (!column.column_name) continue;
@@ -83,23 +83,19 @@ export function buildColumnLabels(columns: DatasetColumn[], fields: Field[], fac
   return labels;
 }
 
-function resolveColumnLabel(
-  column: DatasetColumn,
-  fieldByID: Map<string, Field>,
-  factorByID: Map<string, Factor>,
-) {
+function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>, factorByID: Map<string, Factor>) {
   const columnDisplayName = displayName(column.attributes);
   if (columnDisplayName) return columnDisplayName;
-  if (isOriginType(column.origin_type, 'DATASET_COLUMN_ORIGIN_TYPE_FIELD', 1)) {
+  if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FIELD", 1)) {
     return readableColumnLabel(
       column.column_name,
-      fieldByID.get(column.origin_id)?.name || fieldByID.get(column.column_name)?.name,
+      fieldByID.get(column.origin_id)?.name || fieldByID.get(column.column_name)?.name
     );
   }
-  if (isOriginType(column.origin_type, 'DATASET_COLUMN_ORIGIN_TYPE_FACTOR', 2)) {
+  if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
     return readableColumnLabel(
       column.column_name,
-      factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name,
+      factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name
     );
   }
   return systemColumnLabels[column.origin_id] || readableColumnLabel(column.column_name);
@@ -110,7 +106,7 @@ function readableColumnLabel(columnName: string, metadataName?: string) {
 }
 
 function displayName(attributes?: Record<string, string>) {
-  return attributes?.display_name?.trim() || '';
+  return attributes?.display_name?.trim() || "";
 }
 
 function containsCJK(value: string) {
@@ -134,21 +130,21 @@ function isOriginType(value: DatasetColumnOriginType, name: string, alias: numbe
 }
 
 export function columnValueText(column?: ColumnValue) {
-  if (!column?.value) return '-';
+  if (!column?.value) return "-";
   return typedValueText(column.value);
 }
 
 export function typedValueText(value?: TypedValue): string {
-  if (!value) return '-';
+  if (!value) return "-";
   if (value.string_value !== undefined) return value.string_value;
   if (value.int_value !== undefined) return String(value.int_value);
   if (value.double_value !== undefined) return String(value.double_value);
-  if (value.bool_value !== undefined) return value.bool_value ? 'true' : 'false';
+  if (value.bool_value !== undefined) return value.bool_value ? "true" : "false";
   if (value.time_value !== undefined) return value.time_value;
   if (value.json_value !== undefined) return value.json_value;
   if (value.bytes_value !== undefined) return value.bytes_value;
-  if (value.list_value?.values) return value.list_value.values.map((item) => typedValueText(item)).join(', ');
-  return '-';
+  if (value.list_value?.values) return value.list_value.values.map(item => typedValueText(item)).join(", ");
+  return "-";
 }
 
 export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, preferred: string[] = []) {
@@ -171,19 +167,19 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
 
 export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow[] {
   return rows.map((row, index) => ({
-    id: `ts-${index}-${row.key?.subject_id || ''}-${row.key?.data_time || ''}`,
-    key: row.key?.subject_id || '-',
-    version: row.key?.data_time || '-',
-    values: columnsToValueMap(row.columns || []),
+    id: `ts-${index}-${row.key?.subject_id || ""}-${row.key?.data_time || ""}`,
+    key: row.key?.subject_id || "-",
+    version: row.key?.data_time || "-",
+    values: columnsToValueMap(row.columns || [])
   }));
 }
 
 export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
   return rows.map((row, index) => ({
-    id: `record-${index}-${row.key?.record_id || ''}-${row.key?.version || ''}`,
-    key: row.key?.record_id || '-',
-    version: row.key?.version || '-',
-    values: columnsToValueMap(row.columns || []),
+    id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
+    key: row.key?.record_id || "-",
+    version: row.key?.version || "-",
+    values: columnsToValueMap(row.columns || [])
   }));
 }
 
@@ -192,15 +188,15 @@ export function sortBrowseTableRows(rows: BrowseTableRow[], fieldName: string, d
   return [...rows].sort((left, right) => {
     const leftValue = browseSortValue(left, fieldName);
     const rightValue = browseSortValue(right, fieldName);
-    const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: 'base' });
-    return direction === 'desc' ? -comparison : comparison;
+    const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: "base" });
+    return direction === "desc" ? -comparison : comparison;
   });
 }
 
 function browseSortValue(row: BrowseTableRow, fieldName: string) {
-  if (fieldName === 'subject_id' || fieldName === 'record_id') return row.key;
-  if (fieldName === 'data_time' || fieldName === 'version') return row.version;
-  return row.values[fieldName] || '';
+  if (fieldName === "subject_id" || fieldName === "record_id") return row.key;
+  if (fieldName === "data_time" || fieldName === "version") return row.version;
+  return row.values[fieldName] || "";
 }
 
 function columnsToValueMap(columns: ColumnValue[]) {

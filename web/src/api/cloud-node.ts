@@ -1,7 +1,12 @@
-import { callControl } from '@/api/admin/http';
-export { withOptionalSpace } from '@/api/space-context';
+import { callControl } from "@/api/admin/http";
+export { withOptionalSpace } from "@/api/space-context";
 
-export type NodeStatusCode = 'NODE_STATUS_UNSPECIFIED' | 'NODE_STATUS_OFFLINE' | 'NODE_STATUS_ONLINE' | 'NODE_STATUS_TIMEOUT' | 'NODE_STATUS_ABNORMAL';
+export type NodeStatusCode =
+  | "NODE_STATUS_UNSPECIFIED"
+  | "NODE_STATUS_OFFLINE"
+  | "NODE_STATUS_ONLINE"
+  | "NODE_STATUS_TIMEOUT"
+  | "NODE_STATUS_ABNORMAL";
 
 export interface CloudNode {
   id?: number;
@@ -130,75 +135,93 @@ export interface BatchChangeResult {
 }
 
 export const NODE_STATUS_LABEL: Record<string, string> = {
-  NODE_STATUS_ONLINE: '在线',
-  NODE_STATUS_OFFLINE: '离线',
-  NODE_STATUS_TIMEOUT: '超时',
-  NODE_STATUS_ABNORMAL: '异常',
-  NODE_STATUS_UNSPECIFIED: '未知'
+  NODE_STATUS_ONLINE: "在线",
+  NODE_STATUS_OFFLINE: "离线",
+  NODE_STATUS_TIMEOUT: "超时",
+  NODE_STATUS_ABNORMAL: "异常",
+  NODE_STATUS_UNSPECIFIED: "未知"
 };
 
-function normalizePageParams<T extends { page?: Page | number; page_size?: number; status?: unknown }>(params: T): T & { page?: Page } {
+function normalizePageParams<T extends { page?: Page | number; page_size?: number; status?: unknown }>(
+  params: T
+): T & { page?: Page } {
   const normalized = { ...params } as T & { page?: Page };
-  if (typeof params.page === 'number' || params.page_size !== undefined) {
+  if (typeof params.page === "number" || params.page_size !== undefined) {
     normalized.page = {
-      page: typeof params.page === 'number' ? params.page : params.page?.page,
-      size: params.page_size ?? (typeof params.page === 'object' ? params.page?.size : undefined)
+      page: typeof params.page === "number" ? params.page : params.page?.page,
+      size: params.page_size ?? (typeof params.page === "object" ? params.page?.size : undefined)
     };
   }
   delete (normalized as { page_size?: number }).page_size;
-  if (normalized.status === '') {
+  if (normalized.status === "") {
     delete (normalized as { status?: unknown }).status;
   }
   return normalized;
 }
 
-export const getNodeList = async (params: GetNodeListRequest = {}): Promise<{ items: CloudNode[]; total: number; page?: PageResult }> => {
-  const rsp = await callControl<GetNodeListRequest, { items?: CloudNode[]; page?: PageResult }>('cloudnode', 'GetNodeList', normalizePageParams(params));
+export const getNodeList = async (
+  params: GetNodeListRequest = {}
+): Promise<{ items: CloudNode[]; total: number; page?: PageResult }> => {
+  const rsp = await callControl<GetNodeListRequest, { items?: CloudNode[]; page?: PageResult }>(
+    "cloudnode",
+    "GetNodeList",
+    normalizePageParams(params)
+  );
   return { items: rsp.items ?? [], total: rsp.page?.total ?? 0, page: rsp.page };
 };
 
 export const updateNode = async (data: UpdateNodeRequest): Promise<void> => {
-  await callControl<{ node: UpdateNodeRequest }, Record<string, never>>('cloudnode', 'UpdateNode', { node: data });
+  await callControl<{ node: UpdateNodeRequest }, Record<string, never>>("cloudnode", "UpdateNode", { node: data });
 };
 
 export const batchCreateNodes = async (data: BatchCreateNodesRequest): Promise<BatchChangeResult> => {
-  const nodes = data.nodes ?? Array.from({ length: data.count }).map((_, index) => ({
-    cloud_account_id: data.cloud_account_id,
-    node_type: data.node_type,
-    region: data.region,
-    namespace: data.namespace,
-    runtime: data.runtime,
-    handler: data.handler,
-    package_id: data.package_id,
-    deployment_id: data.deployment_id,
-    config: data.config,
-    environment: data.environment,
-    metadata: {
-      ...(data.metadata ?? {}),
-      function_name_prefix: data.function_name_prefix,
-      index
-    }
-  }));
-  const rsp = await callControl<{ nodes: BatchCreateNodeItem[] }, Partial<BatchChangeResult>>('cloudnode', 'BatchCreateNodes', { nodes });
-  return { batch_id: rsp.batch_id ?? '', processed_count: rsp.processed_count ?? 0 };
+  const nodes =
+    data.nodes ??
+    Array.from({ length: data.count }).map((_, index) => ({
+      cloud_account_id: data.cloud_account_id,
+      node_type: data.node_type,
+      region: data.region,
+      namespace: data.namespace,
+      runtime: data.runtime,
+      handler: data.handler,
+      package_id: data.package_id,
+      deployment_id: data.deployment_id,
+      config: data.config,
+      environment: data.environment,
+      metadata: {
+        ...(data.metadata ?? {}),
+        function_name_prefix: data.function_name_prefix,
+        index
+      }
+    }));
+  const rsp = await callControl<{ nodes: BatchCreateNodeItem[] }, Partial<BatchChangeResult>>("cloudnode", "BatchCreateNodes", {
+    nodes
+  });
+  return { batch_id: rsp.batch_id ?? "", processed_count: rsp.processed_count ?? 0 };
 };
 
 export const batchDeployNodes = async (data: BatchDeployNodesRequest): Promise<BatchChangeResult> => {
   const deployments = data.node_ids.map(id => ({ node_id: id, package_id: data.package_id }));
   const rsp = await callControl<{ deployments: Array<{ node_id: string; package_id: string }> }, Partial<BatchChangeResult>>(
-    'cloudnode',
-    'BatchDeployNodes',
+    "cloudnode",
+    "BatchDeployNodes",
     { deployments }
   );
-  return { batch_id: rsp.batch_id ?? '', processed_count: rsp.processed_count ?? 0 };
+  return { batch_id: rsp.batch_id ?? "", processed_count: rsp.processed_count ?? 0 };
 };
 
 export const batchDeleteNodes = async (data: BatchDeleteNodesRequest): Promise<BatchChangeResult> => {
-  const rsp = await callControl<{ node_ids: string[] }, Partial<BatchChangeResult>>('cloudnode', 'BatchDeleteNodes', { node_ids: data.node_ids });
-  return { batch_id: rsp.batch_id ?? '', processed_count: rsp.processed_count ?? 0 };
+  const rsp = await callControl<{ node_ids: string[] }, Partial<BatchChangeResult>>("cloudnode", "BatchDeleteNodes", {
+    node_ids: data.node_ids
+  });
+  return { batch_id: rsp.batch_id ?? "", processed_count: rsp.processed_count ?? 0 };
 };
 
-export const listCloudRegions = async (provider = 'tencent'): Promise<CloudRegion[]> => {
-  const rsp = await callControl<{ provider?: string }, { regions?: CloudRegion[] }>('cloudnode', 'ListCloudRegions', provider ? { provider } : {});
+export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegion[]> => {
+  const rsp = await callControl<{ provider?: string }, { regions?: CloudRegion[] }>(
+    "cloudnode",
+    "ListCloudRegions",
+    provider ? { provider } : {}
+  );
   return rsp.regions ?? [];
 };

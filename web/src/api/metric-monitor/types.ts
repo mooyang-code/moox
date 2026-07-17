@@ -5,7 +5,7 @@ export const METRIC_RULE_LIMIT = 100;
 
 export const LogicalOperator = {
   AND: 1,
-  OR: 2,
+  OR: 2
 } as const;
 export type LogicalOperatorValue = (typeof LogicalOperator)[keyof typeof LogicalOperator] | number;
 
@@ -15,7 +15,7 @@ export const CompareOperator = {
   LT: 3,
   LTE: 4,
   EQ: 5,
-  NEQ: 6,
+  NEQ: 6
 } as const;
 export type CompareOperatorValue = (typeof CompareOperator)[keyof typeof CompareOperator] | number;
 
@@ -26,7 +26,7 @@ export const TimeReducer = {
   MAX: 4,
   SUM: 5,
   RATE: 6,
-  INCREASE: 7,
+  INCREASE: 7
 } as const;
 export type TimeReducerValue = (typeof TimeReducer)[keyof typeof TimeReducer] | number;
 
@@ -34,14 +34,14 @@ export const SeriesReducer = {
   AVG: 1,
   MIN: 2,
   MAX: 3,
-  SUM: 4,
+  SUM: 4
 } as const;
 export type SeriesReducerValue = (typeof SeriesReducer)[keyof typeof SeriesReducer] | number;
 
 export const NoDataPolicy = {
   KEEP_STATE: 1,
   OK: 2,
-  FIRING: 3,
+  FIRING: 3
 } as const;
 export type NoDataPolicyValue = (typeof NoDataPolicy)[keyof typeof NoDataPolicy] | number;
 
@@ -137,7 +137,7 @@ export interface MetricCondition {
   no_data_policy: NoDataPolicyValue;
 }
 
-export type MetricConditionPatch = Omit<Partial<MetricCondition>, 'query'> & {
+export type MetricConditionPatch = Omit<Partial<MetricCondition>, "query"> & {
   query?: {
     selector?: Partial<MetricSelector>;
     time_reducer?: TimeReducerValue;

@@ -57,7 +57,7 @@ type relayTestStore struct {
 	deleted []uint64
 }
 
-func (s *relayTestStore) Close() error { return nil }
+func (s *relayTestStore) Close() error                                           { return nil }
 func (s *relayTestStore) WriteRows(context.Context, []*pb.PrimaryStoreRow) error { return nil }
 func (s *relayTestStore) WriteRowsWithOutbox(context.Context, []*pb.PrimaryStoreRow, *device.OutboxEntry) error {
 	return nil

@@ -1,4 +1,4 @@
-import { callControl } from '@/api/admin/http';
+import { callControl } from "@/api/admin/http";
 import type {
   AlertEvent,
   AlertRule,
@@ -8,69 +8,69 @@ import type {
   MonitorOverview,
   PageReq,
   PageResult,
-  WebhookChannel,
-} from './types';
+  WebhookChannel
+} from "./types";
 
-const service = 'moox_monitor';
+const service = "moox_monitor";
 
 export const monitorApi = {
   listChecks(req: { space_id?: string; group_name?: string; source?: string; page?: PageReq } = {}) {
-    return callControl<typeof req, { checks?: MonitorCheck[]; page_result?: PageResult }>(service, 'ListChecks', req);
+    return callControl<typeof req, { checks?: MonitorCheck[]; page_result?: PageResult }>(service, "ListChecks", req);
   },
   getCheck(req: { space_id?: string; check_id: string }) {
-    return callControl<typeof req, { check?: MonitorCheck }>(service, 'GetCheck', req);
+    return callControl<typeof req, { check?: MonitorCheck }>(service, "GetCheck", req);
   },
   createCheck(check: MonitorCheck) {
-    return callControl<{ check: MonitorCheck }, { check?: MonitorCheck }>(service, 'CreateCheck', { check });
+    return callControl<{ check: MonitorCheck }, { check?: MonitorCheck }>(service, "CreateCheck", { check });
   },
   updateCheck(check: MonitorCheck) {
-    return callControl<{ check: MonitorCheck }, { check?: MonitorCheck }>(service, 'UpdateCheck', { check });
+    return callControl<{ check: MonitorCheck }, { check?: MonitorCheck }>(service, "UpdateCheck", { check });
   },
   deleteCheck(req: { space_id?: string; check_id: string }) {
-    return callControl<typeof req, Record<string, never>>(service, 'DeleteCheck', req);
+    return callControl<typeof req, Record<string, never>>(service, "DeleteCheck", req);
   },
   runCheckOnce(req: { space_id?: string; check_id: string }) {
-    return callControl<typeof req, { result?: CheckResult }>(service, 'RunCheckOnce', req);
+    return callControl<typeof req, { result?: CheckResult }>(service, "RunCheckOnce", req);
   },
   listResults(req: { space_id?: string; check_id: string; limit?: number }) {
-    return callControl<typeof req, { results?: CheckResult[] }>(service, 'ListResults', req);
+    return callControl<typeof req, { results?: CheckResult[] }>(service, "ListResults", req);
   },
   getOverview(req: { space_id?: string } = {}) {
-    return callControl<typeof req, { overview?: MonitorOverview }>(service, 'GetOverview', req);
+    return callControl<typeof req, { overview?: MonitorOverview }>(service, "GetOverview", req);
   },
   listWebhookChannels(req: { space_id?: string } = {}) {
-    return callControl<typeof req, { channels?: WebhookChannel[] }>(service, 'ListWebhookChannels', req);
+    return callControl<typeof req, { channels?: WebhookChannel[] }>(service, "ListWebhookChannels", req);
   },
   createWebhookChannel(channel: WebhookChannel) {
-    return callControl<{ channel: WebhookChannel }, { channel?: WebhookChannel }>(service, 'CreateWebhookChannel', { channel });
+    return callControl<{ channel: WebhookChannel }, { channel?: WebhookChannel }>(service, "CreateWebhookChannel", { channel });
   },
   updateWebhookChannel(channel: WebhookChannel) {
-    return callControl<{ channel: WebhookChannel }, { channel?: WebhookChannel }>(service, 'UpdateWebhookChannel', { channel });
+    return callControl<{ channel: WebhookChannel }, { channel?: WebhookChannel }>(service, "UpdateWebhookChannel", { channel });
   },
   deleteWebhookChannel(req: { space_id?: string; webhook_id: string }) {
-    return callControl<typeof req, Record<string, never>>(service, 'DeleteWebhookChannel', req);
+    return callControl<typeof req, Record<string, never>>(service, "DeleteWebhookChannel", req);
   },
   listAlertRules(req: { space_id?: string; check_id?: string } = {}) {
-    return callControl<typeof req, { rules?: AlertRule[] }>(service, 'ListAlertRules', req);
+    return callControl<typeof req, { rules?: AlertRule[] }>(service, "ListAlertRules", req);
   },
   createAlertRule(rule: AlertRule) {
-    return callControl<{ rule: AlertRule }, { rule?: AlertRule }>(service, 'CreateAlertRule', { rule });
+    return callControl<{ rule: AlertRule }, { rule?: AlertRule }>(service, "CreateAlertRule", { rule });
   },
   updateAlertRule(rule: AlertRule) {
-    return callControl<{ rule: AlertRule }, { rule?: AlertRule }>(service, 'UpdateAlertRule', { rule });
+    return callControl<{ rule: AlertRule }, { rule?: AlertRule }>(service, "UpdateAlertRule", { rule });
   },
   deleteAlertRule(req: { space_id?: string; rule_id: string }) {
-    return callControl<typeof req, Record<string, never>>(service, 'DeleteAlertRule', req);
+    return callControl<typeof req, Record<string, never>>(service, "DeleteAlertRule", req);
   },
   listAlertEvents(req: { space_id?: string; limit?: number } = {}) {
-    return callControl<typeof req, { events?: AlertEvent[] }>(service, 'ListAlertEvents', req);
+    return callControl<typeof req, { events?: AlertEvent[] }>(service, "ListAlertEvents", req);
   },
   listMonitorInstances() {
-    return callControl<Record<string, never>, { instances?: MonitorInstance[] }>(service, 'ListMonitorInstances', {});
+    return callControl<Record<string, never>, { instances?: MonitorInstance[] }>(service, "ListMonitorInstances", {});
   },
   syncSystemChecks() {
-    return callControl<Record<string, never>, { synced?: number }>(service, 'SyncSystemChecks', {});
-  },
+    return callControl<Record<string, never>, { synced?: number }>(service, "SyncSystemChecks", {});
+  }
 };
 
-export * from './types';
+export * from "./types";

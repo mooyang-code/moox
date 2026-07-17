@@ -213,9 +213,9 @@ func TestDeltaTargetRebalanceCreatesBuyLeg(t *testing.T) {
 	if err = svc.Create(ctx, rebalanceapp.CreateInput{
 		SpaceID: "space", RunID: "delta-1", IdempotencyKey: "delta-idem", AccountID: "account", ChannelID: "channel",
 		MarketSnapshotID: "m1", PositionSnapshotID: "p1", RulesVersion: "r1", Mode: rebalance.PatchTarget,
-		Targets: []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.MustDecimal("1")}},
+		Targets:  []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.MustDecimal("1")}},
 		Currents: []rebalance.Current{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
-		Markets: map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "50000"}},
+		Markets:  map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "50000"}},
 	}); err != nil {
 		t.Fatal(err)
 	}

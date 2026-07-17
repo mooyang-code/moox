@@ -19,18 +19,38 @@
             <template #icon><icon-plus /></template>
             新建指标
           </a-button>
-          <a-select v-model="selectedService" allow-clear placeholder="服务" :loading="catalogLoading" @change="onServiceChange" style="width: 220px">
+          <a-select
+            v-model="selectedService"
+            allow-clear
+            placeholder="服务"
+            :loading="catalogLoading"
+            @change="onServiceChange"
+            style="width: 220px"
+          >
             <a-option v-for="service in serviceOptions" :key="service" :value="service">{{ service }}</a-option>
           </a-select>
           <a-select v-model="selectedInstance" allow-clear placeholder="实例" @change="refreshSeriesData" style="width: 220px">
             <a-option v-for="instance in instanceOptions" :key="instance" :value="instance">{{ instance }}</a-option>
           </a-select>
-          <a-select v-model="selectedMetric" allow-clear placeholder="指标" :loading="catalogLoading" @change="onMetricChange" style="width: 280px">
+          <a-select
+            v-model="selectedMetric"
+            allow-clear
+            placeholder="指标"
+            :loading="catalogLoading"
+            @change="onMetricChange"
+            style="width: 280px"
+          >
             <a-option v-for="metric in metricOptions" :key="metric.metric_name" :value="metric.metric_name">
               {{ metric.metric_name }} <span class="option-count">({{ metric.series_count || 0 }})</span>
             </a-option>
           </a-select>
-          <a-input v-model="labelsFilter" allow-clear placeholder="标签文本过滤" style="width: 240px" @press-enter="refreshSeriesData" />
+          <a-input
+            v-model="labelsFilter"
+            allow-clear
+            placeholder="标签文本过滤"
+            style="width: 240px"
+            @press-enter="refreshSeriesData"
+          />
           <a-button @click="refreshSeriesData">查询</a-button>
         </section>
 
@@ -42,22 +62,34 @@
             <div class="section-head">
               <div>
                 <strong>最新值</strong>
-                <span v-if="seriesTotal > MAX_DISPLAY_SERIES" class="cardinality-note">已限制 {{ MAX_DISPLAY_SERIES }} 条，匹配总数 {{ seriesTotal }}</span>
+                <span v-if="seriesTotal > MAX_DISPLAY_SERIES" class="cardinality-note"
+                  >已限制 {{ MAX_DISPLAY_SERIES }} 条，匹配总数 {{ seriesTotal }}</span
+                >
               </div>
               <a-tag v-if="staleCount" color="orange">{{ staleCount }} 个实例陈旧</a-tag>
             </div>
-            <a-table row-key="series_id" size="small" :bordered="{ cell: true }" :loading="latestLoading" :data="latestRows" :pagination="false" :scroll="{ x: 'max-content', y: 430 }">
+            <a-table
+              row-key="series_id"
+              size="small"
+              :bordered="{ cell: true }"
+              :loading="latestLoading"
+              :data="latestRows"
+              :pagination="false"
+              :scroll="{ x: 'max-content', y: 430 }"
+            >
               <template #columns>
                 <a-table-column title="指标" data-index="metric_name" :width="240" />
                 <a-table-column title="实例" data-index="instance_id" :width="180" />
                 <a-table-column title="标签" :width="270" :ellipsis="true" :tooltip="true">
-                  <template #cell="{ record }">{{ record.labels_json || '-' }}</template>
+                  <template #cell="{ record }">{{ record.labels_json || "-" }}</template>
                 </a-table-column>
                 <a-table-column title="最新值" :width="130">
                   <template #cell="{ record }">{{ formatNumber(record.value) }}</template>
                 </a-table-column>
                 <a-table-column title="状态" :width="100">
-                  <template #cell="{ record }"><a-tag size="small" :color="statusColor(record)">{{ statusText(record) }}</a-tag></template>
+                  <template #cell="{ record }"
+                    ><a-tag size="small" :color="statusColor(record)">{{ statusText(record) }}</a-tag></template
+                  >
                 </a-table-column>
                 <a-table-column title="观测时间" :width="190">
                   <template #cell="{ record }">{{ formatTime(record.observed_at) }}</template>
@@ -85,20 +117,62 @@
             <div><strong>指标告警规则</strong><span class="section-meta">平面 A-H 条件，仅支持单层 AND / OR</span></div>
             <a-button type="primary" status="success" size="small" @click="openCreateRule">新增规则</a-button>
           </div>
-          <a-table row-key="rule_id" size="small" :loading="rulesLoading" :data="rules" :pagination="false" :scroll="{ x: 'max-content' }">
+          <a-table
+            row-key="rule_id"
+            size="small"
+            :loading="rulesLoading"
+            :data="rules"
+            :pagination="false"
+            :scroll="{ x: 'max-content' }"
+          >
             <template #columns>
               <a-table-column title="名称" :width="220">
-                <template #cell="{ record }"><div class="rule-name"><strong>{{ record.name }}</strong><span>{{ record.rule_id }}</span></div></template>
+                <template #cell="{ record }"
+                  ><div class="rule-name">
+                    <strong>{{ record.name }}</strong
+                    ><span>{{ record.rule_id }}</span>
+                  </div></template
+                >
               </a-table-column>
-              <a-table-column title="条件" :width="90"><template #cell="{ record }">{{ record.conditions?.length || 0 }} 条</template></a-table-column>
-              <a-table-column title="连接" :width="90"><template #cell="{ record }">{{ connectorText(record.connector) }}</template></a-table-column>
+              <a-table-column title="条件" :width="90"
+                ><template #cell="{ record }">{{ record.conditions?.length || 0 }} 条</template></a-table-column
+              >
+              <a-table-column title="连接" :width="90"
+                ><template #cell="{ record }">{{ connectorText(record.connector) }}</template></a-table-column
+              >
               <a-table-column title="状态" :width="150">
-                <template #cell="{ record }"><a-space><a-tag size="small" :color="record.enabled ? 'green' : 'gray'">{{ record.enabled ? '启用' : '停用' }}</a-tag><a-tag v-if="ruleState(record.rule_id)?.status" size="small" :color="ruleStatusColor(ruleState(record.rule_id)?.status)">{{ ruleStatusText(ruleState(record.rule_id)?.status) }}</a-tag></a-space></template>
+                <template #cell="{ record }"
+                  ><a-space
+                    ><a-tag size="small" :color="record.enabled ? 'green' : 'gray'">{{ record.enabled ? "启用" : "停用" }}</a-tag
+                    ><a-tag
+                      v-if="ruleState(record.rule_id)?.status"
+                      size="small"
+                      :color="ruleStatusColor(ruleState(record.rule_id)?.status)"
+                      >{{ ruleStatusText(ruleState(record.rule_id)?.status) }}</a-tag
+                    ></a-space
+                  ></template
+                >
               </a-table-column>
-              <a-table-column title="连续计数" :width="110"><template #cell="{ record }">{{ ruleState(record.rule_id)?.trigger_count || 0 }} / {{ record.consecutive_trigger_count }}</template></a-table-column>
-              <a-table-column title="最近评估" :width="190"><template #cell="{ record }">{{ formatTime(ruleState(record.rule_id)?.last_evaluated_at) }}</template></a-table-column>
+              <a-table-column title="连续计数" :width="110"
+                ><template #cell="{ record }"
+                  >{{ ruleState(record.rule_id)?.trigger_count || 0 }} / {{ record.consecutive_trigger_count }}</template
+                ></a-table-column
+              >
+              <a-table-column title="最近评估" :width="190"
+                ><template #cell="{ record }">{{
+                  formatTime(ruleState(record.rule_id)?.last_evaluated_at)
+                }}</template></a-table-column
+              >
               <a-table-column title="操作" :width="230" align="center">
-                <template #cell="{ record }"><a-space><a-button size="mini" type="text" @click="openEditRule(record)">编辑</a-button><a-button size="mini" type="text" @click="openEvaluations(record)">评估记录</a-button><a-popconfirm content="确认删除该规则？" @ok="removeRule(record)"><a-button size="mini" type="text" status="danger">删除</a-button></a-popconfirm></a-space></template>
+                <template #cell="{ record }"
+                  ><a-space
+                    ><a-button size="mini" type="text" @click="openEditRule(record)">编辑</a-button
+                    ><a-button size="mini" type="text" @click="openEvaluations(record)">评估记录</a-button
+                    ><a-popconfirm content="确认删除该规则？" @ok="removeRule(record)"
+                      ><a-button size="mini" type="text" status="danger">删除</a-button></a-popconfirm
+                    ></a-space
+                  ></template
+                >
               </a-table-column>
             </template>
           </a-table>
@@ -107,17 +181,33 @@
       </section>
     </div>
 
-    <a-drawer v-model:visible="ruleDrawerVisible" width="1060px" :title="editingRule?.rule_id ? '编辑指标告警规则' : '新建指标告警规则'" :footer="false" unmount-on-close>
+    <a-drawer
+      v-model:visible="ruleDrawerVisible"
+      width="1060px"
+      :title="editingRule?.rule_id ? '编辑指标告警规则' : '新建指标告警规则'"
+      :footer="false"
+      unmount-on-close
+    >
       <metric-rule-editor :rule="editingRule" :webhooks="webhooks" @saved="onRuleSaved" @cancel="ruleDrawerVisible = false" />
     </a-drawer>
 
     <a-drawer v-model:visible="evaluationDrawerVisible" width="900px" title="评估记录" :footer="false" unmount-on-close>
       <a-table size="small" :loading="evaluationLoading" :data="evaluations" :pagination="false" :scroll="{ x: 'max-content' }">
         <template #columns>
-          <a-table-column title="时间" :width="190"><template #cell="{ record }">{{ formatTime(record.evaluated_at) }}</template></a-table-column>
-          <a-table-column title="状态" :width="110"><template #cell="{ record }"><a-tag :color="ruleStatusColor(record.status)">{{ ruleStatusText(record.status) }}</a-tag></template></a-table-column>
-          <a-table-column title="结果" :width="90"><template #cell="{ record }">{{ record.result ? '触发' : '正常' }}</template></a-table-column>
-          <a-table-column title="条件结果" :width="440"><template #cell="{ record }">{{ evaluationSummary(record) }}</template></a-table-column>
+          <a-table-column title="时间" :width="190"
+            ><template #cell="{ record }">{{ formatTime(record.evaluated_at) }}</template></a-table-column
+          >
+          <a-table-column title="状态" :width="110"
+            ><template #cell="{ record }"
+              ><a-tag :color="ruleStatusColor(record.status)">{{ ruleStatusText(record.status) }}</a-tag></template
+            ></a-table-column
+          >
+          <a-table-column title="结果" :width="90"
+            ><template #cell="{ record }">{{ record.result ? "触发" : "正常" }}</template></a-table-column
+          >
+          <a-table-column title="条件结果" :width="440"
+            ><template #cell="{ record }">{{ evaluationSummary(record) }}</template></a-table-column
+          >
         </template>
       </a-table>
       <div v-if="!evaluationLoading && !evaluations.length" class="inline-empty">暂无评估记录</div>
@@ -126,26 +216,36 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import MetricChart, { type ChartPoint } from './metric-chart.vue';
-import MetricRuleEditor from './metric-rule-editor.vue';
-import { metricMonitorApi } from '@/api/metric-monitor';
-import type { MetricHistoryPoint, MetricLatestPoint, MetricNameInfo, MetricRule, MetricRuleEvaluation, MetricSeriesInfo, MetricServiceInfo, MetricRuleState, WebhookChannel } from '@/api/metric-monitor/types';
+import { computed, onMounted, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import MetricChart, { type ChartPoint } from "./metric-chart.vue";
+import MetricRuleEditor from "./metric-rule-editor.vue";
+import { metricMonitorApi } from "@/api/metric-monitor";
+import type {
+  MetricHistoryPoint,
+  MetricLatestPoint,
+  MetricNameInfo,
+  MetricRule,
+  MetricRuleEvaluation,
+  MetricSeriesInfo,
+  MetricServiceInfo,
+  MetricRuleState,
+  WebhookChannel
+} from "@/api/metric-monitor/types";
 
 const props = defineProps<{ embedded?: boolean }>();
 const embedded = computed(() => props.embedded === true);
 
 const MAX_DISPLAY_SERIES = 50;
 const MAX_CHART_SERIES = 10;
-const activeTab = ref('explorer');
+const activeTab = ref("explorer");
 const loading = ref(false);
 const catalogLoading = ref(false);
 const latestLoading = ref(false);
 const historyLoading = ref(false);
 const rulesLoading = ref(false);
 const evaluationLoading = ref(false);
-const historyError = ref('');
+const historyError = ref("");
 const services = ref<MetricServiceInfo[]>([]);
 const metricOptions = ref<MetricNameInfo[]>([]);
 const series = ref<MetricSeriesInfo[]>([]);
@@ -155,23 +255,66 @@ const rules = ref<MetricRule[]>([]);
 const ruleStates = ref<Record<string, MetricRuleState>>({});
 const webhooks = ref<WebhookChannel[]>([]);
 const evaluations = ref<MetricRuleEvaluation[]>([]);
-const selectedService = ref('');
-const selectedInstance = ref('');
-const selectedMetric = ref('');
-const labelsFilter = ref('');
+const selectedService = ref("");
+const selectedInstance = ref("");
+const selectedMetric = ref("");
+const labelsFilter = ref("");
 const ruleDrawerVisible = ref(false);
 const evaluationDrawerVisible = ref(false);
 const editingRule = ref<MetricRule>();
 
-const serviceOptions = computed(() => [...new Set(services.value.map((item) => item.service_name).filter(Boolean) as string[])].sort());
-const instanceOptions = computed(() => [...new Set(services.value.filter((item) => !selectedService.value || item.service_name === selectedService.value).map((item) => item.instance_id).filter(Boolean) as string[])].sort());
-const selectedSeries = computed(() => series.value.filter((item) => (!selectedInstance.value || item.instance_id === selectedInstance.value) && (!labelsFilter.value || (item.labels_json || '').toLowerCase().includes(labelsFilter.value.toLowerCase()))).slice(0, MAX_DISPLAY_SERIES));
-const seriesTotal = computed(() => series.value.filter((item) => (!selectedInstance.value || item.instance_id === selectedInstance.value) && (!labelsFilter.value || (item.labels_json || '').toLowerCase().includes(labelsFilter.value.toLowerCase()))).length);
-const staleCount = computed(() => latestRows.value.filter((item) => isStale(item)).length);
-const chartPoints = computed<ChartPoint[]>(() => Object.entries(historyBySeries.value).flatMap(([seriesId, points]) => points.map((point) => ({ time: formatTime(point.observed_at), value: point.value || 0, series: seriesId.slice(0, 12) }))));
+const serviceOptions = computed(() =>
+  [...new Set(services.value.map(item => item.service_name).filter(Boolean) as string[])].sort()
+);
+const instanceOptions = computed(() =>
+  [
+    ...new Set(
+      services.value
+        .filter(item => !selectedService.value || item.service_name === selectedService.value)
+        .map(item => item.instance_id)
+        .filter(Boolean) as string[]
+    )
+  ].sort()
+);
+const selectedSeries = computed(() =>
+  series.value
+    .filter(
+      item =>
+        (!selectedInstance.value || item.instance_id === selectedInstance.value) &&
+        (!labelsFilter.value || (item.labels_json || "").toLowerCase().includes(labelsFilter.value.toLowerCase()))
+    )
+    .slice(0, MAX_DISPLAY_SERIES)
+);
+const seriesTotal = computed(
+  () =>
+    series.value.filter(
+      item =>
+        (!selectedInstance.value || item.instance_id === selectedInstance.value) &&
+        (!labelsFilter.value || (item.labels_json || "").toLowerCase().includes(labelsFilter.value.toLowerCase()))
+    ).length
+);
+const staleCount = computed(() => latestRows.value.filter(item => isStale(item)).length);
+const chartPoints = computed<ChartPoint[]>(() =>
+  Object.entries(historyBySeries.value).flatMap(([seriesId, points]) =>
+    points.map(point => ({ time: formatTime(point.observed_at), value: point.value || 0, series: seriesId.slice(0, 12) }))
+  )
+);
 
 function normalizeRule(rule?: MetricRule): MetricRule {
-  return JSON.parse(JSON.stringify(rule || { name: '', conditions: [], connector: 1, consecutive_trigger_count: 3, consecutive_recovery_count: 1, evaluation_interval_seconds: 30, webhook_ids: [], enabled: true })) as MetricRule;
+  return JSON.parse(
+    JSON.stringify(
+      rule || {
+        name: "",
+        conditions: [],
+        connector: 1,
+        consecutive_trigger_count: 3,
+        consecutive_recovery_count: 1,
+        evaluation_interval_seconds: 30,
+        webhook_ids: [],
+        enabled: true
+      }
+    )
+  ) as MetricRule;
 }
 
 function notifyError(reason: unknown, fallback: string) {
@@ -184,10 +327,11 @@ async function loadCatalog() {
   try {
     const response = await metricMonitorApi.listMetricServices({ page: { page: 1, size: 200 } });
     services.value = response.services || [];
-    if (!selectedService.value || !serviceOptions.value.includes(selectedService.value)) selectedService.value = serviceOptions.value[0] || '';
+    if (!selectedService.value || !serviceOptions.value.includes(selectedService.value))
+      selectedService.value = serviceOptions.value[0] || "";
     await loadNames();
   } catch (error) {
-    notifyError(error, '服务指标目录加载失败');
+    notifyError(error, "服务指标目录加载失败");
   } finally {
     catalogLoading.value = false;
   }
@@ -196,13 +340,14 @@ async function loadCatalog() {
 async function loadNames() {
   metricOptions.value = [];
   if (!selectedService.value) {
-    selectedMetric.value = '';
+    selectedMetric.value = "";
     series.value = [];
     return;
   }
   const response = await metricMonitorApi.listMetricNames({ service_name: selectedService.value, page: { page: 1, size: 200 } });
   metricOptions.value = response.names || [];
-  if (!selectedMetric.value || !metricOptions.value.some((item) => item.metric_name === selectedMetric.value)) selectedMetric.value = metricOptions.value[0]?.metric_name || '';
+  if (!selectedMetric.value || !metricOptions.value.some(item => item.metric_name === selectedMetric.value))
+    selectedMetric.value = metricOptions.value[0]?.metric_name || "";
   await loadSeries();
 }
 
@@ -214,11 +359,15 @@ async function loadSeries() {
     return;
   }
   try {
-    const response = await metricMonitorApi.listMetricSeries({ service_name: selectedService.value, metric_name: selectedMetric.value, page: { page: 1, size: MAX_DISPLAY_SERIES } });
+    const response = await metricMonitorApi.listMetricSeries({
+      service_name: selectedService.value,
+      metric_name: selectedMetric.value,
+      page: { page: 1, size: MAX_DISPLAY_SERIES }
+    });
     series.value = response.series || [];
     await refreshSeriesData();
   } catch (error) {
-    notifyError(error, '指标序列加载失败');
+    notifyError(error, "指标序列加载失败");
   }
 }
 
@@ -229,9 +378,18 @@ async function refreshSeriesData() {
 async function loadLatest() {
   latestLoading.value = true;
   try {
-    const responses = await Promise.allSettled(selectedSeries.value.filter((item) => item.series_id).map((item) => metricMonitorApi.getMetricLatest({ series_id: item.series_id as string })));
-    latestRows.value = responses.filter((response): response is PromiseFulfilledResult<{ latest?: MetricLatestPoint }> => response.status === 'fulfilled' && !!response.value.latest).map((response) => response.value.latest as MetricLatestPoint);
-    if (responses.some((response) => response.status === 'rejected')) Message.error('部分指标最新值加载失败，已保留可查询数据。');
+    const responses = await Promise.allSettled(
+      selectedSeries.value
+        .filter(item => item.series_id)
+        .map(item => metricMonitorApi.getMetricLatest({ series_id: item.series_id as string }))
+    );
+    latestRows.value = responses
+      .filter(
+        (response): response is PromiseFulfilledResult<{ latest?: MetricLatestPoint }> =>
+          response.status === "fulfilled" && !!response.value.latest
+      )
+      .map(response => response.value.latest as MetricLatestPoint);
+    if (responses.some(response => response.status === "rejected")) Message.error("部分指标最新值加载失败，已保留可查询数据。");
   } finally {
     latestLoading.value = false;
   }
@@ -239,19 +397,26 @@ async function loadLatest() {
 
 async function loadHistory() {
   historyLoading.value = true;
-  historyError.value = '';
+  historyError.value = "";
   const startAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   try {
-    const responses = await Promise.allSettled(selectedSeries.value.slice(0, MAX_CHART_SERIES).filter((item) => item.series_id).map((item) => metricMonitorApi.queryMetricHistory({ series_id: item.series_id as string, start_at: startAt, order: 1, limit: 500 })));
+    const responses = await Promise.allSettled(
+      selectedSeries.value
+        .slice(0, MAX_CHART_SERIES)
+        .filter(item => item.series_id)
+        .map(item =>
+          metricMonitorApi.queryMetricHistory({ series_id: item.series_id as string, start_at: startAt, order: 1, limit: 500 })
+        )
+    );
     const next: Record<string, MetricHistoryPoint[]> = {};
     responses.forEach((response, index) => {
       const id = selectedSeries.value[index]?.series_id;
-      if (response.status === 'fulfilled' && id) next[id] = response.value.points || [];
+      if (response.status === "fulfilled" && id) next[id] = response.value.points || [];
     });
     historyBySeries.value = next;
-    if (responses.some((response) => response.status === 'rejected')) Message.error('部分历史指标加载失败，已保留可查询数据。');
+    if (responses.some(response => response.status === "rejected")) Message.error("部分历史指标加载失败，已保留可查询数据。");
   } catch (error) {
-    notifyError(error, '历史数据加载失败');
+    notifyError(error, "历史数据加载失败");
   } finally {
     historyLoading.value = false;
   }
@@ -262,10 +427,21 @@ async function loadRules() {
   try {
     const response = await metricMonitorApi.listMetricRules({ page: { page: 1, size: 100 } });
     rules.value = response.rules || [];
-    const states = await Promise.allSettled(rules.value.filter((rule) => rule.rule_id).map((rule) => metricMonitorApi.getMetricRuleState({ rule_id: rule.rule_id as string })));
-    ruleStates.value = Object.fromEntries(states.map((response, index) => [rules.value[index]?.rule_id, response.status === 'fulfilled' ? response.value.state : undefined]).filter((entry): entry is [string, MetricRuleState] => !!entry[0] && !!entry[1]));
+    const states = await Promise.allSettled(
+      rules.value
+        .filter(rule => rule.rule_id)
+        .map(rule => metricMonitorApi.getMetricRuleState({ rule_id: rule.rule_id as string }))
+    );
+    ruleStates.value = Object.fromEntries(
+      states
+        .map((response, index) => [
+          rules.value[index]?.rule_id,
+          response.status === "fulfilled" ? response.value.state : undefined
+        ])
+        .filter((entry): entry is [string, MetricRuleState] => !!entry[0] && !!entry[1])
+    );
   } catch (error) {
-    notifyError(error, '告警规则加载失败');
+    notifyError(error, "告警规则加载失败");
   } finally {
     rulesLoading.value = false;
   }
@@ -276,7 +452,7 @@ async function loadWebhooks() {
     webhooks.value = (await metricMonitorApi.listWebhookChannels()).channels || [];
   } catch (reason) {
     webhooks.value = [];
-    notifyError(reason, '通知通道加载失败');
+    notifyError(reason, "通知通道加载失败");
   }
 }
 
@@ -284,14 +460,14 @@ async function refreshAll() {
   loading.value = true;
   try {
     await Promise.all([loadCatalog(), loadRules(), loadWebhooks()]);
-    Message.success('指标数据已刷新');
+    Message.success("指标数据已刷新");
   } finally {
     loading.value = false;
   }
 }
 
 async function onServiceChange() {
-  selectedInstance.value = '';
+  selectedInstance.value = "";
   await loadNames();
 }
 
@@ -324,48 +500,161 @@ async function openEvaluations(rule: MetricRule) {
   evaluationDrawerVisible.value = true;
   evaluationLoading.value = true;
   try {
-    evaluations.value = (await metricMonitorApi.listMetricRuleEvaluations({ rule_id: rule.rule_id, page: { page: 1, size: 50 } })).evaluations || [];
+    evaluations.value =
+      (await metricMonitorApi.listMetricRuleEvaluations({ rule_id: rule.rule_id, page: { page: 1, size: 50 } })).evaluations ||
+      [];
   } finally {
     evaluationLoading.value = false;
   }
 }
 
-function ruleState(ruleId?: string) { return ruleId ? ruleStates.value[ruleId] : undefined; }
-function formatTime(value?: string) { if (!value) return '-'; const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString(); }
-function formatNumber(value?: number) { return value === undefined || value === null ? '-' : Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 }); }
-function isStale(row: MetricLatestPoint) { return !!row.stale || (!!row.observed_at && Date.now() - new Date(row.observed_at).valueOf() > 90_000); }
-function statusText(row: MetricLatestPoint) { return isStale(row) ? '陈旧' : '正常'; }
-function statusColor(row: MetricLatestPoint) { return isStale(row) ? 'orange' : 'green'; }
-function connectorText(value?: number) { return value === 2 ? 'OR' : 'AND'; }
-function ruleStatusText(value?: number | string) { return value === 2 || value === 'ALERT_STATUS_FIRING' ? 'FIRING' : value === 3 || value === 'ALERT_STATUS_RESOLVED' ? 'RESOLVED' : 'OK'; }
-function ruleStatusColor(value?: number | string) { return ruleStatusText(value) === 'FIRING' ? 'red' : ruleStatusText(value) === 'RESOLVED' ? 'blue' : 'green'; }
-function evaluationSummary(evaluation: MetricRuleEvaluation) { return (evaluation.conditions || []).map((item) => `${item.condition_id || '-'}:${item.has_data === false ? '无数据' : item.result ? '触发' : '正常'}(${formatNumber(item.value)})`).join(' · '); }
+function ruleState(ruleId?: string) {
+  return ruleId ? ruleStates.value[ruleId] : undefined;
+}
+function formatTime(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
+}
+function formatNumber(value?: number) {
+  return value === undefined || value === null ? "-" : Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+function isStale(row: MetricLatestPoint) {
+  return !!row.stale || (!!row.observed_at && Date.now() - new Date(row.observed_at).valueOf() > 90_000);
+}
+function statusText(row: MetricLatestPoint) {
+  return isStale(row) ? "陈旧" : "正常";
+}
+function statusColor(row: MetricLatestPoint) {
+  return isStale(row) ? "orange" : "green";
+}
+function connectorText(value?: number) {
+  return value === 2 ? "OR" : "AND";
+}
+function ruleStatusText(value?: number | string) {
+  return value === 2 || value === "ALERT_STATUS_FIRING"
+    ? "FIRING"
+    : value === 3 || value === "ALERT_STATUS_RESOLVED"
+      ? "RESOLVED"
+      : "OK";
+}
+function ruleStatusColor(value?: number | string) {
+  return ruleStatusText(value) === "FIRING" ? "red" : ruleStatusText(value) === "RESOLVED" ? "blue" : "green";
+}
+function evaluationSummary(evaluation: MetricRuleEvaluation) {
+  return (evaluation.conditions || [])
+    .map(
+      item =>
+        `${item.condition_id || "-"}:${item.has_data === false ? "无数据" : item.result ? "触发" : "正常"}(${formatNumber(item.value)})`
+    )
+    .join(" · ");
+}
 
 watch(selectedInstance, refreshSeriesData);
 onMounted(refreshAll);
 </script>
 
 <style scoped lang="scss">
-.metric-monitor-page { height: 100%; overflow-y: auto; padding: 0 0 var(--moox-space-5); color: var(--color-text-1); }
-.page-head, .section-head, .filter-band { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.page-head { margin-bottom: var(--moox-space-2); }
-.page-head h2 { margin: 0 0 var(--moox-space-1); font-size: 20px; font-weight: 600; }
-.page-head span, .section-meta, .cardinality-note { color: var(--color-text-3); font-size: 12px; }
-.metric-subtabs { margin-bottom: var(--moox-space-3); }
-.metric-subtabs :deep(.arco-tabs-content) { display: none; }
-.metric-subtabs :deep(.arco-tabs-tab:first-child) { margin-left: 0; }
-.metric-subtabs :deep(.arco-tabs-tab) { border-radius: 4px; }
-.metric-subtabs :deep(.arco-tabs-tab-active) { color: rgb(var(--primary-6)); background-color: var(--color-fill-2); }
-.filter-band { justify-content: flex-start; flex-wrap: wrap; gap: var(--moox-space-2); margin-bottom: var(--moox-space-2); padding: 0; }
-.option-count { color: var(--color-text-3); }
-.state-band, .latest-panel, .chart-panel, .rules-panel { margin-top: var(--moox-space-2); padding: var(--moox-space-4); border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
-.state-band { min-height: 220px; display: grid; place-items: center; }
-.explorer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--moox-space-4); }
-.latest-panel, .chart-panel { min-width: 0; }
-.section-head { margin-bottom: var(--moox-space-3); }
-.section-head > div { display: flex; align-items: baseline; gap: 10px; }
-.cardinality-note { color: var(--color-warning-6); }
-.inline-empty { padding: 28px; text-align: center; color: var(--color-text-3); }
-.rule-name { display: flex; flex-direction: column; gap: 3px; }
-.rule-name span { color: var(--color-text-3); font-size: 12px; }
+.metric-monitor-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0 0 var(--moox-space-5);
+  color: var(--color-text-1);
+}
+.page-head,
+.section-head,
+.filter-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.page-head {
+  margin-bottom: var(--moox-space-2);
+}
+.page-head h2 {
+  margin: 0 0 var(--moox-space-1);
+  font-size: 20px;
+  font-weight: 600;
+}
+.page-head span,
+.section-meta,
+.cardinality-note {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.metric-subtabs {
+  margin-bottom: var(--moox-space-3);
+}
+.metric-subtabs :deep(.arco-tabs-content) {
+  display: none;
+}
+.metric-subtabs :deep(.arco-tabs-tab:first-child) {
+  margin-left: 0;
+}
+.metric-subtabs :deep(.arco-tabs-tab) {
+  border-radius: 4px;
+}
+.metric-subtabs :deep(.arco-tabs-tab-active) {
+  color: rgb(var(--primary-6));
+  background-color: var(--color-fill-2);
+}
+.filter-band {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: var(--moox-space-2);
+  margin-bottom: var(--moox-space-2);
+  padding: 0;
+}
+.option-count {
+  color: var(--color-text-3);
+}
+.state-band,
+.latest-panel,
+.chart-panel,
+.rules-panel {
+  margin-top: var(--moox-space-2);
+  padding: var(--moox-space-4);
+  border: 1px solid var(--color-border-2);
+  background: var(--color-bg-2);
+}
+.state-band {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+}
+.explorer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--moox-space-4);
+}
+.latest-panel,
+.chart-panel {
+  min-width: 0;
+}
+.section-head {
+  margin-bottom: var(--moox-space-3);
+}
+.section-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.cardinality-note {
+  color: var(--color-warning-6);
+}
+.inline-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--color-text-3);
+}
+.rule-name {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rule-name span {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
 </style>

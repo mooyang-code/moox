@@ -15,17 +15,22 @@ interface Account {
  * 用户角色枚举值映射
  * 根据proto定义：
  * GUEST = 0;       // 游客
- * USER = 1;        // 普通用户  
+ * USER = 1;        // 普通用户
  * ADMIN = 2;       // 管理员
  * SUPER_ADMIN = 3; // 超级管理员
  */
 const mapUserRoleToString = (roleValue: number): string[] => {
   switch (roleValue) {
-    case 0: return ["guest"];           // 游客
-    case 1: return ["common"];          // 普通用户
-    case 2: return ["admin"];           // 管理员
-    case 3: return ["admin"];           // 超级管理员，也归类为admin权限
-    default: return ["guest"];          // 默认游客权限
+    case 0:
+      return ["guest"]; // 游客
+    case 1:
+      return ["common"]; // 普通用户
+    case 2:
+      return ["admin"]; // 管理员
+    case 3:
+      return ["admin"]; // 超级管理员，也归类为admin权限
+    default:
+      return ["guest"]; // 默认游客权限
   }
 };
 
@@ -63,21 +68,21 @@ const userInfoStore = () => {
         console.error("setAccount: 未找到访问令牌，无法获取用户信息");
         throw new Error("未找到访问令牌，请重新登录");
       }
-      
+
       const data = await getUserInfoAPI(token.value);
-      
+
       // 添加安全检查
       if (!data) {
-        throw new Error('获取用户信息失败：响应数据为空');
+        throw new Error("获取用户信息失败：响应数据为空");
       }
-      
+
       if (data.user_info) {
         const userInfo = data.user_info;
-        
+
         // 根据UserRole枚举值判断角色
         const roleStrings = mapUserRoleToString(userInfo.role);
         const isAdmin = isAdminRole(userInfo.role);
-        
+
         account.value = {
           user: {
             id: userInfo.user_id || "",
@@ -107,33 +112,33 @@ const userInfoStore = () => {
       }
     } catch (error: any) {
       console.error("setAccount: 获取用户信息失败", error);
-      
+
       // 清空用户信息，避免死循环
       account.value = {
         user: {},
         roles: [],
         permissions: []
       };
-      
+
       // 关键修复：获取用户信息失败时，完全清除token状态，避免路由守卫死循环
       token.value = "";
       sessionId.value = "";
       expiresAt.value = 0;
-      
+
       // 同时清除localStorage中的持久化数据
       try {
         await clearBrowserSession();
       } catch (storageError) {
         console.error("setAccount: 清除localStorage失败", storageError);
       }
-      
+
       // 抛出一个特殊的错误标识，让路由守卫知道需要跳转登录页
       const authError = new Error("获取用户信息失败，请重新登录");
       authError.name = "AuthenticationError";
       throw authError;
     }
   }
-  
+
   // 设置token
   async function setToken(data: string) {
     token.value = data;
@@ -148,9 +153,9 @@ const userInfoStore = () => {
 
   async function hasValidSession() {
     const now = Math.floor(Date.now() / 1000);
-    return Boolean(token.value && sessionId.value && expiresAt.value > now && await loadSigningSession(sessionId.value));
+    return Boolean(token.value && sessionId.value && expiresAt.value > now && (await loadSigningSession(sessionId.value)));
   }
-  
+
   // 退出登录
   async function logOut() {
     try {

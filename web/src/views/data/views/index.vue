@@ -1,67 +1,66 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div v-if="!props.embedded" class="page-head__title">
-        <slot name="page-title">
-          <h2>{{ props.pageTitle }}</h2>
-        </slot>
+      <div class="page-head">
+        <div v-if="!props.embedded" class="page-head__title">
+          <slot name="page-title">
+            <h2>{{ props.pageTitle }}</h2>
+          </slot>
+        </div>
+        <a-space>
+          <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            新增视图
+          </a-button>
+        </a-space>
       </div>
-      <a-space>
-        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增视图
-        </a-button>
-      </a-space>
-    </div>
 
-    <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
-    <a-table
-      v-else
-      row-key="view_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="visibleRows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="视图ID" data-index="view_id" :width="170" />
-        <a-table-column title="中文名" data-index="name" :width="160" />
-        <a-table-column title="引擎" data-index="engine" :width="100" />
-        <a-table-column title="主数据集" data-index="primary_dataset_id" :width="150" />
-        <a-table-column title="频率" :width="90">
-          <template #cell="{ record }">{{ viewFreqLabel(record) }}</template>
-        </a-table-column>
-        <a-table-column title="版本" :width="90">
-          <template #cell="{ record }">{{ record.view_version || 0 }}</template>
-        </a-table-column>
-        <a-table-column title="活跃版本" :width="100">
-          <template #cell="{ record }">{{ record.active_view_version || 0 }}</template>
-        </a-table-column>
-        <a-table-column title="切换状态" :width="120">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="viewIndexStateColor(record)">{{ viewIndexStateLabel(record) }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-        </a-table-column>
-        <a-table-column title="操作" :width="250" align="center" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-space>
-              <a-button size="mini" type="text" @click="openColumns(record)">列</a-button>
-              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-            </a-space>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
-
+      <a-table
+        v-else
+        row-key="view_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="visibleRows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="视图ID" data-index="view_id" :width="170" />
+          <a-table-column title="中文名" data-index="name" :width="160" />
+          <a-table-column title="引擎" data-index="engine" :width="100" />
+          <a-table-column title="主数据集" data-index="primary_dataset_id" :width="150" />
+          <a-table-column title="频率" :width="90">
+            <template #cell="{ record }">{{ viewFreqLabel(record) }}</template>
+          </a-table-column>
+          <a-table-column title="版本" :width="90">
+            <template #cell="{ record }">{{ record.view_version || 0 }}</template>
+          </a-table-column>
+          <a-table-column title="活跃版本" :width="100">
+            <template #cell="{ record }">{{ record.active_view_version || 0 }}</template>
+          </a-table-column>
+          <a-table-column title="切换状态" :width="120">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="viewIndexStateColor(record)">{{ viewIndexStateLabel(record) }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+          </a-table-column>
+          <a-table-column title="操作" :width="250" align="center" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-space>
+                <a-button size="mini" type="text" @click="openColumns(record)">列</a-button>
+                <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+              </a-space>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
     </div>
 
     <a-modal v-model:visible="visible" width="820px" :title="modalTitle" @ok="submit">
@@ -114,7 +113,7 @@
             >
               <template #columns>
                 <a-table-column title="中文名" :width="120">
-                  <template #cell="{ record }">{{ record.attributes?.display_name || '-' }}</template>
+                  <template #cell="{ record }">{{ record.attributes?.display_name || "-" }}</template>
                 </a-table-column>
                 <a-table-column title="技术列名" data-index="column_name" :width="170" />
                 <a-table-column title="来源数据集" :width="180">
@@ -201,33 +200,36 @@ import {
 
 defineOptions({ name: "DataViews" });
 
-const props = withDefaults(defineProps<{
-  embedded?: boolean;
-  pageTitle?: string;
-  ownerModule?: OwnerModule;
-  viewRole?: ViewRole;
-  filterOwnerModules?: OwnerModule[];
-  filterDatasetRoles?: DatasetRole[];
-  filterViewRoles?: ViewRole[];
-  includeUnowned?: boolean;
-  managedBy?: string;
-  allowedPrimaryDatasetIds?: string[];
-  excludedPrimaryDatasetIds?: string[];
-  excludeLikelyFactorDatasets?: boolean;
-}>(), {
-  embedded: false,
-  pageTitle: "视图列表",
-  ownerModule: undefined,
-  viewRole: undefined,
-  filterOwnerModules: undefined,
-  filterDatasetRoles: undefined,
-  filterViewRoles: undefined,
-  includeUnowned: false,
-  managedBy: undefined,
-  allowedPrimaryDatasetIds: undefined,
-  excludedPrimaryDatasetIds: undefined,
-  excludeLikelyFactorDatasets: false,
-});
+const props = withDefaults(
+  defineProps<{
+    embedded?: boolean;
+    pageTitle?: string;
+    ownerModule?: OwnerModule;
+    viewRole?: ViewRole;
+    filterOwnerModules?: OwnerModule[];
+    filterDatasetRoles?: DatasetRole[];
+    filterViewRoles?: ViewRole[];
+    includeUnowned?: boolean;
+    managedBy?: string;
+    allowedPrimaryDatasetIds?: string[];
+    excludedPrimaryDatasetIds?: string[];
+    excludeLikelyFactorDatasets?: boolean;
+  }>(),
+  {
+    embedded: false,
+    pageTitle: "视图列表",
+    ownerModule: undefined,
+    viewRole: undefined,
+    filterOwnerModules: undefined,
+    filterDatasetRoles: undefined,
+    filterViewRoles: undefined,
+    includeUnowned: false,
+    managedBy: undefined,
+    allowedPrimaryDatasetIds: undefined,
+    excludedPrimaryDatasetIds: undefined,
+    excludeLikelyFactorDatasets: false
+  }
+);
 
 type ViewForm = View & { view_freq?: string };
 
@@ -237,14 +239,14 @@ const rows = ref<View[]>([]);
 const allowedPrimaryDatasetIdSet = computed(() => new Set((props.allowedPrimaryDatasetIds || []).filter(Boolean)));
 const excludedPrimaryDatasetIdSet = computed(() => new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean)));
 const hasViewAttributionFilter = computed(() =>
-  Boolean(props.filterOwnerModules?.length || props.filterViewRoles?.length || props.includeUnowned),
+  Boolean(props.filterOwnerModules?.length || props.filterViewRoles?.length || props.includeUnowned)
 );
 const hasDatasetAttributionFilter = computed(() =>
-  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned),
+  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned)
 );
-const datasetById = computed(() => new Map(datasets.value.map((item) => [item.dataset_id, item])));
+const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
 const visibleRows = computed(() =>
-  rows.value.filter((item) => {
+  rows.value.filter(item => {
     const matchedByDataset =
       allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.primary_dataset_id);
     if (!matchedByDataset && excludedPrimaryDatasetIdSet.value.has(item.primary_dataset_id)) {
@@ -256,7 +258,7 @@ const visibleRows = computed(() =>
     const matchedByAttrs = viewMatchesAttribution(item, {
       ownerModules: props.filterOwnerModules,
       viewRoles: props.filterViewRoles,
-      includeUnowned: props.includeUnowned,
+      includeUnowned: props.includeUnowned
     });
     if (allowedPrimaryDatasetIdSet.value.size > 0 && hasViewAttributionFilter.value) {
       return matchedByDataset || matchedByAttrs;
@@ -265,13 +267,12 @@ const visibleRows = computed(() =>
       return matchedByDataset;
     }
     return matchedByAttrs;
-  }),
+  })
 );
 const datasets = ref<Dataset[]>([]);
 const selectableDatasets = computed(() =>
-  datasets.value.filter((item) => {
-    const matchedByAllowedId =
-      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.dataset_id);
+  datasets.value.filter(item => {
+    const matchedByAllowedId = allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.dataset_id);
     if (!matchedByAllowedId && excludedPrimaryDatasetIdSet.value.has(item.dataset_id)) {
       return false;
     }
@@ -281,7 +282,7 @@ const selectableDatasets = computed(() =>
     const matchedByAttrs = datasetMatchesAttribution(item, {
       ownerModules: props.filterOwnerModules,
       datasetRoles: props.filterDatasetRoles,
-      includeUnowned: props.includeUnowned,
+      includeUnowned: props.includeUnowned
     });
     if (allowedPrimaryDatasetIdSet.value.size > 0 && hasDatasetAttributionFilter.value) {
       return matchedByAllowedId || matchedByAttrs;
@@ -290,7 +291,7 @@ const selectableDatasets = computed(() =>
       return matchedByAllowedId;
     }
     return matchedByAttrs;
-  }),
+  })
 );
 const hasAttributionFilter = computed(() =>
   Boolean(
@@ -300,8 +301,8 @@ const hasAttributionFilter = computed(() =>
       props.includeUnowned ||
       props.allowedPrimaryDatasetIds?.length ||
       props.excludedPrimaryDatasetIds?.length ||
-      props.excludeLikelyFactorDatasets,
-  ),
+      props.excludeLikelyFactorDatasets
+  )
 );
 const draftColumns = ref<ViewColumn[]>([]);
 const loading = ref(false);
@@ -491,7 +492,7 @@ async function submit() {
       ownerModule: props.ownerModule,
       viewRole: props.viewRole,
       managedBy: props.managedBy,
-      primaryDatasetRole: primaryDataset.value?.attributes?.dataset_role as DatasetRole | undefined,
+      primaryDatasetRole: primaryDataset.value?.attributes?.dataset_role as DatasetRole | undefined
     })
   };
   if (editing.value) {
@@ -574,11 +575,13 @@ const viewIndexStateLabels: Record<string, string> = {
   BUILDING: "构建中",
   CATCHING_UP: "追平中",
   READY: "待激活",
-  FAILED: "失败",
+  FAILED: "失败"
 };
 
 function normalizedViewIndexState(record: View) {
-  return String(record.index_build?.state ?? "").replace(/^VIEW_INDEX_BUILD_STATE_/, "").toUpperCase();
+  return String(record.index_build?.state ?? "")
+    .replace(/^VIEW_INDEX_BUILD_STATE_/, "")
+    .toUpperCase();
 }
 
 function viewIndexStateLabel(record: View) {

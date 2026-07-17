@@ -21,6 +21,6 @@ export const getRoutersAPI = () => {
   return Promise.resolve({
     data: filteredMenu,
     status: 200,
-    statusText: 'OK'
+    statusText: "OK"
   });
 };

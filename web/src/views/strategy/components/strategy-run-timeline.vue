@@ -14,6 +14,6 @@
 </template>
 
 <script setup lang="ts">
-import type { StrategyRun } from '@/api/strategy-types';
+import type { StrategyRun } from "@/api/strategy-types";
 defineProps<{ runs: StrategyRun[] }>();
 </script>

@@ -1,6 +1,6 @@
-import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from '@/utils/request-signing';
-import { readSelectedSpaceId } from './space-header';
+import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
+import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from "@/utils/request-signing";
+import { readSelectedSpaceId } from "./space-header";
 
 interface PersistedAuth {
   token?: string;
@@ -10,14 +10,14 @@ interface PersistedAuth {
 
 export function readPersistedAuth(): PersistedAuth {
   try {
-    return JSON.parse(localStorage.getItem('user-info') || '{}');
+    return JSON.parse(localStorage.getItem("user-info") || "{}");
   } catch {
     return {};
   }
 }
 
 export async function clearBrowserSession(): Promise<void> {
-  localStorage.removeItem('user-info');
+  localStorage.removeItem("user-info");
   await clearSigningSessions();
 }
 
@@ -27,40 +27,40 @@ async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalA
   const session = auth.sessionId ? await loadSigningSession(auth.sessionId) : null;
   if (!auth.token || !auth.sessionId || !auth.expiresAt || auth.expiresAt <= now || !session) {
     await clearBrowserSession();
-    throw new Error('登录态已失效，请重新登录');
+    throw new Error("登录态已失效，请重新登录");
   }
 
-  const body = config.data == null ? '' : typeof config.data === 'string' ? config.data : JSON.stringify(config.data);
+  const body = config.data == null ? "" : typeof config.data === "string" ? config.data : JSON.stringify(config.data);
   config.data = body;
-  const url = new URL(config.url || '/', window.location.origin);
+  const url = new URL(config.url || "/", window.location.origin);
   const timestamp = now;
   const nonce = createNonce();
   const signature = await signRequest(session.key, {
-    method: config.method || 'GET',
+    method: config.method || "GET",
     path: url.pathname,
     body,
     headers: {
-      'X-App-Id': config.headers.get('X-App-Id'),
-      'X-App-Key': config.headers.get('X-App-Key'),
-      'X-Space-Id': config.headers.get('X-Space-Id'),
+      "X-App-Id": config.headers.get("X-App-Id"),
+      "X-App-Key": config.headers.get("X-App-Key"),
+      "X-Space-Id": config.headers.get("X-Space-Id")
     },
     timestamp,
-    nonce,
+    nonce
   });
   config.headers.Authorization = auth.token;
-  config.headers['X-Access-Token'] = auth.token;
-  config.headers['X-Moox-Timestamp'] = String(timestamp);
-  config.headers['X-Moox-Nonce'] = nonce;
-  config.headers['X-Moox-Signature'] = signature;
+  config.headers["X-Access-Token"] = auth.token;
+  config.headers["X-Moox-Timestamp"] = String(timestamp);
+  config.headers["X-Moox-Nonce"] = nonce;
+  config.headers["X-Moox-Signature"] = signature;
   return config;
 }
 
 export function installSignedClient(client: AxiosInstance): void {
   client.interceptors.request.use(signConfig);
-  client.interceptors.response.use(undefined, async (error) => {
+  client.interceptors.response.use(undefined, async error => {
     if (error?.response?.status === 401) {
       await clearBrowserSession();
-      if (window.location.hash !== '#/login') window.location.hash = '#/login';
+      if (window.location.hash !== "#/login") window.location.hash = "#/login";
     }
     return Promise.reject(error);
   });
@@ -69,10 +69,10 @@ export function installSignedClient(client: AxiosInstance): void {
 export function installSpaceAwareSignedClient(client: AxiosInstance): void {
   // Axios executes request interceptors in reverse registration order.
   installSignedClient(client);
-  client.interceptors.request.use((config) => {
+  client.interceptors.request.use(config => {
     const spaceId = readSelectedSpaceId();
-    if (spaceId && !config.headers.get('X-Space-Id')) {
-      config.headers.set('X-Space-Id', spaceId);
+    if (spaceId && !config.headers.get("X-Space-Id")) {
+      config.headers.set("X-Space-Id", spaceId);
     }
     return config;
   });

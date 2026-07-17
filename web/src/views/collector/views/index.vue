@@ -37,16 +37,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { listFactorBindings } from '@/api/factor';
-import type { FactorBinding } from '@/api/factor/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { factorBindingTargetDatasetIds } from '@/views/data/shared/factor-result-dataset';
-import ViewDefinitions from '@/views/data/views/index.vue';
-import ViewBrowse from '@/views/data/view-browse/index.vue';
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { listFactorBindings } from "@/api/factor";
+import type { FactorBinding } from "@/api/factor/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { factorBindingTargetDatasetIds } from "@/views/data/shared/factor-result-dataset";
+import ViewDefinitions from "@/views/data/views/index.vue";
+import ViewBrowse from "@/views/data/view-browse/index.vue";
 
-defineOptions({ name: 'CollectorViews' });
+defineOptions({ name: "CollectorViews" });
 
 const props = withDefaults(
   defineProps<{
@@ -54,9 +54,9 @@ const props = withDefaults(
     routePath?: string;
   }>(),
   {
-    queryKey: 'tab',
-    routePath: '/collector/views',
-  },
+    queryKey: "tab",
+    routePath: "/collector/views"
+  }
 );
 
 const route = useRoute();
@@ -65,25 +65,25 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const activeTab = ref(tabFromRoute());
 const bindings = ref<FactorBinding[]>([]);
-type CollectorViewTab = 'definitions' | 'browse';
+type CollectorViewTab = "definitions" | "browse";
 
 const tabs = [
-  { key: 'definitions', label: '视图定义' },
-  { key: 'browse', label: '查看数据' },
+  { key: "definitions", label: "视图定义" },
+  { key: "browse", label: "查看数据" }
 ] as const;
 
-const normalizedQuery = computed(() => String(route.query[props.queryKey] || ''));
+const normalizedQuery = computed(() => String(route.query[props.queryKey] || ""));
 const excludedFactorDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
 
 function tabFromRoute() {
-  return route.query[props.queryKey] === 'browse' ? 'browse' : 'definitions';
+  return route.query[props.queryKey] === "browse" ? "browse" : "definitions";
 }
 
 function syncRoute(key: string | number) {
-  const tab: CollectorViewTab = key === 'browse' ? 'browse' : 'definitions';
+  const tab: CollectorViewTab = key === "browse" ? "browse" : "definitions";
   activeTab.value = tab;
   const query = { ...route.query };
-  if (tab === 'browse') query[props.queryKey] = tab;
+  if (tab === "browse") query[props.queryKey] = tab;
   else delete query[props.queryKey];
   void router.replace({ path: props.routePath, query });
 }
@@ -106,8 +106,8 @@ async function listAllBindings(spaceId: string) {
   for (let pageNo = 1; ; pageNo += 1) {
     const rsp = await listFactorBindings({
       space_id: spaceId,
-      status: 'enabled',
-      page: { page: pageNo, size },
+      status: "enabled",
+      page: { page: pageNo, size }
     });
     items.push(...(rsp.bindings || []));
     if (!rsp.page_result?.has_more || (rsp.bindings || []).length === 0) {
@@ -131,5 +131,4 @@ onMounted(loadBindings);
   min-height: 0;
   overflow: hidden;
 }
-
 </style>

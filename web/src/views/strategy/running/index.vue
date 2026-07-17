@@ -5,10 +5,12 @@
 </template>
 
 <script setup lang="ts">
-import StrategyOverview from '@/views/strategy/overview/index.vue';
-defineOptions({ name: 'StrategyRunning' });
+import StrategyOverview from "@/views/strategy/overview/index.vue";
+defineOptions({ name: "StrategyRunning" });
 </script>
 
 <style scoped>
-.running-page { min-height: 100%; }
+.running-page {
+  min-height: 100%;
+}
 </style>

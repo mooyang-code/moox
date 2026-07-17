@@ -44,7 +44,6 @@
           </a-table-column>
         </template>
       </a-table>
-
     </div>
 
     <a-modal v-model:visible="visible" width="780px" :title="modalTitle" @ok="submit">
@@ -89,20 +88,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
 import {
   createPrimaryStoreRoute,
   listDatasets,
   listPrimaryStoreNodes,
   listPrimaryStoreRoutes,
-  updatePrimaryStoreRoute,
-} from '@/api/storage/metadata';
-import type { Dataset, PrimaryStoreNode, PrimaryStoreRoute } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { applyPageResult, defaultPagination, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
+  updatePrimaryStoreRoute
+} from "@/api/storage/metadata";
+import type { Dataset, PrimaryStoreNode, PrimaryStoreRoute } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { applyPageResult, defaultPagination, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'OpsStorageRoutes' });
+defineOptions({ name: "OpsStorageRoutes" });
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
@@ -115,18 +114,18 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive<PrimaryStoreRoute>({
-  space_id: '',
-  route_id: '',
-  dataset_id: '',
-  subject_id: '',
-  subject_pattern: '',
-  hash_rule: 'subject_id',
-  node_id: '',
+  space_id: "",
+  route_id: "",
+  dataset_id: "",
+  subject_id: "",
+  subject_pattern: "",
+  hash_rule: "subject_id",
+  node_id: "",
   priority: 100,
-  status: 'active',
+  status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑主存路由' : '新增主存路由'));
+const modalTitle = computed(() => (editing.value ? "编辑主存路由" : "新增主存路由"));
 
 async function loadOptions() {
   if (!selectedSpaceId.value) {
@@ -136,7 +135,7 @@ async function loadOptions() {
   }
   const [datasetRsp, nodeRsp] = await Promise.all([
     listDatasets({ space_id: selectedSpaceId.value, page: { page: 1, size: 500 } }),
-    listPrimaryStoreNodes({ page: { page: 1, size: 500 } }),
+    listPrimaryStoreNodes({ page: { page: 1, size: 500 } })
   ]);
   datasets.value = datasetRsp.datasets || [];
   nodes.value = nodeRsp.nodes || [];
@@ -152,7 +151,7 @@ async function load() {
     await loadOptions();
     const rsp = await listPrimaryStoreRoutes({
       space_id: selectedSpaceId.value,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.primary_store_routes || [];
     applyPageResult(pagination, rsp.page_result);
@@ -164,14 +163,14 @@ async function load() {
 function resetForm() {
   Object.assign(form, {
     space_id: selectedSpaceId.value,
-    route_id: '',
-    dataset_id: '',
-    subject_id: '',
-    subject_pattern: '',
-    hash_rule: 'subject_id',
-    node_id: '',
+    route_id: "",
+    dataset_id: "",
+    subject_id: "",
+    subject_pattern: "",
+    hash_rule: "subject_id",
+    node_id: "",
     priority: 100,
-    status: 'active',
+    status: "active"
   });
 }
 
@@ -190,13 +189,13 @@ function openEdit(record: PrimaryStoreRoute) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.route_id || !form.dataset_id || !form.node_id) {
-    Message.warning('请补全路由ID、数据集和主存节点');
+    Message.warning("请补全路由ID、数据集和主存节点");
     return;
   }
   const payload = { ...form, space_id: spaceId };
   if (editing.value) await updatePrimaryStoreRoute(payload);
   else await createPrimaryStoreRoute(payload);
-  Message.success('主存路由已保存');
+  Message.success("主存路由已保存");
   visible.value = false;
   await load();
 }

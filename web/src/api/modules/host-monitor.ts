@@ -1,12 +1,17 @@
-import { callControl } from '@/api/admin/http';
+import { callControl } from "@/api/admin/http";
 import {
   aggregateNetworkRate,
   filesystemUsageAvailable,
   maxAvailableFilesystemUsage,
-  memoryUsageAvailable,
-} from './host-monitor-mapping';
+  memoryUsageAvailable
+} from "./host-monitor-mapping";
 
-export { aggregateNetworkRate, historyHasRenderableData, maxAvailableFilesystemUsage, metricValueAvailable } from './host-monitor-mapping';
+export {
+  aggregateNetworkRate,
+  historyHasRenderableData,
+  maxAvailableFilesystemUsage,
+  metricValueAvailable
+} from "./host-monitor-mapping";
 
 export interface CPUMetrics {
   usage: number;
@@ -58,7 +63,7 @@ export interface HostMetrics {
   host_id: string;
   host_name: string;
   address: string;
-  status: 'online' | 'offline' | 'error';
+  status: "online" | "offline" | "error";
   timestamp: string;
   cpu: CPUMetrics;
   memory: MemoryMetrics;
@@ -84,9 +89,34 @@ export interface HistoryPoint {
 interface HostSnapshot {
   cpu?: { logical_cores?: number; usage_percent?: number; usage_available?: boolean };
   memory?: { total_bytes?: WireNumber; used_bytes?: WireNumber; available_bytes?: WireNumber; usage_percent?: number };
-  filesystems?: Array<{ device?: string; mountpoint?: string; fs_type?: string; total_bytes?: WireNumber; used_bytes?: WireNumber; available_bytes?: WireNumber; usage_percent?: number; read_only?: boolean }>;
-  disks?: Array<{ device?: string; read_bytes_per_second?: number; write_bytes_per_second?: number; read_iops?: number; write_iops?: number; utilization_percent?: number; rate_available?: boolean }>;
-  networks?: Array<{ device?: string; operstate?: string; receive_bytes_per_second?: number; transmit_bytes_per_second?: number; receive_errors_total?: WireNumber; transmit_errors_total?: WireNumber; rate_available?: boolean }>;
+  filesystems?: Array<{
+    device?: string;
+    mountpoint?: string;
+    fs_type?: string;
+    total_bytes?: WireNumber;
+    used_bytes?: WireNumber;
+    available_bytes?: WireNumber;
+    usage_percent?: number;
+    read_only?: boolean;
+  }>;
+  disks?: Array<{
+    device?: string;
+    read_bytes_per_second?: number;
+    write_bytes_per_second?: number;
+    read_iops?: number;
+    write_iops?: number;
+    utilization_percent?: number;
+    rate_available?: boolean;
+  }>;
+  networks?: Array<{
+    device?: string;
+    operstate?: string;
+    receive_bytes_per_second?: number;
+    transmit_bytes_per_second?: number;
+    receive_errors_total?: WireNumber;
+    transmit_errors_total?: WireNumber;
+    rate_available?: boolean;
+  }>;
 }
 
 type WireNumber = number | string;
@@ -106,28 +136,32 @@ interface HostHistoryPoint {
 }
 
 export const getCurrentMetrics = () => {
-  return callControl<Record<string, never>, { agents?: HostAgent[]; storage_available?: boolean; data_gap?: boolean }>('monitor', 'ListHostAgents', {}).then((response) => ({
-    metrics: (response.agents ?? []).map((agent) => toHostMetrics(agent, response.storage_available !== false)),
+  return callControl<Record<string, never>, { agents?: HostAgent[]; storage_available?: boolean; data_gap?: boolean }>(
+    "monitor",
+    "ListHostAgents",
+    {}
+  ).then(response => ({
+    metrics: (response.agents ?? []).map(agent => toHostMetrics(agent, response.storage_available !== false)),
     storage_available: response.storage_available !== false,
-    data_gap: response.data_gap === true,
+    data_gap: response.data_gap === true
   }));
 };
 
-export const getHistoryMetrics = (hostID: string, duration = '1h') => {
+export const getHistoryMetrics = (hostID: string, duration = "1h") => {
   const end = new Date();
   const start = new Date(end.getTime() - durationMilliseconds(duration));
   return callControl<
     { agent_id: string; start_at: string; end_at: string; limit: number },
     { points?: HostHistoryPoint[]; storage_available?: boolean; data_gap?: boolean }
-  >('monitor', 'QueryHostMetricHistory', {
+  >("monitor", "QueryHostMetricHistory", {
     agent_id: hostID,
     start_at: start.toISOString(),
     end_at: end.toISOString(),
-    limit: 500,
-  }).then((response) => ({
+    limit: 500
+  }).then(response => ({
     history: (response.points ?? []).map(toHistoryPoint),
     storage_available: response.storage_available !== false,
-    data_gap: response.data_gap === true,
+    data_gap: response.data_gap === true
   }));
 };
 
@@ -136,53 +170,53 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
   const cpu = snapshot.cpu ?? {};
   const memory = snapshot.memory ?? {};
   return {
-    host_id: agent.agent_id ?? '',
-    host_name: agent.hostname ?? agent.agent_id ?? 'unknown',
-    address: agent.agent_id ?? '',
-    status: agent.archived ? 'offline' : isFresh(agent.last_seen_at) ? 'online' : 'offline',
-    timestamp: agent.last_seen_at ?? '',
+    host_id: agent.agent_id ?? "",
+    host_name: agent.hostname ?? agent.agent_id ?? "unknown",
+    address: agent.agent_id ?? "",
+    status: agent.archived ? "offline" : isFresh(agent.last_seen_at) ? "online" : "offline",
+    timestamp: agent.last_seen_at ?? "",
     cpu: {
       usage: cpu.usage_percent ?? 0,
       usage_available: cpu.usage_available === true,
-      cores: cpu.logical_cores ?? 0,
+      cores: cpu.logical_cores ?? 0
     },
     memory: {
       total: toNumber(memory.total_bytes),
       used: toNumber(memory.used_bytes),
       available: toNumber(memory.available_bytes),
       percent: memory.usage_percent ?? 0,
-      percent_available: memoryUsageAvailable(toNumber(memory.total_bytes), snapshot.memory !== undefined),
+      percent_available: memoryUsageAvailable(toNumber(memory.total_bytes), snapshot.memory !== undefined)
     },
-    filesystems: (snapshot.filesystems ?? []).map((item) => ({
-      device: item.device ?? '',
-      mountpoint: item.mountpoint ?? '',
-      fs_type: item.fs_type ?? '',
+    filesystems: (snapshot.filesystems ?? []).map(item => ({
+      device: item.device ?? "",
+      mountpoint: item.mountpoint ?? "",
+      fs_type: item.fs_type ?? "",
       total: toNumber(item.total_bytes),
       used: toNumber(item.used_bytes),
       available: toNumber(item.available_bytes),
       percent: item.usage_percent ?? 0,
       percent_available: filesystemUsageAvailable(item.device, item.mountpoint, toNumber(item.total_bytes)),
-      read_only: item.read_only === true,
+      read_only: item.read_only === true
     })),
-    disks: (snapshot.disks ?? []).map((item) => ({
-      device: item.device ?? '',
+    disks: (snapshot.disks ?? []).map(item => ({
+      device: item.device ?? "",
       read_bytes_per_second: item.read_bytes_per_second ?? 0,
       write_bytes_per_second: item.write_bytes_per_second ?? 0,
       read_iops: item.read_iops ?? 0,
       write_iops: item.write_iops ?? 0,
       utilization_percent: item.utilization_percent ?? 0,
-      rate_available: item.rate_available === true,
+      rate_available: item.rate_available === true
     })),
-    networks: (snapshot.networks ?? []).map((item) => ({
-      device: item.device ?? '',
-      operstate: item.operstate ?? 'unknown',
+    networks: (snapshot.networks ?? []).map(item => ({
+      device: item.device ?? "",
+      operstate: item.operstate ?? "unknown",
       rx_speed: item.receive_bytes_per_second ?? 0,
       tx_speed: item.transmit_bytes_per_second ?? 0,
       receive_errors_total: toNumber(item.receive_errors_total),
       transmit_errors_total: toNumber(item.transmit_errors_total),
-      rate_available: item.rate_available === true,
+      rate_available: item.rate_available === true
     })),
-    storage_available: storageAvailable,
+    storage_available: storageAvailable
   };
 };
 
@@ -191,7 +225,7 @@ const toHistoryPoint = (point: HostHistoryPoint): HistoryPoint => {
   const filesystemUsage = maxAvailableFilesystemUsage(metric.filesystems);
   const networkRate = aggregateNetworkRate(metric.networks);
   return {
-    timestamp: point.observed_at ?? '',
+    timestamp: point.observed_at ?? "",
     cpu_usage: metric.cpu.usage,
     cpu_available: metric.cpu.usage_available,
     memory_percent: metric.memory.percent,
@@ -200,7 +234,7 @@ const toHistoryPoint = (point: HostHistoryPoint): HistoryPoint => {
     disk_available: filesystemUsage !== null,
     network_rx_speed: networkRate?.rx ?? 0,
     network_tx_speed: networkRate?.tx ?? 0,
-    network_available: networkRate !== null,
+    network_available: networkRate !== null
   };
 };
 
@@ -218,8 +252,8 @@ const durationMilliseconds = (value: string) => {
 };
 
 export const formatBytes = (bytes: number): string => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
   return `${Math.round((bytes / 1024 ** index) * 100) / 100} ${sizes[index]}`;
 };

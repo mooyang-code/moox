@@ -13,20 +13,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
-import GatewayNodes from './gateway-nodes.vue';
-import ServiceDeployments from '@/views/settings/service-deployments/index.vue';
-import ServiceMonitor from '@/views/ops/service-monitor/index.vue';
-import MetricMonitor from '@/views/ops/metric-monitor/index.vue';
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import GatewayNodes from "./gateway-nodes.vue";
+import ServiceDeployments from "@/views/settings/service-deployments/index.vue";
+import ServiceMonitor from "@/views/ops/service-monitor/index.vue";
+import MetricMonitor from "@/views/ops/metric-monitor/index.vue";
 
-type ServiceManagementTab = 'nodes' | 'instances' | 'availability' | 'metrics';
+type ServiceManagementTab = "nodes" | "instances" | "availability" | "metrics";
 const tabs = [
-  { key: 'nodes', label: '网关节点' },
-  { key: 'instances', label: '服务实例' },
-  { key: 'availability', label: '可用性监控' },
-  { key: 'metrics', label: '应用指标' },
+  { key: "nodes", label: "网关节点" },
+  { key: "instances", label: "服务实例" },
+  { key: "availability", label: "可用性监控" },
+  { key: "metrics", label: "应用指标" }
 ] as const;
 
 const route = useRoute();
@@ -36,15 +36,18 @@ if (route.query.tab !== undefined && normalizeTab(route.query.tab) !== route.que
   void router.replace({ query: { ...route.query, tab: activeTab.value } });
 }
 
-const activeComponent = computed(() => ({
-  nodes: GatewayNodes,
-  instances: ServiceDeployments,
-  availability: ServiceMonitor,
-  metrics: MetricMonitor,
-}[activeTab.value]));
+const activeComponent = computed(
+  () =>
+    ({
+      nodes: GatewayNodes,
+      instances: ServiceDeployments,
+      availability: ServiceMonitor,
+      metrics: MetricMonitor
+    })[activeTab.value]
+);
 
 function normalizeTab(value: unknown): ServiceManagementTab {
-  return value === 'instances' || value === 'availability' || value === 'metrics' ? value : 'nodes';
+  return value === "instances" || value === "availability" || value === "metrics" ? value : "nodes";
 }
 
 function onTabChange(value: string | number) {
@@ -53,10 +56,13 @@ function onTabChange(value: string | number) {
   void router.replace({ query: { ...route.query, tab } });
 }
 
-watch(() => route.query.tab, (value) => {
-  const tab = normalizeTab(value);
-  if (tab !== activeTab.value) activeTab.value = tab;
-});
+watch(
+  () => route.query.tab,
+  value => {
+    const tab = normalizeTab(value);
+    if (tab !== activeTab.value) activeTab.value = tab;
+  }
+);
 </script>
 
 <style scoped lang="scss">

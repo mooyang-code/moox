@@ -45,7 +45,7 @@ func TestEncodeJSONRequestMetaUsesArrowMmapWhenSnapshotPathSet(t *testing.T) {
 
 func TestDecodeJSONResponse(t *testing.T) {
 	meta := map[string]any{
-		"elapsed_ms": float64(12),
+		"elapsed_ms":    float64(12),
 		"per_factor_ms": map[string]any{"f1": float64(5)},
 		"results": map[string]any{
 			"alpha": map[string]any{"tail": float64(2), "values": []any{1.0, 2.0}},

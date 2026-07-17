@@ -1,8 +1,7 @@
-import { defineStore } from 'pinia';
-import { ref, readonly } from 'vue';
+import { defineStore } from "pinia";
+import { ref, readonly } from "vue";
 
-
-export const useLoadingStore = defineStore('loading', () => {
+export const useLoadingStore = defineStore("loading", () => {
   // State
   const routeLoading = ref(false);
   const pageLoading = ref(false);

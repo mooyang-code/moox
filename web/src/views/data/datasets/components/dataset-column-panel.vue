@@ -22,7 +22,7 @@
     >
       <template #columns>
         <a-table-column title="中文名" :width="120">
-          <template #cell="{ record }">{{ record.attributes?.display_name || '-' }}</template>
+          <template #cell="{ record }">{{ record.attributes?.display_name || "-" }}</template>
         </a-table-column>
         <a-table-column title="技术列名" data-index="column_name" :width="150" />
         <a-table-column title="来源类型" :width="120">
@@ -38,17 +38,17 @@
         </a-table-column>
         <a-table-column title="必填" :width="80" align="center">
           <template #cell="{ record }">
-            <a-tag size="small" :color="record.required ? 'red' : 'gray'">{{ record.required ? '是' : '否' }}</a-tag>
+            <a-tag size="small" :color="record.required ? 'red' : 'gray'">{{ record.required ? "是" : "否" }}</a-tag>
           </template>
         </a-table-column>
         <a-table-column title="唯一" :width="80" align="center">
           <template #cell="{ record }">
-            <a-tag size="small" :color="record.is_unique ? 'blue' : 'gray'">{{ record.is_unique ? '是' : '否' }}</a-tag>
+            <a-tag size="small" :color="record.is_unique ? 'blue' : 'gray'">{{ record.is_unique ? "是" : "否" }}</a-tag>
           </template>
         </a-table-column>
         <a-table-column title="别名" :width="180">
           <template #cell="{ record }">
-            {{ joinList(record.aliases) || '-' }}
+            {{ joinList(record.aliases) || "-" }}
           </template>
         </a-table-column>
         <a-table-column title="状态" :width="90">
@@ -109,10 +109,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { listDatasetColumns, upsertDatasetColumn } from '@/api/storage/metadata';
-import type { DatasetColumn } from '@/api/storage/types';
+import { computed, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { listDatasetColumns, upsertDatasetColumn } from "@/api/storage/metadata";
+import type { DatasetColumn } from "@/api/storage/types";
 import {
   applyPageResult,
   datasetColumnOriginOptions,
@@ -123,10 +123,10 @@ import {
   splitList,
   statusColor,
   statusOptions,
-  validateChineseDisplayName,
-} from '@/views/data/shared/metadata-utils';
+  validateChineseDisplayName
+} from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'DatasetColumnPanel' });
+defineOptions({ name: "DatasetColumnPanel" });
 
 const props = defineProps<{
   spaceId: string;
@@ -140,18 +140,18 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive({
-  display_name: '',
-  column_name: '',
-  origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD' as DatasetColumn['origin_type'],
-  origin_id: '',
-  value_type: 'FIELD_VALUE_TYPE_STRING' as DatasetColumn['value_type'],
+  display_name: "",
+  column_name: "",
+  origin_type: "DATASET_COLUMN_ORIGIN_TYPE_FIELD" as DatasetColumn["origin_type"],
+  origin_id: "",
+  value_type: "FIELD_VALUE_TYPE_STRING" as DatasetColumn["value_type"],
   required: false,
   is_unique: false,
-  aliasesText: '',
-  status: 'active',
+  aliasesText: "",
+  status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑数据集列' : '新增数据集列'));
+const modalTitle = computed(() => (editing.value ? "编辑数据集列" : "新增数据集列"));
 
 async function load() {
   if (!props.spaceId || !props.datasetId) {
@@ -163,7 +163,7 @@ async function load() {
     const rsp = await listDatasetColumns({
       space_id: props.spaceId,
       dataset_id: props.datasetId,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.columns || [];
     applyPageResult(pagination, rsp.page_result);
@@ -174,15 +174,15 @@ async function load() {
 
 function resetForm() {
   Object.assign(form, {
-    column_name: '',
-    display_name: '',
-    origin_type: 'DATASET_COLUMN_ORIGIN_TYPE_FIELD',
-    origin_id: '',
-    value_type: 'FIELD_VALUE_TYPE_STRING',
+    column_name: "",
+    display_name: "",
+    origin_type: "DATASET_COLUMN_ORIGIN_TYPE_FIELD",
+    origin_id: "",
+    value_type: "FIELD_VALUE_TYPE_STRING",
     required: false,
     is_unique: false,
-    aliasesText: '',
-    status: 'active',
+    aliasesText: "",
+    status: "active"
   });
 }
 
@@ -196,21 +196,21 @@ function openEdit(record: DatasetColumn) {
   editing.value = true;
   Object.assign(form, {
     column_name: record.column_name,
-    display_name: record.attributes?.display_name || '',
-    origin_type: record.origin_type || 'DATASET_COLUMN_ORIGIN_TYPE_FIELD',
+    display_name: record.attributes?.display_name || "",
+    origin_type: record.origin_type || "DATASET_COLUMN_ORIGIN_TYPE_FIELD",
     origin_id: record.origin_id,
-    value_type: record.value_type || 'FIELD_VALUE_TYPE_STRING',
+    value_type: record.value_type || "FIELD_VALUE_TYPE_STRING",
     required: !!record.required,
     is_unique: !!record.is_unique,
     aliasesText: joinList(record.aliases),
-    status: record.status || 'active',
+    status: record.status || "active"
   });
   visible.value = true;
 }
 
 async function submit() {
   if (!props.spaceId || !props.datasetId || !form.column_name || !form.origin_id || !form.display_name) {
-    Message.warning('请补全中文名、列名、来源ID和数据集');
+    Message.warning("请补全中文名、列名、来源ID和数据集");
     return;
   }
   const nameError = validateChineseDisplayName(form.display_name);
@@ -229,9 +229,9 @@ async function submit() {
     is_unique: form.is_unique,
     aliases: splitList(form.aliasesText),
     status: form.status,
-    attributes: { display_name: form.display_name },
+    attributes: { display_name: form.display_name }
   });
-  Message.success('数据集列已保存');
+  Message.success("数据集列已保存");
   visible.value = false;
   await load();
 }

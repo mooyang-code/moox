@@ -29,7 +29,7 @@ async function initVChartTheme() {
     initVChartArcoTheme();
     vchartThemeInitialized = true;
   } catch (error) {
-    console.warn('VChart theme initialization failed:', error);
+    console.warn("VChart theme initialization failed:", error);
   }
 }
 
@@ -40,13 +40,13 @@ const app = createApp(App);
 
 // 全局错误处理
 app.config.errorHandler = (err, instance, info) => {
-  console.error('全局错误捕获:', err);
-  console.error('错误实例:', instance);
-  console.error('错误信息:', info);
+  console.error("全局错误捕获:", err);
+  console.error("错误实例:", instance);
+  console.error("错误信息:", info);
 
   // 如果是resetFields相关错误，给出更友好的提示
-  if (err instanceof Error && err.message && err.message.includes('resetFields')) {
-    console.warn('表单重置方法调用失败，这通常是因为组件还未完全挂载');
+  if (err instanceof Error && err.message && err.message.includes("resetFields")) {
+    console.warn("表单重置方法调用失败，这通常是因为组件还未完全挂载");
   }
 };
 

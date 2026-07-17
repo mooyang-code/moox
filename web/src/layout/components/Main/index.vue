@@ -41,7 +41,7 @@ let { refreshPage, isTabs, watermark, watermarkStyle, watermarkRotate, watermark
 const routerStore = useRoutesConfigStore();
 const { cacheRoutes } = storeToRefs(routerStore);
 const loadingStore = useLoadingStore();
-  
+
 // 水印配置
 const watermarkConfig = computed(() => {
   return {

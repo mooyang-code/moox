@@ -1,63 +1,62 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <div class="page-head__title">
-        <slot name="page-title">
-          <h2>{{ props.pageTitle }}</h2>
-        </slot>
+      <div class="page-head">
+        <div class="page-head__title">
+          <slot name="page-title">
+            <h2>{{ props.pageTitle }}</h2>
+          </slot>
+        </div>
+        <a-space>
+          <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            新增数据集
+          </a-button>
+        </a-space>
       </div>
-      <a-space>
-        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增数据集
-        </a-button>
-      </a-space>
-    </div>
 
-    <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
-    <a-table
-      v-else
-      row-key="dataset_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="visibleRows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="数据集ID" data-index="dataset_id" :width="180" />
-        <a-table-column title="中文名" data-index="name" :width="180" />
-        <a-table-column title="数据源" data-index="data_source_id" :width="150" />
-        <a-table-column title="数据形态" :width="130">
-          <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
-        </a-table-column>
-        <a-table-column title="频率" :width="180">
-          <template #cell="{ record }">{{ joinList(record.freqs) || '-' }}</template>
-        </a-table-column>
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-        </a-table-column>
-        <a-table-column title="操作" :width="210" align="center" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-space>
-              <a-button size="mini" type="text" @click="openManage(record)">列/对象</a-button>
-              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-            </a-space>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
-
+      <a-table
+        v-else
+        row-key="dataset_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="visibleRows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="数据集ID" data-index="dataset_id" :width="180" />
+          <a-table-column title="中文名" data-index="name" :width="180" />
+          <a-table-column title="数据源" data-index="data_source_id" :width="150" />
+          <a-table-column title="数据形态" :width="130">
+            <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
+          </a-table-column>
+          <a-table-column title="频率" :width="180">
+            <template #cell="{ record }">{{ joinList(record.freqs) || "-" }}</template>
+          </a-table-column>
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+          </a-table-column>
+          <a-table-column title="操作" :width="210" align="center" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-space>
+                <a-button size="mini" type="text" @click="openManage(record)">列/对象</a-button>
+                <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+              </a-space>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
     </div>
 
     <a-modal v-model:visible="visible" width="760px" :title="modalTitle" @ok="submit">
@@ -109,13 +108,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { createDataset, listDatasets, listDataSources, updateDataset } from '@/api/storage/metadata';
-import type { DataSource, Dataset } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
-import DatasetColumnPanel from './components/dataset-column-panel.vue';
-import DatasetSubjectPanel from './components/dataset-subject-panel.vue';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { createDataset, listDatasets, listDataSources, updateDataset } from "@/api/storage/metadata";
+import type { DataSource, Dataset } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
+import DatasetColumnPanel from "./components/dataset-column-panel.vue";
+import DatasetSubjectPanel from "./components/dataset-subject-panel.vue";
 import {
   applyPageResult,
   dataKindOptions,
@@ -127,34 +126,37 @@ import {
   statusColor,
   statusOptions,
   validateChineseDisplayName,
-  validateLowerSnakeId,
-} from '@/views/data/shared/metadata-utils';
+  validateLowerSnakeId
+} from "@/views/data/shared/metadata-utils";
 import {
   datasetMatchesAttribution,
   mergeDatasetAttribution,
   type DatasetRole,
-  type OwnerModule,
-} from '@/views/data/shared/module-attribution';
+  type OwnerModule
+} from "@/views/data/shared/module-attribution";
 
-defineOptions({ name: 'DataDatasets' });
+defineOptions({ name: "DataDatasets" });
 
-const props = withDefaults(defineProps<{
-  pageTitle?: string;
-  ownerModule?: OwnerModule;
-  datasetRole?: DatasetRole;
-  filterOwnerModules?: OwnerModule[];
-  filterDatasetRoles?: DatasetRole[];
-  includeUnowned?: boolean;
-  managedBy?: string;
-}>(), {
-  pageTitle: '数据集',
-  ownerModule: undefined,
-  datasetRole: undefined,
-  filterOwnerModules: undefined,
-  filterDatasetRoles: undefined,
-  includeUnowned: false,
-  managedBy: undefined,
-});
+const props = withDefaults(
+  defineProps<{
+    pageTitle?: string;
+    ownerModule?: OwnerModule;
+    datasetRole?: DatasetRole;
+    filterOwnerModules?: OwnerModule[];
+    filterDatasetRoles?: DatasetRole[];
+    includeUnowned?: boolean;
+    managedBy?: string;
+  }>(),
+  {
+    pageTitle: "数据集",
+    ownerModule: undefined,
+    datasetRole: undefined,
+    filterOwnerModules: undefined,
+    filterDatasetRoles: undefined,
+    includeUnowned: false,
+    managedBy: undefined
+  }
+);
 
 type DatasetForm = Dataset & { freqsText?: string };
 
@@ -162,16 +164,16 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<Dataset[]>([]);
 const visibleRows = computed(() =>
-  rows.value.filter((item) =>
+  rows.value.filter(item =>
     datasetMatchesAttribution(item, {
       ownerModules: props.filterOwnerModules,
       datasetRoles: props.filterDatasetRoles,
-      includeUnowned: props.includeUnowned,
-    }),
-  ),
+      includeUnowned: props.includeUnowned
+    })
+  )
 );
 const hasAttributionFilter = computed(() =>
-  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned),
+  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned)
 );
 const dataSources = ref<DataSource[]>([]);
 const loading = ref(false);
@@ -182,26 +184,26 @@ const activeDataset = ref<Dataset>();
 const pagination = reactive(defaultPagination());
 
 const form = reactive<DatasetForm>({
-  space_id: '',
-  dataset_id: '',
-  data_source_id: '',
-  name: '',
-  description: '',
-  data_kind: 'DATA_KIND_TIME_SERIES',
+  space_id: "",
+  dataset_id: "",
+  data_source_id: "",
+  name: "",
+  description: "",
+  data_kind: "DATA_KIND_TIME_SERIES",
   freqs: [],
-  freqsText: '',
-  status: 'active',
-  attributes: {},
+  freqsText: "",
+  status: "active",
+  attributes: {}
 });
 
 const freqTags = computed({
   get: () => form.freqs || [],
   set: (value: string[]) => {
     form.freqs = value;
-  },
+  }
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑数据集' : '新增数据集'));
+const modalTitle = computed(() => (editing.value ? "编辑数据集" : "新增数据集"));
 
 async function loadDataSources() {
   if (!selectedSpaceId.value) {
@@ -227,7 +229,7 @@ async function load() {
     }
     const rsp = await listDatasets({
       space_id: selectedSpaceId.value,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.datasets || [];
     applyPageResult(pagination, rsp.page_result);
@@ -251,15 +253,15 @@ async function listAllDatasets(spaceId: string) {
 function resetForm() {
   Object.assign(form, {
     space_id: selectedSpaceId.value,
-    dataset_id: '',
-    data_source_id: '',
-    name: '',
-    description: '',
-    data_kind: 'DATA_KIND_TIME_SERIES',
+    dataset_id: "",
+    data_source_id: "",
+    name: "",
+    description: "",
+    data_kind: "DATA_KIND_TIME_SERIES",
     freqs: [],
-    freqsText: '',
-    status: 'active',
-    attributes: {},
+    freqsText: "",
+    status: "active",
+    attributes: {}
   });
 }
 
@@ -274,7 +276,7 @@ function openEdit(record: Dataset) {
   Object.assign(form, {
     ...record,
     freqs: record.freqs || [],
-    freqsText: joinList(record.freqs),
+    freqsText: joinList(record.freqs)
   });
   visible.value = true;
 }
@@ -287,7 +289,7 @@ function openManage(record: Dataset) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.dataset_id || !form.data_source_id || !form.name || !form.data_kind) {
-    Message.warning('请补全数据集ID、数据源、中文名和数据形态');
+    Message.warning("请补全数据集ID、数据源、中文名和数据形态");
     return;
   }
   const nameError = validateChineseDisplayName(form.name);
@@ -312,12 +314,12 @@ async function submit() {
     attributes: mergeDatasetAttribution(form.attributes, {
       ownerModule: props.ownerModule,
       datasetRole: props.datasetRole,
-      managedBy: props.managedBy,
-    }),
+      managedBy: props.managedBy
+    })
   };
   if (editing.value) await updateDataset(payload);
   else await createDataset(payload);
-  Message.success('数据集已保存');
+  Message.success("数据集已保存");
   visible.value = false;
   await load();
 }

@@ -2,16 +2,16 @@ package view
 
 import (
 	"context"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
 )
 
 func TestMaintenanceBuildsAndActivatesMissingTimeSeriesIndex(t *testing.T) {

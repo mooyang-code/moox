@@ -67,7 +67,7 @@
             </span>
           </div>
           <div v-else class="balance-empty">
-            {{ selectedBalanceLoading ? '读取余额中' : '暂无非零余额' }}
+            {{ selectedBalanceLoading ? "读取余额中" : "暂无非零余额" }}
           </div>
 
           <a-table
@@ -132,7 +132,7 @@
             <a-table-column title="方向" :width="70">
               <template #cell="{ record }">
                 <a-tag size="small" :color="record.pos_side === 'long' ? 'red' : record.pos_side === 'short' ? 'green' : 'gray'">
-                  {{ record.pos_side || '-' }}
+                  {{ record.pos_side || "-" }}
                 </a-tag>
               </template>
             </a-table-column>
@@ -143,12 +143,12 @@
             <a-table-column title="强平价" data-index="liq_price" :width="120" />
             <a-table-column title="未实现盈亏" :width="120">
               <template #cell="{ record }">
-                <span :style="{ color: pnlColor(record.unrealized_pnl) }">{{ record.unrealized_pnl || '-' }}</span>
+                <span :style="{ color: pnlColor(record.unrealized_pnl) }">{{ record.unrealized_pnl || "-" }}</span>
               </template>
             </a-table-column>
             <a-table-column title="已实现盈亏" :width="120">
               <template #cell="{ record }">
-                <span :style="{ color: pnlColor(record.realized_pnl) }">{{ record.realized_pnl || '-' }}</span>
+                <span :style="{ color: pnlColor(record.realized_pnl) }">{{ record.realized_pnl || "-" }}</span>
               </template>
             </a-table-column>
             <a-table-column title="更新时间" :width="170">
@@ -165,22 +165,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { Message } from '@arco-design/web-vue';
+import { computed, onMounted, reactive, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
 import {
-  getBalances, listAccounts, listPositions, syncBalances, syncPositions,
-  accountTypeLabels, formatTimestamp,
-} from '@/api/trade';
-import type { Account, Balance, Position } from '@/api/trade/types';
+  getBalances,
+  listAccounts,
+  listPositions,
+  syncBalances,
+  syncPositions,
+  accountTypeLabels,
+  formatTimestamp
+} from "@/api/trade";
+import type { Account, Balance, Position } from "@/api/trade/types";
 
-defineOptions({ name: 'position-detail' });
+defineOptions({ name: "position-detail" });
 
 const accounts = ref<Account[]>([]);
 const positionAccountTabs = computed(() => accounts.value);
 const positionAccountTabsExpanded = ref(false);
-const selectedAccount = computed(() => (
-  accounts.value.find((acc) => acc.account_id === positionFilter.account_id) || null
-));
+const selectedAccount = computed(() => accounts.value.find(acc => acc.account_id === positionFilter.account_id) || null);
 
 function togglePositionAccountTabs() {
   positionAccountTabsExpanded.value = !positionAccountTabsExpanded.value;
@@ -192,10 +195,12 @@ async function loadAccounts() {
 }
 
 function defaultPositionAccountID(): string {
-  return accounts.value.find((acc) => acc.account_type === 2)?.account_id
-    || accounts.value.find((acc) => acc.is_default)?.account_id
-    || accounts.value[0]?.account_id
-    || '';
+  return (
+    accounts.value.find(acc => acc.account_type === 2)?.account_id ||
+    accounts.value.find(acc => acc.is_default)?.account_id ||
+    accounts.value[0]?.account_id ||
+    ""
+  );
 }
 
 function positionAccountCandidates(): string[] {
@@ -205,9 +210,7 @@ function positionAccountCandidates(): string[] {
       ids.push(id);
     }
   };
-  accounts.value
-    .filter((acc) => acc.account_type === 2)
-    .forEach((acc) => add(acc.account_id));
+  accounts.value.filter(acc => acc.account_type === 2).forEach(acc => add(acc.account_id));
   add(defaultPositionAccountID());
   add(accounts.value[0]?.account_id);
   return ids;
@@ -218,29 +221,26 @@ async function onPositionAccountTabClick(accountID: string) {
     return;
   }
   positionFilter.account_id = accountID;
-  await Promise.all([
-    loadPositions(),
-    loadBalancesForAccount(accountID),
-  ]);
+  await Promise.all([loadPositions(), loadBalancesForAccount(accountID)]);
 }
 
 function accountName(accountId: string): string {
-  const acc = accounts.value.find((a) => a.account_id === accountId);
-  return acc ? acc.account_name : accountId || '-';
+  const acc = accounts.value.find(a => a.account_id === accountId);
+  return acc ? acc.account_name : accountId || "-";
 }
 
 function pnlColor(val?: string): string {
-  if (!val) return '';
+  if (!val) return "";
   const n = parseFloat(val);
-  if (isNaN(n)) return '';
-  return n > 0 ? '#f53f3f' : n < 0 ? '#00b42a' : '';
+  if (isNaN(n)) return "";
+  return n > 0 ? "#f53f3f" : n < 0 ? "#00b42a" : "";
 }
 
 // ========== 持仓列表 ==========
 const positions = ref<Position[]>([]);
 const positionLoading = ref(false);
 const syncingPositions = ref(false);
-const positionFilter = reactive({ account_id: '', symbol: '' });
+const positionFilter = reactive({ account_id: "", symbol: "" });
 
 async function loadPositions() {
   if (!positionFilter.account_id) {
@@ -258,7 +258,7 @@ async function loadPositions() {
 
 async function onSyncPositions() {
   if (!positionFilter.account_id) {
-    Message.warning('请先选择账户');
+    Message.warning("请先选择账户");
     return;
   }
   await syncPositionsForCurrent(true);
@@ -291,7 +291,7 @@ const selectedNonZeroBalanceCount = computed(() => selectedAccountBalances.value
 const selectedBalanceLoading = computed(() => Boolean(balanceLoadingMap[positionFilter.account_id]));
 
 async function loadBalancePreviews() {
-  await Promise.allSettled(accounts.value.map((account) => loadBalancesForAccount(account.account_id)));
+  await Promise.allSettled(accounts.value.map(account => loadBalancesForAccount(account.account_id)));
 }
 
 async function loadBalancesForAccount(accountID: string) {
@@ -314,7 +314,7 @@ async function loadSelectedBalances() {
 
 async function syncBalancesForCurrent() {
   if (!positionFilter.account_id) {
-    Message.warning('请先选择账户');
+    Message.warning("请先选择账户");
     return;
   }
   syncingBalances.value = true;
@@ -333,7 +333,7 @@ function balanceCount(accountID: string) {
 
 function nonZeroBalances(accountID: string) {
   return (accountBalanceMap[accountID] || [])
-    .filter((item) => hasNonZeroBalance(item))
+    .filter(item => hasNonZeroBalance(item))
     .sort((a, b) => balancePriority(b) - balancePriority(a));
 }
 
@@ -348,25 +348,25 @@ function balancePriority(item: Balance) {
 }
 
 function hasNonZeroBalance(item: Balance) {
-  return [item.total, item.available, item.frozen].some((value) => isNonZeroAmount(value));
+  return [item.total, item.available, item.frozen].some(value => isNonZeroAmount(value));
 }
 
 function balanceDisplayAmount(item: Balance) {
   if (isNonZeroAmount(item.total)) return item.total;
   if (isNonZeroAmount(item.available)) return item.available;
-  return item.frozen || '0';
+  return item.frozen || "0";
 }
 
 function isNonZeroAmount(value?: string) {
-  const parsed = Number.parseFloat(value || '0');
+  const parsed = Number.parseFloat(value || "0");
   return Number.isFinite(parsed) && Math.abs(parsed) > 0;
 }
 
 function formatBalanceAmount(value?: string) {
-  const raw = (value || '0').trim();
-  if (!raw) return '0';
-  if (!raw.includes('.')) return raw;
-  const trimmed = raw.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+  const raw = (value || "0").trim();
+  if (!raw) return "0";
+  if (!raw.includes(".")) return raw;
+  const trimmed = raw.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
   return trimmed.length > 16 ? `${trimmed.slice(0, 16)}...` : trimmed;
 }
 
@@ -458,7 +458,10 @@ onMounted(async () => {
   border: 1px solid transparent;
   border-radius: 4px;
   outline: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .position-account-tab:hover {
@@ -565,8 +568,17 @@ onMounted(async () => {
   margin-bottom: var(--moox-space-2);
 }
 
-.page-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
-.position-toolbar { display: flex; align-items: center; gap: var(--moox-space-3); margin-bottom: var(--moox-space-2); }
+.page-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.position-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
+}
 
 @media (max-width: 760px) {
   .account-tabs-block,

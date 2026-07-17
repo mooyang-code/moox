@@ -49,7 +49,13 @@
           <a-empty v-else description="暂无账户" />
 
           <div class="filter-bar">
-            <a-input v-model="orderFilter.symbol" placeholder="交易对" style="width: 140px" allow-clear @press-enter="loadOrders" />
+            <a-input
+              v-model="orderFilter.symbol"
+              placeholder="交易对"
+              style="width: 140px"
+              allow-clear
+              @press-enter="loadOrders"
+            />
             <a-select v-model="orderFilter.status" placeholder="状态" style="width: 120px" allow-clear @change="loadOrders">
               <a-option v-for="(label, val) in orderStatusLabels" :key="val" :value="Number(val)">{{ label }}</a-option>
             </a-select>
@@ -110,7 +116,8 @@
                       type="text"
                       status="danger"
                       @click="onCancelOrder(record)"
-                    >撤单</a-button>
+                      >撤单</a-button
+                    >
                     <a-button size="mini" type="text" @click="openOrderTrades(record)">成交</a-button>
                   </a-space>
                 </template>
@@ -161,7 +168,13 @@
           <a-empty v-else description="暂无账户" />
 
           <div class="filter-bar">
-            <a-input v-model="tradeFilter.symbol" placeholder="交易对" style="width: 140px" allow-clear @press-enter="loadTrades" />
+            <a-input
+              v-model="tradeFilter.symbol"
+              placeholder="交易对"
+              style="width: 140px"
+              allow-clear
+              @press-enter="loadTrades"
+            />
             <a-button type="primary" size="small" :disabled="!tradeFilter.account_id" @click="loadTrades">
               <template #icon><icon-search /></template>
               查询
@@ -211,7 +224,12 @@
       </template>
 
       <!-- 订单成交明细弹窗 -->
-      <a-modal v-model:visible="orderTradesVisible" width="900px" :title="`订单成交明细 - ${selectedOrder?.symbol || ''}`" :footer="false">
+      <a-modal
+        v-model:visible="orderTradesVisible"
+        width="900px"
+        :title="`订单成交明细 - ${selectedOrder?.symbol || ''}`"
+        :footer="false"
+      >
         <a-table
           row-key="trade_id"
           size="small"
@@ -245,34 +263,42 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
+import { onMounted, reactive, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
+import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import {
-  listAccounts, listOrders, syncOrders, listTrades, syncTrades, cancelOrder,
+  listAccounts,
+  listOrders,
+  syncOrders,
+  listTrades,
+  syncTrades,
+  cancelOrder,
   accountTypeLabels,
-  orderSideLabels, orderSideColors, orderTypeLabels,
-  orderStatusLabels, orderStatusColors,
-  formatTimestamp,
-} from '@/api/trade';
-import type { Account, Order, OrderStatus, Trade } from '@/api/trade/types';
-import { defaultPagination, applyPageResult } from '@/views/data/shared/metadata-utils';
+  orderSideLabels,
+  orderSideColors,
+  orderTypeLabels,
+  orderStatusLabels,
+  orderStatusColors,
+  formatTimestamp
+} from "@/api/trade";
+import type { Account, Order, OrderStatus, Trade } from "@/api/trade/types";
+import { defaultPagination, applyPageResult } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'trade-record' });
+defineOptions({ name: "trade-record" });
 
-type TradeRecordTab = 'orders' | 'trades';
+type TradeRecordTab = "orders" | "trades";
 
-const activeTab = ref<TradeRecordTab>('orders');
+const activeTab = ref<TradeRecordTab>("orders");
 const tabs = [
-  { key: 'orders', label: '订单记录' },
-  { key: 'trades', label: '成交明细' },
+  { key: "orders", label: "订单记录" },
+  { key: "trades", label: "成交明细" }
 ] as const;
 const accounts = ref<Account[]>([]);
 const orderAccountTabsExpanded = ref(false);
 const tradeAccountTabsExpanded = ref(false);
 
 function switchTab(key: string) {
-  activeTab.value = key === 'trades' ? 'trades' : 'orders';
+  activeTab.value = key === "trades" ? "trades" : "orders";
 }
 
 async function loadAccounts() {
@@ -281,12 +307,12 @@ async function loadAccounts() {
 }
 
 function defaultAccountID(): string {
-  return accounts.value.find((acc) => acc.is_default)?.account_id || accounts.value[0]?.account_id || '';
+  return accounts.value.find(acc => acc.is_default)?.account_id || accounts.value[0]?.account_id || "";
 }
 
 function accountName(accountId: string): string {
-  const acc = accounts.value.find((a) => a.account_id === accountId);
-  return acc ? acc.account_name : accountId || '-';
+  const acc = accounts.value.find(a => a.account_id === accountId);
+  return acc ? acc.account_name : accountId || "-";
 }
 
 function canCancel(status: number): boolean {
@@ -307,10 +333,10 @@ const orderLoading = ref(false);
 const syncingOrders = ref(false);
 const orderPagination = reactive(defaultPagination());
 const orderFilter = reactive({
-  account_id: '',
-  symbol: '',
+  account_id: "",
+  symbol: "",
   status: undefined as OrderStatus | undefined,
-  only_open: false,
+  only_open: false
 });
 
 async function loadOrders() {
@@ -325,7 +351,7 @@ async function loadOrders() {
       symbol: orderFilter.symbol || undefined,
       status: orderFilter.status,
       only_open: orderFilter.only_open || undefined,
-      page: { page: orderPagination.current, size: orderPagination.pageSize },
+      page: { page: orderPagination.current, size: orderPagination.pageSize }
     });
     orders.value = rsp.orders || [];
     applyPageResult(orderPagination, rsp.page_result);
@@ -345,7 +371,7 @@ async function onOrderAccountTabClick(accountID: string) {
 
 async function onSyncOrders() {
   if (!orderFilter.account_id) {
-    Message.warning('请先选择账户');
+    Message.warning("请先选择账户");
     return;
   }
   const symbol = orderFilter.symbol.trim().toUpperCase();
@@ -356,7 +382,7 @@ async function onSyncOrders() {
       account_id: orderFilter.account_id,
       symbol: symbol || undefined,
       only_open: syncOnlyOpen,
-      page: { page: orderPagination.current, size: orderPagination.pageSize },
+      page: { page: orderPagination.current, size: orderPagination.pageSize }
     });
     orders.value = rsp.orders || [];
     applyPageResult(orderPagination, rsp.page_result);
@@ -385,9 +411,9 @@ async function onCancelOrder(record: Order) {
   await cancelOrder({
     account_id: record.account_id,
     channel_id: record.channel_id,
-    order_id: record.order_id,
+    order_id: record.order_id
   });
-  Message.success('撤单请求已提交');
+  Message.success("撤单请求已提交");
   await loadOrders();
 }
 
@@ -396,7 +422,7 @@ const trades = ref<Trade[]>([]);
 const tradeLoading = ref(false);
 const syncingTrades = ref(false);
 const tradePagination = reactive(defaultPagination());
-const tradeFilter = reactive({ account_id: '', symbol: '' });
+const tradeFilter = reactive({ account_id: "", symbol: "" });
 
 async function loadTrades() {
   if (!tradeFilter.account_id) {
@@ -408,7 +434,7 @@ async function loadTrades() {
     const rsp = await listTrades({
       account_id: tradeFilter.account_id,
       symbol: tradeFilter.symbol || undefined,
-      page: { page: tradePagination.current, size: tradePagination.pageSize },
+      page: { page: tradePagination.current, size: tradePagination.pageSize }
     });
     trades.value = rsp.trades || [];
     applyPageResult(tradePagination, rsp.page_result);
@@ -428,12 +454,12 @@ async function onTradeAccountTabClick(accountID: string) {
 
 async function onSyncTrades() {
   if (!tradeFilter.account_id) {
-    Message.warning('请先选择账户');
+    Message.warning("请先选择账户");
     return;
   }
   const symbol = tradeFilter.symbol.trim().toUpperCase();
   if (!symbol) {
-    Message.warning('请先输入交易对');
+    Message.warning("请先输入交易对");
     return;
   }
   syncingTrades.value = true;
@@ -441,7 +467,7 @@ async function onSyncTrades() {
     const rsp = await syncTrades({
       account_id: tradeFilter.account_id,
       symbol,
-      page: { page: tradePagination.current, size: tradePagination.pageSize },
+      page: { page: tradePagination.current, size: tradePagination.pageSize }
     });
     trades.value = rsp.trades || [];
     applyPageResult(tradePagination, rsp.page_result);
@@ -476,7 +502,7 @@ async function openOrderTrades(record: Order) {
   try {
     const rsp = await listTrades({
       account_id: record.account_id,
-      order_id: record.order_id,
+      order_id: record.order_id
     });
     orderTrades.value = rsp.trades || [];
   } finally {
@@ -536,7 +562,10 @@ onMounted(async () => {
   border: 1px solid transparent;
   border-radius: 4px;
   outline: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .record-account-tab:hover {
@@ -596,5 +625,4 @@ onMounted(async () => {
   margin-bottom: var(--moox-space-2);
   flex-wrap: wrap;
 }
-
 </style>

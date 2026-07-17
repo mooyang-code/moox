@@ -40,7 +40,7 @@
           <a-table-column title="行数" data-index="row_count" :width="100" />
           <a-table-column title="内容Hash" data-index="content_hash" :width="220" />
           <a-table-column title="列" :width="220">
-            <template #cell="{ record }">{{ joinList(record.columns) || '-' }}</template>
+            <template #cell="{ record }">{{ joinList(record.columns) || "-" }}</template>
           </a-table-column>
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
@@ -60,19 +60,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { listArchiveFiles } from '@/api/storage/metadata';
-import type { ArchiveFile } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { applyPageResult, defaultPagination, formatTime, joinList, statusColor } from '@/views/data/shared/metadata-utils';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { listArchiveFiles } from "@/api/storage/metadata";
+import type { ArchiveFile } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { applyPageResult, defaultPagination, formatTime, joinList, statusColor } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'OpsStorageArchive' });
+defineOptions({ name: "OpsStorageArchive" });
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<ArchiveFile[]>([]);
 const loading = ref(false);
-const datasetFilter = ref('');
+const datasetFilter = ref("");
 const pagination = reactive(defaultPagination());
 
 async function load() {
@@ -85,7 +85,7 @@ async function load() {
     const rsp = await listArchiveFiles({
       space_id: selectedSpaceId.value,
       dataset_id: datasetFilter.value,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.archive_files || [];
     applyPageResult(pagination, rsp.page_result);
@@ -124,5 +124,4 @@ onMounted(load);
   justify-content: flex-start;
   margin-bottom: var(--moox-space-2);
 }
-
 </style>

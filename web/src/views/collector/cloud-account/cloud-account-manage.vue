@@ -14,7 +14,7 @@
           新增云账户
         </a-button>
       </a-row>
-      
+
       <a-table
         row-key="account_id"
         size="small"
@@ -37,7 +37,7 @@
             <template #cell="{ record }">
               <a-space>
                 <span>{{ record.secret_id }}</span>
-                <icon-copy style="cursor: pointer;" @click="copyToClipboard(record.secret_id)" />
+                <icon-copy style="cursor: pointer" @click="copyToClipboard(record.secret_id)" />
               </a-space>
             </template>
           </a-table-column>
@@ -53,17 +53,17 @@
           </a-table-column>
           <a-table-column title="应用ID" data-index="app_id" :width="150">
             <template #cell="{ record }">
-              <span>{{ record.app_id || '-' }}</span>
+              <span>{{ record.app_id || "-" }}</span>
             </template>
           </a-table-column>
           <a-table-column title="COS区域" data-index="cos_region" :width="150">
             <template #cell="{ record }">
-              <span>{{ record.cos_region || '-' }}</span>
+              <span>{{ record.cos_region || "-" }}</span>
             </template>
           </a-table-column>
           <a-table-column title="COS桶名" data-index="cos_bucket" :width="200">
             <template #cell="{ record }">
-              <span>{{ record.cos_bucket || '-' }}</span>
+              <span>{{ record.cos_bucket || "-" }}</span>
             </template>
           </a-table-column>
           <a-table-column title="创建时间" data-index="created_at" :width="180">
@@ -96,7 +96,7 @@
         </template>
       </a-table>
     </div>
-    
+
     <!-- 新增/编辑弹窗 -->
     <a-modal
       v-model:visible="formVisible"
@@ -110,7 +110,7 @@
         <a-form-item field="account_name" label="账户名称" required>
           <a-input v-model="form.account_name" placeholder="请输入账户名称" />
         </a-form-item>
-        
+
         <a-form-item field="provider" label="云厂商" required>
           <a-select v-model="form.provider" placeholder="请选择云厂商" :disabled="isEdit">
             <a-option value="tencent">腾讯云</a-option>
@@ -118,26 +118,19 @@
             <a-option value="aws">AWS</a-option>
           </a-select>
         </a-form-item>
-        
+
         <a-form-item field="secret_id" label="SecretId" required>
           <a-input v-model="form.secret_id" placeholder="请输入SecretId" :disabled="isEdit" />
           <template #extra v-if="isEdit">
-            <span style="color: #f53f3f; font-size: 12px;">
-              SecretId不允许修改,如需修改请删除后重新创建
-            </span>
+            <span style="color: #f53f3f; font-size: 12px"> SecretId不允许修改,如需修改请删除后重新创建 </span>
           </template>
         </a-form-item>
-        
+
         <a-form-item field="secret_key" label="SecretKey" :required="!isEdit">
-          <a-input-password
-            v-model="form.secret_key"
-            placeholder="请输入SecretKey"
-            :disabled="isEdit"
-            allow-clear
-          />
+          <a-input-password v-model="form.secret_key" placeholder="请输入SecretKey" :disabled="isEdit" allow-clear />
           <template #extra>
             <span :style="{ color: isEdit ? '#f53f3f' : '#86909c', fontSize: '12px' }">
-              {{ isEdit ? 'SecretKey不允许修改,如需修改请删除后重新创建' : '密钥将加密存储' }}
+              {{ isEdit ? "SecretKey不允许修改,如需修改请删除后重新创建" : "密钥将加密存储" }}
             </span>
           </template>
         </a-form-item>
@@ -151,30 +144,24 @@
             @blur="parseCosUrl"
           />
           <template #extra>
-            <span style="color: #86909c; font-size: 12px;">
-              粘贴COS控制台URL后将自动解析并填充应用ID、桶名和地区
-            </span>
+            <span style="color: #86909c; font-size: 12px"> 粘贴COS控制台URL后将自动解析并填充应用ID、桶名和地区 </span>
           </template>
         </a-form-item>
 
         <a-form-item field="app_id" label="应用ID">
           <a-input v-model="form.app_id" placeholder="请输入应用ID（可选）" />
         </a-form-item>
-        
+
         <a-form-item field="cos_region" label="COS区域">
           <a-input v-model="form.cos_region" placeholder="请输入COS区域（可选），如：ap-guangzhou" />
         </a-form-item>
-        
+
         <a-form-item field="cos_bucket" label="COS桶名">
           <a-input v-model="form.cos_bucket" placeholder="请输入COS桶名（可选）" />
         </a-form-item>
-        
+
         <a-form-item field="extra_config" label="额外配置（可选）">
-          <a-textarea 
-            v-model="form.extra_config" 
-            placeholder="JSON格式的额外配置，例如：{&quot;region&quot;: &quot;ap-guangzhou&quot;}" 
-            :rows="4"
-          />
+          <a-textarea v-model="form.extra_config" placeholder='JSON格式的额外配置，例如：{"region": "ap-guangzhou"}' :rows="4" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -182,15 +169,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, reactive } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { 
-  getCloudAccountList, 
-  createCloudAccount, 
-  updateCloudAccount, 
+import { ref, watch, reactive } from "vue";
+import { Message } from "@arco-design/web-vue";
+import {
+  getCloudAccountList,
+  createCloudAccount,
+  updateCloudAccount,
   deleteCloudAccount,
-  type CloudAccount 
-} from '@/api/cloud-account';
+  type CloudAccount
+} from "@/api/cloud-account";
 
 // Props
 const props = defineProps<{
@@ -199,8 +186,8 @@ const props = defineProps<{
 
 // Emits
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean];
-  'refresh': [];
+  "update:modelValue": [value: boolean];
+  refresh: [];
 }>();
 
 // 响应式数据
@@ -214,32 +201,35 @@ const formRef = ref();
 
 // 表单数据
 const defaultForm = {
-  account_id: '',
-  account_name: '',
-  provider: 'tencent',
-  secret_id: '',
-  secret_key: '',
-  app_id: '',
-  cos_region: '',
-  cos_bucket: '',
-  extra_config: ''
+  account_id: "",
+  account_name: "",
+  provider: "tencent",
+  secret_id: "",
+  secret_key: "",
+  app_id: "",
+  cos_region: "",
+  cos_bucket: "",
+  extra_config: ""
 };
 
 const form = reactive({ ...defaultForm });
 
 // COS URL 输入框
-const cosUrl = ref('');
+const cosUrl = ref("");
 
 // 监听属性变化
-watch(() => props.modelValue, (newVal) => {
-  visible.value = newVal;
-  if (newVal) {
-    loadAccountList();
+watch(
+  () => props.modelValue,
+  newVal => {
+    visible.value = newVal;
+    if (newVal) {
+      loadAccountList();
+    }
   }
-});
+);
 
-watch(visible, (newVal) => {
-  emit('update:modelValue', newVal);
+watch(visible, newVal => {
+  emit("update:modelValue", newVal);
 });
 
 // 加载账户列表
@@ -250,8 +240,8 @@ const loadAccountList = async () => {
     accountList.value = accounts || [];
     total.value = accountList.value.length;
   } catch (error) {
-    console.error('加载云账户列表失败:', error);
-    Message.error(error instanceof Error ? error.message : '加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署');
+    console.error("加载云账户列表失败:", error);
+    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
   } finally {
     loading.value = false;
   }
@@ -271,7 +261,7 @@ const onAdd = () => {
     ...defaultForm,
     account_id: generateAccountId()
   });
-  cosUrl.value = '';
+  cosUrl.value = "";
   formVisible.value = true;
 };
 
@@ -283,13 +273,13 @@ const onEdit = (record: CloudAccount) => {
     account_name: record.account_name,
     provider: record.provider,
     secret_id: record.secret_id,
-    secret_key: '', // 编辑时密钥留空,但会被禁用不允许修改
-    app_id: record.app_id || '',
-    cos_region: record.cos_region || '',
-    cos_bucket: record.cos_bucket || '',
-    extra_config: record.extra_config || ''
+    secret_key: "", // 编辑时密钥留空,但会被禁用不允许修改
+    app_id: record.app_id || "",
+    cos_region: record.cos_region || "",
+    cos_bucket: record.cos_bucket || "",
+    extra_config: record.extra_config || ""
   });
-  cosUrl.value = '';
+  cosUrl.value = "";
   formVisible.value = true;
 };
 
@@ -297,12 +287,12 @@ const onEdit = (record: CloudAccount) => {
 const onDelete = async (record: CloudAccount) => {
   try {
     await deleteCloudAccount(record.account_id);
-    Message.success('删除成功');
+    Message.success("删除成功");
     await loadAccountList();
-    emit('refresh');
+    emit("refresh");
   } catch (error) {
-    console.error('删除云账户失败:', error);
-    Message.error('删除云账户失败');
+    console.error("删除云账户失败:", error);
+    Message.error("删除云账户失败");
   }
 };
 
@@ -320,16 +310,16 @@ const parseCosUrl = () => {
     const params = new URLSearchParams(url.search);
 
     // 获取bucket参数
-    const bucket = params.get('bucket');
+    const bucket = params.get("bucket");
     // 获取region参数
-    const region = params.get('region');
+    const region = params.get("region");
 
     if (bucket) {
       form.cos_bucket = bucket;
 
       // 从桶名中提取应用ID
       // 桶名格式通常为: bucketname-appid
-      const parts = bucket.split('-');
+      const parts = bucket.split("-");
       if (parts.length >= 2) {
         const appId = parts[parts.length - 1];
         // 验证是否为纯数字
@@ -344,12 +334,12 @@ const parseCosUrl = () => {
     }
 
     if (bucket || region) {
-      Message.success('已自动填充COS配置信息');
+      Message.success("已自动填充COS配置信息");
     } else {
-      Message.warning('无法从URL中解析出有效的配置信息');
+      Message.warning("无法从URL中解析出有效的配置信息");
     }
-  } catch (error) {
-    Message.error('URL格式不正确,请检查后重试');
+  } catch {
+    Message.error("URL格式不正确,请检查后重试");
   }
 };
 
@@ -365,8 +355,8 @@ const handleFormOk = async () => {
   if (form.extra_config) {
     try {
       JSON.parse(form.extra_config);
-    } catch (e) {
-      Message.error('额外配置必须是有效的JSON格式');
+    } catch {
+      Message.error("额外配置必须是有效的JSON格式");
       return;
     }
   }
@@ -381,7 +371,7 @@ const handleFormOk = async () => {
         app_id: form.app_id,
         cos_region: form.cos_region,
         cos_bucket: form.cos_bucket,
-        extra_config: form.extra_config || '{}'
+        extra_config: form.extra_config || "{}"
       };
 
       await updateCloudAccount(form.account_id, updateData);
@@ -396,17 +386,17 @@ const handleFormOk = async () => {
         app_id: form.app_id,
         cos_region: form.cos_region,
         cos_bucket: form.cos_bucket,
-        extra_config: form.extra_config || '{}'
+        extra_config: form.extra_config || "{}"
       });
     }
 
-    Message.success(isEdit.value ? '编辑成功' : '新增成功');
+    Message.success(isEdit.value ? "编辑成功" : "新增成功");
     formVisible.value = false;
     await loadAccountList();
-    emit('refresh');
+    emit("refresh");
   } catch (error: any) {
-    console.error('保存云账户失败:', error);
-    Message.error(error?.message || '保存云账户失败');
+    console.error("保存云账户失败:", error);
+    Message.error(error?.message || "保存云账户失败");
   }
 };
 
@@ -418,31 +408,31 @@ const handleCancel = () => {
 // 工具函数
 const getProviderName = (provider: string) => {
   const providerMap: Record<string, string> = {
-    'tencent': '腾讯云',
-    'aliyun': '阿里云',
-    'aws': 'AWS'
+    tencent: "腾讯云",
+    aliyun: "阿里云",
+    aws: "AWS"
   };
   return providerMap[provider] || provider;
 };
 
 const getProviderColor = (provider: string) => {
   const colorMap: Record<string, string> = {
-    'tencent': 'blue',
-    'aliyun': 'orange',
-    'aws': 'purple'
+    tencent: "blue",
+    aliyun: "orange",
+    aws: "purple"
   };
-  return colorMap[provider] || 'gray';
+  return colorMap[provider] || "gray";
 };
 
 const formatTime = (time: string | undefined) => {
-  if (!time) return '-';
-  return new Date(time).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
+  if (!time) return "-";
+  return new Date(time).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
   });
 };
 
@@ -450,9 +440,9 @@ const formatTime = (time: string | undefined) => {
 const copyToClipboard = async (text: string) => {
   try {
     await navigator.clipboard.writeText(text);
-    Message.success('已复制到剪贴板');
-  } catch (error) {
-    Message.error('复制失败');
+    Message.success("已复制到剪贴板");
+  } catch {
+    Message.error("复制失败");
   }
 };
 </script>

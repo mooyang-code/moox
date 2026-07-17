@@ -67,13 +67,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { bindDatasetSubject, listDatasetSubjects } from '@/api/storage/metadata';
-import type { DatasetSubject } from '@/api/storage/types';
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from '@/views/data/shared/metadata-utils';
+import { computed, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { bindDatasetSubject, listDatasetSubjects } from "@/api/storage/metadata";
+import type { DatasetSubject } from "@/api/storage/types";
+import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'DatasetSubjectPanel' });
+defineOptions({ name: "DatasetSubjectPanel" });
 
 const props = defineProps<{
   spaceId: string;
@@ -87,14 +87,14 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive({
-  subject_id: '',
-  subject_role: 'primary',
-  effective_start_time: '',
-  effective_end_time: '',
-  status: 'active',
+  subject_id: "",
+  subject_role: "primary",
+  effective_start_time: "",
+  effective_end_time: "",
+  status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑对象绑定' : '绑定对象'));
+const modalTitle = computed(() => (editing.value ? "编辑对象绑定" : "绑定对象"));
 
 async function load() {
   if (!props.spaceId || !props.datasetId) {
@@ -106,7 +106,7 @@ async function load() {
     const rsp = await listDatasetSubjects({
       space_id: props.spaceId,
       dataset_id: props.datasetId,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.dataset_subjects || [];
     applyPageResult(pagination, rsp.page_result);
@@ -117,11 +117,11 @@ async function load() {
 
 function resetForm() {
   Object.assign(form, {
-    subject_id: '',
-    subject_role: 'primary',
-    effective_start_time: '',
-    effective_end_time: '',
-    status: 'active',
+    subject_id: "",
+    subject_role: "primary",
+    effective_start_time: "",
+    effective_end_time: "",
+    status: "active"
   });
 }
 
@@ -135,29 +135,29 @@ function openEdit(record: DatasetSubject) {
   editing.value = true;
   Object.assign(form, {
     subject_id: record.subject_id,
-    subject_role: record.subject_role || 'primary',
-    effective_start_time: record.effective_start_time || '',
-    effective_end_time: record.effective_end_time || '',
-    status: record.status || 'active',
+    subject_role: record.subject_role || "primary",
+    effective_start_time: record.effective_start_time || "",
+    effective_end_time: record.effective_end_time || "",
+    status: record.status || "active"
   });
   visible.value = true;
 }
 
 async function submit() {
   if (!props.spaceId || !props.datasetId || !form.subject_id) {
-    Message.warning('请补全对象ID和数据集');
+    Message.warning("请补全对象ID和数据集");
     return;
   }
   await bindDatasetSubject({
     space_id: props.spaceId,
     dataset_id: props.datasetId,
     subject_id: form.subject_id,
-    subject_role: form.subject_role || 'primary',
+    subject_role: form.subject_role || "primary",
     effective_start_time: form.effective_start_time,
     effective_end_time: form.effective_end_time,
-    status: form.status,
+    status: form.status
   });
-  Message.success('对象绑定已保存');
+  Message.success("对象绑定已保存");
   visible.value = false;
   await load();
 }

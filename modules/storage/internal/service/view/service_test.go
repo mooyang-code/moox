@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-	"sync"
-	"testing"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"sort"
+	"sync"
+	"testing"
 )
 
 type recordingTimeSeriesIndexQuery struct {
@@ -356,7 +356,7 @@ func TestQueryTimeSeriesRowsRejectsMissingViewID(t *testing.T) {
 func TestQueryTimeSeriesRowsRejectsWrongEngine(t *testing.T) {
 	svc := NewService(ServiceOptions{
 		Metadata: &activeSchemaMetadata{
-			view: &pb.View{SpaceId: "crypto", ViewId: "spot_view", Engine: "bleve", PrimaryDatasetId: "ds1", ActiveIndexId: "idx-1"},
+			view:        &pb.View{SpaceId: "crypto", ViewId: "spot_view", Engine: "bleve", PrimaryDatasetId: "ds1", ActiveIndexId: "idx-1"},
 			datasetKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 		},
 	})
@@ -370,7 +370,7 @@ func TestQueryTimeSeriesRowsRejectsWrongEngine(t *testing.T) {
 func TestSearchRecordRowsRejectsMissingPrimaryDataset(t *testing.T) {
 	svc := NewService(ServiceOptions{
 		Metadata: &activeSchemaMetadata{
-			view: &pb.View{SpaceId: "crypto", ViewId: "spot_view", Engine: "bleve", ActiveIndexId: "idx-1"},
+			view:        &pb.View{SpaceId: "crypto", ViewId: "spot_view", Engine: "bleve", ActiveIndexId: "idx-1"},
 			datasetKind: pb.DataKind_DATA_KIND_RECORD,
 		},
 		RecordIndexes: &activeSchemaRecordQuery{},

@@ -22,11 +22,22 @@
 
       <div v-for="root in tree" :key="root.group_id" class="tree-group">
         <div class="tree-row">
-          <button class="expand-button" type="button" :aria-label="expanded.has(root.group_id) ? '折叠' : '展开'" @click="toggle(root.group_id)">
+          <button
+            class="expand-button"
+            type="button"
+            :aria-label="expanded.has(root.group_id) ? '折叠' : '展开'"
+            @click="toggle(root.group_id)"
+          >
             <icon-down v-if="expanded.has(root.group_id)" /><icon-right v-else />
           </button>
-          <button class="tree-item" :class="{ active: selected === root.group_id }" type="button" @click="$emit('select', root.group_id)">
-            <icon-folder /><span class="tree-label">{{ root.name }}</span><span class="tree-count">{{ counts[root.group_id] || 0 }}</span>
+          <button
+            class="tree-item"
+            :class="{ active: selected === root.group_id }"
+            type="button"
+            @click="$emit('select', root.group_id)"
+          >
+            <icon-folder /><span class="tree-label">{{ root.name }}</span
+            ><span class="tree-count">{{ counts[root.group_id] || 0 }}</span>
           </button>
           <a-dropdown trigger="click">
             <a-button class="node-menu" size="mini" type="text"><icon-more /></a-button>
@@ -40,8 +51,14 @@
         <div v-if="expanded.has(root.group_id)">
           <div v-for="child in root.children" :key="child.group_id" class="tree-row child-row">
             <span class="child-guide" />
-            <button class="tree-item" :class="{ active: selected === child.group_id }" type="button" @click="$emit('select', child.group_id)">
-              <icon-file /><span class="tree-label">{{ child.name }}</span><span class="tree-count">{{ counts[child.group_id] || 0 }}</span>
+            <button
+              class="tree-item"
+              :class="{ active: selected === child.group_id }"
+              type="button"
+              @click="$emit('select', child.group_id)"
+            >
+              <icon-file /><span class="tree-label">{{ child.name }}</span
+              ><span class="tree-count">{{ counts[child.group_id] || 0 }}</span>
             </button>
             <a-dropdown trigger="click">
               <a-button class="node-menu" size="mini" type="text"><icon-more /></a-button>
@@ -59,9 +76,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue';
-import type { FieldGroup } from '@/api/storage/types';
-import { buildGroupTree } from '../field-workbench';
+import { computed, reactive, watch } from "vue";
+import type { FieldGroup } from "@/api/storage/types";
+import { buildGroupTree } from "../field-workbench";
 
 const props = defineProps<{
   groups: FieldGroup[];
@@ -82,9 +99,13 @@ defineEmits<{
 const tree = computed(() => buildGroupTree(props.groups));
 const expanded = reactive(new Set<string>());
 
-watch(tree, (items) => {
-  items.forEach((item) => expanded.add(item.group_id));
-}, { immediate: true });
+watch(
+  tree,
+  items => {
+    items.forEach(item => expanded.add(item.group_id));
+  },
+  { immediate: true }
+);
 
 function toggle(groupID: string) {
   if (expanded.has(groupID)) expanded.delete(groupID);
@@ -93,21 +114,91 @@ function toggle(groupID: string) {
 </script>
 
 <style scoped>
-.group-tree { height: 100%; min-height: 0; padding: 10px var(--moox-space-2); }
-.group-tree-head { display: flex; height: 34px; padding: 0 6px 6px 10px; align-items: center; justify-content: space-between; }
-.group-tree-spin { display: block; min-height: 160px; }
-.tree-group { margin-top: 2px; }
-.tree-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 28px; align-items: center; }
-.tree-row:hover .node-menu { opacity: 1; }
-.child-row { padding-left: 18px; }
-.tree-item { display: flex; min-width: 0; height: 34px; padding: 0 var(--moox-space-2); border: 0; border-radius: 4px; align-items: center; gap: var(--moox-space-2); background: transparent; color: var(--color-text-2); cursor: pointer; text-align: left; }
-.group-tree-spin > .tree-item { width: 100%; }
-.tree-item:hover { background: var(--color-fill-2); }
-.tree-item.active { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 600; }
-.tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-count { margin-left: auto; color: var(--color-text-3); font-size: 12px; font-weight: 400; }
-.expand-button { display: grid; width: 24px; height: 30px; padding: 0; border: 0; place-items: center; background: transparent; color: var(--color-text-3); cursor: pointer; }
-.child-guide { width: 24px; }
-.node-menu { opacity: 0; }
-:deep(.danger-option) { color: rgb(var(--danger-6)); }
+.group-tree {
+  height: 100%;
+  min-height: 0;
+  padding: 10px var(--moox-space-2);
+}
+.group-tree-head {
+  display: flex;
+  height: 34px;
+  padding: 0 6px 6px 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.group-tree-spin {
+  display: block;
+  min-height: 160px;
+}
+.tree-group {
+  margin-top: 2px;
+}
+.tree-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 28px;
+  align-items: center;
+}
+.tree-row:hover .node-menu {
+  opacity: 1;
+}
+.child-row {
+  padding-left: 18px;
+}
+.tree-item {
+  display: flex;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--moox-space-2);
+  border: 0;
+  border-radius: 4px;
+  align-items: center;
+  gap: var(--moox-space-2);
+  background: transparent;
+  color: var(--color-text-2);
+  cursor: pointer;
+  text-align: left;
+}
+.group-tree-spin > .tree-item {
+  width: 100%;
+}
+.tree-item:hover {
+  background: var(--color-fill-2);
+}
+.tree-item.active {
+  background: rgb(var(--primary-1));
+  color: rgb(var(--primary-6));
+  font-weight: 600;
+}
+.tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-count {
+  margin-left: auto;
+  color: var(--color-text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+.expand-button {
+  display: grid;
+  width: 24px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  place-items: center;
+  background: transparent;
+  color: var(--color-text-3);
+  cursor: pointer;
+}
+.child-guide {
+  width: 24px;
+}
+.node-menu {
+  opacity: 0;
+}
+:deep(.danger-option) {
+  color: rgb(var(--danger-6));
+}
 </style>

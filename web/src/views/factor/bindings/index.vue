@@ -1,69 +1,68 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <h2>因子绑定</h2>
-      <a-space wrap>
-        <a-input v-model="filters.source_dataset" allow-clear placeholder="源数据集" @press-enter="reloadFirstPage" />
-        <a-input v-model="filters.freq" allow-clear placeholder="频率" style="width: 120px" @press-enter="reloadFirstPage" />
-        <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
-          <a-option value="enabled">enabled</a-option>
-          <a-option value="disabled">disabled</a-option>
-        </a-select>
-        <a-button @click="reloadFirstPage">查询</a-button>
-        <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增绑定
-        </a-button>
-      </a-space>
-    </div>
+      <div class="page-head">
+        <h2>因子绑定</h2>
+        <a-space wrap>
+          <a-input v-model="filters.source_dataset" allow-clear placeholder="源数据集" @press-enter="reloadFirstPage" />
+          <a-input v-model="filters.freq" allow-clear placeholder="频率" style="width: 120px" @press-enter="reloadFirstPage" />
+          <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
+            <a-option value="enabled">enabled</a-option>
+            <a-option value="disabled">disabled</a-option>
+          </a-select>
+          <a-button @click="reloadFirstPage">查询</a-button>
+          <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            新增绑定
+          </a-button>
+        </a-space>
+      </div>
 
-    <a-alert v-if="!selectedSpaceId" class="top-alert" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-alert v-if="!selectedSpaceId" class="top-alert" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
-    <template v-else>
-      <a-table
-        row-key="binding_id"
-        size="small"
-        :bordered="{ cell: true }"
-        :loading="loading"
-        :data="rows"
-        :pagination="pagination"
-        :scroll="{ x: 'max-content' }"
-        @page-change="onPageChange"
-        @page-size-change="onPageSizeChange"
-      >
-        <template #columns>
-          <a-table-column title="因子" data-index="factor_id" :width="130" />
-          <a-table-column title="源数据集" data-index="source_dataset" :width="180" />
-          <a-table-column title="目标数据集" data-index="target_dataset" :width="180" />
-          <a-table-column title="频率" data-index="freq" :width="90" />
-          <a-table-column title="标的模式" data-index="subject_mode" :width="110" />
-          <a-table-column title="标的列表" data-index="subjects_json" :width="220" :ellipsis="true" :tooltip="true" />
-          <a-table-column title="状态" :width="100">
-            <template #cell="{ record }">
-              <a-tag size="small" :color="bindingStatusColor(record.status)">{{ record.status }}</a-tag>
-            </template>
-          </a-table-column>
-          <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
-          </a-table-column>
-          <a-table-column title="操作" :width="210" align="center" :fixed="'right'">
-            <template #cell="{ record }">
-              <a-space>
-                <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-                <a-button size="mini" type="text" @click="toggleStatus(record)">
-                  {{ record.status === 'enabled' ? '禁用' : '启用' }}
-                </a-button>
-                <a-popconfirm content="确认删除该绑定？" @ok="remove(record)">
-                  <a-button size="mini" type="text" status="danger">删除</a-button>
-                </a-popconfirm>
-              </a-space>
-            </template>
-          </a-table-column>
-        </template>
-      </a-table>
-    </template>
-
+      <template v-else>
+        <a-table
+          row-key="binding_id"
+          size="small"
+          :bordered="{ cell: true }"
+          :loading="loading"
+          :data="rows"
+          :pagination="pagination"
+          :scroll="{ x: 'max-content' }"
+          @page-change="onPageChange"
+          @page-size-change="onPageSizeChange"
+        >
+          <template #columns>
+            <a-table-column title="因子" data-index="factor_id" :width="130" />
+            <a-table-column title="源数据集" data-index="source_dataset" :width="180" />
+            <a-table-column title="目标数据集" data-index="target_dataset" :width="180" />
+            <a-table-column title="频率" data-index="freq" :width="90" />
+            <a-table-column title="标的模式" data-index="subject_mode" :width="110" />
+            <a-table-column title="标的列表" data-index="subjects_json" :width="220" :ellipsis="true" :tooltip="true" />
+            <a-table-column title="状态" :width="100">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="bindingStatusColor(record.status)">{{ record.status }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="更新时间" :width="180">
+              <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+            </a-table-column>
+            <a-table-column title="操作" :width="210" align="center" :fixed="'right'">
+              <template #cell="{ record }">
+                <a-space>
+                  <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                  <a-button size="mini" type="text" @click="toggleStatus(record)">
+                    {{ record.status === "enabled" ? "禁用" : "启用" }}
+                  </a-button>
+                  <a-popconfirm content="确认删除该绑定？" @ok="remove(record)">
+                    <a-button size="mini" type="text" status="danger">删除</a-button>
+                  </a-popconfirm>
+                </a-space>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </template>
     </div>
 
     <a-modal
@@ -110,7 +109,12 @@
           </a-select>
         </a-form-item>
         <a-form-item class="form-span-2" field="subjects_json" label="标的白名单JSON">
-          <a-textarea v-model="form.subjects_json" :disabled="form.subject_mode !== 'include'" :auto-size="{ minRows: 3, maxRows: 6 }" placeholder='["BTC-USDT","ETH-USDT"]' />
+          <a-textarea
+            v-model="form.subjects_json"
+            :disabled="form.subject_mode !== 'include'"
+            :auto-size="{ minRows: 3, maxRows: 6 }"
+            placeholder='["BTC-USDT","ETH-USDT"]'
+          />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -118,16 +122,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { deleteFactorBinding, listFactorBindings, listFactorDefs, upsertFactorBinding } from '@/api/factor';
-import type { FactorBinding, FactorDef } from '@/api/factor/types';
-import { listDatasets } from '@/api/storage/metadata';
-import type { Dataset } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { applyPageResult, defaultPagination, formatTime } from '@/views/data/shared/metadata-utils';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { deleteFactorBinding, listFactorBindings, listFactorDefs, upsertFactorBinding } from "@/api/factor";
+import type { FactorBinding, FactorDef } from "@/api/factor/types";
+import { listDatasets } from "@/api/storage/metadata";
+import type { Dataset } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'FactorBindings' });
+defineOptions({ name: "FactorBindings" });
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
@@ -138,21 +142,21 @@ const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
 const pagination = reactive(defaultPagination());
-const filters = reactive({ source_dataset: '', freq: '', status: '' });
+const filters = reactive({ source_dataset: "", freq: "", status: "" });
 
 const form = reactive<FactorBinding>({
-  binding_id: '',
-  factor_id: '',
-  space_id: '',
-  source_dataset: '',
-  freq: '1m',
-  subject_mode: 'all',
-  subjects_json: '[]',
-  target_dataset: '',
-  status: 'enabled',
+  binding_id: "",
+  factor_id: "",
+  space_id: "",
+  source_dataset: "",
+  freq: "1m",
+  subject_mode: "all",
+  subjects_json: "[]",
+  target_dataset: "",
+  status: "enabled"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑绑定' : '新增绑定'));
+const modalTitle = computed(() => (editing.value ? "编辑绑定" : "新增绑定"));
 const factorOptions = computed(() => factors.value);
 const datasetOptions = computed(() => datasets.value);
 
@@ -169,10 +173,10 @@ async function load() {
         source_dataset: filters.source_dataset || undefined,
         freq: filters.freq || undefined,
         status: filters.status || undefined,
-        page: { page: pagination.current, size: pagination.pageSize },
+        page: { page: pagination.current, size: pagination.pageSize }
       }),
       listFactorDefs({ page: { page: 1, size: 500 } }),
-      listDatasets({ space_id: selectedSpaceId.value, data_kind: 'DATA_KIND_TIME_SERIES', page: { page: 1, size: 500 } }),
+      listDatasets({ space_id: selectedSpaceId.value, data_kind: "DATA_KIND_TIME_SERIES", page: { page: 1, size: 500 } })
     ]);
     rows.value = bindingRsp.bindings || [];
     factors.value = factorRsp.factors || [];
@@ -189,17 +193,17 @@ function reloadFirstPage() {
 }
 
 function resetForm() {
-  const datasetID = filters.source_dataset || datasets.value[0]?.dataset_id || '';
+  const datasetID = filters.source_dataset || datasets.value[0]?.dataset_id || "";
   Object.assign(form, {
-    binding_id: '',
-    factor_id: factors.value[0]?.factor_id || '',
-    space_id: selectedSpaceId.value || '',
+    binding_id: "",
+    factor_id: factors.value[0]?.factor_id || "",
+    space_id: selectedSpaceId.value || "",
     source_dataset: datasetID,
-    freq: filters.freq || '1m',
-    subject_mode: 'all',
-    subjects_json: '[]',
-    target_dataset: '',
-    status: 'enabled',
+    freq: filters.freq || "1m",
+    subject_mode: "all",
+    subjects_json: "[]",
+    target_dataset: "",
+    status: "enabled"
   });
 }
 
@@ -213,7 +217,7 @@ function openEdit(record: FactorBinding) {
   editing.value = true;
   Object.assign(form, {
     ...record,
-    subjects_json: record.subjects_json || '[]',
+    subjects_json: record.subjects_json || "[]"
   });
   visible.value = true;
 }
@@ -221,36 +225,36 @@ function openEdit(record: FactorBinding) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.factor_id || !form.source_dataset || !form.freq) {
-    Message.warning('请补全因子、源数据集和频率');
+    Message.warning("请补全因子、源数据集和频率");
     return;
   }
   try {
-    JSON.parse(form.subjects_json || '[]');
+    JSON.parse(form.subjects_json || "[]");
   } catch (err) {
     Message.warning(`标的白名单不是合法 JSON: ${(err as Error).message}`);
     return;
   }
-  await upsertFactorBinding({ ...form, space_id: spaceId, target_dataset: form.target_dataset || '' });
-  Message.success('绑定已保存，实时触发将在下一次快照刷新后生效');
+  await upsertFactorBinding({ ...form, space_id: spaceId, target_dataset: form.target_dataset || "" });
+  Message.success("绑定已保存，实时触发将在下一次快照刷新后生效");
   visible.value = false;
   await load();
 }
 
 async function toggleStatus(record: FactorBinding) {
-  await upsertFactorBinding({ ...record, status: record.status === 'enabled' ? 'disabled' : 'enabled' });
-  Message.success('状态已更新');
+  await upsertFactorBinding({ ...record, status: record.status === "enabled" ? "disabled" : "enabled" });
+  Message.success("状态已更新");
   await load();
 }
 
 async function remove(record: FactorBinding) {
   if (!record.binding_id) return;
   await deleteFactorBinding(record.binding_id);
-  Message.success('绑定已删除');
+  Message.success("绑定已删除");
   await load();
 }
 
 function onSourceDatasetChange() {
-  form.target_dataset = '';
+  form.target_dataset = "";
 }
 
 function onPageChange(page: number) {
@@ -265,9 +269,9 @@ function onPageSizeChange(pageSize: number) {
 }
 
 function bindingStatusColor(status?: string) {
-  if (status === 'enabled') return 'green';
-  if (status === 'disabled') return 'orange';
-  return 'gray';
+  if (status === "enabled") return "green";
+  if (status === "disabled") return "orange";
+  return "gray";
 }
 
 watch(selectedSpaceId, () => reloadFirstPage());

@@ -1,33 +1,33 @@
-import axios from 'axios';
-import type { AxiosRequestConfig } from 'axios';
-import { Message } from '@arco-design/web-vue';
-import { gatewayOrigin } from '@/api/gateway';
-import { isRetInfoSuccess } from '../ret-info';
-import type { ControlResponse } from './types';
-import { installSpaceAwareSignedClient } from './signed-client';
+import axios from "axios";
+import type { AxiosRequestConfig } from "axios";
+import { Message } from "@arco-design/web-vue";
+import { gatewayOrigin } from "@/api/gateway";
+import { isRetInfoSuccess } from "../ret-info";
+import type { ControlResponse } from "./types";
+import { installSpaceAwareSignedClient } from "./signed-client";
 
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  headers: { "Content-Type": "application/json" }
 });
 const reportedErrors = new WeakSet<object>();
 
 export function reportControlError(error: unknown) {
-  if (typeof error === 'object' && error !== null && reportedErrors.has(error)) return;
-  const message = error instanceof Error ? error.message : String(error || 'Control 请求失败');
+  if (typeof error === "object" && error !== null && reportedErrors.has(error)) return;
+  const message = error instanceof Error ? error.message : String(error || "Control 请求失败");
   Message.error(message);
-  if (typeof error === 'object' && error !== null) reportedErrors.add(error);
+  if (typeof error === "object" && error !== null) reportedErrors.add(error);
 }
 
 function readAccessTokenFromConfig(config?: AxiosRequestConfig): string {
   const headers = (config?.headers || {}) as Record<string, string | undefined>;
-  return headers.Authorization || headers['X-Access-Token'] || '';
+  return headers.Authorization || headers["X-Access-Token"] || "";
 }
 
 function assertControlSuccess<T>(rsp: ControlResponse<T>): T {
   if (!rsp.ret_info) {
-    throw new Error('control response missing ret_info');
+    throw new Error("control response missing ret_info");
   }
   const retCode = rsp.ret_info.code;
   if (!isRetInfoSuccess(retCode)) {
@@ -40,10 +40,10 @@ export async function callControl<TReq extends object, TRsp>(
   service: string,
   method: string,
   req: TReq,
-  config?: AxiosRequestConfig,
+  config?: AxiosRequestConfig
 ): Promise<TRsp> {
-  if (!localStorage.getItem('user-info') && !readAccessTokenFromConfig(config)) {
-    throw new Error('未登录或登录态已失效，请重新登录后再访问管理接口');
+  if (!localStorage.getItem("user-info") && !readAccessTokenFromConfig(config)) {
+    throw new Error("未登录或登录态已失效，请重新登录后再访问管理接口");
   }
   const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req, config);
   return assertControlSuccess<TRsp>(rsp.data);
@@ -52,20 +52,20 @@ export async function callControl<TReq extends object, TRsp>(
 installSpaceAwareSignedClient(adminClient);
 
 adminClient.interceptors.response.use(
-  (rsp) => {
+  rsp => {
     // 框架错误：HTTP 200 但 trpc-ret != 0，body 为空，错误信息在 header。
-    const trpcRet = rsp.headers?.['trpc-ret'] ?? rsp.headers?.['Trpc-Ret'];
-    if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== '0') {
-      const funcRet = rsp.headers?.['trpc-func-ret'] ?? '';
+    const trpcRet = rsp.headers?.["trpc-ret"] ?? rsp.headers?.["Trpc-Ret"];
+    if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== "0") {
+      const funcRet = rsp.headers?.["trpc-func-ret"] ?? "";
       return Promise.reject(new Error(funcRet || `框架错误(${trpcRet})`));
     }
     return rsp;
   },
-  (error) => {
+  error => {
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
-    const message = data?.ret_info?.msg || error?.message || 'Control 请求失败';
+    const message = data?.ret_info?.msg || error?.message || "Control 请求失败";
     const reportedError = new Error(message);
     reportControlError(reportedError);
     return Promise.reject(reportedError);
-  },
+  }
 );

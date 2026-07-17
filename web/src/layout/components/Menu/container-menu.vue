@@ -4,7 +4,7 @@
     <template #icon>
       <MenuItemIcon icon="icon-menu" />
     </template>
-    <span>{{ $t('menu.ssh-hosts') }}</span>
+    <span>{{ $t("menu.ssh-hosts") }}</span>
   </a-menu-item>
 
   <!-- SSH终端菜单项 -->
@@ -12,7 +12,7 @@
     <template #icon>
       <MenuItemIcon icon="icon-menu" />
     </template>
-    <span>{{ $t('menu.ssh-terminal') }}</span>
+    <span>{{ $t("menu.ssh-terminal") }}</span>
   </a-menu-item>
 
   <!-- 会话管理菜单项 -->
@@ -20,7 +20,7 @@
     <template #icon>
       <MenuItemIcon icon="icon-menu" />
     </template>
-    <span>{{ $t('menu.ssh-sessions') }}</span>
+    <span>{{ $t("menu.ssh-sessions") }}</span>
   </a-menu-item>
 
   <!-- 容器监控菜单项 -->
@@ -28,13 +28,12 @@
     <template #icon>
       <MenuItemIcon icon="icon-menu" />
     </template>
-    <span>{{ $t('menu.resource-monitor') }}</span>
+    <span>{{ $t("menu.resource-monitor") }}</span>
   </a-menu-item>
 </template>
 
 <script setup lang="ts">
-import MenuItemIcon from './menu-item-icon.vue';
+import MenuItemIcon from "./menu-item-icon.vue";
 </script>
 
-<style scoped>
-</style>
+<style scoped></style>

@@ -6,3 +6,7 @@
 **/*.sh
 
 /public/*
+
+# Build plugins regenerate these declarations and do not preserve Prettier output.
+/src/auto-import.d.ts
+/src/components.d.ts

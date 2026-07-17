@@ -33,7 +33,7 @@ describe('metric monitor layout', () => {
   it('uses popup errors instead of inline error rows and keeps shared spacing', () => {
     expect(source).not.toContain('errorMessage');
     expect(source).toContain("if (!/metrics catalog is unavailable/i.test(message)) Message.error(message);");
-    expect(source).toContain("Message.error('部分指标最新值加载失败，已保留可查询数据。')");
+    expect(source.replace(/'/g, '"')).toContain('Message.error("部分指标最新值加载失败，已保留可查询数据。")');
     expect(source).not.toContain('partialState');
     expect(source).not.toContain('chartPartial');
     expect(chartSource).not.toContain('chart-error');

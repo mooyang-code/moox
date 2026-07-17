@@ -89,17 +89,17 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
         }
       } catch (error: any) {
         console.error("路由守卫: 获取用户信息失败", error);
-        
+
         // 确保完全清除用户状态，避免死循环
         await store.logOut();
-        
+
         // 直接跳转到登录页，不做任何其他检查
-        next('/login');
+        next("/login");
         return;
       }
     } else {
       // 检查路由是否存在，如果不存在则重新初始化路由
-      if (!router.hasRoute(to.name as string) && to.name !== 'not-found') {
+      if (!router.hasRoute(to.name as string) && to.name !== "not-found") {
         try {
           await routeStore.initSetRouter();
           // 使用setTimeout确保路由已经添加完成
@@ -110,7 +110,7 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
         } catch (error) {
           console.error("路由重新初始化失败:", error);
           // 如果路由初始化失败，跳转到首页
-          next('/home');
+          next("/home");
           return;
         }
       }

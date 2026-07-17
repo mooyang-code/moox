@@ -2,12 +2,7 @@
   <div class="ssh-file-manager-page">
     <!-- 路径输入框 -->
     <div class="path-input-bar">
-      <a-input
-        v-model="pathInput"
-        placeholder="输入路径后按回车导航"
-        allow-clear
-        @press-enter="onPathInputEnter"
-      >
+      <a-input v-model="pathInput" placeholder="输入路径后按回车导航" allow-clear @press-enter="onPathInputEnter">
         <template #prefix>
           <icon-folder />
         </template>
@@ -78,13 +73,13 @@
         <a-table-column title="类型" data-index="type" :width="70">
           <template #cell="{ record }">
             <a-tag size="small" :color="record.type === 'd' ? 'orangered' : 'blue'">
-              {{ record.type === 'd' ? '目录' : '文件' }}
+              {{ record.type === "d" ? "目录" : "文件" }}
             </a-tag>
           </template>
         </a-table-column>
         <a-table-column title="大小" data-index="size" :width="70">
           <template #cell="{ record }">
-            {{ record.type === 'd' ? '-' : formatFileSize(record.size) }}
+            {{ record.type === "d" ? "-" : formatFileSize(record.size) }}
           </template>
         </a-table-column>
         <a-table-column title="权限" data-index="mode" :width="130">
@@ -100,12 +95,7 @@
         <a-table-column title="操作" :width="80">
           <template #cell="{ record }">
             <a-space :size="4">
-              <a-button
-                v-if="record.type === 'f'"
-                type="text"
-                size="small"
-                @click.stop="downloadFile(record)"
-              >
+              <a-button v-if="record.type === 'f'" type="text" size="small" @click.stop="downloadFile(record)">
                 <template #icon><icon-download /></template>
                 下载
               </a-button>
@@ -137,12 +127,7 @@
     >
       <a-form :model="{ dirName: newDirName }" layout="vertical">
         <a-form-item label="目录名称">
-          <a-input
-            v-model="newDirName"
-            placeholder="请输入目录名称"
-            allow-clear
-            @press-enter="onMkdirConfirm"
-          />
+          <a-input v-model="newDirName" placeholder="请输入目录名称" allow-clear @press-enter="onMkdirConfirm" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -150,27 +135,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
-import { useRoute } from 'vue-router';
-import { Message } from '@arco-design/web-vue';
-import {
-  sftpList,
-  sftpMkdir,
-  sftpDelete,
-  getSftpDownloadUrl,
-  getSftpUploadUrl,
-  type SftpFileItem,
-} from '@/api/modules/ssh';
+import { ref, computed, watch } from "vue";
+import { useRoute } from "vue-router";
+import { Message } from "@arco-design/web-vue";
+import { sftpList, sftpMkdir, sftpDelete, getSftpDownloadUrl, getSftpUploadUrl, type SftpFileItem } from "@/api/modules/ssh";
 
 const props = defineProps<{
   sessionId?: string;
 }>();
 
 const route = useRoute();
-const DEFAULT_SFTP_DIR = '/home';
+const DEFAULT_SFTP_DIR = "/home";
 
 // ---------- 状态 ----------
-const resolvedSessionId = computed(() => props.sessionId || (route.query.sessionId as string) || '');
+const resolvedSessionId = computed(() => props.sessionId || (route.query.sessionId as string) || "");
 const loading = ref(false);
 const fileList = ref<SftpFileItem[]>([]);
 const breadcrumbs = ref<{ name: string; dir: string }[]>([]);
@@ -180,18 +158,18 @@ const pathInput = ref(DEFAULT_SFTP_DIR);
 // 新建目录相关
 const mkdirModalVisible = ref(false);
 const mkdirLoading = ref(false);
-const newDirName = ref('');
+const newDirName = ref("");
 
 // ---------- 上传相关 ----------
 const uploadFormData = computed(() => ({
   session_id: resolvedSessionId.value,
-  path: currentDir.value,
+  path: currentDir.value
 }));
 
 // ---------- 工具函数 ----------
 const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
   const k = 1024;
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   const size = parseFloat((bytes / Math.pow(k, i)).toFixed(2));
@@ -201,7 +179,7 @@ const formatFileSize = (bytes: number): string => {
 // ---------- 数据加载 ----------
 const loadDir = async (path: string) => {
   if (!resolvedSessionId.value) {
-    Message.warning('缺少 sessionId 参数');
+    Message.warning("缺少 sessionId 参数");
     return;
   }
   loading.value = true;
@@ -209,11 +187,11 @@ const loadDir = async (path: string) => {
     const res = await sftpList(resolvedSessionId.value, path);
     fileList.value = res.files || [];
     breadcrumbs.value = res.paths || [];
-    currentDir.value = res.current_dir || '/';
-    pathInput.value = res.current_dir || '/';
+    currentDir.value = res.current_dir || "/";
+    pathInput.value = res.current_dir || "/";
   } catch (error) {
-    console.error('加载目录失败:', error);
-    Message.error('加载目录失败');
+    console.error("加载目录失败:", error);
+    Message.error("加载目录失败");
   } finally {
     loading.value = false;
   }
@@ -225,10 +203,10 @@ const refresh = () => {
 
 // ---------- 导航 ----------
 const goParent = () => {
-  if (currentDir.value === '/') return;
-  const parts = currentDir.value.replace(/\/+$/, '').split('/');
+  if (currentDir.value === "/") return;
+  const parts = currentDir.value.replace(/\/+$/, "").split("/");
   parts.pop();
-  const parentDir = parts.length <= 1 ? '/' : parts.join('/');
+  const parentDir = parts.length <= 1 ? "/" : parts.join("/");
   loadDir(parentDir);
 };
 
@@ -239,7 +217,7 @@ const onPathInputEnter = () => {
 };
 
 const openDirectory = (record: SftpFileItem) => {
-  if (record.type === 'd') {
+  if (record.type === "d") {
     loadDir(record.path);
   }
 };
@@ -250,28 +228,26 @@ const onRowDblClick = (record: SftpFileItem) => {
 
 // ---------- 新建目录 ----------
 const onMkdirClick = () => {
-  newDirName.value = '';
+  newDirName.value = "";
   mkdirModalVisible.value = true;
 };
 
 const onMkdirConfirm = async () => {
   const name = newDirName.value.trim();
   if (!name) {
-    Message.warning('请输入目录名称');
+    Message.warning("请输入目录名称");
     return;
   }
   mkdirLoading.value = true;
   try {
-    const targetPath = currentDir.value === '/'
-      ? `/${name}`
-      : `${currentDir.value}/${name}`;
+    const targetPath = currentDir.value === "/" ? `/${name}` : `${currentDir.value}/${name}`;
     await sftpMkdir(resolvedSessionId.value, targetPath);
-    Message.success('目录创建成功');
+    Message.success("目录创建成功");
     mkdirModalVisible.value = false;
     refresh();
   } catch (error) {
-    console.error('创建目录失败:', error);
-    Message.error('创建目录失败');
+    console.error("创建目录失败:", error);
+    Message.error("创建目录失败");
   } finally {
     mkdirLoading.value = false;
   }
@@ -279,12 +255,12 @@ const onMkdirConfirm = async () => {
 
 // ---------- 上传回调 ----------
 const onUploadSuccess = () => {
-  Message.success('文件上传成功');
+  Message.success("文件上传成功");
   refresh();
 };
 
 const onUploadError = () => {
-  Message.error('文件上传失败');
+  Message.error("文件上传失败");
 };
 
 const uploadFile = async (option: {
@@ -295,22 +271,22 @@ const uploadFile = async (option: {
   try {
     const url = await getSftpUploadUrl(resolvedSessionId.value);
     const formData = new FormData();
-    formData.append('session_id', uploadFormData.value.session_id);
-    formData.append('path', uploadFormData.value.path);
-    formData.append('file', option.fileItem.file!);
-    const response = await fetch(url, { method: 'POST', body: formData });
+    formData.append("session_id", uploadFormData.value.session_id);
+    formData.append("path", uploadFormData.value.path);
+    formData.append("file", option.fileItem.file!);
+    const response = await fetch(url, { method: "POST", body: formData });
     if (!response.ok) throw new Error(`upload failed: ${response.status}`);
     option.onSuccess(await response.json());
   } catch (error) {
     option.onError(error as Error);
   }
-  return { abort() {} };
+  return { abort: () => undefined };
 };
 
 // ---------- 下载 ----------
 const downloadFile = async (record: SftpFileItem) => {
   const url = await getSftpDownloadUrl(resolvedSessionId.value, record.path);
-  const a = document.createElement('a');
+  const a = document.createElement("a");
   a.href = url;
   a.download = record.name;
   document.body.appendChild(a);
@@ -322,23 +298,27 @@ const downloadFile = async (record: SftpFileItem) => {
 const deleteItem = async (record: SftpFileItem) => {
   try {
     await sftpDelete(resolvedSessionId.value, record.path);
-    Message.success('删除成功');
+    Message.success("删除成功");
     refresh();
   } catch (error) {
-    console.error('删除失败:', error);
-    Message.error('删除失败');
+    console.error("删除失败:", error);
+    Message.error("删除失败");
   }
 };
 
 // ---------- 初始化 & 监听 ----------
 // 当 sessionId 变化时（包括首次传入），重新加载默认目录
-watch(resolvedSessionId, (id) => {
-  if (id) {
-    currentDir.value = DEFAULT_SFTP_DIR;
-    pathInput.value = DEFAULT_SFTP_DIR;
-    loadDir(DEFAULT_SFTP_DIR);
-  }
-}, { immediate: true });
+watch(
+  resolvedSessionId,
+  id => {
+    if (id) {
+      currentDir.value = DEFAULT_SFTP_DIR;
+      pathInput.value = DEFAULT_SFTP_DIR;
+      loadDir(DEFAULT_SFTP_DIR);
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <style lang="scss" scoped>
@@ -372,7 +352,9 @@ watch(resolvedSessionId, (id) => {
     color: var(--color-text-1);
     border-radius: 4px;
     outline: none;
-    transition: color 0.15s ease, background-color 0.15s ease;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
   }
 
   .file-entry-icon {

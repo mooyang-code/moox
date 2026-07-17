@@ -7,30 +7,25 @@
         :options="spaceOptions"
         @change="onSpaceChange"
         placeholder="请选择空间"
-        style="width: 220px; margin-left: var(--moox-space-4);"
+        style="width: 220px; margin-left: var(--moox-space-4)"
         allow-search
         :loading="loading"
       >
         <template #empty>
-          <div style="text-align: center; padding: var(--moox-space-3);">
+          <div style="text-align: center; padding: var(--moox-space-3)">
             <div>暂无空间</div>
-            <a-button type="primary" status="success" size="small" @click="openCreate" style="margin-top: var(--moox-space-2);">
+            <a-button type="primary" status="success" size="small" @click="openCreate" style="margin-top: var(--moox-space-2)">
               新建空间
             </a-button>
           </div>
         </template>
       </a-select>
-      <a-button type="text" size="small" title="新建空间" style="margin-left: var(--moox-space-2);" @click="openCreate">
+      <a-button type="text" size="small" title="新建空间" style="margin-left: var(--moox-space-2)" @click="openCreate">
         <template #icon><icon-plus /></template>
       </a-button>
     </div>
 
-    <a-modal
-      v-model:visible="createVisible"
-      title="新建空间"
-      :on-before-ok="submitCreate"
-      @cancel="resetCreate"
-    >
+    <a-modal v-model:visible="createVisible" title="新建空间" :on-before-ok="submitCreate" @cancel="resetCreate">
       <a-form :model="createForm" layout="vertical">
         <a-form-item label="空间 ID" required>
           <a-input v-model="createForm.space_id" placeholder="如 hk_stock" />
@@ -56,13 +51,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, computed, reactive, ref } from 'vue';
-import { Message } from '@arco-design/web-vue';
+import { onMounted, computed, reactive, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
-import { useSpaceStore } from '@/store/modules/space';
-import { createSpace } from '@/api/admin/spaces';
-import { storeToRefs } from 'pinia';
-import type { Space } from '@/api/admin/types';
+import { useSpaceStore } from "@/store/modules/space";
+import { createSpace } from "@/api/admin/spaces";
+import { storeToRefs } from "pinia";
+import type { Space } from "@/api/admin/types";
 
 const spaceStore = useSpaceStore();
 const { spaces, selectedSpaceId, loading } = storeToRefs(spaceStore);
@@ -76,7 +71,7 @@ const spaceOptions = computed(() => {
 });
 
 const onSpaceChange = (spaceId: string | number | boolean | Record<string, unknown> | undefined) => {
-  spaceStore.setSelectedSpace(typeof spaceId === 'string' ? spaceId : '');
+  spaceStore.setSelectedSpace(typeof spaceId === "string" ? spaceId : "");
 };
 
 const createVisible = ref(false);

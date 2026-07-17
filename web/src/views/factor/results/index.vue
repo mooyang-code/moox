@@ -28,17 +28,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import PageTitleTabs from '@/components/page-title-tabs/index.vue';
-import { listFactorBindings } from '@/api/factor';
-import type { FactorBinding } from '@/api/factor/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { factorBindingTargetDatasetIds } from '@/views/data/shared/factor-result-dataset';
-import ViewDefinitions from '@/views/data/views/index.vue';
-import ViewBrowse from '@/views/data/view-browse/index.vue';
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { listFactorBindings } from "@/api/factor";
+import type { FactorBinding } from "@/api/factor/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { factorBindingTargetDatasetIds } from "@/views/data/shared/factor-result-dataset";
+import ViewDefinitions from "@/views/data/views/index.vue";
+import ViewBrowse from "@/views/data/view-browse/index.vue";
 
-defineOptions({ name: 'FactorResults' });
+defineOptions({ name: "FactorResults" });
 
 const route = useRoute();
 const router = useRouter();
@@ -46,24 +46,24 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const bindings = ref<FactorBinding[]>([]);
 const activeTab = ref(tabFromRoute());
-type FactorResultTab = 'definitions' | 'browse';
+type FactorResultTab = "definitions" | "browse";
 
 const tabs = [
-  { key: 'definitions', label: '结果视图' },
-  { key: 'browse', label: '查看结果' },
+  { key: "definitions", label: "结果视图" },
+  { key: "browse", label: "查看结果" }
 ] as const;
-const normalizedQuery = computed(() => String(route.query.tab || ''));
+const normalizedQuery = computed(() => String(route.query.tab || ""));
 
 const targetDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
 
 function tabFromRoute() {
-  return route.query.tab === 'definitions' ? 'definitions' : 'browse';
+  return route.query.tab === "definitions" ? "definitions" : "browse";
 }
 
 function syncRoute(key: string | number) {
-  const tab: FactorResultTab = key === 'definitions' ? 'definitions' : 'browse';
+  const tab: FactorResultTab = key === "definitions" ? "definitions" : "browse";
   activeTab.value = tab;
-  router.replace({ path: '/factor/results', query: tab === 'definitions' ? { tab } : {} });
+  router.replace({ path: "/factor/results", query: tab === "definitions" ? { tab } : {} });
 }
 
 async function loadBindings() {
@@ -80,8 +80,8 @@ async function listAllBindings(spaceId: string) {
   for (let pageNo = 1; ; pageNo += 1) {
     const rsp = await listFactorBindings({
       space_id: spaceId,
-      status: 'enabled',
-      page: { page: pageNo, size },
+      status: "enabled",
+      page: { page: pageNo, size }
     });
     items.push(...(rsp.bindings || []));
     if (!rsp.page_result?.has_more || (rsp.bindings || []).length === 0) {
@@ -112,7 +112,24 @@ onMounted(loadBindings);
   min-height: 0;
   flex-direction: column;
 }
-.factor-results-content { min-height: 0; flex: 1; margin-top: var(--moox-space-3); overflow: hidden; }
-.factor-results-content :deep(.moox-page) { height: 100%; min-height: 0; padding: 0; overflow: auto; background: transparent; }
-.factor-results-content :deep(.moox-page > .moox-inner) { min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+.factor-results-content {
+  min-height: 0;
+  flex: 1;
+  margin-top: var(--moox-space-3);
+  overflow: hidden;
+}
+.factor-results-content :deep(.moox-page) {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+  background: transparent;
+}
+.factor-results-content :deep(.moox-page > .moox-inner) {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
 </style>

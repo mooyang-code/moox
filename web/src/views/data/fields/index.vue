@@ -4,9 +4,18 @@
       <div class="toolbar">
         <div class="toolbar-main">
           <h2 class="page-title">字段管理</h2>
-          <a-button class="mobile-group-trigger" @click="mobileGroupVisible = true"><template #icon><icon-menu /></template>字段组</a-button>
+          <a-button class="mobile-group-trigger" @click="mobileGroupVisible = true"
+            ><template #icon><icon-menu /></template>字段组</a-button
+          >
           <div class="keyword-control">
-            <a-input-search v-model="searchKeyword" class="keyword-input" allow-clear placeholder="搜索字段 ID、中文名或描述" @input="scheduleSearch" @search="commitSearch" />
+            <a-input-search
+              v-model="searchKeyword"
+              class="keyword-input"
+              allow-clear
+              placeholder="搜索字段 ID、中文名或描述"
+              @input="scheduleSearch"
+              @search="commitSearch"
+            />
           </div>
           <div class="filter-control">
             <a-select v-model="state.valueType" class="filter-select" allow-clear placeholder="值类型" @change="changeFilter">
@@ -33,7 +42,9 @@
       <template v-else>
         <section class="field-workbench">
           <aside class="group-panel">
-            <a-alert v-if="groupError" type="error" class="inline-error">字段组加载失败 <a-link @click="loadGroups">重试</a-link></a-alert>
+            <a-alert v-if="groupError" type="error" class="inline-error"
+              >字段组加载失败 <a-link @click="loadGroups">重试</a-link></a-alert
+            >
             <FieldGroupTree
               :groups="groups"
               :counts="fieldCounts"
@@ -49,8 +60,16 @@
           </aside>
 
           <main class="field-main">
-            <FieldBatchBar :selected-count="selectedKeys.length" :groups="groups" :loading="batchLoading" @apply="applyBatch" @clear="selectedKeys = []" />
-            <a-alert v-if="fieldError" type="error" class="table-error">字段列表加载失败 <a-link @click="loadFields">重试</a-link></a-alert>
+            <FieldBatchBar
+              :selected-count="selectedKeys.length"
+              :groups="groups"
+              :loading="batchLoading"
+              @apply="applyBatch"
+              @clear="selectedKeys = []"
+            />
+            <a-alert v-if="fieldError" type="error" class="table-error"
+              >字段列表加载失败 <a-link @click="loadFields">重试</a-link></a-alert
+            >
             <FieldTable
               :rows="rows"
               :groups="groups"
@@ -110,9 +129,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { Message, Modal } from '@arco-design/web-vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { Message, Modal } from "@arco-design/web-vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   batchUpdateFields,
   createField,
@@ -121,19 +140,19 @@ import {
   listFieldGroups,
   listFields,
   updateField,
-  updateFieldGroup,
-} from '@/api/storage/metadata';
-import type { Field, FieldGroup } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { applyPageResult, defaultPagination, fieldValueTypeOptions, statusOptions } from '@/views/data/shared/metadata-utils';
-import FieldBatchBar from './components/FieldBatchBar.vue';
-import FieldEditorDrawer from './components/FieldEditorDrawer.vue';
-import FieldGroupDialog from './components/FieldGroupDialog.vue';
-import FieldGroupTree from './components/FieldGroupTree.vue';
-import FieldTable from './components/FieldTable.vue';
-import { fieldQueryFromRoute, fieldQueryToRoute, RequestGate } from './field-workbench';
+  updateFieldGroup
+} from "@/api/storage/metadata";
+import type { Field, FieldGroup } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { applyPageResult, defaultPagination, fieldValueTypeOptions, statusOptions } from "@/views/data/shared/metadata-utils";
+import FieldBatchBar from "./components/FieldBatchBar.vue";
+import FieldEditorDrawer from "./components/FieldEditorDrawer.vue";
+import FieldGroupDialog from "./components/FieldGroupDialog.vue";
+import FieldGroupTree from "./components/FieldGroupTree.vue";
+import FieldTable from "./components/FieldTable.vue";
+import { fieldQueryFromRoute, fieldQueryToRoute, RequestGate } from "./field-workbench";
 
-defineOptions({ name: 'DataFields' });
+defineOptions({ name: "DataFields" });
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -159,7 +178,7 @@ const groupDialogVisible = ref(false);
 const mobileGroupVisible = ref(false);
 const editingField = ref<Field | null>(null);
 const editingGroup = ref<FieldGroup | null>(null);
-const newGroupParentID = ref('');
+const newGroupParentID = ref("");
 const routeReady = ref(false);
 const replacingRoute = ref(false);
 const pagination = reactive({ ...defaultPagination(), pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
@@ -169,10 +188,10 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let revertingSpace = false;
 
 const initialFieldGroupID = computed(() => {
-  if (state.group && state.group !== 'ungrouped' && groups.value.some((item) => item.group_id === state.group)) return state.group;
-  return groups.value.find((item) => item.parent_group_id)?.group_id || groups.value[0]?.group_id || '';
+  if (state.group && state.group !== "ungrouped" && groups.value.some(item => item.group_id === state.group)) return state.group;
+  return groups.value.find(item => item.parent_group_id)?.group_id || groups.value[0]?.group_id || "";
 });
-const emptyText = computed(() => state.keyword || state.valueType || state.status ? '没有符合条件的字段' : '当前范围暂无字段');
+const emptyText = computed(() => (state.keyword || state.valueType || state.status ? "没有符合条件的字段" : "当前范围暂无字段"));
 
 async function replaceQuery() {
   replacingRoute.value = true;
@@ -202,8 +221,8 @@ async function loadGroups() {
       if (!rsp.page_result?.has_more || !(rsp.field_groups || []).length) break;
     }
     groups.value = all;
-    if (state.group && state.group !== 'ungrouped' && !all.some((item) => item.group_id === state.group)) {
-      state.group = '';
+    if (state.group && state.group !== "ungrouped" && !all.some(item => item.group_id === state.group)) {
+      state.group = "";
       state.page = 1;
       await replaceQuery();
     }
@@ -220,18 +239,18 @@ async function loadFields() {
   loading.value = true;
   fieldError.value = false;
   try {
-    const selected = groups.value.find((item) => item.group_id === state.group);
+    const selected = groups.value.find(item => item.group_id === state.group);
     const rsp = await listFields({
       space_id: selectedSpaceId.value,
-      group_id: state.group && state.group !== 'ungrouped' ? state.group : undefined,
+      group_id: state.group && state.group !== "ungrouped" ? state.group : undefined,
       include_descendants: Boolean(selected && !selected.parent_group_id),
-      ungrouped_only: state.group === 'ungrouped' || undefined,
+      ungrouped_only: state.group === "ungrouped" || undefined,
       value_type: state.valueType || undefined,
       status: state.status || undefined,
       keyword: state.keyword || undefined,
       sort_by: state.sort,
       sort_order: state.order,
-      page: { page: state.page, size: state.pageSize },
+      page: { page: state.page, size: state.pageSize }
     });
     if (!fieldGate.isCurrent(token)) return;
     rows.value = rsp.fields || [];
@@ -267,16 +286,38 @@ function commitSearch() {
   void commitState({ keyword: searchKeyword.value.trim(), page: 1 });
 }
 
-function changeFilter() { void commitState({ page: 1 }); }
-function selectGroup(groupID: string) { void commitState({ group: groupID, page: 1 }); }
-function selectGroupFromMobile(groupID: string) { mobileGroupVisible.value = false; selectGroup(groupID); }
-function changePage(page: number) { void commitState({ page }); }
-function changePageSize(pageSize: number) { void commitState({ page: 1, pageSize }); }
-function changeSort(sort: 'sort_order' | 'field_id' | 'updated_at', order: 'asc' | 'desc') { void commitState({ sort, order, page: 1 }); }
+function changeFilter() {
+  void commitState({ page: 1 });
+}
+function selectGroup(groupID: string) {
+  void commitState({ group: groupID, page: 1 });
+}
+function selectGroupFromMobile(groupID: string) {
+  mobileGroupVisible.value = false;
+  selectGroup(groupID);
+}
+function changePage(page: number) {
+  void commitState({ page });
+}
+function changePageSize(pageSize: number) {
+  void commitState({ page: 1, pageSize });
+}
+function changeSort(sort: "sort_order" | "field_id" | "updated_at", order: "asc" | "desc") {
+  void commitState({ sort, order, page: 1 });
+}
 
-function openCreateField() { editingField.value = null; fieldDrawerVisible.value = true; }
-function openEditField(field: Field) { editingField.value = field; fieldDrawerVisible.value = true; }
-function closeFieldDrawer() { fieldDrawerVisible.value = false; editingField.value = null; }
+function openCreateField() {
+  editingField.value = null;
+  fieldDrawerVisible.value = true;
+}
+function openEditField(field: Field) {
+  editingField.value = field;
+  fieldDrawerVisible.value = true;
+}
+function closeFieldDrawer() {
+  fieldDrawerVisible.value = false;
+  editingField.value = null;
+}
 
 async function resetForSpace() {
   fieldGate.next();
@@ -287,7 +328,7 @@ async function resetForSpace() {
   rows.value = [];
   selectedKeys.value = [];
   Object.assign(state, fieldQueryFromRoute({}));
-  searchKeyword.value = '';
+  searchKeyword.value = "";
   await replaceQuery();
   await loadAll();
 }
@@ -295,8 +336,9 @@ async function resetForSpace() {
 async function saveField(field: Field) {
   fieldSaving.value = true;
   try {
-    if (editingField.value) await updateField(field); else await createField(field);
-    Message.success('字段已保存');
+    if (editingField.value) await updateField(field);
+    else await createField(field);
+    Message.success("字段已保存");
     closeFieldDrawer();
     selectedKeys.value = [];
     await loadAll();
@@ -305,7 +347,7 @@ async function saveField(field: Field) {
   }
 }
 
-function openCreateGroup(parentID = '') {
+function openCreateGroup(parentID = "") {
   editingGroup.value = null;
   newGroupParentID.value = parentID;
   groupDialogVisible.value = true;
@@ -313,7 +355,7 @@ function openCreateGroup(parentID = '') {
 }
 function openEditGroup(group: FieldGroup) {
   editingGroup.value = group;
-  newGroupParentID.value = '';
+  newGroupParentID.value = "";
   groupDialogVisible.value = true;
   mobileGroupVisible.value = false;
 }
@@ -321,8 +363,9 @@ function openEditGroup(group: FieldGroup) {
 async function saveGroup(group: FieldGroup) {
   groupSaving.value = true;
   try {
-    if (editingGroup.value) await updateFieldGroup(group); else await createFieldGroup(group);
-    Message.success('字段组已保存');
+    if (editingGroup.value) await updateFieldGroup(group);
+    else await createFieldGroup(group);
+    Message.success("字段组已保存");
     groupDialogVisible.value = false;
     await loadGroups();
   } finally {
@@ -334,23 +377,23 @@ function confirmDeleteGroup(group: FieldGroup) {
   mobileGroupVisible.value = false;
   Modal.confirm({
     title: `删除字段组“${group.name}”？`,
-    content: '只有不包含子组和字段的空字段组可以删除。',
-    okText: '删除',
-    okButtonProps: { status: 'danger' },
+    content: "只有不包含子组和字段的空字段组可以删除。",
+    okText: "删除",
+    okButtonProps: { status: "danger" },
     onOk: async () => {
       await deleteFieldGroup({ space_id: selectedSpaceId.value, group_id: group.group_id });
-      Message.success('字段组已删除');
+      Message.success("字段组已删除");
       if (state.group === group.group_id) {
-        state.group = '';
+        state.group = "";
         state.page = 1;
         await replaceQuery();
       }
       await loadAll();
-    },
+    }
   });
 }
 
-async function applyBatch(change: { target_group_id?: string; target_status?: 'active' | 'disabled' }) {
+async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" }) {
   if (!selectedKeys.value.length) return;
   batchLoading.value = true;
   try {
@@ -363,13 +406,16 @@ async function applyBatch(change: { target_group_id?: string; target_status?: 'a
   }
 }
 
-watch(() => route.query, async (query) => {
-  if (!routeReady.value || replacingRoute.value) return;
-  Object.assign(state, fieldQueryFromRoute(query));
-  searchKeyword.value = state.keyword;
-  selectedKeys.value = [];
-  await loadFields();
-});
+watch(
+  () => route.query,
+  async query => {
+    if (!routeReady.value || replacingRoute.value) return;
+    Object.assign(state, fieldQueryFromRoute(query));
+    searchKeyword.value = state.keyword;
+    selectedKeys.value = [];
+    await loadFields();
+  }
+);
 
 watch(selectedSpaceId, async (nextSpaceID, previousSpaceID) => {
   if (revertingSpace) {
@@ -380,13 +426,13 @@ watch(selectedSpaceId, async (nextSpaceID, previousSpaceID) => {
     revertingSpace = true;
     spaceStore.setSelectedSpace(previousSpaceID);
     Modal.confirm({
-      title: '切换空间并放弃修改？',
-      content: '当前字段存在未保存修改。',
-      okText: '放弃修改',
+      title: "切换空间并放弃修改？",
+      content: "当前字段存在未保存修改。",
+      okText: "放弃修改",
       onOk: () => {
         closeFieldDrawer();
         spaceStore.setSelectedSpace(nextSpaceID);
-      },
+      }
     });
     return;
   }
@@ -400,33 +446,119 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.fields-inner { display: flex; min-height: calc(100vh - 116px); flex-direction: column; }
-.toolbar { display: flex; min-height: 32px; margin-bottom: var(--moox-space-2); align-items: center; justify-content: space-between; gap: var(--moox-space-4); }
-.toolbar-main { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: var(--moox-space-2); }
-.page-title { flex: 0 0 auto; margin: 0 var(--moox-space-2) 0 0; font-size: 20px; font-weight: 600; }
-.toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--moox-space-2); white-space: nowrap; }
-.keyword-control { min-width: 220px; flex: 1 1 360px; }
-.filter-control { width: 140px; flex: 0 0 140px; }
-.keyword-input, .filter-select { width: 100%; }
-.mobile-group-trigger { display: none; }
-.field-workbench { display: grid; min-height: 560px; flex: 1; grid-template-columns: 240px minmax(0, 1fr); border: 1px solid var(--color-border-2); background: var(--color-bg-2); }
-.group-panel { min-height: 0; overflow: auto; border-right: 1px solid var(--color-border-2); background: var(--color-fill-1); }
-.field-main { min-width: 0; overflow: hidden; }
-.inline-error, .table-error { margin: var(--moox-space-2); }
-.table-error { margin-bottom: 0; }
+.fields-inner {
+  display: flex;
+  min-height: calc(100vh - 116px);
+  flex-direction: column;
+}
+.toolbar {
+  display: flex;
+  min-height: 32px;
+  margin-bottom: var(--moox-space-2);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-4);
+}
+.toolbar-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--moox-space-2);
+}
+.page-title {
+  flex: 0 0 auto;
+  margin: 0 var(--moox-space-2) 0 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.toolbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--moox-space-2);
+  white-space: nowrap;
+}
+.keyword-control {
+  min-width: 220px;
+  flex: 1 1 360px;
+}
+.filter-control {
+  width: 140px;
+  flex: 0 0 140px;
+}
+.keyword-input,
+.filter-select {
+  width: 100%;
+}
+.mobile-group-trigger {
+  display: none;
+}
+.field-workbench {
+  display: grid;
+  min-height: 560px;
+  flex: 1;
+  grid-template-columns: 240px minmax(0, 1fr);
+  border: 1px solid var(--color-border-2);
+  background: var(--color-bg-2);
+}
+.group-panel {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--color-border-2);
+  background: var(--color-fill-1);
+}
+.field-main {
+  min-width: 0;
+  overflow: hidden;
+}
+.inline-error,
+.table-error {
+  margin: var(--moox-space-2);
+}
+.table-error {
+  margin-bottom: 0;
+}
 @media (max-width: 900px) {
-  .group-panel { display: none; }
-  .field-workbench { grid-template-columns: minmax(0, 1fr); }
-  .mobile-group-trigger { display: inline-flex; }
-  .toolbar { flex-wrap: wrap; gap: var(--moox-space-2); }
-  .toolbar-main { flex: 1 1 100%; flex-wrap: wrap; }
-  .toolbar-actions { margin-left: auto; }
-  .keyword-control { min-width: 220px; flex: 1 1 260px; }
-  .filter-control { width: auto; flex: 1 1 130px; }
+  .group-panel {
+    display: none;
+  }
+  .field-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mobile-group-trigger {
+    display: inline-flex;
+  }
+  .toolbar {
+    flex-wrap: wrap;
+    gap: var(--moox-space-2);
+  }
+  .toolbar-main {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+  .toolbar-actions {
+    margin-left: auto;
+  }
+  .keyword-control {
+    min-width: 220px;
+    flex: 1 1 260px;
+  }
+  .filter-control {
+    width: auto;
+    flex: 1 1 130px;
+  }
 }
 @media (max-width: 560px) {
-  .toolbar-main, .toolbar-actions { width: 100%; }
-  .toolbar-actions { justify-content: flex-end; }
-  .field-workbench { min-height: 480px; }
+  .toolbar-main,
+  .toolbar-actions {
+    width: 100%;
+  }
+  .toolbar-actions {
+    justify-content: flex-end;
+  }
+  .field-workbench {
+    min-height: 480px;
+  }
 }
 </style>

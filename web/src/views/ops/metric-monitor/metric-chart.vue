@@ -6,8 +6,8 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import VChart from '@visactor/vchart';
+import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import VChart from "@visactor/vchart";
 
 export interface ChartPoint {
   time: string;
@@ -34,20 +34,20 @@ async function renderChart() {
   releaseChart();
   if (!chartRoot.value || props.loading || props.error || !props.series.length) return;
   const spec = {
-    type: 'line',
-    data: [{ id: 'metric-history', values: props.series }],
-    xField: 'time',
-    yField: 'value',
-    seriesField: 'series',
-    line: { style: { lineWidth: 2, curveType: 'monotone' } },
+    type: "line",
+    data: [{ id: "metric-history", values: props.series }],
+    xField: "time",
+    yField: "value",
+    seriesField: "series",
+    line: { style: { lineWidth: 2, curveType: "monotone" } },
     point: { visible: false },
-    legends: { visible: true, orient: 'top' },
+    legends: { visible: true, orient: "top" },
     axes: [
-      { orient: 'left', title: { visible: true, text: '值' } },
-      { orient: 'bottom', sampling: true, label: { style: { fontSize: 10 } } },
+      { orient: "left", title: { visible: true, text: "值" } },
+      { orient: "bottom", sampling: true, label: { style: { fontSize: 10 } } }
     ],
     tooltip: { mark: { content: [{ key: (d: ChartPoint) => d.series, value: (d: ChartPoint) => d.value }] } },
-    crosshair: { xField: { visible: true } },
+    crosshair: { xField: { visible: true } }
   };
   chart = new VChart(spec as any, { dom: chartRoot.value });
   chart.renderSync();
@@ -72,5 +72,4 @@ onBeforeUnmount(releaseChart);
   gap: var(--moox-space-3);
   color: var(--color-text-3);
 }
-
 </style>

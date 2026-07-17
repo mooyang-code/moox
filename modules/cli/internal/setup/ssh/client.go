@@ -23,10 +23,10 @@ import (
 )
 
 var (
-	ErrHostKeyUnknown     = errors.New("host_key_unknown")
+	ErrHostKeyUnknown      = errors.New("host_key_unknown")
 	ErrFingerprintMismatch = errors.New("host_key_fingerprint_mismatch")
-	ErrAuthFailed         = errors.New("ssh_auth_failed")
-	ErrUnreachable        = errors.New("ssh_unreachable")
+	ErrAuthFailed          = errors.New("ssh_auth_failed")
+	ErrUnreachable         = errors.New("ssh_unreachable")
 )
 
 type Target struct {

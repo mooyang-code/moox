@@ -17,15 +17,21 @@
     </header>
 
     <section class="summary-band" aria-label="主机状态总览">
-      <div class="summary-item"><span>在线</span><strong>{{ onlineHosts }} / {{ hostMetrics.length }}</strong></div>
-      <div class="summary-item"><span>需关注</span><strong :class="{ danger: attentionHosts > 0 }">{{ attentionHosts }}</strong></div>
+      <div class="summary-item">
+        <span>在线</span><strong>{{ onlineHosts }} / {{ hostMetrics.length }}</strong>
+      </div>
+      <div class="summary-item">
+        <span>需关注</span><strong :class="{ danger: attentionHosts > 0 }">{{ attentionHosts }}</strong>
+      </div>
       <div class="summary-item">
         <span>历史存储</span>
         <strong :class="storageAvailable && !currentDataGap ? 'healthy' : 'danger'">
-          {{ !storageAvailable ? '不可用' : currentDataGap ? '存在缺口' : '正常' }}
+          {{ !storageAvailable ? "不可用" : currentDataGap ? "存在缺口" : "正常" }}
         </strong>
       </div>
-      <div class="summary-item"><span>刷新模式</span><strong>{{ autoRefresh ? '自动 · 5秒' : '手动' }}</strong></div>
+      <div class="summary-item">
+        <span>刷新模式</span><strong>{{ autoRefresh ? "自动 · 5秒" : "手动" }}</strong>
+      </div>
     </section>
 
     <a-alert v-if="refreshError" type="warning" :show-icon="true" class="page-alert">{{ refreshError }}</a-alert>
@@ -46,33 +52,49 @@
             <strong>{{ host.host_name }}</strong>
             <span>{{ host.address }}</span>
           </div>
-          <span class="host-status" :class="host.status">
-            <i />{{ statusText(host.status) }}
-          </span>
+          <span class="host-status" :class="host.status"> <i />{{ statusText(host.status) }} </span>
         </div>
-        <div class="last-seen">{{ host.timestamp ? `${formatAge(host.timestamp)}上报` : '尚未上报' }}</div>
+        <div class="last-seen">{{ host.timestamp ? `${formatAge(host.timestamp)}上报` : "尚未上报" }}</div>
 
         <div class="metric-list">
           <div class="metric-row">
             <span>CPU</span>
-            <a-progress :percent="host.cpuAvailable ? host.cpuUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.cpuUsage)" aria-hidden="true" />
-            <strong>{{ host.cpuAvailable ? `${host.cpuUsage}%` : '--' }}</strong>
+            <a-progress
+              :percent="host.cpuAvailable ? host.cpuUsage / 100 : 0"
+              :show-text="false"
+              size="small"
+              :color="progressColor(host.cpuUsage)"
+              aria-hidden="true"
+            />
+            <strong>{{ host.cpuAvailable ? `${host.cpuUsage}%` : "--" }}</strong>
           </div>
           <div class="metric-row">
             <span>内存</span>
-            <a-progress :percent="host.memoryAvailable ? host.memoryUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.memoryUsage)" aria-hidden="true" />
-            <strong>{{ host.memoryAvailable ? `${host.memoryUsage}%` : '--' }}</strong>
+            <a-progress
+              :percent="host.memoryAvailable ? host.memoryUsage / 100 : 0"
+              :show-text="false"
+              size="small"
+              :color="progressColor(host.memoryUsage)"
+              aria-hidden="true"
+            />
+            <strong>{{ host.memoryAvailable ? `${host.memoryUsage}%` : "--" }}</strong>
           </div>
           <div class="metric-row">
             <span>文件系统</span>
-            <a-progress :percent="host.filesystemUsage !== null ? host.filesystemUsage / 100 : 0" :show-text="false" size="small" :color="progressColor(host.filesystemUsage ?? 0)" aria-hidden="true" />
-            <strong>{{ host.filesystemUsage !== null ? `${host.filesystemUsage}%` : '--' }}</strong>
+            <a-progress
+              :percent="host.filesystemUsage !== null ? host.filesystemUsage / 100 : 0"
+              :show-text="false"
+              size="small"
+              :color="progressColor(host.filesystemUsage ?? 0)"
+              aria-hidden="true"
+            />
+            <strong>{{ host.filesystemUsage !== null ? `${host.filesystemUsage}%` : "--" }}</strong>
           </div>
         </div>
 
         <div class="network-summary">
-          <span><icon-arrow-down />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.rx) : '--' }}</span>
-          <span><icon-arrow-up />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.tx) : '--' }}</span>
+          <span><icon-arrow-down />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.rx) : "--" }}</span>
+          <span><icon-arrow-up />{{ host.networkRate ? formatBytesPerSecond(host.networkRate.tx) : "--" }}</span>
         </div>
       </button>
     </section>
@@ -112,10 +134,22 @@
         <section class="device-section">
           <h4>设备概览</h4>
           <dl class="device-summary">
-            <div><dt>CPU 核心</dt><dd>{{ selectedHost.cpu.cores || '--' }}</dd></div>
-            <div><dt>内存</dt><dd>{{ formatBytes(selectedHost.memory.total) }}</dd></div>
-            <div><dt>文件系统</dt><dd>{{ selectedHost.filesystems.length }}</dd></div>
-            <div><dt>磁盘 / 网卡</dt><dd>{{ selectedHost.disks.length }} / {{ selectedHost.networks.length }}</dd></div>
+            <div>
+              <dt>CPU 核心</dt>
+              <dd>{{ selectedHost.cpu.cores || "--" }}</dd>
+            </div>
+            <div>
+              <dt>内存</dt>
+              <dd>{{ formatBytes(selectedHost.memory.total) }}</dd>
+            </div>
+            <div>
+              <dt>文件系统</dt>
+              <dd>{{ selectedHost.filesystems.length }}</dd>
+            </div>
+            <div>
+              <dt>磁盘 / 网卡</dt>
+              <dd>{{ selectedHost.disks.length }} / {{ selectedHost.networks.length }}</dd>
+            </div>
           </dl>
         </section>
       </div>
@@ -125,16 +159,26 @@
           <h4>文件系统</h4>
           <div class="table-scroll">
             <table>
-              <thead><tr><th>挂载点</th><th>设备</th><th>类型</th><th>使用率</th><th>容量</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>挂载点</th>
+                  <th>设备</th>
+                  <th>类型</th>
+                  <th>使用率</th>
+                  <th>容量</th>
+                </tr>
+              </thead>
               <tbody>
                 <tr v-for="item in selectedHost.filesystems" :key="`${item.device}:${item.mountpoint}`">
-                  <td :title="item.mountpoint">{{ item.mountpoint || '--' }}</td>
-                  <td :title="item.device">{{ item.device || '--' }}</td>
-                  <td>{{ item.fs_type || '--' }}</td>
-                  <td>{{ item.percent_available ? `${item.percent.toFixed(1)}%` : '--' }}</td>
+                  <td :title="item.mountpoint">{{ item.mountpoint || "--" }}</td>
+                  <td :title="item.device">{{ item.device || "--" }}</td>
+                  <td>{{ item.fs_type || "--" }}</td>
+                  <td>{{ item.percent_available ? `${item.percent.toFixed(1)}%` : "--" }}</td>
                   <td>{{ formatBytes(item.total) }}</td>
                 </tr>
-                <tr v-if="!selectedHost.filesystems.length"><td colspan="5" class="table-empty">暂无文件系统数据</td></tr>
+                <tr v-if="!selectedHost.filesystems.length">
+                  <td colspan="5" class="table-empty">暂无文件系统数据</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -144,15 +188,24 @@
           <h4>磁盘 I/O</h4>
           <div class="table-scroll">
             <table>
-              <thead><tr><th>设备</th><th>读取</th><th>写入</th><th>利用率</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>设备</th>
+                  <th>读取</th>
+                  <th>写入</th>
+                  <th>利用率</th>
+                </tr>
+              </thead>
               <tbody>
                 <tr v-for="item in selectedHost.disks" :key="item.device">
-                  <td>{{ item.device || '--' }}</td>
-                  <td>{{ item.rate_available ? formatBytesPerSecond(item.read_bytes_per_second) : '--' }}</td>
-                  <td>{{ item.rate_available ? formatBytesPerSecond(item.write_bytes_per_second) : '--' }}</td>
-                  <td>{{ item.rate_available ? `${item.utilization_percent.toFixed(1)}%` : '--' }}</td>
+                  <td>{{ item.device || "--" }}</td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.read_bytes_per_second) : "--" }}</td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.write_bytes_per_second) : "--" }}</td>
+                  <td>{{ item.rate_available ? `${item.utilization_percent.toFixed(1)}%` : "--" }}</td>
                 </tr>
-                <tr v-if="!selectedHost.disks.length"><td colspan="4" class="table-empty">暂无磁盘数据</td></tr>
+                <tr v-if="!selectedHost.disks.length">
+                  <td colspan="4" class="table-empty">暂无磁盘数据</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -162,16 +215,28 @@
           <h4>网络接口</h4>
           <div class="table-scroll">
             <table>
-              <thead><tr><th>接口</th><th>状态</th><th>接收</th><th>发送</th><th>错误</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>接口</th>
+                  <th>状态</th>
+                  <th>接收</th>
+                  <th>发送</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
               <tbody>
                 <tr v-for="item in selectedHost.networks" :key="item.device">
-                  <td>{{ item.device || '--' }}</td>
-                  <td><span class="operstate" :class="item.operstate">{{ item.operstate }}</span></td>
-                  <td>{{ item.rate_available ? formatBytesPerSecond(item.rx_speed) : '--' }}</td>
-                  <td>{{ item.rate_available ? formatBytesPerSecond(item.tx_speed) : '--' }}</td>
+                  <td>{{ item.device || "--" }}</td>
+                  <td>
+                    <span class="operstate" :class="item.operstate">{{ item.operstate }}</span>
+                  </td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.rx_speed) : "--" }}</td>
+                  <td>{{ item.rate_available ? formatBytesPerSecond(item.tx_speed) : "--" }}</td>
                   <td>{{ item.receive_errors_total + item.transmit_errors_total }}</td>
                 </tr>
-                <tr v-if="!selectedHost.networks.length"><td colspan="5" class="table-empty">暂无网络数据</td></tr>
+                <tr v-if="!selectedHost.networks.length">
+                  <td colspan="5" class="table-empty">暂无网络数据</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -182,9 +247,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { default as VChart } from '@visactor/vchart';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { default as VChart } from "@visactor/vchart";
 import {
   aggregateNetworkRate,
   formatBytes,
@@ -195,8 +260,8 @@ import {
   maxAvailableFilesystemUsage,
   metricValueAvailable,
   type HistoryPoint,
-  type HostMetrics,
-} from '@/api/modules/host-monitor';
+  type HostMetrics
+} from "@/api/modules/host-monitor";
 
 const loading = ref(false);
 const historyLoading = ref(false);
@@ -204,42 +269,48 @@ const autoRefresh = ref(true);
 const hostMetrics = ref<HostMetrics[]>([]);
 const storageAvailable = ref(true);
 const currentDataGap = ref(false);
-const refreshError = ref('');
-const lastRefreshAt = ref('');
-const selectedHostID = ref('');
-const historyDuration = ref('1h');
+const refreshError = ref("");
+const lastRefreshAt = ref("");
+const selectedHostID = ref("");
+const historyDuration = ref("1h");
 const historyData = ref<HistoryPoint[]>([]);
-const historyNotice = ref('');
+const historyNotice = ref("");
 const trendChartRef = ref<HTMLElement>();
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let trendChart: VChart | null = null;
 let currentRequestID = 0;
 let historyRequestID = 0;
 
-const hostCards = computed(() => hostMetrics.value.map((host) => {
-  const filesystemUsage = maxAvailableFilesystemUsage(host.filesystems);
-  const networkRate = aggregateNetworkRate(host.networks);
-  const cpuUsage = Math.round(host.cpu.usage);
-  const memoryUsage = Math.round(host.memory.percent);
-  const cpuAvailable = metricValueAvailable(host.status, host.cpu.usage_available);
-  const memoryAvailable = metricValueAvailable(host.status, host.memory.percent_available);
-  const filesystemAvailable = metricValueAvailable(host.status, filesystemUsage !== null);
-  const attention = [cpuAvailable ? cpuUsage : 0, memoryAvailable ? memoryUsage : 0, filesystemAvailable ? filesystemUsage ?? 0 : 0].some((value) => value >= 80);
-  return {
-    ...host,
-    cpuUsage,
-    memoryUsage,
-    cpuAvailable,
-    memoryAvailable,
-    filesystemUsage: filesystemAvailable && filesystemUsage !== null ? Math.round(filesystemUsage) : null,
-    networkRate: metricValueAvailable(host.status, networkRate !== null) ? networkRate : null,
-    attention,
-  };
-}));
+const hostCards = computed(() =>
+  hostMetrics.value.map(host => {
+    const filesystemUsage = maxAvailableFilesystemUsage(host.filesystems);
+    const networkRate = aggregateNetworkRate(host.networks);
+    const cpuUsage = Math.round(host.cpu.usage);
+    const memoryUsage = Math.round(host.memory.percent);
+    const cpuAvailable = metricValueAvailable(host.status, host.cpu.usage_available);
+    const memoryAvailable = metricValueAvailable(host.status, host.memory.percent_available);
+    const filesystemAvailable = metricValueAvailable(host.status, filesystemUsage !== null);
+    const attention = [
+      cpuAvailable ? cpuUsage : 0,
+      memoryAvailable ? memoryUsage : 0,
+      filesystemAvailable ? (filesystemUsage ?? 0) : 0
+    ].some(value => value >= 80);
+    return {
+      ...host,
+      cpuUsage,
+      memoryUsage,
+      cpuAvailable,
+      memoryAvailable,
+      filesystemUsage: filesystemAvailable && filesystemUsage !== null ? Math.round(filesystemUsage) : null,
+      networkRate: metricValueAvailable(host.status, networkRate !== null) ? networkRate : null,
+      attention
+    };
+  })
+);
 
-const selectedHost = computed(() => hostMetrics.value.find((host) => host.host_id === selectedHostID.value) ?? null);
-const onlineHosts = computed(() => hostMetrics.value.filter((host) => host.status === 'online').length);
-const attentionHosts = computed(() => hostCards.value.filter((host) => host.attention || host.status !== 'online').length);
+const selectedHost = computed(() => hostMetrics.value.find(host => host.host_id === selectedHostID.value) ?? null);
+const onlineHosts = computed(() => hostMetrics.value.filter(host => host.status === "online").length);
+const attentionHosts = computed(() => hostCards.value.filter(host => host.attention || host.status !== "online").length);
 
 const refreshData = async (silent = false) => {
   const requestID = ++currentRequestID;
@@ -251,12 +322,12 @@ const refreshData = async (silent = false) => {
     storageAvailable.value = response.storage_available;
     currentDataGap.value = response.data_gap;
     lastRefreshAt.value = new Date().toISOString();
-    refreshError.value = '';
-    if (!silent) Message.success('主机数据已刷新');
+    refreshError.value = "";
+    if (!silent) Message.success("主机数据已刷新");
   } catch {
     if (requestID !== currentRequestID) return;
-    refreshError.value = '实时数据刷新失败，当前仍显示上一次成功结果。请检查 Monitor 服务后重试。';
-    if (!silent) Message.error('主机数据刷新失败');
+    refreshError.value = "实时数据刷新失败，当前仍显示上一次成功结果。请检查 Monitor 服务后重试。";
+    if (!silent) Message.error("主机数据刷新失败");
   } finally {
     if (requestID === currentRequestID) loading.value = false;
   }
@@ -272,12 +343,16 @@ const loadHistory = async () => {
     const response = await getHistoryMetrics(agentID, duration);
     if (requestID !== historyRequestID || agentID !== selectedHostID.value || duration !== historyDuration.value) return;
     historyData.value = response.history;
-    historyNotice.value = !response.storage_available ? '历史存储暂不可用' : response.data_gap ? '当前时间范围存在历史数据缺口' : '';
+    historyNotice.value = !response.storage_available
+      ? "历史存储暂不可用"
+      : response.data_gap
+        ? "当前时间范围存在历史数据缺口"
+        : "";
     await nextTick();
     renderTrendChart();
   } catch {
     if (requestID !== historyRequestID) return;
-    historyNotice.value = '历史数据加载失败';
+    historyNotice.value = "历史数据加载失败";
   } finally {
     if (requestID === historyRequestID) historyLoading.value = false;
   }
@@ -305,7 +380,7 @@ const stopAutoRefresh = () => {
   refreshTimer = null;
 };
 
-const toggleAutoRefresh = (enabled: boolean) => enabled ? startAutoRefresh() : stopAutoRefresh();
+const toggleAutoRefresh = (enabled: boolean) => (enabled ? startAutoRefresh() : stopAutoRefresh());
 
 const renderTrendChart = () => {
   trendChart?.release();
@@ -313,41 +388,57 @@ const renderTrendChart = () => {
   if (!trendChartRef.value || !historyHasRenderableData(historyData.value)) return;
   const values: Array<{ time: string; value: number; type: string }> = [];
   for (const point of historyData.value) {
-    const time = new Date(point.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    if (point.cpu_available) values.push({ time, value: point.cpu_usage, type: 'CPU' });
-    if (point.memory_available) values.push({ time, value: point.memory_percent, type: '内存' });
-    if (point.disk_available) values.push({ time, value: point.disk_percent, type: '文件系统' });
+    const time = new Date(point.timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    if (point.cpu_available) values.push({ time, value: point.cpu_usage, type: "CPU" });
+    if (point.memory_available) values.push({ time, value: point.memory_percent, type: "内存" });
+    if (point.disk_available) values.push({ time, value: point.disk_percent, type: "文件系统" });
   }
-  trendChart = new VChart({
-    type: 'line', data: [{ id: 'trend', values }], xField: 'time', yField: 'value', seriesField: 'type',
-    color: ['#2563eb', '#16a34a', '#f59e0b'],
-    line: { style: { lineWidth: 2, curveType: 'monotone' } }, point: { visible: false },
-    legends: { visible: true, orient: 'top' },
-    axes: [{ orient: 'left', min: 0, max: 100 }, { orient: 'bottom', sampling: true }],
-    tooltip: { mark: { content: [{ key: (datum: any) => datum.type, value: (datum: any) => `${datum.value.toFixed(1)}%` }] } },
-    crosshair: { xField: { visible: true } },
-  } as any, { dom: trendChartRef.value });
+  trendChart = new VChart(
+    {
+      type: "line",
+      data: [{ id: "trend", values }],
+      xField: "time",
+      yField: "value",
+      seriesField: "type",
+      color: ["#2563eb", "#16a34a", "#f59e0b"],
+      line: { style: { lineWidth: 2, curveType: "monotone" } },
+      point: { visible: false },
+      legends: { visible: true, orient: "top" },
+      axes: [
+        { orient: "left", min: 0, max: 100 },
+        { orient: "bottom", sampling: true }
+      ],
+      tooltip: { mark: { content: [{ key: (datum: any) => datum.type, value: (datum: any) => `${datum.value.toFixed(1)}%` }] } },
+      crosshair: { xField: { visible: true } }
+    } as any,
+    { dom: trendChartRef.value }
+  );
   trendChart.renderSync();
 };
 
-const progressColor = (value: number) => value >= 80 ? '#dc2626' : value >= 60 ? '#f59e0b' : '#16a34a';
-const statusText = (status: HostMetrics['status']) => status === 'online' ? '在线' : status === 'offline' ? '离线' : '异常';
+const progressColor = (value: number) => (value >= 80 ? "#dc2626" : value >= 60 ? "#f59e0b" : "#16a34a");
+const statusText = (status: HostMetrics["status"]) => (status === "online" ? "在线" : status === "offline" ? "离线" : "异常");
 const formatAge = (value: string) => {
   const age = Date.now() - Date.parse(value);
-  if (!Number.isFinite(age) || age < 0) return '刚刚';
+  if (!Number.isFinite(age) || age < 0) return "刚刚";
   if (age < 60_000) return `${Math.max(1, Math.floor(age / 1_000))}秒前`;
   if (age < 3_600_000) return `${Math.floor(age / 60_000)}分钟前`;
   return `${Math.floor(age / 3_600_000)}小时前`;
 };
 
-watch(hostCards, (hosts) => {
+watch(hostCards, hosts => {
   if (!hosts.length) {
     historyRequestID++;
-    selectedHostID.value = '';
+    selectedHostID.value = "";
     historyData.value = [];
     return;
   }
-  if (!hosts.some((host) => host.host_id === selectedHostID.value)) {
+  if (!hosts.some(host => host.host_id === selectedHostID.value)) {
     selectedHostID.value = hosts[0].host_id;
     loadHistory();
   }
@@ -365,67 +456,362 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.resource-monitor-page { padding: var(--moox-space-4); }
-.page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--moox-space-4); margin-bottom:var(--moox-space-2); }
-.page-header h2 { margin:0; font-size:20px; font-weight:600; }
-.page-header p { margin:6px 0 0; color:var(--color-text-2); }
-.refresh-controls { display:flex; align-items:center; gap:10px; min-height:32px; }
-.refresh-time { color:var(--color-text-3); font-size:12px; }
-.summary-band { display:flex; flex-wrap:wrap; gap:28px; padding:14px 0; border-top:1px solid var(--color-border-2); border-bottom:1px solid var(--color-border-2); margin-bottom:var(--moox-space-2); }
-.summary-item { display:flex; align-items:baseline; gap:var(--moox-space-2); min-width:130px; }
-.summary-item span { color:var(--color-text-2); font-size:13px; }
-.summary-item strong { color:var(--color-text-1); font-size:16px; }
-.healthy { color:#16a34a !important; }
-.danger { color:#dc2626 !important; }
-.page-alert, .history-alert { margin-bottom:var(--moox-space-2); }
-.host-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--moox-space-4); }
-.host-card { appearance:none; width:100%; min-height:252px; padding:var(--moox-space-4); text-align:left; color:inherit; font:inherit; background:var(--color-bg-2); border:1px solid var(--color-border-2); border-radius:8px; cursor:pointer; touch-action:manipulation; transition:border-color .15s ease, box-shadow .15s ease; }
-.host-card:hover { border-color:rgb(var(--primary-5)); }
-.host-card:focus-visible { outline:2px solid rgb(var(--primary-6)); outline-offset:2px; }
-.host-card.selected { border-color:rgb(var(--primary-6)); box-shadow:0 0 0 2px rgba(var(--primary-6),.12); }
-.host-card.warning { border-left:3px solid #f59e0b; }
-.host-card.offline { opacity:.76; }
-.host-card-header { display:flex; justify-content:space-between; gap:var(--moox-space-3); }
-.host-identity { min-width:0; }
-.host-identity strong, .host-identity span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.host-identity strong { font-size:16px; }
-.host-identity span, .last-seen { color:var(--color-text-3); font-size:12px; }
-.last-seen { margin-top:var(--moox-space-1); }
-.host-status { display:flex; align-items:center; gap:6px; flex:none; font-size:12px; }
-.host-status i { width:7px; height:7px; border-radius:50%; background:#94a3b8; }
-.host-status.online { color:#16a34a; }.host-status.online i { background:#16a34a; }
-.host-status.offline, .host-status.error { color:#dc2626; }.host-status.offline i, .host-status.error i { background:#dc2626; }
-.metric-list { display:grid; gap:var(--moox-space-3); margin-top:var(--moox-space-5); }
-.metric-row { display:grid; grid-template-columns:58px minmax(0,1fr) 44px; align-items:center; gap:10px; font-size:13px; }
-.metric-row strong { text-align:right; font-variant-numeric:tabular-nums; }
-.network-summary { display:flex; justify-content:space-between; gap:var(--moox-space-3); padding-top:14px; margin-top:var(--moox-space-4); border-top:1px solid var(--color-border-2); color:var(--color-text-2); font-size:12px; }
-.network-summary span { display:flex; align-items:center; gap:var(--moox-space-1); min-width:0; }
-.detail-area { margin-top:28px; }
-.detail-heading { display:flex; align-items:end; justify-content:space-between; gap:var(--moox-space-4); margin-bottom:14px; }
-.detail-heading h3 { margin:2px 0 0; font-size:20px; }
-.eyebrow { color:var(--color-text-3); font-size:12px; }
-.detail-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(260px,1fr); gap:var(--moox-space-5); }
-.trend-section, .device-section, .data-section { min-width:0; }
-.trend-section h4, .device-section h4, .data-section h4 { margin:0 0 var(--moox-space-3); font-size:14px; }
-.chart-container { position:relative; height:280px; border-top:1px solid var(--color-border-2); }
-.chart-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:2; background:var(--color-bg-1); }
-.empty-chart { flex-direction:column; gap:var(--moox-space-2); color:var(--color-text-3); font-size:28px; }
-.empty-chart span { font-size:13px; }
-.device-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0; background:var(--color-border-2); border:1px solid var(--color-border-2); }
-.device-summary div { padding:var(--moox-space-4); background:var(--color-bg-2); }
-.device-summary dt { color:var(--color-text-3); font-size:12px; }
-.device-summary dd { margin:6px 0 0; font-size:16px; font-weight:600; }
-.tables-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--moox-space-5); margin-top:var(--moox-space-6); }
-.table-scroll { overflow:auto; border-top:1px solid var(--color-border-2); }
-table { width:100%; min-width:440px; border-collapse:collapse; font-size:12px; }
-th, td { padding:10px var(--moox-space-2); text-align:left; border-bottom:1px solid var(--color-border-2); white-space:nowrap; }
-th { color:var(--color-text-3); font-weight:500; }
-td { max-width:150px; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
-.table-empty { text-align:center; color:var(--color-text-3); }
-.operstate { color:var(--color-text-3); }.operstate.up { color:#16a34a; }
-.empty-state, .loading-state { display:flex; align-items:center; justify-content:center; min-height:260px; }
-@media (max-width:1200px) { .host-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .tables-grid { grid-template-columns:1fr; } }
-@media (max-width:820px) { .resource-monitor-page { padding:var(--moox-space-3); } .page-header, .detail-heading { align-items:flex-start; flex-direction:column; } .host-grid, .detail-grid { grid-template-columns:minmax(0,1fr); } .summary-band { gap:var(--moox-space-3) var(--moox-space-5); } .summary-item { min-width:110px; } }
-@media (max-width:560px) { .host-grid { grid-template-columns:minmax(0,1fr); } .refresh-time { display:none; } .network-summary { flex-direction:column; } }
-@media (prefers-reduced-motion:reduce) { .host-card { transition:none; } }
+.resource-monitor-page {
+  padding: var(--moox-space-4);
+}
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--moox-space-4);
+  margin-bottom: var(--moox-space-2);
+}
+.page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.page-header p {
+  margin: 6px 0 0;
+  color: var(--color-text-2);
+}
+.refresh-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+.refresh-time {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.summary-band {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-border-2);
+  border-bottom: 1px solid var(--color-border-2);
+  margin-bottom: var(--moox-space-2);
+}
+.summary-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--moox-space-2);
+  min-width: 130px;
+}
+.summary-item span {
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+.summary-item strong {
+  color: var(--color-text-1);
+  font-size: 16px;
+}
+.healthy {
+  color: #16a34a !important;
+}
+.danger {
+  color: #dc2626 !important;
+}
+.page-alert,
+.history-alert {
+  margin-bottom: var(--moox-space-2);
+}
+.host-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--moox-space-4);
+}
+.host-card {
+  appearance: none;
+  width: 100%;
+  min-height: 252px;
+  padding: var(--moox-space-4);
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.host-card:hover {
+  border-color: rgb(var(--primary-5));
+}
+.host-card:focus-visible {
+  outline: 2px solid rgb(var(--primary-6));
+  outline-offset: 2px;
+}
+.host-card.selected {
+  border-color: rgb(var(--primary-6));
+  box-shadow: 0 0 0 2px rgba(var(--primary-6), 0.12);
+}
+.host-card.warning {
+  border-left: 3px solid #f59e0b;
+}
+.host-card.offline {
+  opacity: 0.76;
+}
+.host-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--moox-space-3);
+}
+.host-identity {
+  min-width: 0;
+}
+.host-identity strong,
+.host-identity span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-identity strong {
+  font-size: 16px;
+}
+.host-identity span,
+.last-seen {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.last-seen {
+  margin-top: var(--moox-space-1);
+}
+.host-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 12px;
+}
+.host-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+.host-status.online {
+  color: #16a34a;
+}
+.host-status.online i {
+  background: #16a34a;
+}
+.host-status.offline,
+.host-status.error {
+  color: #dc2626;
+}
+.host-status.offline i,
+.host-status.error i {
+  background: #dc2626;
+}
+.metric-list {
+  display: grid;
+  gap: var(--moox-space-3);
+  margin-top: var(--moox-space-5);
+}
+.metric-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.metric-row strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.network-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--moox-space-3);
+  padding-top: 14px;
+  margin-top: var(--moox-space-4);
+  border-top: 1px solid var(--color-border-2);
+  color: var(--color-text-2);
+  font-size: 12px;
+}
+.network-summary span {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-1);
+  min-width: 0;
+}
+.detail-area {
+  margin-top: 28px;
+}
+.detail-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--moox-space-4);
+  margin-bottom: 14px;
+}
+.detail-heading h3 {
+  margin: 2px 0 0;
+  font-size: 20px;
+}
+.eyebrow {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: var(--moox-space-5);
+}
+.trend-section,
+.device-section,
+.data-section {
+  min-width: 0;
+}
+.trend-section h4,
+.device-section h4,
+.data-section h4 {
+  margin: 0 0 var(--moox-space-3);
+  font-size: 14px;
+}
+.chart-container {
+  position: relative;
+  height: 280px;
+  border-top: 1px solid var(--color-border-2);
+}
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  background: var(--color-bg-1);
+}
+.empty-chart {
+  flex-direction: column;
+  gap: var(--moox-space-2);
+  color: var(--color-text-3);
+  font-size: 28px;
+}
+.empty-chart span {
+  font-size: 13px;
+}
+.device-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--color-border-2);
+  border: 1px solid var(--color-border-2);
+}
+.device-summary div {
+  padding: var(--moox-space-4);
+  background: var(--color-bg-2);
+}
+.device-summary dt {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.device-summary dd {
+  margin: 6px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.tables-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--moox-space-5);
+  margin-top: var(--moox-space-6);
+}
+.table-scroll {
+  overflow: auto;
+  border-top: 1px solid var(--color-border-2);
+}
+table {
+  width: 100%;
+  min-width: 440px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+th,
+td {
+  padding: 10px var(--moox-space-2);
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-2);
+  white-space: nowrap;
+}
+th {
+  color: var(--color-text-3);
+  font-weight: 500;
+}
+td {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.table-empty {
+  text-align: center;
+  color: var(--color-text-3);
+}
+.operstate {
+  color: var(--color-text-3);
+}
+.operstate.up {
+  color: #16a34a;
+}
+.empty-state,
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 260px;
+}
+@media (max-width: 1200px) {
+  .host-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tables-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 820px) {
+  .resource-monitor-page {
+    padding: var(--moox-space-3);
+  }
+  .page-header,
+  .detail-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .host-grid,
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .summary-band {
+    gap: var(--moox-space-3) var(--moox-space-5);
+  }
+  .summary-item {
+    min-width: 110px;
+  }
+}
+@media (max-width: 560px) {
+  .host-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .refresh-time {
+    display: none;
+  }
+  .network-summary {
+    flex-direction: column;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .host-card {
+    transition: none;
+  }
+}
 </style>

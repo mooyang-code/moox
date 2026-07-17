@@ -32,7 +32,7 @@ export const currentlyRoute = (current: any) => {
   }
 
   const staticRouteNames = ["home"];
-  
+
   // 跳转路由是有权限的，从有权限路由中匹配
   const { hasRoute } = useRoutingMethod();
   // 对于静态路由，跳过权限检查；其他路由进行正常权限检查
@@ -109,7 +109,7 @@ export const moduleMatch = (item: any) => {
 function normalizeViewModulePath(key: string) {
   const normalized = key.replace(/\.vue$/, "");
   const prefixes = ["@/views/", "/src/views/"];
-  const matchedPrefix = prefixes.find((prefix) => normalized.startsWith(prefix));
+  const matchedPrefix = prefixes.find(prefix => normalized.startsWith(prefix));
   if (matchedPrefix) return normalized.slice(matchedPrefix.length);
 
   const marker = "/views/";

@@ -31,12 +31,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import DatasetDefinitions from '@/views/data/datasets/index.vue';
-import DatasetBrowse from '@/views/data/browse/index.vue';
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import DatasetDefinitions from "@/views/data/datasets/index.vue";
+import DatasetBrowse from "@/views/data/browse/index.vue";
 
-defineOptions({ name: 'CollectorDatasets' });
+defineOptions({ name: "CollectorDatasets" });
 
 const props = withDefaults(
   defineProps<{
@@ -44,32 +44,32 @@ const props = withDefaults(
     routePath?: string;
   }>(),
   {
-    queryKey: 'tab',
-    routePath: '/collector/datasets',
-  },
+    queryKey: "tab",
+    routePath: "/collector/datasets"
+  }
 );
 
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref(tabFromRoute());
-type CollectorDatasetTab = 'definitions' | 'browse';
+type CollectorDatasetTab = "definitions" | "browse";
 
 const tabs = [
-  { key: 'definitions', label: '集合定义' },
-  { key: 'browse', label: '查看数据' },
+  { key: "definitions", label: "集合定义" },
+  { key: "browse", label: "查看数据" }
 ] as const;
 
-const normalizedQuery = computed(() => String(route.query[props.queryKey] || ''));
+const normalizedQuery = computed(() => String(route.query[props.queryKey] || ""));
 
 function tabFromRoute() {
-  return route.query[props.queryKey] === 'browse' ? 'browse' : 'definitions';
+  return route.query[props.queryKey] === "browse" ? "browse" : "definitions";
 }
 
 function syncRoute(key: string | number) {
-  const tab: CollectorDatasetTab = key === 'browse' ? 'browse' : 'definitions';
+  const tab: CollectorDatasetTab = key === "browse" ? "browse" : "definitions";
   activeTab.value = tab;
   const query = { ...route.query };
-  if (tab === 'browse') query[props.queryKey] = tab;
+  if (tab === "browse") query[props.queryKey] = tab;
   else delete query[props.queryKey];
   void router.replace({ path: props.routePath, query });
 }

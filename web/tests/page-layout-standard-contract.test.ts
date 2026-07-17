@@ -218,7 +218,7 @@ describe('page layout standards', () => {
     expectMargin(strategyOverview, '.top-alert', 'margin-bottom', 8);
     expectMargin(strategyPerformance, '.performance-toolbar', 'margin-bottom', 8);
     expect(strategyPerformance).toMatch(/\.metrics\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
-    expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:0 0 var\(--moox-space-5\);/);
+    expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:\s*0 0 var\(--moox-space-5\);/);
     expectMargin(hostMonitor, '.monitor-toolbar', 'margin-bottom', 8);
     expectMargin(hostMonitor, '.monitor-summary', 'margin-bottom', 8);
     expectMargin(hostMonitor, '.monitor-alert', 'margin-bottom', 8);

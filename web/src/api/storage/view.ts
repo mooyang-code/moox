@@ -1,4 +1,4 @@
-import { callView } from './http';
+import { callView } from "./http";
 import type {
   FilterExpr,
   Page,
@@ -12,8 +12,8 @@ import type {
   TimeSeriesKey,
   TimeSeriesRow,
   TotalMode,
-  VersionRange,
-} from './types';
+  VersionRange
+} from "./types";
 
 export interface QueryTimeSeriesRowsReq {
   space_id: string;
@@ -41,9 +41,15 @@ export interface SearchRecordRowsReq {
 }
 
 export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq) {
-  return callView<QueryTimeSeriesRowsReq, { ret_info: RetInfo; columns: ResultColumn[]; rows: TimeSeriesRow[]; page_result: PageResult }>('QueryTimeSeriesRows', req);
+  return callView<
+    QueryTimeSeriesRowsReq,
+    { ret_info: RetInfo; columns: ResultColumn[]; rows: TimeSeriesRow[]; page_result: PageResult }
+  >("QueryTimeSeriesRows", req);
 }
 
 export function searchRecordRows(req: SearchRecordRowsReq) {
-  return callView<SearchRecordRowsReq, { ret_info: RetInfo; columns: ResultColumn[]; rows: RecordRow[]; page_result: PageResult }>('SearchRecordRows', req);
+  return callView<
+    SearchRecordRowsReq,
+    { ret_info: RetInfo; columns: ResultColumn[]; rows: RecordRow[]; page_result: PageResult }
+  >("SearchRecordRows", req);
 }

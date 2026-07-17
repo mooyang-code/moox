@@ -25,7 +25,7 @@
         <button v-for="item in stats" :key="item.key" class="stat-card" @click="router.push(item.path)">
           <span class="accent" :style="{ background: item.color }" />
           <span class="stat-group">{{ item.group }}</span>
-          <strong>{{ item.value }}{{ item.hasMore ? '+' : '' }}</strong>
+          <strong>{{ item.value }}{{ item.hasMore ? "+" : "" }}</strong>
           <span class="stat-label">{{ item.label }}</span>
           <small>{{ item.description }}</small>
         </button>
@@ -35,8 +35,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import {
   listArchiveFiles,
   listDatasets,
@@ -45,13 +45,13 @@ import {
   listFields,
   listPrimaryStoreRoutes,
   listSubjects,
-  listViews,
-} from '@/api/storage/metadata';
-import type { PageResult } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
-import { pageResultTotal } from '@/views/data/shared/metadata-utils';
+  listViews
+} from "@/api/storage/metadata";
+import type { PageResult } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
+import { pageResultTotal } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'DataOverview' });
+defineOptions({ name: "DataOverview" });
 
 interface CountResult {
   value: number;
@@ -73,85 +73,85 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const loading = ref(false);
 const stats = reactive<StatItem[]>([
   {
-    key: 'sources',
-    group: '接入',
-    label: '数据源',
-    description: '交易所、财经接口、文件导入来源',
-    path: '/data/sources',
+    key: "sources",
+    group: "接入",
+    label: "数据源",
+    description: "交易所、财经接口、文件导入来源",
+    path: "/data/sources",
     value: 0,
     hasMore: false,
-    color: '#2563eb',
+    color: "#2563eb"
   },
   {
-    key: 'subjects',
-    group: '对象',
-    label: '数据对象',
-    description: '标的、股票、合约等隔离实体',
-    path: '/data/subjects',
+    key: "subjects",
+    group: "对象",
+    label: "数据对象",
+    description: "标的、股票、合约等隔离实体",
+    path: "/data/subjects",
     value: 0,
     hasMore: false,
-    color: '#0891b2',
+    color: "#0891b2"
   },
   {
-    key: 'datasets',
-    group: '建模',
-    label: '数据集',
-    description: '时序与记录数据写入契约',
-    path: '/data/datasets',
+    key: "datasets",
+    group: "建模",
+    label: "数据集",
+    description: "时序与记录数据写入契约",
+    path: "/data/datasets",
     value: 0,
     hasMore: false,
-    color: '#16a34a',
+    color: "#16a34a"
   },
   {
-    key: 'fields',
-    group: '建模',
-    label: '字段',
-    description: '可复用字段定义与类型约束',
-    path: '/data/fields',
+    key: "fields",
+    group: "建模",
+    label: "字段",
+    description: "可复用字段定义与类型约束",
+    path: "/data/fields",
     value: 0,
     hasMore: false,
-    color: '#7c3aed',
+    color: "#7c3aed"
   },
   {
-    key: 'factors',
-    group: '计算',
-    label: '因子',
-    description: '衍生计算字段与算法定义',
-    path: '/data/factors',
+    key: "factors",
+    group: "计算",
+    label: "因子",
+    description: "衍生计算字段与算法定义",
+    path: "/data/factors",
     value: 0,
     hasMore: false,
-    color: '#db2777',
+    color: "#db2777"
   },
   {
-    key: 'views',
-    group: '查询',
-    label: '查询视图',
-    description: '面向分析与检索的读取模型',
-    path: '/data/views',
+    key: "views",
+    group: "查询",
+    label: "查询视图",
+    description: "面向分析与检索的读取模型",
+    path: "/data/views",
     value: 0,
     hasMore: false,
-    color: '#ea580c',
+    color: "#ea580c"
   },
   {
-    key: 'routes',
-    group: '主存',
-    label: '主存路由',
-    description: '数据集到 PrimaryStore 的路由配置',
-    path: '/ops/storage/routes',
+    key: "routes",
+    group: "主存",
+    label: "主存路由",
+    description: "数据集到 PrimaryStore 的路由配置",
+    path: "/ops/storage/routes",
     value: 0,
     hasMore: false,
-    color: '#475569',
+    color: "#475569"
   },
   {
-    key: 'archives',
-    group: '归档',
-    label: '归档文件',
-    description: '离线文件登记与归档结果',
-    path: '/ops/storage/archive',
+    key: "archives",
+    group: "归档",
+    label: "归档文件",
+    description: "离线文件登记与归档结果",
+    path: "/ops/storage/archive",
     value: 0,
     hasMore: false,
-    color: '#ca8a04',
-  },
+    color: "#ca8a04"
+  }
 ]);
 
 function countFrom(page?: PageResult, fallbackLength = 0): CountResult {
@@ -162,7 +162,7 @@ function countFrom(page?: PageResult, fallbackLength = 0): CountResult {
 }
 
 function setStat(key: string, value: CountResult) {
-  const item = stats.find((row) => row.key === key);
+  const item = stats.find(row => row.key === key);
   if (!item) return;
   item.value = value.value;
   item.hasMore = value.hasMore;
@@ -182,17 +182,17 @@ async function load() {
       listFactors({ space_id, page }),
       listViews({ space_id, page }),
       listPrimaryStoreRoutes({ space_id, page }),
-      listArchiveFiles({ space_id, page }),
+      listArchiveFiles({ space_id, page })
     ]);
 
-    setStat('sources', countFrom(sources.page_result, sources.data_sources?.length));
-    setStat('subjects', countFrom(subjects.page_result, subjects.subjects?.length));
-    setStat('datasets', countFrom(datasets.page_result, datasets.datasets?.length));
-    setStat('fields', countFrom(fields.page_result, fields.fields?.length));
-    setStat('factors', countFrom(factors.page_result, factors.factors?.length));
-    setStat('views', countFrom(views.page_result, views.views?.length));
-    setStat('routes', countFrom(routes.page_result, routes.primary_store_routes?.length));
-    setStat('archives', countFrom(archives.page_result, archives.archive_files?.length));
+    setStat("sources", countFrom(sources.page_result, sources.data_sources?.length));
+    setStat("subjects", countFrom(subjects.page_result, subjects.subjects?.length));
+    setStat("datasets", countFrom(datasets.page_result, datasets.datasets?.length));
+    setStat("fields", countFrom(fields.page_result, fields.fields?.length));
+    setStat("factors", countFrom(factors.page_result, factors.factors?.length));
+    setStat("views", countFrom(views.page_result, views.views?.length));
+    setStat("routes", countFrom(routes.page_result, routes.primary_store_routes?.length));
+    setStat("archives", countFrom(archives.page_result, archives.archive_files?.length));
   } finally {
     loading.value = false;
   }
@@ -273,7 +273,10 @@ onMounted(load);
   background: var(--color-bg-2);
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .stat-card:hover {

@@ -80,11 +80,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { createFactor, listFactors, updateFactor } from '@/api/storage/metadata';
-import type { Factor } from '@/api/storage/types';
-import { useSpaceStore } from '@/store/modules/space';
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { createFactor, listFactors, updateFactor } from "@/api/storage/metadata";
+import type { Factor } from "@/api/storage/types";
+import { useSpaceStore } from "@/store/modules/space";
 import {
   applyPageResult,
   defaultPagination,
@@ -93,10 +93,10 @@ import {
   jsonText,
   optionLabel,
   statusColor,
-  statusOptions,
-} from '@/views/data/shared/metadata-utils';
+  statusOptions
+} from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'DataFactors' });
+defineOptions({ name: "DataFactors" });
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
@@ -107,17 +107,17 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive<Factor>({
-  space_id: '',
-  factor_id: '',
-  name: '',
-  description: '',
-  algorithm: '',
-  params_json: '{}',
-  value_type: 'FIELD_VALUE_TYPE_DOUBLE',
-  status: 'active',
+  space_id: "",
+  factor_id: "",
+  name: "",
+  description: "",
+  algorithm: "",
+  params_json: "{}",
+  value_type: "FIELD_VALUE_TYPE_DOUBLE",
+  status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑因子' : '新增因子'));
+const modalTitle = computed(() => (editing.value ? "编辑因子" : "新增因子"));
 
 async function load() {
   if (!selectedSpaceId.value) {
@@ -128,7 +128,7 @@ async function load() {
   try {
     const rsp = await listFactors({
       space_id: selectedSpaceId.value,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.factors || [];
     applyPageResult(pagination, rsp.page_result);
@@ -140,13 +140,13 @@ async function load() {
 function resetForm() {
   Object.assign(form, {
     space_id: selectedSpaceId.value,
-    factor_id: '',
-    name: '',
-    description: '',
-    algorithm: '',
-    params_json: '{}',
-    value_type: 'FIELD_VALUE_TYPE_DOUBLE',
-    status: 'active',
+    factor_id: "",
+    name: "",
+    description: "",
+    algorithm: "",
+    params_json: "{}",
+    value_type: "FIELD_VALUE_TYPE_DOUBLE",
+    status: "active"
   });
 }
 
@@ -160,7 +160,7 @@ function openEdit(record: Factor) {
   editing.value = true;
   Object.assign(form, {
     ...record,
-    params_json: jsonText(record.params_json),
+    params_json: jsonText(record.params_json)
   });
   visible.value = true;
 }
@@ -168,13 +168,13 @@ function openEdit(record: Factor) {
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.factor_id || !form.name || !form.algorithm || !form.value_type) {
-    Message.warning('请补全因子ID、名称、算法和值类型');
+    Message.warning("请补全因子ID、名称、算法和值类型");
     return;
   }
   const payload = { ...form, space_id: spaceId, params_json: jsonText(form.params_json) };
   if (editing.value) await updateFactor(payload);
   else await createFactor(payload);
-  Message.success('因子已保存');
+  Message.success("因子已保存");
   visible.value = false;
   await load();
 }

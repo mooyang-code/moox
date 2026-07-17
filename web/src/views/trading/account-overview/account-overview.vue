@@ -49,8 +49,8 @@
 
             <div class="account-meta-row">
               <span>{{ accountTypeLabels[record.account_type] || record.account_type }}</span>
-              <span>{{ record.base_currency || '-' }}</span>
-              <span>{{ record.channel_id ? '已绑定通道' : '未绑定通道' }}</span>
+              <span>{{ record.base_currency || "-" }}</span>
+              <span>{{ record.channel_id ? "已绑定通道" : "未绑定通道" }}</span>
             </div>
 
             <div class="balance-panel">
@@ -76,7 +76,7 @@
                 </span>
               </div>
               <div v-else class="balance-empty">
-                {{ balancePreviewLoading[record.account_id] ? '读取余额中' : '暂无非零余额' }}
+                {{ balancePreviewLoading[record.account_id] ? "读取余额中" : "暂无非零余额" }}
               </div>
             </div>
 
@@ -113,7 +113,12 @@
       </div>
 
       <!-- 新增/编辑账户弹窗 -->
-      <a-modal v-model:visible="accountModalVisible" width="560px" :title="editingAccount ? '编辑账户' : '新增账户'" @ok="submitAccount">
+      <a-modal
+        v-model:visible="accountModalVisible"
+        width="560px"
+        :title="editingAccount ? '编辑账户' : '新增账户'"
+        @ok="submitAccount"
+      >
         <a-form :model="accountForm" auto-label-width>
           <a-form-item field="account_name" label="账户名称" required>
             <a-input v-model="accountForm.account_name" placeholder="如：币币主账户" />
@@ -150,8 +155,13 @@
       </a-modal>
 
       <!-- 余额弹窗 -->
-      <a-modal v-model:visible="balanceModalVisible" width="720px" :title="`账户余额 - ${selectedAccount?.account_name || ''}`" :footer="false">
-        <div style="margin-bottom: var(--moox-space-3);">
+      <a-modal
+        v-model:visible="balanceModalVisible"
+        width="720px"
+        :title="`账户余额 - ${selectedAccount?.account_name || ''}`"
+        :footer="false"
+      >
+        <div style="margin-bottom: var(--moox-space-3)">
           <a-space>
             <a-button type="primary" size="small" @click="onSyncBalances" :loading="syncing">
               <template #icon><icon-sync /></template>
@@ -163,7 +173,14 @@
             </a-button>
           </a-space>
         </div>
-        <a-table row-key="currency" size="small" :bordered="{ cell: true }" :loading="balanceLoading" :data="balances" :pagination="false">
+        <a-table
+          row-key="currency"
+          size="small"
+          :bordered="{ cell: true }"
+          :loading="balanceLoading"
+          :data="balances"
+          :pagination="false"
+        >
           <template #columns>
             <a-table-column title="币种" data-index="currency" :width="100" />
             <a-table-column title="可用" data-index="available" :width="160" />
@@ -192,9 +209,14 @@
         <div class="liquidation-toolbar">
           <div>
             <span class="liquidation-count">待清仓标的 {{ liquidationTargets.length }}</span>
-            <span class="liquidation-account">{{ selectedAccount?.account_id || '-' }}</span>
+            <span class="liquidation-account">{{ selectedAccount?.account_id || "-" }}</span>
           </div>
-          <a-button size="small" :loading="liquidationLoading" :disabled="liquidationSubmitting" @click="reloadLiquidationTargets">
+          <a-button
+            size="small"
+            :loading="liquidationLoading"
+            :disabled="liquidationSubmitting"
+            @click="reloadLiquidationTargets"
+          >
             <template #icon><icon-refresh /></template>
             刷新持仓
           </a-button>
@@ -226,7 +248,7 @@
                   可用 {{ formatBalanceAmount(record.available) }}
                   <span class="liquidation-muted">冻结 {{ formatBalanceAmount(record.frozen) }}</span>
                 </span>
-                <span v-else>{{ record.pos_side || 'BOTH' }}</span>
+                <span v-else>{{ record.pos_side || "BOTH" }}</span>
               </template>
             </a-table-column>
             <a-table-column title="说明" data-index="note" :width="180" />
@@ -270,7 +292,12 @@
       </a-modal>
 
       <!-- 资金流水弹窗 -->
-      <a-modal v-model:visible="fundFlowModalVisible" width="900px" :title="`资金流水 - ${selectedAccount?.account_name || ''}`" :footer="false">
+      <a-modal
+        v-model:visible="fundFlowModalVisible"
+        width="900px"
+        :title="`资金流水 - ${selectedAccount?.account_name || ''}`"
+        :footer="false"
+      >
         <div class="filter-bar">
           <a-input v-model="fundFlowFilter.currency" placeholder="币种" style="width: 100px" allow-clear />
           <a-select v-model="fundFlowFilter.biz_type" placeholder="业务类型" style="width: 140px" allow-clear>
@@ -298,7 +325,9 @@
             </a-table-column>
             <a-table-column title="方向" :width="70">
               <template #cell="{ record }">
-                <a-tag size="small" :color="record.direction > 0 ? 'green' : 'red'">{{ record.direction > 0 ? '增加' : '减少' }}</a-tag>
+                <a-tag size="small" :color="record.direction > 0 ? 'green' : 'red'">{{
+                  record.direction > 0 ? "增加" : "减少"
+                }}</a-tag>
               </template>
             </a-table-column>
             <a-table-column title="金额" data-index="amount" :width="140" />
@@ -309,25 +338,39 @@
       </a-modal>
 
       <!-- API 凭证弹窗 -->
-      <a-modal v-model:visible="apiKeyModalVisible" width="860px" :title="`API 凭证 - ${selectedAccount?.account_name || ''}`" :footer="false">
-        <div style="margin-bottom: var(--moox-space-3);">
+      <a-modal
+        v-model:visible="apiKeyModalVisible"
+        width="860px"
+        :title="`API 凭证 - ${selectedAccount?.account_name || ''}`"
+        :footer="false"
+      >
+        <div style="margin-bottom: var(--moox-space-3)">
           <a-button type="primary" status="success" size="small" @click="openCreateApiKey">
             <template #icon><icon-plus /></template>
             新增凭证
           </a-button>
         </div>
-        <a-table row-key="api_key_id" size="small" :bordered="{ cell: true }" :loading="apiKeyLoading" :data="apiKeys" :pagination="false">
+        <a-table
+          row-key="api_key_id"
+          size="small"
+          :bordered="{ cell: true }"
+          :loading="apiKeyLoading"
+          :data="apiKeys"
+          :pagination="false"
+        >
           <template #columns>
             <a-table-column title="交易所" data-index="exchange" :width="100" />
             <a-table-column title="API Key" data-index="api_key" :width="240" ellipsis />
             <a-table-column title="权限" :width="160">
               <template #cell="{ record }">
-                <a-tag v-for="p in (record.permissions || [])" :key="p" size="small">{{ p }}</a-tag>
+                <a-tag v-for="p in record.permissions || []" :key="p" size="small">{{ p }}</a-tag>
               </template>
             </a-table-column>
             <a-table-column title="状态" :width="70">
               <template #cell="{ record }">
-                <a-tag size="small" :color="record.status === 1 ? 'green' : 'gray'">{{ record.status === 1 ? '正常' : '禁用' }}</a-tag>
+                <a-tag size="small" :color="record.status === 1 ? 'green' : 'gray'">{{
+                  record.status === 1 ? "正常" : "禁用"
+                }}</a-tag>
               </template>
             </a-table-column>
             <a-table-column title="创建时间" :width="170">
@@ -373,16 +416,21 @@
       </a-modal>
 
       <!-- 账户详情弹窗 -->
-      <a-modal v-model:visible="detailModalVisible" width="560px" :title="`账户详情 - ${selectedAccount?.account_name || ''}`" :footer="false">
+      <a-modal
+        v-model:visible="detailModalVisible"
+        width="560px"
+        :title="`账户详情 - ${selectedAccount?.account_name || ''}`"
+        :footer="false"
+      >
         <a-descriptions :column="1" bordered size="small">
           <a-descriptions-item label="账户ID">{{ selectedAccount?.account_id }}</a-descriptions-item>
           <a-descriptions-item label="账户名称">{{ selectedAccount?.account_name }}</a-descriptions-item>
           <a-descriptions-item label="类型">{{ accountTypeLabels[selectedAccount?.account_type ?? 0] }}</a-descriptions-item>
-          <a-descriptions-item label="基础币种">{{ selectedAccount?.base_currency || '-' }}</a-descriptions-item>
-          <a-descriptions-item label="绑定通道">{{ selectedAccount?.channel_id || '-' }}</a-descriptions-item>
+          <a-descriptions-item label="基础币种">{{ selectedAccount?.base_currency || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="绑定通道">{{ selectedAccount?.channel_id || "-" }}</a-descriptions-item>
           <a-descriptions-item label="状态">{{ accountStatusLabels[selectedAccount?.status ?? 0] }}</a-descriptions-item>
-          <a-descriptions-item label="默认账户">{{ selectedAccount?.is_default ? '是' : '否' }}</a-descriptions-item>
-          <a-descriptions-item label="备注">{{ selectedAccount?.remark || '-' }}</a-descriptions-item>
+          <a-descriptions-item label="默认账户">{{ selectedAccount?.is_default ? "是" : "否" }}</a-descriptions-item>
+          <a-descriptions-item label="备注">{{ selectedAccount?.remark || "-" }}</a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatTimestamp(selectedAccount?.created_at) }}</a-descriptions-item>
           <a-descriptions-item label="更新时间">{{ formatTimestamp(selectedAccount?.updated_at) }}</a-descriptions-item>
         </a-descriptions>
@@ -392,34 +440,46 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { Message } from '@arco-design/web-vue';
+import { computed, onMounted, reactive, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
 import {
-  listAccounts, createAccount, updateAccount, deleteAccount,
+  listAccounts,
+  createAccount,
+  updateAccount,
+  deleteAccount,
   syncExchangeAccounts,
-  getBalances, syncBalances,
+  getBalances,
+  syncBalances,
   listFundFlows,
-  listApiKeys, createApiKey, deleteApiKey,
-  placeOrder, convertDust, syncPositions, listInstruments,
-  accountTypeLabels, accountStatusLabels, accountStatusColors,
-  bizTypeLabels, formatTimestamp,
-} from '@/api/trade';
-import type { Account, Balance, FundFlow, ApiKey, AccountType, AccountStatus } from '@/api/trade/types';
-import { defaultPagination, applyPageResult } from '@/views/data/shared/metadata-utils';
+  listApiKeys,
+  createApiKey,
+  deleteApiKey,
+  placeOrder,
+  convertDust,
+  syncPositions,
+  listInstruments,
+  accountTypeLabels,
+  accountStatusLabels,
+  accountStatusColors,
+  bizTypeLabels,
+  formatTimestamp
+} from "@/api/trade";
+import type { Account, Balance, FundFlow, ApiKey, AccountType, AccountStatus } from "@/api/trade/types";
+import { defaultPagination, applyPageResult } from "@/views/data/shared/metadata-utils";
 import {
   buildSpotLiquidationPlan,
   buildSwapLiquidationTargets,
-  splitLiquidationTargetsForSubmit,
-} from './account-liquidation-utils';
-import type { LiquidationResult, LiquidationTarget } from './account-liquidation-utils';
+  splitLiquidationTargetsForSubmit
+} from "./account-liquidation-utils";
+import type { LiquidationResult, LiquidationTarget } from "./account-liquidation-utils";
 
-defineOptions({ name: 'account-overview' });
+defineOptions({ name: "account-overview" });
 
 // ========== 账户列表 ==========
 const accounts = ref<Account[]>([]);
 const loading = ref(false);
 const syncingAccounts = ref(false);
-const keyword = ref('');
+const keyword = ref("");
 const pagination = reactive(defaultPagination());
 const accountBalanceMap = reactive<Record<string, Balance[]>>({});
 const balancePreviewLoading = reactive<Record<string, boolean>>({});
@@ -432,7 +492,7 @@ async function loadAccounts() {
   try {
     const rsp = await listAccounts({
       keyword: keyword.value || undefined,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     if (loadSeq !== accountLoadSeq) return;
     accounts.value = rsp.accounts || [];
@@ -462,7 +522,7 @@ function onPageSizeChange(size: number) {
 async function onSyncExchangeAccounts() {
   syncingAccounts.value = true;
   try {
-    const rsp = await syncExchangeAccounts({ provider: 'binance' });
+    const rsp = await syncExchangeAccounts({ provider: "binance" });
     Message.success(`已同步 ${rsp.accounts?.length || 0} 个币安账户及资产快照`);
     await loadAccounts();
   } finally {
@@ -471,7 +531,7 @@ async function onSyncExchangeAccounts() {
 }
 
 async function loadBalancePreviews(loadSeq = accountLoadSeq) {
-  await Promise.allSettled(accounts.value.map((account) => loadBalancePreview(account.account_id, loadSeq)));
+  await Promise.allSettled(accounts.value.map(account => loadBalancePreview(account.account_id, loadSeq)));
 }
 
 async function loadBalancePreview(accountID: string, loadSeq = accountLoadSeq) {
@@ -505,7 +565,7 @@ function balanceCount(accountID: string) {
 
 function nonZeroBalances(accountID: string) {
   return (accountBalanceMap[accountID] || [])
-    .filter((item) => isNonZeroAmount(item.total || item.available || item.frozen))
+    .filter(item => isNonZeroAmount(item.total || item.available || item.frozen))
     .sort((a, b) => balancePriority(b) - balancePriority(a));
 }
 
@@ -519,20 +579,20 @@ function topBalances(accountID: string) {
 
 function balancePriority(item: Balance) {
   const preferred: Record<string, number> = { USDT: 1000, USDC: 900, BTC: 800, ETH: 700, BNB: 600, SOL: 500 };
-  const amount = Number.parseFloat(item.total || item.available || '0');
+  const amount = Number.parseFloat(item.total || item.available || "0");
   return (preferred[item.currency] || 0) + (Number.isFinite(amount) && amount > 0 ? Math.min(amount, 100) : 0);
 }
 
 function isNonZeroAmount(value?: string) {
-  const parsed = Number.parseFloat(value || '0');
+  const parsed = Number.parseFloat(value || "0");
   return Number.isFinite(parsed) && Math.abs(parsed) > 0;
 }
 
 function formatBalanceAmount(value?: string) {
-  const raw = (value || '0').trim();
-  if (!raw) return '0';
-  if (!raw.includes('.')) return raw;
-  const trimmed = raw.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+  const raw = (value || "0").trim();
+  if (!raw) return "0";
+  if (!raw.includes(".")) return raw;
+  const trimmed = raw.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
   return trimmed.length > 12 ? `${trimmed.slice(0, 12)}…` : trimmed;
 }
 
@@ -549,20 +609,26 @@ const accountForm = reactive<{
   is_default: boolean;
   remark: string;
 }>({
-  account_id: '',
-  account_name: '',
+  account_id: "",
+  account_name: "",
   account_type: 0,
-  channel_id: '',
-  base_currency: '',
+  channel_id: "",
+  base_currency: "",
   status: 1,
   is_default: false,
-  remark: '',
+  remark: ""
 });
 
 function resetAccountForm() {
   Object.assign(accountForm, {
-    account_id: '', account_name: '', account_type: 0,
-    channel_id: '', base_currency: '', status: 1, is_default: false, remark: '',
+    account_id: "",
+    account_name: "",
+    account_type: 0,
+    channel_id: "",
+    base_currency: "",
+    status: 1,
+    is_default: false,
+    remark: ""
   });
 }
 
@@ -582,14 +648,14 @@ function openEditAccount(record: Account) {
     base_currency: record.base_currency,
     status: record.status,
     is_default: record.is_default,
-    remark: record.remark,
+    remark: record.remark
   });
   accountModalVisible.value = true;
 }
 
 async function submitAccount() {
   if (!accountForm.account_name) {
-    Message.warning('请输入账户名称');
+    Message.warning("请输入账户名称");
     return;
   }
   if (editingAccount.value) {
@@ -598,18 +664,18 @@ async function submitAccount() {
       account_name: accountForm.account_name,
       status: accountForm.status,
       is_default: accountForm.is_default,
-      remark: accountForm.remark,
+      remark: accountForm.remark
     });
-    Message.success('账户已更新');
+    Message.success("账户已更新");
   } else {
     await createAccount({
       account_name: accountForm.account_name,
       account_type: accountForm.account_type,
       channel_id: accountForm.channel_id || undefined,
       base_currency: accountForm.base_currency || undefined,
-      remark: accountForm.remark || undefined,
+      remark: accountForm.remark || undefined
     });
-    Message.success('账户已创建');
+    Message.success("账户已创建");
   }
   accountModalVisible.value = false;
   await loadAccounts();
@@ -617,7 +683,7 @@ async function submitAccount() {
 
 async function onDeleteAccount(record: Account) {
   await deleteAccount(record.account_id);
-  Message.success('账户已删除');
+  Message.success("账户已删除");
   await loadAccounts();
 }
 
@@ -661,7 +727,7 @@ async function onSyncBalances() {
     const rsp = await syncBalances(selectedAccount.value.account_id);
     balances.value = rsp.balances || [];
     accountBalanceMap[selectedAccount.value.account_id] = balances.value;
-    Message.success('余额已同步');
+    Message.success("余额已同步");
   } finally {
     syncing.value = false;
   }
@@ -673,20 +739,21 @@ const liquidationLoading = ref(false);
 const liquidationSubmitting = ref(false);
 const liquidationTargets = ref<LiquidationTarget[]>([]);
 const liquidationResults = reactive<Record<string, LiquidationResult>>({});
-const liquidationConfirmText = ref('');
+const liquidationConfirmText = ref("");
 const liquidationHiddenCount = ref(0);
-const liquidationConfirmDisabled = computed(() => (
-  liquidationLoading.value
-  || liquidationSubmitting.value
-  || liquidationTargets.value.length === 0
-  || liquidationConfirmText.value !== '清仓'
-));
+const liquidationConfirmDisabled = computed(
+  () =>
+    liquidationLoading.value ||
+    liquidationSubmitting.value ||
+    liquidationTargets.value.length === 0 ||
+    liquidationConfirmText.value !== "清仓"
+);
 
 function resetLiquidationState() {
   liquidationTargets.value = [];
   liquidationHiddenCount.value = 0;
-  liquidationConfirmText.value = '';
-  Object.keys(liquidationResults).forEach((key) => delete liquidationResults[key]);
+  liquidationConfirmText.value = "";
+  Object.keys(liquidationResults).forEach(key => delete liquidationResults[key]);
 }
 
 function openLiquidation(record: Account) {
@@ -711,17 +778,17 @@ async function loadLiquidationTargets(record: Account) {
     } else {
       const [balanceResult, instrumentResult] = await Promise.allSettled([
         syncBalances(record.account_id),
-        record.channel_id ? listInstruments(record.channel_id, record.account_type) : Promise.resolve({ instruments: [] }),
+        record.channel_id ? listInstruments(record.channel_id, record.account_type) : Promise.resolve({ instruments: [] })
       ]);
-      if (balanceResult.status === 'rejected') {
+      if (balanceResult.status === "rejected") {
         throw balanceResult.reason;
       }
-      if (instrumentResult.status === 'rejected') {
+      if (instrumentResult.status === "rejected") {
         Message.warning(`交易规则读取失败：${errorText(instrumentResult.reason)}`);
       }
       const rsp = balanceResult.value;
       const nextBalances = rsp.balances || [];
-      const instruments = instrumentResult.status === 'fulfilled' ? instrumentResult.value.instruments || [] : [];
+      const instruments = instrumentResult.status === "fulfilled" ? instrumentResult.value.instruments || [] : [];
       accountBalanceMap[record.account_id] = nextBalances;
       const plan = buildSpotLiquidationPlan(record, nextBalances, instruments);
       liquidationTargets.value = plan.targets;
@@ -742,63 +809,63 @@ async function submitLiquidation() {
     const groupedTargets = splitLiquidationTargetsForSubmit(liquidationTargets.value);
     const dustTargets = groupedTargets.dust_targets;
     if (dustTargets.length > 0) {
-      dustTargets.forEach((target) => {
-        liquidationResults[target.id] = { status: 'submitting' };
+      dustTargets.forEach(target => {
+        liquidationResults[target.id] = { status: "submitting" };
       });
-      const dustChannelID = dustTargets[0]?.channel_id || '';
+      const dustChannelID = dustTargets[0]?.channel_id || "";
       if (!dustChannelID) {
         failedCount += dustTargets.length;
-        dustTargets.forEach((target) => {
-          liquidationResults[target.id] = { status: 'failed', message: '缺少交易通道' };
+        dustTargets.forEach(target => {
+          liquidationResults[target.id] = { status: "failed", message: "缺少交易通道" };
         });
       } else {
         try {
           const rsp = await convertDust({
             account_id: account.account_id,
             channel_id: dustChannelID,
-            assets: groupedTargets.dust_assets,
+            assets: groupedTargets.dust_assets
           });
-          const resultByAsset = new Map((rsp.results || []).map((item) => [item.asset.toUpperCase(), item]));
-          const skippedByAsset = new Map((rsp.skipped_results || []).map((item) => [item.asset.toUpperCase(), item]));
-          dustTargets.forEach((target) => {
+          const resultByAsset = new Map((rsp.results || []).map(item => [item.asset.toUpperCase(), item]));
+          const skippedByAsset = new Map((rsp.skipped_results || []).map(item => [item.asset.toUpperCase(), item]));
+          dustTargets.forEach(target => {
             const result = resultByAsset.get(target.source_name.toUpperCase());
             const skipped = skippedByAsset.get(target.source_name.toUpperCase());
             if (skipped) {
               failedCount += 1;
               liquidationResults[target.id] = {
-                status: 'failed',
-                message: skipped.reason || '估值过低，Binance 不支持转换，保留小尾巴',
+                status: "failed",
+                message: skipped.reason || "估值过低，Binance 不支持转换，保留小尾巴"
               };
               return;
             }
             if (!result) {
               failedCount += 1;
               liquidationResults[target.id] = {
-                status: 'failed',
-                message: 'Binance 未返回转换结果，保留小尾巴',
+                status: "failed",
+                message: "Binance 未返回转换结果，保留小尾巴"
               };
               return;
             }
             successCount += 1;
             liquidationResults[target.id] = {
-              status: 'success',
-              message: dustTransferMessage(result?.transfered_amount, target.source_name),
+              status: "success",
+              message: dustTransferMessage(result?.transfered_amount, target.source_name)
             };
           });
         } catch (err) {
           failedCount += dustTargets.length;
-          dustTargets.forEach((target) => {
-            liquidationResults[target.id] = { status: 'failed', message: liquidationErrorText(err) };
+          dustTargets.forEach(target => {
+            liquidationResults[target.id] = { status: "failed", message: liquidationErrorText(err) };
           });
         }
       }
     }
 
     for (const [idx, target] of groupedTargets.order_targets.entries()) {
-      liquidationResults[target.id] = { status: 'submitting' };
+      liquidationResults[target.id] = { status: "submitting" };
       if (!target.channel_id) {
         failedCount += 1;
-        liquidationResults[target.id] = { status: 'failed', message: '缺少交易通道' };
+        liquidationResults[target.id] = { status: "failed", message: "缺少交易通道" };
         continue;
       }
       try {
@@ -813,24 +880,24 @@ async function submitLiquidation() {
           order_type: 1,
           quantity: target.quantity,
           reduce_only: target.reduce_only,
-          source: 'one_click_liquidation',
+          source: "one_click_liquidation"
         });
         successCount += 1;
         liquidationResults[target.id] = {
-          status: 'success',
+          status: "success",
           order_id: rsp.order_id,
           exchange_order_id: rsp.exchange_order_id,
-          message: rsp.exchange_order_id || rsp.order_id || '已提交',
+          message: rsp.exchange_order_id || rsp.order_id || "已提交"
         };
       } catch (err) {
         failedCount += 1;
-        liquidationResults[target.id] = { status: 'failed', message: errorText(err) };
+        liquidationResults[target.id] = { status: "failed", message: errorText(err) };
       }
     }
     if (successCount > 0) {
-      Message.success(`清仓单已提交 ${successCount} 个${failedCount ? `，失败 ${failedCount} 个` : ''}`);
+      Message.success(`清仓单已提交 ${successCount} 个${failedCount ? `，失败 ${failedCount} 个` : ""}`);
     } else {
-      Message.error('清仓单提交失败');
+      Message.error("清仓单提交失败");
     }
     await loadBalancePreview(account.account_id);
     if (account.account_type === 2) {
@@ -842,19 +909,19 @@ async function submitLiquidation() {
 }
 
 function dustTransferMessage(totalTransfered?: string, asset?: string) {
-  if (totalTransfered && totalTransfered !== '0') {
+  if (totalTransfered && totalTransfered !== "0") {
     return `已转为 ${formatBalanceAmount(totalTransfered)} BNB`;
   }
-  return `${asset || '资产'} 已提交转换`;
+  return `${asset || "资产"} 已提交转换`;
 }
 
 function liquidationErrorText(err: unknown) {
   const message = errorText(err);
-  if (message.includes('It can only be requested once within 1 hour')) {
-    return 'Binance 小额资产转换 1 小时内只能执行一次，请稍后再试';
+  if (message.includes("It can only be requested once within 1 hour")) {
+    return "Binance 小额资产转换 1 小时内只能执行一次，请稍后再试";
   }
-  if (message.includes('The valuation of the remaining') || message.includes('"code":-5005')) {
-    return '部分资产估值过低，Binance 不支持转换，保留小尾巴';
+  if (message.includes("The valuation of the remaining") || message.includes('"code":-5005')) {
+    return "部分资产估值过低，Binance 不支持转换，保留小尾巴";
   }
   return message;
 }
@@ -866,25 +933,25 @@ function buildLiquidationClientOrderID(index: number) {
 
 function liquidationResultText(id: string) {
   const result = liquidationResults[id];
-  if (!result) return '待提交';
-  if (result.status === 'submitting') return '提交中';
-  if (result.status === 'success') return '已提交';
-  if (result.status === 'failed') return '失败';
-  return '待提交';
+  if (!result) return "待提交";
+  if (result.status === "submitting") return "提交中";
+  if (result.status === "success") return "已提交";
+  if (result.status === "failed") return "失败";
+  return "待提交";
 }
 
 function liquidationResultColor(id: string) {
   const status = liquidationResults[id]?.status;
-  if (status === 'submitting') return 'blue';
-  if (status === 'success') return 'green';
-  if (status === 'failed') return 'red';
-  return 'gray';
+  if (status === "submitting") return "blue";
+  if (status === "success") return "green";
+  if (status === "failed") return "red";
+  return "gray";
 }
 
 function errorText(err: unknown) {
   if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  return '提交失败';
+  if (typeof err === "string") return err;
+  return "提交失败";
 }
 
 // ========== 资金流水 ==========
@@ -892,14 +959,14 @@ const fundFlowModalVisible = ref(false);
 const fundFlows = ref<FundFlow[]>([]);
 const fundFlowLoading = ref(false);
 const fundFlowPagination = reactive(defaultPagination());
-const fundFlowFilter = reactive({ currency: '', biz_type: '' });
+const fundFlowFilter = reactive({ currency: "", biz_type: "" });
 
 function openFundFlows(record: Account) {
   selectedAccount.value = record;
   fundFlowModalVisible.value = true;
   fundFlowPagination.current = 1;
-  fundFlowFilter.currency = '';
-  fundFlowFilter.biz_type = '';
+  fundFlowFilter.currency = "";
+  fundFlowFilter.biz_type = "";
   loadFundFlows();
 }
 
@@ -911,7 +978,7 @@ async function loadFundFlows() {
       account_id: selectedAccount.value.account_id,
       currency: fundFlowFilter.currency || undefined,
       biz_type: fundFlowFilter.biz_type || undefined,
-      page: { page: fundFlowPagination.current, size: fundFlowPagination.pageSize },
+      page: { page: fundFlowPagination.current, size: fundFlowPagination.pageSize }
     });
     fundFlows.value = rsp.flows || [];
     applyPageResult(fundFlowPagination, rsp.page_result);
@@ -938,12 +1005,12 @@ const apiKeyForm = reactive<{
   passphrase: string;
   permissions: string[];
 }>({
-  account_id: '',
-  exchange: 'binance',
-  api_key: '',
-  api_secret: '',
-  passphrase: '',
-  permissions: ['read'],
+  account_id: "",
+  exchange: "binance",
+  api_key: "",
+  api_secret: "",
+  passphrase: "",
+  permissions: ["read"]
 });
 
 function openApiKeys(record: Account) {
@@ -965,19 +1032,19 @@ async function loadApiKeys() {
 
 function openCreateApiKey() {
   Object.assign(apiKeyForm, {
-    account_id: selectedAccount.value?.account_id || '',
-    exchange: 'binance',
-    api_key: '',
-    api_secret: '',
-    passphrase: '',
-    permissions: ['read'],
+    account_id: selectedAccount.value?.account_id || "",
+    exchange: "binance",
+    api_key: "",
+    api_secret: "",
+    passphrase: "",
+    permissions: ["read"]
   });
   apiKeyFormVisible.value = true;
 }
 
 async function submitApiKey() {
   if (!apiKeyForm.api_key || !apiKeyForm.api_secret) {
-    Message.warning('请输入 API Key 和 Secret');
+    Message.warning("请输入 API Key 和 Secret");
     return;
   }
   await createApiKey({
@@ -986,16 +1053,16 @@ async function submitApiKey() {
     api_key: apiKeyForm.api_key,
     api_secret: apiKeyForm.api_secret,
     passphrase: apiKeyForm.passphrase || undefined,
-    permissions: apiKeyForm.permissions,
+    permissions: apiKeyForm.permissions
   });
-  Message.success('凭证已创建');
+  Message.success("凭证已创建");
   apiKeyFormVisible.value = false;
   await loadApiKeys();
 }
 
 async function onDeleteApiKey(record: ApiKey) {
   await deleteApiKey(record.api_key_id);
-  Message.success('凭证已删除');
+  Message.success("凭证已删除");
   await loadApiKeys();
 }
 

@@ -60,19 +60,19 @@ export interface ServiceDeployment {
 
 export type ServiceDeploymentInput = Pick<
   ServiceDeployment,
-  | 'service_name'
-  | 'service_kind'
-  | 'protocol'
-  | 'host'
-  | 'port'
-  | 'gateway_path'
-  | 'scope'
-  | 'status'
-  | 'description'
-  | 'extra_config'
-  | 'node_id'
-  | 'gateway_service_id'
-  | 'gateway_enabled'
+  | "service_name"
+  | "service_kind"
+  | "protocol"
+  | "host"
+  | "port"
+  | "gateway_path"
+  | "scope"
+  | "status"
+  | "description"
+  | "extra_config"
+  | "node_id"
+  | "gateway_service_id"
+  | "gateway_enabled"
 >;
 
 export interface GatewayNode {
@@ -90,7 +90,7 @@ export interface GatewayNode {
   updated_at?: string;
 }
 
-export type GatewayNodeInput = Pick<GatewayNode, 'node_id' | 'host_id' | 'name' | 'public_address' | 'status'>;
+export type GatewayNodeInput = Pick<GatewayNode, "node_id" | "host_id" | "name" | "public_address" | "status">;
 
 export interface GatewayRoute {
   service_id: string;

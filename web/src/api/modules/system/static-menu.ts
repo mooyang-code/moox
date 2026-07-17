@@ -19,7 +19,7 @@ const menu = (
   title: string,
   component: string,
   sort: number,
-  extra: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {}
 ) => ({
   id,
   parentId,
@@ -37,7 +37,7 @@ const directory = (
   name: string,
   title: string,
   sort: number,
-  extra: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {}
 ) => ({
   id,
   parentId,
@@ -56,10 +56,29 @@ export const systemMenu = [
   menu("0202", "02", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
   menu("0203", "02", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
 
-  directory("03", "0", "/collector/data-management", "compute-collector", "compute-collector", 3, { svgIcon: "functions", icon: "" }),
-  menu("0305", "03", "/collector/data-management", "collector-data-management", "collector-data-management", "collector/data-management/index", 1),
+  directory("03", "0", "/collector/data-management", "compute-collector", "compute-collector", 3, {
+    svgIcon: "functions",
+    icon: ""
+  }),
+  menu(
+    "0305",
+    "03",
+    "/collector/data-management",
+    "collector-data-management",
+    "collector-data-management",
+    "collector/data-management/index",
+    1
+  ),
   menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/task-management/index", 2),
-  menu("0301", "03", "/collector/cloudnodes", "collector-cloudnodes", "collector-cloudnodes", "collector/cloud-node/cloud-node", 4),
+  menu(
+    "0301",
+    "03",
+    "/collector/cloudnodes",
+    "collector-cloudnodes",
+    "collector-cloudnodes",
+    "collector/cloud-node/cloud-node",
+    4
+  ),
 
   directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 4, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),
@@ -72,7 +91,15 @@ export const systemMenu = [
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 6, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),
-  menu("0502", "05", "/trading/positions", "trading-positions", "trading-positions", "trading/position-detail/position-detail", 2),
+  menu(
+    "0502",
+    "05",
+    "/trading/positions",
+    "trading-positions",
+    "trading-positions",
+    "trading/position-detail/position-detail",
+    2
+  ),
   menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 3),
 
   directory("06", "0", "/ops/hosts", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
@@ -83,5 +110,14 @@ export const systemMenu = [
   directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
   menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2),
-  menu("0703", "07", "/settings/service-deployments", "settings-service-deployments", "settings-service-deployments", "settings/service-deployments/index", 3, { hide: true })
+  menu(
+    "0703",
+    "07",
+    "/settings/service-deployments",
+    "settings-service-deployments",
+    "settings-service-deployments",
+    "settings/service-deployments/index",
+    3,
+    { hide: true }
+  )
 ];

@@ -22,7 +22,7 @@
     >
       <template #columns>
         <a-table-column title="中文名" :width="120">
-          <template #cell="{ record }">{{ record.attributes?.display_name || '-' }}</template>
+          <template #cell="{ record }">{{ record.attributes?.display_name || "-" }}</template>
         </a-table-column>
         <a-table-column title="技术列名" data-index="column_name" :width="150" />
         <a-table-column title="来源类型" :width="130">
@@ -81,10 +81,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import { listViewColumns, upsertViewColumn } from '@/api/storage/metadata';
-import type { ViewColumn } from '@/api/storage/types';
+import { computed, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { listViewColumns, upsertViewColumn } from "@/api/storage/metadata";
+import type { ViewColumn } from "@/api/storage/types";
 import {
   applyPageResult,
   defaultPagination,
@@ -92,10 +92,10 @@ import {
   formatTime,
   optionLabel,
   validateChineseDisplayName,
-  viewColumnOriginOptions,
-} from '@/views/data/shared/metadata-utils';
+  viewColumnOriginOptions
+} from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'ViewColumnPanel' });
+defineOptions({ name: "ViewColumnPanel" });
 
 const props = defineProps<{
   spaceId: string;
@@ -109,16 +109,16 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const form = reactive({
-  display_name: '',
-  column_name: '',
-  origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN' as ViewColumn['origin_type'],
-  origin_id: '',
-  value_type: 'FIELD_VALUE_TYPE_STRING' as ViewColumn['value_type'],
-  online_time: '',
-  sort_order: 0,
+  display_name: "",
+  column_name: "",
+  origin_type: "COLUMN_ORIGIN_TYPE_DATASET_COLUMN" as ViewColumn["origin_type"],
+  origin_id: "",
+  value_type: "FIELD_VALUE_TYPE_STRING" as ViewColumn["value_type"],
+  online_time: "",
+  sort_order: 0
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑结果列' : '新增结果列'));
+const modalTitle = computed(() => (editing.value ? "编辑结果列" : "新增结果列"));
 
 async function load() {
   if (!props.spaceId || !props.viewId) {
@@ -130,7 +130,7 @@ async function load() {
     const rsp = await listViewColumns({
       space_id: props.spaceId,
       view_id: props.viewId,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.columns || [];
     applyPageResult(pagination, rsp.page_result);
@@ -141,13 +141,13 @@ async function load() {
 
 function resetForm() {
   Object.assign(form, {
-    display_name: '',
-    column_name: '',
-    origin_type: 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN',
-    origin_id: '',
-    value_type: 'FIELD_VALUE_TYPE_STRING',
-    online_time: '',
-    sort_order: 0,
+    display_name: "",
+    column_name: "",
+    origin_type: "COLUMN_ORIGIN_TYPE_DATASET_COLUMN",
+    origin_id: "",
+    value_type: "FIELD_VALUE_TYPE_STRING",
+    online_time: "",
+    sort_order: 0
   });
 }
 
@@ -160,20 +160,20 @@ function openCreate() {
 function openEdit(record: ViewColumn) {
   editing.value = true;
   Object.assign(form, {
-    display_name: record.attributes?.display_name || '',
+    display_name: record.attributes?.display_name || "",
     column_name: record.column_name,
-    origin_type: record.origin_type || 'COLUMN_ORIGIN_TYPE_DATASET_COLUMN',
+    origin_type: record.origin_type || "COLUMN_ORIGIN_TYPE_DATASET_COLUMN",
     origin_id: record.origin_id,
-    value_type: record.value_type || 'FIELD_VALUE_TYPE_STRING',
-    online_time: record.online_time || '',
-    sort_order: record.sort_order || 0,
+    value_type: record.value_type || "FIELD_VALUE_TYPE_STRING",
+    online_time: record.online_time || "",
+    sort_order: record.sort_order || 0
   });
   visible.value = true;
 }
 
 async function submit() {
   if (!props.spaceId || !props.viewId || !form.display_name || !form.column_name || !form.origin_id) {
-    Message.warning('请补全中文名、列名、来源ID和视图');
+    Message.warning("请补全中文名、列名、来源ID和视图");
     return;
   }
   const nameError = validateChineseDisplayName(form.display_name);
@@ -190,9 +190,9 @@ async function submit() {
     value_type: form.value_type,
     online_time: form.online_time,
     sort_order: form.sort_order,
-    attributes: { display_name: form.display_name },
+    attributes: { display_name: form.display_name }
   });
-  Message.success('结果列已保存');
+  Message.success("结果列已保存");
   visible.value = false;
   await load();
 }

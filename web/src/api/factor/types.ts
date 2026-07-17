@@ -1,8 +1,8 @@
-import type { Page, PageResult, RetInfo } from '@/api/storage/types';
+import type { Page, PageResult, RetInfo } from "@/api/storage/types";
 
-export type FactorStatus = 'enabled' | 'disabled' | string;
-export type BindingStatus = 'enabled' | 'disabled' | string;
-export type SubjectMode = 'all' | 'include' | string;
+export type FactorStatus = "enabled" | "disabled" | string;
+export type BindingStatus = "enabled" | "disabled" | string;
+export type SubjectMode = "all" | "include" | string;
 
 export interface FactorDef {
   factor_id: string;

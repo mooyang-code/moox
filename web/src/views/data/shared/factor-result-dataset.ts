@@ -6,36 +6,36 @@ type FactorBindingLike = {
 
 export function factorResultDataset(sourceDataset: string) {
   const source = sourceDataset.trim().toLowerCase();
-  const base = source.endsWith('_kline') ? source.slice(0, -'_kline'.length) : source;
+  const base = source.endsWith("_kline") ? source.slice(0, -"_kline".length) : source;
   const candidate = `${base}_factor`;
   if (candidate.length <= 20) {
     return candidate;
   }
   const suffix = `_f${sha1Hex(source).slice(0, 4)}`;
   const prefixLen = 20 - suffix.length;
-  let prefix = trimRight(base, '_');
+  let prefix = trimRight(base, "_");
   if (prefix.length > prefixLen) {
-    prefix = trimRight(prefix.slice(0, prefixLen), '_');
+    prefix = trimRight(prefix.slice(0, prefixLen), "_");
   }
   if (!prefix) {
-    prefix = 'dataset';
+    prefix = "dataset";
   }
   return `${prefix}${suffix}`;
 }
 
 export function factorBindingTargetDataset(binding: FactorBindingLike) {
-  const explicitTarget = (binding.target_dataset || '').trim();
+  const explicitTarget = (binding.target_dataset || "").trim();
   if (explicitTarget) {
     return explicitTarget;
   }
-  const source = (binding.source_dataset || '').trim();
-  return source ? factorResultDataset(source) : '';
+  const source = (binding.source_dataset || "").trim();
+  return source ? factorResultDataset(source) : "";
 }
 
 export function factorBindingTargetDatasetIds(bindings: FactorBindingLike[]) {
   const ids = new Set<string>();
   for (const binding of bindings) {
-    if (binding.status && binding.status !== 'enabled') {
+    if (binding.status && binding.status !== "enabled") {
       continue;
     }
     const datasetId = factorBindingTargetDataset(binding);
@@ -115,9 +115,9 @@ function sha1Hex(input: string) {
     h4 = (h4 + e) | 0;
   }
 
-  return [h0, h1, h2, h3, h4].map((word) => (word >>> 0).toString(16).padStart(8, '0')).join('');
+  return [h0, h1, h2, h3, h4].map(word => (word >>> 0).toString(16).padStart(8, "0")).join("");
 }
 
 function rotateLeft(value: number, bits: number) {
-  return ((value << bits) | (value >>> (32 - bits))) | 0;
+  return (value << bits) | (value >>> (32 - bits)) | 0;
 }

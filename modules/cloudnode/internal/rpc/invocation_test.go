@@ -43,7 +43,7 @@ func TestInvokeSync_ValidatesInput(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 
 	rsp, err = svc.InvokeSync(context.Background(), &pb.InvokeSyncReq{
-		SpaceId: "crypto",
+		SpaceId:  "crypto",
 		Payloads: []*pb.InvokeSyncPayload{{RequestId: "r1", Payload: `{}`}},
 	})
 	require.NoError(t, err)

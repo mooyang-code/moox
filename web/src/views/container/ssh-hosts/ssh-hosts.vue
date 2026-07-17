@@ -94,15 +94,9 @@
       @cancel="handleCancel"
       unmount-on-close
     >
-      <a-form
-        ref="formRef"
-        :model="formData"
-        :rules="formRules"
-        auto-label-width
-        layout="vertical"
-      >
+      <a-form ref="formRef" :model="formData" :rules="formRules" auto-label-width layout="vertical">
         <!-- 基本信息 -->
-        <a-typography-title :heading="6" style="margin-top: 0; margin-bottom: var(--moox-space-4);">基本信息</a-typography-title>
+        <a-typography-title :heading="6" style="margin-top: 0; margin-bottom: var(--moox-space-4)">基本信息</a-typography-title>
         <a-row :gutter="16">
           <a-col :span="12">
             <a-form-item field="name" label="名称" validate-trigger="blur">
@@ -135,7 +129,7 @@
         </a-row>
 
         <!-- 认证方式 -->
-        <a-typography-title :heading="6" style="margin-bottom: var(--moox-space-4);">认证方式</a-typography-title>
+        <a-typography-title :heading="6" style="margin-bottom: var(--moox-space-4)">认证方式</a-typography-title>
         <a-form-item field="auth_type" label="认证类型">
           <a-radio-group v-model="formData.auth_type" type="button">
             <a-radio value="pwd">密码</a-radio>
@@ -168,13 +162,7 @@
             <a-row :gutter="16">
               <a-col :span="12">
                 <a-form-item field="font_size" label="字体大小">
-                  <a-input-number
-                    v-model="formData.font_size"
-                    placeholder="13"
-                    :min="8"
-                    :max="36"
-                    :style="{ width: '100%' }"
-                  />
+                  <a-input-number v-model="formData.font_size" placeholder="13" :min="8" :max="36" :style="{ width: '100%' }" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
@@ -241,54 +229,87 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue';
-import { useRouter } from 'vue-router';
-import { Message, Modal } from '@arco-design/web-vue';
-import { listSSHHosts, createSSHHost, updateSSHHost, deleteSSHHost, type SSHHost } from '@/api/modules/ssh';
-import type { HostMetrics } from '@/api/modules/host-monitor';
-import PickColors from 'vue-pick-colors';
+import { ref, reactive, onMounted, computed } from "vue";
+import { useRouter } from "vue-router";
+import { Message, Modal } from "@arco-design/web-vue";
+import { listSSHHosts, createSSHHost, updateSSHHost, deleteSSHHost, type SSHHost } from "@/api/modules/ssh";
+import type { HostMetrics } from "@/api/modules/host-monitor";
+import PickColors from "vue-pick-colors";
 
 const router = useRouter();
-const props = defineProps<{ embedded?: boolean; monitorByHostId?: Record<number, HostMetrics | undefined>; monitorOnlyHosts?: HostMetrics[] }>();
+const props = defineProps<{
+  embedded?: boolean;
+  monitorByHostId?: Record<number, HostMetrics | undefined>;
+  monitorOnlyHosts?: HostMetrics[];
+}>();
 const emit = defineEmits<{ connect: [hostId: number]; fileManage: [hostId: number] }>();
 
 // ---------- 字体选项 ----------
-const fontOptions = ['Menlo', 'Consolas', 'Monaco', 'Courier New', 'Source Code Pro', 'monospace'];
+const fontOptions = ["Menlo", "Consolas", "Monaco", "Courier New", "Source Code Pro", "monospace"];
 
 // ---------- 预设色块 ----------
 // 背景色：深色系
 const bgPresetColors = [
-  '#1e1e1e', '#000000', '#0c0c0c', '#1a1a2e', '#282a36',
-  '#2d2d2d', '#263238', '#1e2127', '#002b36', '#3b3b3b',
+  "#1e1e1e",
+  "#000000",
+  "#0c0c0c",
+  "#1a1a2e",
+  "#282a36",
+  "#2d2d2d",
+  "#263238",
+  "#1e2127",
+  "#002b36",
+  "#3b3b3b"
 ];
 // 前景色：浅色系
 const fgPresetColors = [
-  '#d4d4d4', '#ffffff', '#f8f8f2', '#c0c0c0', '#a9b7c6',
-  '#abb2bf', '#e0e0e0', '#cccccc', '#b0b0b0', '#50fa7b',
+  "#d4d4d4",
+  "#ffffff",
+  "#f8f8f2",
+  "#c0c0c0",
+  "#a9b7c6",
+  "#abb2bf",
+  "#e0e0e0",
+  "#cccccc",
+  "#b0b0b0",
+  "#50fa7b"
 ];
 // 光标颜色
 const cursorPresetColors = [
-  '#d4d4d4', '#ffffff', '#f8f8f0', '#ffcc00', '#ff5555',
-  '#50fa7b', '#8be9fd', '#bd93f9', '#ff79c6', '#f1fa8c',
+  "#d4d4d4",
+  "#ffffff",
+  "#f8f8f0",
+  "#ffcc00",
+  "#ff5555",
+  "#50fa7b",
+  "#8be9fd",
+  "#bd93f9",
+  "#ff79c6",
+  "#f1fa8c"
 ];
 
 // ---------- 列表数据 ----------
 const loading = ref(false);
-const keyword = ref('');
+const keyword = ref("");
 const hostList = ref<SSHHost[]>([]);
 const selectedKeys = ref<number[]>([]);
 type DisplaySSHHost = SSHHost & { monitorOnly?: boolean; monitor?: HostMetrics };
 const displayHostList = computed<DisplaySSHHost[]>(() => [
   ...hostList.value,
-  ...(pagination.value.current === 1 ? (props.monitorOnlyHosts || []).map((monitor, index) => ({
-    id: -(index + 1),
-    name: monitor.host_name || monitor.host_id,
-    address: monitor.address || monitor.host_id,
-    port: 0,
-    user: '-',
-    monitorOnly: true,
-    monitor,
-  } as DisplaySSHHost)) : []),
+  ...(pagination.value.current === 1
+    ? (props.monitorOnlyHosts || []).map(
+        (monitor, index) =>
+          ({
+            id: -(index + 1),
+            name: monitor.host_name || monitor.host_id,
+            address: monitor.address || monitor.host_id,
+            port: 0,
+            user: "-",
+            monitorOnly: true,
+            monitor
+          }) as DisplaySSHHost
+      )
+    : [])
 ]);
 
 // 分页配置
@@ -314,9 +335,9 @@ const paginationConfig = computed(() => ({
 
 // ---------- 行选择配置 ----------
 const rowSelection = reactive({
-  type: 'checkbox' as const,
+  type: "checkbox" as const,
   showCheckedAll: true,
-  getCheckboxProps: (record: DisplaySSHHost) => ({ disabled: record.monitorOnly === true }),
+  getCheckboxProps: (record: DisplaySSHHost) => ({ disabled: record.monitorOnly === true })
 });
 
 // ---------- 弹窗状态 ----------
@@ -326,50 +347,50 @@ const submitLoading = ref(false);
 const formRef = ref();
 
 const getDefaultFormData = (): Partial<SSHHost> => ({
-  name: '',
-  address: '',
+  name: "",
+  address: "",
   port: 22,
-  user: 'root',
-  auth_type: 'pwd',
-  net_type: 'tcp4',
-  password: '',
-  cert_data: '',
-  cert_pwd: '',
+  user: "root",
+  auth_type: "pwd",
+  net_type: "tcp4",
+  password: "",
+  cert_data: "",
+  cert_pwd: "",
   font_size: 13,
-  background: '#1e1e1e',
-  foreground: '#d4d4d4',
-  cursor_color: '#d4d4d4',
-  font_family: 'Menlo',
-  cursor_style: 'underline',
-  shell: '/bin/bash',
-  pty_type: 'xterm-256color',
-  init_cmd: '',
+  background: "#1e1e1e",
+  foreground: "#d4d4d4",
+  cursor_color: "#d4d4d4",
+  font_family: "Menlo",
+  cursor_style: "underline",
+  shell: "/bin/bash",
+  pty_type: "xterm-256color",
+  init_cmd: ""
 });
 
 const formData = ref<Partial<SSHHost>>(getDefaultFormData());
 
 // ---------- 表单校验 ----------
 const formRules = {
-  name: [{ required: true, message: '请输入主机名称' }],
-  address: [{ required: true, message: '请输入主机地址' }],
+  name: [{ required: true, message: "请输入主机名称" }],
+  address: [{ required: true, message: "请输入主机地址" }],
   port: [
-    { required: true, message: '请输入端口号' },
+    { required: true, message: "请输入端口号" },
     {
       validator: (value: number, callback: (error?: string) => void) => {
         if (value < 1 || value > 65535) {
-          callback('端口范围为 1 - 65535');
+          callback("端口范围为 1 - 65535");
         } else {
           callback();
         }
-      },
-    },
+      }
+    }
   ],
-  user: [{ required: true, message: '请输入用户名' }],
+  user: [{ required: true, message: "请输入用户名" }]
 };
 
 // 认证方式动态校验规则
-const passwordRules = [{ required: true, message: '请输入密码' }];
-const certDataRules = [{ required: true, message: '请粘贴证书内容' }];
+const passwordRules = [{ required: true, message: "请输入密码" }];
+const certDataRules = [{ required: true, message: "请粘贴证书内容" }];
 
 // ---------- 数据加载 ----------
 const fetchHosts = async () => {
@@ -378,13 +399,13 @@ const fetchHosts = async () => {
     const res = await listSSHHosts({
       keyword: keyword.value || undefined,
       offset: (pagination.value.current - 1) * pagination.value.pageSize,
-      limit: pagination.value.pageSize,
+      limit: pagination.value.pageSize
     });
     hostList.value = res.hosts ?? [];
     pagination.value.total = res.total || 0;
   } catch (error) {
-    console.error('加载主机列表失败:', error);
-    Message.error('加载主机列表失败');
+    console.error("加载主机列表失败:", error);
+    Message.error("加载主机列表失败");
   } finally {
     loading.value = false;
   }
@@ -412,18 +433,18 @@ const onPageSizeChange = (pageSize: number) => {
 const onConnect = (record: SSHHost) => {
   if (record.id === undefined) return;
   if (props.embedded) {
-    emit('connect', record.id);
+    emit("connect", record.id);
     return;
   }
   router.push({
-    path: '/ops/hosts',
-    query: { hostId: String(record.id) },
+    path: "/ops/hosts",
+    query: { hostId: String(record.id) }
   });
 };
 
 const onFileManage = (record: SSHHost) => {
   if (record.id === undefined) return;
-  emit('fileManage', record.id);
+  emit("fileManage", record.id);
 };
 
 const onConfigure = (record: DisplaySSHHost) => {
@@ -432,9 +453,12 @@ const onConfigure = (record: DisplaySSHHost) => {
   modalVisible.value = true;
 };
 
-const monitorFor = (record: DisplaySSHHost) => record.monitor || (record.id === undefined ? undefined : props.monitorByHostId?.[record.id]);
-const monitorStatusColor = (record: SSHHost) => monitorFor(record)?.status === 'online' ? 'green' : monitorFor(record) ? 'red' : 'gray';
-const monitorStatusLabel = (record: SSHHost) => monitorFor(record) ? (monitorFor(record)?.status === 'online' ? '在线' : '离线') : '未接入监控';
+const monitorFor = (record: DisplaySSHHost) =>
+  record.monitor || (record.id === undefined ? undefined : props.monitorByHostId?.[record.id]);
+const monitorStatusColor = (record: SSHHost) =>
+  monitorFor(record)?.status === "online" ? "green" : monitorFor(record) ? "red" : "gray";
+const monitorStatusLabel = (record: SSHHost) =>
+  monitorFor(record) ? (monitorFor(record)?.status === "online" ? "在线" : "离线") : "未接入监控";
 
 // ---------- 操作：新增 ----------
 const onAdd = () => {
@@ -455,11 +479,11 @@ const onDelete = async (record: SSHHost) => {
   if (!record.id) return;
   try {
     await deleteSSHHost(record.id);
-    Message.success('删除成功');
+    Message.success("删除成功");
     fetchHosts();
   } catch (error) {
-    console.error('删除主机失败:', error);
-    Message.error('删除主机失败');
+    console.error("删除主机失败:", error);
+    Message.error("删除主机失败");
   }
 };
 
@@ -482,12 +506,12 @@ const handleSubmit = async (done: (closed: boolean) => void) => {
       await createSSHHost(payload);
     }
 
-    Message.success(isEdit.value ? '更新成功' : '创建成功');
+    Message.success(isEdit.value ? "更新成功" : "创建成功");
     done(true);
     fetchHosts();
   } catch (error) {
-    console.error('提交失败:', error);
-    Message.error('操作失败，请检查网络连接');
+    console.error("提交失败:", error);
+    Message.error("操作失败，请检查网络连接");
     done(false);
   } finally {
     submitLoading.value = false;
@@ -501,14 +525,14 @@ const handleCancel = () => {
 // ---------- 批量删除 ----------
 const batchDelete = () => {
   if (selectedKeys.value.length === 0) {
-    Message.warning('请先选择要删除的主机');
+    Message.warning("请先选择要删除的主机");
     return;
   }
   Modal.warning({
-    title: '批量删除确认',
+    title: "批量删除确认",
     content: `确定要删除选中的 ${selectedKeys.value.length} 台主机吗？删除后将无法恢复。`,
-    okText: '确定删除',
-    cancelText: '取消',
+    okText: "确定删除",
+    cancelText: "取消",
     hideCancel: false,
     onOk: async () => {
       let successCount = 0;
@@ -528,7 +552,7 @@ const batchDelete = () => {
       }
       selectedKeys.value = [];
       fetchHosts();
-    },
+    }
   });
 };
 

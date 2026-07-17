@@ -1,13 +1,13 @@
 package transport
 
 import (
+	"encoding/json"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"math"
 	"reflect"
 	"testing"
 	"time"
-	"encoding/json"
-	"math"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestJSONTableRoundTrip(t *testing.T) {

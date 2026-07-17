@@ -1,4 +1,4 @@
-import { callControl } from './http';
+import { callControl } from "./http";
 
 export interface Secret {
   id?: number;
@@ -59,25 +59,28 @@ export interface ToggleSecretStatusReq {
 }
 
 export function listSecrets(req: ListSecretsReq = {}) {
-  return callControl<ListSecretsReq, ListSecretsRsp>('secret', 'ListSecrets', req);
+  return callControl<ListSecretsReq, ListSecretsRsp>("secret", "ListSecrets", req);
 }
 
 export function getSecret(secretId: string) {
-  return callControl<{ secret_id: string }, { secret: Secret }>('secret', 'GetSecret', { secret_id: secretId });
+  return callControl<{ secret_id: string }, { secret: Secret }>("secret", "GetSecret", { secret_id: secretId });
 }
 
 export function createSecret(secret: Secret) {
-  return callControl<CreateSecretReq, CreateSecretRsp>('secret', 'CreateSecret', { secret });
+  return callControl<CreateSecretReq, CreateSecretRsp>("secret", "CreateSecret", { secret });
 }
 
 export function updateSecret(req: UpdateSecretReq) {
-  return callControl<UpdateSecretReq, Record<string, never>>('secret', 'UpdateSecret', req);
+  return callControl<UpdateSecretReq, Record<string, never>>("secret", "UpdateSecret", req);
 }
 
 export function deleteSecret(secretId: string) {
-  return callControl<{ secret_id: string }, Record<string, never>>('secret', 'DeleteSecret', { secret_id: secretId });
+  return callControl<{ secret_id: string }, Record<string, never>>("secret", "DeleteSecret", { secret_id: secretId });
 }
 
 export function toggleSecretStatus(secretId: string, status: string) {
-  return callControl<ToggleSecretStatusReq, Record<string, never>>('secret', 'ToggleSecretStatus', { secret_id: secretId, status });
+  return callControl<ToggleSecretStatusReq, Record<string, never>>("secret", "ToggleSecretStatus", {
+    secret_id: secretId,
+    status
+  });
 }

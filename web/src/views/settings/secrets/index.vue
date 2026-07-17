@@ -1,158 +1,151 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-    <div class="page-head">
-      <h2>秘钥管理</h2>
-      <a-space wrap>
-        <a-input-search
-          v-model="filters.keyword"
-          placeholder="搜索名称或描述"
-          style="width: 240px"
-          allow-clear
-          @search="onSearch"
-          @clear="onSearch"
-        />
-        <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="load">
-          <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-        </a-select>
-        <a-select v-model="filters.status" placeholder="状态" style="width: 120px" allow-clear @change="load">
-          <a-option value="active">启用</a-option>
-          <a-option value="inactive">禁用</a-option>
-        </a-select>
-        <a-button type="primary" status="success" @click="openCreate">
-          <template #icon><icon-plus /></template>
-          新增秘钥
-        </a-button>
-      </a-space>
-    </div>
-
-    <a-table
-      row-key="secret_id"
-      size="small"
-      :bordered="{ cell: true }"
-      :loading="loading"
-      :data="rows"
-      :pagination="pagination"
-      :scroll="{ x: 'max-content' }"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
-    >
-      <template #columns>
-        <a-table-column title="名称" data-index="name" :width="180" />
-        <a-table-column title="分类" :width="100">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="categoryColor(record.category)">{{ categoryLabel(record.category) }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="提供方" data-index="provider" :width="110" />
-        <a-table-column title="类型" data-index="secret_type" :width="110" />
-        <a-table-column title="标识 (Key ID)" data-index="key_id" :width="200" :ellipsis="true" :tooltip="true" />
-        <a-table-column title="秘钥值" :width="140">
-          <template #cell>
-            <a-space>
-              <span>******</span>
-              <a-tooltip content="秘钥已加密存储，列表不展示明文">
-                <icon-info-circle />
-              </a-tooltip>
-            </a-space>
-          </template>
-        </a-table-column>
-        <a-table-column title="状态" :width="90">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="record.status === 'active' ? 'green' : 'gray'">
-              {{ record.status === 'active' ? '启用' : '禁用' }}
-            </a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column title="创建人" data-index="creator" :width="100" />
-        <a-table-column title="最后使用" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.last_used_at) || '-' }}</template>
-        </a-table-column>
-        <a-table-column title="更新时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.modify_time) }}</template>
-        </a-table-column>
-        <a-table-column title="操作" :width="200" align="center" :fixed="'right'">
-          <template #cell="{ record }">
-            <a-space>
-              <a-popconfirm :content="toggleConfirmText(record)" @ok="toggleStatus(record)">
-                <a-button size="mini" type="text">
-                  {{ record.status === 'active' ? '禁用' : '启用' }}
-                </a-button>
-              </a-popconfirm>
-              <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-              <a-popconfirm content="确认删除该秘钥？" @ok="remove(record)">
-                <a-button size="mini" type="text" status="danger">删除</a-button>
-              </a-popconfirm>
-            </a-space>
-          </template>
-        </a-table-column>
-      </template>
-    </a-table>
-
-    <!-- 新增/编辑弹窗 -->
-    <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @before-ok="submit" @cancel="visible = false">
-      <a-form :model="form" auto-label-width>
-        <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" placeholder="例如：交易所-生产环境" />
-        </a-form-item>
-        <a-form-item field="category" label="分类" required>
-          <a-select v-model="form.category" placeholder="选择分类">
+      <div class="page-head">
+        <h2>秘钥管理</h2>
+        <a-space wrap>
+          <a-input-search
+            v-model="filters.keyword"
+            placeholder="搜索名称或描述"
+            style="width: 240px"
+            allow-clear
+            @search="onSearch"
+            @clear="onSearch"
+          />
+          <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="load">
             <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
           </a-select>
-        </a-form-item>
-        <a-form-item field="provider" label="提供方">
-          <a-input v-model="form.provider" placeholder="例如：binance / okx / mysql" />
-        </a-form-item>
-        <a-form-item field="secret_type" label="类型">
-          <a-select v-model="form.secret_type" placeholder="选择类型">
-            <a-option value="api_key">API 密钥对</a-option>
-            <a-option value="password">密码</a-option>
-            <a-option value="token">访问令牌</a-option>
-            <a-option value="certificate">证书</a-option>
-            <a-option value="ssh_key">SSH 密钥</a-option>
-            <a-option value="other">其他</a-option>
+          <a-select v-model="filters.status" placeholder="状态" style="width: 120px" allow-clear @change="load">
+            <a-option value="active">启用</a-option>
+            <a-option value="inactive">禁用</a-option>
           </a-select>
-        </a-form-item>
-        <a-form-item field="key_id" label="标识 (Key ID)">
-          <a-input v-model="form.key_id" placeholder="公开标识，如 SecretId / 用户名 / API Key" />
-        </a-form-item>
-        <a-form-item field="secret_value" label="秘钥值" :required="!editing">
-          <a-input-password
-            v-model="form.secret_value"
-            :placeholder="editing ? '留空表示不修改秘钥值' : '输入秘钥值'"
-            allow-clear
-          />
-        </a-form-item>
-        <a-form-item field="extra_config" label="额外配置">
-          <a-textarea
-            v-model="form.extra_config"
-            :auto-size="{ minRows: 2, maxRows: 5 }"
-            placeholder="JSON 格式，用于存储额外参数"
-          />
-        </a-form-item>
-        <a-form-item field="description" label="描述">
-          <a-textarea v-model="form.description" :auto-size="{ minRows: 2, maxRows: 4 }"></a-textarea>
-        </a-form-item>
-      </a-form>
-    </a-modal>
+          <a-button type="primary" status="success" @click="openCreate">
+            <template #icon><icon-plus /></template>
+            新增秘钥
+          </a-button>
+        </a-space>
+      </div>
+
+      <a-table
+        row-key="secret_id"
+        size="small"
+        :bordered="{ cell: true }"
+        :loading="loading"
+        :data="rows"
+        :pagination="pagination"
+        :scroll="{ x: 'max-content' }"
+        @page-change="onPageChange"
+        @page-size-change="onPageSizeChange"
+      >
+        <template #columns>
+          <a-table-column title="名称" data-index="name" :width="180" />
+          <a-table-column title="分类" :width="100">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="categoryColor(record.category)">{{ categoryLabel(record.category) }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="提供方" data-index="provider" :width="110" />
+          <a-table-column title="类型" data-index="secret_type" :width="110" />
+          <a-table-column title="标识 (Key ID)" data-index="key_id" :width="200" :ellipsis="true" :tooltip="true" />
+          <a-table-column title="秘钥值" :width="140">
+            <template #cell>
+              <a-space>
+                <span>******</span>
+                <a-tooltip content="秘钥已加密存储，列表不展示明文">
+                  <icon-info-circle />
+                </a-tooltip>
+              </a-space>
+            </template>
+          </a-table-column>
+          <a-table-column title="状态" :width="90">
+            <template #cell="{ record }">
+              <a-tag size="small" :color="record.status === 'active' ? 'green' : 'gray'">
+                {{ record.status === "active" ? "启用" : "禁用" }}
+              </a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="创建人" data-index="creator" :width="100" />
+          <a-table-column title="最后使用" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.last_used_at) || "-" }}</template>
+          </a-table-column>
+          <a-table-column title="更新时间" :width="180">
+            <template #cell="{ record }">{{ formatTime(record.modify_time) }}</template>
+          </a-table-column>
+          <a-table-column title="操作" :width="200" align="center" :fixed="'right'">
+            <template #cell="{ record }">
+              <a-space>
+                <a-popconfirm :content="toggleConfirmText(record)" @ok="toggleStatus(record)">
+                  <a-button size="mini" type="text">
+                    {{ record.status === "active" ? "禁用" : "启用" }}
+                  </a-button>
+                </a-popconfirm>
+                <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                <a-popconfirm content="确认删除该秘钥？" @ok="remove(record)">
+                  <a-button size="mini" type="text" status="danger">删除</a-button>
+                </a-popconfirm>
+              </a-space>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
+
+      <!-- 新增/编辑弹窗 -->
+      <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @before-ok="submit" @cancel="visible = false">
+        <a-form :model="form" auto-label-width>
+          <a-form-item field="name" label="名称" required>
+            <a-input v-model="form.name" placeholder="例如：交易所-生产环境" />
+          </a-form-item>
+          <a-form-item field="category" label="分类" required>
+            <a-select v-model="form.category" placeholder="选择分类">
+              <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item field="provider" label="提供方">
+            <a-input v-model="form.provider" placeholder="例如：binance / okx / mysql" />
+          </a-form-item>
+          <a-form-item field="secret_type" label="类型">
+            <a-select v-model="form.secret_type" placeholder="选择类型">
+              <a-option value="api_key">API 密钥对</a-option>
+              <a-option value="password">密码</a-option>
+              <a-option value="token">访问令牌</a-option>
+              <a-option value="certificate">证书</a-option>
+              <a-option value="ssh_key">SSH 密钥</a-option>
+              <a-option value="other">其他</a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item field="key_id" label="标识 (Key ID)">
+            <a-input v-model="form.key_id" placeholder="公开标识，如 SecretId / 用户名 / API Key" />
+          </a-form-item>
+          <a-form-item field="secret_value" label="秘钥值" :required="!editing">
+            <a-input-password
+              v-model="form.secret_value"
+              :placeholder="editing ? '留空表示不修改秘钥值' : '输入秘钥值'"
+              allow-clear
+            />
+          </a-form-item>
+          <a-form-item field="extra_config" label="额外配置">
+            <a-textarea
+              v-model="form.extra_config"
+              :auto-size="{ minRows: 2, maxRows: 5 }"
+              placeholder="JSON 格式，用于存储额外参数"
+            />
+          </a-form-item>
+          <a-form-item field="description" label="描述">
+            <a-textarea v-model="form.description" :auto-size="{ minRows: 2, maxRows: 4 }"></a-textarea>
+          </a-form-item>
+        </a-form>
+      </a-modal>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { Message } from '@arco-design/web-vue';
-import {
-  listSecrets,
-  createSecret,
-  updateSecret,
-  deleteSecret,
-  toggleSecretStatus,
-  type Secret,
-} from '@/api/admin/secret';
-import { defaultPagination, formatTime } from '@/views/data/shared/metadata-utils';
+import { computed, onMounted, reactive, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { listSecrets, createSecret, updateSecret, deleteSecret, toggleSecretStatus, type Secret } from "@/api/admin/secret";
+import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: 'SettingsSecrets' });
+defineOptions({ name: "SettingsSecrets" });
 
 const rows = ref<Secret[]>([]);
 const loading = ref(false);
@@ -161,47 +154,47 @@ const editing = ref(false);
 const pagination = reactive(defaultPagination());
 
 const filters = reactive({
-  keyword: '',
-  category: '',
-  status: '',
+  keyword: "",
+  category: "",
+  status: ""
 });
 
 const categoryOptions = [
-  { label: 'SSH 凭证', value: 'ssh' },
-  { label: '交易所', value: 'exchange' },
-  { label: '数据库', value: 'database' },
-  { label: '系统令牌', value: 'jwt' },
-  { label: '其他', value: 'other' },
+  { label: "SSH 凭证", value: "ssh" },
+  { label: "交易所", value: "exchange" },
+  { label: "数据库", value: "database" },
+  { label: "系统令牌", value: "jwt" },
+  { label: "其他", value: "other" }
 ];
 
 function categoryLabel(value: string) {
-  return categoryOptions.find((o) => o.value === value)?.label || value;
+  return categoryOptions.find(o => o.value === value)?.label || value;
 }
 
 function categoryColor(value: string) {
   const map: Record<string, string> = {
-    ssh: 'cyan',
-    exchange: 'orange',
-    database: 'purple',
-    jwt: 'red',
-    other: 'gray',
+    ssh: "cyan",
+    exchange: "orange",
+    database: "purple",
+    jwt: "red",
+    other: "gray"
   };
-  return map[value] || 'gray';
+  return map[value] || "gray";
 }
 
 const form = reactive({
-  secret_id: '',
-  name: '',
-  description: '',
-  category: 'ssh',
-  provider: '',
-  secret_type: 'api_key',
-  key_id: '',
-  secret_value: '',
-  extra_config: '{}',
+  secret_id: "",
+  name: "",
+  description: "",
+  category: "ssh",
+  provider: "",
+  secret_type: "api_key",
+  key_id: "",
+  secret_value: "",
+  extra_config: "{}"
 });
 
-const modalTitle = computed(() => (editing.value ? '编辑秘钥' : '新增秘钥'));
+const modalTitle = computed(() => (editing.value ? "编辑秘钥" : "新增秘钥"));
 
 async function load() {
   loading.value = true;
@@ -211,7 +204,7 @@ async function load() {
       category: filters.category || undefined,
       status: filters.status || undefined,
       offset: (pagination.current - 1) * pagination.pageSize,
-      limit: pagination.pageSize,
+      limit: pagination.pageSize
     });
     rows.value = rsp.secrets || [];
     pagination.total = rsp.total || 0;
@@ -227,15 +220,15 @@ function onSearch() {
 
 function resetForm() {
   Object.assign(form, {
-    secret_id: '',
-    name: '',
-    description: '',
-    category: 'ssh',
-    provider: '',
-    secret_type: 'api_key',
-    key_id: '',
-    secret_value: '',
-    extra_config: '{}',
+    secret_id: "",
+    name: "",
+    description: "",
+    category: "ssh",
+    provider: "",
+    secret_type: "api_key",
+    key_id: "",
+    secret_value: "",
+    extra_config: "{}"
   });
 }
 
@@ -248,30 +241,30 @@ function openCreate() {
 function openEdit(record: Secret) {
   editing.value = true;
   Object.assign(form, {
-    secret_id: record.secret_id || '',
-    name: record.name || '',
-    description: record.description || '',
-    category: record.category || 'ssh',
-    provider: record.provider || '',
-    secret_type: record.secret_type || 'api_key',
-    key_id: record.key_id || '',
-    secret_value: '',
-    extra_config: record.extra_config || '{}',
+    secret_id: record.secret_id || "",
+    name: record.name || "",
+    description: record.description || "",
+    category: record.category || "ssh",
+    provider: record.provider || "",
+    secret_type: record.secret_type || "api_key",
+    key_id: record.key_id || "",
+    secret_value: "",
+    extra_config: record.extra_config || "{}"
   });
   visible.value = true;
 }
 
 async function submit(): Promise<boolean> {
   if (!form.name) {
-    Message.warning('请填写秘钥名称');
+    Message.warning("请填写秘钥名称");
     return false;
   }
   if (!form.category) {
-    Message.warning('请选择分类');
+    Message.warning("请选择分类");
     return false;
   }
   if (!editing.value && !form.secret_value) {
-    Message.warning('请输入秘钥值');
+    Message.warning("请输入秘钥值");
     return false;
   }
   // JSON 校验
@@ -279,7 +272,7 @@ async function submit(): Promise<boolean> {
     try {
       JSON.parse(form.extra_config);
     } catch {
-      Message.warning('额外配置不是有效的 JSON 格式');
+      Message.warning("额外配置不是有效的 JSON 格式");
       return false;
     }
   }
@@ -294,9 +287,9 @@ async function submit(): Promise<boolean> {
         extra_config: form.extra_config,
         category: form.category,
         provider: form.provider,
-        secret_type: form.secret_type,
+        secret_type: form.secret_type
       });
-      Message.success('秘钥已更新');
+      Message.success("秘钥已更新");
     } else {
       await createSecret({
         name: form.name,
@@ -306,9 +299,9 @@ async function submit(): Promise<boolean> {
         secret_type: form.secret_type,
         key_id: form.key_id,
         secret_value: form.secret_value,
-        extra_config: form.extra_config,
+        extra_config: form.extra_config
       });
-      Message.success('秘钥已创建');
+      Message.success("秘钥已创建");
     }
     await load();
     return true;
@@ -319,26 +312,26 @@ async function submit(): Promise<boolean> {
 
 async function remove(record: Secret) {
   if (!record.secret_id) {
-    Message.warning('秘钥标识缺失，无法删除');
+    Message.warning("秘钥标识缺失，无法删除");
     return;
   }
   await deleteSecret(record.secret_id);
-  Message.success('秘钥已删除');
+  Message.success("秘钥已删除");
   await load();
 }
 
 function toggleConfirmText(record: Secret) {
-  return `确认${record.status === 'active' ? '禁用' : '启用'}该秘钥？`;
+  return `确认${record.status === "active" ? "禁用" : "启用"}该秘钥？`;
 }
 
 async function toggleStatus(record: Secret) {
   if (!record.secret_id) {
-    Message.warning('秘钥标识缺失，无法操作');
+    Message.warning("秘钥标识缺失，无法操作");
     return;
   }
-  const newStatus = record.status === 'active' ? 'inactive' : 'active';
+  const newStatus = record.status === "active" ? "inactive" : "active";
   await toggleSecretStatus(record.secret_id, newStatus);
-  Message.success(newStatus === 'active' ? '已启用' : '已禁用');
+  Message.success(newStatus === "active" ? "已启用" : "已禁用");
   await load();
 }
 
@@ -371,7 +364,12 @@ onMounted(load);
 }
 
 @media (max-width: 900px) {
-  .page-head { align-items: stretch; flex-direction: column; }
-  .page-head :deep(.arco-space) { justify-content: flex-end; }
+  .page-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .page-head :deep(.arco-space) {
+    justify-content: flex-end;
+  }
 }
 </style>

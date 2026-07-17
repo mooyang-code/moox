@@ -59,12 +59,7 @@
       <Main />
       <Footer v-if="isFooter" />
 
-      <a-modal
-        v-model:visible="createVisible"
-        title="新建空间"
-        :on-before-ok="submitCreate"
-        @cancel="resetCreate"
-      >
+      <a-modal v-model:visible="createVisible" title="新建空间" :on-before-ok="submitCreate" @cancel="resetCreate">
         <a-form :model="createForm" layout="vertical">
           <a-form-item label="空间 ID" required>
             <a-input v-model="createForm.space_id" placeholder="如 hk_stock" />

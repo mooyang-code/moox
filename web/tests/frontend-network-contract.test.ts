@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = resolve(__dirname, '..');
+const normalizeSource = (value: string) => value.replace(/\s+/g, '').replace(/'/g, '"');
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = resolve(directory, entry.name);
@@ -29,7 +30,7 @@ describe('frontend network contract', () => {
 
   it('uploads to external pre-signed URLs without session credentials', () => {
     const uploadSource = readFileSync(resolve(root, 'src/api/function-package.ts'), 'utf8');
-    expect(uploadSource).toContain("fetch(initRsp.upload_url, { method: 'PUT', body: file })");
+    expect(normalizeSource(uploadSource)).toContain('fetch(initRsp.upload_url,{method:"PUT",body:file})');
     expect(uploadSource).not.toMatch(/upload_url[\s\S]{0,200}(Authorization|X-Access-Token|X-Moox-|X-Moox-Space)/);
   });
 });

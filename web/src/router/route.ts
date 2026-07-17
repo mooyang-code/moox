@@ -262,7 +262,10 @@ export const staticRoutes = [
       },
       {
         path: "/ops/ssh-terminal",
-        redirect: (to: any) => ({ path: "/ops/hosts", query: { tab: "hosts", ...(to.query.hostId ? { hostId: to.query.hostId } : {}) } }),
+        redirect: (to: any) => ({
+          path: "/ops/hosts",
+          query: { tab: "hosts", ...(to.query.hostId ? { hostId: to.query.hostId } : {}) }
+        }),
         meta: { title: "ops-ssh-terminal", hide: true }
       },
       {

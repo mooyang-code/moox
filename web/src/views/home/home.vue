@@ -8,9 +8,7 @@
           MOOX 把行情采集、时序存储、因子计算与宽表查询串成一条链路。
           先创建一个<strong>空间</strong>，所有数据资产与采集配置都在空间内隔离管理。
         </p>
-        <a-button type="primary" status="success" size="large" @click="go('/settings/spaces')">
-          创建第一个空间
-        </a-button>
+        <a-button type="primary" status="success" size="large" @click="go('/settings/spaces')"> 创建第一个空间 </a-button>
       </div>
       <ol class="onboard-steps">
         <li v-for="(step, i) in setupSteps" :key="step.title">
@@ -41,7 +39,7 @@
         <div class="health-score-card">
           <span class="score-label">系统健康度</span>
           <strong>{{ healthScore }}</strong>
-          <small>/100 · {{ healthScore >= 80 ? '运行健康' : healthScore >= 60 ? '需要关注' : '存在风险' }}</small>
+          <small>/100 · {{ healthScore >= 80 ? "运行健康" : healthScore >= 60 ? "需要关注" : "存在风险" }}</small>
           <div class="score-bar">
             <span :style="{ width: `${healthScore}%` }"></span>
           </div>
@@ -76,12 +74,7 @@
             <span class="dash-chip">A 权重方案</span>
           </div>
           <div class="score-breakdown">
-            <div
-              v-for="item in healthBreakdown"
-              :key="item.key"
-              class="score-line"
-              :class="`tone-${item.tone}`"
-            >
+            <div v-for="item in healthBreakdown" :key="item.key" class="score-line" :class="`tone-${item.tone}`">
               <div class="score-line-meta">
                 <strong>{{ item.label }}</strong>
                 <span>{{ item.note }}</span>
@@ -152,12 +145,7 @@
             </div>
           </div>
           <div class="pipeline-compact">
-            <button
-              v-for="node in pipeline"
-              :key="node.key"
-              class="pipeline-step"
-              @click="go(node.path)"
-            >
+            <button v-for="node in pipeline" :key="node.key" class="pipeline-step" @click="go(node.path)">
               <span>{{ node.label }}</span>
               <strong>{{ fmt(counts[node.key]) }}</strong>
             </button>
@@ -254,12 +242,7 @@
             </div>
           </div>
           <div class="action-grid">
-            <button
-              v-for="item in workflowLinks"
-              :key="item.path"
-              class="action-tile"
-              @click="go(item.path)"
-            >
+            <button v-for="item in workflowLinks" :key="item.path" class="action-tile" @click="go(item.path)">
               <b>{{ item.icon }}</b>
               <span>{{ item.title }}</span>
               <small>{{ item.description }}</small>
@@ -272,61 +255,59 @@
 </template>
 
 <script setup lang="ts" name="Home">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
-import { useRouter } from 'vue-router';
-import { useSpaceStore } from '@/store/modules/space';
-import { useUserInfoStore } from '@/store/modules/user-info';
-import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from '@/api/storage/metadata';
-import type { Dataset, PageResult, View } from '@/api/storage/types';
-import { pageResultTotal } from '@/views/data/shared/metadata-utils';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
+import { useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
+import { useUserInfoStore } from "@/store/modules/user-info";
+import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from "@/api/storage/metadata";
+import type { Dataset, PageResult, View } from "@/api/storage/types";
+import { pageResultTotal } from "@/views/data/shared/metadata-utils";
 import {
   datasetMatchesAttribution,
   isLikelyFactorResultDataset,
   isLikelyFactorResultDatasetId,
-  viewMatchesAttribution,
-} from '@/views/data/shared/module-attribution';
-import { callControl } from '@/api/admin/http';
-import { listServiceDeployments } from '@/api/admin/sysdeploy';
-import type { ServiceDeployment } from '@/api/admin/types';
-import { listAccounts } from '@/api/trade';
-import { getCurrentMetrics, type HostMetrics } from '@/api/modules/host-monitor';
-import { getNodeList } from '@/api/cloud-node';
+  viewMatchesAttribution
+} from "@/views/data/shared/module-attribution";
+import { callControl } from "@/api/admin/http";
+import { listServiceDeployments } from "@/api/admin/sysdeploy";
+import type { ServiceDeployment } from "@/api/admin/types";
+import { listAccounts } from "@/api/trade";
+import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
+import { getNodeList } from "@/api/cloud-node";
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const userInfoStore = useUserInfoStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 const { account } = storeToRefs(userInfoStore);
-const displayUserName = computed(() =>
-  account.value.user?.userName || account.value.user?.nickName || 'Trader',
-);
+const displayUserName = computed(() => account.value.user?.userName || account.value.user?.nickName || "Trader");
 
 const currentHour = new Date().getHours();
 const greeting = computed(() => {
   const h = currentHour;
-  if (h < 6) return '凌晨好';
-  if (h < 12) return '早上好';
-  if (h < 18) return '下午好';
-  return '晚上好';
+  if (h < 6) return "凌晨好";
+  if (h < 12) return "早上好";
+  if (h < 18) return "下午好";
+  return "晚上好";
 });
 
 const bannerSlogans = [
-  { headline: 'Quant. Trade. Win.', subtitle: '数字背后是逻辑，逻辑背后是优势' },
-  { headline: 'Code. Backtest. Deploy.', subtitle: '每一行策略代码，都是对市场的一次深刻理解' },
-  { headline: 'Signal. Edge. Alpha.', subtitle: '在噪声中寻找信号，在混沌中建立优势' },
-  { headline: 'Think. Model. Execute.', subtitle: '用系统的力量，对抗市场的随机性' },
-  { headline: 'Data. Strategy. Freedom.', subtitle: '让算法替你工作，让数据为你决策' },
-  { headline: 'Logic. Risk. Reward.', subtitle: '控制好每一次回撤，才能守住每一分收益' },
-  { headline: 'Predict. Position. Profit.', subtitle: '预测不是玄学，是概率与模型的艺术' },
-  { headline: 'Noise. Filter. Clarity.', subtitle: '过滤市场的喧嚣，只追踪真正有效的信号' },
-  { headline: 'Pattern. Probability. Edge.', subtitle: '重复出现的规律，就是可以被利用的优势' },
-  { headline: 'Market. Math. Mastery.', subtitle: '用数学丈量市场，用逻辑掌控交易' },
-  { headline: 'Build. Test. Evolve.', subtitle: '策略不是一成不变的，进化才是长期生存之道' },
-  { headline: 'Price. Volume. Truth.', subtitle: '价格和成交量，是市场留下的唯一真相' },
-  { headline: 'Entropy. Order. Profit.', subtitle: '在市场的混沌中，寻找短暂却真实的秩序' },
-  { headline: 'Asymmetry. Leverage. Compound.', subtitle: '寻找不对称的赔率，是量化交易最迷人的地方' },
-  { headline: 'Flow. Trend. Ride.', subtitle: '顺势而为不是妥协，是对市场规律最深的尊重' },
+  { headline: "Quant. Trade. Win.", subtitle: "数字背后是逻辑，逻辑背后是优势" },
+  { headline: "Code. Backtest. Deploy.", subtitle: "每一行策略代码，都是对市场的一次深刻理解" },
+  { headline: "Signal. Edge. Alpha.", subtitle: "在噪声中寻找信号，在混沌中建立优势" },
+  { headline: "Think. Model. Execute.", subtitle: "用系统的力量，对抗市场的随机性" },
+  { headline: "Data. Strategy. Freedom.", subtitle: "让算法替你工作，让数据为你决策" },
+  { headline: "Logic. Risk. Reward.", subtitle: "控制好每一次回撤，才能守住每一分收益" },
+  { headline: "Predict. Position. Profit.", subtitle: "预测不是玄学，是概率与模型的艺术" },
+  { headline: "Noise. Filter. Clarity.", subtitle: "过滤市场的喧嚣，只追踪真正有效的信号" },
+  { headline: "Pattern. Probability. Edge.", subtitle: "重复出现的规律，就是可以被利用的优势" },
+  { headline: "Market. Math. Mastery.", subtitle: "用数学丈量市场，用逻辑掌控交易" },
+  { headline: "Build. Test. Evolve.", subtitle: "策略不是一成不变的，进化才是长期生存之道" },
+  { headline: "Price. Volume. Truth.", subtitle: "价格和成交量，是市场留下的唯一真相" },
+  { headline: "Entropy. Order. Profit.", subtitle: "在市场的混沌中，寻找短暂却真实的秩序" },
+  { headline: "Asymmetry. Leverage. Compound.", subtitle: "寻找不对称的赔率，是量化交易最迷人的地方" },
+  { headline: "Flow. Trend. Ride.", subtitle: "顺势而为不是妥协，是对市场规律最深的尊重" }
 ];
 
 function pickRandomSloganIndex(currentIndex?: number) {
@@ -354,32 +335,56 @@ const counts = reactive<Record<string, number | null>>({
   factors: null,
   accounts: null,
   subjects: null,
-  tasks: null,
+  tasks: null
 });
 
 const pipeline = [
-  { key: 'sources', stage: '01', label: '数据源', color: '#3b6fd9', path: '/data/sources' },
-  { key: 'rules', stage: '02', label: '采集规则', color: '#0d9488', path: '/collector/rules' },
-  { key: 'datasets', stage: '03', label: '数据集合', color: '#059669', path: '/collector/datasets' },
-  { key: 'factors', stage: '04', label: '因子定义', color: '#c026d3', path: '/factor/definitions' },
-  { key: 'views', stage: '05', label: '数据视图', color: '#ea580c', path: '/collector/views' },
-  { key: 'accounts', stage: '06', label: '交易账户', color: '#b45309', path: '/trading/accounts' },
+  { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
+  { key: "rules", stage: "02", label: "采集规则", color: "#0d9488", path: "/collector/rules" },
+  { key: "datasets", stage: "03", label: "数据集合", color: "#059669", path: "/collector/datasets" },
+  { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
+  { key: "views", stage: "05", label: "数据视图", color: "#ea580c", path: "/collector/views" },
+  { key: "accounts", stage: "06", label: "交易账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
 const workflowLinks = [
-  { title: 'K 线浏览', description: '检查最新 bar 是否入库', path: '/collector/views?tab=browse', icon: 'K', tint: 'rgba(59, 111, 217, 12%)' },
-  { title: '视图查询', description: '查看数据集合生成的视图', path: '/collector/views?tab=browse', icon: 'Q', tint: 'rgba(234, 88, 12, 12%)' },
-  { title: '采集实例', description: '任务执行状态与失败明细', path: '/collector/tasks', icon: 'T', tint: 'rgba(13, 148, 136, 12%)' },
-  { title: '数据集合', description: '定义采集写入的数据契约', path: '/collector/datasets', icon: 'D', tint: 'rgba(5, 150, 105, 12%)' },
-  { title: '因子结果', description: '查看因子计算写回结果', path: '/factor/results', icon: 'F', tint: 'rgba(192, 38, 211, 12%)' },
-  { title: '交易账户', description: '账户余额与下单通道', path: '/trading/accounts', icon: 'A', tint: 'rgba(180, 83, 9, 12%)' },
+  {
+    title: "K 线浏览",
+    description: "检查最新 bar 是否入库",
+    path: "/collector/views?tab=browse",
+    icon: "K",
+    tint: "rgba(59, 111, 217, 12%)"
+  },
+  {
+    title: "视图查询",
+    description: "查看数据集合生成的视图",
+    path: "/collector/views?tab=browse",
+    icon: "Q",
+    tint: "rgba(234, 88, 12, 12%)"
+  },
+  {
+    title: "采集实例",
+    description: "任务执行状态与失败明细",
+    path: "/collector/tasks",
+    icon: "T",
+    tint: "rgba(13, 148, 136, 12%)"
+  },
+  {
+    title: "数据集合",
+    description: "定义采集写入的数据契约",
+    path: "/collector/datasets",
+    icon: "D",
+    tint: "rgba(5, 150, 105, 12%)"
+  },
+  { title: "因子结果", description: "查看因子计算写回结果", path: "/factor/results", icon: "F", tint: "rgba(192, 38, 211, 12%)" },
+  { title: "交易账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
 ];
 
 const setupSteps = [
-  { title: '创建空间', description: '空间是数据资产、采集与交易的隔离边界，管理台所有请求都带空间上下文。' },
-  { title: '登记数据资产', description: '配置数据源、数据对象、字段，再到数据采集里定义数据集合与视图。' },
-  { title: '启动采集链路', description: 'collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。' },
-  { title: '查询与因子', description: '用数据视图浏览 K 线；因子模块自动写回独立结果数据集合。' },
+  { title: "创建空间", description: "空间是数据资产、采集与交易的隔离边界，管理台所有请求都带空间上下文。" },
+  { title: "登记数据资产", description: "配置数据源、数据对象、字段，再到数据采集里定义数据集合与视图。" },
+  { title: "启动采集链路", description: "collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。" },
+  { title: "查询与因子", description: "用数据视图浏览 K 线；因子模块自动写回独立结果数据集合。" }
 ];
 
 const nodesOnline = ref<number | null>(null);
@@ -388,27 +393,23 @@ const deployments = ref<ServiceDeployment[]>([]);
 const deploymentsLoaded = ref(false);
 const hosts = ref<HostMetrics[]>([]);
 
-const nodesAllOnline = computed(
-  () => nodesTotal.value !== null && nodesOnline.value === nodesTotal.value,
-);
+const nodesAllOnline = computed(() => nodesTotal.value !== null && nodesOnline.value === nodesTotal.value);
 const nodesNote = computed(() => {
-  if (nodesTotal.value === null) return '加载中';
-  if (nodesTotal.value === 0) return '尚未注册节点';
-  return nodesAllOnline.value ? '全部在线' : '存在离线节点';
+  if (nodesTotal.value === null) return "加载中";
+  if (nodesTotal.value === 0) return "尚未注册节点";
+  return nodesAllOnline.value ? "全部在线" : "存在离线节点";
 });
 
 const healthBreakdown = computed(() => [
-  { key: 'freshness', label: '数据新鲜度', score: 26, max: 30, tone: 'ok', note: '主力 K 线 6 分钟前入库' },
-  { key: 'collector', label: '采集任务健康', score: 16, max: 20, tone: 'warn', note: '7 个任务需要处理' },
-  { key: 'nodes', label: '云节点健康', score: 12, max: 15, tone: 'warn', note: '96 / 101 节点在线' },
-  { key: 'services', label: '服务部署健康', score: 14, max: 15, tone: 'ok', note: '核心服务 active' },
-  { key: 'assets', label: '数据资产完整度', score: 8, max: 10, tone: 'ok', note: 'Dataset / View 已配置' },
-  { key: 'trade', label: '交易账户状态', score: 8, max: 10, tone: 'ok', note: '5 / 6 账户可用' },
+  { key: "freshness", label: "数据新鲜度", score: 26, max: 30, tone: "ok", note: "主力 K 线 6 分钟前入库" },
+  { key: "collector", label: "采集任务健康", score: 16, max: 20, tone: "warn", note: "7 个任务需要处理" },
+  { key: "nodes", label: "云节点健康", score: 12, max: 15, tone: "warn", note: "96 / 101 节点在线" },
+  { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务 active" },
+  { key: "assets", label: "数据资产完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
+  { key: "trade", label: "交易账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
 ]);
 
-const healthScore = computed(() =>
-  healthBreakdown.value.reduce((sum, item) => sum + item.score, 0),
-);
+const healthScore = computed(() => healthBreakdown.value.reduce((sum, item) => sum + item.score, 0));
 
 function countOrFallback(v: number | null | undefined, fallback: number): number {
   return v === null || v === undefined ? fallback : v;
@@ -416,79 +417,107 @@ function countOrFallback(v: number | null | undefined, fallback: number): number
 
 const dashboardKpis = computed(() => [
   {
-    key: 'health',
-    label: '系统健康度',
+    key: "health",
+    label: "系统健康度",
     value: String(healthScore.value),
-    unit: '/100',
-    note: '数据与采集优先',
-    delta: '+4 vs 昨日',
-    tone: 'ok',
-    path: '/home',
+    unit: "/100",
+    note: "数据与采集优先",
+    delta: "+4 vs 昨日",
+    tone: "ok",
+    path: "/home"
   },
   {
-    key: 'freshness',
-    label: '数据新鲜度',
-    value: '6m',
-    unit: '',
-    note: '最新 K 线延迟',
-    delta: 'APT-USDT',
-    tone: 'ok',
-    path: '/collector/views?tab=browse',
+    key: "freshness",
+    label: "数据新鲜度",
+    value: "6m",
+    unit: "",
+    note: "最新 K 线延迟",
+    delta: "APT-USDT",
+    tone: "ok",
+    path: "/collector/views?tab=browse"
   },
   {
-    key: 'tasks',
-    label: '今日采集任务',
+    key: "tasks",
+    label: "今日采集任务",
     value: fmt(counts.tasks ?? 443),
-    unit: '',
-    note: '规则展开实例',
-    delta: '运行中 18',
-    tone: 'neutral',
-    path: '/collector/tasks',
+    unit: "",
+    note: "规则展开实例",
+    delta: "运行中 18",
+    tone: "neutral",
+    path: "/collector/tasks"
   },
   {
-    key: 'incidents',
-    label: '异常任务',
-    value: '7',
-    unit: '',
-    note: '失败 / 超时',
-    delta: '需处理',
-    tone: 'danger',
-    path: '/collector/tasks',
+    key: "incidents",
+    label: "异常任务",
+    value: "7",
+    unit: "",
+    note: "失败 / 超时",
+    delta: "需处理",
+    tone: "danger",
+    path: "/collector/tasks"
   },
   {
-    key: 'nodes',
-    label: '云节点在线',
-    value: '96',
-    unit: '/101',
+    key: "nodes",
+    label: "云节点在线",
+    value: "96",
+    unit: "/101",
     note: nodesNote.value,
-    delta: '5 离线',
-    tone: 'warn',
-    path: '/collector/cloudnodes',
+    delta: "5 离线",
+    tone: "warn",
+    path: "/collector/cloudnodes"
   },
   {
-    key: 'services',
-    label: '服务在线',
+    key: "services",
+    label: "服务在线",
     value: String(deploymentsLoaded.value ? deployments.value.length : 28),
-    unit: '',
-    note: 'active 部署',
-    delta: 'gateway ok',
-    tone: 'ok',
-    path: '/settings/service-deployments',
-  },
+    unit: "",
+    note: "active 部署",
+    delta: "gateway ok",
+    tone: "ok",
+    path: "/settings/service-deployments"
+  }
 ]);
 
 const stalenessItems = [
-  { name: 'APT-USDT', dataset: 'BINANCE spot / 1m kline', delay: '6m', status: 'fresh', tone: 'ok' },
-  { name: 'BTC-USDT', dataset: 'BINANCE spot / ticker', delay: '2m', status: 'fresh', tone: 'ok' },
-  { name: 'ETH-USDT', dataset: 'OKX spot / 5m kline', delay: '18m', status: 'watch', tone: 'warn' },
-  { name: 'factor.momentum', dataset: 'daily factor view', delay: '48m', status: 'late', tone: 'danger' },
+  { name: "APT-USDT", dataset: "BINANCE spot / 1m kline", delay: "6m", status: "fresh", tone: "ok" },
+  { name: "BTC-USDT", dataset: "BINANCE spot / ticker", delay: "2m", status: "fresh", tone: "ok" },
+  { name: "ETH-USDT", dataset: "OKX spot / 5m kline", delay: "18m", status: "watch", tone: "warn" },
+  { name: "factor.momentum", dataset: "daily factor view", delay: "48m", status: "late", tone: "danger" }
 ];
 
 const incidentItems = [
-  { level: 'P1', title: 'factor.momentum 今日未刷新', meta: '因子结果延迟 48m', action: '打开结果', path: '/factor/results', tone: 'danger' },
-  { level: 'P2', title: '云节点离线 5 台', meta: 'SCF runtime 心跳缺失', action: '查看节点', path: '/collector/cloudnodes', tone: 'warn' },
-  { level: 'P2', title: '7 个采集实例失败', meta: '交易所限频 / 网络超时', action: '处理任务', path: '/collector/tasks', tone: 'warn' },
-  { level: 'P3', title: '1 个交易账户同步较慢', meta: 'Binance futures 14m 未更新', action: '账户摘要', path: '/trading/accounts', tone: 'neutral' },
+  {
+    level: "P1",
+    title: "factor.momentum 今日未刷新",
+    meta: "因子结果延迟 48m",
+    action: "打开结果",
+    path: "/factor/results",
+    tone: "danger"
+  },
+  {
+    level: "P2",
+    title: "云节点离线 5 台",
+    meta: "SCF runtime 心跳缺失",
+    action: "查看节点",
+    path: "/collector/cloudnodes",
+    tone: "warn"
+  },
+  {
+    level: "P2",
+    title: "7 个采集实例失败",
+    meta: "交易所限频 / 网络超时",
+    action: "处理任务",
+    path: "/collector/tasks",
+    tone: "warn"
+  },
+  {
+    level: "P3",
+    title: "1 个交易账户同步较慢",
+    meta: "Binance futures 14m 未更新",
+    action: "账户摘要",
+    path: "/trading/accounts",
+    tone: "neutral"
+  }
 ];
 
 const tradeSummary = computed(() => ({
@@ -497,75 +526,75 @@ const tradeSummary = computed(() => ({
   ordersToday: 128,
   failedOrders: 2,
   positions: 11,
-  lastFill: '19:28:41',
+  lastFill: "19:28:41"
 }));
 
 const tradeMetrics = computed(() => [
-  { label: '账户', value: `${tradeSummary.value.online}/${tradeSummary.value.total}` },
-  { label: '今日订单', value: String(tradeSummary.value.ordersToday) },
-  { label: '失败订单', value: String(tradeSummary.value.failedOrders) },
-  { label: '持仓', value: String(tradeSummary.value.positions) },
+  { label: "账户", value: `${tradeSummary.value.online}/${tradeSummary.value.total}` },
+  { label: "今日订单", value: String(tradeSummary.value.ordersToday) },
+  { label: "失败订单", value: String(tradeSummary.value.failedOrders) },
+  { label: "持仓", value: String(tradeSummary.value.positions) }
 ]);
 
 const tradeAccounts = [
-  { name: 'Binance Spot', status: 'online', detail: '现货 / 最近成交 19:28', tone: 'ok' },
-  { name: 'OKX Spot', status: 'online', detail: '现货 / 余额同步 3m', tone: 'ok' },
-  { name: 'Binance Futures', status: 'watch', detail: '合约 / 同步延迟 14m', tone: 'warn' },
+  { name: "Binance Spot", status: "online", detail: "现货 / 最近成交 19:28", tone: "ok" },
+  { name: "OKX Spot", status: "online", detail: "现货 / 余额同步 3m", tone: "ok" },
+  { name: "Binance Futures", status: "watch", detail: "合约 / 同步延迟 14m", tone: "warn" }
 ];
 
 const taskPulse = [
-  { label: '09:00', value: 42 },
-  { label: '10:00', value: 66 },
-  { label: '11:00', value: 58 },
-  { label: '12:00', value: 74 },
-  { label: '13:00', value: 81 },
-  { label: '14:00', value: 63 },
-  { label: '15:00', value: 88 },
-  { label: '16:00', value: 71 },
-  { label: '17:00', value: 93 },
-  { label: '18:00', value: 78 },
-  { label: '19:00', value: 84 },
-  { label: '20:00', value: 69 },
+  { label: "09:00", value: 42 },
+  { label: "10:00", value: 66 },
+  { label: "11:00", value: 58 },
+  { label: "12:00", value: 74 },
+  { label: "13:00", value: 81 },
+  { label: "14:00", value: 63 },
+  { label: "15:00", value: 88 },
+  { label: "16:00", value: 71 },
+  { label: "17:00", value: 93 },
+  { label: "18:00", value: 78 },
+  { label: "19:00", value: 84 },
+  { label: "20:00", value: 69 }
 ];
 
 const visibleDeployments = computed(() => {
   const fallback = [
-    { name: 'admin-gateway', status: 'active', addr: 'same-origin', tone: 'ok' },
-    { name: 'storage-access', status: 'active', addr: ':20201', tone: 'ok' },
-    { name: 'collector', status: 'active', addr: ':11402', tone: 'ok' },
-    { name: 'cloudnode', status: 'active', addr: ':11401', tone: 'ok' },
-    { name: 'trade', status: 'watch', addr: ':11200', tone: 'warn' },
+    { name: "admin-gateway", status: "active", addr: "same-origin", tone: "ok" },
+    { name: "storage-access", status: "active", addr: ":20201", tone: "ok" },
+    { name: "collector", status: "active", addr: ":11402", tone: "ok" },
+    { name: "cloudnode", status: "active", addr: ":11401", tone: "ok" },
+    { name: "trade", status: "watch", addr: ":11200", tone: "warn" }
   ];
   if (!deployments.value.length) return fallback;
-  return deployments.value.slice(0, 5).map((dep) => ({
+  return deployments.value.slice(0, 5).map(dep => ({
     name: dep.service_name,
     status: dep.status,
     addr: `${dep.host}:${dep.port}`,
-    tone: dep.status === 'active' ? 'ok' : 'warn',
+    tone: dep.status === "active" ? "ok" : "warn"
   }));
 });
 
 const visibleHosts = computed(() => {
   const fallback = [
-    { name: 'prod-main', cpu: '31%', memory: '58%', tone: 'ok' },
-    { name: 'collector-01', cpu: '64%', memory: '71%', tone: 'warn' },
-    { name: 'query-node', cpu: '22%', memory: '46%', tone: 'ok' },
+    { name: "prod-main", cpu: "31%", memory: "58%", tone: "ok" },
+    { name: "collector-01", cpu: "64%", memory: "71%", tone: "warn" },
+    { name: "query-node", cpu: "22%", memory: "46%", tone: "ok" }
   ];
   if (!hosts.value.length) return fallback;
-  return hosts.value.slice(0, 3).map((host) => ({
+  return hosts.value.slice(0, 3).map(host => ({
     name: host.host_name || host.address,
     cpu: formatPercent(host.cpu?.usage),
     memory: formatPercent(host.memory?.percent),
-    tone: host.status === 'online' && (host.cpu?.usage ?? 0) < 80 && (host.memory?.percent ?? 0) < 85 ? 'ok' : 'warn',
+    tone: host.status === "online" && (host.cpu?.usage ?? 0) < 80 && (host.memory?.percent ?? 0) < 85 ? "ok" : "warn"
   }));
 });
 
 function fmt(v: number | null | undefined): string {
-  return v === null || v === undefined ? '—' : String(v);
+  return v === null || v === undefined ? "—" : String(v);
 }
 
 function formatPercent(v?: number): string {
-  return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(0)}%` : '—';
+  return typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(0)}%` : "—";
 }
 
 function countFrom(page?: PageResult, fallbackLength = 0): number {
@@ -582,37 +611,36 @@ async function loadSpaceScoped() {
   const page = { page: 1, size: 1 };
 
   const jobs: Array<Promise<void>> = [
-    listDataSources({ space_id, page }).then((rsp) => {
+    listDataSources({ space_id, page }).then(rsp => {
       counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
     }),
     loadCollectorAssetCounts(space_id),
-    listFactors({ space_id, page }).then((rsp) => {
+    listFactors({ space_id, page }).then(rsp => {
       counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
     }),
-    listSubjects({ space_id, page }).then((rsp) => {
+    listSubjects({ space_id, page }).then(rsp => {
       counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
     }),
     callControl<{ page: { page: number; size: number } }, { rules?: unknown[]; page?: { total?: number } }>(
-      'collectmgr',
-      'GetTaskRuleList',
-      { page: { page: 1, size: 1 } },
-    ).then((rsp) => {
+      "collectmgr",
+      "GetTaskRuleList",
+      { page: { page: 1, size: 1 } }
+    ).then(rsp => {
       counts.rules = Number(rsp.page?.total) || rsp.rules?.length || 0;
     }),
-    callControl<{ filter: { space_id: string; page: { page: number; size: number } } }, { instances?: unknown[]; page?: { total?: number } }>(
-      'collectmgr',
-      'GetTaskInstanceList',
-      { filter: { space_id, page: { page: 1, size: 1 } } },
-    ).then((rsp) => {
+    callControl<
+      { filter: { space_id: string; page: { page: number; size: number } } },
+      { instances?: unknown[]; page?: { total?: number } }
+    >("collectmgr", "GetTaskInstanceList", { filter: { space_id, page: { page: 1, size: 1 } } }).then(rsp => {
       counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
     }),
-    listAccounts({ page: { page: 1, size: 1 } }).then((rsp) => {
+    listAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
     }),
     getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {
       nodesTotal.value = total || items.length;
-      nodesOnline.value = items.filter((n) => String(n.status ?? '').includes('ONLINE')).length;
-    }),
+      nodesOnline.value = items.filter(n => String(n.status ?? "").includes("ONLINE")).length;
+    })
   ];
 
   await Promise.allSettled(jobs);
@@ -620,22 +648,24 @@ async function loadSpaceScoped() {
 
 async function loadCollectorAssetCounts(spaceId: string) {
   const [datasetItems, viewItems] = await Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]);
-  const datasetById = new Map(datasetItems.map((item) => [item.dataset_id, item]));
-  counts.datasets = datasetItems.filter((item) =>
-    !isLikelyFactorResultDataset(item) &&
+  const datasetById = new Map(datasetItems.map(item => [item.dataset_id, item]));
+  counts.datasets = datasetItems.filter(
+    item =>
+      !isLikelyFactorResultDataset(item) &&
       datasetMatchesAttribution(item, {
-        ownerModules: ['collector'],
-        datasetRoles: ['raw_collection', 'import'],
-        includeUnowned: true,
-      }),
+        ownerModules: ["collector"],
+        datasetRoles: ["raw_collection", "import"],
+        includeUnowned: true
+      })
   ).length;
-  counts.views = viewItems.filter((item) =>
-    !viewUsesLikelyFactorDataset(item, datasetById) &&
+  counts.views = viewItems.filter(
+    item =>
+      !viewUsesLikelyFactorDataset(item, datasetById) &&
       viewMatchesAttribution(item, {
-        ownerModules: ['collector'],
-        viewRoles: ['collection_browse', 'analysis'],
-        includeUnowned: true,
-      }),
+        ownerModules: ["collector"],
+        viewRoles: ["collection_browse", "analysis"],
+        includeUnowned: true
+      })
   ).length;
 }
 
@@ -673,20 +703,20 @@ function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Datase
 
 async function loadGlobal() {
   await Promise.allSettled([
-    listServiceDeployments({ status: 'active', page: { page: 1, size: 50 } })
-      .then((rsp) => {
+    listServiceDeployments({ status: "active", page: { page: 1, size: 50 } })
+      .then(rsp => {
         deployments.value = rsp.deployments ?? [];
       })
       .finally(() => {
         deploymentsLoaded.value = true;
       }),
     getCurrentMetrics()
-      .then((rsp) => {
+      .then(rsp => {
         hosts.value = (rsp.metrics ?? []).slice(0, 4);
       })
       .catch(() => {
         hosts.value = [];
-      }),
+      })
   ]);
 }
 
@@ -695,7 +725,7 @@ async function refreshAll() {
 }
 
 function resetCounts() {
-  Object.keys(counts).forEach((k) => {
+  Object.keys(counts).forEach(k => {
     counts[k] = null;
   });
   nodesOnline.value = null;
@@ -805,9 +835,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   padding: var(--moox-space-7);
   border: 1px solid var(--color-border-2);
   border-radius: 16px;
-  background:
-    radial-gradient(ellipse 80% 60% at 100% 0%, rgba(13, 148, 136, 8%), transparent 55%),
-    var(--color-bg-2);
+  background: radial-gradient(ellipse 80% 60% at 100% 0%, rgba(13, 148, 136, 8%), transparent 55%), var(--color-bg-2);
 }
 
 .onboard-copy h1 {
@@ -885,8 +913,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   padding: 28px var(--moox-space-7);
   border: 1px solid var(--color-border-2);
   border-radius: 16px;
-  background:
-    linear-gradient(135deg, var(--color-bg-2) 0%, var(--color-fill-1) 100%);
+  background: linear-gradient(135deg, var(--color-bg-2) 0%, var(--color-fill-1) 100%);
   box-shadow: 0 1px 0 rgba(15, 23, 42, 4%);
 }
 
@@ -936,10 +963,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   width: 108px;
   height: 108px;
   border-radius: 50%;
-  background: conic-gradient(
-    var(--home-accent) calc(var(--ring-pct) * 1%),
-    var(--color-fill-3) 0
-  );
+  background: conic-gradient(var(--home-accent) calc(var(--ring-pct) * 1%), var(--color-fill-3) 0);
 
   &::before {
     content: "";
@@ -1043,7 +1067,10 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   cursor: pointer;
   text-align: left;
   animation: fade-up 0.45s both;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
 
   &:hover {
     border-color: var(--node-color);
@@ -1135,7 +1162,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   background: var(--color-fill-1);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 
   &:hover {
     border-color: rgb(var(--primary-5));
@@ -1523,9 +1552,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .dashboard-shell .onboard {
   border-color: var(--dash-border);
   border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(219, 234, 254, 70%), rgba(255, 255, 255, 92%)),
-    var(--dash-surface);
+  background: linear-gradient(135deg, rgba(219, 234, 254, 70%), rgba(255, 255, 255, 92%)), var(--dash-surface);
   box-shadow: var(--dash-shadow);
 }
 
@@ -1541,8 +1568,13 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   overflow: visible;
   border: 1px solid rgba(147, 197, 253, 65%);
   border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(239, 246, 255, 98%) 0%, rgba(219, 234, 254, 90%) 42%, rgba(224, 242, 254, 86%) 72%, rgba(191, 219, 254, 74%) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(239, 246, 255, 98%) 0%,
+    rgba(219, 234, 254, 90%) 42%,
+    rgba(224, 242, 254, 86%) 72%,
+    rgba(191, 219, 254, 74%) 100%
+  );
   box-shadow: var(--dash-shadow-strong);
 }
 
@@ -1557,9 +1589,17 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
     repeating-linear-gradient(118deg, transparent 0 11px, rgba(15, 23, 42, 7%) 12px 13px, transparent 14px 27px),
     linear-gradient(90deg, rgba(30, 64, 175, 8%) 1px, transparent 1px),
     linear-gradient(180deg, rgba(30, 64, 175, 7%) 1px, transparent 1px);
-  background-position: right clamp(128px, 12vw, 180px) center, 0 0, 0 0, 0 0;
+  background-position:
+    right clamp(128px, 12vw, 180px) center,
+    0 0,
+    0 0,
+    0 0;
   background-repeat: no-repeat, repeat, repeat, repeat;
-  background-size: min(58vw, 620px) auto, 36px 36px, 34px 34px, 34px 34px;
+  background-size:
+    min(58vw, 620px) auto,
+    36px 36px,
+    34px 34px,
+    34px 34px;
   clip-path: inset(0 round 8px);
   mix-blend-mode: multiply;
   opacity: 0.72;
@@ -1607,7 +1647,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .banner-slogan-enter-active,
 .banner-slogan-leave-active {
-  transition: opacity 0.24s ease, transform 0.24s ease;
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s ease;
 }
 
 .banner-slogan-enter-from {
@@ -1647,8 +1689,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   padding: 14px;
   border: 1px solid rgba(30, 64, 175, 18%);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 88%), rgba(248, 250, 252, 76%));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 88%), rgba(248, 250, 252, 76%));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 82%);
 }
 
@@ -1711,13 +1752,15 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   overflow: hidden;
   border: 1px solid rgba(191, 219, 254, 86%);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 92%));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 92%));
   box-shadow: var(--dash-shadow);
   color: inherit;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .kpi-card::before {
@@ -1830,10 +1873,11 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   padding: 15px;
   border: 1px solid var(--dash-border);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 70%));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 70%));
   box-shadow: var(--dash-shadow);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
 .dash-card:hover {
@@ -2002,7 +2046,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   color: inherit;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.18s ease, background 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
 }
 
 .freshness-row {
@@ -2085,7 +2131,9 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   color: inherit;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.18s ease, background 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
 }
 
 .pipeline-step {
@@ -2189,9 +2237,7 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   height: 112px;
   overflow: hidden;
   border-radius: 6px 6px 3px 3px;
-  background:
-    linear-gradient(180deg, rgba(219, 234, 254, 42%) 0 1px, transparent 1px 25%),
-    var(--dash-surface-soft);
+  background: linear-gradient(180deg, rgba(219, 234, 254, 42%) 0 1px, transparent 1px 25%), var(--dash-surface-soft);
 }
 
 .pulse-bar i {

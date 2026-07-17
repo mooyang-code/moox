@@ -1,4 +1,4 @@
-import type { FieldGroup } from '@/api/storage/types';
+import type { FieldGroup } from "@/api/storage/types";
 
 export interface FieldWorkbenchQuery {
   group: string;
@@ -7,8 +7,8 @@ export interface FieldWorkbenchQuery {
   status: string;
   page: number;
   pageSize: number;
-  sort: 'sort_order' | 'field_id' | 'updated_at';
-  order: 'asc' | 'desc';
+  sort: "sort_order" | "field_id" | "updated_at";
+  order: "asc" | "desc";
 }
 
 export interface FieldGroupNode extends FieldGroup {
@@ -17,7 +17,7 @@ export interface FieldGroupNode extends FieldGroup {
 
 type RouteQuery = Record<string, unknown>;
 
-const text = (value: unknown) => (Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')).trim();
+const text = (value: unknown) => (Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "")).trim();
 
 function positiveInt(value: unknown, fallback: number) {
   const parsed = Number.parseInt(text(value), 10);
@@ -35,8 +35,8 @@ export function fieldQueryFromRoute(query: RouteQuery): FieldWorkbenchQuery {
     status: text(query.status),
     page: positiveInt(query.page, 1),
     pageSize: [20, 50, 100].includes(requestedSize) ? requestedSize : 20,
-    sort: sort === 'field_id' || sort === 'updated_at' ? sort : 'sort_order',
-    order: order === 'desc' ? 'desc' : 'asc',
+    sort: sort === "field_id" || sort === "updated_at" ? sort : "sort_order",
+    order: order === "desc" ? "desc" : "asc"
   };
 }
 
@@ -48,8 +48,8 @@ export function fieldQueryToRoute(state: FieldWorkbenchQuery): Record<string, st
   if (state.status) query.status = state.status;
   if (state.page !== 1) query.page = String(state.page);
   if (state.pageSize !== 20) query.page_size = String(state.pageSize);
-  if (state.sort !== 'sort_order') query.sort = state.sort;
-  if (state.order !== 'asc') query.order = state.order;
+  if (state.sort !== "sort_order") query.sort = state.sort;
+  if (state.order !== "asc") query.order = state.order;
   return query;
 }
 
@@ -58,19 +58,19 @@ const byOrder = (a: FieldGroup, b: FieldGroup) =>
 
 export function buildGroupTree(groups: FieldGroup[]): FieldGroupNode[] {
   return groups
-    .filter((item) => !item.parent_group_id)
+    .filter(item => !item.parent_group_id)
     .sort(byOrder)
-    .map((item) => ({
+    .map(item => ({
       ...item,
-      children: groups.filter((child) => child.parent_group_id === item.group_id).sort(byOrder),
+      children: groups.filter(child => child.parent_group_id === item.group_id).sort(byOrder)
     }));
 }
 
 export function groupPath(groups: FieldGroup[], groupID: string) {
-  const group = groups.find((item) => item.group_id === groupID);
+  const group = groups.find(item => item.group_id === groupID);
   if (!group) return groupID;
   if (!group.parent_group_id) return group.name;
-  const parent = groups.find((item) => item.group_id === group.parent_group_id);
+  const parent = groups.find(item => item.group_id === group.parent_group_id);
   return parent ? `${parent.name} / ${group.name}` : group.name;
 }
 

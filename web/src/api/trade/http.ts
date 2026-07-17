@@ -1,32 +1,32 @@
-import axios from 'axios';
-import { Message } from '@arco-design/web-vue';
-import { gatewayOrigin } from '@/api/gateway';
-import { isRetInfoSuccess } from '../ret-info';
-import type { RetInfo } from './types';
-import { installSpaceAwareSignedClient } from '../admin/signed-client';
+import axios from "axios";
+import { Message } from "@arco-design/web-vue";
+import { gatewayOrigin } from "@/api/gateway";
+import { isRetInfoSuccess } from "../ret-info";
+import type { RetInfo } from "./types";
+import { installSpaceAwareSignedClient } from "../admin/signed-client";
 
 // trade 服务 ID → 网关路径映射（与 admin/config/gateway.yaml 对齐）
 const tradeServiceMap: Record<string, string> = {
-  account: 'trade_account',
-  balance: 'trade_balance',
-  fund: 'trade_fund',
-  apikey: 'trade_apikey',
-  channel: 'trade_channel',
-  tradeop: 'trade_tradeop',
-  order: 'trade_order',
-  tradeq: 'trade_tradeq',
-  position: 'trade_position',
+  account: "trade_account",
+  balance: "trade_balance",
+  fund: "trade_fund",
+  apikey: "trade_apikey",
+  channel: "trade_channel",
+  tradeop: "trade_tradeop",
+  order: "trade_order",
+  tradeq: "trade_tradeq",
+  position: "trade_position"
 };
 
 const tradeClient = axios.create({
   baseURL: gatewayOrigin(),
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  headers: { "Content-Type": "application/json" }
 });
 
 function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
-    throw new Error('trade response missing ret_info');
+    throw new Error("trade response missing ret_info");
   }
   if (!isRetInfoSuccess(retInfo.code)) {
     throw new Error(retInfo.msg || `trade request failed: ${retInfo.code}`);
@@ -42,7 +42,7 @@ function assertSuccess(retInfo?: RetInfo) {
 export async function callTrade<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   group: keyof typeof tradeServiceMap,
   method: string,
-  req: TReq,
+  req: TReq
 ): Promise<TRsp> {
   const serviceId = tradeServiceMap[group];
   const rsp = await tradeClient.post<TRsp>(`/api/admin/${serviceId}/${method}`, req);
@@ -53,16 +53,16 @@ export async function callTrade<TReq extends object, TRsp extends { ret_info: Re
 installSpaceAwareSignedClient(tradeClient);
 
 tradeClient.interceptors.response.use(
-  (rsp) => {
-    const trpcRet = rsp.headers?.['trpc-ret'] ?? rsp.headers?.['Trpc-Ret'];
-    if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== '0') {
-      const funcRet = rsp.headers?.['trpc-func-ret'] ?? '';
+  rsp => {
+    const trpcRet = rsp.headers?.["trpc-ret"] ?? rsp.headers?.["Trpc-Ret"];
+    if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== "0") {
+      const funcRet = rsp.headers?.["trpc-func-ret"] ?? "";
       return Promise.reject(new Error(funcRet || `框架错误(${trpcRet})`));
     }
     return rsp;
   },
-  (error) => {
-    Message.error(error?.message || 'Trade 请求失败');
+  error => {
+    Message.error(error?.message || "Trade 请求失败");
     return Promise.reject(error);
-  },
+  }
 );

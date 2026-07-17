@@ -1,6 +1,6 @@
-export type CheckKind = 'CHECK_KIND_HTTP' | 'CHECK_KIND_TCP' | number;
-export type CheckStatus = 'CHECK_STATUS_OK' | 'CHECK_STATUS_DEGRADED' | 'CHECK_STATUS_DOWN' | number;
-export type AlertStatus = 'ALERT_STATUS_OK' | 'ALERT_STATUS_FIRING' | 'ALERT_STATUS_RESOLVED' | number;
+export type CheckKind = "CHECK_KIND_HTTP" | "CHECK_KIND_TCP" | number;
+export type CheckStatus = "CHECK_STATUS_OK" | "CHECK_STATUS_DEGRADED" | "CHECK_STATUS_DOWN" | number;
+export type AlertStatus = "ALERT_STATUS_OK" | "ALERT_STATUS_FIRING" | "ALERT_STATUS_RESOLVED" | number;
 
 export interface PageReq {
   page?: number;

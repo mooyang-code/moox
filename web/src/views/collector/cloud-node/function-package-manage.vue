@@ -9,28 +9,13 @@
       <!-- 搜索区域 -->
       <div class="package-toolbar">
         <a-space class="package-filters" wrap>
-          <a-input
-            v-model="searchForm.package_name"
-            placeholder="搜索代码包名称"
-            style="width: 200px"
-            allow-clear
-          />
-          <a-select
-            v-model="searchForm.runtime"
-            placeholder="运行时环境"
-            style="width: 150px"
-            allow-clear
-          >
+          <a-input v-model="searchForm.package_name" placeholder="搜索代码包名称" style="width: 200px" allow-clear />
+          <a-select v-model="searchForm.runtime" placeholder="运行时环境" style="width: 150px" allow-clear>
             <a-option v-for="runtime in RUNTIME_OPTIONS" :key="runtime.value" :value="runtime.value">
               {{ runtime.label }}
             </a-option>
           </a-select>
-          <a-select
-            v-model="searchForm.status"
-            placeholder="状态"
-            style="width: 120px"
-            allow-clear
-          >
+          <a-select v-model="searchForm.status" placeholder="状态" style="width: 120px" allow-clear>
             <a-option v-for="status in STATUS_OPTIONS" :key="status.value" :value="status.value">
               {{ status.label }}
             </a-option>
@@ -59,7 +44,7 @@
         <template #columns>
           <a-table-column title="代码包名称" data-index="package_name" :width="180">
             <template #cell="{ record }">
-              <a-button type="text" style="padding: 0; height: auto; color: #165dff;" @click="onShowDetail(record)">
+              <a-button type="text" style="padding: 0; height: auto; color: #165dff" @click="onShowDetail(record)">
                 {{ record.package_name }}
               </a-button>
             </template>
@@ -93,31 +78,43 @@
           <a-table-column title="描述" data-index="description" :width="200">
             <template #cell="{ record }">
               <a-tooltip :content="record.description" position="top">
-                <span>{{ record.description ? (record.description.length > 20 ? record.description.substring(0, 20) + '...' : record.description) : '-' }}</span>
+                <span>{{
+                  record.description
+                    ? record.description.length > 20
+                      ? record.description.substring(0, 20) + "..."
+                      : record.description
+                    : "-"
+                }}</span>
               </a-tooltip>
             </template>
           </a-table-column>
           <a-table-column title="云账户" data-index="cloud_account_id" :width="120">
             <template #cell="{ record }">
-              {{ record.cloud_account_id || '-' }}
+              {{ record.cloud_account_id || "-" }}
             </template>
           </a-table-column>
           <a-table-column title="COS地区" data-index="cos_region" :width="120">
             <template #cell="{ record }">
-              {{ record.cos_region || '-' }}
+              {{ record.cos_region || "-" }}
             </template>
           </a-table-column>
           <a-table-column title="文件MD5" data-index="file_md5" :width="180">
             <template #cell="{ record }">
               <a-tooltip :content="record.file_md5" position="top">
-                <span>{{ record.file_md5 ? (record.file_md5.length > 16 ? record.file_md5.substring(0, 16) + '...' : record.file_md5) : '-' }}</span>
+                <span>{{
+                  record.file_md5
+                    ? record.file_md5.length > 16
+                      ? record.file_md5.substring(0, 16) + "..."
+                      : record.file_md5
+                    : "-"
+                }}</span>
               </a-tooltip>
             </template>
           </a-table-column>
           <a-table-column title="操作" :width="180" align="center" fixed="right">
             <template #cell="{ record }">
               <a-space>
-                <a-button 
+                <a-button
                   type="primary"
                   size="mini"
                   status="success"
@@ -151,7 +148,7 @@
         </template>
       </a-table>
     </div>
-    
+
     <!-- 上传弹窗 -->
     <a-modal
       v-model:visible="uploadVisible"
@@ -162,34 +159,25 @@
     >
       <a-form :model="uploadForm" layout="vertical" ref="uploadFormRef">
         <a-form-item field="package_type" label="函数包类型" required>
-          <a-select v-model="uploadForm.package_type" placeholder="请选择函数包类型" @change="onPackageTypeChange" :disabled="!!props.packageType">
+          <a-select
+            v-model="uploadForm.package_type"
+            placeholder="请选择函数包类型"
+            @change="onPackageTypeChange"
+            :disabled="!!props.packageType"
+          >
             <a-option v-for="type in PACKAGE_TYPE_OPTIONS" :key="type.value" :value="type.value">
               {{ type.label }}
             </a-option>
           </a-select>
         </a-form-item>
-        
-        
-        <a-form-item
-          field="version"
-          label="版本号"
-          required
-          :status="versionValidationStatus"
-          :feedback="versionFeedback"
-        >
-          <a-input
-            v-model="uploadForm.version"
-            placeholder="将从上传的文件名中自动解析"
-            readonly
-            disabled
-          />
+
+        <a-form-item field="version" label="版本号" required :status="versionValidationStatus" :feedback="versionFeedback">
+          <a-input v-model="uploadForm.version" placeholder="将从上传的文件名中自动解析" readonly disabled />
           <template #extra>
-            <span style="color: #86909c; font-size: 12px;">
-              版本号将从上传的文件名中自动解析（格式：xxx-v1.0.45.zip）
-            </span>
+            <span style="color: #86909c; font-size: 12px"> 版本号将从上传的文件名中自动解析（格式：xxx-v1.0.45.zip） </span>
           </template>
         </a-form-item>
-        
+
         <a-form-item field="runtime" label="运行时环境" required>
           <a-select v-model="uploadForm.runtime" placeholder="请选择运行时环境">
             <a-option v-for="runtime in RUNTIME_OPTIONS" :key="runtime.value" :value="runtime.value">
@@ -197,7 +185,7 @@
             </a-option>
           </a-select>
         </a-form-item>
-        
+
         <a-form-item field="cloud_account_id" label="云账户" required>
           <a-select v-model="uploadForm.cloud_account_id" placeholder="请选择云账户（COS存储）">
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
@@ -205,27 +193,25 @@
             </a-option>
           </a-select>
           <template #extra>
-            <span style="color: #86909c; font-size: 12px;">
+            <span style="color: #86909c; font-size: 12px">
               仅支持COS方式上传，请选择云账户。上传由独立 cloudnode 服务处理。
             </span>
           </template>
         </a-form-item>
-        
+
         <a-form-item field="description" label="描述（可选）">
-          <a-textarea 
-            v-model="uploadForm.description" 
-            placeholder="请输入代码包描述" 
+          <a-textarea
+            v-model="uploadForm.description"
+            placeholder="请输入代码包描述"
             :rows="3"
             :max-length="500"
             show-word-limit
           />
           <template #extra>
-            <span style="color: #86909c; font-size: 12px;">
-              最多500个字符 ({{ uploadForm.description?.length || 0 }}/500)
-            </span>
+            <span style="color: #86909c; font-size: 12px"> 最多500个字符 ({{ uploadForm.description?.length || 0 }}/500) </span>
           </template>
         </a-form-item>
-        
+
         <a-form-item field="file" label="代码包文件">
           <a-upload
             ref="uploadRef"
@@ -239,12 +225,10 @@
             <template #upload-button>
               <div class="upload-area">
                 <div>
-                  <icon-upload style="font-size: 48px; color: #c9cdd4;" />
+                  <icon-upload style="font-size: 48px; color: #c9cdd4" />
                 </div>
-                <div style="margin-top: var(--moox-space-2);">
-                  点击或拖拽上传ZIP文件
-                </div>
-                <div style="color: #86909c; font-size: 12px; margin-top: var(--moox-space-1);">
+                <div style="margin-top: var(--moox-space-2)">点击或拖拽上传ZIP文件</div>
+                <div style="color: #86909c; font-size: 12px; margin-top: var(--moox-space-1)">
                   支持ZIP格式，文件大小不超过100MB
                 </div>
               </div>
@@ -252,7 +236,7 @@
           </a-upload>
         </a-form-item>
       </a-form>
-      
+
       <!-- 自定义footer -->
       <template #footer>
         <a-space>
@@ -261,7 +245,7 @@
         </a-space>
       </template>
     </a-modal>
-    
+
     <!-- 代码包详情弹窗 -->
     <a-modal
       v-model:visible="detailVisible"
@@ -273,7 +257,7 @@
     >
       <div v-if="packageDetail" class="package-detail">
         <!-- 基本信息 -->
-        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
+        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
           <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
           <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
           <a-descriptions-item label="类型">
@@ -289,28 +273,28 @@
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="文件MD5" :span="2">
-            <a-typography-text copyable>{{ packageDetail.file_md5 || '-' }}</a-typography-text>
+            <a-typography-text copyable>{{ packageDetail.file_md5 || "-" }}</a-typography-text>
           </a-descriptions-item>
           <a-descriptions-item label="描述" :span="2">
-            {{ packageDetail.description || '-' }}
+            {{ packageDetail.description || "-" }}
           </a-descriptions-item>
         </a-descriptions>
-        
+
         <!-- 存储信息 -->
-        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4);">
+        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
           <a-descriptions-item label="云账户">
-            {{ packageDetail.cloud_account_id || '本地存储' }}
+            {{ packageDetail.cloud_account_id || "本地存储" }}
           </a-descriptions-item>
           <a-descriptions-item label="存储类型">
             <a-tag :color="packageDetail.cos_bucket === 'local' ? 'orange' : 'blue'">
-              {{ packageDetail.cos_bucket === 'local' ? '本地存储' : 'COS存储' }}
+              {{ packageDetail.cos_bucket === "local" ? "本地存储" : "COS存储" }}
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="COS地区">
-            {{ packageDetail.cos_region || '-' }}
+            {{ packageDetail.cos_region || "-" }}
           </a-descriptions-item>
           <a-descriptions-item label="COS桶">
-            {{ packageDetail.cos_bucket === 'local' ? '-' : (packageDetail.cos_bucket || '-') }}
+            {{ packageDetail.cos_bucket === "local" ? "-" : packageDetail.cos_bucket || "-" }}
           </a-descriptions-item>
           <a-descriptions-item label="存储路径" :span="2">
             <a-typography-text copyable v-if="packageDetail.cos_path">
@@ -319,30 +303,36 @@
             <span v-else>-</span>
           </a-descriptions-item>
         </a-descriptions>
-        
+
         <!-- 时间信息 -->
         <a-descriptions title="时间信息" :column="2" bordered size="medium">
           <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatTime(packageDetail.created_time) }}</a-descriptions-item>
           <a-descriptions-item label="最后部署时间" :span="2">
-            {{ packageDetail.last_deploy_time ? formatTime(packageDetail.last_deploy_time) : '-' }}
+            {{ packageDetail.last_deploy_time ? formatTime(packageDetail.last_deploy_time) : "-" }}
           </a-descriptions-item>
         </a-descriptions>
-        
-        <div style="margin-top: var(--moox-space-4); text-align: right;">
+
+        <div style="margin-top: var(--moox-space-4); text-align: right">
           <a-space>
             <a-button @click="handleDetailCancel">关闭</a-button>
-            <a-button 
+            <a-button
               type="primary"
               status="success"
               @click="onDownload(packageDetail)"
               :disabled="packageDetail.status !== 1"
-              :loading="downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100"
+              :loading="
+                downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100
+              "
             >
               <template #icon>
                 <icon-download />
               </template>
-              <span v-if="downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100">
+              <span
+                v-if="
+                  downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100
+                "
+              >
                 下载中...
               </span>
               <span v-else>下载</span>
@@ -350,19 +340,19 @@
           </a-space>
         </div>
       </div>
-      <div v-else style="text-align: center; padding: var(--moox-space-8);">
+      <div v-else style="text-align: center; padding: var(--moox-space-8)">
         <a-spin :loading="true" />
-        <div style="margin-top: var(--moox-space-4);">加载中...</div>
+        <div style="margin-top: var(--moox-space-4)">加载中...</div>
       </div>
     </a-modal>
   </component>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, reactive, computed, onMounted } from 'vue';
-import { Message, Modal } from '@arco-design/web-vue';
-import { 
-  getFunctionPackageList, 
+import { ref, watch, reactive, computed, onMounted } from "vue";
+import { Message, Modal } from "@arco-design/web-vue";
+import {
+  getFunctionPackageList,
   getFunctionPackageDetail,
   uploadFunctionPackage,
   deleteFunctionPackage,
@@ -375,39 +365,38 @@ import {
   PACKAGE_TYPE_LABEL,
   type FunctionPackage,
   type PackageListRequest
-} from '@/api/function-package';
-import { getCloudAccountList, type CloudAccount } from '@/api/cloud-account';
+} from "@/api/function-package";
+import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
 
 // Props
 const props = defineProps<{
   modelValue?: boolean;
-  mode?: 'page' | 'modal';
+  mode?: "page" | "modal";
   packageType?: string | number; // 用于过滤代码包类型
   bizType?: string; // 用于过滤业务类型
 }>();
 
 // Emits
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean];
-  'refresh': [];
+  "update:modelValue": [value: boolean];
+  refresh: [];
 }>();
 
-
 // 响应式数据
-const packageManageMode = computed(() => props.mode || 'page');
-const standalone = computed(() => packageManageMode.value === 'page');
+const packageManageMode = computed(() => props.mode || "page");
+const standalone = computed(() => packageManageMode.value === "page");
 const visible = ref(standalone.value ? true : props.modelValue);
-const packageManageContainer = computed(() => standalone.value ? 'div' : Modal);
+const packageManageContainer = computed(() => (standalone.value ? "div" : Modal));
 const packageManageContainerProps = computed(() => {
   if (standalone.value) {
     return {
-      class: 'moox-page function-package-page'
+      class: "moox-page function-package-page"
     };
   }
 
   return {
     visible: visible.value,
-    title: '代码包版本管理',
+    title: "代码包版本管理",
     width: 1200,
     maskClosable: false,
     footer: false
@@ -427,8 +416,8 @@ const detailVisible = ref(false);
 const packageDetail = ref<FunctionPackage | null>(null);
 
 // 版本验证状态
-const versionValidationStatus = ref<'error' | 'warning' | 'success' | undefined>(undefined);
-const versionFeedback = ref<string>('');
+const versionValidationStatus = ref<"error" | "warning" | "success" | undefined>(undefined);
+const versionFeedback = ref<string>("");
 const isCheckingVersion = ref(false);
 
 // 搜索表单
@@ -446,36 +435,39 @@ const pagination = computed(() => ({
   showSizeChanger: true,
   showJumper: true,
   showTotal: true,
-  pageSizeOptions: ['10', '20', '50', '100']
+  pageSizeOptions: ["10", "20", "50", "100"]
 }));
 
 const total = ref(0);
 
 // 上传表单数据
 const defaultUploadForm = {
-  package_name: 'moox-collector',
-  version: 'dev',
-  description: '',
-  runtime: 'Python3.9',
+  package_name: "moox-collector",
+  version: "dev",
+  description: "",
+  runtime: "Python3.9",
   package_type: 1,
-  biz_type: '',
-  cloud_account_id: ''
+  biz_type: "",
+  cloud_account_id: ""
 };
 
 const uploadForm = reactive({ ...defaultUploadForm });
 
 // 监听属性变化
-watch(() => props.modelValue, async (newVal) => {
-  if (standalone.value) return;
-  visible.value = newVal;
-  if (newVal) {
-    await initializePackageManage();
+watch(
+  () => props.modelValue,
+  async newVal => {
+    if (standalone.value) return;
+    visible.value = newVal;
+    if (newVal) {
+      await initializePackageManage();
+    }
   }
-});
+);
 
-watch(visible, (newVal) => {
+watch(visible, newVal => {
   if (!standalone.value) {
-    emit('update:modelValue', newVal);
+    emit("update:modelValue", newVal);
   }
 });
 
@@ -501,7 +493,8 @@ const loadPackageList = async () => {
   loading.value = true;
   try {
     // 构建查询参数，排除 package_type
-    const { package_type, ...queryParams } = searchForm;
+    const queryParams = { ...searchForm };
+    delete queryParams.package_type;
     const response = await getFunctionPackageList(queryParams);
 
     if (response?.items) {
@@ -512,9 +505,9 @@ const loadPackageList = async () => {
       total.value = 0;
     }
   } catch (error) {
-    console.error('加载代码包列表失败:', error);
+    console.error("加载代码包列表失败:", error);
     Message.error({
-      content: '加载代码包列表失败',
+      content: "加载代码包列表失败",
       duration: 5000
     });
   } finally {
@@ -528,9 +521,9 @@ const loadCloudAccounts = async () => {
     const accounts = await getCloudAccountList();
     cloudAccountOptions.value = accounts || [];
   } catch (error) {
-    console.error('加载云账户列表失败:', error);
+    console.error("加载云账户列表失败:", error);
     cloudAccountOptions.value = [];
-    Message.error(error instanceof Error ? error.message : '加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署');
+    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
   }
 };
 
@@ -550,7 +543,7 @@ const handlePageSizeChange = (pageSize: number) => {
 const onAdd = () => {
   // 根据传入的 packageType 和 bizType 设置默认值
   const defaultPackageType = resolvePackageType(props.packageType);
-  const defaultBizType = props.bizType || '';
+  const defaultBizType = props.bizType || "";
   Object.assign(uploadForm, {
     ...defaultUploadForm,
     package_type: defaultPackageType,
@@ -560,23 +553,23 @@ const onAdd = () => {
   fileList.value = [];
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
-  versionFeedback.value = '';
+  versionFeedback.value = "";
   uploadVisible.value = true;
 };
 
 // 包类型变化处理
 const packageNameForType = (packageType: number) => {
   const map: Record<number, string> = {
-    1: 'moox-collector',
-    2: 'factor_calculator',
-    3: 'custom_package'
+    1: "moox-collector",
+    2: "factor_calculator",
+    3: "custom_package"
   };
-  return map[packageType] || 'moox-collector';
+  return map[packageType] || "moox-collector";
 };
 
 const onPackageTypeChange = (value: number) => {
   uploadForm.package_name = packageNameForType(value);
-  
+
   // 包类型变化时重新检查版本
   if (uploadForm.version) {
     checkVersionExists();
@@ -591,16 +584,16 @@ const checkVersionExists = async () => {
 
   // 去除首尾空格
   uploadForm.version = uploadForm.version.trim();
-  
+
   if (!uploadForm.version) {
     versionValidationStatus.value = undefined;
-    versionFeedback.value = '';
+    versionFeedback.value = "";
     return;
   }
 
   isCheckingVersion.value = true;
   versionValidationStatus.value = undefined;
-  versionFeedback.value = '正在检查版本...';
+  versionFeedback.value = "正在检查版本...";
 
   try {
     // 使用现有的列表查询API检查版本是否存在
@@ -612,31 +605,30 @@ const checkVersionExists = async () => {
 
     if (response?.items) {
       const existingPackages = response.items || [];
-      
+
       // 检查是否有相同版本的包（排除已删除的）
-      const duplicatePackage = existingPackages.find((pkg: FunctionPackage) => 
-        pkg.version === uploadForm.version && 
-        pkg.package_name === uploadForm.package_name &&
-        pkg.status !== 4 // 排除已删除状态
+      const duplicatePackage = existingPackages.find(
+        (pkg: FunctionPackage) =>
+          pkg.version === uploadForm.version && pkg.package_name === uploadForm.package_name && pkg.status !== 4 // 排除已删除状态
       );
 
       if (duplicatePackage) {
-        versionValidationStatus.value = 'error';
+        versionValidationStatus.value = "error";
         versionFeedback.value = `版本 ${uploadForm.version} 已存在，请使用其他版本号`;
       } else {
-        versionValidationStatus.value = 'success';
-        versionFeedback.value = '版本号可用';
+        versionValidationStatus.value = "success";
+        versionFeedback.value = "版本号可用";
       }
     } else {
       // 查询失败，不显示错误，允许用户继续
       versionValidationStatus.value = undefined;
-      versionFeedback.value = '';
+      versionFeedback.value = "";
     }
   } catch (error) {
-    console.error('检查版本失败:', error);
+    console.error("检查版本失败:", error);
     // 查询失败，不显示错误，允许用户继续
     versionValidationStatus.value = undefined;
-    versionFeedback.value = '';
+    versionFeedback.value = "";
   } finally {
     isCheckingVersion.value = false;
   }
@@ -649,15 +641,15 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
     const fileName = fileItem.file.name;
 
     // 检查文件类型
-    if (!fileName.toLowerCase().endsWith('.zip')) {
+    if (!fileName.toLowerCase().endsWith(".zip")) {
       Message.error({
-        content: '只支持ZIP格式的文件',
+        content: "只支持ZIP格式的文件",
         duration: 5000
       });
       fileList.value = [];
-      uploadForm.version = '';
+      uploadForm.version = "";
       versionValidationStatus.value = undefined;
-      versionFeedback.value = '';
+      versionFeedback.value = "";
       return;
     }
 
@@ -665,18 +657,18 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
     const versionMatch = fileName.match(/-v(\d+\.\d+\.\d+)\.zip$/i);
     if (!versionMatch) {
       Message.error({
-        content: '文件名格式不正确，应为：xxx-v1.0.45.zip（例如：collector-scf-v1.0.45.zip）',
+        content: "文件名格式不正确，应为：xxx-v1.0.45.zip（例如：collector-scf-v1.0.45.zip）",
         duration: 5000
       });
       fileList.value = [];
-      uploadForm.version = '';
-      versionValidationStatus.value = 'error';
-      versionFeedback.value = '文件名格式不符合要求';
+      uploadForm.version = "";
+      versionValidationStatus.value = "error";
+      versionFeedback.value = "文件名格式不符合要求";
       return;
     }
 
     // 提取版本号（包含 v 前缀）
-    const version = 'v' + versionMatch[1];
+    const version = "v" + versionMatch[1];
     uploadForm.version = version;
 
     // 解析成功后自动检查版本是否存在
@@ -686,19 +678,19 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
     const maxSize = 100 * 1024 * 1024;
     if (fileItem.file.size > maxSize) {
       Message.error({
-        content: '文件大小不能超过100MB',
+        content: "文件大小不能超过100MB",
         duration: 5000
       });
       fileList.value = [];
-      uploadForm.version = '';
+      uploadForm.version = "";
       versionValidationStatus.value = undefined;
-      versionFeedback.value = '';
+      versionFeedback.value = "";
       return;
     }
   } else {
-    uploadForm.version = '';
+    uploadForm.version = "";
     versionValidationStatus.value = undefined;
-    versionFeedback.value = '';
+    versionFeedback.value = "";
   }
 };
 
@@ -706,7 +698,7 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
 const handleUploadCancel = () => {
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
-  versionFeedback.value = '';
+  versionFeedback.value = "";
   uploadVisible.value = false;
 };
 
@@ -716,12 +708,12 @@ const validateUploadForm = () => {
 
   // 验证函数包类型
   if (!uploadForm.package_type) {
-    errors.push('请选择函数包类型');
+    errors.push("请选择函数包类型");
   }
 
   // 验证版本号
   if (!uploadForm.version) {
-    errors.push('请输入版本号');
+    errors.push("请输入版本号");
   } else {
     // 去除首尾空格
     uploadForm.version = uploadForm.version.trim();
@@ -729,64 +721,64 @@ const validateUploadForm = () => {
     // 版本号格式验证 (支持 v1.0.0, 1.0.0, v1.0, 1.0 等格式)
     const versionRegex = /^v?\d+(\.\d+){0,2}(-[a-zA-Z0-9]+)?$/;
     if (!versionRegex.test(uploadForm.version)) {
-      errors.push('版本号格式不正确，请使用如 v1.0.0 或 1.0.0 的格式');
+      errors.push("版本号格式不正确，请使用如 v1.0.0 或 1.0.0 的格式");
     }
 
     // 检查版本号长度
     if (uploadForm.version.length > 20) {
-      errors.push('版本号长度不能超过20个字符');
+      errors.push("版本号长度不能超过20个字符");
     }
   }
 
   // 验证运行时环境
   if (!uploadForm.runtime) {
-    errors.push('请选择运行时环境');
+    errors.push("请选择运行时环境");
   }
 
   // 验证云账户（必填）
   if (!uploadForm.cloud_account_id) {
-    errors.push('请选择云账户，仅支持COS方式上传');
+    errors.push("请选择云账户，仅支持COS方式上传");
   }
 
   if (fileList.value.length === 0) {
-    errors.push('请选择要上传的ZIP文件');
+    errors.push("请选择要上传的ZIP文件");
   } else {
     const file = fileList.value[0];
     if (!file.file) {
-      errors.push('文件读取失败，请重新选择文件');
+      errors.push("文件读取失败，请重新选择文件");
     } else {
-      if (!file.file.name.toLowerCase().endsWith('.zip')) {
-        errors.push('只支持ZIP格式的文件');
+      if (!file.file.name.toLowerCase().endsWith(".zip")) {
+        errors.push("只支持ZIP格式的文件");
       }
       if (file.file.size > 100 * 1024 * 1024) {
-        errors.push('文件大小不能超过100MB');
+        errors.push("文件大小不能超过100MB");
       }
       if (file.file.size === 0) {
-        errors.push('文件不能为空');
+        errors.push("文件不能为空");
       }
       if (file.file.name.length > 255) {
-        errors.push('文件名长度不能超过255个字符');
+        errors.push("文件名长度不能超过255个字符");
       }
     }
   }
-  
+
   // 如果有描述，验证长度和内容
   if (uploadForm.description) {
     uploadForm.description = uploadForm.description.trim();
     if (uploadForm.description.length > 500) {
-      errors.push('描述长度不能超过500个字符');
+      errors.push("描述长度不能超过500个字符");
     }
   }
-  
+
   return errors;
 };
 
 // 上传确认
 const handleUploadOk = async () => {
   // 检查版本是否重复
-  if (versionValidationStatus.value === 'error') {
+  if (versionValidationStatus.value === "error") {
     Message.error({
-      content: versionFeedback.value || '版本已存在，请修改版本号',
+      content: versionFeedback.value || "版本已存在，请修改版本号",
       duration: 5000
     });
     return;
@@ -796,9 +788,9 @@ const handleUploadOk = async () => {
   if (uploadForm.version && !versionValidationStatus.value) {
     await checkVersionExists();
     // 检查后如果发现重复，阻止提交
-    if (versionValidationStatus.value === 'error') {
+    if (versionValidationStatus.value === "error") {
       Message.error({
-        content: versionFeedback.value || '版本已存在，请修改版本号',
+        content: versionFeedback.value || "版本已存在，请修改版本号",
         duration: 5000
       });
       return;
@@ -822,13 +814,13 @@ const handleUploadOk = async () => {
   }
 
   uploading.value = true;
-  
+
   try {
     await handleUpload();
   } catch (error: any) {
-    console.error('上传代码包失败:', error);
+    console.error("上传代码包失败:", error);
     Message.error({
-      content: error?.message || '上传代码包失败',
+      content: error?.message || "上传代码包失败",
       duration: 5000 // 错误消息显示5秒
     });
     // 出错时不关闭弹窗，让用户可以修改后重新提交
@@ -840,29 +832,31 @@ const handleUploadOk = async () => {
 // 统一上传处理（独立 cloudnode 服务）
 const handleUpload = async () => {
   try {
-    const originalFilename = fileList.value[0]?.file?.name || '';
-    await uploadFunctionPackage({
-      ...uploadForm,
-      original_filename: originalFilename
-    }, fileList.value[0].file);
+    const originalFilename = fileList.value[0]?.file?.name || "";
+    await uploadFunctionPackage(
+      {
+        ...uploadForm,
+        original_filename: originalFilename
+      },
+      fileList.value[0].file
+    );
 
-    Message.success('上传成功！');
+    Message.success("上传成功！");
     uploadVisible.value = false;
     await loadPackageList();
-    emit('refresh');
+    emit("refresh");
   } catch (error: any) {
-    console.error('上传代码包失败:', error);
-    
-    const errorMessage = error?.message || '上传代码包失败';
-    
+    console.error("上传代码包失败:", error);
+
+    const errorMessage = error?.message || "上传代码包失败";
+
     Message.error(errorMessage);
     uploading.value = false;
   }
 };
 
 // 下载进度状态（简化版）
-const downloadProgress = ref<{[key: string]: number}>({});
-
+const downloadProgress = ref<{ [key: string]: number }>({});
 
 // 下载（新的URL下载方式）
 const onDownload = async (record: FunctionPackage) => {
@@ -880,13 +874,12 @@ const onDownload = async (record: FunctionPackage) => {
 
     // 清理进度状态
     delete downloadProgress.value[record.package_id];
-
   } catch (error) {
-    console.error('下载失败:', error);
+    console.error("下载失败:", error);
     // 清除状态
     delete downloadProgress.value[record.package_id];
 
-    const errorMessage = error instanceof Error ? error.message : '未知错误';
+    const errorMessage = error instanceof Error ? error.message : "未知错误";
     Message.error({
       content: `下载失败: ${errorMessage}`,
       duration: 5000
@@ -898,14 +891,14 @@ const onDownload = async (record: FunctionPackage) => {
 const onDelete = async (record: FunctionPackage) => {
   try {
     await deleteFunctionPackage(record.package_id);
-    Message.success('删除成功');
+    Message.success("删除成功");
     // 刷新代码包列表
     await loadPackageList();
-    emit('refresh');
+    emit("refresh");
   } catch (error) {
-    console.error('删除代码包失败:', error);
+    console.error("删除代码包失败:", error);
     Message.error({
-      content: '删除代码包失败',
+      content: "删除代码包失败",
       duration: 5000
     });
   }
@@ -926,12 +919,12 @@ const onShowDetail = async (record: FunctionPackage) => {
     if (detail) {
       packageDetail.value = detail;
     } else {
-      throw new Error('获取详情失败');
+      throw new Error("获取详情失败");
     }
   } catch (error) {
-    console.error('获取代码包详情失败:', error);
+    console.error("获取代码包详情失败:", error);
     Message.error({
-      content: '获取代码包详情失败',
+      content: "获取代码包详情失败",
       duration: 5000
     });
     detailVisible.value = false;
@@ -947,9 +940,9 @@ const handleDetailCancel = () => {
 // 工具函数
 const getProviderName = (provider: string) => {
   const providerMap: Record<string, string> = {
-    'tencent': '腾讯云',
-    'aliyun': '阿里云',
-    'aws': 'AWS'
+    tencent: "腾讯云",
+    aliyun: "阿里云",
+    aws: "AWS"
   };
   return providerMap[provider] || provider;
 };
@@ -957,74 +950,73 @@ const getProviderName = (provider: string) => {
 const getPackageTypeColor = (packageType: number | string) => {
   const normalized = String(packageType);
   const colorMap: Record<string, string> = {
-    '1': 'blue',
-    '2': 'green',
-    '3': 'gray',
-    'PACKAGE_TYPE_COLLECTOR': 'blue',
-    'PACKAGE_TYPE_FACTOR': 'green',
-    'PACKAGE_TYPE_CUSTOM': 'gray',
-    'data_collector': 'blue',
-    'factor_calculator': 'green'
+    "1": "blue",
+    "2": "green",
+    "3": "gray",
+    PACKAGE_TYPE_COLLECTOR: "blue",
+    PACKAGE_TYPE_FACTOR: "green",
+    PACKAGE_TYPE_CUSTOM: "gray",
+    data_collector: "blue",
+    factor_calculator: "green"
   };
-  return colorMap[normalized] || 'gray';
+  return colorMap[normalized] || "gray";
 };
 
 const getStatusColor = (status: number | string) => {
   const colorMap: Record<number, string> = {
-    1: 'blue',
-    2: 'green',
-    3: 'red',
-    4: 'gray'
+    1: "blue",
+    2: "green",
+    3: "red",
+    4: "gray"
   };
-  const numeric = typeof status === 'number' ? status : Number(status);
-  return colorMap[numeric] || 'gray';
+  const numeric = typeof status === "number" ? status : Number(status);
+  return colorMap[numeric] || "gray";
 };
 
 const getPackageStatusLabel = (status: number | string) => {
-  const numeric = typeof status === 'number' ? status : Number(status);
+  const numeric = typeof status === "number" ? status : Number(status);
   const enumMap: Record<number, string> = {
-    1: 'PACKAGE_STATUS_PENDING',
-    2: 'PACKAGE_STATUS_AVAILABLE',
-    3: 'PACKAGE_STATUS_FAILED',
-    4: 'PACKAGE_STATUS_DELETED'
+    1: "PACKAGE_STATUS_PENDING",
+    2: "PACKAGE_STATUS_AVAILABLE",
+    3: "PACKAGE_STATUS_FAILED",
+    4: "PACKAGE_STATUS_DELETED"
   };
-  const key = enumMap[numeric] || 'PACKAGE_STATUS_UNSPECIFIED';
-  return PACKAGE_STATUS_LABEL[key] || '未知';
+  const key = enumMap[numeric] || "PACKAGE_STATUS_UNSPECIFIED";
+  return PACKAGE_STATUS_LABEL[key] || "未知";
 };
 
 const getPackageTypeLabel = (packageType: number | string) => {
-  if (typeof packageType === 'string' && PACKAGE_TYPE_LABEL[packageType]) {
+  if (typeof packageType === "string" && PACKAGE_TYPE_LABEL[packageType]) {
     return PACKAGE_TYPE_LABEL[packageType];
   }
-  const numeric = typeof packageType === 'number' ? packageType : Number(packageType);
+  const numeric = typeof packageType === "number" ? packageType : Number(packageType);
   const enumMap: Record<number, string> = {
-    1: 'PACKAGE_TYPE_COLLECTOR',
-    2: 'PACKAGE_TYPE_FACTOR',
-    3: 'PACKAGE_TYPE_CUSTOM'
+    1: "PACKAGE_TYPE_COLLECTOR",
+    2: "PACKAGE_TYPE_FACTOR",
+    3: "PACKAGE_TYPE_CUSTOM"
   };
-  const key = enumMap[numeric] || 'PACKAGE_TYPE_UNSPECIFIED';
+  const key = enumMap[numeric] || "PACKAGE_TYPE_UNSPECIFIED";
   return PACKAGE_TYPE_LABEL[key] || String(packageType);
 };
 
 const formatFileSize = (size: number) => {
-  if (size < 1024) return size + 'B';
-  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + 'KB';
-  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + 'MB';
-  return (size / (1024 * 1024 * 1024)).toFixed(1) + 'GB';
+  if (size < 1024) return size + "B";
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + "KB";
+  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + "MB";
+  return (size / (1024 * 1024 * 1024)).toFixed(1) + "GB";
 };
 
 const formatTime = (time: string | undefined) => {
-  if (!time) return '-';
-  return new Date(time).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
+  if (!time) return "-";
+  return new Date(time).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
   });
 };
-
 </script>
 
 <style scoped>
@@ -1093,8 +1085,12 @@ const formatTime = (time: string | undefined) => {
 
 /* 加载动画 */
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .spinning-icon {

@@ -204,11 +204,20 @@ export interface UpdateAccountRsp {
   account: Account;
 }
 
-export interface DeleteAccountReq { account_id: string; }
-export interface DeleteAccountRsp { ret_info: RetInfo; }
+export interface DeleteAccountReq {
+  account_id: string;
+}
+export interface DeleteAccountRsp {
+  ret_info: RetInfo;
+}
 
-export interface GetAccountReq { account_id: string; }
-export interface GetAccountRsp { ret_info: RetInfo; account: Account; }
+export interface GetAccountReq {
+  account_id: string;
+}
+export interface GetAccountRsp {
+  ret_info: RetInfo;
+  account: Account;
+}
 
 export interface ListAccountsReq {
   user_id?: string;
@@ -241,7 +250,9 @@ export interface GetBalancesRsp {
   balances: Balance[];
 }
 
-export interface SyncBalancesReq { account_id: string; }
+export interface SyncBalancesReq {
+  account_id: string;
+}
 export interface SyncBalancesRsp {
   ret_info: RetInfo;
   balances: Balance[];
@@ -289,10 +300,16 @@ export interface CreateApiKeyRsp {
   api_key_id: string;
 }
 
-export interface DeleteApiKeyReq { api_key_id: string; }
-export interface DeleteApiKeyRsp { ret_info: RetInfo; }
+export interface DeleteApiKeyReq {
+  api_key_id: string;
+}
+export interface DeleteApiKeyRsp {
+  ret_info: RetInfo;
+}
 
-export interface ListApiKeysReq { account_id: string; }
+export interface ListApiKeysReq {
+  account_id: string;
+}
 export interface ListApiKeysRsp {
   ret_info: RetInfo;
   api_keys: ApiKey[];
@@ -321,10 +338,16 @@ export interface UpdateChannelReq {
   endpoint?: string;
   rate_limit?: number;
 }
-export interface UpdateChannelRsp { ret_info: RetInfo; }
+export interface UpdateChannelRsp {
+  ret_info: RetInfo;
+}
 
-export interface DeleteChannelReq { channel_id: string; }
-export interface DeleteChannelRsp { ret_info: RetInfo; }
+export interface DeleteChannelReq {
+  channel_id: string;
+}
+export interface DeleteChannelRsp {
+  ret_info: RetInfo;
+}
 
 export interface ListChannelsReq {
   account_id?: string;
@@ -337,7 +360,9 @@ export interface ListChannelsRsp {
   page_result: PageResult;
 }
 
-export interface TestChannelReq { channel_id: string; }
+export interface TestChannelReq {
+  channel_id: string;
+}
 export interface TestChannelRsp {
   ret_info: RetInfo;
   reachable: boolean;
@@ -418,7 +443,9 @@ export interface SetLeverageReq {
   symbol: string;
   leverage: string;
 }
-export interface SetLeverageRsp { ret_info: RetInfo; }
+export interface SetLeverageRsp {
+  ret_info: RetInfo;
+}
 
 export interface DustTransferItem {
   asset: string;

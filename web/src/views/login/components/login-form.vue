@@ -30,7 +30,7 @@
         </a-form-item>
         <a-form-item>
           <a-button long type="primary" html-type="submit" :loading="loginLoading">
-            {{ loginLoading ? '登录中...' : '登录' }}
+            {{ loginLoading ? "登录中..." : "登录" }}
           </a-button>
         </a-form-item>
       </a-form>
@@ -94,7 +94,7 @@ const rules = ref({
           callback();
           return;
         }
-        
+
         // 检查长度
         if (value.length < 1 || value.length > 20) {
           callback("账号长度必须在1-20个字符之间");
@@ -123,7 +123,7 @@ const rules = ref({
           callback();
           return;
         }
-        
+
         // 检查长度
         if (value.length < 1 || value.length > 20) {
           callback("密码长度必须在1-20个字符之间");
@@ -155,30 +155,30 @@ const onSubmit = async ({ errors, values }: any) => {
     Message.error("请修正表单中的错误后重试");
     return;
   }
-  
+
   // 额外的安全检查
   if (!values.username || !values.password) {
     Message.error("请填写完整的登录信息");
     return;
   }
-  
+
   onLogin();
 };
 
 // 登录
 const onLogin = async () => {
   if (loginLoading.value) return;
-  
+
   try {
     loginLoading.value = true;
-    
+
     // 首先进行表单验证
     const validateResult = await formRef.value?.validate();
     if (validateResult) {
       Message.error("请修正输入格式错误");
       return;
     }
-    
+
     // 检查必填字段
     if (!form.value.username.trim()) {
       Message.error("请输入账号");
@@ -188,7 +188,7 @@ const onLogin = async () => {
       Message.error("请输入密码");
       return;
     }
-    
+
     // 执行字符串格式验证
     try {
       await validateStringFormat(form.value.username, "账号");
@@ -197,19 +197,19 @@ const onLogin = async () => {
       Message.error(error);
       return;
     }
-    
+
     // 使用新的安全登录方法
     let res = await loginAPI({
       username: form.value.username,
       password: form.value.password,
       verifyCode: form.value.verifyCode
     });
-    
+
     // 检查登录是否成功 - 使用新的ret_info协议格式
     if (res.ret_info.code !== 0) {
       throw new Error(res.ret_info.msg || "登录失败");
     }
-    
+
     if (!res.access_token || !res.session_id || !res.request_signing_key || !res.expires_at) {
       throw new Error("登录响应中缺少安全会话信息");
     }
@@ -218,29 +218,28 @@ const onLogin = async () => {
       token: res.access_token,
       sessionId: res.session_id,
       signingKey: res.request_signing_key,
-      expiresAt: res.expires_at,
+      expiresAt: res.expires_at
     });
-    
+
     // 加载用户信息
     await userStores.setAccount();
-    
+
     // 加载路由信息
     await routeStore.initSetRouter();
 
     Message.success("登录成功");
-    
+
     // 跳转首页
     router.replace("/home");
-    
+
     // 如果选择了记住密码，保存用户名（不保存密码）
     if (form.value.remember) {
-      localStorage.setItem('remembered_username', form.value.username);
+      localStorage.setItem("remembered_username", form.value.username);
     } else {
-      localStorage.removeItem('remembered_username');
+      localStorage.removeItem("remembered_username");
     }
-    
   } catch (error: unknown) {
-    console.error('❌ 登录失败:', error);
+    console.error("❌ 登录失败:", error);
 
     // 清理可能设置的无效token
     await userStores.logOut();
@@ -257,7 +256,7 @@ const onLogin = async () => {
 
 // 页面加载时恢复记住的用户名
 onMounted(() => {
-  const rememberedUsername = localStorage.getItem('remembered_username');
+  const rememberedUsername = localStorage.getItem("remembered_username");
   if (rememberedUsername) {
     form.value.username = rememberedUsername;
     form.value.remember = true;

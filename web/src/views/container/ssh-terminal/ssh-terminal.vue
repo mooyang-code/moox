@@ -5,23 +5,13 @@
       <div class="toolbar-right">
         <a-space>
           <a-tooltip content="重连">
-            <a-button
-              size="small"
-              type="text"
-              :disabled="!activeTab"
-              @click="reconnect"
-            >
+            <a-button size="small" type="text" :disabled="!activeTab" @click="reconnect">
               <template #icon><icon-sync /></template>
               重连
             </a-button>
           </a-tooltip>
           <a-tooltip content="清屏">
-            <a-button
-              size="small"
-              type="text"
-              :disabled="!activeTab"
-              @click="clearScreen"
-            >
+            <a-button size="small" type="text" :disabled="!activeTab" @click="clearScreen">
               <template #icon><icon-eraser /></template>
               清屏
             </a-button>
@@ -39,12 +29,7 @@
             </a-button>
           </a-tooltip>
           <a-tooltip content="文件管理">
-            <a-button
-              size="small"
-              type="text"
-              :disabled="!activeTab || !activeTab.connected"
-              @click="openFileManager"
-            >
+            <a-button size="small" type="text" :disabled="!activeTab || !activeTab.connected" @click="openFileManager">
               <template #icon><icon-folder /></template>
               文件管理
             </a-button>
@@ -85,22 +70,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
-import { useRoute } from 'vue-router';
-import { Message } from '@arco-design/web-vue';
-import { Terminal } from '@xterm/xterm';
-import { AttachAddon } from '@xterm/addon-attach';
-import { FitAddon } from '@xterm/addon-fit';
-import '@xterm/xterm/css/xterm.css';
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
+import { useRoute } from "vue-router";
+import { Message } from "@arco-design/web-vue";
+import { Terminal } from "@xterm/xterm";
+import { AttachAddon } from "@xterm/addon-attach";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import {
   createSSHSession,
   disconnectSSHSession,
   resizeSSHTerminal,
   getSSHWebSocketUrl,
   getSSHHostDetail,
-  type SSHHost,
-} from '@/api/modules/ssh';
-import SshFileManager from '@/views/container/ssh-file-manager/ssh-file-manager.vue';
+  type SSHHost
+} from "@/api/modules/ssh";
+import SshFileManager from "@/views/container/ssh-file-manager/ssh-file-manager.vue";
 
 const route = useRoute();
 const props = defineProps<{ initialHostId?: number; disconnectOnUnmount?: boolean }>();
@@ -118,11 +103,9 @@ interface TerminalTab {
 }
 
 const tabs = ref<TerminalTab[]>([]);
-const activeTabId = ref<string>('');
+const activeTabId = ref<string>("");
 
-const activeTab = computed<TerminalTab | undefined>(() =>
-  tabs.value.find((t) => t.id === activeTabId.value)
-);
+const activeTab = computed<TerminalTab | undefined>(() => tabs.value.find(t => t.id === activeTabId.value));
 
 // Track terminal container DOM refs keyed by tab id
 const terminalRefs: Record<string, HTMLElement | null> = {};
@@ -147,7 +130,7 @@ const setupResizeObserver = (tabId: string) => {
   }
 
   resizeObserver = new ResizeObserver(() => {
-    const tab = tabs.value.find((t) => t.id === tabId);
+    const tab = tabs.value.find(t => t.id === tabId);
     if (tab?.fitAddon && tab.terminal) {
       try {
         tab.fitAddon.fit();
@@ -187,12 +170,12 @@ const connectToHost = async (hostId: number) => {
     const detailRes = await getSSHHostDetail(hostId);
     hostConfig = detailRes.host;
   } catch {
-    Message.error('获取主机信息失败');
+    Message.error("获取主机信息失败");
     return;
   }
 
   if (!hostConfig) {
-    Message.error('主机信息为空');
+    Message.error("主机信息为空");
     return;
   }
 
@@ -200,13 +183,13 @@ const connectToHost = async (hostId: number) => {
   let sessionId: string;
   try {
     const sessionRes = await createSSHSession({ host_id: hostId });
-    sessionId = sessionRes.session_id || '';
+    sessionId = sessionRes.session_id || "";
     if (!sessionId) {
-      Message.error('创建会话失败：无法获取 session_id');
+      Message.error("创建会话失败：无法获取 session_id");
       return;
     }
   } catch (err: any) {
-    Message.error('创建 SSH 会话失败：' + (err?.message || '未知错误'));
+    Message.error("创建 SSH 会话失败：" + (err?.message || "未知错误"));
     return;
   }
 
@@ -215,7 +198,7 @@ const connectToHost = async (hostId: number) => {
     id: sessionId,
     hostId: hostId,
     connected: false,
-    config: hostConfig,
+    config: hostConfig
   };
 
   tabs.value.push(tab);
@@ -231,7 +214,7 @@ const connectToHost = async (hostId: number) => {
 const initTerminal = async (tab: TerminalTab) => {
   const container = terminalRefs[tab.id];
   if (!container) {
-    Message.error('终端容器未就绪');
+    Message.error("终端容器未就绪");
     return;
   }
 
@@ -240,15 +223,15 @@ const initTerminal = async (tab: TerminalTab) => {
   const term = new Terminal({
     fontSize: config?.font_size || 14,
     fontFamily: config?.font_family || "'Consolas', 'Monaco', 'Courier New', monospace",
-    cursorStyle: config?.cursor_style || 'block',
+    cursorStyle: config?.cursor_style || "block",
     cursorBlink: true,
     theme: {
-      background: config?.background || '#1e1e1e',
-      foreground: config?.foreground || '#d4d4d4',
-      cursor: config?.cursor_color || '#ffffff',
+      background: config?.background || "#1e1e1e",
+      foreground: config?.foreground || "#d4d4d4",
+      cursor: config?.cursor_color || "#ffffff"
     },
     allowProposedApi: true,
-    scrollback: 5000,
+    scrollback: 5000
   });
 
   const fitAddon = new FitAddon();
@@ -277,12 +260,12 @@ const initTerminal = async (tab: TerminalTab) => {
 
   ws.onclose = () => {
     tab.connected = false;
-    term.writeln('\r\n\x1b[31m[连接已断开]\x1b[0m');
+    term.writeln("\r\n\x1b[31m[连接已断开]\x1b[0m");
   };
 
   ws.onerror = () => {
     tab.connected = false;
-    term.writeln('\r\n\x1b[31m[连接发生错误]\x1b[0m');
+    term.writeln("\r\n\x1b[31m[连接发生错误]\x1b[0m");
   };
 
   tab.ws = ws;
@@ -315,7 +298,7 @@ const reconnect = async () => {
   delete terminalRefs[tabId];
 
   // Remove old tab
-  const idx = tabs.value.findIndex((t) => t.id === tabId);
+  const idx = tabs.value.findIndex(t => t.id === tabId);
   if (idx !== -1) {
     tabs.value.splice(idx, 1);
   }
@@ -344,13 +327,13 @@ const disconnectCurrent = async () => {
     // ignore
   }
   tab.connected = false;
-  tab.terminal?.writeln('\r\n\x1b[33m[已手动断开连接]\x1b[0m');
+  tab.terminal?.writeln("\r\n\x1b[33m[已手动断开连接]\x1b[0m");
 };
 
 // ---------- 文件管理弹窗 ----------
 
 const fileManagerVisible = ref(false);
-const fileManagerSessionId = ref('');
+const fileManagerSessionId = ref("");
 
 const openFileManager = () => {
   const tab = activeTab.value;
@@ -362,7 +345,7 @@ const openFileManager = () => {
 // ---------- Lifecycle ----------
 
 onMounted(async () => {
-  window.addEventListener('resize', handleWindowResize);
+  window.addEventListener("resize", handleWindowResize);
 
   // Priority 1: Auto-connect if hostId is provided in query
   const hostIdQuery = props.initialHostId || route.query.hostId;
@@ -375,7 +358,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleWindowResize);
+  window.removeEventListener("resize", handleWindowResize);
 
   if (resizeObserver) {
     resizeObserver.disconnect();

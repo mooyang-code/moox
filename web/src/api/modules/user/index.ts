@@ -15,8 +15,8 @@ export const getUserInfoAPI = async (accessToken: string) => {
       { app_info: ReturnType<typeof getAppInfo>; access_token: string; user_id: string },
       { user_info?: Record<string, any> }
     >(
-      'auth',
-      'GetUserInfo',
+      "auth",
+      "GetUserInfo",
       {
         app_info: getAppInfo(),
         access_token: accessToken,
@@ -25,18 +25,21 @@ export const getUserInfoAPI = async (accessToken: string) => {
       {
         headers: {
           Authorization: accessToken,
-          'X-Access-Token': accessToken,
-        },
+          "X-Access-Token": accessToken
+        }
       }
     );
   } catch (error: unknown) {
-    console.error('获取用户信息失败:', error);
+    console.error("获取用户信息失败:", error);
     throw error;
   }
 };
 
-export const logoutAPI = () =>
-  callControl<Record<string, never>, Record<string, never>>('auth', 'Logout', {});
+export const logoutAPI = () => callControl<Record<string, never>, Record<string, never>>("auth", "Logout", {});
 
-export const issueRawSessionTicketAPI = (operation: 'ssh_ws' | 'sftp_download' | 'sftp_upload', sessionId: string) =>
-  callControl<{ operation: string; session_id: string }, { ticket: string; expires_at: number }>('auth', 'IssueRawSessionTicket', { operation, session_id: sessionId });
+export const issueRawSessionTicketAPI = (operation: "ssh_ws" | "sftp_download" | "sftp_upload", sessionId: string) =>
+  callControl<{ operation: string; session_id: string }, { ticket: string; expires_at: number }>(
+    "auth",
+    "IssueRawSessionTicket",
+    { operation, session_id: sessionId }
+  );

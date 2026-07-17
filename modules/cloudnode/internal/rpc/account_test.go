@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"testing"
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"testing"
 )
 
 func newCatalogForAccountTests(t *testing.T) *store.CatalogRepository {

@@ -1,9 +1,16 @@
-export type StrategyMode = 'observe' | 'paper' | 'live';
-export type StrategyStatus = 'enabled' | 'disabled' | 'running' | 'paused' | 'waiting_data' | 'failed' | 'unknown' | 'stale';
-export type PerformanceSource = 'backtest' | 'observe' | 'paper' | 'live';
+export type StrategyMode = "observe" | "paper" | "live";
+export type StrategyStatus = "enabled" | "disabled" | "running" | "paused" | "waiting_data" | "failed" | "unknown" | "stale";
+export type PerformanceSource = "backtest" | "observe" | "paper" | "live";
 
-export interface PageRequest { page?: number; page_size?: number }
-export interface PageResponse { total?: number; page?: number; page_size?: number }
+export interface PageRequest {
+  page?: number;
+  page_size?: number;
+}
+export interface PageResponse {
+  total?: number;
+  page?: number;
+  page_size?: number;
+}
 
 export interface StrategyHealth {
   status: string;
@@ -108,7 +115,7 @@ export interface PerformanceSummary {
   volatility?: string;
   win_rate?: string;
   as_of?: string;
-  status?: 'ok' | 'insufficient_data' | 'stale' | string;
+  status?: "ok" | "insufficient_data" | "stale" | string;
 }
 
 export interface StrategyPerformance {
