@@ -79,12 +79,27 @@ Space 内产生名称碰撞。
 4. 重命名四个 View 及其 ViewColumn。
 5. 更新注释和显示名称，使建模意图可直接从 seed 中读出。
 
-同时扫描 `examples` 下其他加密货币 seed：
+`examples/` 只保留默认初始化、部署必需元数据和可执行 E2E 三类内容。删除以下
+已经被默认初始化文件替代或不再属于示例目录的文件：
 
-- 将交易所作为 Space 的示例改为 `crypto`。
-- 保留已经符合统一 Space 模型的文件。
-- 只在 Dataset 为单频且本次文件独立定义该 Dataset 时补充频率后缀；不把多频
-  Dataset 错误改成单频名称。
+- `metadata-cn-stock.seed.yaml`
+- `metadata-crypto.seed.yaml`
+- `metadata-crypto-binance-swap-kline.seed.yaml`
+- `metadata-crypto-binance-swap-symbols.seed.yaml`
+- `metadata-crypto-spot-kline-1m-view.seed.yaml`
+- `data-crypto-record-symbol-profiles.json`
+- `trade-sync/README.md`
+- `e2e/cloudnode_jetstream_queue.md`
+
+保留 `platform-local.seed.yaml`、Monitor 逻辑元数据与本地路由 seed、默认量化 seed，
+以及 E2E 可执行脚本。`examples/README.md` 改为只描述保留文件。
+
+E2E 不再依赖旧 Binance 演示 seed。它导入默认量化 seed 的 `crypto` Space，使用
+`binance_spot_kline_1h`，并通过 Metadata API 登记测试 Subject、SubjectSymbol 和
+DatasetSubject。测试对象属于运行期目录，不重新放回业务初始化 seed。
+
+`modules/storage/config/metadata.seed.yaml` 是 storage CLI 的模块内默认输入，不属于
+本次 `examples/` 清理范围；其定位另行收敛。
 
 不修改运行时代码、数据库迁移和既有环境数据。项目无需兼容旧初始化数据，新的
 环境直接使用更新后的 seed 创建元数据。
@@ -96,5 +111,5 @@ Space 内产生名称碰撞。
   DataSource、四个带 `1h` 后缀的 Dataset，且不存在 `crypto_binance` 或
   `crypto_okx`。
 - 运行 CLI 元数据相关单元测试。
-- 扫描示例 seed，确认不再把 Binance 或 OKX 定义为独立 Space。
-
+- 运行 E2E 脚本静态测试，并确认脚本只引用保留的 seed 和新 Dataset ID。
+- 扫描 `examples/`，确认旧文件和旧 Space ID 已清除。
