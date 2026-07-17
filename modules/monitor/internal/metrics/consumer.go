@@ -236,7 +236,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	actionCtx := trpc.CloneContext(ctx)
+	actionCtx := ctx
 	if d.Message == nil {
 		if d.DecodeError == nil {
 			return errors.New("empty metric delivery")

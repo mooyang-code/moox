@@ -73,26 +73,25 @@ func NewDNSProxy() *DNSProxy {
 
 // HandleSchedule trpc定时器[入口函数] - 定时解析配置的域名并缓存结果
 func HandleSchedule(ctx context.Context, params string) error {
-	ctxClone := trpc.CloneContext(ctx)
-	log.InfoContextf(ctxClone, "[DNSProxy] Starting DNS proxy schedule, params: %s", params)
+	log.InfoContextf(ctx, "[DNSProxy] Starting DNS proxy schedule, params: %s", params)
 
 	// 检查是否启用本地DNS解析
 	cfg := GetConfig()
 	if cfg != nil && !cfg.DNSProxy.EnableLocalDNSResolve {
-		log.InfoContextf(ctxClone, "[DNSProxy] Local DNS resolve is disabled, skip schedule")
+		log.InfoContextf(ctx, "[DNSProxy] Local DNS resolve is disabled, skip schedule")
 		return nil
 	}
 
 	if globalDNSInstance == nil {
 		err := fmt.Errorf("DNS proxy instance not initialized")
-		log.ErrorContext(ctxClone, "[DNSProxy] "+err.Error())
+		log.ErrorContext(ctx, "[DNSProxy] "+err.Error())
 		return err
 	}
 
 	// 获取配置的域名列表
 	domains := getScheduledDomains()
 	if len(domains) == 0 {
-		log.InfoContextf(ctxClone, "[DNSProxy] No domains configured for scheduled resolution")
+		log.InfoContextf(ctx, "[DNSProxy] No domains configured for scheduled resolution")
 		return nil
 	}
 
@@ -101,7 +100,7 @@ func HandleSchedule(ctx context.Context, params string) error {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 100 // 默认最大并发数
 	}
-	return resolveDomainsBatch(ctxClone, domains, maxConcurrent)
+	return resolveDomainsBatch(ctx, domains, maxConcurrent)
 }
 
 // resolveDomain 解析域名并返回IP列表（按延迟排序）

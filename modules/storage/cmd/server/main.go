@@ -92,7 +92,8 @@ func main() {
 		pb.RegisterMetadataService(s, storageService)
 		pb.RegisterAccessService(s, storageService)
 		registerAccessScanService(s, storageService)
-		startHostRetention(storageService, cfg.Storage.View.Maintenance)
+		stopRetention := startHostRetention(storageService, cfg.Storage.View.Maintenance)
+		defer stopRetention()
 	}
 
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
@@ -157,21 +158,23 @@ func shutdownTracing() {
 	}
 }
 
-func startHostRetention(access *storagesvc.Service, maintenance storageconfig.StorageViewMaintenance) {
+func startHostRetention(access *storagesvc.Service, maintenance storageconfig.StorageViewMaintenance) func() {
+	noop := func() {}
 	if access == nil || !maintenance.IsEnabled() {
-		return
+		return noop
 	}
 	retention, ok := parseStorageDuration(maintenance.HostRetention)
 	if !ok || retention <= 0 {
-		return
+		return noop
 	}
 	interval, ok := parseStorageDuration(maintenance.HostInterval)
 	if !ok || interval <= 0 {
 		interval = time.Hour
 	}
 	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
+	done := make(chan struct{})
 	go func() {
-		defer cancel()
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -187,6 +190,10 @@ func startHostRetention(access *storagesvc.Service, maintenance storageconfig.St
 			}
 		}
 	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func registerStorageMetricsReporter(s *server.Server, storage storageconfig.StorageConfig) {

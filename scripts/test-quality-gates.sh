@@ -30,6 +30,11 @@ grep -Fq 'git ls-files' scripts/check-gofmt.sh
 grep -Fq ':!web-host/internal/statik/statik.go' scripts/check-gofmt.sh
 grep -Fq "' go.work" scripts/check-trpc-context.sh
 grep -Fq 'context\.Background\(\)' scripts/check-trpc-context.sh
+grep -Fq 'CloneContext is only allowed at reviewed detached-work boundaries' scripts/check-trpc-context.sh
+if grep -Fq '|| true' scripts/check-trpc-context.sh; then
+  echo 'context scan must not swallow rg failures' >&2
+  exit 1
+fi
 grep -Fxq '/src/auto-import.d.ts' web/.prettierignore
 grep -Fxq '/src/components.d.ts' web/.prettierignore
 

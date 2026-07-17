@@ -61,7 +61,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	} else if cfg.LiveEnabled {
 		return nil, nil, fmt.Errorf("worker_path is required when live is enabled")
 	}
-	probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
+	probeCtx, probeCancel := context.WithTimeout(ctx, workerProbeTimeout())
 	err = eng.Probe(probeCtx)
 	probeCancel()
 	if err != nil {
@@ -102,6 +102,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	keepResources = true
 	return s, closeFn, nil
+}
+
+func workerProbeTimeout() time.Duration {
+	return 30 * time.Second
 }
 
 func newEventBusRuntime(repo *store.Store, cfg Config) (*strategybus.Runtime, error) {

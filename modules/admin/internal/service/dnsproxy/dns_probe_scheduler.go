@@ -3,7 +3,6 @@ package dnsproxy
 import (
 	"context"
 
-	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -12,16 +11,15 @@ import (
 // 执行频率: 每30秒一次
 // 执行逻辑: 合并本地DNS + 所有终端DNS → 探测所有IP → 缓存结果(5分钟)
 func HandleDNSProbeSchedule(ctx context.Context, params string) error {
-	ctxClone := trpc.CloneContext(ctx)
-	log.InfoContextf(ctxClone, "[DNSProxy] ========== DNS Probe Task Started ==========")
+	log.InfoContextf(ctx, "[DNSProxy] ========== DNS Probe Task Started ==========")
 
 	// 执行核心探测逻辑
-	if err := MergeAndDNSProbeAllDomains(ctxClone); err != nil {
-		log.ErrorContextf(ctxClone, "[DNSProxy] DNS Probe task failed: %v", err)
+	if err := MergeAndDNSProbeAllDomains(ctx); err != nil {
+		log.ErrorContextf(ctx, "[DNSProxy] DNS Probe task failed: %v", err)
 		// 不返回错误，避免导致服务启动失败
 		return nil
 	}
 
-	log.InfoContextf(ctxClone, "[DNSProxy] ========== DNS Probe Task Completed ==========")
+	log.InfoContextf(ctx, "[DNSProxy] ========== DNS Probe Task Completed ==========")
 	return nil
 }

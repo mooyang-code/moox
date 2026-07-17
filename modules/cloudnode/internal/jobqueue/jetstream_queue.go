@@ -135,13 +135,6 @@ func fetchRouteConsumer(ctx context.Context, consumer *jetstream.PullConsumer, l
 	return deliveries, err
 }
 
-func detachedActionContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		return trpc.BackgroundContext()
-	}
-	return trpc.CloneContext(ctx)
-}
-
 func tryAcquireFetchLock(lock *sync.Mutex) bool {
 	return lock != nil && lock.TryLock()
 }
@@ -186,7 +179,7 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 
 	out := make([]Delivery, 0, len(deliveries))
 	for _, delivery := range deliveries {
-		actionCtx := detachedActionContext(ctx)
+		actionCtx := ctx
 		item := &pb.JobItem{}
 		if err := proto.Unmarshal(delivery.Message.GetPayload(), item); err != nil {
 			_ = delivery.Term(actionCtx)

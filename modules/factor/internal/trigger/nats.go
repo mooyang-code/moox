@@ -97,20 +97,19 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 			continue
 		}
 		for _, delivery := range deliveries {
-			actionCtx := trpc.CloneContext(ctx)
 			event := &storagepb.TimeSeriesRowsUpdated{}
 			if delivery.Message.GetContentType() != "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated" {
-				_ = delivery.Term(actionCtx)
+				_ = delivery.Term(ctx)
 				continue
 			}
 			if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
-				_ = delivery.Term(actionCtx)
+				_ = delivery.Term(ctx)
 				continue
 			}
 			if c.debounce != nil {
 				c.debounce.Ingest(event, time.Now().UTC())
 			}
-			_ = delivery.Ack(actionCtx)
+			_ = delivery.Ack(ctx)
 		}
 	}
 }

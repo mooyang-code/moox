@@ -11,7 +11,6 @@ import (
 
 	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
-	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -36,8 +35,7 @@ type ServerDNSRecord struct {
 }
 
 // ScheduledResolveDNS 定时器入口函数 - 定时解析 DNS 记录（先本地解析，失败则请求远端）
-func ScheduledResolveDNS(c context.Context, _ string) error {
-	ctx := trpc.CloneContext(c)
+func ScheduledResolveDNS(ctx context.Context, _ string) error {
 	nodeID, version := runtimeapp.GetNodeInfo()
 	log.WithContextFields(ctx, "func", "ScheduledResolveDNS", "version", version, "nodeID", nodeID)
 

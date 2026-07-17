@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
-	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -43,8 +42,7 @@ type ControlDirective struct {
 }
 
 // ScheduledHeartbeat 框架定时器入口函数 - 定时心跳
-func ScheduledHeartbeat(c context.Context, _ string) error {
-	ctx := trpc.CloneContext(c)
+func ScheduledHeartbeat(ctx context.Context, _ string) error {
 	nodeID, version := runtimeapp.GetNodeInfo()
 	log.WithContextFields(ctx, "func", "ScheduledHeartbeat", "version", version, "nodeID", nodeID)
 
