@@ -49,6 +49,12 @@ Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指
 [`docs/运维/MooX-EventBus运维.md`](docs/运维/MooX-EventBus运维.md) 和
 [`docs/运维/MooX指标监控.md`](docs/运维/MooX指标监控.md)。
 
+运行数据不是统一永久保留：JetStream Stream/KV、CloudNode 短期任务历史、
+Monitor 检查历史和 Storage 派生 View 都有时间或容量边界；行情事实和 Archive
+Parquet 则不会被通用清理器静默删除。各类数据的默认保留时间、自动清理方式、
+仍会持续增长的目录及磁盘巡检方法见
+[`docs/运维/数据保留与磁盘空间.md`](docs/运维/数据保留与磁盘空间.md)。
+
 ## 服务监控
 
 `moox-monitor` 是独立 HTTP/TCP 可用性监控模块，和 Admin 内原有主机资源监控并存。它通过 SysDeploy 同步内置 `moox-system` 检查，也支持手动检查、webhook 告警和多 monitor 实例 peer 去重。所有独立部署进程的 `/healthz`、`/readyz` 和 `/metrics` 都是内部诊断面，需要独立 health HMAC；公开 Caddy 端口对诊断路由返回 `404`。

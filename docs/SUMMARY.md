@@ -40,6 +40,7 @@
 * [Node Gateway 运维手册](ops/node-gateway.md)
 * [MooX EventBus 运维](运维/MooX-EventBus运维.md)
 * [MooX 指标监控](运维/MooX指标监控.md)
+* [数据保留与磁盘空间](运维/数据保留与磁盘空间.md)
 * [MooX Trade 运维](运维/MooX-Trade运维.md)
 * [子服务健康检查 tRPC 注册改造](superpowers/plans/2026-07-12-health-trpc-registration.md)
 

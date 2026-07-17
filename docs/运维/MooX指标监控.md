@@ -12,6 +12,16 @@
 
 `/metrics` 仅保留作带 health HMAC 的本机调试入口，不再存在独立的未鉴权 Prometheus plugin listener。共享 `requestmetrics` filter 继续采集 tRPC 客户端/服务端请求量和耗时，写入同一个默认 registry。EventBus 不可用时业务服务继续启动，timer 记录错误并等待下一次快照；Monitor 消费失败时消息按至少一次语义重投递。
 
+## 数据保留
+
+- `MOOX_METRICS` 消息最多保留 24 小时或占用 512 MiB，达到任一边界后由 JetStream 淘汰最旧消息。
+- Monitor SQLite 中的检查结果和告警事件默认保留 14 天，启动时清理一次，之后每 6 小时清理。
+- 指标消息去重记录默认保留 7 天，每 6 小时删除过期记录；catalog、latest、规则和规则状态不随去重回执删除。
+- Storage 当前对四个主机指标 Dataset 保留 72 小时。已批准的改造目标是 48 小时、有界 10 批清理；合入前不能把目标值视为已生效。
+- Archive Parquet 和通用行情/因子事实不受指标历史清理影响。
+
+全系统的当前值、目标改造、永久数据和磁盘巡检命令见[数据保留与磁盘空间](数据保留与磁盘空间.md)。
+
 ## 元数据预检和启动顺序
 
 历史数据使用 Storage 的内部 Space `moox_system` 和 Dataset `moox_service_metrics`，Space 以 `moox_` 前缀标记 MooX 管理范围。Monitor 不会在运行时创建或修改 Storage 元数据。部署脚本在启动 Monitor 前执行：

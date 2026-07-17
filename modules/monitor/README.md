@@ -13,6 +13,16 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 `internal/store` 负责 Monitor 控制面数据（检查、结果、告警和实例）。
 `internal/metrics` 是独立的指标持久化 bounded context，负责指标目录、去重、最新值和规则状态；两者共享同一个 SQLite 文件，但通过明确的 Store 类型隔离职责。
 
+## 历史清理与容量
+
+- 检查结果和告警事件默认保留 14 天。Monitor 启动时先清理一次，之后每 6 小时清理一次。
+- 指标消息去重记录默认有效 7 天，每 6 小时删除到期记录。清理去重记录不会删除 metric catalog、latest、规则或规则状态。
+- 服务指标和主机指标的时序历史位于 Storage，不存放在 Monitor SQLite。Storage 当前对四个主机指标 Dataset 保留 72 小时。
+- 已确定的 Storage 改造会把主机指标默认窗口改为 48 小时，并使用有批次上限的 tRPC Timer；该改造完成前仍以当前 72 小时配置为准。
+- SQLite 异常增长通常意味着清理任务失败、事件数量异常或高基数 catalog 增长，不能只靠缩短 Storage 历史窗口解决。
+
+完整的数据保留矩阵、永久数据和磁盘巡检命令见[数据保留与磁盘空间](../../docs/运维/数据保留与磁盘空间.md)。
+
 ## 端口
 
 - `:11410`: tRPC/HTTP 管理 API `trpc.moox.monitor.MonitorMgr`

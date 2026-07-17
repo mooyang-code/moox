@@ -23,6 +23,21 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 | Bleve | Record View 版本化全文索引 |
 | Parquet | 事实冷归档 |
 
+### 数据保留与磁盘边界
+
+Storage 不使用一条全局规则删除所有历史。不同存储层的生命周期相互独立：
+
+| 数据层 | 自动清理行为 |
+| --- | --- |
+| Pebble 通用事实 | 默认不删除；行情、因子和资料事实不能因为 View 过期而丢失 |
+| 四个主机指标 Dataset | 当前每小时清理严格早于 72 小时的数据；每数据集、每 target 单次最多 1000 行 |
+| DuckDB TimeSeries View | 只构建 `retention_window` 范围；旧 a/b 槽位在切换、引用排空和宽限期结束后删除 |
+| Bleve Record View | 默认索引最近 30 天；旧槽位按同样流程删除 |
+| JetStream 行变更事件 | 由独立 EventBus 的 Stream 时间和字节上限淘汰，不由 Storage 客户端删除 |
+| Parquet Archive | 长期事实归档，默认永久保留，需要单独规划磁盘或 COS 容量 |
+
+主机指标清理已经确定升级为 `trpc.moox.storage.host_metrics_cleanup.timer`：默认改为 48 小时，每数据集单次最多 10 批，并增加 60 秒超时、防重入和结果指标。在该改造合入前，当前发布仍按 72 小时和单页清理执行。完整的现状、目标值和巡检方式见[数据保留与磁盘空间](../../docs/运维/数据保留与磁盘空间.md)。
+
 ### 事实数据版本语义
 
 Storage 的事实主存统一按 `key + version` 定位一行数据，Access 对外拆成两套更贴近业务的接口：
@@ -149,6 +164,13 @@ storage:
           1d: 730d
       record:
         retention_window: 30d
+  maintenance:
+    host_metrics_cleanup:       # 目标配置；随 tRPC Timer 改造合入
+      enabled: true
+      dataset_ids: [host_resource_v1, host_fs_v1, host_disk_v1, host_net_v1]
+      max_age: 48h
+      batch_size: 1000
+      max_batches_per_run: 10
 ```
 
 每个 DuckDB 槽位默认使用 `memory_limit=512MB`、`threads=1`、`max_temp_directory_size=2GB`。可通过 `MOOX_DUCKDB_MEMORY_LIMIT`、`MOOX_DUCKDB_THREADS`、`MOOX_DUCKDB_MAX_TEMP_DIRECTORY_SIZE` 覆盖。
@@ -193,6 +215,8 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | --- | --- | --- |
 | `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；bootstrap 固定执行 `op=maintain`，只在 view_builder 注册 | 开（每 30s） |
 | `trpc.moox.storage.archive.timer` | Archive 角色的 Parquet 冷归档调度入口 | 关 |
+
+当前主机指标清理由 `access` 角色的内部小时循环执行，尚未注册为 tRPC Timer。目标服务名、批次边界和迁移步骤见[Timer 改造计划](../../docs/superpowers/plans/2026-07-17-trpc-timer-and-host-metrics-cleanup.md)，文档不得在代码合入前把目标 Timer 写成已运行服务。
 
 配置路径可被命令行参数或环境变量覆盖：
 

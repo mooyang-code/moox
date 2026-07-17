@@ -95,6 +95,8 @@ MOOX_CLOUDNODE_JOB_ACTIVE JetStream KV bucket          active JobItem 状态，T
 
 tRPC 定时器 `cloudnodeJobHistorySchedule` 每天触发一次：先创建未来两天的历史日库，再删除前天、大前天的历史库。SCF 执行日志通过函数 stdout 上报到 CLS，本地不再写执行日志表。
 
+因此 CloudNode 的高频任务运行态有两层磁盘边界：active KV 最长保留 48 小时，终态历史日库默认保留 2 天。节点停机跨过多个每日维护周期时，当前维护逻辑只处理指定日期文件；重启后应检查 `data/cloudnode/jobs` 是否残留更老日库。主 SQLite 保存云账户、节点、代码包等控制面数据，不按时间自动删除。跨模块的保留矩阵和巡检命令见[数据保留与磁盘空间](../../docs/运维/数据保留与磁盘空间.md)。
+
 SCF 不直接连接 NATS，也不直接写 CloudNode SQLite。
 
 云账户、COS bucket 和云厂商密钥不写在 `config/app.yaml`，由 CloudAccount 表和相关 RPC 管理；代码包上传流程从已登记云账户读取 COS/SCF 所需配置。

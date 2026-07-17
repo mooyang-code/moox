@@ -45,11 +45,15 @@ Stream/KV 由 `modules/eventbus/config/app.yaml` 声明并由 EventBus 在 readi
 
 | 资源 | Subject/用途 | 保留 |
 | --- | --- | --- |
-| `MOOX_STORAGE` | `moox.storage.>` | 72 小时，20 GiB |
-| `MOOX_METRICS` | `moox.metrics.>` | 24 小时，10 GiB |
-| `MOOX_CLOUDNODE_EXEC` | 云节点任务 | 72 小时，10 GiB |
-| `MOOX_DLQ` | `moox.dlq.>` | 30 天，2 GiB |
+| `MOOX_STORAGE` | `moox.storage.>` | 72 小时，2 GiB |
+| `MOOX_METRICS` | `moox.metrics.>` | 24 小时，512 MiB |
+| `MOOX_CLOUDNODE_EXEC` | 云节点任务 | 72 小时，512 MiB |
+| `MOOX_DLQ` | `moox.dlq.>` | 30 天，256 MiB |
+| `MOOX_TRADE` | `moox.trade.>` | 7 天，512 MiB |
+| `MOOX_STRATEGY` | `moox.strategy.>` | 7 天，512 MiB |
 | `MOOX_CLOUDNODE_JOB_ACTIVE` | JetStream KV | TTL 48 小时 |
+
+达到时间或字节任一边界后，`limits` Stream 使用 `DiscardOld` 淘汰最旧消息；WorkQueue 在 ACK 后移除消息。完整的磁盘边界、下游历史与永久数据说明见[数据保留与磁盘空间](数据保留与磁盘空间.md)。
 
 Topic 必须遵循 `moox.<domain>.<entity>.<action>.v<major>`，且 `MooxMessage.topic` 必须等于实际 Subject。兼容字段追加可以复用当前 Topic；字段含义变化、重编号或 payload 替换必须发布新的 `.v2` Topic。先扩容再发布方，避免在消息已积压时缩小 `max_age` 或 `max_bytes`。Retention、Storage 和已有消息上的 Subject 删除会被拒绝，需要人工迁移。
 
