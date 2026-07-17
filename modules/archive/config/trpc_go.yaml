@@ -14,6 +14,16 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+    - name: trpc.moox.archive.materialize.timer
+      port: 11510
+      network: "0 */10 * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 120000
+    - name: trpc.moox.archive.cos_sync.timer
+      port: 11511
+      network: "0 0 * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 300000
 
 plugins:
   metrics:

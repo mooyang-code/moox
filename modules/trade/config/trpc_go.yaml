@@ -111,6 +111,16 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.trade.fill_reconcile.timer
+      port: 11213
+      network: "*/5 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 5000
+    - name: trpc.moox.trade.order_recovery.timer
+      port: 11214
+      network: "*/15 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 15000
 
 client:
   filter:

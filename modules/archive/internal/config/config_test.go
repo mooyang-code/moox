@@ -55,3 +55,15 @@ func TestPathContains(t *testing.T) {
 	assert.True(t, pathContains(parent, child))
 	assert.False(t, pathContains("/data/other", child))
 }
+
+func TestAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
+	raw, err := os.ReadFile("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, oldKey := range []string{"interval:", "sync_interval:"} {
+		if strings.Contains(string(raw), oldKey) {
+			t.Fatalf("app config still contains %q", oldKey)
+		}
+	}
+}

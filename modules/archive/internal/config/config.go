@@ -48,7 +48,6 @@ type EventBusConfig struct {
 }
 
 type MaterializeConfig struct {
-	Interval        time.Duration `yaml:"interval"`
 	PendingRows     int           `yaml:"pending_rows"`
 	Workers         int           `yaml:"workers"`
 	RowGroupRows    int64         `yaml:"row_group_rows"`
@@ -61,13 +60,12 @@ type StorageRPCConfig struct {
 }
 
 type COSConfig struct {
-	Enabled            bool          `yaml:"enabled"`
-	Region             string        `yaml:"region"`
-	Bucket             string        `yaml:"bucket"`
-	Prefix             string        `yaml:"prefix"`
-	SyncInterval       time.Duration `yaml:"sync_interval"`
-	SyncOpenPartitions bool          `yaml:"sync_open_partitions"`
-	Workers            int           `yaml:"workers"`
+	Enabled            bool   `yaml:"enabled"`
+	Region             string `yaml:"region"`
+	Bucket             string `yaml:"bucket"`
+	Prefix             string `yaml:"prefix"`
+	SyncOpenPartitions bool   `yaml:"sync_open_partitions"`
+	Workers            int    `yaml:"workers"`
 }
 
 type HealthConfig struct {
@@ -92,9 +90,9 @@ func Default() *Config {
 				FetchBatch: 128, FetchMaxWait: time.Second, AckWait: 5 * time.Minute,
 				MaxAckPending: 256, DedupeRetention: 168 * time.Hour,
 			},
-			Materialize: MaterializeConfig{Interval: 10 * time.Minute, PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
+			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
 			StorageRPC:  StorageRPCConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100"},
-			COS:         COSConfig{Prefix: "moox/archive", SyncInterval: time.Hour, Workers: 2},
+			COS:         COSConfig{Prefix: "moox/archive", Workers: 2},
 		},
 		Health: HealthConfig{Addr: "127.0.0.1:11416"},
 	}
@@ -157,9 +155,6 @@ func (c *Config) applyDefaults() {
 	if c.Archive.EventBus.DedupeRetention == 0 {
 		c.Archive.EventBus.DedupeRetention = d.Archive.EventBus.DedupeRetention
 	}
-	if c.Archive.Materialize.Interval == 0 {
-		c.Archive.Materialize.Interval = d.Archive.Materialize.Interval
-	}
 	if c.Archive.Materialize.PendingRows == 0 {
 		c.Archive.Materialize.PendingRows = d.Archive.Materialize.PendingRows
 	}
@@ -174,9 +169,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Archive.COS.Prefix == "" {
 		c.Archive.COS.Prefix = d.Archive.COS.Prefix
-	}
-	if c.Archive.COS.SyncInterval == 0 {
-		c.Archive.COS.SyncInterval = d.Archive.COS.SyncInterval
 	}
 	if c.Archive.COS.Workers == 0 {
 		c.Archive.COS.Workers = d.Archive.COS.Workers
@@ -248,7 +240,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("archive dedupe_retention must be at least 168h")
 	}
 	m := c.Archive.Materialize
-	if m.Interval <= 0 || m.PendingRows <= 0 || m.Workers < 1 || m.Workers > 32 || m.RowGroupRows <= 0 || m.ShutdownTimeout <= 0 {
+	if m.PendingRows <= 0 || m.Workers < 1 || m.Workers > 32 || m.RowGroupRows <= 0 || m.ShutdownTimeout <= 0 {
 		return fmt.Errorf("archive materialize settings are invalid")
 	}
 	if c.Archive.COS.Enabled && (strings.TrimSpace(c.Archive.COS.Region) == "" || strings.TrimSpace(c.Archive.COS.Bucket) == "") {

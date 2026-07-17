@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -53,8 +54,6 @@ func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store
 	go runProgressConsumer(ctx, client, cfg, s, e)
 	go runReconciliationConsumer(ctx, client, cfg, s, e)
 	go runPrivateStreamSupervisor(ctx, s, e)
-	go runRecoveryLoop(ctx, s, e)
-	go runFillReconciliation(ctx, s, e)
 	return nil
 }
 
@@ -304,77 +303,67 @@ func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, 
 	return err
 }
 
-func runFillReconciliation(ctx context.Context, s *store.Store, e *command.Engine) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := reconcileOrdersOnce(ctx, s, e, "", "", ""); err != nil {
-				log.WarnContextf(ctx, "trade fill reconciliation scan: %v", err)
-			}
-		}
-	}
-}
-
 func reconcileOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine, space, account, channel string) error {
 	_, err := (reconciliation.Reconciler{Store: s, Engine: e}).Scope(ctx, reconciliation.Scope{SpaceID: space, AccountID: account, ChannelID: channel, Limit: 200})
 	return err
 }
 
-func runRecoveryLoop(ctx context.Context, s *store.Store, e *command.Engine) {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
+func recoverOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	worker := consumer.SubmissionWorker{Engine: e}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			orders, err := s.ListRecoverableOrders(ctx, 100)
-			if err != nil {
-				log.WarnContextf(ctx, "trade recovery scan: %v", err)
-				continue
+	var errs []error
+	orders, err := s.ListRecoverableOrders(ctx, 100)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list recoverable orders: %w", err))
+	} else {
+		for _, o := range orders {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
 			}
-			for _, o := range orders {
-				var runErr error
-				switch o.State {
-				case "READY", "SUBMITTING", "SUBMIT_UNKNOWN":
-					_, runErr = worker.Handle(ctx, o.SpaceID, o.OrderID)
-				case "CANCELING":
-					_, runErr = e.RecoverCanceling(ctx, o.SpaceID, o.OrderID)
-				case "CANCEL_UNKNOWN":
-					_, runErr = e.ResolveCancelUnknown(ctx, o.SpaceID, o.OrderID)
-				}
-				if runErr != nil {
-					log.WarnContextf(ctx, "trade recovery order %s: %v", o.OrderID, runErr)
-				}
+			var runErr error
+			switch o.State {
+			case "READY", "SUBMITTING", "SUBMIT_UNKNOWN":
+				_, runErr = worker.Handle(ctx, o.SpaceID, o.OrderID)
+			case "CANCELING":
+				_, runErr = e.RecoverCanceling(ctx, o.SpaceID, o.OrderID)
+			case "CANCEL_UNKNOWN":
+				_, runErr = e.ResolveCancelUnknown(ctx, o.SpaceID, o.OrderID)
 			}
-			sagas, sagaErr := s.ListRecoverableSagas(ctx, 100)
-			if sagaErr != nil {
-				log.WarnContextf(ctx, "trade saga recovery scan: %v", sagaErr)
-				continue
-			}
-			for _, sg := range sagas {
-				if _, err := e.ResumeReplace(ctx, sg.SpaceID, sg.SagaID); err != nil {
-					log.WarnContextf(ctx, "trade saga %s recovery: %v", sg.SagaID, err)
-				}
-			}
-			runs, runErr := s.ListActiveRebalanceRuns(ctx, 100)
 			if runErr != nil {
-				log.WarnContextf(ctx, "trade rebalance recovery scan: %v", runErr)
-				continue
-			}
-			svc := rebalanceapp.Service{Store: s, Engine: e}
-			for _, run := range runs {
-				if _, err := svc.Advance(ctx, run.SpaceID, run.RunID, run.AccountID, run.ChannelID); err != nil {
-					log.WarnContextf(ctx, "trade rebalance %s recovery: %v", run.RunID, err)
-				}
+				errs = append(errs, fmt.Errorf("recover order %s: %w", o.OrderID, runErr))
 			}
 		}
 	}
+	sagas, err := s.ListRecoverableSagas(ctx, 100)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list recoverable sagas: %w", err))
+	} else {
+		for _, saga := range sagas {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
+			if _, err := e.ResumeReplace(ctx, saga.SpaceID, saga.SagaID); err != nil {
+				errs = append(errs, fmt.Errorf("recover saga %s: %w", saga.SagaID, err))
+			}
+		}
+	}
+	runs, err := s.ListActiveRebalanceRuns(ctx, 100)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list active rebalance runs: %w", err))
+	} else {
+		svc := rebalanceapp.Service{Store: s, Engine: e}
+		for _, run := range runs {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
+			if _, err := svc.Advance(ctx, run.SpaceID, run.RunID, run.AccountID, run.ChannelID); err != nil {
+				errs = append(errs, fmt.Errorf("recover rebalance %s: %w", run.RunID, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {

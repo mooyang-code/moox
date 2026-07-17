@@ -91,6 +91,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := startKernelWorkers(ctx, appCfg.EventBus, tradeStore, kernel); err != nil {
 		return nil, err
 	}
+	if err := registerKernelTimers(s, tradeStore, kernel); err != nil {
+		return nil, err
+	}
 	registerMetricsReporter(s)
 	if err := registerHealth(s, appCfg, tradeStore); err != nil {
 		return nil, err

@@ -2,53 +2,55 @@ package writer
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
-
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-// Scheduler periodically materializes dirty partitions and flushes once more on shutdown.
-// It is intentionally small: the journal remains the source of truth for retries and recovery.
+// Scheduler exposes bounded run-once Archive maintenance operations.
 type Scheduler struct {
 	Writer          *Writer
-	Interval        time.Duration
 	PendingRows     int
-	ShutdownTimeout time.Duration
 	DedupeRetention time.Duration
+	Now             func() time.Time
 }
 
-func (s Scheduler) Run(ctx context.Context) error {
+// MaterializeOnce writes dirty partitions and prunes expired message receipts.
+func (s Scheduler) MaterializeOnce(ctx context.Context) error {
 	if s.Writer == nil {
-		return context.Canceled
+		return fmt.Errorf("archive writer is required")
 	}
-	if s.Interval <= 0 {
-		s.Interval = 10 * time.Minute
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if s.PendingRows <= 0 {
-		s.PendingRows = 10000
+	pendingRows := s.PendingRows
+	if pendingRows <= 0 {
+		pendingRows = 10000
 	}
-	if s.ShutdownTimeout <= 0 {
-		s.ShutdownTimeout = 2 * time.Minute
+	retention := s.DedupeRetention
+	if retention <= 0 {
+		retention = 168 * time.Hour
 	}
-	if s.DedupeRetention <= 0 {
-		s.DedupeRetention = 168 * time.Hour
+	now := time.Now().UTC()
+	if s.Now != nil {
+		now = s.Now().UTC()
 	}
-	ticker := time.NewTicker(s.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			flushCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), s.ShutdownTimeout)
-			err := s.Writer.WriteDirty(flushCtx, s.PendingRows)
-			cancel()
-			return err
-		case <-ticker.C:
-			if err := s.Writer.WriteDirty(ctx, s.PendingRows); err != nil {
-				return err
-			}
-			if _, err := s.Writer.PruneMessageReceipts(ctx, time.Now().UTC().Add(-s.DedupeRetention)); err != nil {
-				return err
-			}
-		}
+	writeErr := s.Writer.WriteDirty(ctx, pendingRows)
+	_, pruneErr := s.Writer.PruneMessageReceipts(ctx, now.Add(-retention))
+	return errors.Join(writeErr, pruneErr)
+}
+
+// FlushOnShutdown writes remaining dirty partitions without pruning receipts.
+func (s Scheduler) FlushOnShutdown(ctx context.Context) error {
+	if s.Writer == nil {
+		return fmt.Errorf("archive writer is required")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	pendingRows := s.PendingRows
+	if pendingRows <= 0 {
+		pendingRows = 10000
+	}
+	return s.Writer.WriteDirty(ctx, pendingRows)
 }
