@@ -18,11 +18,11 @@ CLI，不再是占位模块。
 - `make release`：生成二进制归档包，包含 Gateway、核心服务二进制与配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
 - `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端。Gateway 默认部署到每台机器；`--no-admin` 生成不含 Admin、浏览器资源、Admin schema 和 Admin 凭据的数据面节点。
 
-`make release` 会打包 `cli/admin/gateway/gateway-cli/web-host/eventbus/cloudnode/collector/collector-scf/factor/trade/monitor/storage/archive` 等二进制。`make deploy` 默认编排 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Monitor、Storage 和 Archive，可用 `--no-monitor`、`--no-eventbus` 等开关关闭独立模块；Trade 当前通过 release 制品或模块构建单独部署。
+`make release` 会打包 `cli`、`admin/admin-cli`、`gateway/gateway-cli`、`web-host`、`eventbus`、`cloudnode/cloudnode-cli`、`collector/collector-cli/collector-scf`、`factor/factor-cli`、`strategy/strategy-cli`、`trade/trade-cli`、`monitor/monitor-cli`、`storage/storage-cli` 和 `archive/archive-cli`；Linux amd64/arm64 还包含 HostAgent。`make deploy` 默认编排 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Monitor、Storage 和 Archive，可用 `--no-strategy`、`--no-monitor`、`--no-eventbus` 等开关关闭独立模块；Trade 当前通过 release 制品或模块构建单独部署。
 
 部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
 
-提交前统一运行 `make verify`，它会检查模块边界，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway 部署和 Caddy 契约检查。
+提交前统一运行 `make verify`。它会检查模块和 package 依赖边界、tRPC Context、gofmt、Prettier 与零 warning ESLint，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway/Strategy 部署和 Caddy 契约检查；所有格式与 lint 门禁都是只读检查，不在 CI 中执行 `--fix` 或 `--write`。
 
 Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 
@@ -36,7 +36,7 @@ MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点�
 
 ## EventBus 与指标监控
 
-`moox-eventbus` 是唯一的生产 NATS JetStream 所有者。Storage、CloudNode、Factor
+`moox-eventbus` 是唯一的生产 NATS JetStream 所有者。Storage、CloudNode、Factor、Strategy
 和各 tRPC 服务通过统一 `MooxMessage` 直接连接 EventBus；发布包不会携带
 JetStream 运行态数据。部署启动顺序为 EventBus -> Storage -> Metadata
 `metadata apply` 预检 -> Monitor -> 其他业务服务。

@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-context check-format check-lint test-quality-gates release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-context check-format check-lint test-quality-gates test-docs-architecture release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -27,6 +27,9 @@ check-lint:
 test-quality-gates:
 	bash scripts/test-quality-gates.sh
 
+test-docs-architecture:
+	bash scripts/test-docs-architecture.sh
+
 release:
 	./scripts/release.sh
 
@@ -46,7 +49,7 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries check-context test check-format check-lint test-quality-gates test-release test-gateway-deploy test-strategy-deploy test-caddy
+verify: check-boundaries check-context test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
