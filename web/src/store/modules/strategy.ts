@@ -1,38 +1,46 @@
-import { computed, ref } from 'vue';
-import { defineStore } from 'pinia';
+import { computed, ref } from "vue";
+import { defineStore } from "pinia";
 import {
   getStrategyOverview,
   getStrategyPerformance,
+  getStrategyCapabilities,
   listRunningStrategies,
   listStrategyRuns,
   pauseBinding,
   resumeBinding,
-  setExecutionMode,
-} from '@/api/strategy';
-import type { PerformanceSource, RunningStrategySummary, StrategyOverview, StrategyPerformance, StrategyRun } from '@/api/strategy-types';
+  setExecutionMode
+} from "@/api/strategy";
+import type {
+  PerformanceSource,
+  RunningStrategySummary,
+  StrategyOverview,
+  StrategyPerformance,
+  StrategyRun
+} from "@/api/strategy-types";
 
-export const useStrategyStore = defineStore('strategy', () => {
+export const useStrategyStore = defineStore("strategy", () => {
   const rows = ref<RunningStrategySummary[]>([]);
   const total = ref(0);
   const loading = ref(false);
-  const error = ref('');
+  const error = ref("");
   const overview = ref<StrategyOverview | null>(null);
   const runs = ref<StrategyRun[]>([]);
   const performance = ref<StrategyPerformance | null>(null);
-  const performanceSource = ref<PerformanceSource>('paper');
+  const performanceSource = ref<PerformanceSource>("paper");
   const poller = ref<ReturnType<typeof setInterval> | null>(null);
+  const liveExecutionEnabled = ref(false);
 
   const hasRows = computed(() => rows.value.length > 0);
 
   async function loadRunning(params: Parameters<typeof listRunningStrategies>[0] = {}) {
     loading.value = true;
-    error.value = '';
+    error.value = "";
     try {
-      const result = await listRunningStrategies(params);
+      const [result] = await Promise.all([listRunningStrategies(params), loadCapabilities()]);
       rows.value = result.items;
       total.value = result.page.total ?? 0;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '策略列表加载失败';
+      error.value = err instanceof Error ? err.message : "策略列表加载失败";
     } finally {
       loading.value = false;
     }
@@ -40,15 +48,28 @@ export const useStrategyStore = defineStore('strategy', () => {
 
   async function loadOverview(bindingId: string) {
     loading.value = true;
-    error.value = '';
+    error.value = "";
     try {
-      overview.value = await getStrategyOverview(bindingId);
-      const runsResult = await listStrategyRuns(bindingId, { page: 1, page_size: 20 });
+      const [loadedOverview, runsResult] = await Promise.all([
+        getStrategyOverview(bindingId),
+        listStrategyRuns(bindingId, { page: 1, page_size: 20 }),
+        loadCapabilities()
+      ]);
+      overview.value = loadedOverview;
       runs.value = runsResult.items;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '策略详情加载失败';
+      error.value = err instanceof Error ? err.message : "策略详情加载失败";
     } finally {
       loading.value = false;
+    }
+  }
+
+  async function loadCapabilities() {
+    try {
+      const capabilities = await getStrategyCapabilities();
+      liveExecutionEnabled.value = capabilities.live_execution_enabled;
+    } catch {
+      liveExecutionEnabled.value = false;
     }
   }
 
@@ -57,7 +78,7 @@ export const useStrategyStore = defineStore('strategy', () => {
     try {
       performance.value = await getStrategyPerformance(bindingId, source);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '策略表现加载失败';
+      error.value = err instanceof Error ? err.message : "策略表现加载失败";
     }
   }
 
@@ -85,5 +106,25 @@ export const useStrategyStore = defineStore('strategy', () => {
     return setExecutionMode(bindingId, mode, reason, crypto.randomUUID());
   }
 
-  return { rows, total, loading, error, overview, runs, performance, performanceSource, hasRows, loadRunning, loadOverview, loadPerformance, startPolling, stopPolling, pause, resume, changeMode };
+  return {
+    rows,
+    total,
+    loading,
+    error,
+    overview,
+    runs,
+    performance,
+    performanceSource,
+    liveExecutionEnabled,
+    hasRows,
+    loadRunning,
+    loadOverview,
+    loadCapabilities,
+    loadPerformance,
+    startPolling,
+    stopPolling,
+    pause,
+    resume,
+    changeMode
+  };
 });

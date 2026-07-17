@@ -173,5 +173,88 @@ func TestPageFromProtoAndOperatorAllowed(t *testing.T) {
 	assert.Equal(t, 2, page.Number)
 	assert.Equal(t, 5, page.Size)
 
+	page = pageFromProto(&strategypb.PageReq{Page: -1, PageSize: 500})
+	assert.Equal(t, 1, page.Number)
+	assert.Equal(t, 200, page.Size)
+
 	assert.True(t, operatorAllowed(context.Background()))
+}
+
+func TestParseStrictTimeRangeRejectsMalformedAndNonIncreasingBounds(t *testing.T) {
+	tests := []struct {
+		name     string
+		rangeReq *strategypb.TimeRange
+		wantErr  string
+	}{
+		{name: "bad from", rangeReq: &strategypb.TimeRange{From: "bad"}, wantErr: "from"},
+		{name: "bad to", rangeReq: &strategypb.TimeRange{To: "bad"}, wantErr: "to"},
+		{name: "equal", rangeReq: &strategypb.TimeRange{From: "2026-07-17T00:00:00Z", To: "2026-07-17T00:00:00Z"}, wantErr: "before"},
+		{name: "reversed", rangeReq: &strategypb.TimeRange{From: "2026-07-18T00:00:00Z", To: "2026-07-17T00:00:00Z"}, wantErr: "before"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := parseStrictTimeRange(tt.rangeReq)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+
+	from, to, err := parseStrictTimeRange(&strategypb.TimeRange{
+		From: "2026-07-17T08:00:00+08:00", To: "2026-07-17T09:00:00+08:00",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, time.UTC, from.Location())
+	assert.Equal(t, time.UTC, to.Location())
+	from, to, err = parseStrictTimeRange(nil)
+	require.NoError(t, err)
+	assert.True(t, from.IsZero())
+	assert.True(t, to.IsZero())
+}
+
+func TestFrontendRPCRejectsInvalidQueryBeforeRepositoryAccess(t *testing.T) {
+	svc := &Service{}
+
+	runs, err := svc.ListStrategyRuns(context.Background(), &strategypb.ListStrategyRunsReq{
+		BindingId: "b1", Range: &strategypb.TimeRange{From: "not-a-time"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, runs.GetRetInfo().GetMsg(), "range.from")
+
+	performance, err := svc.GetStrategyPerformance(context.Background(), &strategypb.GetStrategyPerformanceReq{
+		BindingId: "b1", PerformanceSource: "invalid", Interval: "hourly",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, performance.GetRetInfo().GetMsg(), "performance_source")
+}
+
+func TestGetStrategyPerformanceRejectsUnsupportedInterval(t *testing.T) {
+	svc := &Service{}
+	rsp, err := svc.GetStrategyPerformance(context.Background(), &strategypb.GetStrategyPerformanceReq{
+		BindingId: "b1", PerformanceSource: "paper", Interval: "hourly",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "interval")
+}
+
+func TestSetExecutionModeRejectsLiveWhenCapabilityDisabled(t *testing.T) {
+	db, repo := newFrontendRPCStore(t)
+	seedFrontendBinding(t, db, repo, "b1")
+	svc := &Service{Repo: repo, LiveExecutionEnabled: false}
+
+	rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
+		BindingId: "b1", Mode: "live", OperationId: "op-live", Reason: "enable live",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "live execution is disabled")
+
+	var mode string
+	require.NoError(t, db.Raw(`SELECT c_mode FROM t_strategy_execution_bindings WHERE c_execution_binding_id = 'exec-1'`).Scan(&mode).Error)
+	assert.Equal(t, "observe", mode)
+}
+
+func TestGetEngineStatusExposesLiveCapability(t *testing.T) {
+	svc := &Service{LiveExecutionEnabled: true}
+	rsp, err := svc.GetEngineStatus(context.Background(), &strategypb.GetEngineStatusReq{})
+	require.NoError(t, err)
+	assert.True(t, rsp.GetLiveExecutionEnabled())
 }

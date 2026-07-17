@@ -18,7 +18,18 @@ func pageFromProto(page *strategypb.PageReq) store.Page {
 	if page == nil {
 		return store.Page{Number: 1, Size: 20}
 	}
-	return store.Page{Number: int(page.GetPage()), Size: int(page.GetPageSize())}
+	number := int(page.GetPage())
+	size := int(page.GetPageSize())
+	if number < 1 {
+		number = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 200 {
+		size = 200
+	}
+	return store.Page{Number: number, Size: size}
 }
 
 func (s *Service) ListRunningStrategies(ctx context.Context, req *strategypb.ListRunningStrategiesReq) (*strategypb.ListRunningStrategiesRsp, error) {
@@ -75,16 +86,19 @@ func (s *Service) ListStrategyRuns(ctx context.Context, req *strategypb.ListStra
 	if req == nil || req.GetBindingId() == "" {
 		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
 	}
+	from, to, err := parseStrictTimeRange(req.GetRange())
+	if err != nil {
+		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
+	}
+	if s == nil || s.Repo == nil {
+		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
+	}
 	if binding, err := s.Repo.GetBinding(ctx, req.GetBindingId()); err != nil {
 		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
 	} else if err := ensureBindingScope(ctx, binding); err != nil {
 		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
 	}
-	filter := store.RunFilter{BindingID: req.GetBindingId()}
-	if r := req.GetRange(); r != nil {
-		filter.From, _ = parseTime(r.GetFrom())
-		filter.To, _ = parseTime(r.GetTo())
-	}
+	filter := store.RunFilter{BindingID: req.GetBindingId(), From: from, To: to}
 	runs, total, err := s.Repo.ListRuns(ctx, filter, pageFromProto(req.GetPage()))
 	if err != nil {
 		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
@@ -180,19 +194,25 @@ func (s *Service) GetStrategyPerformance(ctx context.Context, req *strategypb.Ge
 	if req == nil || req.GetBindingId() == "" {
 		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
 	}
+	if !domain.ValidPerformanceSource(req.GetPerformanceSource()) {
+		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("performance_source is required and must be observe, paper, or live"))}, nil
+	}
+	if interval := req.GetInterval(); interval != "" && interval != "auto" && interval != "daily" {
+		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("interval must be auto or daily"))}, nil
+	}
+	from, to, err := parseStrictTimeRange(req.GetRange())
+	if err != nil {
+		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
+	}
+	if s == nil || s.Repo == nil {
+		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
+	}
 	if binding, err := s.Repo.GetBinding(ctx, req.GetBindingId()); err != nil {
 		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
 	} else if err := ensureBindingScope(ctx, binding); err != nil {
 		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
 	}
-	filter := store.PerformanceFilter{BindingID: req.GetBindingId(), Source: req.GetPerformanceSource()}
-	if r := req.GetRange(); r != nil {
-		filter.From, _ = parseTime(r.GetFrom())
-		filter.To, _ = parseTime(r.GetTo())
-	}
-	if filter.Source == "" {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("performance_source is required"))}, nil
-	}
+	filter := store.PerformanceFilter{BindingID: req.GetBindingId(), Source: req.GetPerformanceSource(), From: from, To: to}
 	out := make([]*strategypb.PerformancePoint, 0)
 	if req.GetInterval() == "daily" {
 		daily, dailyErr := s.Repo.ListPerformanceDaily(ctx, filter)
@@ -253,6 +273,9 @@ func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecu
 	}
 	if req.GetMode() != "observe" && req.GetMode() != "paper" && req.GetMode() != "live" {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("unsupported execution mode"))}, nil
+	}
+	if req.GetMode() == "live" && (s == nil || !s.LiveExecutionEnabled) {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("live execution is disabled by server capability"))}, nil
 	}
 	if !operatorAllowed(ctx) {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("strategy operation requires operator permission"))}, nil
@@ -333,7 +356,29 @@ func parseTime(value string) (time.Time, error) {
 	if value == "" {
 		return time.Time{}, nil
 	}
-	return time.Parse(time.RFC3339Nano, value)
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
+}
+
+func parseStrictTimeRange(value *strategypb.TimeRange) (time.Time, time.Time, error) {
+	if value == nil {
+		return time.Time{}, time.Time{}, nil
+	}
+	from, err := parseTime(value.GetFrom())
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("range.from must be RFC3339Nano: %w", err)
+	}
+	to, err := parseTime(value.GetTo())
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("range.to must be RFC3339Nano: %w", err)
+	}
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		return time.Time{}, time.Time{}, errors.New("range.from must be before range.to")
+	}
+	return from, to, nil
 }
 
 func summaryProto(v domain.RunningStrategySummary) *strategypb.RunningStrategySummary {

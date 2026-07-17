@@ -55,7 +55,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	// pyruntime workers are started lazily on the first LOAD. Do not report
 	// them as ready before a real handshake has completed.
-	service := &rpc.Service{Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng, Workers: cfg.Workers, ReadyWorkers: 0}
+	service := &rpc.Service{Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng, Workers: cfg.Workers, ReadyWorkers: 0, LiveExecutionEnabled: cfg.LiveEnabled}
 	strategypb.RegisterStrategyMgrService(s, service)
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = strategyHealthSnapshot(db, eng, cfg.Workers, healthState)

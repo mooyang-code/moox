@@ -18,11 +18,12 @@ import (
 )
 
 type Service struct {
-	Repo         *store.Store
-	Registry     *registry.Service
-	Workers      int
-	ReadyWorkers int
-	Engine       *engine.Engine
+	Repo                 *store.Store
+	Registry             *registry.Service
+	Workers              int
+	ReadyWorkers         int
+	Engine               *engine.Engine
+	LiveExecutionEnabled bool
 }
 
 func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStrategyReq) (*strategypb.CreateStrategyRsp, error) {
@@ -111,7 +112,7 @@ func (s *Service) RunOnce(ctx context.Context, req *strategypb.RunOnceReq) (*str
 	return &strategypb.RunOnceRsp{RetInfo: success(), Run: &strategypb.StrategyRun{RunId: runID, BindingId: binding.BindingID, TriggerBarTime: req.GetTriggerBarTime(), Action: out.Action, Status: map[bool]string{true: "accepted", false: "observed"}[req.GetCommit()], OutputJson: string(raw)}}, nil
 }
 func (s *Service) GetEngineStatus(context.Context, *strategypb.GetEngineStatusReq) (*strategypb.GetEngineStatusRsp, error) {
-	return &strategypb.GetEngineStatusRsp{RetInfo: success(), Workers: int32(s.Workers), ReadyWorkers: int32(s.ReadyWorkers)}, nil
+	return &strategypb.GetEngineStatusRsp{RetInfo: success(), Workers: int32(s.Workers), ReadyWorkers: int32(s.ReadyWorkers), LiveExecutionEnabled: s.LiveExecutionEnabled}, nil
 }
 func success() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}

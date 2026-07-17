@@ -24,7 +24,7 @@ message RunOnceReq {
 }
 message RunOnceRsp { common.RetInfo ret_info = 1; StrategyRun run = 2; }
 message GetEngineStatusReq {}
-message GetEngineStatusRsp { common.RetInfo ret_info = 1; int32 workers = 2; int32 ready_workers = 3; }
+message GetEngineStatusRsp { common.RetInfo ret_info = 1; int32 workers = 2; int32 ready_workers = 3; bool live_execution_enabled = 4; }
 
 message PageReq { int32 page = 1; int32 page_size = 2; }
 message TimeRange { string from = 1; string to = 2; }
