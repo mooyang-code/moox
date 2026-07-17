@@ -1,0 +1,529 @@
+# MooX service deployment seed. Hosts are loopback defaults for a single-node install.
+# Replace public_address and the public service hosts before importing a multi-host setup.
+version: 1
+node:
+  id: control
+  name: control
+  public_address: https://127.0.0.1
+  status: enabled
+
+services:
+  # Independently deployed processes and their public/internal endpoints.
+  - name: admin_gateway
+    kind: gateway
+    deployment_mode: process
+    protocol: https
+    host: 127.0.0.1
+    port: 9527
+    gateway_path: /api/admin
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*
+    extra_config:
+      health_url: http://127.0.0.1:11010/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: web_host
+    kind: frontend
+    deployment_mode: process
+    protocol: https
+    host: 127.0.0.1
+    port: 9527
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: Caddy 管理台 HTTPS 页面入口；web-host 上游仅绑定 loopback
+    extra_config:
+      health_url: http://127.0.0.1:19527/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: storage_metadata
+    kind: storage
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 20200
+    gateway_path: trpc.moox.storage.Metadata
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage 元数据 HTTP 服务
+    extra_config:
+      health_url: http://127.0.0.1:20210/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: storage_access
+    kind: storage
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 20201
+    gateway_path: trpc.moox.storage.Access
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连
+    extra_config:
+      health_url: http://127.0.0.1:20210/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: storage_view
+    kind: storage
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 20202
+    gateway_path: trpc.moox.storage.DataView
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage 数据视图 HTTP 服务
+    extra_config:
+      health_url: http://127.0.0.1:20212/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: storage_view_builder
+    kind: storage
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 20211
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: moox-storage View 独立进程中的物化职责健康检查
+    extra_config:
+      health_url: http://127.0.0.1:20211/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: storage_view_query
+    kind: storage
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 20202
+    gateway_path: trpc.moox.storage.DataView
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: moox-storage View 独立进程中的查询职责
+    extra_config:
+      health_url: http://127.0.0.1:20212/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: storage_view_index
+    kind: storage_rpc
+    deployment_mode: process
+    protocol: trpc
+    host: 127.0.0.1
+    port: 20104
+    gateway_path: trpc.moox.storage.ViewIndex
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: moox-storage View 索引文件唯一 owner
+    extra_config:
+      health_url: http://127.0.0.1:20213/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: eventbus
+    kind: eventbus
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11420
+    gateway_path: trpc.moox.eventbus.EventBusMgr
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: MooX 统一 NATS JetStream EventBus 服务
+    extra_config:
+      health_url: http://127.0.0.1:11419/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_monitor
+    kind: monitor
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11410
+    gateway_path: trpc.moox.monitor.MonitorMgr
+    gateway_service_id: monitor
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: 独立服务监控模块，承载 HTTP/TCP 探测、告警和多实例协同
+    extra_config:
+      health_url: http://127.0.0.1:11409/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_collector
+    kind: collector
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11402
+    gateway_path: trpc.moox.collector.CollectMgr
+    gateway_service_id: collectmgr
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: 独立采集管理服务，承载采集规则、任务实例和 planner
+    extra_config:
+      health_url: http://127.0.0.1:11412/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_cloudnode
+    kind: cloudnode
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11401
+    gateway_path: trpc.moox.cloudnode.CloudNodeMgr
+    gateway_service_id: cloudnode
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: 独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用
+    extra_config:
+      health_url: http://127.0.0.1:11411/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_factor
+    kind: factor
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11404
+    gateway_path: trpc.moox.factor.FactorMgr
+    gateway_service_id: factormgr
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: 因子计算服务，承载因子定义、绑定、补算与结果写回
+    extra_config:
+      health_url: http://127.0.0.1:11414/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_strategy
+    kind: strategy
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11430
+    gateway_path: trpc.moox.strategy.StrategyMgr
+    gateway_service_id: strategymgr
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: 交易策略运行、目标和绩效查询服务
+    extra_config:
+      health_url: http://127.0.0.1:11431/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_archive
+    kind: archive
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11416
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 事件归档和物化服务
+    extra_config:
+      health_url: http://127.0.0.1:11416/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_hostagent
+    kind: hostagent
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11426
+    gateway_path: trpc.moox.hostagent.HostAgentMgr
+    gateway_service_id: hostagent
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: 主机指标采集代理
+    extra_config:
+      health_url: http://127.0.0.1:11425/readyz
+      health_kind: readiness
+      monitor_enabled: true
+  - name: moox_trade
+    kind: trade
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11210
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易执行和账本服务
+    extra_config:
+      health_url: http://127.0.0.1:11210/readyz
+      health_kind: readiness
+      monitor_enabled: true
+
+  # Logical RPC endpoints hosted by the Admin or Storage/Trade process.
+  - name: storage_metadata_trpc
+    kind: storage_rpc
+    deployment_mode: endpoint
+    protocol: trpc
+    host: 127.0.0.1
+    port: 20100
+    gateway_path: trpc.moox.storage.Metadata
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage 元数据 tRPC 服务
+    extra_config: {}
+  - name: storage_primary_trpc
+    kind: storage_rpc
+    deployment_mode: endpoint
+    protocol: trpc
+    host: 127.0.0.1
+    port: 20101
+    gateway_path: trpc.moox.storage.PrimaryStore
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage PrimaryStore tRPC 服务
+    extra_config: {}
+  - name: storage_access_trpc
+    kind: storage_rpc
+    deployment_mode: endpoint
+    protocol: trpc
+    host: 127.0.0.1
+    port: 20102
+    gateway_path: trpc.moox.storage.Access
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage Access tRPC 服务
+    extra_config: {}
+  - name: storage_view_trpc
+    kind: storage_rpc
+    deployment_mode: endpoint
+    protocol: trpc
+    host: 127.0.0.1
+    port: 20103
+    gateway_path: trpc.moox.storage.DataView
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: moox-storage DataView tRPC 服务
+    extra_config: {}
+  - name: admin_auth
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11100
+    gateway_path: trpc.moox.infra.Auth
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 认证 RPC 服务
+    extra_config: {}
+  - name: dnsproxy
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11101
+    gateway_path: trpc.moox.infra.Dns
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: DNS 代理 RPC 服务
+    extra_config: {}
+  - name: ssh
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11106
+    gateway_path: trpc.moox.ops.Ssh
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: SSH 管理 RPC 服务
+    extra_config: {}
+  - name: space
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11107
+    gateway_path: trpc.moox.admin.SpaceMgr
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 空间管理 RPC 服务
+    extra_config: {}
+  - name: secret
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11108
+    gateway_path: trpc.moox.ops.SecretMgr
+    gateway_enabled: true
+    gateway_service_id: secret
+    scope: internal
+    status: active
+    description: 秘钥管理 RPC 服务
+    extra_config:
+      gateway_methods:
+        - ListSecrets
+        - RevealSecret
+  - name: sysdeploy
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11109
+    gateway_path: trpc.moox.ops.SysDeploy
+    gateway_enabled: true
+    gateway_service_id: sysdeploy
+    scope: internal
+    status: active
+    description: 系统服务部署信息 RPC 服务
+    extra_config:
+      gateway_methods:
+        - ListActiveServiceDeployments
+  - name: trade_account
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11200
+    gateway_path: trpc.moox.trade.AccountSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易账户服务
+    extra_config: {}
+  - name: trade_balance
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11201
+    gateway_path: trpc.moox.trade.BalanceSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易余额服务
+    extra_config: {}
+  - name: trade_fund
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11202
+    gateway_path: trpc.moox.trade.FundSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易资金服务
+    extra_config: {}
+  - name: trade_apikey
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11203
+    gateway_path: trpc.moox.trade.ApiKeySvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易 API Key 服务
+    extra_config: {}
+  - name: trade_channel
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11204
+    gateway_path: trpc.moox.trade.ChannelSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易通道服务
+    extra_config: {}
+  - name: trade_tradeop
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11205
+    gateway_path: trpc.moox.trade.TradeOpSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易操作服务
+    extra_config: {}
+  - name: trade_order
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11206
+    gateway_path: trpc.moox.trade.OrderSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 订单服务
+    extra_config: {}
+  - name: trade_tradeq
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11207
+    gateway_path: trpc.moox.trade.TradeQuerySvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易查询服务
+    extra_config: {}
+  - name: trade_position
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11208
+    gateway_path: trpc.moox.trade.PositionSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 持仓服务
+    extra_config: {}
+  - name: trade_rebalance
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11211
+    gateway_path: trpc.moox.trade.RebalanceSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 目标仓位调仓服务
+    extra_config: {}
+  - name: trade_ops
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11212
+    gateway_path: trpc.moox.trade.TradeOpsSvc
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 交易暂停、对账与 Saga 运维服务
+    extra_config: {}

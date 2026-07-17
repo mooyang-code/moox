@@ -12,6 +12,8 @@ API 或采集流程生成，不在这里维护交易所、标的或历史行情�
 - `metadata-monitor-metrics-local-route.seed.yaml`：服务指标的本地主存路由。
 - `metadata-monitor-host.seed.yaml`：主机资源逻辑元数据。
 - `metadata-monitor-host-local-route.seed.yaml`：主机资源的本地主存路由。
+- `service-deployments.seed.yaml`：Admin `t_service_deployments` 的初始化清单，区分独立进程
+  (`deployment_mode: process`) 与同进程 RPC 端点 (`deployment_mode: endpoint`)。
 
 默认量化 seed 使用市场作为 Space。`crypto` 是加密货币市场，`binance` 和 `okx`
 是该 Space 下的 DataSource；单频 Dataset ID 包含来源、产品和频率。
@@ -43,6 +45,24 @@ moox-cli metadata import \
 ```
 
 该 seed 只面向空系统。结构调整后清理旧运行数据并重新导入，不执行旧元数据迁移。
+
+## 服务部署导入
+
+Admin 启动时会自动补齐同一套默认服务部署。需要在启动前导入或在重建数据库时显式
+初始化时，可以使用 Admin CLI：
+
+```bash
+moox-admin-cli service-deployments import \
+  --db-path ./data/admin.db \
+  --file examples/service-deployments.seed.yaml
+```
+
+该命令以 `node.id + service.name` 为幂等键，重复执行会更新清单中的地址、端口、网关
+路由和健康检查配置。示例默认全部使用 `127.0.0.1`；多主机部署前请先替换节点的
+`public_address` 以及需要对外暴露的服务 `host`。配置中的独立进程包括 Storage 的
+`access`、`view-index`、`view-builder`、`view-query`，以及 Collector、CloudNode、
+Factor、Strategy、Monitor、EventBus、Archive、HostAgent、Trade 等服务；Admin、
+Storage、Trade 内部 RPC 则以 `endpoint` 端点登记，不会被误认为独立进程。
 
 ## E2E
 
