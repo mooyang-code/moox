@@ -164,3 +164,15 @@ func TestCacheDB_Ping_ShouldSucceed(t *testing.T) {
 	cdb := setupCacheDB(t)
 	require.NoError(t, cdb.Ping(context.Background()))
 }
+
+func TestCacheDBRunValueLogGCTreatsNoRewriteAsSuccess(t *testing.T) {
+	cdb := setupCacheDB(t)
+	require.NoError(t, cdb.RunValueLogGC(context.Background()))
+}
+
+func TestCacheDBRunValueLogGCRejectsCanceledContext(t *testing.T) {
+	cdb := setupCacheDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, cdb.RunValueLogGC(ctx), context.Canceled)
+}

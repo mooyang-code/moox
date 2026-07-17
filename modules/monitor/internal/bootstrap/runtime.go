@@ -35,14 +35,8 @@ func (r *Runtime) Close() error {
 		if r.cancel != nil {
 			r.cancel()
 		}
-		if r.Scheduler != nil {
-			r.Scheduler.Stop()
-		}
 		if r.HostRuleCache != nil {
 			_ = r.HostRuleCache.Stop(trpc.BackgroundContext())
-		}
-		if r.MetricScheduler != nil {
-			r.MetricScheduler.Stop()
 		}
 		r.workers.Wait()
 		if r.Store != nil {

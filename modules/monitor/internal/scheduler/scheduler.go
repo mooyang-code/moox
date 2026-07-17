@@ -11,14 +11,12 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type ResultHook func(context.Context, domain.Check, domain.CheckResult)
 
 type Options struct {
 	InstanceID     string
-	ReloadInterval time.Duration
 	MaxConcurrency int
 	Runner         probe.Runner
 	OnResult       ResultHook
@@ -26,23 +24,16 @@ type Options struct {
 }
 
 type Scheduler struct {
-	checks      *store.CheckRepository
-	results     *store.ResultRepository
-	instanceID  string
-	reloadEvery time.Duration
-	maxConc     int
-	runner      probe.Runner
-	onResult    ResultHook
-	dueBatch    int
-	cancel      context.CancelFunc
-	loopWG      sync.WaitGroup
+	checks     *store.CheckRepository
+	results    *store.ResultRepository
+	instanceID string
+	maxConc    int
+	runner     probe.Runner
+	onResult   ResultHook
+	dueBatch   int
 }
 
 func New(repos *store.Repositories, opts Options) *Scheduler {
-	reloadEvery := opts.ReloadInterval
-	if reloadEvery <= 0 {
-		reloadEvery = 30 * time.Second
-	}
 	maxConc := opts.MaxConcurrency
 	if maxConc <= 0 {
 		maxConc = 16
@@ -63,48 +54,14 @@ func New(repos *store.Repositories, opts Options) *Scheduler {
 		repos = store.NewRepositories(nil)
 	}
 	return &Scheduler{
-		checks:      repos.Checks,
-		results:     repos.Results,
-		instanceID:  instanceID,
-		reloadEvery: reloadEvery,
-		maxConc:     maxConc,
-		runner:      runner,
-		onResult:    opts.OnResult,
-		dueBatch:    dueBatch,
+		checks:     repos.Checks,
+		results:    repos.Results,
+		instanceID: instanceID,
+		maxConc:    maxConc,
+		runner:     runner,
+		onResult:   opts.OnResult,
+		dueBatch:   dueBatch,
 	}
-}
-
-func (s *Scheduler) Start(ctx context.Context) {
-	if ctx == nil {
-		ctx = trpc.BackgroundContext()
-	}
-	loopCtx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
-	s.loopWG.Add(1)
-	go func() {
-		defer s.loopWG.Done()
-		ticker := time.NewTicker(s.reloadEvery)
-		defer ticker.Stop()
-		for {
-			_, _ = s.RunDueOnce(loopCtx)
-			select {
-			case <-loopCtx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-}
-
-// Stop cancels the periodic loop and waits for any in-flight scheduled run.
-func (s *Scheduler) Stop() {
-	if s == nil {
-		return
-	}
-	if s.cancel != nil {
-		s.cancel()
-	}
-	s.loopWG.Wait()
 }
 
 func (s *Scheduler) RunDueOnce(ctx context.Context) (int, error) {

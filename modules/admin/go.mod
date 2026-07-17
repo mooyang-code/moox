@@ -13,6 +13,7 @@ require (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.47.0
@@ -61,6 +62,7 @@ replace (
 	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
+	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 )
 
 require (

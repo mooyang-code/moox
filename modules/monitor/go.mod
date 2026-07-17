@@ -15,6 +15,7 @@ require (
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.47.0
 	github.com/prometheus/client_golang v1.23.2
@@ -134,3 +135,5 @@ replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob

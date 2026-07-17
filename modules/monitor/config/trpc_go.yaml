@@ -36,6 +36,26 @@ server:
       network: "0 * * * * *"
       protocol: timer
       timeout: 30000
+    - name: trpc.moox.monitor.data_cleanup.timer
+      port: 11500
+      network: "0 0 */6 * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 120000
+    - name: trpc.moox.monitor.check_schedule.timer
+      port: 11501
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 30000
+    - name: trpc.moox.monitor.metric_rule.timer
+      port: 11502
+      network: "0 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 30000
+    - name: trpc.moox.monitor.peer_sync.timer
+      port: 11503
+      network: "*/10 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 10000
 
 plugins:
   auth:

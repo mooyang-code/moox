@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // CacheDB BadgerDB封装，提供缓存操作
@@ -26,14 +25,7 @@ func NewCacheDB(dataDir string) (*CacheDB, error) {
 		return nil, fmt.Errorf("failed to open badger db: %w", err)
 	}
 
-	cdb := &CacheDB{
-		db: db,
-	}
-
-	// 启动垃圾回收
-	go cdb.runGC()
-
-	return cdb, nil
+	return &CacheDB{db: db}, nil
 }
 
 // NewCacheDBFromBadger 从现有 BadgerDB 实例创建 CacheDB（用于与 database.Manager 集成）
@@ -42,14 +34,7 @@ func NewCacheDBFromBadger(db *badger.DB) (*CacheDB, error) {
 		return nil, fmt.Errorf("badger db is nil")
 	}
 
-	cdb := &CacheDB{
-		db: db,
-	}
-
-	// 启动垃圾回收
-	go cdb.runGC()
-
-	return cdb, nil
+	return &CacheDB{db: db}, nil
 }
 
 // Close 关闭数据库
@@ -354,18 +339,16 @@ func (c *CacheDB) Incr(ctx context.Context, key string) (int64, error) {
 	return newValue, err
 }
 
-// runGC 运行垃圾回收
-func (c *CacheDB) runGC() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		err := c.db.RunValueLogGC(0.7)
-		if err != nil {
-			// 这是正常的，当没有需要回收的数据时会返回错误
-			log.Debugf("[Auth] GC completed: %v", err)
-		}
+// RunValueLogGC performs one bounded Badger value-log collection attempt.
+func (c *CacheDB) RunValueLogGC(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	err := c.db.RunValueLogGC(0.7)
+	if errors.Is(err, badger.ErrNoRewrite) {
+		return nil
+	}
+	return err
 }
 
 // Ping 测试连接

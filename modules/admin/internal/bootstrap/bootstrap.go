@@ -2,9 +2,13 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -35,6 +39,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "注册TRPC服务失败: %v", err)
 		return nil, err
 	}
+	cache, err := authdao.NewCacheDBFromBadger(services.DBManager.GetCache())
+	if err != nil {
+		return nil, fmt.Errorf("create auth cache cleanup handle: %w", err)
+	}
+	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
+		return nil, err
+	}
 
 	// 4. 注册定时器
 	// DNS探测定时器（本地DNS解析）
@@ -55,6 +66,28 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	return s, nil
+}
+
+const authCacheCleanupTimerService = "trpc.moox.admin.auth_cache_cleanup.timer"
+
+type authCacheCleaner interface {
+	RunValueLogGC(context.Context) error
+}
+
+func registerAuthCacheCleanupTimer(s *server.Server, cleaner authCacheCleaner) error {
+	if s == nil || cleaner == nil {
+		return fmt.Errorf("auth cache cleanup timer requires server and cache")
+	}
+	service := s.Service(authCacheCleanupTimerService)
+	if service == nil {
+		return fmt.Errorf("auth cache cleanup timer service %q is not configured", authCacheCleanupTimerService)
+	}
+	job, err := timerjob.New("admin_auth_cache_cleanup", time.Minute, cleaner.RunValueLogGC)
+	if err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, job.Handle)
+	return nil
 }
 
 func registerMetricsReporter(s *server.Server) {

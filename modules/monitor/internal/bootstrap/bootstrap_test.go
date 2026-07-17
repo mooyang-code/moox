@@ -167,16 +167,13 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	startMetricsConsumer(ctx, cfg, nil, nil)
 	startMetricsConsumer(ctx, cfg, &Runtime{}, nil)
 
-	startMetricsDedupeCleaner(ctx, rt, nil)
-	startRetentionCleaner(ctx, cfg, rt) // retention days default > 0 starts goroutine
-	cfg.Scheduler.ResultRetentionDays = 0
-	startRetentionCleaner(ctx, cfg, rt)
-
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	cfg.Peer.Enabled = false
-	assert.NoError(t, startPeerPuller(ctx, cfg, rt))
+	puller, err := buildPeerPuller(cfg, rt)
+	assert.NoError(t, err)
+	assert.Nil(t, puller)
 
 	registerMetricsReporter(nil)
 	assert.NoError(t, registerHealth(nil, nil, rt, nil))
@@ -251,7 +248,7 @@ func TestStartPeerPullerReturnsClientConstructionError(t *testing.T) {
 	cfg := config.Default()
 	cfg.Peer.Peers = []config.PeerEntry{{InstanceID: "monitor-peer", GatewayURL: "https://peer.example", NodeID: "gateway-peer"}}
 	cfg.Peer.ServiceAuth = config.ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret", CAFile: filepath.Join(t.TempDir(), "missing.pem")}
-	err = startPeerPuller(context.Background(), cfg, &Runtime{Repositories: mgr.Repositories()})
+	_, err = buildPeerPuller(cfg, &Runtime{Repositories: mgr.Repositories()})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "peer gateway client")
 }
@@ -262,21 +259,6 @@ func TestWaitHostMetricsRespectsCancel(t *testing.T) {
 	start := time.Now()
 	waitHostMetrics(ctx)
 	assert.Less(t, time.Since(start), 2*time.Second)
-}
-
-func TestPruneMonitorHistoryNoopAndHappyPath(t *testing.T) {
-	ctx := context.Background()
-	assert.NoError(t, pruneMonitorHistory(ctx, nil, time.Hour))
-	assert.NoError(t, pruneMonitorHistory(ctx, &Runtime{}, time.Hour))
-	assert.NoError(t, pruneMonitorHistory(ctx, &Runtime{}, 0))
-
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.Close() })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	repos := mgr.Repositories()
-	rt := &Runtime{Store: mgr, Repositories: repos}
-	require.NoError(t, pruneMonitorHistory(ctx, rt, 24*time.Hour))
 }
 
 func TestMonitorResultHook(t *testing.T) {

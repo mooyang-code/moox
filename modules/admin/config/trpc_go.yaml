@@ -85,6 +85,11 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.admin.auth_cache_cleanup.timer
+      port: 11306
+      network: "0 */5 * * * *"
+      protocol: timer
+      timeout: 60000
 
 client:
   filter:

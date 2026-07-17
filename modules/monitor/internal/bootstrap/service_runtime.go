@@ -13,7 +13,6 @@ import (
 	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
-	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -34,12 +33,6 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		SyncSystem: syncSystem, MetricsQuery: metricsQuery, MetricRules: metricRules, MetricEvaluator: metricEvaluator,
 		HostStore: hostStore, HostReader: hostReader, HostStorageReady: hostReady,
 	}))
-}
-
-func startScheduler(ctx context.Context, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult)) *scheduler.Scheduler {
-	s := scheduler.New(runtime.Repositories, scheduler.Options{InstanceID: cfg.Instance.InstanceID, ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second, MaxConcurrency: cfg.Scheduler.MaxConcurrency, Runner: runner, OnResult: hook})
-	s.Start(ctx)
-	return s
 }
 
 func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
@@ -92,41 +85,6 @@ func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *store.
 		seen[instance.InstanceID] = struct{}{}
 	}
 	return ids
-}
-
-func startRetentionCleaner(ctx context.Context, cfg *config.Config, runtime *Runtime) {
-	retention := time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
-	if retention <= 0 {
-		return
-	}
-	runtime.Go(func() {
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
-		for {
-			if err := pruneMonitorHistory(ctx, runtime, retention); err != nil {
-				log.WarnContextf(ctx, "monitor retention prune failed: %v", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	})
-}
-
-func pruneMonitorHistory(ctx context.Context, runtime *Runtime, retention time.Duration) error {
-	if runtime == nil || runtime.Store == nil || runtime.Store.Ping(ctx) != nil || retention <= 0 {
-		return nil
-	}
-	cutoff := time.Now().UTC().Add(-retention)
-	if _, err := runtime.Repositories.Results.DeleteOlderThan(ctx, cutoff); err != nil {
-		return err
-	}
-	if _, err := runtime.Repositories.Alerts.DeleteEventsOlderThan(ctx, cutoff); err != nil {
-		return err
-	}
-	return nil
 }
 
 func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
@@ -193,9 +151,9 @@ func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(contex
 	}
 }
 
-func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) error {
+func buildPeerPuller(cfg *config.Config, runtime *Runtime) (*monitorpeer.Puller, error) {
 	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
-		return nil
+		return nil, nil
 	}
 	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))
 	for _, item := range cfg.Peer.Peers {
@@ -207,22 +165,7 @@ func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) 
 		CAFile:      cfg.Peer.ServiceAuth.CAFile, Alerts: runtime.Repositories.Alerts, OwnerInstanceID: cfg.Instance.InstanceID,
 	})
 	if err != nil {
-		return fmt.Errorf("monitor peer gateway client initialization failed: %w", err)
+		return nil, fmt.Errorf("monitor peer gateway client initialization failed: %w", err)
 	}
-	runtime.Go(func() {
-		ticker := time.NewTicker(time.Duration(cfg.Peer.PullIntervalSeconds) * time.Second)
-		defer ticker.Stop()
-		for {
-			if err := puller.PullOnce(ctx); err != nil {
-				log.WarnContextf(ctx, "monitor peer pull failed: %v", err)
-			}
-			_ = puller.MarkStale(ctx, time.Now(), time.Duration(cfg.Peer.TimeoutSeconds)*time.Second)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	})
-	return nil
+	return puller, nil
 }

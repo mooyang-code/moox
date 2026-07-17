@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,9 +25,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.BaseURL != "http://127.0.0.1:11409" {
 		t.Fatalf("base url = %q", cfg.Instance.BaseURL)
 	}
-	if cfg.Scheduler.ReloadIntervalSeconds != 30 {
-		t.Fatalf("reload interval = %d", cfg.Scheduler.ReloadIntervalSeconds)
-	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
 	}
@@ -36,7 +34,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.SysDeploy.Enabled || cfg.SysDeploy.Target != "ip://127.0.0.1:11109" {
 		t.Fatalf("sysdeploy = %+v", cfg.SysDeploy)
 	}
-	if !cfg.Peer.Enabled || cfg.Peer.PullIntervalSeconds != 10 || cfg.Peer.TimeoutSeconds != 5 {
+	if !cfg.Peer.Enabled || cfg.Peer.TimeoutSeconds != 5 {
 		t.Fatalf("peer = %+v", cfg.Peer)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
@@ -63,7 +61,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("parse trpc config: %v", err)
 	}
-	if len(cfg.Server.Service) != 4 {
+	if len(cfg.Server.Service) != 8 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
 	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
@@ -176,25 +174,18 @@ func TestMonitorConfigRequiresPeerGatewayCredentialsWhenConfigured(t *testing.T)
 	}
 }
 
-func TestMonitorConfigRejectsNonPositivePeerIntervals(t *testing.T) {
-	for _, mutate := range []func(*Config){
-		func(cfg *Config) { cfg.Peer.PullIntervalSeconds = -1 },
-		func(cfg *Config) { cfg.Peer.TimeoutSeconds = -1 },
-		func(cfg *Config) { cfg.Peer.PullIntervalSeconds = 0 },
-		func(cfg *Config) { cfg.Peer.TimeoutSeconds = 0 },
-	} {
-		cfg := Default()
-		cfg.SysDeploy.Enabled = false
-		cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
-		cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
-		mutate(cfg)
-		if err := cfg.Validate(); err == nil {
-			t.Fatal("Validate() error = nil, want non-positive peer interval rejection")
-		}
+func TestMonitorConfigRejectsNonPositivePeerTimeout(t *testing.T) {
+	cfg := Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
+	cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
+	cfg.Peer.TimeoutSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want non-positive peer timeout rejection")
 	}
 }
 
-func TestMonitorConfigDefaultsZeroPeerIntervalsBeforeValidation(t *testing.T) {
+func TestMonitorConfigDefaultsZeroPeerTimeoutBeforeValidation(t *testing.T) {
 	path := writeConfig(t, `
 instance:
   instance_id: monitor-test
@@ -202,7 +193,6 @@ sysdeploy:
   enabled: false
 peer:
   enabled: true
-  pull_interval_seconds: 0
   timeout_seconds: 0
   service_auth:
     key_id: monitor
@@ -216,8 +206,21 @@ peer:
 	if err != nil {
 		t.Fatalf("Load() = %v", err)
 	}
-	if cfg.Peer.PullIntervalSeconds != 10 || cfg.Peer.TimeoutSeconds != 5 {
-		t.Fatalf("peer intervals = %d/%d, want defaults 10/5", cfg.Peer.PullIntervalSeconds, cfg.Peer.TimeoutSeconds)
+	if cfg.Peer.TimeoutSeconds != 5 {
+		t.Fatalf("peer timeout = %d, want default 5", cfg.Peer.TimeoutSeconds)
+	}
+}
+
+func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
+	raw, err := os.ReadFile("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, oldKey := range []string{"reload_interval_seconds", "pull_interval_seconds"} {
+		if strings.Contains(text, oldKey) {
+			t.Fatalf("app config still contains %q", oldKey)
+		}
 	}
 }
 

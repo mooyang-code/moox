@@ -47,7 +47,6 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runt
 		storage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
 	}
 	repo := runtime.MetricStores.Messages
-	startMetricsDedupeCleaner(ctx, runtime, repo)
 	runtime.Go(func() {
 		for {
 			if err := ctx.Err(); err != nil {
@@ -76,26 +75,6 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runt
 			case <-ctx.Done():
 				return
 			case <-time.After(30 * time.Second):
-			}
-		}
-	})
-}
-
-func startMetricsDedupeCleaner(ctx context.Context, runtime *Runtime, repo *monmetrics.MetricMessageStore) {
-	if repo == nil {
-		return
-	}
-	runtime.Go(func() {
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
-		for {
-			if _, err := repo.PruneDedupe(ctx, time.Now().UTC()); err != nil {
-				log.WarnContextf(ctx, "metrics dedupe prune failed: %v", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
 			}
 		}
 	})

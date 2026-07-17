@@ -122,25 +122,17 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
 	registerMetricsReporter(s)
-	if err := startPeerPuller(runtimeCtx, cfg, runtime); err != nil {
+	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	runtime.Scheduler = startScheduler(runtimeCtx, cfg, runtime, probeRunner, resultHook)
-	startRetentionCleaner(runtimeCtx, cfg, runtime)
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
 	startMetricsConsumer(runtimeCtx, cfg, runtime, metricsStorage)
-	if metricEvaluator != nil {
-		runtime.MetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{
-			Evaluator: metricEvaluator, Rules: metricRules, InstanceID: cfg.Instance.InstanceID,
-			ReloadInterval: time.Duration(cfg.Scheduler.ReloadIntervalSeconds) * time.Second,
-			ActiveInstances: func(ctx context.Context) ([]string, error) {
-				return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, runtime.Repositories.Peers, 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
-			},
-		})
-		runtime.MetricScheduler.Start(runtimeCtx)
-	}
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done

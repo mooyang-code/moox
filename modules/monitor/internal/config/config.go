@@ -47,9 +47,8 @@ type InstanceConfig struct {
 }
 
 type SchedulerConfig struct {
-	ReloadIntervalSeconds int `yaml:"reload_interval_seconds"`
-	ResultRetentionDays   int `yaml:"result_retention_days"`
-	MaxConcurrency        int `yaml:"max_concurrency"`
+	ResultRetentionDays int `yaml:"result_retention_days"`
+	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
 type SysDeployConfig struct {
@@ -66,11 +65,10 @@ type ServiceAuthConfig struct {
 }
 
 type PeerConfig struct {
-	Enabled             bool              `yaml:"enabled"`
-	PullIntervalSeconds int               `yaml:"pull_interval_seconds"`
-	TimeoutSeconds      int               `yaml:"timeout_seconds"`
-	ServiceAuth         ServiceAuthConfig `yaml:"service_auth"`
-	Peers               []PeerEntry       `yaml:"peers"`
+	Enabled        bool              `yaml:"enabled"`
+	TimeoutSeconds int               `yaml:"timeout_seconds"`
+	ServiceAuth    ServiceAuthConfig `yaml:"service_auth"`
+	Peers          []PeerEntry       `yaml:"peers"`
 }
 
 type PeerEntry struct {
@@ -163,9 +161,8 @@ func Default() *Config {
 			BaseURL:    "http://127.0.0.1:11409",
 		},
 		Scheduler: SchedulerConfig{
-			ReloadIntervalSeconds: 30,
-			ResultRetentionDays:   14,
-			MaxConcurrency:        16,
+			ResultRetentionDays: 14,
+			MaxConcurrency:      16,
 		},
 		SysDeploy: SysDeployConfig{
 			Enabled:     true,
@@ -173,9 +170,8 @@ func Default() *Config {
 			ServiceAuth: ServiceAuthConfig{},
 		},
 		Peer: PeerConfig{
-			Enabled:             true,
-			PullIntervalSeconds: 10,
-			TimeoutSeconds:      5,
+			Enabled:        true,
+			TimeoutSeconds: 5,
 		},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
@@ -216,9 +212,6 @@ func (c *Config) applyDefaults() {
 	if c.Instance.BaseURL == "" {
 		c.Instance.BaseURL = defaults.Instance.BaseURL
 	}
-	if c.Scheduler.ReloadIntervalSeconds == 0 {
-		c.Scheduler.ReloadIntervalSeconds = defaults.Scheduler.ReloadIntervalSeconds
-	}
 	if c.Scheduler.ResultRetentionDays == 0 {
 		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
 	}
@@ -227,9 +220,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.SysDeploy.Target == "" {
 		c.SysDeploy.Target = defaults.SysDeploy.Target
-	}
-	if c.Peer.PullIntervalSeconds == 0 {
-		c.Peer.PullIntervalSeconds = defaults.Peer.PullIntervalSeconds
 	}
 	if c.Peer.TimeoutSeconds == 0 {
 		c.Peer.TimeoutSeconds = defaults.Peer.TimeoutSeconds
@@ -410,8 +400,8 @@ func (c *Config) Validate() error {
 	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (strings.TrimSpace(c.Peer.ServiceAuth.KeyID) == "" || strings.TrimSpace(c.Peer.ServiceAuth.SecretKey) == "") {
 		return fmt.Errorf("peer.service_auth key_id and secret_key must not be empty when peers are configured")
 	}
-	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (c.Peer.PullIntervalSeconds <= 0 || c.Peer.TimeoutSeconds <= 0) {
-		return fmt.Errorf("peer pull_interval_seconds and timeout_seconds must be positive when peers are configured")
+	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && c.Peer.TimeoutSeconds <= 0 {
+		return fmt.Errorf("peer timeout_seconds must be positive when peers are configured")
 	}
 	return nil
 }

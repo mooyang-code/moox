@@ -19,7 +19,6 @@ instance:
   base_url: "http://127.0.0.1:11409"
 
 scheduler:
-  reload_interval_seconds: 30
   result_retention_days: 14
   max_concurrency: 16
 
@@ -34,7 +33,6 @@ sysdeploy:
 
 peer:
   enabled: true
-  pull_interval_seconds: 10
   timeout_seconds: 5
   service_auth:
     key_id: ""
