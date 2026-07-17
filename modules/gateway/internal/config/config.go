@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -177,14 +176,9 @@ func readSecretFile(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is required")
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	file, err := openSecretFile(path)
 	if err != nil {
-		return "", fmt.Errorf("open key without following symlinks: %w", err)
-	}
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return "", errors.New("open key file descriptor")
+		return "", fmt.Errorf("open key file: %w", err)
 	}
 	defer file.Close()
 	info, err := file.Stat()

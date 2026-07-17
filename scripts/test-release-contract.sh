@@ -11,6 +11,9 @@ if rg -n "pnpm install .*${unfrozen}|${floating_statik}" "${ROOT}/scripts" "${RO
 fi
 
 grep -q 'set -euo pipefail' "${ROOT}/scripts/release.sh"
+grep -q 'SKIP_WEB_ASSETS' "${ROOT}/scripts/release.sh"
+grep -q 'binary_name' "${ROOT}/scripts/build.sh"
+grep -q 'RELEASE_PLATFORMS' "${ROOT}/scripts/release-matrix.sh"
 grep -q 'github.com/rakyll/statik@v0.1.7' "${ROOT}/scripts/release.sh"
 grep -q 'go run github.com/rakyll/statik@v0.1.7' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'modules/trade/config/.' "${ROOT}/scripts/release.sh"
@@ -50,3 +53,11 @@ assert module.HELLO
 PY
 grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release.sh"
+bash -n \
+  "${ROOT}/scripts/build.sh" \
+  "${ROOT}/scripts/release.sh" \
+  "${ROOT}/scripts/release-matrix.sh"
+matrix_output="$(VERSION=test RELEASE_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 "${ROOT}/scripts/release-matrix.sh" --dry-run)"
+grep -q 'release test (linux/amd64' <<<"${matrix_output}"
+grep -q 'release test (darwin/arm64' <<<"${matrix_output}"
+grep -q 'release test (windows/amd64' <<<"${matrix_output}"

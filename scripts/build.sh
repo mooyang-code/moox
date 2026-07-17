@@ -30,13 +30,22 @@ build_go() {
     if [[ -n "${tags}" ]]; then
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${cgo}" go build -tags "${tags}" \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/${output}" "${package}"
+        -o "${BIN_DIR}/$(binary_name "${output}")" "${package}"
     else
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${cgo}" go build \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/${output}" "${package}"
+        -o "${BIN_DIR}/$(binary_name "${output}")" "${package}"
     fi
   )
+}
+
+binary_name() {
+  local name="$1"
+  if [[ "${TARGET_GOOS}" == "windows" ]]; then
+    printf '%s.exe' "${name}"
+  else
+    printf '%s' "${name}"
+  fi
 }
 
 build_storage() {
@@ -47,17 +56,18 @@ build_storage() {
     if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build -tags "${STORAGE_BUILD_TAGS}" \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/moox-storage" ./cmd/server
+        -o "${BIN_DIR}/$(binary_name moox-storage)" ./cmd/server
     else
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
         -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/moox-storage" ./cmd/server
+        -o "${BIN_DIR}/$(binary_name moox-storage)" ./cmd/server
     fi
   )
 }
 
 build_storage_cli() {
-  build_go modules/storage ./cmd/cli moox-storage-cli 1
+  local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
+  build_go modules/storage ./cmd/cli moox-storage-cli "${storage_cgo}"
 }
 
 build_web_host() {
@@ -66,7 +76,7 @@ build_web_host() {
     cd "${ROOT}/web-host"
     GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
       -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-      -o "${BIN_DIR}/moox-web-host" .
+      -o "${BIN_DIR}/$(binary_name moox-web-host)" .
   )
 }
 

@@ -32,9 +32,9 @@ build-darwin:
 	@cd $(ROOT) && TARGET_GOOS=darwin TARGET_GOARCH=amd64 ./scripts/build.sh web-host
 
 build-windows:
-	@echo "Windows build is not supported by scripts/build.sh"
+	@cd $(ROOT) && TARGET_GOOS=windows TARGET_GOARCH=amd64 ./scripts/build.sh web-host
 
-build-all: build-linux build-darwin
+build-all: build-linux build-darwin build-windows
 
 clean:
 	@rm -rf bin release

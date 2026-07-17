@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/BurntSushi/toml"
 )
@@ -133,14 +132,6 @@ func readSecureFile(path string) (os.FileInfo, []byte, error) {
 		return nil, nil, fmt.Errorf("config_invalid: custom.toml exceeds 1 MiB")
 	}
 	return openInfo, raw, nil
-}
-
-func ownedByCurrentUser(info os.FileInfo) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return false
-	}
-	return int(stat.Uid) == os.Geteuid()
 }
 
 func decodeStrict(raw []byte, out *Manifest) error {

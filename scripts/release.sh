@@ -17,7 +17,11 @@ build_web_assets() {
   (cd "${ROOT}/web-host" && go run github.com/rakyll/statik@v0.1.7 -src=../web/dist -dest=./internal)
 }
 
-build_web_assets
+if [[ "${SKIP_WEB_ASSETS:-0}" == "1" ]]; then
+  echo "==> reuse existing web assets"
+else
+  build_web_assets
+fi
 TARGET_GOOS="${OS}" TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh"
 
 validate_monitor_metadata_seeds() {
@@ -42,7 +46,7 @@ validate_monitor_metadata_seeds() {
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --dry-run >/dev/null)
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml" --dry-run >/dev/null)
   grep -q 'host_storage:' "${ROOT}/modules/monitor/config/app.yaml"
-  grep -q 'retention: 72h' "${ROOT}/modules/monitor/config/app.yaml"
+  grep -q 'result_retention_days: 14' "${ROOT}/modules/monitor/config/app.yaml"
   ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
   grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
   for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
@@ -96,7 +100,9 @@ fi
 copy_binary() {
   local name="$1"
   local target_dir="$2"
-  cp "${ROOT}/bin/${name}" "${target_dir}/"
+  local source_name="${name}"
+  [[ "${OS}" == "windows" ]] && source_name="${source_name}.exe"
+  cp "${ROOT}/bin/${source_name}" "${target_dir}/"
 }
 
 copy_binary moox-cli "${RELEASE_ROOT}/cli/bin"

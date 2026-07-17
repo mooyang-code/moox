@@ -13,7 +13,6 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/mooyang-code/moox/packages/pyruntime/transport"
-	"golang.org/x/sys/unix"
 )
 
 type Key struct{ Namespace, DataRevision, SchemaHash, InputHash string }
@@ -44,7 +43,7 @@ func (h *Handle) Release() error {
 type Mapped struct {
 	reader  *ipc.FileReader
 	data    []byte
-	fd      int
+	file    *os.File
 	once    sync.Once
 	err     error
 	release func() error
@@ -72,18 +71,11 @@ func (m *Mapped) Close() error {
 		if m.reader != nil {
 			m.err = m.reader.Close()
 		}
-		if m.data != nil {
-			if err := unix.Munmap(m.data); m.err == nil {
-				m.err = err
-			}
-			m.data = nil
+		if err := closeMappedFile(m.data, m.file); m.err == nil {
+			m.err = err
 		}
-		if m.fd >= 0 && m.reader != nil {
-			if err := unix.Close(m.fd); m.err == nil {
-				m.err = err
-			}
-			m.fd = -1
-		}
+		m.data = nil
+		m.file = nil
 		if m.release != nil {
 			if err := m.release(); m.err == nil {
 				m.err = err
@@ -202,23 +194,17 @@ func (s *Store) Open(ctx context.Context, h *Handle) (*Mapped, error) {
 	if st.Size() == 0 {
 		return nil, errors.New("pyruntime: empty snapshot")
 	}
-	fd, err := unix.Open(h.Path, unix.O_RDONLY, 0)
+	data, file, err := mapReadOnlyFile(h.Path, st.Size())
 	if err != nil {
-		return nil, err
-	}
-	data, err := unix.Mmap(fd, 0, int(st.Size()), unix.PROT_READ, unix.MAP_SHARED)
-	if err != nil {
-		_ = unix.Close(fd)
 		return nil, err
 	}
 	reader, err := ipc.NewMappedFileReader(data)
 	if err != nil {
-		_ = unix.Munmap(data)
-		_ = unix.Close(fd)
+		_ = closeMappedFile(data, file)
 		return nil, err
 	}
 	retained = false
-	return &Mapped{reader: reader, data: data, fd: fd, release: func() error { return s.release(h.Hash, h.Path) }}, nil
+	return &Mapped{reader: reader, data: data, file: file, release: func() error { return s.release(h.Hash, h.Path) }}, nil
 }
 func (s *Store) Reap() error {
 	s.mu.Lock()

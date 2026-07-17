@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-context check-format check-lint test-quality-gates test-docs-architecture release deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-context check-format check-lint test-quality-gates test-docs-architecture release release-matrix deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -32,6 +32,9 @@ test-docs-architecture:
 
 release:
 	./scripts/release.sh
+
+release-matrix:
+	./scripts/release-matrix.sh
 
 deploy:
 	./scripts/deploy-moox.sh $(ARGS)

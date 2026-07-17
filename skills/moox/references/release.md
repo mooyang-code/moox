@@ -6,6 +6,21 @@ Create a release package:
 make release
 ```
 
+Create all public platform archives and SHA-256 files:
+
+```bash
+VERSION=v0.1.0 make release-matrix
+```
+
+The default matrix is Linux amd64/arm64, macOS amd64/arm64, and Windows
+amd64. Pushing a `v*` tag runs the GitHub Actions and CNB pipelines, which
+create the release and upload the same archives on both platforms. Set
+`RELEASE_PLATFORMS` to a comma-separated list to select a smaller matrix.
+
+Matrix cross-builds use Storage's no-CGO fallback unless the target is the
+current host or `STORAGE_CGO_ENABLED=1` is supplied. The full DuckDB-backed
+Storage build requires a target C toolchain when CGO is enabled.
+
 Default remote deployment:
 
 ```bash

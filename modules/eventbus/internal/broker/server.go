@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
@@ -184,7 +183,7 @@ func loadUsersFile(path string) ([]*natsserver.User, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		return nil, fmt.Errorf("users file must be a regular non-symlink file with mode 0600")
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Getuid() {
+	if !ownedByCurrentUser(info) {
 		return nil, fmt.Errorf("users file owner does not match process uid")
 	}
 	raw, err := os.ReadFile(path)
