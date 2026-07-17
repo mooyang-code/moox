@@ -6,7 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"trpc.group/trpc-go/trpc-go"
 )
 
@@ -46,7 +46,7 @@ func (s *AuthServiceImpl) IssueRawSessionTicket(ctx context.Context, req *pb.Iss
 	if err != nil || session.UserID != userID || !time.Now().Before(session.ExpiresAt) {
 		return &pb.IssueRawSessionTicketRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_AUTH, Msg: "用户身份验证失败"}}, nil
 	}
-	ticketID, err := mooxcrypto.RandomHex(32)
+	ticketID, err := mooxsecurity.RandomHex(32)
 	if err != nil {
 		return &pb.IssueRawSessionTicketRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "生成 ticket 失败"}}, nil
 	}

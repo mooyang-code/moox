@@ -16,8 +16,8 @@ import (
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/mooyang-code/moox/packages/requestauth"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
 type requestAuthStore interface {
@@ -99,7 +99,7 @@ func verifyAdminRequest(r *http.Request, body []byte) (*accessClaims, error) {
 	if err != nil {
 		return nil, errors.New("encryption key unavailable")
 	}
-	secret, err := mooxcrypto.Decrypt(session.EncryptedSecret, encryptionKey)
+	secret, err := mooxsecurity.Decrypt(session.EncryptedSecret, encryptionKey)
 	if err != nil {
 		return nil, errors.New("invalid signing session secret")
 	}

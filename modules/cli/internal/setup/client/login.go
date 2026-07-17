@@ -14,7 +14,7 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -61,7 +61,7 @@ func verifyPublicLogin(ctx context.Context, baseURL, username, password string, 
 	}, saltResponse); err != nil || !retInfoSuccess(saltResponse.GetRetInfo()) || saltResponse.GetSalt() == "" || saltResponse.GetTimestamp() <= 0 {
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
 	}
-	encryptedPassword, err := mooxcrypto.Encrypt(password, saltResponse.GetSalt()+strconv.FormatInt(saltResponse.GetTimestamp(), 10))
+	encryptedPassword, err := mooxsecurity.Encrypt(password, saltResponse.GetSalt()+strconv.FormatInt(saltResponse.GetTimestamp(), 10))
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
 	}

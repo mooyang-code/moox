@@ -14,8 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/mooyang-code/moox/packages/requestauth"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
 const Version = "moox-gateway-auth-v1"
@@ -193,12 +193,12 @@ func sign(secret, method, path string, body []byte, timestamp int64, nonce, targ
 		Version,
 		strings.ToUpper(method),
 		path,
-		mooxcrypto.SHA256Hex(body),
+		mooxsecurity.SHA256Hex(body),
 		strconv.FormatInt(timestamp, 10),
 		nonce,
 		targetNode,
 	}, "\n")
-	return mooxcrypto.HMACSHA256Hex(secret, []byte(material))
+	return mooxsecurity.HMACSHA256Hex(secret, []byte(material))
 }
 
 func isLowerHex(value string, byteLen int) bool {

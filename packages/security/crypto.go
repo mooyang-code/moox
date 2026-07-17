@@ -1,5 +1,5 @@
-// Package crypto contains MooX's shared security primitives.
-package crypto
+// Package security contains MooX's shared security primitives.
+package security
 
 import (
 	"crypto/aes"

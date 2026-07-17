@@ -1,4 +1,4 @@
-module github.com/mooyang-code/moox/packages/crypto
+module github.com/mooyang-code/moox/packages/security
 
 go 1.24.0
 

@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -31,7 +31,7 @@ func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string)
 
 	secretKey := "test-secret-for-login"
 	password := "secret123"
-	passwordHash, err := mooxcrypto.HashPassword(password)
+	passwordHash, err := mooxsecurity.HashPassword(password)
 	require.NoError(t, err)
 	user := &model.User{
 		UserID:       "user-login-1",
@@ -62,14 +62,14 @@ func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string)
 
 func encryptLoginPassword(t *testing.T, password, loginSalt string, timestamp int64) string {
 	t.Helper()
-	cipher, err := mooxcrypto.Encrypt(password, loginSalt+strconv.FormatInt(timestamp, 10))
+	cipher, err := mooxsecurity.Encrypt(password, loginSalt+strconv.FormatInt(timestamp, 10))
 	require.NoError(t, err)
 	return cipher
 }
 
 func newTestSalt(t *testing.T) string {
 	t.Helper()
-	salt, err := mooxcrypto.NewSalt()
+	salt, err := mooxsecurity.NewSalt()
 	require.NoError(t, err)
 	return salt
 }
@@ -117,7 +117,7 @@ func TestLogin_ValidCredentials_ShouldReturnAccessToken(t *testing.T) {
 	assert.Len(t, loginRsp.GetRequestSigningKey(), 64)
 	assert.WithinDuration(t, time.Now().Add(24*time.Hour), time.Unix(loginRsp.GetExpiresAt(), 0), 2*time.Second)
 
-	claims, err := mooxcrypto.ParseToken(loginRsp.GetAccessToken(), secretKey)
+	claims, err := mooxsecurity.ParseToken(loginRsp.GetAccessToken(), secretKey)
 	require.NoError(t, err)
 	assert.Equal(t, "user-login-1", claims["user_id"])
 	assert.Equal(t, loginRsp.GetSessionId(), claims["sid"])

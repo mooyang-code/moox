@@ -5,7 +5,7 @@ import (
 
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -113,19 +113,19 @@ func (d *SSHHostDAO) encryptSensitiveFields(host *model.SSHHost) error {
 	}
 
 	if host.Password != "" {
-		host.Password, err = mooxcrypto.Encrypt(host.Password, key)
+		host.Password, err = mooxsecurity.Encrypt(host.Password, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertData != "" {
-		host.CertData, err = mooxcrypto.Encrypt(host.CertData, key)
+		host.CertData, err = mooxsecurity.Encrypt(host.CertData, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertPwd != "" {
-		host.CertPwd, err = mooxcrypto.Encrypt(host.CertPwd, key)
+		host.CertPwd, err = mooxsecurity.Encrypt(host.CertPwd, key)
 		if err != nil {
 			return err
 		}
@@ -141,19 +141,19 @@ func (d *SSHHostDAO) decryptSensitiveFields(host *model.SSHHost) error {
 	}
 
 	if host.Password != "" {
-		host.Password, err = mooxcrypto.Decrypt(host.Password, key)
+		host.Password, err = mooxsecurity.Decrypt(host.Password, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertData != "" {
-		host.CertData, err = mooxcrypto.Decrypt(host.CertData, key)
+		host.CertData, err = mooxsecurity.Decrypt(host.CertData, key)
 		if err != nil {
 			return err
 		}
 	}
 	if host.CertPwd != "" {
-		host.CertPwd, err = mooxcrypto.Decrypt(host.CertPwd, key)
+		host.CertPwd, err = mooxsecurity.Decrypt(host.CertPwd, key)
 		if err != nil {
 			return err
 		}

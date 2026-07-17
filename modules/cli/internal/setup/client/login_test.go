@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -53,7 +53,7 @@ func TestVerifyPublicLoginMatchesBrowserProtocolAndDiscardsSession(t *testing.T)
 	assert.Equal(t, username, loginRequest.GetUsername())
 	assert.Equal(t, "moox_frontend", loginRequest.GetAppInfo().GetAppId())
 	assert.NotEqual(t, password, loginRequest.GetPasswordHash())
-	plain, err := mooxcrypto.Decrypt(loginRequest.GetPasswordHash(), salt+strconv.FormatInt(timestamp, 10))
+	plain, err := mooxsecurity.Decrypt(loginRequest.GetPasswordHash(), salt+strconv.FormatInt(timestamp, 10))
 	require.NoError(t, err)
 	assert.Equal(t, password, plain)
 	assert.NotContains(t, result.LoginAPI, "recognizable-access-token")

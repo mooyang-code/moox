@@ -9,8 +9,8 @@ import (
 	"time"
 
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
 	"github.com/mooyang-code/moox/packages/requestauth"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +56,7 @@ func (s *fakeRequestAuthStore) ConsumeRawSessionTicket(_ context.Context, id str
 
 func signedAdminRequest(t *testing.T, secret, key, sid, path string, body []byte, timestamp int64, nonce string) *http.Request {
 	t.Helper()
-	token, err := mooxcrypto.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": 2, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
+	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": 2, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
 	require.NoError(t, err)
 	sig, err := requestauth.Sign(key, requestauth.Material{Method: http.MethodPost, Path: path, Body: body, Timestamp: timestamp, Nonce: nonce})
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func setupRequestAuthTest(t *testing.T) (*fakeRequestAuthStore, string, string, 
 	t.Helper()
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "encryption-key-for-tests")
 	secret, key, sid := "jwt-secret-for-request-auth", "signing-key", "sid-1"
-	encrypted, err := mooxcrypto.Encrypt(key, "encryption-key-for-tests")
+	encrypted, err := mooxsecurity.Encrypt(key, "encryption-key-for-tests")
 	require.NoError(t, err)
 	store := &fakeRequestAuthStore{sessions: map[string]authmodel.RequestSigningSession{sid: {SessionID: sid, UserID: "u1", EncryptedSecret: encrypted, ExpiresAt: time.Now().Add(time.Hour)}}, nonces: map[string]bool{}, tickets: map[string]authmodel.RawSessionTicket{}}
 	SetRequestAuthStore(store)
@@ -117,7 +117,7 @@ func TestAdminRequestRejectsChangedSpaceHeader(t *testing.T) {
 	timestamp := time.Now().Unix()
 	nonce := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	path := "/api/admin/auth/GetUserInfo"
-	token, err := mooxcrypto.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": 2, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
+	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": 2, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
 	require.NoError(t, err)
 	sig, err := requestauth.Sign(key, requestauth.Material{
 		Method: http.MethodPost, Path: path, Headers: map[string]string{"X-Space-Id": "space-1"}, Timestamp: timestamp, Nonce: nonce,

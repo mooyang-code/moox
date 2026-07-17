@@ -4,7 +4,7 @@ import (
 	"context"
 	"strconv"
 
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -13,7 +13,7 @@ func encryptedPasswordSecret(salt string, timestamp int64) string {
 }
 
 func decryptPassword(encryptedPassword, salt string, timestamp int64) (string, error) {
-	return mooxcrypto.Decrypt(encryptedPassword, encryptedPasswordSecret(salt, timestamp))
+	return mooxsecurity.Decrypt(encryptedPassword, encryptedPasswordSecret(salt, timestamp))
 }
 
 func validateEncryptedPassword(ctx context.Context, storedHash, salt string, timestamp int64, encryptedPassword string) bool {
@@ -22,5 +22,5 @@ func validateEncryptedPassword(ctx context.Context, storedHash, salt string, tim
 		log.ErrorContextf(ctx, "[Auth] 密码解密失败: %v", err)
 		return false
 	}
-	return mooxcrypto.VerifyPassword(password, storedHash)
+	return mooxsecurity.VerifyPassword(password, storedHash)
 }

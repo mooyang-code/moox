@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 )
 
@@ -18,17 +18,17 @@ func (g *GormStore) CreateAPIKey(ctx context.Context, spaceID string, k *service
 	if g.encryptionKey == "" {
 		return errNoEncryptionKey
 	}
-	encKey, err := mooxcrypto.Encrypt(k.APIKey, g.encryptionKey)
+	encKey, err := mooxsecurity.Encrypt(k.APIKey, g.encryptionKey)
 	if err != nil {
 		return err
 	}
-	encSecret, err := mooxcrypto.Encrypt(k.APISecret, g.encryptionKey)
+	encSecret, err := mooxsecurity.Encrypt(k.APISecret, g.encryptionKey)
 	if err != nil {
 		return err
 	}
 	encPass := ""
 	if k.Passphrase != "" {
-		encPass, err = mooxcrypto.Encrypt(k.Passphrase, g.encryptionKey)
+		encPass, err = mooxsecurity.Encrypt(k.Passphrase, g.encryptionKey)
 		if err != nil {
 			return err
 		}
@@ -79,11 +79,11 @@ func (g *GormStore) ListAPIKeys(ctx context.Context, spaceID, accountID string) 
 		return nil, err
 	}
 	for _, k := range rows {
-		apiKey, err := mooxcrypto.Decrypt(k.APIKey, g.encryptionKey)
+		apiKey, err := mooxsecurity.Decrypt(k.APIKey, g.encryptionKey)
 		if err != nil {
 			return nil, err
 		}
-		k.APIKey = mooxcrypto.MaskSecret(apiKey, 4, 4)
+		k.APIKey = mooxsecurity.MaskSecret(apiKey, 4, 4)
 		k.APISecret = ""
 		k.Passphrase = ""
 		k.PermissionsRaw = parsePermissions(k.Permissions)
@@ -105,18 +105,18 @@ func (g *GormStore) GetAPIKey(ctx context.Context, spaceID, apiKeyID string) (*s
 		}
 		return nil, err
 	}
-	apiKey, err := mooxcrypto.Decrypt(k.APIKey, g.encryptionKey)
+	apiKey, err := mooxsecurity.Decrypt(k.APIKey, g.encryptionKey)
 	if err != nil {
 		return nil, err
 	}
 	k.APIKey = apiKey
-	secret, err := mooxcrypto.Decrypt(k.APISecret, g.encryptionKey)
+	secret, err := mooxsecurity.Decrypt(k.APISecret, g.encryptionKey)
 	if err != nil {
 		return nil, err
 	}
 	k.APISecret = secret
 	if k.Passphrase != "" {
-		pass, err := mooxcrypto.Decrypt(k.Passphrase, g.encryptionKey)
+		pass, err := mooxsecurity.Decrypt(k.Passphrase, g.encryptionKey)
 		if err != nil {
 			return nil, err
 		}

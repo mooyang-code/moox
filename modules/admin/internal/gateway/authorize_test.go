@@ -7,7 +7,7 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -40,7 +40,7 @@ func TestGetTokenFromHeader_ExistingHeader_ShouldReturnValue(t *testing.T) {
 func TestValidateAccessToken_ValidToken_ShouldReturnClaims(t *testing.T) {
 	secret := "test-secret-key-for-gateway"
 	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}})
-	token, err := mooxcrypto.SignToken(map[string]any{
+	token, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    "user-1",
 		"username":   "admin",
 		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),
@@ -58,7 +58,7 @@ func TestValidateAccessToken_ValidToken_ShouldReturnClaims(t *testing.T) {
 func TestValidateAccessToken_WrongIssuer_ShouldReject(t *testing.T) {
 	secret := "test-secret-key-for-gateway"
 	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}})
-	token, err := mooxcrypto.SignToken(map[string]any{
+	token, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    "user-1",
 		"username":   "admin",
 		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),

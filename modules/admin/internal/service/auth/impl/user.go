@@ -6,7 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -78,7 +78,7 @@ func (s *AuthServiceImpl) getUserInfoCaller(ctx context.Context, req *pb.GetUser
 	if s == nil || s.cfg == nil || s.cfg.JWT.SecretKey == "" {
 		return "", "", 0, err
 	}
-	claims, tokenErr := mooxcrypto.ParseToken(req.GetAccessToken(), s.cfg.JWT.SecretKey)
+	claims, tokenErr := mooxsecurity.ParseToken(req.GetAccessToken(), s.cfg.JWT.SecretKey)
 	if tokenErr != nil {
 		return "", "", 0, tokenErr
 	}

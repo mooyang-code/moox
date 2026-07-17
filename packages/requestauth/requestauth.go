@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
 const (
@@ -60,7 +60,7 @@ func Canonical(m Material) ([]byte, error) {
 		parts = append(parts, headers...)
 	}
 	parts = append(parts,
-		mooxcrypto.SHA256Hex(m.Body),
+		mooxsecurity.SHA256Hex(m.Body),
 		strconv.FormatInt(m.Timestamp, 10),
 		m.Nonce,
 	)
@@ -103,7 +103,7 @@ func Sign(secret string, m Material) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return mooxcrypto.HMACSHA256Hex(secret, canonical), nil
+	return mooxsecurity.HMACSHA256Hex(secret, canonical), nil
 }
 
 func Verify(secret string, m Material, signature string) error {
@@ -121,7 +121,7 @@ func Verify(secret string, m Material, signature string) error {
 }
 
 func NewNonce() (string, error) {
-	nonce, err := mooxcrypto.RandomHex(32)
+	nonce, err := mooxsecurity.RandomHex(32)
 	if err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}

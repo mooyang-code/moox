@@ -19,7 +19,7 @@ import (
 	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -65,11 +65,11 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 
 	var user authmodel.User
 	require.NoError(t, manager.GetDB().Where("c_username = ?", "admin").First(&user).Error)
-	assert.True(t, mooxcrypto.VerifyPassword("admin-e2e-password", user.PasswordHash))
+	assert.True(t, mooxsecurity.VerifyPassword("admin-e2e-password", user.PasswordHash))
 	var secret secretmodel.Secret
 	require.NoError(t, manager.GetDB().Where("c_secret_id = ?", "tencent-default").First(&secret).Error)
 	assert.NotEqual(t, "cloud-e2e-secret", secret.SecretValue)
-	decrypted, err := mooxcrypto.Decrypt(secret.SecretValue, encryptionKey)
+	decrypted, err := mooxsecurity.Decrypt(secret.SecretValue, encryptionKey)
 	require.NoError(t, err)
 	assert.Equal(t, "cloud-e2e-secret", decrypted)
 	var hosts []sshmodel.SSHHost

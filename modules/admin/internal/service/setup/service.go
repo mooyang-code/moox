@@ -12,7 +12,7 @@ import (
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 )
 
@@ -211,7 +211,7 @@ func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (in
 	if state == recordConflict {
 		return 0, ErrConflict
 	}
-	hash, err := mooxcrypto.HashPassword(input.Password)
+	hash, err := mooxsecurity.HashPassword(input.Password)
 	if err != nil {
 		return 0, ErrInvalid
 	}
@@ -233,7 +233,7 @@ func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (r
 	var user authmodel.User
 	err := tx.WithContext(ctx).Where("c_username = ? AND c_is_deleted = 0", strings.TrimSpace(input.Username)).First(&user).Error
 	if err == nil {
-		if user.Role == 3 && user.Status == 1 && mooxcrypto.VerifyPassword(input.Password, user.PasswordHash) {
+		if user.Role == 3 && user.Status == 1 && mooxsecurity.VerifyPassword(input.Password, user.PasswordHash) {
 			return recordMatch, nil
 		}
 		return recordConflict, nil
@@ -260,7 +260,7 @@ func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input Te
 	if state == recordConflict {
 		return 0, ErrConflict
 	}
-	encrypted, err := mooxcrypto.Encrypt(input.SecretKey, s.encryptionKey)
+	encrypted, err := mooxsecurity.Encrypt(input.SecretKey, s.encryptionKey)
 	if err != nil {
 		return 0, ErrStorage
 	}
@@ -288,7 +288,7 @@ func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input T
 	if err != nil {
 		return recordConflict, ErrStorage
 	}
-	plain, err := mooxcrypto.Decrypt(secret.SecretValue, s.encryptionKey)
+	plain, err := mooxsecurity.Decrypt(secret.SecretValue, s.encryptionKey)
 	if err != nil {
 		return recordConflict, ErrStorage
 	}
@@ -308,7 +308,7 @@ func (s *Service) ensureHost(ctx context.Context, tx *gorm.DB, input Host) (int,
 	if state == recordConflict {
 		return 0, ErrConflict
 	}
-	encrypted, err := mooxcrypto.Encrypt(input.Password, s.encryptionKey)
+	encrypted, err := mooxsecurity.Encrypt(input.Password, s.encryptionKey)
 	if err != nil {
 		return 0, ErrStorage
 	}
@@ -340,7 +340,7 @@ func (s *Service) inspectHost(ctx context.Context, tx *gorm.DB, input Host) (rec
 	if err != nil {
 		return recordConflict, ErrStorage
 	}
-	plain, err := mooxcrypto.Decrypt(host.Password, s.encryptionKey)
+	plain, err := mooxsecurity.Decrypt(host.Password, s.encryptionKey)
 	if err != nil {
 		return recordConflict, ErrStorage
 	}

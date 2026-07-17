@@ -12,7 +12,7 @@ import (
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -54,7 +54,7 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	require.NoError(t, db.Where("c_username = ?", manifest.Admin.Username).First(&user).Error)
 	assert.Equal(t, int32(3), user.Role)
 	assert.Equal(t, int32(1), user.Status)
-	assert.True(t, mooxcrypto.VerifyPassword(manifest.Admin.Password, user.PasswordHash))
+	assert.True(t, mooxsecurity.VerifyPassword(manifest.Admin.Password, user.PasswordHash))
 
 	var secret secretmodel.Secret
 	require.NoError(t, db.Where("c_secret_id = ? AND c_is_deleted = 0", tencentSecretID).First(&secret).Error)
@@ -62,7 +62,7 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	assert.Equal(t, "tencent", secret.Provider)
 	assert.Equal(t, manifest.TencentCloud.SecretID, secret.KeyID)
 	assert.NotEqual(t, manifest.TencentCloud.SecretKey, secret.SecretValue)
-	secretValue, err := mooxcrypto.Decrypt(secret.SecretValue, testEncryptionKey)
+	secretValue, err := mooxsecurity.Decrypt(secret.SecretValue, testEncryptionKey)
 	require.NoError(t, err)
 	assert.Equal(t, manifest.TencentCloud.SecretKey, secretValue)
 
@@ -70,7 +70,7 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	require.NoError(t, db.Order("c_address").Find(&hosts).Error)
 	require.Len(t, hosts, 2)
 	assert.NotEqual(t, manifest.ControlHost.Password, hosts[0].Password)
-	controlPassword, err := mooxcrypto.Decrypt(hosts[0].Password, testEncryptionKey)
+	controlPassword, err := mooxsecurity.Decrypt(hosts[0].Password, testEncryptionKey)
 	require.NoError(t, err)
 	assert.Equal(t, manifest.ControlHost.Password, controlPassword)
 
@@ -134,7 +134,7 @@ func TestApplyConcurrentCallsConvergeToOneCreated(t *testing.T) {
 func TestApplyCompletesMatchingPartialState(t *testing.T) {
 	db := setupDB(t)
 	manifest := testManifest()
-	hash, err := mooxcrypto.HashPassword(manifest.Admin.Password)
+	hash, err := mooxsecurity.HashPassword(manifest.Admin.Password)
 	require.NoError(t, err)
 	require.NoError(t, db.Create(&authmodel.User{
 		UserID: "existing-user", Username: manifest.Admin.Username, PasswordHash: hash, Role: 3, Status: 1,
@@ -157,7 +157,7 @@ func TestApplyCompletesMatchingPartialState(t *testing.T) {
 
 func TestApplyRejectsDifferentInitialAdministrator(t *testing.T) {
 	db := setupDB(t)
-	hash, err := mooxcrypto.HashPassword("other-password")
+	hash, err := mooxsecurity.HashPassword("other-password")
 	require.NoError(t, err)
 	require.NoError(t, db.Create(&authmodel.User{
 		UserID: "other-user", Username: "other-admin", PasswordHash: hash, Role: 3, Status: 1,
@@ -173,7 +173,7 @@ func TestApplyRejectsDifferentInitialAdministrator(t *testing.T) {
 
 func TestApplyConflictRollsBackEarlierWrites(t *testing.T) {
 	db := setupDB(t)
-	encrypted, err := mooxcrypto.Encrypt("different-secret", testEncryptionKey)
+	encrypted, err := mooxsecurity.Encrypt("different-secret", testEncryptionKey)
 	require.NoError(t, err)
 	require.NoError(t, db.Create(&secretmodel.Secret{
 		SecretID: tencentSecretID, Name: "Tencent Cloud Default", Category: "cloud", Provider: "tencent",

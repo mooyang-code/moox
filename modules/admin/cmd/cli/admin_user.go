@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 )
 
@@ -107,7 +107,7 @@ func ensureAdminUser(db *gorm.DB, username, password string, stdout io.Writer) e
 	}
 	action := "unchanged"
 	if count == 0 {
-		hash, err := mooxcrypto.HashPassword(password)
+		hash, err := mooxsecurity.HashPassword(password)
 		if err != nil {
 			return err
 		}
@@ -123,7 +123,7 @@ func ensureAdminUser(db *gorm.DB, username, password string, stdout io.Writer) e
 }
 
 func resetAdminUserPassword(db *gorm.DB, username, password string, stdout io.Writer) error {
-	hash, err := mooxcrypto.HashPassword(password)
+	hash, err := mooxsecurity.HashPassword(password)
 	if err != nil {
 		return err
 	}

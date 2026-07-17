@@ -11,7 +11,7 @@ import (
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -184,7 +184,7 @@ func (d *SecretDAO) encryptSensitiveFields(secret *model.Secret) error {
 	if err != nil {
 		return err
 	}
-	encrypted, err := mooxcrypto.Encrypt(secret.SecretValue, key)
+	encrypted, err := mooxsecurity.Encrypt(secret.SecretValue, key)
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (d *SecretDAO) decryptSensitiveFields(secret *model.Secret) error {
 		return err
 	}
 	if secret.SecretValue != "" {
-		decrypted, err := mooxcrypto.Decrypt(secret.SecretValue, key)
+		decrypted, err := mooxsecurity.Decrypt(secret.SecretValue, key)
 		if err != nil {
 			return err
 		}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/filter"
@@ -152,7 +152,7 @@ func validateAccessToken(ctx context.Context, accessToken string) (*accessClaims
 	}
 
 	// 验证API访问令牌
-	claims, err := mooxcrypto.ParseToken(accessToken, secretKey)
+	claims, err := mooxsecurity.ParseToken(accessToken, secretKey)
 	if err != nil {
 		log.ErrorContextf(ctx, "JWT令牌验证失败: %v", err)
 		return nil, false

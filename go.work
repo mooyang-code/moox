@@ -27,7 +27,7 @@ use (
 	./packages/cloudprovider
 	./packages/cloudruntime
 	./packages/commonpb
-	./packages/crypto
+	./packages/security
 	./packages/gatewayauth
 	./packages/gatewayproxy
 	./packages/healthz
@@ -42,3 +42,7 @@ use (
 	./packages/timerjob
 	./web-host
 )
+
+// Keep the legacy aggregate module past the googleapis api/rpc split so the
+// workspace graph cannot select overlapping package copies.
+replace google.golang.org/genproto => google.golang.org/genproto v0.0.0-20230822172742-b8732ec3820d

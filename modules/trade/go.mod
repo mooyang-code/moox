@@ -69,9 +69,9 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.7.4 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -120,7 +120,7 @@ replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messag
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
+replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 

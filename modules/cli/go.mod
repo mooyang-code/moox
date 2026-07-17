@@ -47,9 +47,9 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/crypto v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -71,7 +71,7 @@ require (
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
-replace github.com/mooyang-code/moox/packages/crypto => ../../packages/crypto
+replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 

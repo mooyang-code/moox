@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
 )
@@ -31,7 +31,7 @@ func TestGetUserInfoAcceptsRequestAccessTokenWhenContextMetadataMissing(t *testi
 		LastPasswordChange: time.Now(),
 	}
 	svc := newAuthServiceForUserTest(t, secretKey, user)
-	accessToken, err := mooxcrypto.SignToken(map[string]any{
+	accessToken, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    user.UserID,
 		"username":   user.Username,
 		"role":       user.Role,

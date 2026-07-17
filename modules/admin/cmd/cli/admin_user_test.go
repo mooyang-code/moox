@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -33,7 +33,7 @@ func TestAdminUserEnsureCreatesSuperAdminAndIsIdempotent(t *testing.T) {
 	row := readAdminUser(t, db, "admin")
 	assert.Equal(t, int32(3), row.Role)
 	assert.Equal(t, int32(1), row.Status)
-	assert.True(t, mooxcrypto.VerifyPassword("first password", row.PasswordHash))
+	assert.True(t, mooxsecurity.VerifyPassword("first password", row.PasswordHash))
 	firstHash := row.PasswordHash
 
 	second := runAdminUserForTest(t, []string{"user", "ensure", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, "different password\n")
@@ -61,7 +61,7 @@ func TestAdminUserResetPasswordChangesOnlyHash(t *testing.T) {
 	assert.Equal(t, before.Status, after.Status)
 	assert.Equal(t, before.Nickname, after.Nickname)
 	assert.NotEqual(t, before.PasswordHash, after.PasswordHash)
-	assert.True(t, mooxcrypto.VerifyPassword("new password", after.PasswordHash))
+	assert.True(t, mooxsecurity.VerifyPassword("new password", after.PasswordHash))
 }
 
 func TestAdminUserRejectsUnsafePasswordInput(t *testing.T) {

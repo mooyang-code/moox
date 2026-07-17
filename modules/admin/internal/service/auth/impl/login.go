@@ -9,7 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxcrypto "github.com/mooyang-code/moox/packages/crypto"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -87,11 +87,11 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 记录登录历史
 	s.recordLoginHistory(ctx, user, req, model.LoginResultSuccess, "")
 
-	sessionID, err := mooxcrypto.RandomHex(16)
+	sessionID, err := mooxsecurity.RandomHex(16)
 	if err != nil {
 		return loginInternalError(), nil
 	}
-	signingKey, err := mooxcrypto.RandomHex(32)
+	signingKey, err := mooxsecurity.RandomHex(32)
 	if err != nil {
 		return loginInternalError(), nil
 	}
@@ -99,7 +99,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	if err != nil {
 		return loginInternalError(), nil
 	}
-	encryptedSigningKey, err := mooxcrypto.Encrypt(signingKey, encryptionKey)
+	encryptedSigningKey, err := mooxsecurity.Encrypt(signingKey, encryptionKey)
 	if err != nil {
 		return loginInternalError(), nil
 	}
@@ -111,7 +111,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	}
 
 	// 生成API访问令牌
-	accessToken, err := mooxcrypto.SignToken(map[string]any{
+	accessToken, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    user.UserID,
 		"username":   user.Username,
 		"role":       user.Role,
@@ -178,7 +178,7 @@ func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSalt
 	}
 
 	// 生成新的随机盐值和时间戳
-	salt, err := mooxcrypto.NewSalt()
+	salt, err := mooxsecurity.NewSalt()
 	if err != nil {
 		return &pb.GetLoginSaltRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "获取登录盐值失败"}}, nil
 	}
