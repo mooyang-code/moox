@@ -1,4 +1,5 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Route } from '@playwright/test';
+import { installE2ESession } from './e2e-session';
 
 const groups = [
   { space_id: 'stock_cn', group_id: 'market', name: '市场数据', status: 'active', sort_order: 20 },
@@ -13,29 +14,6 @@ let fields = [
 ];
 
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: 'success' }, ...data });
-
-async function installSession(page: Page) {
-  await page.route('**/__field_e2e_session__', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>session setup</title>' }));
-  await page.goto('/__field_e2e_session__');
-  await page.evaluate(async () => {
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-    localStorage.setItem('user-info', JSON.stringify({ token: 'e2e-token', sessionId: 'e2e-session', expiresAt }));
-    localStorage.setItem('spaceStore', JSON.stringify({ selectedSpaceId: 'stock_cn', spaces: [] }));
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('0'.repeat(64)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open('moox-request-signing', 1);
-      request.onupgradeneeded = () => request.result.createObjectStore('sessions', { keyPath: 'sessionId' });
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const db = request.result;
-        const tx = db.transaction('sessions', 'readwrite');
-        tx.objectStore('sessions').put({ sessionId: 'e2e-session', key, expiresAt });
-        tx.oncomplete = () => { db.close(); resolve(); };
-        tx.onerror = () => reject(tx.error);
-      };
-    });
-  });
-}
 
 async function mockGateway(route: Route) {
   const method = route.request().url().split('/').pop();
@@ -69,7 +47,7 @@ async function mockGateway(route: Route) {
 
 test.beforeEach(async ({ page }) => {
   fields = fields.map((field) => field.field_id === 'volume' ? { ...field, status: 'disabled', group_id: 'trading' } : { ...field, status: 'active', group_id: 'quote' });
-  await installSession(page);
+  await installE2ESession(page, 'stock_cn');
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
 });
 
@@ -87,7 +65,7 @@ test('supports the approved desktop governance workflow', async ({ page }, testI
     expect((await filter.boundingBox())?.width || 0).toBeLessThanOrEqual(160);
   }
   await expect(page.getByText('收盘价', { exact: true })).toBeVisible();
-  await expect(page.getByText('3 个字段')).toBeVisible();
+  await expect(page.getByRole('button', { name: '全部字段 3' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('field-workbench-desktop.png'), fullPage: true });
 
   await page.getByText('收盘价', { exact: true }).click();
