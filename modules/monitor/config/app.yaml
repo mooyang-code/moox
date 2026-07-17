@@ -26,7 +26,6 @@ scheduler:
 sysdeploy:
   enabled: true
   target: "ip://127.0.0.1:11109"
-  sync_interval_seconds: 60
   service_auth:
     key_id: ""
     secret_key: ""

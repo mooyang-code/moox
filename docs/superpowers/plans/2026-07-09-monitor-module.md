@@ -402,7 +402,7 @@ Required defaults:
 | `scheduler.max_concurrency` | `16` |
 | `sysdeploy.enabled` | `true` |
 | `sysdeploy.target` | `ip://127.0.0.1:11109` |
-| `sysdeploy.sync_interval_seconds` | `60` |
+| `trpc.moox.monitor.sysdeploy.timer` | tRPC timer，`network: "0 * * * * *"` |
 | `peer.enabled` | `true` |
 | `peer.pull_interval_seconds` | `10` |
 | `peer.timeout_seconds` | `5` |
@@ -989,7 +989,7 @@ Keep the existing Admin `monitor` deployment row for resource monitor and add a 
 
 - [ ] **Step 5: Add timer/manual sync**
 
-Register periodic sync in monitor bootstrap using `sysdeploy.sync_interval_seconds`. Implement RPC `SyncSystemChecks` for manual sync from frontend.
+Register periodic sync through the `trpc.moox.monitor.sysdeploy.timer` tRPC timer service. Implement RPC `SyncSystemChecks` for manual sync from frontend.
 
 - [ ] **Step 6: Run tests**
 

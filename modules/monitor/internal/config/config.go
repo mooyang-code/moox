@@ -53,10 +53,9 @@ type SchedulerConfig struct {
 }
 
 type SysDeployConfig struct {
-	Enabled             bool              `yaml:"enabled"`
-	Target              string            `yaml:"target"`
-	SyncIntervalSeconds int               `yaml:"sync_interval_seconds"`
-	ServiceAuth         ServiceAuthConfig `yaml:"service_auth"`
+	Enabled     bool              `yaml:"enabled"`
+	Target      string            `yaml:"target"`
+	ServiceAuth ServiceAuthConfig `yaml:"service_auth"`
 }
 
 type ServiceAuthConfig struct {
@@ -169,10 +168,9 @@ func Default() *Config {
 			MaxConcurrency:        16,
 		},
 		SysDeploy: SysDeployConfig{
-			Enabled:             true,
-			Target:              "ip://127.0.0.1:11109",
-			SyncIntervalSeconds: 60,
-			ServiceAuth:         ServiceAuthConfig{},
+			Enabled:     true,
+			Target:      "ip://127.0.0.1:11109",
+			ServiceAuth: ServiceAuthConfig{},
 		},
 		Peer: PeerConfig{
 			Enabled:             true,
@@ -229,9 +227,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.SysDeploy.Target == "" {
 		c.SysDeploy.Target = defaults.SysDeploy.Target
-	}
-	if c.SysDeploy.SyncIntervalSeconds == 0 {
-		c.SysDeploy.SyncIntervalSeconds = defaults.SysDeploy.SyncIntervalSeconds
 	}
 	if c.Peer.PullIntervalSeconds == 0 {
 		c.Peer.PullIntervalSeconds = defaults.Peer.PullIntervalSeconds

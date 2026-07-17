@@ -18,6 +18,7 @@ import (
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -128,28 +129,68 @@ func pruneMonitorHistory(ctx context.Context, runtime *Runtime, retention time.D
 	return nil
 }
 
-func monitorSyncFunc(ctx context.Context, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
+func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
+	if cfg == nil || runtime == nil {
+		return nil
+	}
 	if !cfg.SysDeploy.Enabled {
+		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
 	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	syncFunc := serializedMonitorSync(syncer.Sync)
+	handler := monitorSyncHandler(syncFunc)
+	registerMonitorSyncTimer(s, handler)
+
+	// Preserve the previous startup behavior; subsequent runs are owned by the
+	// tRPC timer service and receive a fresh framework context per invocation.
 	runtime.Go(func() {
-		ticker := time.NewTicker(time.Duration(cfg.SysDeploy.SyncIntervalSeconds) * time.Second)
-		defer ticker.Stop()
-		for {
-			if n, err := syncer.Sync(ctx); err != nil {
-				log.WarnContextf(ctx, "monitor sysdeploy sync failed: %v", err)
-			} else if n > 0 {
-				log.InfoContextf(ctx, "monitor sysdeploy sync updated %d checks", n)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
+		_ = handler(ctx)
 	})
-	return syncer.Sync
+	return syncFunc
+}
+
+func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) error) {
+	if s == nil {
+		log.Warn("monitor sysdeploy timer server is unavailable, skip register")
+		return
+	}
+	service := s.Service("trpc.moox.monitor.sysdeploy.timer")
+	if service == nil {
+		log.Warn("monitor sysdeploy timer service is not configured, skip register")
+		return
+	}
+	if handler == nil {
+		handler = func(context.Context) error { return nil }
+	}
+	timer.RegisterHandlerService(service, handler)
+}
+
+func serializedMonitorSync(syncFunc func(context.Context) (int, error)) func(context.Context) (int, error) {
+	gate := make(chan struct{}, 1)
+	return func(ctx context.Context) (int, error) {
+		select {
+		case gate <- struct{}{}:
+			defer func() { <-gate }()
+			return syncFunc(ctx)
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+}
+
+func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(context.Context) error {
+	return func(ctx context.Context) error {
+		n, err := syncFunc(ctx)
+		if err != nil {
+			log.WarnContextf(ctx, "monitor sysdeploy sync failed: %v", err)
+			return err
+		}
+		if n > 0 {
+			log.InfoContextf(ctx, "monitor sysdeploy sync updated %d checks", n)
+		}
+		return nil
+	}
 }
 
 func startPeerPuller(ctx context.Context, cfg *config.Config, runtime *Runtime) error {

@@ -31,6 +31,11 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.monitor.sysdeploy.timer
+      port: 11416
+      network: "0 * * * * *"
+      protocol: timer
+      timeout: 30000
 
 plugins:
   auth:

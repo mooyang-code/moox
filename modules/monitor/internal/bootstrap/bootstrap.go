@@ -115,7 +115,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	resultHook := monitorResultHook(cfg, runtime)
 	probeRunner := buildProbeRunner(cfg)
-	syncSystem := monitorSyncFunc(runtimeCtx, cfg, runtime)
+	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	hostReady := func() bool { return false }
 	if hostGate != nil {
 		hostReady = hostGate.Ready

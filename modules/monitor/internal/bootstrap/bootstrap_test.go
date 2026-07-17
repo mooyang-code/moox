@@ -2,6 +2,14 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -11,11 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"path/filepath"
-	"reflect"
-	"sync/atomic"
-	"testing"
-	"time"
+	"gopkg.in/yaml.v3"
 )
 
 func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
@@ -168,13 +172,75 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	cfg.Scheduler.ResultRetentionDays = 0
 	startRetentionCleaner(ctx, cfg, rt)
 
-	assert.Nil(t, monitorSyncFunc(ctx, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
+	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
+	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	cfg.Peer.Enabled = false
 	assert.NoError(t, startPeerPuller(ctx, cfg, rt))
 
 	registerMetricsReporter(nil)
 	assert.NoError(t, registerHealth(nil, nil, rt, nil))
+}
+
+func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
+	wantErr := errors.New("sysdeploy unavailable")
+	called := 0
+	handler := monitorSyncHandler(func(context.Context) (int, error) {
+		called++
+		return 0, wantErr
+	})
+
+	require.ErrorIs(t, handler(context.Background()), wantErr)
+	assert.Equal(t, 1, called)
+}
+
+func TestSerializedMonitorSyncPreventsOverlappingRuns(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	syncFunc := serializedMonitorSync(func(context.Context) (int, error) {
+		close(started)
+		<-release
+		return 1, nil
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := syncFunc(context.Background())
+		firstDone <- err
+	}()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := syncFunc(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	close(release)
+	require.NoError(t, <-firstDone)
+}
+
+func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
+	raw, err := os.ReadFile("../../config/trpc_go.yaml")
+	require.NoError(t, err)
+	var trpcConfig struct {
+		Server struct {
+			Services []struct {
+				Name     string `yaml:"name"`
+				Network  string `yaml:"network"`
+				Protocol string `yaml:"protocol"`
+				Timeout  int    `yaml:"timeout"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &trpcConfig))
+	for _, service := range trpcConfig.Server.Services {
+		if service.Name != "trpc.moox.monitor.sysdeploy.timer" {
+			continue
+		}
+		assert.Equal(t, "0 * * * * *", service.Network)
+		assert.Equal(t, "timer", service.Protocol)
+		assert.Equal(t, 30000, service.Timeout)
+		return
+	}
+	t.Fatal("missing trpc.moox.monitor.sysdeploy.timer service")
 }
 
 func TestStartPeerPullerReturnsClientConstructionError(t *testing.T) {

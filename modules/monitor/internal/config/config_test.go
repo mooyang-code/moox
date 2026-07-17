@@ -63,7 +63,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("parse trpc config: %v", err)
 	}
-	if len(cfg.Server.Service) != 3 {
+	if len(cfg.Server.Service) != 4 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
 	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
@@ -74,6 +74,9 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	}
 	if cfg.Server.Service[2].Name != "trpc.moox.monitor.metrics.timer" || cfg.Server.Service[2].Port != 11415 {
 		t.Fatalf("metrics timer service = %+v", cfg.Server.Service[2])
+	}
+	if cfg.Server.Service[3].Name != "trpc.moox.monitor.sysdeploy.timer" || cfg.Server.Service[3].Port != 11416 {
+		t.Fatalf("sysdeploy timer service = %+v", cfg.Server.Service[3])
 	}
 }
 
