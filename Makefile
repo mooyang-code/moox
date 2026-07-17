@@ -68,6 +68,7 @@ proto:
 	$(MAKE) -C modules/monitor/proto all
 	$(MAKE) -C modules/eventbus/proto all
 	$(MAKE) -C modules/hostagent/proto all
+	$(MAKE) -C modules/strategy/proto all
 
 clean:
 	rm -rf bin release dist scripts/node_exporter/build

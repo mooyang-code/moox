@@ -21,10 +21,11 @@ use (
 	./modules/storage
 	./modules/storage/proto/storagegen
 	./modules/strategy
+	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
-	./packages/cloudruntime
 	./packages/cloudprovider
+	./packages/cloudruntime
 	./packages/commonpb
 	./packages/crypto
 	./packages/gatewayauth

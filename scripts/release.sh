@@ -71,6 +71,11 @@ mkdir -p \
   "${RELEASE_ROOT}/factor/config" \
   "${RELEASE_ROOT}/factor/factors" \
   "${RELEASE_ROOT}/factor/sections" \
+  "${RELEASE_ROOT}/strategy/bin" \
+  "${RELEASE_ROOT}/strategy/config" \
+  "${RELEASE_ROOT}/strategy/pyworker" \
+  "${RELEASE_ROOT}/strategy/pysdk" \
+  "${RELEASE_ROOT}/strategy/strategies/example" \
   "${RELEASE_ROOT}/trade/bin" \
   "${RELEASE_ROOT}/trade/config" \
   "${RELEASE_ROOT}/monitor/bin" \
@@ -107,6 +112,8 @@ copy_binary moox-collector-cli "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-collector-scf "${RELEASE_ROOT}/collector/bin"
 copy_binary moox-factor "${RELEASE_ROOT}/factor/bin"
 copy_binary moox-factor-cli "${RELEASE_ROOT}/factor/bin"
+copy_binary moox-strategy "${RELEASE_ROOT}/strategy/bin"
+copy_binary moox-strategy-cli "${RELEASE_ROOT}/strategy/bin"
 copy_binary moox-trade "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-trade-cli "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-monitor "${RELEASE_ROOT}/monitor/bin"
@@ -131,6 +138,12 @@ cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/collector/config/"
 cp -R "${ROOT}/modules/factor/config/." "${RELEASE_ROOT}/factor/config/"
 cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/factor/factors/"
 cp -R "${ROOT}/modules/factor/sections/." "${RELEASE_ROOT}/factor/sections/"
+cp -R "${ROOT}/modules/strategy/config/." "${RELEASE_ROOT}/strategy/config/"
+cp -R "${ROOT}/modules/strategy/pyworker/." "${RELEASE_ROOT}/strategy/pyworker/"
+cp -R "${ROOT}/modules/strategy/pysdk/." "${RELEASE_ROOT}/strategy/pysdk/"
+cp -R "${ROOT}/modules/strategy/strategies/example/." "${RELEASE_ROOT}/strategy/strategies/example/"
+find "${RELEASE_ROOT}/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
+find "${RELEASE_ROOT}/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -delete
 cp -R "${ROOT}/modules/trade/config/." "${RELEASE_ROOT}/trade/config/"
 cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/factor/pyworker"
 find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
