@@ -46,7 +46,7 @@ describe('page layout standards', () => {
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
     expect(secrets.indexOf('placeholder="分类"')).toBeLessThan(secrets.indexOf('placeholder="状态"'));
     expect(secrets.indexOf('placeholder="状态"')).toBeLessThan(secrets.indexOf('新增秘钥'));
-    expectMargin(secrets, '.page-head', 'margin-bottom', 8);
+    expectMargin(secrets, '.page-head', 'margin-bottom', 5);
   });
 
   it('keeps factor list controls in one compact header', () => {
