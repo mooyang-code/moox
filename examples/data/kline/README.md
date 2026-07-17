@@ -7,15 +7,15 @@ Storage、Factor、View 和数据导入测试使用。
 
 | 文件 | 元数据 Dataset | 频率 | 标的 | 数据范围 | 行数 |
 | --- | --- | --- | --- | --- | ---: |
-| `stock_cn/stock_kline_1d.csv` | `stock_cn/stock_kline` | `1d` | 10 只股票 | 2026-07-02 至 2026-07-15 | 100 |
-| `stock_cn/stock_kline_1h.csv` | `stock_cn/stock_kline` | `1h` | 10 只股票 | 2026-07-16 完整交易日 | 40 |
+| `stock_cn/stock_kline_1d.csv` | `stock_cn/stock_kline` | `1d` | 100 只股票 | 2026-07-02 至 2026-07-16 | 1,100 |
+| `stock_cn/stock_kline_1h.csv` | `stock_cn/stock_kline` | `1h` | 100 只股票 | 2026-07-16 完整交易日 | 400 |
 | `crypto/binance_spot_kline_1h.csv` | `crypto/binance_spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
 | `crypto/binance_perpetual_kline_1h.csv` | `crypto/binance_perpetual_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
 | `crypto/okx_spot_kline_1h.csv` | `crypto/okx_spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
 
-A 股样本覆盖沪深主板和创业板：`sh600000`、`sh600036`、`sh600519`、
-`sh601318`、`sh601398`、`sz000001`、`sz000333`、`sz000651`、`sz000858`、
-`sz300750`。每只股票的小时样本包含当日 4 根完整 K 线。
+A 股样本按市场分层抽取：沪市主板 25 只、深市主板 25 只、创业板 20 只、
+科创板 20 只、北交所 10 只。入选标的均具备连续 11 个日线交易日，小时样本包含
+2026-07-16 当日全部 4 根 K 线。
 
 币安样本覆盖 `ADA`、`AVAX`、`BNB`、`BTC`、`DOGE`、`DOT`、`ETH`、`LINK`、
 `SOL`、`XRP` 的 USDT 交易对。欧易样本选择对应的 USD 交易对，其中以 `LTC`
