@@ -120,3 +120,27 @@ func TestMemorySubscriptionCloseWaitsOnlyForItsInFlightHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMemorySubscriptionCloseDoesNotDeadlockAfterHandlerPanic(t *testing.T) {
+	bus := NewMemoryBus()
+	subscription, err := bus.SubscribeRecordRowsUpdated(context.Background(), func(context.Context, *pb.RecordRowsUpdated) error {
+		panic("boom")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_ = bus.PublishRecordRowsUpdated(context.Background(), &pb.RecordRowsUpdated{})
+	}()
+	done := make(chan error, 1)
+	go func() { done <- subscription.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscription Close deadlocked after handler panic")
+	}
+}

@@ -114,9 +114,16 @@ func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.
 	b.mu.Unlock()
 	defer b.finishPublish()
 	var err error
-	for _, entry := range handlers {
-		err = errors.Join(err, entry.handler(ctx, cloneTimeSeriesRowsUpdated(event)))
-		entry.lifecycle.release()
+	next := 0
+	defer func() {
+		for ; next < len(handlers); next++ {
+			handlers[next].lifecycle.release()
+		}
+	}()
+	for next < len(handlers) {
+		entry := handlers[next]
+		next++
+		err = errors.Join(err, entry.call(ctx, cloneTimeSeriesRowsUpdated(event)))
 	}
 	return err
 }
@@ -137,9 +144,16 @@ func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.Reco
 	b.mu.Unlock()
 	defer b.finishPublish()
 	var err error
-	for _, entry := range handlers {
-		err = errors.Join(err, entry.handler(ctx, cloneRecordRowsUpdated(event)))
-		entry.lifecycle.release()
+	next := 0
+	defer func() {
+		for ; next < len(handlers); next++ {
+			handlers[next].lifecycle.release()
+		}
+	}()
+	for next < len(handlers) {
+		entry := handlers[next]
+		next++
+		err = errors.Join(err, entry.call(ctx, cloneRecordRowsUpdated(event)))
 	}
 	return err
 }
@@ -200,9 +214,19 @@ type memoryTimeSeriesHandler struct {
 	lifecycle *handlerLifecycle
 }
 
+func (h *memoryTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+	defer h.lifecycle.release()
+	return h.handler(ctx, event)
+}
+
 type memoryRecordHandler struct {
 	handler   RecordRowsUpdatedHandler
 	lifecycle *handlerLifecycle
+}
+
+func (h *memoryRecordHandler) call(ctx context.Context, event *pb.RecordRowsUpdated) error {
+	defer h.lifecycle.release()
+	return h.handler(ctx, event)
 }
 
 type handlerLifecycle struct {
