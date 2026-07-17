@@ -133,6 +133,42 @@ func TestServiceStartRejectsDoubleStart(t *testing.T) {
 	require.NoError(t, svc.Close())
 }
 
+type blockingSubscriber struct {
+	entered chan struct{}
+}
+
+func (s *blockingSubscriber) SubscribeTimeSeriesRowsUpdated(ctx context.Context, _ eventbus.TimeSeriesRowsUpdatedHandler) (eventbus.Subscription, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*blockingSubscriber) SubscribeRecordRowsUpdated(context.Context, eventbus.RecordRowsUpdatedHandler) (eventbus.Subscription, error) {
+	return nil, errors.New("record subscribe must not be reached")
+}
+
+func TestServiceCloseCancelsAndWaitsForConcurrentStart(t *testing.T) {
+	subscriber := &blockingSubscriber{entered: make(chan struct{})}
+	svc := NewService(Options{
+		Events: subscriber, Reader: &buildingGuardReader{}, Metadata: newBuildingGuardMetadata(),
+		Engines: map[string]viewindex.ViewIndexEngine{"bleve": newRecordingViewIndexEngine("bleve")},
+	})
+	startErr := make(chan error, 1)
+	go func() { startErr <- svc.Start(context.Background()) }()
+	<-subscriber.entered
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- svc.Close() }()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel a concurrent Start")
+	}
+	require.ErrorIs(t, <-startErr, context.Canceled)
+	require.NoError(t, svc.Close())
+}
+
 func TestReadRecordProjectionRowsReturnsRows(t *testing.T) {
 	key := &pb.RecordKey{
 		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "2026-07-10T12:00:00Z",

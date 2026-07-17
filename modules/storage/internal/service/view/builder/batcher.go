@@ -2,12 +2,18 @@ package builder
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 )
+
+var errBatcherClosed = errors.New("view builder batcher is closed")
 
 type batcher[T any] struct {
 	opts BatchOptions
 	in   chan T
+	mu   sync.RWMutex
+	stop bool
 }
 
 type timerState struct {
@@ -50,12 +56,23 @@ func (b *batcher[T]) add(ctx context.Context, item T) error {
 		return err
 	}
 
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.stop {
+		return errBatcherClosed
+	}
 	select {
 	case b.in <- item:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (b *batcher[T]) stopAccepting() {
+	b.mu.Lock()
+	b.stop = true
+	b.mu.Unlock()
 }
 
 func (b *batcher[T]) run(ctx context.Context, out chan<- []T) {
@@ -86,6 +103,7 @@ func (b *batcher[T]) run(ctx context.Context, out chan<- []T) {
 	for {
 		select {
 		case <-ctx.Done():
+			b.stopAccepting()
 			// Close 取消 run context 后不再接收新任务，但已进入 batcher 的尾批次仍会
 			// flush 给 worker，保证关闭过程中已接收的派生任务至少执行一次。
 			for {

@@ -180,7 +180,10 @@ func (e *failOnceEngine) Write(ctx context.Context, indexID string, batch viewin
 	attempt := e.attempts
 	e.mu.Unlock()
 	if attempt == 1 {
-		return errors.New("injected derived write failure")
+		if err := e.ViewIndexEngine.Write(ctx, indexID, batch); err != nil {
+			return err
+		}
+		return errors.New("injected post-write acknowledgement failure")
 	}
 	return e.ViewIndexEngine.Write(ctx, indexID, batch)
 }

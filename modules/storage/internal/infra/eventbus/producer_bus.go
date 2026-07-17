@@ -124,6 +124,9 @@ func processDelivery(ctx context.Context, delivery deliveryControl, opts Subscri
 		select {
 		case handlerErr = <-handlerResult:
 			goto terminal
+		case <-ctx.Done():
+			handlerErr = ctx.Err()
+			goto terminal
 		case <-ticker.C:
 			actionCtx, cancel := context.WithTimeout(context.Background(), opts.ActionTimeout)
 			if err := delivery.InProgress(actionCtx); err != nil {
@@ -291,6 +294,8 @@ type SubscriberBus struct {
 	recordConsumer     *jetstream.PullConsumer
 	timeSeriesCancel   context.CancelFunc
 	recordCancel       context.CancelFunc
+	timeSeriesStopping bool
+	recordStopping     bool
 	subscribeClosed    bool
 	opts               SubscriberOptions
 	timeSeriesFetchWG  sync.WaitGroup
@@ -335,6 +340,9 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 	if b.subscribeClosed {
 		return nil, context.Canceled
 	}
+	if b.timeSeriesStopping {
+		return nil, errors.New("storage time-series subscription is stopping")
+	}
 	if b.timeSeriesConsumer == nil {
 		consumer, err := b.client.BindPullConsumer(ctx, b.consumerRef(true))
 		if err != nil {
@@ -357,6 +365,9 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 	defer b.mu.Unlock()
 	if b.subscribeClosed {
 		return nil, context.Canceled
+	}
+	if b.recordStopping {
+		return nil, errors.New("storage record subscription is stopping")
 	}
 	if b.recordConsumer == nil {
 		consumer, err := b.client.BindPullConsumer(ctx, b.consumerRef(false))
@@ -389,47 +400,46 @@ func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries b
 		semaphore := make(chan struct{}, b.opts.MaxInFlight)
 		for {
 			select {
+			case semaphore <- struct{}{}:
 			case <-ctx.Done():
 				return
-			default:
 			}
-			deliveries, err := consumer.Fetch(ctx, 32)
+			deliveries, err := consumer.Fetch(ctx, 1)
 			if err != nil && len(deliveries) == 0 {
+				<-semaphore
 				if errors.Is(err, context.Canceled) || errors.Is(err, jetstream.ErrClosed) {
 					return
 				}
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			for _, delivery := range deliveries {
-				if delivery != nil && delivery.DeliveryCount > 1 {
-					b.opts.Metrics.IncRedelivery()
-				}
-				select {
-				case semaphore <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
-				handlerWG.Add(1)
-				go func(delivery *jetstream.Delivery) {
-					defer handlerWG.Done()
-					defer func() { <-semaphore }()
-					err := processDelivery(context.Background(), delivery, b.opts, func(handlerCtx context.Context) error {
-						return b.dispatch(handlerCtx, delivery, timeSeries)
-					})
-					if err != nil {
-						messageID := ""
-						if delivery != nil && delivery.Message != nil {
-							messageID = delivery.Message.GetMessageId()
-						}
-						deliveryCount := uint64(0)
-						if delivery != nil {
-							deliveryCount = delivery.DeliveryCount
-						}
-						log.ErrorContextf(context.Background(), "[StorageEventBus] delivery failed message_id=%s delivery_count=%d: %v", messageID, deliveryCount, err)
-					}
-				}(delivery)
+			if len(deliveries) == 0 {
+				<-semaphore
+				continue
 			}
+			delivery := deliveries[0]
+			if delivery != nil && delivery.DeliveryCount > 1 {
+				b.opts.Metrics.IncRedelivery()
+			}
+			handlerWG.Add(1)
+			go func(delivery *jetstream.Delivery) {
+				defer handlerWG.Done()
+				defer func() { <-semaphore }()
+				err := processDelivery(ctx, delivery, b.opts, func(handlerCtx context.Context) error {
+					return b.dispatch(handlerCtx, delivery, timeSeries)
+				})
+				if err != nil {
+					messageID := ""
+					if delivery != nil && delivery.Message != nil {
+						messageID = delivery.Message.GetMessageId()
+					}
+					deliveryCount := uint64(0)
+					if delivery != nil {
+						deliveryCount = delivery.DeliveryCount
+					}
+					log.ErrorContextf(context.Background(), "[StorageEventBus] delivery failed message_id=%s delivery_count=%d: %v", messageID, deliveryCount, err)
+				}
+			}(delivery)
 		}
 	}()
 }
@@ -484,15 +494,20 @@ func (b *SubscriberBus) closeTimeSeries(id uint64) error {
 		return nil
 	}
 	cancel, consumer := b.timeSeriesCancel, b.timeSeriesConsumer
+	b.timeSeriesStopping = true
 	b.timeSeriesCancel, b.timeSeriesConsumer = nil, nil
 	b.mu.Unlock()
 	cancel()
 	b.timeSeriesFetchWG.Wait()
 	b.timeSeriesHandleWG.Wait()
+	var err error
 	if consumer != nil {
-		return consumer.Close()
+		err = consumer.Close()
 	}
-	return nil
+	b.mu.Lock()
+	b.timeSeriesStopping = false
+	b.mu.Unlock()
+	return err
 }
 func (b *SubscriberBus) closeRecord(id uint64) error {
 	b.mu.Lock()
@@ -502,15 +517,20 @@ func (b *SubscriberBus) closeRecord(id uint64) error {
 		return nil
 	}
 	cancel, consumer := b.recordCancel, b.recordConsumer
+	b.recordStopping = true
 	b.recordCancel, b.recordConsumer = nil, nil
 	b.mu.Unlock()
 	cancel()
 	b.recordFetchWG.Wait()
 	b.recordHandleWG.Wait()
+	var err error
 	if consumer != nil {
-		return consumer.Close()
+		err = consumer.Close()
 	}
-	return nil
+	b.mu.Lock()
+	b.recordStopping = false
+	b.mu.Unlock()
+	return err
 }
 func (b *SubscriberBus) Close() error {
 	if b == nil {

@@ -135,6 +135,33 @@ func TestProcessDeliveryHeartbeatsLongHandlerAndStopsBeforeAck(t *testing.T) {
 	}
 }
 
+func TestProcessDeliveryCancellationNaksWithoutWaitingForStuckHandler(t *testing.T) {
+	delivery := &recordingDelivery{}
+	handlerRelease := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- processDelivery(ctx, delivery, SubscriberOptions{
+			AckWait: 90 * time.Millisecond, NakDelay: time.Millisecond, ActionTimeout: 20 * time.Millisecond,
+		}, func(context.Context) error {
+			<-handlerRelease
+			return nil
+		})
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("processDelivery blocked on a cancelled handler")
+	}
+	close(handlerRelease)
+	actions, _ := delivery.snapshot()
+	assert.Equal(t, "nak", actions[len(actions)-1])
+}
+
 func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 	firstErr := errors.New("first projection failed")
 	secondErr := errors.New("second projection failed")

@@ -33,6 +33,7 @@ type Service struct {
 	recordSub         eventbus.Subscription
 	timeSeriesBatcher *batcher[timeSeriesDeriveItem]
 	recordBatcher     *batcher[recordDeriveItem]
+	startDone         chan struct{}
 	wg                sync.WaitGroup
 }
 
@@ -116,7 +117,9 @@ func (s *Service) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	timeSeriesBatcher := newBatcher[timeSeriesDeriveItem](s.batchOpts)
 	recordBatcher := newBatcher[recordDeriveItem](s.batchOpts)
+	startDone := make(chan struct{})
 	s.cancel = cancel
+	s.startDone = startDone
 	s.runCtx = runCtx
 	s.timeSeriesBatcher = timeSeriesBatcher
 	s.recordBatcher = recordBatcher
@@ -125,6 +128,14 @@ func (s *Service) Start(ctx context.Context) error {
 	processCtx := runCtx
 	s.wg.Add(2 + 2*s.maxWorkers)
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.startDone == startDone {
+			close(startDone)
+			s.startDone = nil
+		}
+		s.mu.Unlock()
+	}()
 
 	go func() {
 		defer s.wg.Done()
@@ -151,12 +162,12 @@ func (s *Service) Start(ctx context.Context) error {
 		}()
 	}
 
-	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsUpdated(ctx, s.enqueueTimeSeries)
+	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsUpdated(runCtx, s.enqueueTimeSeries)
 	if err != nil {
 		s.clearStartedState(cancel)
 		return err
 	}
-	recordSub, err := s.events.SubscribeRecordRowsUpdated(ctx, s.enqueueRecord)
+	recordSub, err := s.events.SubscribeRecordRowsUpdated(runCtx, s.enqueueRecord)
 	if err != nil {
 		_ = timeSeriesSub.Close()
 		s.clearStartedState(cancel)
@@ -175,16 +186,29 @@ func (s *Service) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	cancel := s.cancel
-	timeSeriesSub := s.timeSeriesSub
-	recordSub := s.recordSub
-	if cancel == nil {
+	for {
+		s.mu.Lock()
+		startDone := s.startDone
+		cancel := s.cancel
+		if startDone == nil {
+			timeSeriesSub := s.timeSeriesSub
+			recordSub := s.recordSub
+			if cancel == nil {
+				s.mu.Unlock()
+				return nil
+			}
+			s.mu.Unlock()
+			return s.closeStarted(cancel, timeSeriesSub, recordSub)
+		}
 		s.mu.Unlock()
-		return nil
+		if cancel != nil {
+			cancel()
+		}
+		<-startDone
 	}
-	s.mu.Unlock()
+}
 
+func (s *Service) closeStarted(cancel context.CancelFunc, timeSeriesSub, recordSub eventbus.Subscription) error {
 	var err error
 	if timeSeriesSub != nil {
 		err = errors.Join(err, timeSeriesSub.Close())
@@ -248,7 +272,7 @@ func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRow
 			return completion.wait(ctx)
 		}
 	}
-	return completion.wait(addCtx)
+	return completion.wait(ctx)
 }
 
 func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) (retErr error) {
@@ -293,7 +317,7 @@ func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated
 			return completion.wait(ctx)
 		}
 	}
-	return completion.wait(addCtx)
+	return completion.wait(ctx)
 }
 
 func (s *Service) clearStartedState(cancel context.CancelFunc) {

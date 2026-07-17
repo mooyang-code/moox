@@ -68,3 +68,19 @@ func TestBatcherAddCancelledContextReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func TestBatcherRejectsAddsAfterCancellationDrainCompletes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	b := newBatcher[int](BatchOptions{BatchSize: 10, BatchWait: time.Hour})
+	out := make(chan []int, 1)
+	exited := make(chan struct{})
+	go func() {
+		b.run(ctx, out)
+		close(exited)
+	}()
+	cancel()
+	<-exited
+
+	err := b.add(context.Background(), 1)
+	require.ErrorIs(t, err, errBatcherClosed)
+}
