@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace suitable process-owned tickers with observable, non-overlapping tRPC Timer jobs and rebuild Storage host-metrics cleanup so it deletes data older than 48 hours in bounded multi-batch runs.
+**Goal:** Replace suitable process-owned tickers, including Gateway route refresh and HostAgent sampling, with observable, non-overlapping tRPC Timer jobs and rebuild Storage host-metrics cleanup so it deletes data older than 48 hours in bounded multi-batch runs.
 
 **Architecture:** Keep retries, heartbeats, Factor event batching, outbox relays, and in-memory state loops as Go timers. Move independent database scans and maintenance jobs behind synchronous tRPC Timer handlers. Every migrated handler uses a shared guard that clones the timer context, applies an explicit timeout, prevents overlap, and emits bounded metrics. Storage owns host-metrics deletion because Pebble is the fact source; Monitor remains only a producer and reader of those datasets.
 
@@ -18,12 +18,15 @@
 - `timer.DefaultScheduler` is local and does not provide distributed exclusion. Database operations must remain idempotent; the shared guard only prevents overlap inside one process.
 - Use fixed, low-cardinality job names in logs and metrics. Never label metrics by Space ID, Dataset ID, account, order, peer, message ID, or run ID.
 - Cron is the only scheduling source after migration. Remove application fields that only expressed the old ticker interval.
-- `startAtOnce=1` is used for cleanup, reconciliation, recovery, and peer/check scans so a restart does not wait one full interval.
+- tRPC Timer v1.0.0 supports immediate startup execution through the cron query parameter `?startAtOnce=1`. The call is synchronous inside `ListenAndServe`; if this first handler call returns an error, that Timer service fails to start and the process startup path must surface the error.
+- Use `startAtOnce=1` only for jobs explicitly marked "start immediately" in the inventory. Their first-run failure is intentionally fail-fast so the process supervisor retries startup instead of advertising a service whose mandatory initial maintenance/reconciliation/sampling pass failed. Do not set the package-global `timer.SetStartAtOnce`, because it would change unrelated Timer services.
 - Storage host-metrics cleanup deletes rows strictly older than `now - 48h`. It never deletes exactly-at-cutoff or newer rows.
 - One Storage run processes at most 10 batches per configured dataset and at most 1000 rows per resolved target per batch. It stops early when a batch deletes zero rows.
 - A failure in one Storage dataset is recorded but does not prevent cleanup of the remaining configured datasets. The handler returns `errors.Join` after all datasets have been attempted.
 - Factor's current `Debouncer` is a fixed-window event aggregator, not classic debounce: later events do not extend the bucket deadline. Rename it to `trigger.EventBatcher` and rename `debounce_window_ms` to `event_batch_window_ms` without a compatibility alias.
 - Factor event batching remains a process-owned timer. Its buckets belong to one in-memory runtime instance, use a sub-second polling interval, and must stop with that instance; a service-level cron handler would not improve durability or ownership.
+- Gateway route refresh is a module-level fixed-frequency `Runtime.Refresh(ctx)` operation. Keep mandatory startup initialization synchronous, then execute refresh every 15 seconds through `trpc.moox.gateway.route_refresh.timer`; remove the application-level refresh interval. Do not also configure `startAtOnce=1`, because `Runtime.Initialize` already performs the immediate pull with cache-aware startup semantics and a Timer invocation would duplicate it.
+- HostAgent sampling is a module-level fixed-frequency `RunOnce(ctx)` operation. Execute it every 15 seconds through `trpc.moox.hostagent.sample.timer` with `startAtOnce=1`; keep the Agent's atomic guard so scheduled and manual runs cannot overlap. The immediate handler is the sole replacement for the old eager `Agent.Run` call, and an initial collection/publish error intentionally fails startup.
 
 ## Timer Migration Inventory
 
@@ -35,13 +38,15 @@
 | Storage host dataset cleanup | Migrate and redesign | `trpc.moox.storage.host_metrics_cleanup.timer` | hourly, start immediately |
 | Archive dirty-partition materialization | Migrate | `trpc.moox.archive.materialize.timer` | every 10 minutes, start immediately |
 | Archive COS synchronization | Migrate | `trpc.moox.archive.cos_sync.timer` | hourly, start immediately |
+| Gateway route refresh | Migrate | `trpc.moox.gateway.route_refresh.timer` | every 15 seconds; startup initialization remains synchronous |
+| HostAgent collection/publish | Migrate | `trpc.moox.hostagent.sample.timer` | every 15 seconds, start immediately |
 | Monitor due-check scan | Migrate | `trpc.moox.monitor.check_schedule.timer` | every 30 seconds, start immediately |
 | Monitor metric-rule evaluation | Migrate | `trpc.moox.monitor.metric_rule.timer` | every minute, start immediately |
 | Monitor peer pull/stale marking | Migrate | `trpc.moox.monitor.peer_sync.timer` | every 10 seconds, start immediately |
 | Trade fill reconciliation | Migrate | `trpc.moox.trade.fill_reconcile.timer` | every 5 seconds, start immediately |
 | Trade recoverable-order scan | Migrate | `trpc.moox.trade.order_recovery.timer` | every 15 seconds, start immediately |
 
-The following timers stay as Go timers: Storage/Strategy/Trade outbox relays, Gateway route refresh, HostAgent sampling, Factor event-batch flush and binding refresh, CloudNode heartbeat-buffer flush, JetStream ACK heartbeats, exchange listen-key keepalive, retry backoff, request timeout, shutdown drain, and polling used only to wait for an in-memory condition.
+The following timers stay as Go timers: Storage/Strategy/Trade outbox relays, Factor event-batch flush and binding refresh, CloudNode heartbeat-buffer flush, JetStream ACK heartbeats, exchange listen-key keepalive, retry backoff, request timeout, shutdown drain, and polling used only to wait for an in-memory condition.
 
 ## File Map
 
@@ -69,6 +74,8 @@ The following timers stay as Go timers: Storage/Strategy/Trade outbox relays, Ga
 - Modify Monitor bootstrap, scheduler, metrics scheduler, configuration, tests, and `modules/monitor/config/trpc_go.yaml` for four Timer services.
 - Refactor Archive bootstrap/writer ownership and `modules/archive/config/trpc_go.yaml` for two Timer services.
 - Modify Trade bootstrap/kernel workers/tests and `modules/trade/config/trpc_go.yaml` for reconciliation and recovery timers.
+- Refactor Gateway bootstrap so its manual HTTP servers coexist with a timer-only tRPC server; move the fixed 15-second route refresh schedule to `modules/gateway/config/trpc_go.yaml`.
+- Register HostAgent collection as a start-at-once tRPC Timer and remove the Agent-owned sampling ticker and application interval field.
 - Rename Factor's fixed-window trigger component and config to `EventBatcher` / `event_batch_window_ms`, while preserving its process-owned flush and binding-refresh tickers.
 - Modify `docs/存储引擎架构.md`, `docs/架构总览.md`, and relevant module README files to describe ownership and Timer semantics.
 
@@ -652,7 +659,154 @@ git add modules/factor
 git commit -m "refactor(factor): rename debounce to event batching"
 ```
 
-### Task 10: Documentation, Static Audit, And Full Verification
+### Task 10: Move Gateway Route Refresh To A tRPC Timer
+
+**Files:**
+- Create: `modules/gateway/internal/bootstrap/route_refresh_timer.go`
+- Create: `modules/gateway/internal/bootstrap/route_refresh_timer_test.go`
+- Modify: `modules/gateway/internal/bootstrap/bootstrap.go`
+- Modify: `modules/gateway/internal/bootstrap/bootstrap_test.go`
+- Modify: `modules/gateway/internal/config/config.go`
+- Modify: `modules/gateway/internal/config/config_test.go`
+- Modify: `modules/gateway/config/app.yaml`
+- Modify: `modules/gateway/config/trpc_go.yaml`
+- Modify: `modules/gateway/cmd/server/main.go`
+- Modify: `modules/gateway/README.md`
+- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/release.sh`
+- Modify: `scripts/test-deploy-moox-gateway.sh`
+
+- [ ] **Step 1: Lock startup and refresh behavior with tests**
+
+Keep `Runtime.Initialize(ctx)` as the mandatory synchronous startup path. Tests must prove it loads the cached route, performs exactly one initial control-plane pull before either HTTP listener starts, and fails startup when no usable route exists. Keep `Runtime.Refresh(ctx)` as a synchronous run-once operation; a failed periodic refresh must retain the last valid route table and the existing readiness state.
+
+Add configuration tests proving that `ControlPlaneConfig.RefreshInterval`, `DefaultRefreshInterval`, validation for that duration, and `control_plane.refresh_interval` no longer exist. The checked-in `app.yaml` must not own a scheduling frequency.
+
+- [ ] **Step 2: Add a timer-only tRPC service configuration**
+
+Change `modules/gateway/config/trpc_go.yaml` so it does not declare the Gateway service and health ports already owned by the manual HTTP servers. Register only:
+
+```yaml
+server:
+  service:
+    - name: trpc.moox.gateway.route_refresh.timer
+      ip: 127.0.0.1
+      port: 11013
+      network: "*/15 * * * * *"
+      protocol: timer
+      timeout: 10000
+```
+
+Do not add `startAtOnce=1`: `Initialize` has already completed the first control-plane pull synchronously with the special rule that a valid cached route permits startup after a pull failure. A Timer `startAtOnce` call would both duplicate that pull and fail `ListenAndServe` whenever `Refresh` returns an error, losing the cache-aware startup behavior. Tests must lock the service name, unique port, fixed 15-second cron, lack of `startAtOnce`, `timer` protocol, and 10-second framework timeout.
+
+- [ ] **Step 3: Register the guarded synchronous refresh handler**
+
+Construct one `timerjob.Job` named `gateway_route_refresh`, with a 10-second execution timeout and `runtime.Refresh` as its callback. Register `job.Handle` with `timer.RegisterHandlerService`. The handler must clone the incoming tRPC context through the shared job wrapper, return only after refresh finishes, and skip an overlapping invocation inside the process.
+
+Tests must prove that two concurrent handler invocations execute one refresh, an invocation timeout is returned and measured, a refresh error is returned to the Timer scheduler, and the last valid routing snapshot remains usable after an error.
+
+- [ ] **Step 4: Run tRPC Timer beside the existing HTTP lifecycle**
+
+Create `trpc.NewServer()` after successful `Runtime.Initialize`, register the Timer service, and start `Serve` alongside the existing Gateway and health HTTP listeners. Add the tRPC serve result to the same fatal server-error path and close it during normal shutdown and partial-startup failure. Do not move the Gateway or health HTTP handlers onto tRPC in this change.
+
+Delete the `time.NewTicker` refresh loop from `bootstrap.Run`. Startup order must be: load config, initialize routing synchronously, bind/register all servers, then serve. Shutdown must wait for the Timer server and both HTTP servers without leaking goroutines.
+
+- [ ] **Step 5: Update deployment and release contracts**
+
+Start the Gateway with both configurations:
+
+```bash
+bin/moox-gateway -config=config/app.yaml -conf=config/trpc_go.yaml
+```
+
+Ensure release staging copies `modules/gateway/config/trpc_go.yaml`, and deployment validation rejects a release missing it. Extend deploy/release contract tests to verify the Timer config is present and the obsolete `refresh_interval` key is absent. The frequency is intentionally static and changes only through configuration deployment plus process restart; do not implement file watching or hot reload.
+
+- [ ] **Step 6: Verify and commit Gateway**
+
+```bash
+cd modules/gateway
+env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/bootstrap ./internal/config ./cmd/server
+env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/bootstrap
+if rg -n 'RefreshInterval|DefaultRefreshInterval|refresh_interval|time\.NewTicker' . \
+  --glob '*.go' --glob '*.yaml'; then
+  exit 1
+fi
+cd ../..
+scripts/test-deploy-moox-gateway.sh
+git add modules/gateway scripts/deploy-moox.sh scripts/release.sh scripts/test-deploy-moox-gateway.sh
+git commit -m "refactor(gateway): schedule route refresh with tRPC timer"
+```
+
+Expected: all tests PASS; startup still performs one immediate pull, periodic refresh has exactly one scheduling owner, and Gateway production code contains no refresh ticker or application refresh interval.
+
+### Task 11: Move HostAgent Sampling To A tRPC Timer
+
+**Files:**
+- Create: `modules/hostagent/internal/app/sample_timer.go`
+- Create: `modules/hostagent/internal/app/sample_timer_test.go`
+- Modify: `modules/hostagent/internal/app/app.go`
+- Modify: `modules/hostagent/internal/app/app_test.go`
+- Modify: `modules/hostagent/internal/config/config.go`
+- Modify: `modules/hostagent/internal/config/config_test.go`
+- Modify: `modules/hostagent/config/app.yaml`
+- Modify: `modules/hostagent/config/trpc_go.yaml`
+- Modify: `modules/hostagent/cmd/server/main.go`
+- Modify: `modules/hostagent/README.md`
+- Modify: `scripts/release.sh`
+
+- [ ] **Step 1: Remove application-owned schedule configuration**
+
+Delete `Config.Interval`, its 15-second default, parsing/validation, and the top-level `interval: 15s` YAML key. Tests must prove that the checked-in application configuration still loads all collection and publishing settings and that it contains no sampling frequency. Do not retain an alias or fallback because there is no historical compatibility requirement.
+
+- [ ] **Step 2: Add the HostAgent Timer service**
+
+Add the Timer to `modules/hostagent/config/trpc_go.yaml` beside the existing RPC and health services:
+
+```yaml
+- name: trpc.moox.hostagent.sample.timer
+  ip: 127.0.0.1
+  port: 11427
+  network: "*/15 * * * * *?startAtOnce=1"
+  protocol: timer
+  timeout: 30000
+```
+
+Tests must lock the service name, unique port, fixed 15-second cron, `startAtOnce=1`, `timer` protocol, and 30-second framework timeout. Add an integration-level registration test proving that the immediate handler runs before the Timer listener reports successful startup, and that an immediate handler error is returned by the server startup path. The schedule is deployment-time configuration and does not need hot reload.
+
+- [ ] **Step 3: Expose one synchronous scheduled-run entry point**
+
+Create a Timer registration function in the `app` package. Its handler must clone the incoming tRPC context, apply an explicit 30-second execution timeout, call the existing guarded run-once path synchronously, and return collection or publishing errors to the Timer scheduler.
+
+Keep the Agent's atomic `running` guard and skipped-run counter. Both `trpc.moox.hostagent.sample.timer` and the manual `RunOnce` RPC must enter through that same guard so a manual collection cannot overlap a scheduled collection. Do not wrap this handler with a second independent overlap guard that would bypass the Agent's existing skipped-run accounting.
+
+- [ ] **Step 4: Delete the Agent ticker loop and register the Timer**
+
+Remove `Agent.Run`, its immediate call, `time.NewTicker`, and the goroutine launched by `cmd/server/main.go`. Register the Timer handler on the existing tRPC server before `Serve`; `startAtOnce=1` now provides the immediate collection during Timer service startup, before `Serve` succeeds. An initial collection or publishing error must propagate out of `Serve`, trigger the existing shutdown path, and let the process supervisor retry; it must not be logged and converted to success.
+
+Tests must prove that the scheduled handler waits for `RunOnce` completion, preserves values from the cloned invocation context, observes cancellation/timeout, returns execution errors, and skips/counts a concurrent scheduled or manual run. Server shutdown must cancel an active sampling context and wait for normal Agent close behavior.
+
+- [ ] **Step 5: Update documentation and release packaging**
+
+Document that HostAgent sampling is fixed at 15 seconds, starts immediately, is locally non-reentrant, and shares exclusion with manual collection. State plainly that tRPC Timer runs the `startAtOnce=1` handler synchronously and an initial handler failure prevents successful service startup. Ensure the release includes the updated `trpc_go.yaml` as the authoritative schedule. Do not describe or implement runtime frequency changes.
+
+- [ ] **Step 6: Verify and commit HostAgent**
+
+```bash
+cd modules/hostagent
+env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/app ./internal/config ./cmd/server
+env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/app
+if rg -n 'Config\.Interval|interval: 15s|time\.NewTicker|go a\.Run|func \(a \*Agent\) Run\(' . \
+  --glob '*.go' --glob '*.yaml'; then
+  exit 1
+fi
+cd ../..
+git add modules/hostagent scripts/release.sh
+git commit -m "refactor(hostagent): schedule sampling with tRPC timer"
+```
+
+Expected: all tests PASS; HostAgent has one static Timer schedule, immediate sampling is owned by `startAtOnce=1`, initial failure is fail-fast, and scheduled/manual runs share one overlap guard.
+
+### Task 12: Documentation, Static Audit, And Full Verification
 
 **Files:**
 - Modify: `docs/存储引擎架构.md`
@@ -662,10 +816,12 @@ git commit -m "refactor(factor): rename debounce to event batching"
 - Create: `modules/archive/README.md`
 - Modify: `modules/trade/README.md`
 - Modify: `modules/admin/README.md`
+- Modify: `modules/gateway/README.md`
+- Modify: `modules/hostagent/README.md`
 
 - [ ] **Step 1: Document Timer ownership and Storage cleanup policy**
 
-Record the service names, cron schedules, per-run timeout, overlap behavior, `DefaultScheduler` single-process limitation, 48-hour cutoff, four datasets, 1000-row target batch, 10-batch dataset budget, and partial-failure semantics. State explicitly that Monitor does not delete Storage facts.
+Record the service names, cron schedules, per-run timeout, overlap behavior, `DefaultScheduler` single-process limitation, 48-hour cutoff, four datasets, 1000-row target batch, 10-batch dataset budget, and partial-failure semantics. State explicitly that Monitor does not delete Storage facts. Document that `startAtOnce=1` executes synchronously and a returned error prevents that Timer service from starting. Gateway performs one cache-aware synchronous initialization and therefore omits the flag; HostAgent uses the flag as its sole eager sampling path and deliberately fails startup on an initial sampling error. Both schedules are fixed deployment configuration and do not support hot reload.
 
 - [ ] **Step 2: Audit remaining production timers**
 
@@ -674,7 +830,7 @@ rg -n 'time\.(NewTicker|Tick|NewTimer|AfterFunc|After)\(' modules packages \
   --glob '*.go' --glob '!**/*_test.go' --glob '!**/*_mock.go'
 ```
 
-Expected: every remaining occurrence belongs to the explicit keep list in this plan. There must be no ticker for Admin GC, Monitor cleanup/check/rule/peer scans, Storage host cleanup, Archive materialization/COS sync, or Trade fill/recovery scans.
+Expected: every remaining occurrence belongs to the explicit keep list in this plan. There must be no ticker for Admin GC, Monitor cleanup/check/rule/peer scans, Storage host cleanup, Archive materialization/COS sync, Trade fill/recovery scans, Gateway route refresh, or HostAgent sampling.
 
 - [ ] **Step 3: Run focused repository tests**
 
@@ -685,6 +841,8 @@ env GOCACHE=/tmp/moox-gocache go test -count=1 ./modules/monitor/...
 env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./modules/storage/...
 env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./modules/archive/...
 env GOCACHE=/tmp/moox-gocache go test -count=1 ./modules/trade/...
+env GOCACHE=/tmp/moox-gocache go test -count=1 ./modules/gateway/...
+env GOCACHE=/tmp/moox-gocache go test -count=1 ./modules/hostagent/...
 ```
 
 Expected: all commands PASS.
@@ -722,5 +880,11 @@ Expected: push succeeds, the worktree is clean, and `HEAD` equals `origin/main`.
 - [ ] Timer service configuration tests lock service name, port, cron, protocol, and timeout.
 - [ ] Factor uses `trigger.EventBatcher` and `event_batch_window_ms`; no Debouncer/debounce terminology remains.
 - [ ] Factor event-batch flush and binding reload remain process-owned timers with runtime-context shutdown.
-- [ ] Remaining Go timers are restricted to lifecycle, retry, heartbeat, event batching, outbox, sampling, or in-memory wait semantics.
+- [ ] Gateway performs one synchronous initial route pull, then refreshes through `trpc.moox.gateway.route_refresh.timer` every 15 seconds without `startAtOnce` or an application interval field.
+- [ ] Gateway's manual service/health listeners coexist with a timer-only tRPC server and shut down as one lifecycle.
+- [ ] HostAgent samples through `trpc.moox.hostagent.sample.timer` every 15 seconds with `startAtOnce=1`; no Agent ticker or application interval field remains.
+- [ ] HostAgent tests prove the `startAtOnce=1` handler completes before successful startup and an initial handler error fails startup.
+- [ ] HostAgent scheduled and manual runs share the same atomic overlap guard and skipped-run accounting.
+- [ ] Gateway and HostAgent Timer frequencies are static deployment configuration; no hot-reload mechanism is added.
+- [ ] Remaining Go timers are restricted to lifecycle, retry, heartbeat, event batching, outbox, or in-memory wait semantics.
 - [ ] Focused tests, race tests, `make verify`, commit, push, clean-worktree, and `HEAD == origin/main` checks all pass.
