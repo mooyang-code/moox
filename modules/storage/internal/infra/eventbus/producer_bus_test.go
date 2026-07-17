@@ -193,6 +193,45 @@ func TestProcessDeliveryCancellationWaitsForContextAwareHandlerBeforeNak(t *test
 	assert.Equal(t, "storage.ViewBuilder", delivery.lastCalleeName(), "terminal NAK context must retain tRPC metadata")
 }
 
+func TestProcessDeliveryCancellationBoundsUnresponsiveHandlerDrain(t *testing.T) {
+	delivery := &recordingDelivery{}
+	ctx, cancel := context.WithCancel(context.Background())
+	blocked := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- processDelivery(ctx, delivery, SubscriberOptions{
+			AckWait: 90 * time.Millisecond, NakDelay: time.Millisecond, ActionTimeout: 20 * time.Millisecond,
+			HandlerDrainTimeout: 20 * time.Millisecond,
+		}, func(context.Context) error {
+			<-blocked
+			return nil
+		})
+	}()
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+		assert.ErrorContains(t, err, "handler drain timed out")
+	case <-time.After(time.Second):
+		t.Fatal("processDelivery did not bound an unresponsive handler")
+	}
+	close(blocked)
+	actions, _ := delivery.snapshot()
+	assert.Equal(t, "nak", actions[len(actions)-1])
+}
+
+func TestSubscriberHandlerLifecycleWaitIsBounded(t *testing.T) {
+	lifecycle := newSubscriberHandlerLifecycle()
+	require.True(t, lifecycle.acquire())
+	lifecycle.beginClose()
+
+	err := lifecycle.wait(20 * time.Millisecond)
+	assert.ErrorContains(t, err, "handler drain timed out")
+	lifecycle.release()
+	require.NoError(t, lifecycle.wait(time.Second))
+}
+
 func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 	firstErr := errors.New("first projection failed")
 	secondErr := errors.New("second projection failed")
@@ -265,6 +304,42 @@ func TestSubscriberCloseDrainsItsHandlerWhileOtherHandlerRemains(t *testing.T) {
 	bus.mu.Unlock()
 	assert.False(t, firstPresent)
 	assert.True(t, secondPresent)
+}
+
+func TestSubscriberCloseBoundsUnresponsiveHandler(t *testing.T) {
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
+	require.NoError(t, err)
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+	first := &subscriberTimeSeriesHandler{
+		handler: func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+		lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel,
+	}
+	second := &subscriberTimeSeriesHandler{
+		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil },
+		lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel,
+	}
+	bus := &SubscriberBus{
+		timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{1: first, 2: second},
+		opts:               SubscriberOptions{HandlerDrainTimeout: 20 * time.Millisecond},
+	}
+	dispatchDone := make(chan error, 1)
+	go func() {
+		dispatchDone <- bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: payload}}, true)
+	}()
+	<-started
+
+	err = bus.closeTimeSeries(1, first)
+	assert.ErrorContains(t, err, "handler drain timed out")
+	close(blocked)
+	require.NoError(t, <-dispatchDone)
 }
 
 func TestSubscriberHandlerPanicReleasesUncalledHandlerLeases(t *testing.T) {

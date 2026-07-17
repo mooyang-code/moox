@@ -18,7 +18,13 @@ runtime_python = os.environ.get("MOOX_PYTHON_RUNTIME_PATH")
 if runtime_python:
     sys.path.insert(0, runtime_python)
 else:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "pyruntime" / "python"))
+    worker_path = Path(__file__).resolve()
+    runtime_candidates = (
+        worker_path.parents[1] / "python-runtime",
+        worker_path.parents[3] / "packages" / "pyruntime" / "python",
+    )
+    runtime_python = next((path for path in runtime_candidates if path.is_dir()), runtime_candidates[0])
+    sys.path.insert(0, str(runtime_python))
 from moox_pyruntime.protocol import (
     TYPE_ERROR as ERROR,
     TYPE_HELLO as HELLO,

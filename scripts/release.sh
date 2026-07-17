@@ -74,6 +74,7 @@ mkdir -p \
   "${RELEASE_ROOT}/strategy/bin" \
   "${RELEASE_ROOT}/strategy/config" \
   "${RELEASE_ROOT}/strategy/pyworker" \
+  "${RELEASE_ROOT}/strategy/python-runtime" \
   "${RELEASE_ROOT}/strategy/pysdk" \
   "${RELEASE_ROOT}/strategy/strategies/example" \
   "${RELEASE_ROOT}/trade/bin" \
@@ -140,6 +141,7 @@ cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/factor/factors/"
 cp -R "${ROOT}/modules/factor/sections/." "${RELEASE_ROOT}/factor/sections/"
 cp -R "${ROOT}/modules/strategy/config/." "${RELEASE_ROOT}/strategy/config/"
 cp -R "${ROOT}/modules/strategy/pyworker/." "${RELEASE_ROOT}/strategy/pyworker/"
+cp -R "${ROOT}/packages/pyruntime/python/." "${RELEASE_ROOT}/strategy/python-runtime/"
 cp -R "${ROOT}/modules/strategy/pysdk/." "${RELEASE_ROOT}/strategy/pysdk/"
 cp -R "${ROOT}/modules/strategy/strategies/example/." "${RELEASE_ROOT}/strategy/strategies/example/"
 find "${RELEASE_ROOT}/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +

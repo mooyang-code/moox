@@ -23,6 +23,8 @@ for contract in \
   'copy_binary moox-strategy-cli ' \
   'modules/strategy/config/.' \
   'modules/strategy/pyworker/.' \
+  'packages/pyruntime/python/.' \
+  'RELEASE_ROOT}/strategy/python-runtime/' \
   'modules/strategy/pysdk/.' \
   'modules/strategy/strategies/example/.'; do
   grep -q "${contract}" "${ROOT}/scripts/release.sh" || {
@@ -30,5 +32,21 @@ for contract in \
     exit 1
   }
 done
+tmp_strategy="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-release.XXXXXX")"
+trap 'rm -rf "${tmp_strategy}"' EXIT
+mkdir -p "${tmp_strategy}/strategy/pyworker" "${tmp_strategy}/strategy/python-runtime"
+cp "${ROOT}/modules/strategy/pyworker/worker.py" "${tmp_strategy}/strategy/pyworker/worker.py"
+cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_strategy}/strategy/python-runtime/"
+python3 - "${tmp_strategy}/strategy/pyworker/worker.py" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+worker = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("moox_strategy_release_worker", worker)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module.HELLO
+PY
 grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release.sh"

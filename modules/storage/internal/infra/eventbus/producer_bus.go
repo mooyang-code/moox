@@ -31,18 +31,20 @@ const (
 	defaultAckWait                      = 2 * time.Minute
 	defaultNakDelay                     = time.Second
 	defaultActionTimeout                = 5 * time.Second
+	defaultHandlerDrainTimeout          = 5 * time.Second
 )
 
 // SubscriberOptions is the transport contract for predeclared Storage consumers.
 type SubscriberOptions struct {
-	StreamName    string
-	AckWait       time.Duration
-	MaxDeliver    int
-	MaxInFlight   int
-	MaxAckPending int
-	NakDelay      time.Duration
-	ActionTimeout time.Duration
-	Metrics       *observability.ViewMetrics
+	StreamName          string
+	AckWait             time.Duration
+	MaxDeliver          int
+	MaxInFlight         int
+	MaxAckPending       int
+	NakDelay            time.Duration
+	ActionTimeout       time.Duration
+	HandlerDrainTimeout time.Duration
+	Metrics             *observability.ViewMetrics
 }
 
 func normalizeSubscriberOptions(opts SubscriberOptions) (SubscriberOptions, error) {
@@ -67,6 +69,9 @@ func normalizeSubscriberOptions(opts SubscriberOptions) (SubscriberOptions, erro
 	if opts.ActionTimeout == 0 {
 		opts.ActionTimeout = defaultActionTimeout
 	}
+	if opts.HandlerDrainTimeout == 0 {
+		opts.HandlerDrainTimeout = defaultHandlerDrainTimeout
+	}
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
 	}
@@ -79,7 +84,7 @@ func normalizeSubscriberOptions(opts SubscriberOptions) (SubscriberOptions, erro
 	if opts.MaxDeliver != -1 && opts.MaxDeliver < 1 {
 		return SubscriberOptions{}, errors.New("storage subscriber max deliver must be -1 or at least 1")
 	}
-	if opts.NakDelay < 0 || opts.ActionTimeout <= 0 {
+	if opts.NakDelay < 0 || opts.ActionTimeout <= 0 || opts.HandlerDrainTimeout <= 0 {
 		return SubscriberOptions{}, errors.New("storage subscriber action durations are invalid")
 	}
 	return opts, nil
@@ -107,6 +112,9 @@ func processDelivery(ctx context.Context, delivery deliveryControl, opts Subscri
 	if opts.ActionTimeout <= 0 {
 		opts.ActionTimeout = defaultActionTimeout
 	}
+	if opts.HandlerDrainTimeout <= 0 {
+		opts.HandlerDrainTimeout = defaultHandlerDrainTimeout
+	}
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
 	}
@@ -126,7 +134,12 @@ func processDelivery(ctx context.Context, delivery deliveryControl, opts Subscri
 		case handlerErr = <-handlerResult:
 			goto terminal
 		case <-ctx.Done():
-			handlerErr = errors.Join(ctx.Err(), <-handlerResult)
+			select {
+			case err := <-handlerResult:
+				handlerErr = errors.Join(ctx.Err(), err)
+			case <-time.After(opts.HandlerDrainTimeout):
+				handlerErr = errors.Join(ctx.Err(), errors.New("storage delivery handler drain timed out"))
+			}
 			goto terminal
 		case <-ticker.C:
 			actionCtx, cancel := context.WithTimeout(trpc.CloneContext(ctx), opts.ActionTimeout)
@@ -499,6 +512,13 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 	return err
 }
 
+func (b *SubscriberBus) handlerDrainTimeout() time.Duration {
+	if b != nil && b.opts.HandlerDrainTimeout > 0 {
+		return b.opts.HandlerDrainTimeout
+	}
+	return defaultHandlerDrainTimeout
+}
+
 func callTimeSeriesHandlers(ctx context.Context, event *pb.TimeSeriesRowsUpdated, handlers []*subscriberTimeSeriesHandler) (err error) {
 	next := 0
 	defer func() {
@@ -536,15 +556,14 @@ func (b *SubscriberBus) closeTimeSeries(id uint64, entry *subscriberTimeSeriesHa
 	entry.cancel()
 	if len(b.timeSeriesHandlers) != 0 || b.timeSeriesCancel == nil {
 		b.mu.Unlock()
-		entry.lifecycle.wait()
-		return nil
+		return entry.lifecycle.wait(b.handlerDrainTimeout())
 	}
 	cancel, consumer := b.timeSeriesCancel, b.timeSeriesConsumer
 	b.timeSeriesStopping = true
 	b.timeSeriesCancel, b.timeSeriesConsumer = nil, nil
 	b.mu.Unlock()
-	entry.lifecycle.wait()
 	cancel()
+	drainErr := entry.lifecycle.wait(b.handlerDrainTimeout())
 	b.timeSeriesFetchWG.Wait()
 	b.timeSeriesHandleWG.Wait()
 	var err error
@@ -554,7 +573,7 @@ func (b *SubscriberBus) closeTimeSeries(id uint64, entry *subscriberTimeSeriesHa
 	b.mu.Lock()
 	b.timeSeriesStopping = false
 	b.mu.Unlock()
-	return err
+	return errors.Join(drainErr, err)
 }
 func (b *SubscriberBus) closeRecord(id uint64, entry *subscriberRecordHandler) error {
 	b.mu.Lock()
@@ -563,15 +582,14 @@ func (b *SubscriberBus) closeRecord(id uint64, entry *subscriberRecordHandler) e
 	entry.cancel()
 	if len(b.recordHandlers) != 0 || b.recordCancel == nil {
 		b.mu.Unlock()
-		entry.lifecycle.wait()
-		return nil
+		return entry.lifecycle.wait(b.handlerDrainTimeout())
 	}
 	cancel, consumer := b.recordCancel, b.recordConsumer
 	b.recordStopping = true
 	b.recordCancel, b.recordConsumer = nil, nil
 	b.mu.Unlock()
-	entry.lifecycle.wait()
 	cancel()
+	drainErr := entry.lifecycle.wait(b.handlerDrainTimeout())
 	b.recordFetchWG.Wait()
 	b.recordHandleWG.Wait()
 	var err error
@@ -581,7 +599,7 @@ func (b *SubscriberBus) closeRecord(id uint64, entry *subscriberRecordHandler) e
 	b.mu.Lock()
 	b.recordStopping = false
 	b.mu.Unlock()
-	return err
+	return errors.Join(drainErr, err)
 }
 
 type subscriberTimeSeriesHandler struct {
@@ -622,15 +640,15 @@ func (h *subscriberRecordHandler) call(ctx context.Context, event *pb.RecordRows
 
 type subscriberHandlerLifecycle struct {
 	mu       sync.Mutex
-	cond     *sync.Cond
 	closing  bool
 	inFlight int
+	idle     chan struct{}
 }
 
 func newSubscriberHandlerLifecycle() *subscriberHandlerLifecycle {
-	lifecycle := &subscriberHandlerLifecycle{}
-	lifecycle.cond = sync.NewCond(&lifecycle.mu)
-	return lifecycle
+	idle := make(chan struct{})
+	close(idle)
+	return &subscriberHandlerLifecycle{idle: idle}
 }
 
 func (l *subscriberHandlerLifecycle) acquire() bool {
@@ -638,6 +656,9 @@ func (l *subscriberHandlerLifecycle) acquire() bool {
 	defer l.mu.Unlock()
 	if l.closing {
 		return false
+	}
+	if l.inFlight == 0 {
+		l.idle = make(chan struct{})
 	}
 	l.inFlight++
 	return true
@@ -647,7 +668,7 @@ func (l *subscriberHandlerLifecycle) release() {
 	l.mu.Lock()
 	l.inFlight--
 	if l.inFlight == 0 {
-		l.cond.Broadcast()
+		close(l.idle)
 	}
 	l.mu.Unlock()
 }
@@ -658,12 +679,16 @@ func (l *subscriberHandlerLifecycle) beginClose() {
 	l.mu.Unlock()
 }
 
-func (l *subscriberHandlerLifecycle) wait() {
+func (l *subscriberHandlerLifecycle) wait(timeout time.Duration) error {
 	l.mu.Lock()
-	for l.inFlight > 0 {
-		l.cond.Wait()
-	}
+	idle := l.idle
 	l.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-time.After(timeout):
+		return errors.New("storage subscriber handler drain timed out")
+	}
 }
 
 func (b *SubscriberBus) Close() error {

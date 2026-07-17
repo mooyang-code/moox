@@ -49,7 +49,7 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries check-context test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-caddy
+verify: check-boundaries check-context test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
