@@ -772,7 +772,8 @@ copy_optional_web_host() {
 }
 
 patch_configs() {
-  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+	[[ -f "${STAGE_DIR}/gateway/config/trpc_go.yaml" ]] || fail "missing Gateway tRPC Timer config"
+	if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/admin\.db#path: ../data/admin.db#g' \
       "${STAGE_DIR}/admin/config/app.yaml"
     perl -0pi -e 's#data_dir:\s*"\./data/badger"#data_dir: "../data/badger"#g' \
@@ -1408,9 +1409,9 @@ start_admin() {
 
 start_gateway() {
   [[ "${WITH_GATEWAY}" == "1" ]] || { echo "gateway is disabled in this deployment package" >&2; exit 2; }
-  start_service "gateway" "${ROOT}/gateway" \
-    env "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
-      "${ROOT}/bin/moox-gateway" -config=config/app.yaml
+	start_service "gateway" "${ROOT}/gateway" \
+		env "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
+			"${ROOT}/bin/moox-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
 
 start_cloudnode() {

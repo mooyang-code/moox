@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestLoadAppliesDefaultsAndValidatesRequiredConfiguration(t *testing.T) {
@@ -21,9 +20,6 @@ func TestLoadAppliesDefaultsAndValidatesRequiredConfiguration(t *testing.T) {
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.ControlPlane.RefreshInterval != 15*time.Second {
-		t.Fatalf("refresh = %v", cfg.ControlPlane.RefreshInterval)
 	}
 	if cfg.Server.ServiceAddr != "127.0.0.1:11002" || cfg.Server.HealthAddr != "127.0.0.1:11012" {
 		t.Fatalf("addresses = %+v", cfg.Server)
@@ -50,6 +46,17 @@ func TestLoadAppliesDefaultsAndValidatesRequiredConfiguration(t *testing.T) {
 				t.Fatal("Load() succeeded with missing required value")
 			}
 		})
+	}
+}
+
+func TestCheckedInConfigDoesNotOwnRouteRefreshSchedule(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config", "app.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyKey := "refresh_" + "interval"
+	if strings.Contains(string(data), legacyKey) {
+		t.Fatalf("checked-in app config contains legacy key %q", legacyKey)
 	}
 }
 

@@ -7,7 +7,6 @@ server:
 
 control_plane:
   base_url: https://admin.example.com
-  refresh_interval: 15s
   hmac_key_file: ./secrets/gateway-control.key
 
 auth:

@@ -133,6 +133,11 @@ fi
 
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/admin/config/"
 cp -R "${ROOT}/modules/gateway/config/." "${RELEASE_ROOT}/gateway/config/"
+[[ -f "${RELEASE_ROOT}/gateway/config/trpc_go.yaml" ]] || { echo "missing Gateway tRPC Timer config" >&2; exit 1; }
+if grep -q 'refresh_interval' "${RELEASE_ROOT}/gateway/config/app.yaml"; then
+  echo "obsolete Gateway refresh_interval remains in release config" >&2
+  exit 1
+fi
 cp -R "${ROOT}/modules/eventbus/config/." "${RELEASE_ROOT}/eventbus/config/"
 cp -R "${ROOT}/modules/cloudnode/config/." "${RELEASE_ROOT}/cloudnode/config/"
 cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/collector/config/"

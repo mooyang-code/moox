@@ -12,8 +12,10 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config/app.yaml", "gateway configuration file")
+	configPath := flag.String("config", "config/app.yaml", "gateway application configuration file")
+	frameworkConfigPath := flag.String("conf", "config/trpc_go.yaml", "tRPC framework configuration file")
 	flag.Parse()
+	trpc.ServerConfigPath = *frameworkConfigPath
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("load gateway configuration: %v", err)

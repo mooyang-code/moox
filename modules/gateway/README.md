@@ -19,7 +19,7 @@ database or proxies to another machine. See the canonical
 
 - Service endpoint: `127.0.0.1:11002`
 - Local diagnostics: `127.0.0.1:11012`
-- Control-plane refresh: every 15 seconds by default
+- Control-plane refresh: every 15 seconds through `trpc.moox.gateway.route_refresh.timer`
 - Route cache: `<store.path>/routes.json`
 - Persistent replay store: `<store.path>/nonces`
 
@@ -43,12 +43,12 @@ bundle.
 
 ## Configuration
 
-Start from `config/app.yaml`. The node ID must match the Admin gateway-node
+Start from `config/app.yaml` and `config/trpc_go.yaml`. The node ID must match the Admin gateway-node
 record. Admin may use HTTPS, or plaintext HTTP only on a loopback address. The
 service and health listeners are deliberately fixed to loopback.
 
 ```bash
-go run ./cmd/server --config config/app.yaml
+go run ./cmd/server -config=config/app.yaml -conf=config/trpc_go.yaml
 ```
 
 Only these local diagnostic routes are served:

@@ -3,11 +3,9 @@ global:
   env_name: development
 server:
   service:
-    - name: trpc.moox.gateway.service
-      network: tcp
-      protocol: http
-      address: 127.0.0.1:11002
-    - name: trpc.moox.gateway.health
-      network: tcp
-      protocol: http
-      address: 127.0.0.1:11012
+    - name: trpc.moox.gateway.route_refresh.timer
+      ip: 127.0.0.1
+      port: 11013
+      network: "*/15 * * * * *"
+      protocol: timer
+      timeout: 10000

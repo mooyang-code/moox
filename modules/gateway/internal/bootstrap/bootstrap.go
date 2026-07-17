@@ -234,6 +234,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err := runtime.Initialize(ctx); err != nil {
 		return err
 	}
+	timerServer := trpc.NewServer()
+	if err := registerRouteRefreshTimer(timerServer, runtime); err != nil {
+		return err
+	}
 	state.SetStorageCheck(func() error {
 		if err := routeStore.Check(); err != nil {
 			return err
@@ -258,25 +262,35 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	serviceServer := newServiceHTTPServer(serviceHandler)
 	healthServer := newHealthHTTPServer(state.Handler())
-	serverErrors := make(chan error, 2)
-	go serve(serviceServer, serviceListener, serverErrors)
-	go serve(healthServer, healthListener, serverErrors)
-	ticker := time.NewTicker(cfg.ControlPlane.RefreshInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
-			defer cancel()
-			_ = serviceServer.Shutdown(shutdownCtx)
-			_ = healthServer.Shutdown(shutdownCtx)
-			return nil
-		case err := <-serverErrors:
-			return err
-		case <-ticker.C:
-			_ = runtime.Refresh(ctx)
+	serverResults := make(chan serverResult, 3)
+	go serveHTTP("gateway service", serviceServer, serviceListener, serverResults)
+	go serveHTTP("gateway health", healthServer, healthListener, serverResults)
+	go func() {
+		serverResults <- serverResult{name: "gateway timer", err: timerServer.Serve()}
+	}()
+
+	var firstErr error
+	completed := 0
+	select {
+	case <-ctx.Done():
+	case result := <-serverResults:
+		completed = 1
+		if result.err != nil && !errors.Is(result.err, context.Canceled) {
+			firstErr = fmt.Errorf("%s server: %w", result.name, result.err)
+		} else {
+			firstErr = fmt.Errorf("%s server stopped unexpectedly", result.name)
 		}
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(trpc.CloneContext(ctx), 5*time.Second)
+	defer cancel()
+	shutdownErr := errors.Join(serviceServer.Shutdown(shutdownCtx), healthServer.Shutdown(shutdownCtx))
+	_ = timerServer.Close(nil)
+	for completed < 3 {
+		<-serverResults
+		completed++
+	}
+	return errors.Join(firstErr, shutdownErr)
 }
 
 func newServiceHTTPServer(handler http.Handler) *http.Server {
@@ -299,8 +313,15 @@ func newHealthHTTPServer(handler http.Handler) *http.Server {
 	}
 }
 
-func serve(server *http.Server, listener net.Listener, errorsOut chan<- error) {
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		errorsOut <- err
+type serverResult struct {
+	name string
+	err  error
+}
+
+func serveHTTP(name string, server *http.Server, listener net.Listener, results chan<- serverResult) {
+	err := server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
 	}
+	results <- serverResult{name: name, err: err}
 }

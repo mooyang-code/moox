@@ -10,17 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	ServiceAddress               = "127.0.0.1:11002"
-	HealthAddress                = "127.0.0.1:11012"
-	DefaultRefreshInterval       = 15 * time.Second
-	DefaultMaxBodyBytes    int64 = 4 << 20
+	ServiceAddress            = "127.0.0.1:11002"
+	HealthAddress             = "127.0.0.1:11012"
+	DefaultMaxBodyBytes int64 = 4 << 20
 )
 
 type Config struct {
@@ -32,10 +30,9 @@ type Config struct {
 		HealthAddr  string `yaml:"health_addr"`
 	} `yaml:"server"`
 	ControlPlane struct {
-		BaseURL         string        `yaml:"base_url"`
-		RefreshInterval time.Duration `yaml:"-"`
-		HMACKeyFile     string        `yaml:"hmac_key_file"`
-		CAFile          string        `yaml:"ca_file"`
+		BaseURL     string `yaml:"base_url"`
+		HMACKeyFile string `yaml:"hmac_key_file"`
+		CAFile      string `yaml:"ca_file"`
 	} `yaml:"control_plane"`
 	Auth struct {
 		HMACKeyFile string `yaml:"hmac_key_file"`
@@ -57,10 +54,9 @@ type fileConfig struct {
 		HealthAddr  string `yaml:"health_addr"`
 	} `yaml:"server"`
 	ControlPlane struct {
-		BaseURL         string `yaml:"base_url"`
-		RefreshInterval string `yaml:"refresh_interval"`
-		HMACKeyFile     string `yaml:"hmac_key_file"`
-		CAFile          string `yaml:"ca_file"`
+		BaseURL     string `yaml:"base_url"`
+		HMACKeyFile string `yaml:"hmac_key_file"`
+		CAFile      string `yaml:"ca_file"`
 	} `yaml:"control_plane"`
 	Auth struct {
 		HMACKeyFile string `yaml:"hmac_key_file"`
@@ -101,14 +97,6 @@ func Load(path string) (Config, error) {
 	cfg.Auth.HMACKeyFile = resolvePath(path, raw.Auth.HMACKeyFile)
 	cfg.Store.Path = resolvePath(path, raw.Store.Path)
 	cfg.Proxy.MaxBodyBytes = raw.Proxy.MaxBodyBytes
-	if raw.ControlPlane.RefreshInterval == "" {
-		cfg.ControlPlane.RefreshInterval = DefaultRefreshInterval
-	} else {
-		cfg.ControlPlane.RefreshInterval, err = time.ParseDuration(raw.ControlPlane.RefreshInterval)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse control_plane.refresh_interval: %w", err)
-		}
-	}
 	if cfg.Proxy.MaxBodyBytes == 0 {
 		cfg.Proxy.MaxBodyBytes = DefaultMaxBodyBytes
 	}
@@ -133,9 +121,6 @@ func Validate(cfg Config) error {
 	}
 	if err := ValidateBaseURL(cfg.ControlPlane.BaseURL); err != nil {
 		return fmt.Errorf("control_plane.base_url: %w", err)
-	}
-	if cfg.ControlPlane.RefreshInterval <= 0 {
-		return errors.New("control_plane.refresh_interval must be positive")
 	}
 	if err := ValidateKeyFile(cfg.ControlPlane.HMACKeyFile); err != nil {
 		return fmt.Errorf("control_plane.hmac_key_file: %w", err)
