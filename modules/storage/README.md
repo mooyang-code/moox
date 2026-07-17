@@ -186,10 +186,12 @@ storage:
 | `view_index` | 唯一物理 owner；管理每个 View/槽位的 DuckDB 文件与 Bleve 目录，并提供内部生命周期和查询 RPC。 |
 | `view_builder` | 消费行变更事件，向 owner 双写活动/构建槽位，并执行有租约、可续跑的维护状态机。 |
 | `view_query` | 对外提供 DataView；读取元数据中的 `active_index_id` 并通过 owner 查询。 |
-| `view` | 开发模式组合角色，在一个进程内承载 owner、builder 和 query，但仍通过相同接口分层。 |
+| `view` | 标准部署角色，在一个进程内承载 owner、builder 和 query，但仍通过相同接口分层。 |
 | `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/Access RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
 
 默认运行角色是 `access + view`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
+
+标准部署将 Access 和 View 分为 `storage-access`、`storage-view` 两个进程。`storage-view` 使用 `config/storage_view/trpc_go.yaml` 作为唯一配置文件，其中同时声明 tRPC listener/client、`roles: [view]`、JetStream、ViewIndex 路径和维护参数；不再发布独立的 builder、query、index 进程配置。
 
 仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递事件，不提供写后立即可查派生结果的契约。分布式部署或希望持久化事件时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
@@ -547,7 +549,7 @@ primary_store_routes:
 
 `moox-storage` 二进制只注册 `storage.roles` 启用的服务。常见拆分：
 
-- **View 节点**：启用 `view` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve；多副本时用独立 durable consumer 名或隔离结果目录。
+- **View 节点**：启用 `view` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve。当前物理索引是本地单 owner，标准部署只启动一个 `storage-view` 实例。
 - **Archive 节点**：启用 `archive` 角色，消费 NATS 行变更事件，并通过 Metadata/Access RPC 读取元数据与主存事实数据；后续 Parquet 归档策略在该角色内补齐，不放在 view 进程中。
 - 元数据 SQLite 是控制面单点，建议集中在 Access/控制节点；独立 view/archive 节点通过 RPC 访问 Metadata/Access。
 

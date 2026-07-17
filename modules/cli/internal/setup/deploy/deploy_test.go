@@ -62,8 +62,7 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"package", "upload", "install_storage", "storage_access_ready", "storage_view_index_ready",
-		"storage_view_builder_ready", "storage_view_query_ready", "finalize_storage", "cleanup",
+		"package", "upload", "install_storage", "storage_access_ready", "storage_view_ready", "finalize_storage", "cleanup",
 	}, events)
 	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
 }

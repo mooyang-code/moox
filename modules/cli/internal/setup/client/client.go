@@ -25,7 +25,7 @@ const (
 )
 
 var storageDeploymentNames = []string{
-	"storage_metadata", "storage_access", "storage_view", "storage_view_builder", "storage_view_query", "storage_view_index",
+	"storage_metadata", "storage_access", "storage_view",
 	"storage_metadata_trpc", "storage_primary_trpc", "storage_access_trpc", "storage_view_trpc",
 }
 

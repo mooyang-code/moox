@@ -98,23 +98,13 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["storage_access"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage_access extra_config = %s", byName["storage_access"].ExtraConfig)
 	}
-	if healthURL(byName["storage_view"].ExtraConfig) != "http://127.0.0.1:20212/readyz" {
+	if healthURL(byName["storage_view"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
 		t.Fatalf("storage_view extra_config = %s", byName["storage_view"].ExtraConfig)
 	}
-	if healthURL(byName["storage_view_builder"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
-		t.Fatalf("storage_view_builder extra_config = %s", byName["storage_view_builder"].ExtraConfig)
-	}
-	if healthURL(byName["storage_view_query"].ExtraConfig) != "http://127.0.0.1:20212/readyz" {
-		t.Fatalf("storage_view_query extra_config = %s", byName["storage_view_query"].ExtraConfig)
-	}
-	if byName["storage_view_query"].Port != 20202 {
-		t.Fatalf("storage_view_query port = %d, want DataView HTTP 20202", byName["storage_view_query"].Port)
-	}
-	if healthURL(byName["storage_view_index"].ExtraConfig) != "http://127.0.0.1:20213/readyz" {
-		t.Fatalf("storage_view_index extra_config = %s", byName["storage_view_index"].ExtraConfig)
-	}
-	if byName["storage_view_index"].Port != 20104 || byName["storage_view_index"].Protocol != "trpc" {
-		t.Fatalf("storage_view_index endpoint = %s/%d, want trpc/20104", byName["storage_view_index"].Protocol, byName["storage_view_index"].Port)
+	for _, name := range []string{"storage_view_builder", "storage_view_query", "storage_view_index"} {
+		if _, exists := byName[name]; exists {
+			t.Fatalf("obsolete split View deployment %s must not be registered", name)
+		}
 	}
 	if healthURL(byName["trade_account"].ExtraConfig) != "" {
 		t.Fatalf("trade_account should not default to local health_url: %s", byName["trade_account"].ExtraConfig)

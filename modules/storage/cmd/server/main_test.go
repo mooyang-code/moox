@@ -91,7 +91,7 @@ func TestStorageHealthSnapshot(t *testing.T) {
 		t.Fatalf("create metadata file: %v", err)
 	}
 	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state)(context.Background())
+	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{eventbus: fakeReadyState(true), view: fakeReadyState(true)})(context.Background())
 
 	if rsp.Module != "storage" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
@@ -110,7 +110,7 @@ func TestStorageHealthSnapshotNamesSplitViewQueryRole(t *testing.T) {
 		t.Fatalf("create metadata file: %v", err)
 	}
 	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state)(context.Background())
+	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
 
 	if rsp.Service != "storage-view-query" {
 		t.Fatalf("Service = %q, want storage-view-query", rsp.Service)
@@ -129,7 +129,7 @@ func TestStorageHealthSnapshotNamesViewIndexOwnerRole(t *testing.T) {
 		t.Fatalf("create metadata file: %v", err)
 	}
 	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state)(context.Background())
+	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
 
 	if rsp.Service != "storage-view-index" {
 		t.Fatalf("Service = %q, want storage-view-index", rsp.Service)
@@ -139,8 +139,32 @@ func TestStorageHealthSnapshotNamesViewIndexOwnerRole(t *testing.T) {
 func TestStorageHealthSnapshotReportsMissingDependencies(t *testing.T) {
 	cfg := storageconfig.StorageConfig{Roles: []string{"access"}}
 	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state)(context.Background())
+	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
 	}
 }
+
+func TestStorageHealthSnapshotRequiresUnifiedViewRuntimeAndEventBus(t *testing.T) {
+	cfg := storageconfig.StorageConfig{
+		Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"view"},
+	}
+	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
+		t.Fatalf("create metadata file: %v", err)
+	}
+	state := health.New("storage", "storage-view", "", "")
+	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{eventbus: fakeReadyState(false)})(context.Background())
+	if rsp.Service != "storage-view" || rsp.InstanceID != "storage-view" {
+		t.Fatalf("health identity = %q/%q, want storage-view/storage-view", rsp.Service, rsp.InstanceID)
+	}
+	if rsp.Ready {
+		t.Fatalf("health response = %+v, want not ready", rsp)
+	}
+	if rsp.Details["eventbus_ready"] != false || rsp.Details["view_runtime_ready"] != false {
+		t.Fatalf("health details = %+v", rsp.Details)
+	}
+}
+
+type fakeReadyState bool
+
+func (s fakeReadyState) Ready() bool { return bool(s) }

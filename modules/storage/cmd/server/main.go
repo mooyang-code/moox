@@ -97,14 +97,16 @@ func main() {
 		exitWithStartupError("register host metrics cleanup timer", err)
 	}
 
+	var runtimeView *viewRuntime
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
-		viewRuntime, err := registerViewRole(s, cfg.Storage, rowsChangedBus, storageService, accessReader)
+		var err error
+		runtimeView, err = registerViewRole(s, cfg.Storage, rowsChangedBus, storageService, accessReader)
 		if err != nil {
 			exitWithStartupError("初始化 ViewService 失败", err)
 		}
 		log.Infof("View role initialized")
 		defer func() {
-			if err := viewRuntime.Close(); err != nil {
+			if err := runtimeView.Close(); err != nil {
 				log.Errorf("关闭 view runtime 失败: %v", err)
 			}
 		}()
@@ -139,7 +141,10 @@ func main() {
 		}()
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
-	if err := registerStorageHealth(s, cfg.Storage); err != nil {
+	if err := registerStorageHealth(s, cfg.Storage, storageHealthDependencies{
+		eventbus: rowsChangedBus,
+		view:     viewRuntimeReadiness{runtime: runtimeView, storage: cfg.Storage},
+	}); err != nil {
 		exitWithStartupError("register storage health service", err)
 	}
 	registerStorageMetricsReporter(s, cfg.Storage)

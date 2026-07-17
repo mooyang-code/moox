@@ -34,10 +34,7 @@ func TestHostMetricsCleanupTimerConfigs(t *testing.T) {
 	}{
 		{path: "../../config/trpc_go.yaml", want: true},
 		{path: "../../config/trpc_go.access.yaml", want: true},
-		{path: "../../config/trpc_go.view.yaml"},
-		{path: "../../config/trpc_go.view_builder.yaml"},
-		{path: "../../config/trpc_go.view_index.yaml"},
-		{path: "../../config/trpc_go.view_query.yaml"},
+		{path: "../../config/storage_view/trpc_go.yaml"},
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			raw, err := os.ReadFile(test.path)

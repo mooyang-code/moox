@@ -60,6 +60,7 @@ verify-custom-setup:
 	bash scripts/test-deploy-moox-admin-bootstrap.sh
 	bash scripts/test-deploy-moox-control-profile.sh
 	bash scripts/test-deploy-moox-storage-profile.sh
+	bash scripts/test-deploy-moox-storage-view.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 
 test-caddy:

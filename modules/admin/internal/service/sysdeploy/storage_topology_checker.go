@@ -17,7 +17,6 @@ func storageTopologyWarnings(serviceName string) []*pb.ServiceDeploymentWarning 
 func isStorageDeployment(serviceName string) bool {
 	switch serviceName {
 	case "storage_metadata", "storage_access", "storage_view",
-		"storage_view_builder", "storage_view_query", "storage_view_index",
 		"storage_metadata_trpc", "storage_primary_trpc", "storage_access_trpc", "storage_view_trpc":
 		return true
 	default:

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-deploy-storage-split.XXXXXX")"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-deploy-storage-view.XXXXXX")"
 DEPLOY_DIR="${TMP_ROOT}/deploy"
 STAGE_DIR="${TMP_ROOT}/stage"
 CREATED_BINARIES=()
@@ -98,13 +98,13 @@ chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
 printf 'control-secret' >"${TMP_ROOT}/control.key"
 printf 'service-secret' >"${TMP_ROOT}/service.key"
 chmod 0600 "${TMP_ROOT}/control.key" "${TMP_ROOT}/service.key"
-openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=storage-split-one \
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=storage-view-one \
   -keyout "${TMP_ROOT}/ca-one.key" -out "${TMP_ROOT}/ca-one.crt" -days 1 >/dev/null 2>&1
-openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=storage-split-two \
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=storage-view-two \
   -keyout "${TMP_ROOT}/ca-two.key" -out "${TMP_ROOT}/ca-two.crt" -days 1 >/dev/null 2>&1
 cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
 GATEWAY_ARGS=(
-  --node-id storage-split
+  --node-id storage-view
   --gateway-control-url http://127.0.0.1:11000
   --gateway-ca-bundle "${TMP_ROOT}/peers.pem"
   --gateway-control-key-file "${TMP_ROOT}/control.key"
@@ -124,8 +124,11 @@ GATEWAY_ARGS=(
   --no-monitor \
   "${GATEWAY_ARGS[@]}" >/dev/null
 
-for binary in moox-storage-access moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
+for binary in moox-storage-access moox-storage-view; do
   assert_file "${DEPLOY_DIR}/bin/${binary}"
+done
+for binary in moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
+  assert_missing "${DEPLOY_DIR}/bin/${binary}"
 done
 
 assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
@@ -155,52 +158,47 @@ assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthchec
 
 assert_grep 'start_storage_process "storage-access" "moox-storage-access"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'storage\.access\.yaml' "${DEPLOY_DIR}/start.sh"
-assert_grep 'start_storage_process "storage-view-index" "moox-storage-view-index"' "${DEPLOY_DIR}/start.sh"
-assert_grep 'storage\.view_index\.yaml' "${DEPLOY_DIR}/start.sh"
-assert_grep 'start_storage_process "storage-view-builder" "moox-storage-view-builder"' "${DEPLOY_DIR}/start.sh"
-assert_grep 'storage\.view_builder\.yaml' "${DEPLOY_DIR}/start.sh"
-assert_grep 'start_storage_process "storage-view-query" "moox-storage-view-query"' "${DEPLOY_DIR}/start.sh"
-assert_grep 'storage\.view_query\.yaml' "${DEPLOY_DIR}/start.sh"
+assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
+assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
+assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"
+assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
+if grep -Eq 'storage-view-(index|builder|query)|storage\.view_(index|builder|query)\.yaml' "${DEPLOY_DIR}/start.sh"; then
+  echo "split View processes must not remain in start.sh" >&2
+  exit 1
+fi
 
 assert_order "${DEPLOY_DIR}/start.sh" \
   '^  start_storage_access$' \
-  '^  start_storage_view_index$' \
-  '^  start_storage_view_builder$' \
-  '^  start_storage_view_query$'
+  '^  start_storage_view$'
 assert_order "${DEPLOY_DIR}/stop.sh" \
-  'stop_service "storage-view-query"' \
-  'stop_service "storage-view-builder"' \
-  'stop_service "storage-view-index"' \
+  'stop_service "storage-view"' \
   'stop_service "storage-access"'
 
-for conf in storage.access.yaml storage.view_index.yaml storage.view_builder.yaml storage.view_query.yaml; do
-  assert_grep 'root: \.\./data/storage' "${DEPLOY_DIR}/storage/config/${conf}"
-  assert_grep 'path: \.\./data/storage/metadata/storage_metadata\.db' "${DEPLOY_DIR}/storage/config/${conf}"
-  assert_grep 'pebble_path: \.\./data/storage/pebble' "${DEPLOY_DIR}/storage/config/${conf}"
-done
-
-assert_grep 'view_index_root: \.\./data/storage/view-indexes' "${DEPLOY_DIR}/storage/config/storage.view_index.yaml"
-if grep -Eq 'view_index_root:' "${DEPLOY_DIR}/storage/config/storage.view_builder.yaml" "${DEPLOY_DIR}/storage/config/storage.view_query.yaml"; then
-  echo "builder/query configs must not own view_index_root" >&2
+assert_file "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+[[ $(find "${DEPLOY_DIR}/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]] || {
+  echo "storage-view must read exactly one YAML config" >&2
   exit 1
-fi
-if grep -ERq 'duckdb_path:|bleve_path:|rotation:|op=rotate' "${DEPLOY_DIR}/storage/config"; then
+}
+assert_grep 'root: \.\./data/storage' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'path: \.\./data/storage/metadata/storage_metadata\.db' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'view_index_root: \.\./data/storage/view-indexes' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep '^    - view$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+if grep -ERq 'duckdb_path:|bleve_path:|rotation:|op=rotate' "${DEPLOY_DIR}/storage" "${DEPLOY_DIR}/storage-view"; then
   echo "legacy View index configuration remains in deployment package" >&2
   exit 1
 fi
 
 assert_grep 'enabled: true' "${DEPLOY_DIR}/storage/config/storage.access.yaml"
 assert_grep 'log_path: \.\./logs/storage-access' "${DEPLOY_DIR}/storage/config/trpc_go.access.yaml"
-assert_grep 'log_path: \.\./logs/storage-view-index' "${DEPLOY_DIR}/storage/config/trpc_go.view_index.yaml"
-assert_grep 'log_path: \.\./logs/storage-view-builder' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
-assert_grep 'log_path: \.\./logs/storage-view-query' "${DEPLOY_DIR}/storage/config/trpc_go.view_query.yaml"
-assert_grep 'port: 20104' "${DEPLOY_DIR}/storage/config/trpc_go.view_index.yaml"
-assert_grep 'scheduler=viewBuilderSchedule&startAtOnce=1' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
-if grep -Eq '[?&](params|disable|location)=' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"; then
+assert_grep 'log_path: \.\./logs/storage-view' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'port: 20104' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'port: 20202' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'scheduler=viewBuilderSchedule&startAtOnce=1' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+if grep -Eq '[?&](params|disable|location)=' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"; then
   echo "view builder timer contains options unsupported by the official tRPC timer" >&2
   exit 1
 fi
-assert_grep 'timeout: 900000' "${DEPLOY_DIR}/storage/config/trpc_go.view_builder.yaml"
+assert_grep 'timeout: 900000' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 
 assert_file "${DEPLOY_DIR}/reset-storage-view-indexes.sh"
 RESET_ROOT="${TMP_ROOT}/reset-storage"
@@ -246,4 +244,4 @@ if "${DEPLOY_DIR}/reset-storage-view-indexes.sh" --root "${TMP_ROOT}/unsafe-stor
 	exit 1
 fi
 
-echo "storage four-process deployment package verified"
+echo "storage access plus unified storage-view deployment package verified"

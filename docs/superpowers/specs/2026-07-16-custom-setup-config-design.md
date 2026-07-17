@@ -200,8 +200,9 @@ hosts. The CLI does not infer a default, so `setup deploy-storage --host` is
 required even when the user chooses `control_host`.
 
 The Storage deployment is one indivisible initial unit containing
-`storage-access`, `storage-view-index`, `storage-view-builder`, and
-`storage-view-query`. All four components run on the selected host. The unit is
+`storage-access` and the unified `storage-view` service. Both processes run on
+the selected host. `storage-view` owns indexing, materialization, and query
+behind one `trpc_go.yaml`. The unit is
 installed under `~/moox/storage`, separate from the control deployment at
 `~/moox/prod`, so choosing the control host cannot replace Admin, Gateway, or
 Web. After readiness succeeds, the CLI updates the Storage service placement
@@ -356,7 +357,7 @@ The Skill must:
 10. Run `setup hosts` and ask the user in natural language which listed host
     should run Storage. Do not silently default to the control host.
 11. Run `setup deploy-storage --host <selected-name>` and require readiness for
-    all four Storage components before continuing.
+    both Storage processes before continuing.
 12. Run `metadata spaces` against the default seed, present the available
     business spaces, and let the user choose all, some, or no spaces.
 13. If the selection is non-empty, translate names to stable Space IDs and run
@@ -406,8 +407,8 @@ then a real remote control host:
 6. The public login API accepts the configured account, and the user can log in
    through the browser.
 7. `custom.toml` has the same bytes, owner, and `0600` mode after the workflow.
-8. The user can choose control or another listed host; all four Storage
-   components become ready there without replacing the control deployment.
+8. The user can choose control or another listed host; both Storage processes
+   become ready there without replacing the control deployment.
 9. The metadata catalog is shown only after Storage readiness, and importing a
    subset creates resources only for the selected Spaces and their complete
    dependencies.

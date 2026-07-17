@@ -37,22 +37,20 @@ type Packager interface {
 type ReadinessStage string
 
 const (
-	AdminReady              ReadinessStage = "admin_ready"
-	SetupReady              ReadinessStage = "setup_ready"
-	GatewayReady            ReadinessStage = "gateway_ready"
-	WebReady                ReadinessStage = "web_ready"
-	BrowserHTTPSReady       ReadinessStage = "browser_https_ready"
-	StorageAccessReady      ReadinessStage = "storage_access_ready"
-	StorageViewIndexReady   ReadinessStage = "storage_view_index_ready"
-	StorageViewBuilderReady ReadinessStage = "storage_view_builder_ready"
-	StorageViewQueryReady   ReadinessStage = "storage_view_query_ready"
+	AdminReady         ReadinessStage = "admin_ready"
+	SetupReady         ReadinessStage = "setup_ready"
+	GatewayReady       ReadinessStage = "gateway_ready"
+	WebReady           ReadinessStage = "web_ready"
+	BrowserHTTPSReady  ReadinessStage = "browser_https_ready"
+	StorageAccessReady ReadinessStage = "storage_access_ready"
+	StorageViewReady   ReadinessStage = "storage_view_ready"
 )
 
 type Probe interface {
 	Wait(context.Context, setupssh.Client, ReadinessStage, Options) error
 }
 
-// Storage deploys the four Storage processes as one independently managed unit.
+// Storage deploys Access and the unified View runtime as one independently managed unit.
 // It uses a separate install directory so selecting the control host cannot
 // replace the Admin/Gateway/Web deployment.
 func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps Dependencies) (returnErr error) {
@@ -103,7 +101,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript}, nil)
 		}
 	}()
-	for _, stage := range []ReadinessStage{StorageAccessReady, StorageViewIndexReady, StorageViewBuilderReady, StorageViewQueryReady} {
+	for _, stage := range []ReadinessStage{StorageAccessReady, StorageViewReady} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
 			return fmt.Errorf("storage_deploy_not_ready")
 		}
@@ -375,12 +373,8 @@ func probeCommand(stage ReadinessStage) string {
 		return `curl -fsS --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null`
 	case StorageAccessReady:
 		return `"$HOME/moox/storage/status.sh" storage-access >/dev/null`
-	case StorageViewIndexReady:
-		return `"$HOME/moox/storage/status.sh" storage-view-index >/dev/null`
-	case StorageViewBuilderReady:
-		return `"$HOME/moox/storage/status.sh" storage-view-builder >/dev/null`
-	case StorageViewQueryReady:
-		return `"$HOME/moox/storage/status.sh" storage-view-query >/dev/null`
+	case StorageViewReady:
+		return `"$HOME/moox/storage/status.sh" storage-view >/dev/null`
 	default:
 		return "false"
 	}

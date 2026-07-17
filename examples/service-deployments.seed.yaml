@@ -78,53 +78,9 @@ services:
     gateway_enabled: false
     scope: public
     status: active
-    description: moox-storage 数据视图 HTTP 服务
-    extra_config:
-      health_url: http://127.0.0.1:20212/readyz
-      health_kind: readiness
-      monitor_enabled: true
-  - name: storage_view_builder
-    kind: storage
-    deployment_mode: process
-    protocol: http
-    host: 127.0.0.1
-    port: 20211
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: moox-storage View 独立进程中的物化职责健康检查
+    description: moox-storage 统一 View 服务，承载索引、物化和查询
     extra_config:
       health_url: http://127.0.0.1:20211/readyz
-      health_kind: readiness
-      monitor_enabled: true
-  - name: storage_view_query
-    kind: storage
-    deployment_mode: process
-    protocol: http
-    host: 127.0.0.1
-    port: 20202
-    gateway_path: trpc.moox.storage.DataView
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: moox-storage View 独立进程中的查询职责
-    extra_config:
-      health_url: http://127.0.0.1:20212/readyz
-      health_kind: readiness
-      monitor_enabled: true
-  - name: storage_view_index
-    kind: storage_rpc
-    deployment_mode: process
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20104
-    gateway_path: trpc.moox.storage.ViewIndex
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: moox-storage View 索引文件唯一 owner
-    extra_config:
-      health_url: http://127.0.0.1:20213/readyz
       health_kind: readiness
       monitor_enabled: true
   - name: eventbus

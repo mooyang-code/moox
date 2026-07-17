@@ -208,6 +208,10 @@ func NewProducerBus(client *jetstream.Client, prefix string) *ProducerBus {
 	}
 }
 
+func (b *ProducerBus) Ready() bool {
+	return b != nil && b.client != nil && b.client.Ready()
+}
+
 func (b *ProducerBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
 	if event == nil {
 		return errors.New("time-series update is nil")

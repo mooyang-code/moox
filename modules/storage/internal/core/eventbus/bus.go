@@ -33,6 +33,7 @@ type Subscriber interface {
 type Bus interface {
 	Publisher
 	Subscriber
+	Ready() bool
 	Close() error
 }
 
@@ -54,6 +55,15 @@ func NewMemoryBus() *MemoryBus {
 	}
 	bus.closeCond = sync.NewCond(&bus.mu)
 	return bus
+}
+
+func (b *MemoryBus) Ready() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.closed
 }
 
 func (b *MemoryBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler TimeSeriesRowsUpdatedHandler) (Subscription, error) {

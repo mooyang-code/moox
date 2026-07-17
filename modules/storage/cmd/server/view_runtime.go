@@ -34,6 +34,27 @@ type viewRuntime struct {
 	search  *searchsvc.Service
 }
 
+type viewRuntimeReadiness struct {
+	runtime *viewRuntime
+	storage storageconfig.StorageConfig
+}
+
+func (r viewRuntimeReadiness) Ready() bool {
+	if r.runtime == nil {
+		return false
+	}
+	if shouldRegisterViewQueryRole(r.storage) && r.runtime.service == nil {
+		return false
+	}
+	if shouldStartViewBuilderRole(r.storage) && (r.runtime.builder == nil || !r.runtime.builder.Ready()) {
+		return false
+	}
+	if shouldStartViewIndexRole(r.storage) && (r.runtime.duck == nil || r.runtime.search == nil) {
+		return false
+	}
+	return true
+}
+
 func (r *viewRuntime) Close() error {
 	if r == nil {
 		return nil

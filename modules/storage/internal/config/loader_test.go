@@ -176,16 +176,14 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 	}
 }
 
-func TestStorageSplitConfigFilesLoadRolesAndHealth(t *testing.T) {
+func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 	tests := []struct {
 		file       string
 		wantRole   string
 		wantHealth string
 	}{
 		{file: "storage.access.yaml", wantRole: "access", wantHealth: ":20210"},
-		{file: "storage.view_builder.yaml", wantRole: "view_builder", wantHealth: ":20211"},
-		{file: "storage.view_query.yaml", wantRole: "view_query", wantHealth: ":20212"},
-		{file: "storage.view_index.yaml", wantRole: "view_index", wantHealth: ":20213"},
+		{file: "storage_view/trpc_go.yaml", wantRole: "view", wantHealth: ":20211"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -204,9 +202,7 @@ func TestStorageSplitConfigFilesLoadRolesAndHealth(t *testing.T) {
 }
 
 func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexRoot(t *testing.T) {
-	files := []string{
-		"storage.yaml", "storage.access.yaml", "storage.view.yaml", "storage.view_builder.yaml", "storage.view_query.yaml", "storage.view_index.yaml",
-	}
+	files := []string{"storage.yaml", "storage.access.yaml", "storage_view/trpc_go.yaml"}
 	for _, file := range files {
 		raw, err := os.ReadFile("../../config/" + file)
 		if err != nil {
@@ -217,9 +213,6 @@ func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexR
 			if strings.Contains(text, legacy) {
 				t.Fatalf("%s still contains legacy key %q", file, legacy)
 			}
-		}
-		if (file == "storage.view_builder.yaml" || file == "storage.view_query.yaml") && strings.Contains(text, "view_index_root:") {
-			t.Fatalf("%s must not own view_index_root", file)
 		}
 	}
 }

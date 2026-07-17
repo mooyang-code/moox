@@ -233,6 +233,15 @@ func (s *Service) Close() error {
 	return err
 }
 
+func (s *Service) Ready() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.run != nil
+}
+
 func (s *Service) clearRun(run *serviceRun) {
 	s.mu.Lock()
 	if s.run == run {

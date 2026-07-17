@@ -11,10 +11,7 @@ func TestPluginConfigsInitialize(t *testing.T) {
 	configs := []string{
 		"../../config/trpc_go.yaml",
 		"../../config/trpc_go.access.yaml",
-		"../../config/trpc_go.view.yaml",
-		"../../config/trpc_go.view_builder.yaml",
-		"../../config/trpc_go.view_index.yaml",
-		"../../config/trpc_go.view_query.yaml",
+		"../../config/storage_view/trpc_go.yaml",
 	}
 	for _, path := range configs {
 		t.Run(path, func(t *testing.T) {

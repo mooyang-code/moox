@@ -86,8 +86,9 @@ name into the deterministic command:
 ./bin/moox-cli setup deploy-storage --file ./custom.toml --host <host-name>
 ```
 
-The initial Storage unit contains `storage-access`, `storage-view-index`,
-`storage-view-builder`, and `storage-view-query` on the same selected machine.
+The initial Storage unit contains `storage-access` and the unified
+`storage-view` process on the same selected machine. The View process owns
+index, materialization, and query responsibilities behind one `trpc_go.yaml`.
 Admin, Gateway, and Web remain on `control_host`. The command also updates the
 Storage endpoints in SysDeploy. Never silently choose a Storage host.
 

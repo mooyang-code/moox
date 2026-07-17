@@ -25,9 +25,11 @@ func TestStorageTopologyWarnings_EmptyService_ShouldReturnWarning(t *testing.T) 
 func TestIsStorageDeployment_KnownNames_ShouldReturnTrue(t *testing.T) {
 	for _, name := range []string{
 		"storage_metadata", "storage_access", "storage_view",
-		"storage_view_builder", "storage_view_query", "storage_view_index",
 	} {
 		assert.True(t, isStorageDeployment(name), name)
+	}
+	for _, name := range []string{"storage_view_builder", "storage_view_query", "storage_view_index"} {
+		assert.False(t, isStorageDeployment(name), name)
 	}
 	assert.False(t, isStorageDeployment("moox_trade"))
 }
