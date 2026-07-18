@@ -45,25 +45,20 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 	}
 	_, err = js.AddStream(&nats.StreamConfig{
 		Name: "MOOX_STORAGE", Subjects: []string{
-			infraeventbus.DefaultTimeSeriesRowsUpdatedSubject,
-			infraeventbus.DefaultRecordRowsUpdatedSubject,
+			infraeventbus.DefaultTimeSeriesRowsCommittedSubject,
+			infraeventbus.DefaultRecordRowsCommittedSubject,
 		}, Storage: nats.FileStorage,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	const ackWait = 3 * time.Second
-	for _, consumer := range []struct{ durable, subject string }{
-		{"storage_view_builder_time_series_rows_updated_v1", infraeventbus.DefaultTimeSeriesRowsUpdatedSubject},
-		{"storage_view_builder_record_rows_updated_v1", infraeventbus.DefaultRecordRowsUpdatedSubject},
-	} {
-		_, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{
-			Name: consumer.durable, Durable: consumer.durable, FilterSubject: consumer.subject,
-			AckPolicy: nats.AckExplicitPolicy, AckWait: ackWait, MaxDeliver: -1, MaxAckPending: 128,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+	const durable = "storage_view_builder_rows_committed_v1"
+	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{
+		Name: durable, Durable: durable, FilterSubject: infraeventbus.RowsCommittedSubjectWildcard(infraeventbus.DefaultSubjectPrefix),
+		AckPolicy: nats.AckExplicitPolicy, AckWait: ackWait, MaxDeliver: -1, MaxAckPending: 128,
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	client, err := jetstream.Connect(context.Background(), jetstream.ConfigFromEnv([]string{ns.ClientURL()}, "storage-view-reliability-e2e"))
@@ -130,8 +125,8 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-17T00:00:00Z"},
 		Columns: []*pb.ColumnValue{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: doubleValue(1)}},
 	}
-	if err := bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{
-		MessageId: "duck-retry-1", SpaceId: "crypto", DatasetId: "spot", Rows: []*pb.TimeSeriesRow{timeRow},
+	if err := bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{
+		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "spot", Writes: []*pb.TimeSeriesRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: timeRow}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -139,8 +134,8 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		Key:     &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "2026-07-17T00:00:00Z"},
 		Columns: []*pb.ColumnValue{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: doubleValue(2)}},
 	}
-	if err := bus.PublishRecordRowsUpdated(context.Background(), &pb.RecordRowsUpdated{
-		MessageId: "bleve-retry-1", SpaceId: "crypto", DatasetId: "news", Rows: []*pb.RecordRow{recordRow},
+	if err := bus.PublishRecordRowsCommitted(context.Background(), &pb.RecordRowsCommitted{
+		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "news", Writes: []*pb.RecordRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: recordRow}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -151,15 +146,10 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		return duckErr == nil && bleveErr == nil && duckStats.EntryCount == 1 && bleveStats.EntryCount == 1 &&
 			duckFailOnce.Attempts() >= 2 && bleveFailOnce.Attempts() >= 2
 	})
-	for _, durable := range []string{
-		"storage_view_builder_time_series_rows_updated_v1",
-		"storage_view_builder_record_rows_updated_v1",
-	} {
-		waitFor(t, 5*time.Second, func() bool {
-			info, infoErr := js.ConsumerInfo("MOOX_STORAGE", durable)
-			return infoErr == nil && info.NumAckPending == 0 && info.NumPending == 0
-		})
-	}
+	waitFor(t, 5*time.Second, func() bool {
+		info, infoErr := js.ConsumerInfo("MOOX_STORAGE", durable)
+		return infoErr == nil && info.NumAckPending == 0 && info.NumPending == 0
+	})
 
 	duckStats, _ := duck.Stat(context.Background(), duckIndex)
 	bleveStats, _ := bleve.Stat(context.Background(), bleveIndex)

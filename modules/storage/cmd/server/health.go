@@ -41,7 +41,7 @@ func storageHealthSnapshot(storage storageconfig.StorageConfig, state *health.St
 		rootReady := storage.Root != "" && pathExists(storage.Root)
 		metadataRequired := roleSummary != "view_index"
 		metadataReady := !metadataRequired || (storage.Metadata.Path != "" && pathExists(storage.Metadata.Path))
-		eventbusReady := !needsRowsUpdatedBus(storage) || (deps.eventbus != nil && deps.eventbus.Ready())
+		eventbusReady := !needsRowsCommittedBus(storage) || (deps.eventbus != nil && deps.eventbus.Ready())
 		viewRequired := shouldRegisterViewQueryRole(storage) || shouldStartViewBuilderRole(storage) || shouldStartViewIndexRole(storage)
 		viewRuntimeReady := !viewRequired || (deps.view != nil && deps.view.Ready())
 		ready := rootReady && metadataReady && eventbusReady && viewRuntimeReady

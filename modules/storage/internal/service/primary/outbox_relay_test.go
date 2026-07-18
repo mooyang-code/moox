@@ -101,7 +101,7 @@ type sequencePublisher struct {
 	calls int
 }
 
-func (p *sequencePublisher) PublishEnvelope(context.Context, []byte) error {
+func (p *sequencePublisher) PublishMessage(context.Context, []byte) error {
 	idx := p.calls
 	p.calls++
 	if idx >= len(p.errs) {
@@ -110,14 +110,6 @@ func (p *sequencePublisher) PublishEnvelope(context.Context, []byte) error {
 	return p.errs[idx]
 }
 
-func (p *relayTestPublisher) PublishEnvelope(context.Context, []byte) error {
+func (p *relayTestPublisher) PublishMessage(context.Context, []byte) error {
 	return p.err
-}
-
-func (p *relayTestPublisher) PublishEnvelopes(ctx context.Context, data [][]byte) []error {
-	out := make([]error, len(data))
-	for i := range data {
-		out[i] = p.err
-	}
-	return out
 }

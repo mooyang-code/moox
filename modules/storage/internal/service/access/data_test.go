@@ -305,7 +305,7 @@ func TestScanRecordDatasetReturnsSortedRows(t *testing.T) {
 func TestReportViewErrorDelegatesToReporter(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
-	_, err := bus.SubscribeTimeSeriesRowsUpdated(ctx, func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+	_, err := bus.SubscribeTimeSeriesRowsCommitted(ctx, func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 		return errors.New("publish failed")
 	})
 	require.NoError(t, err)
@@ -334,7 +334,7 @@ func TestReportViewErrorDelegatesToReporter(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Equal(t, "time_series_rows_updated", reportedStage)
+	assert.Equal(t, "time_series_rows_committed", reportedStage)
 }
 
 func TestWriteRoutedRowsUsesMessageWriter(t *testing.T) {
@@ -660,7 +660,7 @@ func TestWriteTimeSeriesRowsRoutesAndPublishes(t *testing.T) {
 	}
 
 	var published int
-	_, err := bus.SubscribeTimeSeriesRowsUpdated(ctx, func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+	_, err := bus.SubscribeTimeSeriesRowsCommitted(ctx, func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 		published++
 		return nil
 	})

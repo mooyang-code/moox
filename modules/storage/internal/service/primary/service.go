@@ -20,12 +20,12 @@ type Options struct {
 	Root       string
 	PebblePath string
 	Pebble     device.FactStore
-	Publisher  EnvelopePublisher
+	Publisher  MessagePublisher
 	Outbox     OutboxConfig
 }
 
-type EnvelopePublisher interface {
-	PublishEnvelope(context.Context, []byte) error
+type MessagePublisher interface {
+	PublishMessage(context.Context, []byte) error
 }
 
 // Service 实现主存分片上的事实行读写接口。

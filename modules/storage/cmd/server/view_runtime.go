@@ -294,13 +294,13 @@ func validateStorageDeployment(storage storageconfig.StorageConfig) error {
 			return err
 		}
 	}
-	if shouldStartViewBuilderRole(storage) && !storage.HasRole("access") && isMemoryRowsUpdatedBus(storage.EventBus) {
+	if shouldStartViewBuilderRole(storage) && !storage.HasRole("access") && isMemoryRowsCommittedBus(storage.EventBus) {
 		return errors.New("storage view builder role requires non-memory eventbus when access role is not in the same process")
 	}
 	return nil
 }
 
-func needsRowsUpdatedBus(storage storageconfig.StorageConfig) bool {
+func needsRowsCommittedBus(storage storageconfig.StorageConfig) bool {
 	return storage.HasRole("access") || storage.HasRole("primary") || shouldStartViewBuilderRole(storage)
 }
 
@@ -340,10 +340,10 @@ func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService 
 }
 
 func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") && shouldStartViewBuilderRole(storage) && isMemoryRowsUpdatedBus(storage.EventBus)
+	return storage.HasRole("access") && shouldStartViewBuilderRole(storage) && isMemoryRowsCommittedBus(storage.EventBus)
 }
 
-func isMemoryRowsUpdatedBus(cfg storageconfig.StorageEventBus) bool {
+func isMemoryRowsCommittedBus(cfg storageconfig.StorageEventBus) bool {
 	kind := strings.ToLower(strings.TrimSpace(cfg.Type))
 	return kind == "" || kind == "memory"
 }

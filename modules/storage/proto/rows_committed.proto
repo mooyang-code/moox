@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package trpc.moox.storage;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storagegen;storagepb";
+
+import "access.proto";
+
+enum RowWriteOperation {
+  ROW_WRITE_OPERATION_UNSPECIFIED = 0;
+  ROW_WRITE_OPERATION_MERGE = 1;
+  ROW_WRITE_OPERATION_REPLACE = 2;
+  ROW_WRITE_OPERATION_DELETE = 3;
+}
+
+message TimeSeriesRowWrite {
+  RowWriteOperation operation = 1;
+  TimeSeriesRow row = 2;
+}
+
+message TimeSeriesRowsCommitted {
+  string shard_id = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  repeated TimeSeriesRowWrite writes = 4;
+}
+
+message RecordRowWrite {
+  RowWriteOperation operation = 1;
+  RecordRow row = 2;
+}
+
+message RecordRowsCommitted {
+  string shard_id = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  repeated RecordRowWrite writes = 4;
+}

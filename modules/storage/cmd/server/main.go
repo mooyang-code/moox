@@ -59,19 +59,19 @@ func main() {
 	if err := validateStorageDeployment(cfg.Storage); err != nil {
 		exitWithStartupError("storage deployment config invalid", err)
 	}
-	var rowsChangedBus coreeventbus.Bus
-	if needsRowsUpdatedBus(cfg.Storage) {
+	var rowsCommittedBus coreeventbus.Bus
+	if needsRowsCommittedBus(cfg.Storage) {
 		var err error
-		rowsChangedBus, err = bootstrapeventbus.NewRowsUpdatedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
+		rowsCommittedBus, err = bootstrapeventbus.NewRowsCommittedBus(trpc.BackgroundContext(), cfg.Storage.EventBus)
 		if err != nil {
 			exitWithStartupError("初始化 storage eventbus 失败", err)
 		}
 		defer func() {
-			if err := rowsChangedBus.Close(); err != nil {
+			if err := rowsCommittedBus.Close(); err != nil {
 				log.Errorf("关闭 storage eventbus 失败: %v", err)
 			}
 		}()
-		opts.Events = rowsChangedBus
+		opts.Events = rowsCommittedBus
 	}
 
 	var storageService *storagesvc.Service
@@ -100,7 +100,7 @@ func main() {
 	var runtimeView *viewRuntime
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
 		var err error
-		runtimeView, err = registerViewRole(s, cfg.Storage, rowsChangedBus, storageService, accessReader)
+		runtimeView, err = registerViewRole(s, cfg.Storage, rowsCommittedBus, storageService, accessReader)
 		if err != nil {
 			exitWithStartupError("初始化 ViewService 失败", err)
 		}
@@ -115,14 +115,14 @@ func main() {
 	}
 
 	if shouldCreatePrimaryService(cfg.Storage) {
-		var envelopePublisher primarysvc.EnvelopePublisher
-		if candidate, ok := rowsChangedBus.(primarysvc.EnvelopePublisher); ok {
-			envelopePublisher = candidate
+		var messagePublisher primarysvc.MessagePublisher
+		if candidate, ok := rowsCommittedBus.(primarysvc.MessagePublisher); ok {
+			messagePublisher = candidate
 		}
 		primaryService := primarysvc.NewService(primarysvc.Options{
 			Root:       opts.Root,
 			PebblePath: opts.PebblePath,
-			Publisher:  envelopePublisher,
+			Publisher:  messagePublisher,
 			Outbox: primarysvc.OutboxConfig{
 				FlushBatchSize: cfg.Storage.Primary.Outbox.FlushBatchSize,
 				FlushMaxBytes:  cfg.Storage.Primary.Outbox.FlushMaxBytes,
@@ -142,7 +142,7 @@ func main() {
 		pb.RegisterPrimaryStoreService(s, primaryService)
 	}
 	if err := registerStorageHealth(s, cfg.Storage, storageHealthDependencies{
-		eventbus: rowsChangedBus,
+		eventbus: rowsCommittedBus,
 		view:     viewRuntimeReadiness{runtime: runtimeView, storage: cfg.Storage},
 	}); err != nil {
 		exitWithStartupError("register storage health service", err)

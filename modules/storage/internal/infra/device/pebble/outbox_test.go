@@ -52,16 +52,30 @@ func TestOutboxKeyFormatsSequence(t *testing.T) {
 func testOutboxMessageBytes(t *testing.T) []byte {
 	t.Helper()
 	now := timestamppb.Now()
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{
+		ShardId:   "node-1",
+		SpaceId:   "crypto",
+		DatasetId: "kline",
+		Writes: []*pb.TimeSeriesRowWrite{{
+			Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE,
+			Row: &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{
+				SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-11T00:00:00Z",
+			}},
+		}},
+	})
+	require.NoError(t, err)
 	msg := &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,
 		MessageId:       "msg-1",
-		Topic:           "moox.storage.time_series.rows_updated.v1",
+		Topic:           "moox.storage.rows_committed.time_series.v1.mzxw6",
 		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
 		Producer:        &messagepb.Producer{ServiceName: "moox-storage", InstanceId: "node-1"},
+		Sequence:        1,
 		OccurredAt:      now,
 		PublishedAt:     now,
 		ContentType:     "application/x-protobuf",
-		Payload:         []byte("payload"),
+		MessageType:     "moox.storage.time_series.rows_committed.v1",
+		Payload:         payload,
 	}
 	data, err := proto.Marshal(msg)
 	require.NoError(t, err)

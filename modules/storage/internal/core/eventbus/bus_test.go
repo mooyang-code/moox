@@ -12,15 +12,15 @@ import (
 func TestMemoryBusReturnsSubscriberErrors(t *testing.T) {
 	bus := NewMemoryBus()
 	want := errors.New("projection failed")
-	if _, err := bus.SubscribeTimeSeriesRowsUpdated(context.Background(), func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+	if _, err := bus.SubscribeTimeSeriesRowsCommitted(context.Background(), func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 		return want
 	}); err != nil {
-		t.Fatalf("SubscribeTimeSeriesRowsUpdated: %v", err)
+		t.Fatalf("SubscribeTimeSeriesRowsCommitted: %v", err)
 	}
 
-	err := bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{})
+	err := bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{})
 	if !errors.Is(err, want) {
-		t.Fatalf("PublishTimeSeriesRowsUpdated error = %v, want subscriber error", err)
+		t.Fatalf("PublishTimeSeriesRowsCommitted error = %v, want subscriber error", err)
 	}
 }
 
@@ -28,17 +28,17 @@ func TestMemoryBusAppliesBackpressure(t *testing.T) {
 	bus := NewMemoryBus()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	if _, err := bus.SubscribeRecordRowsUpdated(context.Background(), func(context.Context, *pb.RecordRowsUpdated) error {
+	if _, err := bus.SubscribeRecordRowsCommitted(context.Background(), func(context.Context, *pb.RecordRowsCommitted) error {
 		close(started)
 		<-release
 		return nil
 	}); err != nil {
-		t.Fatalf("SubscribeRecordRowsUpdated: %v", err)
+		t.Fatalf("SubscribeRecordRowsCommitted: %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.PublishRecordRowsUpdated(context.Background(), &pb.RecordRowsUpdated{})
+		done <- bus.PublishRecordRowsCommitted(context.Background(), &pb.RecordRowsCommitted{})
 	}()
 	<-started
 	select {
@@ -48,7 +48,7 @@ func TestMemoryBusAppliesBackpressure(t *testing.T) {
 	}
 	close(release)
 	if err := <-done; err != nil {
-		t.Fatalf("PublishRecordRowsUpdated: %v", err)
+		t.Fatalf("PublishRecordRowsCommitted: %v", err)
 	}
 }
 
@@ -56,17 +56,17 @@ func TestMemoryBusCloseWaitsForInFlightHandlers(t *testing.T) {
 	bus := NewMemoryBus()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	if _, err := bus.SubscribeTimeSeriesRowsUpdated(context.Background(), func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+	if _, err := bus.SubscribeTimeSeriesRowsCommitted(context.Background(), func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 		close(started)
 		<-release
 		return nil
 	}); err != nil {
-		t.Fatalf("SubscribeTimeSeriesRowsUpdated: %v", err)
+		t.Fatalf("SubscribeTimeSeriesRowsCommitted: %v", err)
 	}
 
 	publishDone := make(chan error, 1)
 	go func() {
-		publishDone <- bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{})
+		publishDone <- bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{})
 	}()
 	<-started
 	closeDone := make(chan error, 1)
@@ -78,7 +78,7 @@ func TestMemoryBusCloseWaitsForInFlightHandlers(t *testing.T) {
 	}
 	close(release)
 	if err := <-publishDone; err != nil {
-		t.Fatalf("PublishTimeSeriesRowsUpdated: %v", err)
+		t.Fatalf("PublishTimeSeriesRowsCommitted: %v", err)
 	}
 	if err := <-closeDone; err != nil {
 		t.Fatalf("Close: %v", err)
@@ -89,7 +89,7 @@ func TestMemorySubscriptionCloseWaitsOnlyForItsInFlightHandler(t *testing.T) {
 	bus := NewMemoryBus()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	subscription, err := bus.SubscribeTimeSeriesRowsUpdated(context.Background(), func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+	subscription, err := bus.SubscribeTimeSeriesRowsCommitted(context.Background(), func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 		close(started)
 		<-release
 		return nil
@@ -97,12 +97,12 @@ func TestMemorySubscriptionCloseWaitsOnlyForItsInFlightHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bus.SubscribeTimeSeriesRowsUpdated(context.Background(), func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil }); err != nil {
+	if _, err := bus.SubscribeTimeSeriesRowsCommitted(context.Background(), func(context.Context, *pb.TimeSeriesRowsCommitted) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	publishDone := make(chan error, 1)
 	go func() {
-		publishDone <- bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{})
+		publishDone <- bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{})
 	}()
 	<-started
 	closeDone := make(chan error, 1)
@@ -123,7 +123,7 @@ func TestMemorySubscriptionCloseWaitsOnlyForItsInFlightHandler(t *testing.T) {
 
 func TestMemorySubscriptionCloseDoesNotDeadlockAfterHandlerPanic(t *testing.T) {
 	bus := NewMemoryBus()
-	subscription, err := bus.SubscribeRecordRowsUpdated(context.Background(), func(context.Context, *pb.RecordRowsUpdated) error {
+	subscription, err := bus.SubscribeRecordRowsCommitted(context.Background(), func(context.Context, *pb.RecordRowsCommitted) error {
 		panic("boom")
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func TestMemorySubscriptionCloseDoesNotDeadlockAfterHandlerPanic(t *testing.T) {
 	}
 	func() {
 		defer func() { _ = recover() }()
-		_ = bus.PublishRecordRowsUpdated(context.Background(), &pb.RecordRowsUpdated{})
+		_ = bus.PublishRecordRowsCommitted(context.Background(), &pb.RecordRowsCommitted{})
 	}()
 	done := make(chan error, 1)
 	go func() { done <- subscription.Close() }()

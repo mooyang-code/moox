@@ -80,8 +80,8 @@ func TestServiceStartSubscribeAndCloseRoundTrip(t *testing.T) {
 	key := &pb.TimeSeriesKey{
 		SpaceId: "crypto", DatasetId: "orphan", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-09T01:00:00Z",
 	}
-	require.NoError(t, bus.PublishTimeSeriesRowsUpdated(ctx, &pb.TimeSeriesRowsUpdated{
-		Rows: []*pb.TimeSeriesRow{testBuilderTimeSeriesRow(key)},
+	require.NoError(t, bus.PublishTimeSeriesRowsCommitted(ctx, &pb.TimeSeriesRowsCommitted{
+		Writes: []*pb.TimeSeriesRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: testBuilderTimeSeriesRow(key)}},
 	}))
 
 	require.NoError(t, svc.Close())
@@ -107,7 +107,7 @@ func TestMemoryBusPublishWaitsForAndReturnsDerivedWriteError(t *testing.T) {
 	row := testBuilderTimeSeriesRow(&pb.TimeSeriesKey{
 		SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-09T01:00:00Z",
 	})
-	err := bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{Rows: []*pb.TimeSeriesRow{row}})
+	err := bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{Writes: []*pb.TimeSeriesRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: row}}})
 
 	require.ErrorIs(t, err, writeErr)
 }
@@ -137,13 +137,13 @@ type blockingSubscriber struct {
 	entered chan struct{}
 }
 
-func (s *blockingSubscriber) SubscribeTimeSeriesRowsUpdated(ctx context.Context, _ eventbus.TimeSeriesRowsUpdatedHandler) (eventbus.Subscription, error) {
+func (s *blockingSubscriber) SubscribeTimeSeriesRowsCommitted(ctx context.Context, _ eventbus.TimeSeriesRowsCommittedHandler) (eventbus.Subscription, error) {
 	close(s.entered)
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
-func (*blockingSubscriber) SubscribeRecordRowsUpdated(context.Context, eventbus.RecordRowsUpdatedHandler) (eventbus.Subscription, error) {
+func (*blockingSubscriber) SubscribeRecordRowsCommitted(context.Context, eventbus.RecordRowsCommittedHandler) (eventbus.Subscription, error) {
 	return nil, errors.New("record subscribe must not be reached")
 }
 

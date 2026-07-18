@@ -52,8 +52,8 @@ func TestServiceEnqueueRecordProcessesBatch(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, svc.Start(ctx))
 
-	require.NoError(t, bus.PublishRecordRowsUpdated(ctx, &pb.RecordRowsUpdated{
-		Rows: []*pb.RecordRow{{Key: recordKey}},
+	require.NoError(t, bus.PublishRecordRowsCommitted(ctx, &pb.RecordRowsCommitted{
+		Writes: []*pb.RecordRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: &pb.RecordRow{Key: recordKey}}},
 	}))
 	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, svc.Close())

@@ -57,7 +57,7 @@ func TestValidateMessageRejectsWildcardsAndOversizedPayload(t *testing.T) {
 	}
 }
 
-func TestMarshalMessageRejectsOversizedEnvelope(t *testing.T) {
+func TestMarshalMessageRejectsOversizedMessage(t *testing.T) {
 	msg := validTestMessage("envelope", "moox.test.events.v1")
 	msg.Payload = []byte("ok")
 	msg.Attributes = map[string]string{"large": string(make([]byte, 512))}

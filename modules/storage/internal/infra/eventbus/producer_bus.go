@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
@@ -20,18 +21,20 @@ import (
 )
 
 const (
-	DefaultSubjectPrefix                = "moox.storage"
-	DefaultTimeSeriesRowsUpdatedSubject = "moox.storage.time_series.rows_updated.v1"
-	DefaultRecordRowsUpdatedSubject     = "moox.storage.record.rows_updated.v1"
-	defaultTimeSeriesRowsUpdatedSuffix  = "time_series.rows_updated.v1"
-	defaultRecordRowsUpdatedSuffix      = "record.rows_updated.v1"
-	defaultStorageStream                = "MOOX_STORAGE"
-	defaultMaxInFlight                  = 128
-	defaultMaxAckPending                = 128
-	defaultAckWait                      = 2 * time.Minute
-	defaultNakDelay                     = time.Second
-	defaultActionTimeout                = 5 * time.Second
-	defaultHandlerDrainTimeout          = 5 * time.Second
+	DefaultSubjectPrefix                  = "moox.storage"
+	DefaultTimeSeriesRowsCommittedSubject = "moox.storage.rows_committed.time_series.v1.>"
+	DefaultRecordRowsCommittedSubject     = "moox.storage.rows_committed.record.v1.>"
+	defaultTimeSeriesRowsCommittedBase    = "rows_committed.time_series.v1"
+	defaultRecordRowsCommittedBase        = "rows_committed.record.v1"
+	defaultTimeSeriesRowsCommittedType    = "moox.storage.time_series.rows_committed.v1"
+	defaultRecordRowsCommittedType        = "moox.storage.record.rows_committed.v1"
+	defaultStorageStream                  = "MOOX_STORAGE"
+	defaultMaxInFlight                    = 128
+	defaultMaxAckPending                  = 128
+	defaultAckWait                        = 2 * time.Minute
+	defaultNakDelay                       = time.Second
+	defaultActionTimeout                  = 5 * time.Second
+	defaultHandlerDrainTimeout            = 5 * time.Second
 )
 
 // SubscriberOptions is the transport contract for predeclared Storage consumers.
@@ -173,15 +176,35 @@ func deriveDeliveryResult(err error) string {
 	return "error"
 }
 
-func TimeSeriesRowsUpdatedSubject(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsUpdatedSuffix
+func TimeSeriesRowsCommittedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsCommittedBase + ".>"
 }
 
-func RecordRowsUpdatedSubject(prefix string) string {
-	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsUpdatedSuffix
+func RecordRowsCommittedSubject(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsCommittedBase + ".>"
+}
+
+func TimeSeriesRowsCommittedTopic(prefix, shardID string) (string, error) {
+	token, err := jetstream.EncodeShardToken(shardID)
+	if err != nil {
+		return "", err
+	}
+	return normalizeSubjectPrefix(prefix) + "." + defaultTimeSeriesRowsCommittedBase + "." + token, nil
+}
+
+func RecordRowsCommittedTopic(prefix, shardID string) (string, error) {
+	token, err := jetstream.EncodeShardToken(shardID)
+	if err != nil {
+		return "", err
+	}
+	return normalizeSubjectPrefix(prefix) + "." + defaultRecordRowsCommittedBase + "." + token, nil
 }
 
 func SubjectPrefixWildcard(prefix string) string { return normalizeSubjectPrefix(prefix) + ".>" }
+
+func RowsCommittedSubjectWildcard(prefix string) string {
+	return normalizeSubjectPrefix(prefix) + ".rows_committed.>"
+}
 
 func normalizeSubjectPrefix(prefix string) string {
 	prefix = strings.Trim(strings.TrimSpace(prefix), ".")
@@ -197,13 +220,14 @@ type ProducerBus struct {
 	timeSeriesSubject string
 	recordSubject     string
 	producer          *messagepb.Producer
+	nextSequence      atomic.Uint64
 }
 
 func NewProducerBus(client *jetstream.Client, prefix string) *ProducerBus {
 	return &ProducerBus{
 		client:            client,
-		timeSeriesSubject: TimeSeriesRowsUpdatedSubject(prefix),
-		recordSubject:     RecordRowsUpdatedSubject(prefix),
+		timeSeriesSubject: TimeSeriesRowsCommittedSubject(prefix),
+		recordSubject:     RecordRowsCommittedSubject(prefix),
 		producer:          &messagepb.Producer{ServiceName: "moox-storage", InstanceId: "storage"},
 	}
 }
@@ -212,21 +236,36 @@ func (b *ProducerBus) Ready() bool {
 	return b != nil && b.client != nil && b.client.Ready()
 }
 
-func (b *ProducerBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+func (b *ProducerBus) PublishTimeSeriesRowsCommitted(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error {
 	if event == nil {
-		return errors.New("time-series update is nil")
+		return errors.New("time-series committed batch is nil")
 	}
-	return b.publish(ctx, b.timeSeriesSubject, event.GetMessageId(), event.GetSpaceId(), event.GetDatasetId(), event)
+	topic, err := TimeSeriesRowsCommittedTopic(b.subjectPrefix(), event.GetShardId())
+	if err != nil {
+		return err
+	}
+	return b.publish(ctx, topic, defaultTimeSeriesRowsCommittedType, event.GetSpaceId(), event.GetDatasetId(), event.GetShardId(), event)
 }
 
-func (b *ProducerBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error {
+func (b *ProducerBus) PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommitted) error {
 	if event == nil {
-		return errors.New("record update is nil")
+		return errors.New("record committed batch is nil")
 	}
-	return b.publish(ctx, b.recordSubject, event.GetMessageId(), event.GetSpaceId(), event.GetDatasetId(), event)
+	topic, err := RecordRowsCommittedTopic(b.subjectPrefix(), event.GetShardId())
+	if err != nil {
+		return err
+	}
+	return b.publish(ctx, topic, defaultRecordRowsCommittedType, event.GetSpaceId(), event.GetDatasetId(), event.GetShardId(), event)
 }
 
-func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID string, payload proto.Message) error {
+func (b *ProducerBus) subjectPrefix() string {
+	if b == nil {
+		return DefaultSubjectPrefix
+	}
+	return strings.TrimSuffix(b.timeSeriesSubject, "."+defaultTimeSeriesRowsCommittedBase+".>")
+}
+
+func (b *ProducerBus) publish(ctx context.Context, topic, messageType, spaceID, datasetID, shardID string, payload proto.Message) error {
 	if b == nil || b.client == nil {
 		return errors.New("storage eventbus client is nil")
 	}
@@ -234,14 +273,9 @@ func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID
 	if err != nil {
 		return fmt.Errorf("marshal storage update: %w", err)
 	}
-	if strings.TrimSpace(id) == "" {
-		return errors.New("storage update message_id is required")
-	}
+	sequence := b.nextSequence.Add(1)
+	id := fmt.Sprintf("storage-%d", sequence)
 	now := timestamppb.Now()
-	contentType := "application/x-protobuf; message=trpc.moox.storage.RecordRowsUpdated"
-	if strings.HasSuffix(topic, defaultTimeSeriesRowsUpdatedSuffix) {
-		contentType = "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated"
-	}
 	msg := &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,
 		MessageId:       id,
@@ -249,19 +283,24 @@ func (b *ProducerBus) publish(ctx context.Context, topic, id, spaceID, datasetID
 		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
 		Producer:        b.producer,
 		SpaceId:         spaceID,
+		Sequence:        sequence,
 		OccurredAt:      now,
 		PublishedAt:     now,
-		ContentType:     contentType,
+		ContentType:     "application/x-protobuf; message=trpc.moox.storage." + map[string]string{defaultTimeSeriesRowsCommittedType: "TimeSeriesRowsCommitted", defaultRecordRowsCommittedType: "RecordRowsCommitted"}[messageType],
+		MessageType:     messageType,
 		Payload:         data,
 		Attributes:      map[string]string{"dataset_id": datasetID},
+	}
+	if err := validateRowsCommittedMessage(msg, shardID); err != nil {
+		return err
 	}
 	_, err = b.client.Publish(ctx, msg)
 	return err
 }
 
-// PublishEnvelope republishes an already persisted deterministic message. It
+// PublishMessage republishes an already persisted deterministic message. It
 // is used by the PrimaryStore relay so a retry never changes message_id.
-func (b *ProducerBus) PublishEnvelope(ctx context.Context, data []byte) error {
+func (b *ProducerBus) PublishMessage(ctx context.Context, data []byte) error {
 	if b == nil || b.client == nil {
 		return errors.New("storage eventbus client is nil")
 	}
@@ -269,28 +308,68 @@ func (b *ProducerBus) PublishEnvelope(ctx context.Context, data []byte) error {
 	if err := proto.Unmarshal(data, msg); err != nil {
 		return err
 	}
+	if err := validateRowsCommittedMessage(msg, ""); err != nil {
+		return err
+	}
 	_, err := b.client.Publish(ctx, msg)
 	return err
 }
 
-func (b *ProducerBus) PublishEnvelopes(ctx context.Context, data [][]byte) []error {
-	results := make([]error, len(data))
-	msgs := make([]*messagepb.MooxMessage, len(data))
-	for i, raw := range data {
-		msg := &messagepb.MooxMessage{}
-		if err := proto.Unmarshal(raw, msg); err != nil {
-			results[i] = err
-		} else {
-			msgs[i] = msg
-		}
+func validateRowsCommittedMessage(msg *messagepb.MooxMessage, expectedShardID string) error {
+	if msg == nil {
+		return errors.New("storage message is nil")
 	}
-	acks := b.client.PublishBatch(ctx, msgs)
-	for i := range results {
-		if results[i] == nil {
-			results[i] = acks[i].Err
-		}
+	if msg.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
+		return errors.New("storage rows committed message kind must be EVENT")
 	}
-	return results
+	if msg.GetSequence() == 0 {
+		return errors.New("storage rows committed message sequence is required")
+	}
+	tokens := strings.Split(msg.GetTopic(), ".")
+	if len(tokens) < 2 {
+		return fmt.Errorf("storage rows committed topic %q is invalid", msg.GetTopic())
+	}
+	shardID, err := jetstream.DecodeShardToken(tokens[len(tokens)-1])
+	if err != nil {
+		return fmt.Errorf("storage rows committed topic shard: %w", err)
+	}
+	if expectedShardID != "" && shardID != expectedShardID {
+		return fmt.Errorf("storage rows committed topic shard %q does not match expected shard %q", shardID, expectedShardID)
+	}
+	base := strings.Join(tokens[:len(tokens)-1], ".")
+	var payloadShard, payloadSpace, payloadDataset string
+	switch msg.GetMessageType() {
+	case defaultTimeSeriesRowsCommittedType:
+		if !strings.HasSuffix(base, "."+defaultTimeSeriesRowsCommittedBase) {
+			return fmt.Errorf("time-series message topic %q is invalid", msg.GetTopic())
+		}
+		event := new(pb.TimeSeriesRowsCommitted)
+		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
+			return fmt.Errorf("decode time-series rows committed payload: %w", err)
+		}
+		payloadShard, payloadSpace, payloadDataset = event.GetShardId(), event.GetSpaceId(), event.GetDatasetId()
+	case defaultRecordRowsCommittedType:
+		if !strings.HasSuffix(base, "."+defaultRecordRowsCommittedBase) {
+			return fmt.Errorf("record message topic %q is invalid", msg.GetTopic())
+		}
+		event := new(pb.RecordRowsCommitted)
+		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
+			return fmt.Errorf("decode record rows committed payload: %w", err)
+		}
+		payloadShard, payloadSpace, payloadDataset = event.GetShardId(), event.GetSpaceId(), event.GetDatasetId()
+	default:
+		return fmt.Errorf("unknown storage message_type %q", msg.GetMessageType())
+	}
+	if payloadShard == "" || payloadShard != shardID {
+		return fmt.Errorf("storage payload shard_id %q does not match topic shard %q", payloadShard, shardID)
+	}
+	if msg.GetSpaceId() != payloadSpace {
+		return fmt.Errorf("storage payload space_id %q does not match message space_id %q", payloadSpace, msg.GetSpaceId())
+	}
+	if dataset := msg.GetAttributes()["dataset_id"]; dataset != "" && dataset != payloadDataset {
+		return fmt.Errorf("storage payload dataset_id %q does not match message attribute %q", payloadDataset, dataset)
+	}
+	return nil
 }
 
 func (b *ProducerBus) Close() error {
@@ -336,20 +415,14 @@ func NewSubscriberBus(client *jetstream.Client, prefix string, opts SubscriberOp
 	}, nil
 }
 
-func (b *SubscriberBus) consumerRef(timeSeries bool) jetstream.ConsumerRef {
-	durable := "storage_view_builder_record_rows_updated_v1"
-	subject := b.recordSubject
-	if timeSeries {
-		durable = "storage_view_builder_time_series_rows_updated_v1"
-		subject = b.timeSeriesSubject
-	}
+func (b *SubscriberBus) consumerRef(_ bool) jetstream.ConsumerRef {
 	return jetstream.ConsumerRef{
-		Stream: b.opts.StreamName, Durable: durable, FilterSubject: subject,
+		Stream: b.opts.StreamName, Durable: "storage_view_builder_rows_committed_v1", FilterSubject: RowsCommittedSubjectWildcard(b.subjectPrefix()),
 		AckWait: b.opts.AckWait, MaxDeliver: b.opts.MaxDeliver, MaxAckPending: b.opts.MaxAckPending,
 	}
 }
 
-func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler coreeventbus.TimeSeriesRowsUpdatedHandler) (coreeventbus.Subscription, error) {
+func (b *SubscriberBus) SubscribeTimeSeriesRowsCommitted(ctx context.Context, handler coreeventbus.TimeSeriesRowsCommittedHandler) (coreeventbus.Subscription, error) {
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
@@ -358,7 +431,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 	if b.subscribeClosed {
 		return nil, context.Canceled
 	}
-	if b.timeSeriesStopping {
+	if b.timeSeriesStopping || b.recordStopping {
 		return nil, errors.New("storage time-series subscription is stopping")
 	}
 	if b.timeSeriesConsumer == nil {
@@ -367,7 +440,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 			return nil, err
 		}
 		b.timeSeriesConsumer = consumer
-		b.startLoop(consumer, true)
+		b.startLoop(consumer)
 	}
 	b.nextID++
 	id := b.nextID
@@ -377,7 +450,7 @@ func (b *SubscriberBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, hand
 	return &subscriberBusSubscription{close: func() error { return b.closeTimeSeries(id, entry) }}, nil
 }
 
-func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler coreeventbus.RecordRowsUpdatedHandler) (coreeventbus.Subscription, error) {
+func (b *SubscriberBus) SubscribeRecordRowsCommitted(ctx context.Context, handler coreeventbus.RecordRowsCommittedHandler) (coreeventbus.Subscription, error) {
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
@@ -386,16 +459,16 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 	if b.subscribeClosed {
 		return nil, context.Canceled
 	}
-	if b.recordStopping {
+	if b.recordStopping || b.timeSeriesStopping {
 		return nil, errors.New("storage record subscription is stopping")
 	}
-	if b.recordConsumer == nil {
+	if b.timeSeriesConsumer == nil {
 		consumer, err := b.client.BindPullConsumer(ctx, b.consumerRef(false))
 		if err != nil {
 			return nil, err
 		}
-		b.recordConsumer = consumer
-		b.startLoop(consumer, false)
+		b.timeSeriesConsumer = consumer
+		b.startLoop(consumer)
 	}
 	b.nextID++
 	id := b.nextID
@@ -405,17 +478,11 @@ func (b *SubscriberBus) SubscribeRecordRowsUpdated(ctx context.Context, handler 
 	return &subscriberBusSubscription{close: func() error { return b.closeRecord(id, entry) }}, nil
 }
 
-func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries bool) {
+func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer) {
 	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
-	fetchWG := &b.recordFetchWG
-	handlerWG := &b.recordHandleWG
-	if timeSeries {
-		b.timeSeriesCancel = cancel
-		fetchWG = &b.timeSeriesFetchWG
-		handlerWG = &b.timeSeriesHandleWG
-	} else {
-		b.recordCancel = cancel
-	}
+	b.timeSeriesCancel = cancel
+	fetchWG := &b.timeSeriesFetchWG
+	handlerWG := &b.timeSeriesHandleWG
 	fetchWG.Add(1)
 	go func() {
 		defer fetchWG.Done()
@@ -448,6 +515,7 @@ func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer, timeSeries b
 				defer handlerWG.Done()
 				defer func() { <-semaphore }()
 				err := processDelivery(ctx, delivery, b.opts, func(handlerCtx context.Context) error {
+					timeSeries := delivery != nil && delivery.Message != nil && delivery.Message.GetMessageType() == defaultTimeSeriesRowsCommittedType
 					return b.dispatch(handlerCtx, delivery, timeSeries)
 				})
 				if err != nil {
@@ -470,10 +538,20 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 	if delivery == nil || delivery.Message == nil {
 		return errors.New("nil storage event delivery")
 	}
+	expectedShard := ""
+	if err := validateRowsCommittedMessage(delivery.Message, expectedShard); err != nil {
+		return err
+	}
+	if timeSeries && delivery.Message.GetMessageType() != defaultTimeSeriesRowsCommittedType {
+		return errors.New("time-series subscription received a non-time-series message")
+	}
+	if !timeSeries && delivery.Message.GetMessageType() != defaultRecordRowsCommittedType {
+		return errors.New("record subscription received a non-record message")
+	}
 	var err error
 	b.mu.Lock()
 	if timeSeries {
-		var event pb.TimeSeriesRowsUpdated
+		var event pb.TimeSeriesRowsCommitted
 		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
 		handlers := make([]*subscriberTimeSeriesHandler, 0, len(b.timeSeriesHandlers))
 		for _, entry := range b.timeSeriesHandlers {
@@ -493,7 +571,7 @@ func (b *SubscriberBus) dispatch(ctx context.Context, delivery *jetstream.Delive
 		}
 		err = callTimeSeriesHandlers(ctx, &event, handlers)
 	} else {
-		var event pb.RecordRowsUpdated
+		var event pb.RecordRowsCommitted
 		err = proto.Unmarshal(delivery.Message.GetPayload(), &event)
 		handlers := make([]*subscriberRecordHandler, 0, len(b.recordHandlers))
 		for _, entry := range b.recordHandlers {
@@ -523,7 +601,7 @@ func (b *SubscriberBus) handlerDrainTimeout() time.Duration {
 	return defaultHandlerDrainTimeout
 }
 
-func callTimeSeriesHandlers(ctx context.Context, event *pb.TimeSeriesRowsUpdated, handlers []*subscriberTimeSeriesHandler) (err error) {
+func callTimeSeriesHandlers(ctx context.Context, event *pb.TimeSeriesRowsCommitted, handlers []*subscriberTimeSeriesHandler) (err error) {
 	next := 0
 	defer func() {
 		for ; next < len(handlers); next++ {
@@ -538,7 +616,7 @@ func callTimeSeriesHandlers(ctx context.Context, event *pb.TimeSeriesRowsUpdated
 	return err
 }
 
-func callRecordHandlers(ctx context.Context, event *pb.RecordRowsUpdated, handlers []*subscriberRecordHandler) (err error) {
+func callRecordHandlers(ctx context.Context, event *pb.RecordRowsCommitted, handlers []*subscriberRecordHandler) (err error) {
 	next := 0
 	defer func() {
 		for ; next < len(handlers); next++ {
@@ -558,7 +636,7 @@ func (b *SubscriberBus) closeTimeSeries(id uint64, entry *subscriberTimeSeriesHa
 	delete(b.timeSeriesHandlers, id)
 	entry.lifecycle.beginClose()
 	entry.cancel()
-	if len(b.timeSeriesHandlers) != 0 || b.timeSeriesCancel == nil {
+	if len(b.timeSeriesHandlers) != 0 || len(b.recordHandlers) != 0 || b.timeSeriesCancel == nil {
 		b.mu.Unlock()
 		return entry.lifecycle.wait(b.handlerDrainTimeout())
 	}
@@ -584,18 +662,18 @@ func (b *SubscriberBus) closeRecord(id uint64, entry *subscriberRecordHandler) e
 	delete(b.recordHandlers, id)
 	entry.lifecycle.beginClose()
 	entry.cancel()
-	if len(b.recordHandlers) != 0 || b.recordCancel == nil {
+	if len(b.recordHandlers) != 0 || len(b.timeSeriesHandlers) != 0 || b.timeSeriesCancel == nil {
 		b.mu.Unlock()
 		return entry.lifecycle.wait(b.handlerDrainTimeout())
 	}
-	cancel, consumer := b.recordCancel, b.recordConsumer
+	cancel, consumer := b.timeSeriesCancel, b.timeSeriesConsumer
 	b.recordStopping = true
-	b.recordCancel, b.recordConsumer = nil, nil
+	b.timeSeriesCancel, b.timeSeriesConsumer = nil, nil
 	b.mu.Unlock()
 	cancel()
 	drainErr := entry.lifecycle.wait(b.handlerDrainTimeout())
-	b.recordFetchWG.Wait()
-	b.recordHandleWG.Wait()
+	b.timeSeriesFetchWG.Wait()
+	b.timeSeriesHandleWG.Wait()
 	var err error
 	if consumer != nil {
 		err = consumer.Close()
@@ -607,13 +685,13 @@ func (b *SubscriberBus) closeRecord(id uint64, entry *subscriberRecordHandler) e
 }
 
 type subscriberTimeSeriesHandler struct {
-	handler   coreeventbus.TimeSeriesRowsUpdatedHandler
+	handler   coreeventbus.TimeSeriesRowsCommittedHandler
 	lifecycle *subscriberHandlerLifecycle
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
 
-func (h *subscriberTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+func (h *subscriberTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error {
 	defer h.lifecycle.release()
 	handlerCtx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(h.ctx, cancel)
@@ -625,13 +703,13 @@ func (h *subscriberTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSe
 }
 
 type subscriberRecordHandler struct {
-	handler   coreeventbus.RecordRowsUpdatedHandler
+	handler   coreeventbus.RecordRowsCommittedHandler
 	lifecycle *subscriberHandlerLifecycle
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
 
-func (h *subscriberRecordHandler) call(ctx context.Context, event *pb.RecordRowsUpdated) error {
+func (h *subscriberRecordHandler) call(ctx context.Context, event *pb.RecordRowsCommitted) error {
 	defer h.lifecycle.release()
 	handlerCtx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(h.ctx, cancel)
@@ -701,25 +779,18 @@ func (b *SubscriberBus) Close() error {
 	}
 	b.mu.Lock()
 	b.subscribeClosed = true
-	timeSeriesCancel, recordCancel := b.timeSeriesCancel, b.recordCancel
-	ts, rec := b.timeSeriesConsumer, b.recordConsumer
+	timeSeriesCancel := b.timeSeriesCancel
+	ts := b.timeSeriesConsumer
 	b.timeSeriesCancel, b.recordCancel = nil, nil
+	b.timeSeriesConsumer, b.recordConsumer = nil, nil
 	b.mu.Unlock()
 	if timeSeriesCancel != nil {
 		timeSeriesCancel()
 	}
-	if recordCancel != nil {
-		recordCancel()
-	}
 	b.timeSeriesFetchWG.Wait()
-	b.recordFetchWG.Wait()
 	b.timeSeriesHandleWG.Wait()
-	b.recordHandleWG.Wait()
 	if ts != nil {
 		_ = ts.Close()
-	}
-	if rec != nil {
-		_ = rec.Close()
 	}
 	return b.ProducerBus.Close()
 }

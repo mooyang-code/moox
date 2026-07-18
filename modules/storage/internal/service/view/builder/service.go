@@ -188,7 +188,7 @@ func (s *Service) Start(ctx context.Context) error {
 		}()
 	}
 
-	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsUpdated(run.ctx, func(handlerCtx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsCommitted(run.ctx, func(handlerCtx context.Context, event *pb.TimeSeriesRowsCommitted) error {
 		return s.enqueueTimeSeriesRun(handlerCtx, run, event)
 	})
 	if err != nil {
@@ -198,7 +198,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 	run.timeSeriesSub = timeSeriesSub
-	recordSub, err := s.events.SubscribeRecordRowsUpdated(run.ctx, func(handlerCtx context.Context, event *pb.RecordRowsUpdated) error {
+	recordSub, err := s.events.SubscribeRecordRowsCommitted(run.ctx, func(handlerCtx context.Context, event *pb.RecordRowsCommitted) error {
 		return s.enqueueRecordRun(handlerCtx, run, event)
 	})
 	if err != nil {
@@ -250,14 +250,14 @@ func (s *Service) clearRun(run *serviceRun) {
 	s.mu.Unlock()
 }
 
-func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsUpdated) (retErr error) {
+func (s *Service) enqueueTimeSeries(ctx context.Context, event *pb.TimeSeriesRowsCommitted) (retErr error) {
 	s.mu.Lock()
 	run := s.run
 	s.mu.Unlock()
 	return s.enqueueTimeSeriesRun(ctx, run, event)
 }
 
-func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, event *pb.TimeSeriesRowsUpdated) (retErr error) {
+func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, event *pb.TimeSeriesRowsCommitted) (retErr error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -269,9 +269,10 @@ func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, eve
 	}
 	batcher := run.timeSeriesBatcher
 	addCtx := run.ctx
-	rows := make([]*pb.TimeSeriesRow, 0, len(event.GetRows()))
-	for _, row := range event.GetRows() {
-		if row == nil {
+	rows := make([]*pb.TimeSeriesRow, 0, len(event.GetWrites()))
+	for _, write := range event.GetWrites() {
+		row := write.GetRow()
+		if write.GetOperation() == pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE || row == nil {
 			continue
 		}
 		rows = append(rows, proto.Clone(row).(*pb.TimeSeriesRow))
@@ -297,14 +298,14 @@ func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, eve
 	return completion.wait(ctx)
 }
 
-func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsUpdated) (retErr error) {
+func (s *Service) enqueueRecord(ctx context.Context, event *pb.RecordRowsCommitted) (retErr error) {
 	s.mu.Lock()
 	run := s.run
 	s.mu.Unlock()
 	return s.enqueueRecordRun(ctx, run, event)
 }
 
-func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *pb.RecordRowsUpdated) (retErr error) {
+func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *pb.RecordRowsCommitted) (retErr error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -316,9 +317,10 @@ func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *
 	}
 	batcher := run.recordBatcher
 	addCtx := run.ctx
-	rows := make([]*pb.RecordRow, 0, len(event.GetRows()))
-	for _, row := range event.GetRows() {
-		if row == nil {
+	rows := make([]*pb.RecordRow, 0, len(event.GetWrites()))
+	for _, write := range event.GetWrites() {
+		row := write.GetRow()
+		if write.GetOperation() == pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE || row == nil {
 			continue
 		}
 		rows = append(rows, proto.Clone(row).(*pb.RecordRow))

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
@@ -90,8 +91,9 @@ func TestSubscriberOptionsBuildConfiguredConsumerRefs(t *testing.T) {
 	assert.Equal(t, 9*time.Second, timeSeries.AckWait)
 	assert.Equal(t, 7, timeSeries.MaxDeliver)
 	assert.Equal(t, 11, timeSeries.MaxAckPending)
-	assert.Equal(t, "custom.time_series.rows_updated.v1", timeSeries.FilterSubject)
-	assert.Equal(t, "custom.record.rows_updated.v1", record.FilterSubject)
+	assert.Equal(t, "custom.rows_committed.>", timeSeries.FilterSubject)
+	assert.Equal(t, timeSeries.Durable, record.Durable)
+	assert.Equal(t, "custom.rows_committed.>", record.FilterSubject)
 }
 
 func TestProcessDeliveryAcknowledgesOnlyAfterHandlerSuccess(t *testing.T) {
@@ -236,7 +238,7 @@ func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 	firstErr := errors.New("first projection failed")
 	secondErr := errors.New("second projection failed")
 	secondCalled := false
-	first, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
+	first, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
 	if err != nil {
 		t.Fatalf("marshal event: %v", err)
 	}
@@ -247,15 +249,15 @@ func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 	defer secondCancel()
 	bus := &SubscriberBus{
 		timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{
-			1: {handler: func(context.Context, *pb.TimeSeriesRowsUpdated) error { return firstErr }, lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel},
-			2: {handler: func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+			1: {handler: func(context.Context, *pb.TimeSeriesRowsCommitted) error { return firstErr }, lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel},
+			2: {handler: func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 				secondCalled = true
 				return secondErr
 			}, lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel},
 		},
 	}
 
-	err = bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: first}}, true)
+	err = bus.dispatch(context.Background(), &jetstream.Delivery{Message: testTimeSeriesMessage(first)}, true)
 	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
 		t.Fatalf("handler error = %v, want both handler errors", err)
 	}
@@ -265,14 +267,14 @@ func TestSubscriberBusInvokesAllTimeSeriesHandlers(t *testing.T) {
 }
 
 func TestSubscriberCloseDrainsItsHandlerWhileOtherHandlerRemains(t *testing.T) {
-	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
 	require.NoError(t, err)
 	started := make(chan struct{})
 	firstCtx, firstCancel := context.WithCancel(context.Background())
 	secondCtx, secondCancel := context.WithCancel(context.Background())
 	defer secondCancel()
 	first := &subscriberTimeSeriesHandler{
-		handler: func(ctx context.Context, _ *pb.TimeSeriesRowsUpdated) error {
+		handler: func(ctx context.Context, _ *pb.TimeSeriesRowsCommitted) error {
 			close(started)
 			<-ctx.Done()
 			return ctx.Err()
@@ -280,13 +282,13 @@ func TestSubscriberCloseDrainsItsHandlerWhileOtherHandlerRemains(t *testing.T) {
 		lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel,
 	}
 	second := &subscriberTimeSeriesHandler{
-		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil },
+		handler:   func(context.Context, *pb.TimeSeriesRowsCommitted) error { return nil },
 		lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel,
 	}
 	bus := &SubscriberBus{timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{1: first, 2: second}}
 	dispatchDone := make(chan error, 1)
 	go func() {
-		dispatchDone <- bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: payload}}, true)
+		dispatchDone <- bus.dispatch(context.Background(), &jetstream.Delivery{Message: testTimeSeriesMessage(payload)}, true)
 	}()
 	<-started
 	if err := bus.closeTimeSeries(1, first); err != nil {
@@ -307,7 +309,7 @@ func TestSubscriberCloseDrainsItsHandlerWhileOtherHandlerRemains(t *testing.T) {
 }
 
 func TestSubscriberCloseBoundsUnresponsiveHandler(t *testing.T) {
-	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
 	require.NoError(t, err)
 	started := make(chan struct{})
 	blocked := make(chan struct{})
@@ -315,7 +317,7 @@ func TestSubscriberCloseBoundsUnresponsiveHandler(t *testing.T) {
 	secondCtx, secondCancel := context.WithCancel(context.Background())
 	defer secondCancel()
 	first := &subscriberTimeSeriesHandler{
-		handler: func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+		handler: func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 			close(started)
 			<-blocked
 			return nil
@@ -323,7 +325,7 @@ func TestSubscriberCloseBoundsUnresponsiveHandler(t *testing.T) {
 		lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel,
 	}
 	second := &subscriberTimeSeriesHandler{
-		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil },
+		handler:   func(context.Context, *pb.TimeSeriesRowsCommitted) error { return nil },
 		lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel,
 	}
 	bus := &SubscriberBus{
@@ -332,7 +334,7 @@ func TestSubscriberCloseBoundsUnresponsiveHandler(t *testing.T) {
 	}
 	dispatchDone := make(chan error, 1)
 	go func() {
-		dispatchDone <- bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: payload}}, true)
+		dispatchDone <- bus.dispatch(context.Background(), &jetstream.Delivery{Message: testTimeSeriesMessage(payload)}, true)
 	}()
 	<-started
 
@@ -348,18 +350,18 @@ func TestSubscriberHandlerPanicReleasesUncalledHandlerLeases(t *testing.T) {
 	defer firstCancel()
 	defer secondCancel()
 	first := &subscriberTimeSeriesHandler{
-		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { panic("boom") },
+		handler:   func(context.Context, *pb.TimeSeriesRowsCommitted) error { panic("boom") },
 		lifecycle: newSubscriberHandlerLifecycle(), ctx: firstCtx, cancel: firstCancel,
 	}
 	second := &subscriberTimeSeriesHandler{
-		handler:   func(context.Context, *pb.TimeSeriesRowsUpdated) error { return nil },
+		handler:   func(context.Context, *pb.TimeSeriesRowsCommitted) error { return nil },
 		lifecycle: newSubscriberHandlerLifecycle(), ctx: secondCtx, cancel: secondCancel,
 	}
 	require.True(t, first.lifecycle.acquire())
 	require.True(t, second.lifecycle.acquire())
 	func() {
 		defer func() { _ = recover() }()
-		_ = callTimeSeriesHandlers(context.Background(), &pb.TimeSeriesRowsUpdated{}, []*subscriberTimeSeriesHandler{first, second})
+		_ = callTimeSeriesHandlers(context.Background(), &pb.TimeSeriesRowsCommitted{}, []*subscriberTimeSeriesHandler{first, second})
 	}()
 	for _, entry := range []*subscriberTimeSeriesHandler{first, second} {
 		entry.lifecycle.mu.Lock()
@@ -370,11 +372,11 @@ func TestSubscriberHandlerPanicReleasesUncalledHandlerLeases(t *testing.T) {
 }
 
 func TestSubscriberBusRejectsDeliveryWithoutHandlers(t *testing.T) {
-	payload, err := proto.Marshal(&pb.TimeSeriesRowsUpdated{MessageId: "event-1"})
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
 	require.NoError(t, err)
 	bus := &SubscriberBus{timeSeriesHandlers: map[uint64]*subscriberTimeSeriesHandler{}}
 
-	err = bus.dispatch(context.Background(), &jetstream.Delivery{Message: &messagepb.MooxMessage{Payload: payload}}, true)
+	err = bus.dispatch(context.Background(), &jetstream.Delivery{Message: testTimeSeriesMessage(payload)}, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no time-series handlers")
@@ -385,61 +387,98 @@ func TestNormalizeSubjectPrefix(t *testing.T) {
 	assert.Equal(t, "custom.prefix", normalizeSubjectPrefix(".custom.prefix."))
 }
 
-func TestTimeSeriesRowsUpdatedSubjectUsesPrefix(t *testing.T) {
-	subject := TimeSeriesRowsUpdatedSubject("custom")
-	assert.Equal(t, "custom.time_series.rows_updated.v1", subject)
+func TestTimeSeriesRowsCommittedSubjectUsesPrefix(t *testing.T) {
+	subject := TimeSeriesRowsCommittedSubject("custom")
+	assert.Equal(t, "custom.rows_committed.time_series.v1.>", subject)
 }
 
-func TestRecordRowsUpdatedSubjectUsesPrefix(t *testing.T) {
-	subject := RecordRowsUpdatedSubject("custom")
-	assert.Equal(t, "custom.record.rows_updated.v1", subject)
+func TestRecordRowsCommittedSubjectUsesPrefix(t *testing.T) {
+	subject := RecordRowsCommittedSubject("custom")
+	assert.Equal(t, "custom.rows_committed.record.v1.>", subject)
 }
 
 func TestSubjectPrefixWildcard(t *testing.T) {
 	assert.Equal(t, "moox.storage.>", SubjectPrefixWildcard(""))
 }
 
-func TestPublishTimeSeriesRowsUpdatedRejectsNilEvent(t *testing.T) {
+func TestPublishTimeSeriesRowsCommittedRejectsNilEvent(t *testing.T) {
 	bus := NewProducerBus(&jetstream.Client{}, "")
-	err := bus.PublishTimeSeriesRowsUpdated(context.Background(), nil)
+	err := bus.PublishTimeSeriesRowsCommitted(context.Background(), nil)
 	require.Error(t, err)
 }
 
-func TestPublishRecordRowsUpdatedRejectsNilEvent(t *testing.T) {
+func TestPublishRecordRowsCommittedRejectsNilEvent(t *testing.T) {
 	bus := NewProducerBus(&jetstream.Client{}, "")
-	err := bus.PublishRecordRowsUpdated(context.Background(), nil)
+	err := bus.PublishRecordRowsCommitted(context.Background(), nil)
 	require.Error(t, err)
 }
 
-func TestPublishEnvelopeRejectsNilClient(t *testing.T) {
+func TestPublishMessageRejectsNilClient(t *testing.T) {
 	var bus *ProducerBus
-	err := bus.PublishEnvelope(context.Background(), []byte("x"))
+	err := bus.PublishMessage(context.Background(), []byte("x"))
 	require.Error(t, err)
-}
-
-func TestPublishEnvelopesReturnsUnmarshalErrors(t *testing.T) {
-	bus := NewProducerBus(&jetstream.Client{}, "")
-	errs := bus.PublishEnvelopes(context.Background(), [][]byte{[]byte("bad")})
-	require.Len(t, errs, 1)
-	require.Error(t, errs[0])
 }
 
 func TestNewProducerBusSetsSubjects(t *testing.T) {
 	bus := NewProducerBus(&jetstream.Client{}, "test")
-	assert.Equal(t, "test.time_series.rows_updated.v1", bus.timeSeriesSubject)
-	assert.Equal(t, "test.record.rows_updated.v1", bus.recordSubject)
+	assert.Equal(t, "test.rows_committed.time_series.v1.>", bus.timeSeriesSubject)
+	assert.Equal(t, "test.rows_committed.record.v1.>", bus.recordSubject)
 }
 
-func TestPublishTimeSeriesRowsUpdatedRequiresMessageID(t *testing.T) {
+func TestPublishTimeSeriesRowsCommittedRequiresEvent(t *testing.T) {
 	bus := NewProducerBus(&jetstream.Client{}, "")
-	err := bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{})
+	err := bus.PublishTimeSeriesRowsCommitted(context.Background(), nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "message_id")
+	assert.Contains(t, err.Error(), "time-series committed")
 }
 
 func TestPublishNilProducerBusReturnsError(t *testing.T) {
 	var bus *ProducerBus
-	err := bus.publish(context.Background(), "topic", "", "space", "dataset", &pb.TimeSeriesRowsUpdated{MessageId: "id-1"})
+	err := bus.publish(context.Background(), "topic", defaultTimeSeriesRowsCommittedType, "space", "dataset", "shard-1", &pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errors.New("storage eventbus client is nil")) || err != nil)
+}
+
+func testTimeSeriesMessage(payload []byte) *messagepb.MooxMessage {
+	now := timestamppb.Now()
+	token, _ := jetstream.EncodeShardToken("shard-1")
+	return &messagepb.MooxMessage{
+		ProtocolVersion: jetstream.ProtocolVersion,
+		MessageId:       "message-1",
+		Topic:           "moox.storage.rows_committed.time_series.v1." + token,
+		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
+		Producer:        &messagepb.Producer{ServiceName: "moox-storage", InstanceId: "storage"},
+		Sequence:        1,
+		OccurredAt:      now,
+		PublishedAt:     now,
+		ContentType:     "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted",
+		MessageType:     defaultTimeSeriesRowsCommittedType,
+		Payload:         payload,
+	}
+}
+
+func TestValidateRowsCommittedMessageRejectsUnknownType(t *testing.T) {
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
+	require.NoError(t, err)
+	msg := testTimeSeriesMessage(payload)
+	msg.MessageType = "moox.storage.unknown.v1"
+	assert.ErrorContains(t, validateRowsCommittedMessage(msg, ""), "unknown storage message_type")
+}
+
+func TestValidateRowsCommittedMessageRejectsTopicShardMismatch(t *testing.T) {
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
+	require.NoError(t, err)
+	msg := testTimeSeriesMessage(payload)
+	token, err := jetstream.EncodeShardToken("shard-2")
+	require.NoError(t, err)
+	msg.Topic = "moox.storage.rows_committed.time_series.v1." + token
+	assert.ErrorContains(t, validateRowsCommittedMessage(msg, ""), "does not match topic shard")
+}
+
+func TestValidateRowsCommittedMessageRejectsZeroSequence(t *testing.T) {
+	payload, err := proto.Marshal(&pb.TimeSeriesRowsCommitted{ShardId: "shard-1"})
+	require.NoError(t, err)
+	msg := testTimeSeriesMessage(payload)
+	msg.Sequence = 0
+	assert.ErrorContains(t, validateRowsCommittedMessage(msg, ""), "sequence is required")
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-func NewRowsUpdatedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
+func NewRowsCommittedBus(ctx context.Context, cfg storageconfig.StorageEventBus) (coreeventbus.Bus, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "", "memory":
 		return coreeventbus.NewMemoryBus(), nil

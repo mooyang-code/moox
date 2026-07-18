@@ -9,13 +9,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type TimeSeriesRowsUpdatedHandler func(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error
-type RecordRowsUpdatedHandler func(ctx context.Context, event *pb.RecordRowsUpdated) error
+type TimeSeriesRowsCommittedHandler func(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error
+type RecordRowsCommittedHandler func(ctx context.Context, event *pb.RecordRowsCommitted) error
 
 // Publisher publishes committed PrimaryStore changes.
 type Publisher interface {
-	PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error
-	PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error
+	PublishTimeSeriesRowsCommitted(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error
+	PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommitted) error
 }
 
 // Subscription 表示一个已建立的事件订阅。
@@ -25,8 +25,8 @@ type Subscription interface {
 
 // Subscriber consumes PrimaryStore changes.
 type Subscriber interface {
-	SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler TimeSeriesRowsUpdatedHandler) (Subscription, error)
-	SubscribeRecordRowsUpdated(ctx context.Context, handler RecordRowsUpdatedHandler) (Subscription, error)
+	SubscribeTimeSeriesRowsCommitted(ctx context.Context, handler TimeSeriesRowsCommittedHandler) (Subscription, error)
+	SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error)
 }
 
 // Bus combines capabilities for bootstrap-owned transports.
@@ -66,7 +66,7 @@ func (b *MemoryBus) Ready() bool {
 	return !b.closed
 }
 
-func (b *MemoryBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler TimeSeriesRowsUpdatedHandler) (Subscription, error) {
+func (b *MemoryBus) SubscribeTimeSeriesRowsCommitted(ctx context.Context, handler TimeSeriesRowsCommittedHandler) (Subscription, error) {
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil
@@ -87,7 +87,7 @@ func (b *MemoryBus) SubscribeTimeSeriesRowsUpdated(ctx context.Context, handler 
 	return &memorySubscription{close: func() { b.deleteTimeSeriesHandler(id, entry) }}, nil
 }
 
-func (b *MemoryBus) SubscribeRecordRowsUpdated(ctx context.Context, handler RecordRowsUpdatedHandler) (Subscription, error) {
+func (b *MemoryBus) SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error) {
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil
@@ -108,7 +108,7 @@ func (b *MemoryBus) SubscribeRecordRowsUpdated(ctx context.Context, handler Reco
 	return &memorySubscription{close: func() { b.deleteRecordHandler(id, entry) }}, nil
 }
 
-func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+func (b *MemoryBus) PublishTimeSeriesRowsCommitted(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -133,12 +133,12 @@ func (b *MemoryBus) PublishTimeSeriesRowsUpdated(ctx context.Context, event *pb.
 	for next < len(handlers) {
 		entry := handlers[next]
 		next++
-		err = errors.Join(err, entry.call(ctx, cloneTimeSeriesRowsUpdated(event)))
+		err = errors.Join(err, entry.call(ctx, cloneTimeSeriesRowsCommitted(event)))
 	}
 	return err
 }
 
-func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.RecordRowsUpdated) error {
+func (b *MemoryBus) PublishRecordRowsCommitted(ctx context.Context, event *pb.RecordRowsCommitted) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -163,7 +163,7 @@ func (b *MemoryBus) PublishRecordRowsUpdated(ctx context.Context, event *pb.Reco
 	for next < len(handlers) {
 		entry := handlers[next]
 		next++
-		err = errors.Join(err, entry.call(ctx, cloneRecordRowsUpdated(event)))
+		err = errors.Join(err, entry.call(ctx, cloneRecordRowsCommitted(event)))
 	}
 	return err
 }
@@ -220,21 +220,21 @@ func (b *MemoryBus) deleteRecordHandler(id uint64, entry *memoryRecordHandler) {
 }
 
 type memoryTimeSeriesHandler struct {
-	handler   TimeSeriesRowsUpdatedHandler
+	handler   TimeSeriesRowsCommittedHandler
 	lifecycle *handlerLifecycle
 }
 
-func (h *memoryTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeriesRowsUpdated) error {
+func (h *memoryTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error {
 	defer h.lifecycle.release()
 	return h.handler(ctx, event)
 }
 
 type memoryRecordHandler struct {
-	handler   RecordRowsUpdatedHandler
+	handler   RecordRowsCommittedHandler
 	lifecycle *handlerLifecycle
 }
 
-func (h *memoryRecordHandler) call(ctx context.Context, event *pb.RecordRowsUpdated) error {
+func (h *memoryRecordHandler) call(ctx context.Context, event *pb.RecordRowsCommitted) error {
 	defer h.lifecycle.release()
 	return h.handler(ctx, event)
 }
@@ -285,18 +285,18 @@ func (l *handlerLifecycle) wait() {
 	l.mu.Unlock()
 }
 
-func cloneTimeSeriesRowsUpdated(event *pb.TimeSeriesRowsUpdated) *pb.TimeSeriesRowsUpdated {
+func cloneTimeSeriesRowsCommitted(event *pb.TimeSeriesRowsCommitted) *pb.TimeSeriesRowsCommitted {
 	if event == nil {
 		return nil
 	}
-	return proto.Clone(event).(*pb.TimeSeriesRowsUpdated)
+	return proto.Clone(event).(*pb.TimeSeriesRowsCommitted)
 }
 
-func cloneRecordRowsUpdated(event *pb.RecordRowsUpdated) *pb.RecordRowsUpdated {
+func cloneRecordRowsCommitted(event *pb.RecordRowsCommitted) *pb.RecordRowsCommitted {
 	if event == nil {
 		return nil
 	}
-	return proto.Clone(event).(*pb.RecordRowsUpdated)
+	return proto.Clone(event).(*pb.RecordRowsCommitted)
 }
 
 // memorySubscription 表示 MemoryBus 返回的订阅句柄。

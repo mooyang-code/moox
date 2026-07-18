@@ -1,4 +1,4 @@
-PROTO_FILES := common.proto metadata.proto access.proto store.proto view.proto view_index.proto message.proto
+PROTO_FILES := common.proto metadata.proto access.proto store.proto view.proto view_index.proto rows_committed.proto
 OUTPUT_DIR := ./storagegen
 COMMON_PROTO_DIR := ../../../packages/commonpb
 

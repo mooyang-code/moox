@@ -145,18 +145,18 @@ func TestNewEventConsumer_StartAndClose_ShouldSubscribeBothTopics(t *testing.T) 
 	recordCalled := false
 	consumer := NewEventConsumer(EventConsumerOptions{
 		Events: bus,
-		HandleTimeSeries: func(context.Context, *pb.TimeSeriesRowsUpdated) error {
+		HandleTimeSeries: func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 			timeSeriesCalled = true
 			return nil
 		},
-		HandleRecord: func(context.Context, *pb.RecordRowsUpdated) error {
+		HandleRecord: func(context.Context, *pb.RecordRowsCommitted) error {
 			recordCalled = true
 			return nil
 		},
 	})
 	require.NoError(t, consumer.Start(ctx))
-	require.NoError(t, bus.PublishTimeSeriesRowsUpdated(ctx, &pb.TimeSeriesRowsUpdated{}))
-	require.NoError(t, bus.PublishRecordRowsUpdated(ctx, &pb.RecordRowsUpdated{}))
+	require.NoError(t, bus.PublishTimeSeriesRowsCommitted(ctx, &pb.TimeSeriesRowsCommitted{}))
+	require.NoError(t, bus.PublishRecordRowsCommitted(ctx, &pb.RecordRowsCommitted{}))
 	require.NoError(t, consumer.Close())
 	assert.True(t, timeSeriesCalled)
 	assert.True(t, recordCalled)

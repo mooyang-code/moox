@@ -162,12 +162,14 @@ func testOutboxMessage(t *testing.T, nodeID string) []byte {
 	msg := &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,
 		MessageId:       "msg-1",
-		Topic:           "moox.storage.time_series.rows_updated.v1",
+		Topic:           "moox.storage.rows_committed.time_series.v1.mzxw6",
 		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
 		Producer:        &messagepb.Producer{ServiceName: "moox-storage", InstanceId: nodeID},
+		Sequence:        1,
 		OccurredAt:      now,
 		PublishedAt:     now,
 		ContentType:     "application/x-protobuf",
+		MessageType:     "moox.storage.time_series.rows_committed.v1",
 		Payload:         []byte("payload"),
 	}
 	data, err := proto.Marshal(msg)

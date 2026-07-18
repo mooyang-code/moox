@@ -53,7 +53,7 @@ func (c OutboxConfig) normalized() OutboxConfig {
 
 type OutboxRelay struct {
 	store     device.FactStore
-	publisher EnvelopePublisher
+	publisher MessagePublisher
 	cfg       OutboxConfig
 	stop      chan struct{}
 	done      chan struct{}
@@ -62,7 +62,7 @@ type OutboxRelay struct {
 	lastAck   atomic.Int64
 }
 
-func NewOutboxRelay(store device.FactStore, publisher EnvelopePublisher, cfg OutboxConfig) *OutboxRelay {
+func NewOutboxRelay(store device.FactStore, publisher MessagePublisher, cfg OutboxConfig) *OutboxRelay {
 	return &OutboxRelay{store: store, publisher: publisher, cfg: cfg.normalized()}
 }
 
@@ -138,7 +138,7 @@ func (r *OutboxRelay) flush(ctx context.Context) (int, error) {
 		if entry == nil {
 			return len(confirmed), errors.New("storage outbox contains nil entry")
 		}
-		if err := r.publisher.PublishEnvelope(ctx, entry.Data); err != nil {
+		if err := r.publisher.PublishMessage(ctx, entry.Data); err != nil {
 			if len(confirmed) > 0 {
 				if deleteErr := r.store.DeleteOutbox(ctx, confirmed); deleteErr != nil {
 					return len(confirmed), errors.Join(err, deleteErr)
