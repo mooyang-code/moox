@@ -58,6 +58,9 @@
 | View 物化 | RowsChanged 只触发刷新；ViewBuilder 批量回读最新事实数据并生成完整 View 行 |
 | View 行并发 | 同一 `ViewRowKey` 串行处理，不比较不同 DataShard 的 Sequence |
 | DuckDB/Bleve | 共用同一物化协议；两者都完整 Replace/Upsert，不接收 Merge 请求中的局部字段 |
+| 共享包边界 | 删除含糊的 `internal/core` 总目录；真正跨服务复用的代码只保留顶层 `internal/rowkey`、`internal/typedvalue`、`internal/retinfo` |
+| ViewIndex 行模型 | 不创建独立 `viewrow` 包；`Row`、`RowKey`、`Batch` 作为 ViewIndex 写入契约，由 `internal/service/viewindex` 持有 |
+| 错误与返回信息 | 错误码、类型化错误和 `pb.RetInfo` 转换统一放入 `internal/retinfo`；不拆分 `errorcode`、`rpcresult`，不保留 `response` 包 |
 | Archive 范围 | 只处理配置白名单中的 TimeSeries Dataset；永久保留每个历史业务 Key 的最新完整状态 |
 | Archive 删除 | Archive 忽略 Delete 并 ACK，不写 Tombstone，不删除 Parquet/COS |
 | View 范围 | 使用成对的 `indexed_from` / `indexed_to`，删除 `active_coverage_start/end` |
@@ -118,10 +121,9 @@ modules/storage/
     viewindex/                        # ViewIndex 生命周期和内部 RPC
       duckdb/                         # 结构化索引实现
       bleve/                          # 全文索引实现
-  internal/core/
-    rowkey/                           # 事实行 Key 规范化、解析、维度哈希和时间格式
-    typedvalue/                       # TypedValue 转换、比较和 Null 基础语义
-    viewrow/                          # ViewBuilder/ViewIndex 共享的不可变 ViewRow DTO
+  internal/rowkey/                    # 事实行 Key 规范化、解析、维度哈希和时间格式
+  internal/typedvalue/                # TypedValue 转换、比较和 Null 基础语义
+  internal/retinfo/                   # 错误码、类型化错误和 pb.RetInfo 转换
 ```
 
 Storage 不再保留横向的 `internal/infra` 技术分层：有唯一生命周期所有者的实现必须和所属领域服务放在一起；真正跨模块复用的 JetStream、鉴权和协议能力继续使用 `packages/*`。Admin Gateway 是浏览器 BFF，Node Service Gateway 是唯一内部服务入口；Storage 模块内不再创建额外转发进程或 God Service。
@@ -589,6 +591,8 @@ git commit -m "fix(storage): propagate online deletes to views"
 - Modify: `modules/storage/internal/service/view/builder/record_test.go`
 - Modify: `modules/storage/internal/service/view/builder/options.go`
 - Modify: `modules/storage/internal/service/view/builder/options_test.go`
+- Create: `modules/storage/internal/core/viewindex/row.go`
+- Create: `modules/storage/internal/core/viewindex/row_test.go`
 - Modify: `modules/storage/internal/observability/view_metrics.go`
 - Modify: `modules/storage/internal/observability/view_metrics_test.go`
 
@@ -646,7 +650,9 @@ write_timeout: 10s
 
 - [ ] **Step 7: 生成完整 View 行**
 
-`rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。它必须读取所有 ViewColumn 的来源 Dataset，应用固定 Filter，输出完整列集合和稳定 ViewRowKey。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。`internal/core/viewrow` 只允许保存 ViewBuilder 与 ViewIndex 共同依赖的不可变 ViewRow/ViewRowKey DTO，不得包含事实读取或映射流程。
+`rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。它必须读取所有 ViewColumn 的来源 Dataset，应用固定 Filter，输出完整列集合和稳定 ViewRowKey。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。
+
+不创建独立 `viewrow` 包。ViewBuilder 和 ViewIndex 之间统一使用 ViewIndex 所拥有的 `viewindex.Row`、`viewindex.RowKey`、`viewindex.Batch` 写入契约；本任务先在现有 `internal/core/viewindex` 中建立这些类型，Task 13 再随整个 ViewIndex 契约原子移动到 `internal/service/viewindex`。这些类型只能表达不可变的完整派生行、稳定行身份和有界批次，不得包含事实回读、Filter 或 RowMapper 流程。
 
 - [ ] **Step 8: ACK/NAK 必须等待持久化结果**
 
@@ -657,8 +663,8 @@ JetStream Handler 为每条输入消息保留完成通知；EventBatcher 可以�
 - [ ] **Step 9: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/core/viewrow ./internal/service/view/builder/... ./internal/observability)
-git add modules/storage/internal/core/viewrow modules/storage/internal/service/view
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/core/viewindex ./internal/service/view/builder/... ./internal/service/viewindex ./internal/observability)
+git add modules/storage/internal/core/viewindex modules/storage/internal/service/view modules/storage/internal/service/viewindex
 git commit -m "refactor(storage): batch and serialize view refreshes"
 ```
 
@@ -678,23 +684,32 @@ git commit -m "refactor(storage): batch and serialize view refreshes"
 - Modify: `modules/storage/internal/infra/device/bleve/index_test.go`
 - Modify: `modules/storage/internal/service/viewindex/service_test.go`
 
-- [ ] **Step 1: 扩展 ViewIndexBatch**
+- [ ] **Step 1: 定义 ViewIndex 写入契约**
 
 ```go
-type ViewIndexBatch struct {
-    TimeSeriesRows []*pb.TimeSeriesRow
-    RecordRows     []*pb.RecordRow
-    DeleteKeys     []ViewRowKey
-    ShardID        string
-    Sequence       uint64
-    IndexedFrom    string
-    IndexedTo      string
-    ViewVersion    uint64
-    SchemaHash     string
+type RowKey struct {
+    TimeSeriesKey *pb.TimeSeriesKey
+    RecordKey     *pb.RecordKey
+}
+
+type Row struct {
+    TimeSeries *pb.TimeSeriesRow
+    Record     *pb.RecordRow
+}
+
+type Batch struct {
+    Upserts     []Row
+    DeleteKeys  []RowKey
+    ShardID     string
+    Sequence    uint64
+    IndexedFrom string
+    IndexedTo   string
+    ViewVersion uint64
+    SchemaHash  string
 }
 ```
 
-不得增加全局 `write_version`。
+每个 `Row` 和 `RowKey` 必须且只能设置 TimeSeries/Record 中的一种；`Batch` 只接收 RowMapper 生成的完整行，不接收事实 Merge 的局部字段。不得增加全局 `write_version`。
 
 - [ ] **Step 2: DuckDB 改为完整 Replace**
 
@@ -802,8 +817,9 @@ git commit -m "fix(storage): enforce materialized view ranges"
 - Modify: `modules/storage/internal/service/access/validate.go`
 - Modify: `modules/storage/internal/service/access/validate_test.go`
 - Modify: `modules/storage/internal/service/access/errors.go`
-- Modify: `modules/storage/internal/core/response/retinfo.go`
-- Modify: `modules/storage/internal/core/response/retinfo_test.go`
+- Rename: `modules/storage/internal/core/response/` -> `modules/storage/internal/retinfo/`
+- Modify: `modules/storage/internal/retinfo/retinfo.go`
+- Modify: `modules/storage/internal/retinfo/retinfo_test.go`
 - Modify: `modules/storage/internal/service/primary/remote.go`
 - Modify: `modules/storage/internal/service/primary/remote_test.go`
 - Modify: `modules/storage/internal/bootstrap/metadata/seed.go`
@@ -855,14 +871,16 @@ Required 列在合并后的完整行上校验，不能被 Null 或 Remove。
 
 实现 `required`；删除当前无法在分布式 Pebble 中正确保证的 `is_unique` 和未执行的 `validation_rule_json`，同步清理 Proto、SQL、Seed、UI 和文档。Dataset Schema 每次修改必须生成新的 `schema_hash`；已有事实数据时禁止改变现有列类型、删除列或新增 Required 列，除非先执行显式清空流程。新增可选列允许继续写入，但所有引用该 Dataset 的 ViewIndex 必须进入 Rebuild Required，不能让旧 Schema 索引继续显示 Ready。
 
-- [ ] **Step 5: 使用类型化错误**
+- [ ] **Step 5: 将错误码和 RetInfo 收敛到单包**
 
-定义 Domain Error Kind，由 RPC Handler 统一映射到 RetInfo。删除错误字符串解析。远程响应 `ret_info=nil` 必须视为协议错误；Pebble/网络错误不得映射为 INVALID_PARAM。
+使用单一 `internal/retinfo` 包定义 `Code`、带 `Code/Message/Cause` 的类型化错误，以及 `OK()`、`NewError()`、`FromError()`。`FromError()` 是内部错误到 `pb.RetInfo` 的唯一转换入口；未知错误统一返回不泄漏 SQL、文件路径和网络细节的 `INNER_ERR`。不再拆分 `errorcode`、`rpcresult`，也不保留 `response`、`errorinfo` 等平行包。
+
+删除 `MetadataStoreCode` 和所有错误字符串解析。SQLite/Pebble/网络错误必须在所属服务边界转换为明确的 `retinfo.Code`；远程响应 `ret_info=nil` 视为协议错误，Pebble/网络错误不得映射为 `INVALID_PARAM`。`retinfo` 不负责日志、数据库判断和业务规则。
 
 - [ ] **Step 6: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/core/schema ./internal/core/response ./internal/service/access ./internal/service/primary ./internal/infra/metadata/sqlite)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/core/schema ./internal/retinfo ./internal/service/access ./internal/service/primary ./internal/infra/metadata/sqlite)
 bash scripts/test-storage-consistency-contract.sh
 pnpm --dir web exec vitest run src/views/data/fields/field-workbench.test.ts src/views/data/metadata-catalog.test.ts
 pnpm --dir web exec eslint . --max-warnings=0
@@ -980,8 +998,9 @@ git commit -m "perf(storage): bound metadata queries and cache"
 - Rename: `modules/storage/internal/service/view/builder/access_reader.go` -> `modules/storage/internal/service/viewbuilder/source_reader.go`
 - Move: `modules/storage/internal/service/view/remote_metadata.go` -> `modules/storage/internal/service/dataview/remote_metadata.go`
 - Consolidate: `modules/storage/internal/service/viewindex/` as final `viewindex/`
-- Rename: `modules/storage/internal/core/factkey/` -> `modules/storage/internal/core/rowkey/`
-- Split: `modules/storage/internal/core/factvalue/` -> `modules/storage/internal/core/typedvalue/` plus owner-local helpers
+- Rename: `modules/storage/internal/core/factkey/` -> `modules/storage/internal/rowkey/`
+- Split: `modules/storage/internal/core/factvalue/` -> `modules/storage/internal/typedvalue/` plus owner-local helpers
+- Keep: `modules/storage/internal/retinfo/` as the single error-code and RPC RetInfo package established by Task 10
 - Move: `modules/storage/internal/core/schema/` -> `modules/storage/internal/service/primarystore/schema/`
 - Move: `modules/storage/internal/core/router/` -> `modules/storage/internal/service/primarystore/shardrouter/`
 - Move: `modules/storage/internal/core/metadata/store.go` -> `modules/storage/internal/service/metadata/contracts.go`
@@ -989,7 +1008,10 @@ git commit -m "perf(storage): bound metadata queries and cache"
 - Move: `modules/storage/internal/core/viewindex/engine_test.go` -> `modules/storage/internal/service/viewindex/engine_test.go`
 - Move: `modules/storage/internal/core/viewindex/path.go` -> `modules/storage/internal/service/viewindex/path.go`
 - Move: `modules/storage/internal/core/viewindex/path_test.go` -> `modules/storage/internal/service/viewindex/path_test.go`
+- Move: `modules/storage/internal/core/viewindex/row.go` -> `modules/storage/internal/service/viewindex/row.go`
+- Move: `modules/storage/internal/core/viewindex/row_test.go` -> `modules/storage/internal/service/viewindex/row_test.go`
 - Delete: `modules/storage/internal/core/eventbus/` after replacing it with DataShard `MessagePublisher`, ViewBuilder `EventConsumer`, and owner-local test fakes
+- Delete: `modules/storage/internal/core/` after all remaining packages have moved to their final owners
 - Move: `modules/storage/internal/infra/metadata/sqlite/` -> `modules/storage/internal/service/metadata/sqlite/`
 - Move: `modules/storage/internal/infra/metadata/cache/` -> `modules/storage/internal/service/metadata/cache/`
 - Move: `modules/storage/internal/infra/device/pebble/` -> `modules/storage/internal/service/datashard/pebble/`
@@ -1041,7 +1063,7 @@ git commit -m "perf(storage): bound metadata queries and cache"
 
 - [ ] **Step 2: 整理 View 边界**
 
-`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsChanged、回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件与内部 RPC。`core/viewrow` 只保留 ViewBuilder 和 ViewIndex 共享的不可变 DTO。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
+`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsChanged、回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件、内部 RPC 及其写入契约。ViewBuilder 输出 `viewindex.Row` / `viewindex.Batch`，ViewIndex 负责持有 `RowKey` 及完整行的不变式；不创建独立 `viewrow` 包。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
 
 - [ ] **Step 3: 原子替换服务名**
 
@@ -1061,11 +1083,11 @@ old role primary   -> role shard
 
 不添加 Alias、Forwarding Package、Deprecated Service 或旧配置兼容分支。
 
-- [ ] **Step 4: 完成 Core 命名与 Infra 垂直归属**
+- [ ] **Step 4: 删除 Core 总目录并完成垂直归属**
 
-`factkey` 实际表达行身份规范化，因此统一改为 `rowkey`；其职责固定为 TimeSeries/Record Key 构造解析、维度排序转义哈希和 UTC 时间格式。`factvalue` 中 TypedValue String/Numeric/Compare 移到 `typedvalue`，无生产调用的 `TimeInRange`/`ParseTime` 及其孤立测试直接删除，简单 `StringSet` 放回唯一调用方。禁止创建含糊的 `key`、`value` 通用包。
+不使用 `core`、`common`、`shared` 之类的总括目录。`factkey` 实际表达行身份规范化，因此直接移动为顶层 `internal/rowkey`；其职责固定为 TimeSeries/Record Key 构造解析、维度排序转义哈希和 UTC 时间格式。`factvalue` 中 TypedValue String/Numeric/Compare 移到顶层 `internal/typedvalue`，无生产调用的 `TimeInRange`/`ParseTime` 及其孤立测试直接删除，简单 `StringSet` 放回唯一调用方。错误码和 RPC 返回信息只使用 Task 10 建立的顶层 `internal/retinfo`。禁止创建含糊的 `key`、`value`、`response` 通用包，也不得创建 `errorcode`、`rpcresult` 平行包。
 
-完成 Pebble -> DataShard、DuckDB/Bleve -> ViewIndex、SQLite/Cache -> Metadata、Schema/ShardRouter -> PrimaryStore、RowMapper/EventConsumer -> ViewBuilder 的物理移动。删除组合 Publisher/Subscriber 的 Storage `Bus` 和运行时 MemoryBus；DataShard 只依赖窄 `MessagePublisher`，ViewBuilder 只依赖窄 `EventConsumer`，测试在各所有者包内使用 Fake。只有通用 JetStream 编解码、发布和鉴权留在 `packages/jetstream`。移动完成后，活动 Storage 代码不得从 `internal/infra` 导入任何实现。
+完成 Pebble -> DataShard、DuckDB/Bleve 与 Row/RowKey/Batch -> ViewIndex、SQLite/Cache -> Metadata、Schema/ShardRouter -> PrimaryStore、RowMapper/EventConsumer -> ViewBuilder 的物理移动。删除组合 Publisher/Subscriber 的 Storage `Bus` 和运行时 MemoryBus；DataShard 只依赖窄 `MessagePublisher`，ViewBuilder 只依赖窄 `EventConsumer`，测试在各所有者包内使用 Fake。只有通用 JetStream 编解码、发布和鉴权留在 `packages/jetstream`。移动完成后，活动 Storage 代码不得存在 `internal/core`、`internal/infra` 或独立 `viewrow` 目录。
 
 - [ ] **Step 5: 拆分超大 Metadata Proto**
 
@@ -1081,6 +1103,11 @@ old role primary   -> role shard
 rg -n 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|PrimaryStore(Node|Route|Target|Key|Row)|storage[_-]access|moox-storage-access|ProjectionReader|active_coverage_|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' \
   modules packages scripts web/src examples skills/moox docs \
   --glob '!superpowers/**' --glob '!代码审查报告-*.md'
+test ! -d modules/storage/internal/core
+test ! -d modules/storage/internal/viewrow
+test ! -d modules/storage/internal/response
+test ! -d modules/storage/internal/errorcode
+test ! -d modules/storage/internal/rpcresult
 ```
 
 Expected: 活动代码和当前文档无匹配；历史 Git 记录不需要修改。
@@ -1105,6 +1132,7 @@ git commit -m "refactor(storage): establish final service boundaries"
 - Delete: `modules/storage/internal/infra/metadata/` after Metadata moves leave it empty
 - Delete: `modules/storage/internal/infra/eventbus/` after adapters move leave it empty
 - Delete: `modules/storage/internal/infra/` after all live owners move and dead implementations are removed
+- Verify absent: `modules/storage/internal/core/` after Task 13 moved all owner-specific and shared packages
 - Delete: `modules/storage/core`
 - Modify: `modules/storage/proto/shard_metadata.proto`
 - Modify: `modules/storage/proto/archive_registry.proto`
@@ -1146,9 +1174,9 @@ Pebble 归属 DataShard；DuckDB/Bleve 归属 storage-view 本地 ViewIndex；Ar
 
 删除 `Embedded` 旧配置、Schema V2 兼容、`all/access/primary/view_builder/view_query/view_index/archive` 等旧 Role 解析，只保留最终 `primary/shard/view` 装配语义。
 
-- [ ] **Step 4: 删除空文件和无引用 Symbol**
+- [ ] **Step 4: 删除空目录、旧共享包和无引用 Symbol**
 
-运行 `rg`、`go list` 和 `go vet` 确认没有死包、无引用配置键、旧 SQL 表和旧 Seed。
+运行 `rg`、`go list` 和 `go vet` 确认没有死包、无引用配置键、旧 SQL 表和旧 Seed。删除迁空后的 `internal/core`，并断言最终只存在顶层 `internal/rowkey`、`internal/typedvalue`、`internal/retinfo` 三个跨服务小包；不得存在独立 `viewrow`、`response`、`errorcode`、`rpcresult` 包。
 
 - [ ] **Step 5: Run and commit**
 
@@ -1498,7 +1526,7 @@ RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 
 - [ ] **Step 2: 文档写清一致性和限制**
 
-说明 Shard Sequence、ViewIndex Checkpoint、`indexed_from/indexed_to`、Merge 三态、Outbox 连续前缀、View 完整行替换、部分成功、重建流程、Archive 非当前状态备份，以及无 HA/Failover/Migration/Rebalance。明确 `rowkey`、`typedvalue`、`MooxMessage`、两种 RowsChanged 消息的职责，并说明 Pebble/Outbox、DuckDB/Bleve、SQLite/Cache、RowMapper/EventConsumer 分别由哪个领域服务拥有。
+说明 Shard Sequence、ViewIndex Checkpoint、`indexed_from/indexed_to`、Merge 三态、Outbox 连续前缀、View 完整行替换、部分成功、重建流程、Archive 非当前状态备份，以及无 HA/Failover/Migration/Rebalance。明确 `rowkey`、`typedvalue`、`retinfo`、`MooxMessage`、两种 RowsChanged 消息的职责；说明 `Row`、`RowKey`、`Batch` 是 ViewIndex 写入契约而不是独立 `viewrow` 包，并说明 Pebble/Outbox、DuckDB/Bleve、SQLite/Cache、RowMapper/EventConsumer 分别由哪个领域服务拥有。
 
 单独画出双网关信任边界：浏览器只能持用户令牌并进入 Admin Gateway；Admin Gateway 使用 Service HMAC 通过 Node Service Gateway 调用 Storage；服务间生成客户端直接通过 Node Service Gateway；任何调用方都不得保存或使用 Metadata、PrimaryStore、DataView 的物理地址。
 
@@ -1508,7 +1536,7 @@ RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 
 - [ ] **Step 4: 添加架构扫描门禁**
 
-脚本必须拒绝活动源码和现行文档中的旧 Access/PrimaryStore 物理命名、Mutation/DataChange/Projection、`active_coverage_*`、`factkey`、`factvalue`、Envelope 别名、通用 Device、Storage `internal/infra`、旧 Runtime Role、旧配置和过时文档链接，并验证 `docs/架构总览.md` 链接 `docs/存储层架构.md`。Package Boundary 必须断言 Pebble 只能被 DataShard 导入、DuckDB/Bleve 只能被 ViewIndex 导入、SQLite/Cache 只能被 Metadata 导入、RowMapper/EventConsumer 只能属于 ViewBuilder。`docs/superpowers/` 执行历史和带日期的历史审查报告可以保留原文，但不得被现行架构文档引用为当前事实源。
+脚本必须拒绝活动源码和现行文档中的旧 Access/PrimaryStore 物理命名、Mutation/DataChange/Projection、`active_coverage_*`、`factkey`、`factvalue`、Envelope 别名、通用 Device、Storage `internal/core` / `internal/infra`、独立 `viewrow`、`response`、`errorcode`、`rpcresult` 包、旧 Runtime Role、旧配置和过时文档链接，并验证 `docs/架构总览.md` 链接 `docs/存储层架构.md`。Package Boundary 必须断言 Pebble 只能被 DataShard 导入、DuckDB/Bleve 及 `Row`/`RowKey`/`Batch` 只能被 ViewIndex 持有、SQLite/Cache 只能被 Metadata 导入、RowMapper/EventConsumer 只能属于 ViewBuilder；`retinfo` 不得包含日志、数据库错误识别和业务规则。`docs/superpowers/` 执行历史和带日期的历史审查报告可以保留原文，但不得被现行架构文档引用为当前事实源。
 
 - [ ] **Step 5: 固化最初 CR 和后续讨论的已完成项**
 
@@ -1517,6 +1545,12 @@ RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 ```bash
 test -z "$(rg -l 'context\.Background\(\)' --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' .)"
 test -z "$(rg -l 'packages/crypto|package crypto' --glob '!docs/superpowers/**' .)"
+test ! -d modules/storage/internal/core
+test ! -d modules/storage/internal/viewrow
+test ! -d modules/storage/internal/response
+test ! -d modules/storage/internal/errorcode
+test ! -d modules/storage/internal/rpcresult
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/rowkey ./internal/typedvalue ./internal/retinfo ./internal/service/viewindex)
 (cd modules/strategy && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/rpc)
 (cd modules/gateway && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/bootstrap)
 (cd modules/hostagent && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/app)
@@ -1615,6 +1649,9 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 | tRPC Context、Timer、Host Metrics Cleanup、Security 包命名回归 | Task 15、18 |
 | 文档漂移和缺少运维信心 | Task 18 |
 | `factkey`/`factvalue` 语义含糊 | Task 13、14、18 |
+| `internal/core` 总目录缺少明确所有权 | Task 13、14、18 |
+| `viewrow` 小包与 `rowkey` 边界不清 | Task 7、8、13、18 |
+| `response` 混合错误分类和 RPC 返回构造 | Task 10、13、18 |
 | Storage Infra 与领域生命周期分离 | Task 13、14、18 |
 | 浏览器与服务间调用缺少双网关边界 | Task 16、18 |
 | RowsUpdated 删除概念且通用 DataChange 隐藏领域差异 | Task 2、3、6、7 |
@@ -1632,7 +1669,7 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 - [ ] TimeSeriesRowsChanged/RecordRowsChanged 由 DataShard 原子生成；MooxMessage 只保存一份消息 ID、类型和 Sequence。
 - [ ] UPSERT RowsChanged 携带完整提交后行；ViewBuilder 仍以批量回读作为最终事实来源。
 - [ ] Outbox 永不跨过失败项删除，重放不会增加 DuckDB/Bleve Entry Count。
-- [ ] DuckDB/Bleve 接收完整 View 行并拥有一致的 Upsert/Delete/Checkpoint 语义。
+- [ ] DuckDB/Bleve 通过 ViewIndex 拥有的 `Row`、`RowKey`、`Batch` 接收完整 View 行，并拥有一致的 Upsert/Delete/Checkpoint 语义；不存在独立 `viewrow` 包。
 - [ ] Archive 忽略 Delete，不写 Tombstone，不删除历史文件。
 - [ ] `indexed_from/indexed_to` 和 Shard Checkpoint 能解释查询范围和新鲜度。
 - [ ] 1001 行、1/25/999 页面、ASC/DESC 全部无遗漏和重复。
@@ -1641,7 +1678,8 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 - [ ] Metadata 使用 SQL 真分页、小型目录缓存和 SQL 时间戳事实源。
 - [ ] 配置、构造、Timer、健康和 Context 全部 Fail Closed。
 - [ ] 旧 Access、旧物理 PrimaryStore、Mutation、Projection、Coverage、Device 和兼容角色从活动树清零。
-- [ ] `factkey`、`factvalue`、Envelope 别名、DataChange 和 Storage `internal/infra` 从活动树清零；最终使用 `rowkey`、`typedvalue`、MooxMessage 和垂直领域目录。
+- [ ] `factkey`、`factvalue`、Envelope 别名、DataChange 以及 Storage `internal/core` / `internal/infra` 从活动树清零；最终只使用顶层 `rowkey`、`typedvalue`、`retinfo`、MooxMessage 和垂直领域目录。
+- [ ] 错误码、类型化错误和 `pb.RetInfo` 转换统一由 `internal/retinfo` 提供；不存在 `response`、`errorcode`、`rpcresult` 平行包，也不存在错误字符串分类。
 - [ ] Strategy 构建、发布、默认部署、入口可达性和严格时间参数契约继续通过。
 - [ ] Gateway/HostAgent tRPC Timer、Factor EventBatcher、48H Host Metrics Cleanup 和 `packages/security` 无回归。
 - [ ] CloudNode、View Browse 已按工作流与展示职责拆分，桌面和移动端核心流程通过。
