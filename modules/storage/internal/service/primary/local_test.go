@@ -32,10 +32,11 @@ func TestLocalClientWriteRowsWithMessageUsesOutbox(t *testing.T) {
 	client := NewLocalClient(LocalClientOptions{Pebble: store})
 	target := &pb.PrimaryStoreTarget{NodeId: "node-1"}
 	msg := testOutboxMessage(t, "node-1")
-	require.NoError(t, client.WriteRowsWithMessage(context.Background(), target, []*pb.PrimaryStoreRow{
+	err := client.WriteRowsWithMessage(context.Background(), target, []*pb.PrimaryStoreRow{
 		{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", Key: "BTC|1m|_"}},
-	}, msg))
-	assert.NotNil(t, store.outboxEntry)
+	}, msg)
+	require.Error(t, err)
+	assert.Nil(t, store.outboxEntry)
 }
 
 func TestLocalClientRejectsUnsupportedEngine(t *testing.T) {

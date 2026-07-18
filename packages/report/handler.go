@@ -104,6 +104,7 @@ func (h *Handler) Handle(ctx context.Context) error {
 		OccurredAt:      timestamppb.Now(),
 		PublishedAt:     timestamppb.Now(),
 		ContentType:     SnapshotContentType,
+		MessageType:     "moox.metrics.snapshot.reported.v1",
 		Payload:         payload,
 	}
 	client, err := h.publisher(ctx)

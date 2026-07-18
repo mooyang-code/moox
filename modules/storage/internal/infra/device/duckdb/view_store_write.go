@@ -49,11 +49,65 @@ func (s *ViewStore) InsertRows(ctx context.Context, tableName string, rows []*pb
 		return err
 	}
 	if empty {
+		if len(columns) > 1 {
+			complete := make([]*pb.TimeSeriesRow, 0, len(rows))
+			for _, row := range rows {
+				if len(row.GetColumns()) >= len(columns) {
+					complete = append(complete, row)
+				}
+			}
+			rows = complete
+		}
 		_, err = s.insertRowsIntoEmptyTable(ctx, quoted, columns, rows)
 	} else {
 		_, err = s.mergeRowsIntoTable(ctx, quoted, columns, rows)
 	}
 	return err
+}
+
+func (s *ViewStore) DeleteRows(ctx context.Context, tableName string, rows []*pb.TimeSeriesRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	quoted, err := quoteTableName(tableName)
+	if err != nil {
+		return err
+	}
+	unlock := s.lockResultTable(tableName)
+	defer unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	where, args := rowKeyPredicate(rows)
+	if where == "" {
+		_ = tx.Rollback()
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE %s`, quoted, where), args...)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if deleted > 0 {
+		name, err := unquoteTableName(quoted)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := updateIndexMetaTx(ctx, tx, name, -deleted, "", ""); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string) (bool, error) {
@@ -259,9 +313,17 @@ func mergeTimeSeriesRow(base *pb.TimeSeriesRow, patch *pb.TimeSeriesRow) *pb.Tim
 		positions[column.GetColumnName()] = idx
 	}
 	for _, column := range patch.GetColumns() {
+		if column == nil {
+			continue
+		}
 		copied := proto.Clone(column).(*pb.ColumnValue)
 		if idx, ok := positions[column.GetColumnName()]; ok {
-			if isNullColumn(copied) && !isNullColumn(merged.Columns[idx]) {
+			if isNullColumn(copied) {
+				merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
+				positions = make(map[string]int, len(merged.Columns))
+				for pos, value := range merged.Columns {
+					positions[value.GetColumnName()] = pos
+				}
 				continue
 			}
 			merged.Columns[idx] = copied
@@ -274,7 +336,11 @@ func mergeTimeSeriesRow(base *pb.TimeSeriesRow, patch *pb.TimeSeriesRow) *pb.Tim
 }
 
 func isNullColumn(column *pb.ColumnValue) bool {
-	return column == nil || column.GetValue() == nil
+	if column == nil || column.GetValue() == nil {
+		return true
+	}
+	_, explicit := column.GetValue().GetValue().(*pb.TypedValue_NullValue)
+	return explicit
 }
 
 func buildInsertSQL(quotedTableName string, columns []*pb.ResultColumn) (string, error) {

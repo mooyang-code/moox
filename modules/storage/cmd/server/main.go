@@ -122,6 +122,7 @@ func main() {
 		primaryService := primarysvc.NewService(primarysvc.Options{
 			Root:       opts.Root,
 			PebblePath: opts.PebblePath,
+			ShardID:    opts.ShardID,
 			Publisher:  messagePublisher,
 			Outbox: primarysvc.OutboxConfig{
 				FlushBatchSize: cfg.Storage.Primary.Outbox.FlushBatchSize,

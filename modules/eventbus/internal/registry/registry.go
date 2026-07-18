@@ -327,7 +327,25 @@ func TopicStream(cfg *config.Config, topic string) (config.TopicConfig, string, 
 			return t, t.Stream, nil
 		}
 	}
+	for _, family := range cfg.TopicFamilies {
+		if family.Enabled && topicMatchesPattern(topic, family.Pattern) {
+			return config.TopicConfig{Topic: topic, Stream: family.Stream, Kind: family.Kind, PayloadContentType: family.PayloadContentType, PayloadVersion: family.PayloadVersion, Enabled: family.Enabled}, family.Stream, nil
+		}
+	}
 	return config.TopicConfig{}, "", fmt.Errorf("topic %q is not registered", topic)
+}
+
+func topicMatchesPattern(topic, pattern string) bool {
+	a, b := strings.Split(topic, "."), strings.Split(pattern, ".")
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if b[i] != "*" && b[i] != a[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Registry) ValidateTopic(topic string) error {

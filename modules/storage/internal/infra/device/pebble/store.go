@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -18,6 +20,7 @@ import (
 type Options struct {
 	Path              string
 	DisableSyncWrites bool
+	ShardID           string
 }
 
 // Store 封装 Pebble 主存的行级读写能力。
@@ -27,6 +30,14 @@ type Store struct {
 	lockMu       sync.Mutex
 	locks        map[string]*rowLock
 	outboxMu     sync.Mutex
+	shardID      string
+}
+
+func (s *Store) ShardID() string {
+	if s == nil {
+		return ""
+	}
+	return s.shardID
 }
 
 // rowLock 保存同一行合并写入时使用的互斥锁。
@@ -47,7 +58,11 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	return &Store{db: db, writeOptions: writeOptions, locks: make(map[string]*rowLock)}, nil
+	shardID := strings.TrimSpace(opts.ShardID)
+	if shardID == "" {
+		shardID = "local"
+	}
+	return &Store{db: db, writeOptions: writeOptions, locks: make(map[string]*rowLock), shardID: shardID}, nil
 }
 
 func (s *Store) Close() error {
@@ -62,9 +77,27 @@ func (s *Store) WriteRows(ctx context.Context, rows []*pb.PrimaryStoreRow) error
 }
 
 func (s *Store) DeleteRows(ctx context.Context, keys []*pb.PrimaryStoreKey) error {
+	return s.deleteRows(ctx, keys, nil)
+}
+
+func (s *Store) deleteRows(ctx context.Context, keys []*pb.PrimaryStoreKey, entry *device.OutboxEntry) error {
 	if s == nil || s.db == nil {
 		return errors.New("pebble store is closed")
 	}
+	if len(keys) == 0 {
+		return nil
+	}
+	for _, key := range keys {
+		if err := validateKey(key); err != nil {
+			return err
+		}
+	}
+	rowKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		rowKeys = append(rowKeys, encodePrimaryStoreKey(key))
+	}
+	unlock := s.lockRows(rowKeys)
+	defer unlock()
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	for _, key := range keys {
@@ -78,6 +111,13 @@ func (s *Store) DeleteRows(ctx context.Context, keys []*pb.PrimaryStoreKey) erro
 			return err
 		}
 	}
+	if entry != nil {
+		s.outboxMu.Lock()
+		defer s.outboxMu.Unlock()
+		if err := s.stageOutbox(batch, entry); err != nil {
+			return err
+		}
+	}
 	return batch.Commit(s.writeOptions)
 }
 
@@ -86,10 +126,8 @@ func (s *Store) writeRows(ctx context.Context, rows []*pb.PrimaryStoreRow, entry
 	if len(rows) == 0 {
 		return nil
 	}
-	for _, row := range rows {
-		if err := validateRow(row); err != nil {
-			return err
-		}
+	if err := validateRowBatchIdentity(rows); err != nil {
+		return err
 	}
 	keys := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -117,6 +155,9 @@ func (s *Store) writeRows(ctx context.Context, rows []*pb.PrimaryStoreRow, entry
 	if entry != nil {
 		s.outboxMu.Lock()
 		defer s.outboxMu.Unlock()
+		if err := materializeRowsCommittedMessage(entry, rows, pending); err != nil {
+			return err
+		}
 	}
 	for key, row := range pending {
 		data, err := proto.Marshal(row)
@@ -133,6 +174,101 @@ func (s *Store) writeRows(ctx context.Context, rows []*pb.PrimaryStoreRow, entry
 		}
 	}
 	return batch.Commit(s.writeOptions)
+}
+
+// materializeRowsCommittedMessage turns the caller's column patches into the
+// complete post-merge snapshot that downstream consumers are entitled to
+// receive. It runs after the pending rows have been merged and before the
+// same Pebble batch stages the outbox entry, so the fact row and event cannot
+// observe different states.
+func materializeRowsCommittedMessage(entry *device.OutboxEntry, inputRows []*pb.PrimaryStoreRow, pending map[string]*pb.PrimaryStoreRow) error {
+	if entry == nil || len(entry.Data) == 0 {
+		return nil
+	}
+	msg := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(entry.Data, msg); err != nil {
+		return fmt.Errorf("decode outbox message: %w", err)
+	}
+	lookup := make(map[string]*pb.PrimaryStoreRow, len(pending))
+	for key, row := range pending {
+		lookup[key] = row
+	}
+	switch msg.GetMessageType() {
+	case "moox.storage.time_series.rows_committed.v1":
+		event := &pb.TimeSeriesRowsCommitted{}
+		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
+			return fmt.Errorf("decode time-series rows committed payload: %w", err)
+		}
+		for idx, write := range event.GetWrites() {
+			if write == nil || write.GetRow() == nil || idx >= len(inputRows) {
+				continue
+			}
+			full := lookup[encodeRowKey(inputRows[idx])]
+			if full == nil {
+				continue
+			}
+			write.Row.Columns = cloneColumns(full.GetColumns())
+			write.Row.Attributes = cloneAttributes(full.GetAttributes())
+		}
+		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+		if err != nil {
+			return err
+		}
+		msg.Payload = data
+	case "moox.storage.record.rows_committed.v1":
+		event := &pb.RecordRowsCommitted{}
+		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
+			return fmt.Errorf("decode record rows committed payload: %w", err)
+		}
+		for idx, write := range event.GetWrites() {
+			if write == nil || write.GetRow() == nil || idx >= len(inputRows) {
+				continue
+			}
+			full := lookup[encodeRowKey(inputRows[idx])]
+			if full == nil {
+				continue
+			}
+			write.Row.Columns = cloneColumns(full.GetColumns())
+			write.Row.Attributes = cloneAttributes(full.GetAttributes())
+		}
+		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+		if err != nil {
+			return err
+		}
+		msg.Payload = data
+	default:
+		return fmt.Errorf("unsupported outbox message_type %q", msg.GetMessageType())
+	}
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	entry.Data = data
+	return nil
+}
+
+func cloneColumns(columns []*pb.ColumnValue) []*pb.ColumnValue {
+	if len(columns) == 0 {
+		return nil
+	}
+	out := make([]*pb.ColumnValue, 0, len(columns))
+	for _, column := range columns {
+		if column != nil {
+			out = append(out, proto.Clone(column).(*pb.ColumnValue))
+		}
+	}
+	return out
+}
+
+func cloneAttributes(attributes map[string]string) map[string]string {
+	if len(attributes) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		out[key] = value
+	}
+	return out
 }
 
 func (s *Store) lockRows(keys []string) func() {
@@ -200,7 +336,9 @@ func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimarySt
 	for _, column := range patch.GetColumns() {
 		copied := proto.Clone(column).(*pb.ColumnValue)
 		if idx, ok := positions[column.GetColumnName()]; ok {
-			if isNullColumn(copied) && !isNullColumn(merged.Columns[idx]) {
+			if isNullColumn(copied) {
+				merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
+				positions = columnPositions(merged.Columns)
 				continue
 			}
 			merged.Columns[idx] = copied
@@ -221,7 +359,21 @@ func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimarySt
 }
 
 func isNullColumn(column *pb.ColumnValue) bool {
-	return column == nil || column.GetValue() == nil
+	if column == nil || column.GetValue() == nil {
+		return true
+	}
+	_, explicit := column.GetValue().GetValue().(*pb.TypedValue_NullValue)
+	return explicit
+}
+
+func columnPositions(columns []*pb.ColumnValue) map[string]int {
+	positions := make(map[string]int, len(columns))
+	for idx, column := range columns {
+		if column != nil {
+			positions[column.GetColumnName()] = idx
+		}
+	}
+	return positions
 }
 
 func (s *Store) ReadRows(ctx context.Context, keys []*pb.PrimaryStoreKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {

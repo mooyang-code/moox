@@ -29,7 +29,7 @@ const (
 	defaultTimeSeriesRowsCommittedType    = "moox.storage.time_series.rows_committed.v1"
 	defaultRecordRowsCommittedType        = "moox.storage.record.rows_committed.v1"
 	defaultStorageStream                  = "MOOX_STORAGE"
-	defaultMaxInFlight                    = 128
+	defaultMaxInFlight                    = 1
 	defaultMaxAckPending                  = 128
 	defaultAckWait                        = 2 * time.Minute
 	defaultNakDelay                       = time.Second

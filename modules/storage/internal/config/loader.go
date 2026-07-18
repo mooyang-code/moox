@@ -169,6 +169,7 @@ func (m StorageViewMaintenance) IsEnabled() bool {
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string        `yaml:"service_name"`
+	ShardID     string        `yaml:"shard_id"`
 	Outbox      StorageOutbox `yaml:"outbox"`
 }
 
@@ -198,6 +199,9 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if len(c.Roles) == 0 {
 		c.Roles = []string{"access", "view"}
+	}
+	if c.Primary.ShardID == "" {
+		c.Primary.ShardID = "storage-primary-0"
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")

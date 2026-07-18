@@ -69,7 +69,7 @@ func NewServiceWithOptions(opts Options) *Service {
 		primaryClient = primary.NewRemoteClient(opts.PrimaryServiceName)
 	}
 	if primaryClient == nil {
-		primaryClient = primary.NewLocalClient(primary.LocalClientOptions{Root: root, PebblePath: opts.PebblePath})
+		primaryClient = primary.NewLocalClient(primary.LocalClientOptions{Root: root, PebblePath: opts.PebblePath, ShardID: opts.ShardID})
 	}
 	events := opts.Events
 	if events == nil {

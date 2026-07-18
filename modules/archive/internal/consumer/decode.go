@@ -41,28 +41,29 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if message.GetProtocolVersion() != 1 || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unsupported message protocol or kind")
 	}
-	if message.GetTopic() != "moox.storage.time_series.rows_updated.v1" || !strings.Contains(message.GetContentType(), "TimeSeriesRowsUpdated") {
+	if !strings.HasPrefix(message.GetTopic(), "moox.storage.rows_committed.time_series.v1.") || message.GetMessageType() != "moox.storage.time_series.rows_committed.v1" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected topic or content type")
 	}
 	if strings.TrimSpace(message.GetMessageId()) == "" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message_id is required")
 	}
-	var event storagepb.TimeSeriesRowsUpdated
+	var event storagepb.TimeSeriesRowsCommitted
 	if err := proto.Unmarshal(message.GetPayload(), &event); err != nil {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("decode time-series event: %w", err)
-	}
-	if event.GetMessageId() != message.GetMessageId() {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("outer and inner message_id mismatch")
 	}
 	if _, ok := d.sources[event.GetSpaceId()][event.GetDatasetId()]; !ok {
 		return domain.EventBatch{}, DecisionIgnore, nil
 	}
-	writtenAt, err := parseTime(event.GetWrittenAt())
-	if err != nil {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("written_at: %w", err)
+	if message.GetOccurredAt() == nil || message.GetOccurredAt().CheckValid() != nil {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("occurred_at is required")
 	}
+	writtenAt := message.GetOccurredAt().AsTime().UTC()
 	rows := make(map[string]domain.RowPatch)
-	for _, row := range event.GetRows() {
+	for _, write := range event.GetWrites() {
+		if write.GetOperation() == storagepb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
+			continue
+		}
+		row := write.GetRow()
 		patch, err := decodeRow(&event, row, writtenAt)
 		if err != nil {
 			return domain.EventBatch{}, DecisionReject, err
@@ -75,16 +76,18 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 		}
 	}
 	if len(rows) == 0 {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("event rows are required")
+		// Archive is an append-only historical sink. A committed DELETE is
+		// intentionally acknowledged without creating a tombstone.
+		return domain.EventBatch{MessageID: message.GetMessageId()}, DecisionIgnore, nil
 	}
-	batch := domain.EventBatch{MessageID: event.GetMessageId(), Rows: make([]domain.RowPatch, 0, len(rows))}
+	batch := domain.EventBatch{MessageID: message.GetMessageId(), Rows: make([]domain.RowPatch, 0, len(rows))}
 	for _, patch := range rows {
 		batch.Rows = append(batch.Rows, patch)
 	}
 	return batch, DecisionArchive, nil
 }
 
-func decodeRow(event *storagepb.TimeSeriesRowsUpdated, row *storagepb.TimeSeriesRow, writtenAt time.Time) (domain.RowPatch, error) {
+func decodeRow(event *storagepb.TimeSeriesRowsCommitted, row *storagepb.TimeSeriesRow, writtenAt time.Time) (domain.RowPatch, error) {
 	if row == nil || row.GetKey() == nil {
 		return domain.RowPatch{}, fmt.Errorf("row key is required")
 	}

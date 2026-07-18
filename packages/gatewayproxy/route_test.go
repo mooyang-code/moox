@@ -78,7 +78,7 @@ func TestValidateRouteAcceptsCapsAndRejectsValuesAboveCaps(t *testing.T) {
 
 func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	routes := []Route{
-		{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.Storage"},
+		{ServiceID: "storage_api", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.Storage"},
 		{ServiceID: "admin", Address: "[::1]:8001", ServicePath: "trpc.moox.Admin"},
 	}
 	first, err := NormalizeAndHash("node-1", routes)
@@ -101,6 +101,33 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	routes[0].Address = "127.0.0.1:9999"
 	if first.Routes[1].Address == routes[0].Address {
 		t.Fatal("NormalizeAndHash retained caller-owned route storage")
+	}
+}
+
+func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testing.T) {
+	base := Route{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.storage.DataView"}
+	if err := ValidateRoute(base); err == nil {
+		t.Fatal("ValidateRoute accepted an unrestricted storage route")
+	}
+
+	for _, method := range []string{
+		"ClaimViewIndexBuild",
+		"ScanRecordRows",
+		"WritePrimaryRows",
+		"DeletePrimaryRows",
+		"WriteViewIndex",
+	} {
+		route := base
+		route.AllowedMethods = []string{method}
+		if err := ValidateRoute(route); err == nil {
+			t.Fatalf("ValidateRoute accepted internal storage method %q", method)
+		}
+	}
+
+	public := base
+	public.AllowedMethods = []string{"SearchRecordRows"}
+	if err := ValidateRoute(public); err != nil {
+		t.Fatalf("ValidateRoute rejected public storage method: %v", err)
 	}
 }
 

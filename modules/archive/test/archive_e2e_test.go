@@ -39,11 +39,11 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.time_series.rows_updated.v1"}, Storage: nats.FileStorage})
+	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.rows_committed.time_series.v1.*"}, Storage: nats.FileStorage})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "archive-e2e", Durable: "archive-e2e", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: -1})
+	_, err = js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "archive-e2e", Durable: "archive-e2e", FilterSubject: "moox.storage.rows_committed.time_series.v1.*", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: -1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	pull, err := client.BindPullConsumer(context.Background(), jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "archive-e2e", FilterSubject: "moox.storage.time_series.rows_updated.v1", AckWait: time.Second, FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true})
+	pull, err := client.BindPullConsumer(context.Background(), jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "archive-e2e", FilterSubject: "moox.storage.rows_committed.time_series.v1.*", AckWait: time.Second, FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,13 +73,13 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	go func() { runErr <- runner.Run(ctx) }()
 
 	publish := func(id, dataTime, close string) {
-		event := &storagepb.TimeSeriesRowsUpdated{MessageId: id, WrittenAt: "2026-07-01T00:00:00Z", SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}, Columns: []*storagepb.ColumnValue{{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
+		event := &storagepb.TimeSeriesRowsCommitted{ShardId: "shard-1", SpaceId: "crypto_binance", DatasetId: "spot_kline", Writes: []*storagepb.TimeSeriesRowWrite{{Operation: storagepb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}, Columns: []*storagepb.ColumnValue{{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}}
 		payload, err := proto.Marshal(event)
 		if err != nil {
 			t.Fatal(err)
 		}
 		now := timestamppb.Now()
-		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: "moox.storage.time_series.rows_updated.v1", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated", Payload: payload, SpaceId: "crypto_binance"})
+		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: "moox.storage.rows_committed.time_series.v1.shard-1", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted", MessageType: "moox.storage.time_series.rows_committed.v1", Payload: payload, SpaceId: "crypto_binance"})
 		if err != nil {
 			t.Fatal(err)
 		}

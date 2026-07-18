@@ -61,7 +61,15 @@ message TypedValue {
     bytes bytes_value = 7;
     // list_value 表示列表值。
     ValueList list_value = 8;
+    // null_value 表示调用方明确要求清除该列值。
+    NullValue null_value = 9;
   }
+}
+
+// NullValue 是列级显式空值标记，与未提供 ColumnValue 区分。
+enum NullValue {
+  NULL_VALUE_UNSPECIFIED = 0;
+  NULL_VALUE = 1;
 }
 
 // ColumnValue 表示一列事实数据值。

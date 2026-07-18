@@ -165,7 +165,7 @@ func TestVersionRangeContainsHonorsBounds(t *testing.T) {
 	assert.False(t, versionRangeContains("2026-07-09T07:00:00Z", rng))
 }
 
-func TestMergeRowPreservesExistingColumnsWhenPatchIsNull(t *testing.T) {
+func TestMergeRowRemovesExistingColumnWhenPatchIsNull(t *testing.T) {
 	base := &pb.PrimaryStoreRow{
 		Key:     testPrimaryTimeSeriesKey("2026-07-09T08:10:00.000000000Z"),
 		Columns: []*pb.ColumnValue{{ColumnName: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}},
@@ -175,8 +175,7 @@ func TestMergeRowPreservesExistingColumnsWhenPatchIsNull(t *testing.T) {
 		Columns: []*pb.ColumnValue{{ColumnName: "close"}},
 	}
 	merged := mergeRow(base, patch)
-	require.Len(t, merged.GetColumns(), 1)
-	assert.Equal(t, float64(2), merged.GetColumns()[0].GetValue().GetDoubleValue())
+	require.Empty(t, merged.GetColumns())
 }
 
 func TestReadExactRowsReturnsStoredVersions(t *testing.T) {

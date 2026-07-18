@@ -19,6 +19,7 @@ const defaultRoot = "var/storage"
 type LocalClientOptions struct {
 	Root       string
 	PebblePath string
+	ShardID    string
 	Pebble     device.FactStore
 	Outbox     OutboxConfig
 }
@@ -28,6 +29,7 @@ type LocalClient struct {
 	pebblePath string
 	pebble     device.FactStore
 	outbox     OutboxConfig
+	shardID    string
 	opened     sync.Map
 }
 
@@ -43,7 +45,7 @@ var pebbleStores = struct {
 }{items: make(map[string]*sharedPebbleStore)}
 
 func NewLocalClient(opts LocalClientOptions) *LocalClient {
-	return &LocalClient{pebblePath: localPebblePath(opts.Root, opts.PebblePath), pebble: opts.Pebble, outbox: opts.Outbox}
+	return &LocalClient{pebblePath: localPebblePath(opts.Root, opts.PebblePath), pebble: opts.Pebble, outbox: opts.Outbox, shardID: opts.ShardID}
 }
 
 func (c *LocalClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
@@ -51,7 +53,7 @@ func (c *LocalClient) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarg
 }
 
 func (c *LocalClient) WriteRowsWithMessage(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
-	return c.writeRows(ctx, target, rows, message)
+	return fmt.Errorf("caller-provided outbox messages are not supported; DataShard creates committed events")
 }
 
 func (c *LocalClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
@@ -59,6 +61,9 @@ func (c *LocalClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarg
 	case "", "pebble":
 		store, err := c.factStore()
 		if err != nil {
+			return err
+		}
+		if err := validateTargetShard(target, store); err != nil {
 			return err
 		}
 		if len(message) > 0 {
@@ -70,6 +75,11 @@ func (c *LocalClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarg
 			WriteRowsWithOutbox(context.Context, []*pb.PrimaryStoreRow, *device.OutboxEntry) error
 		}); ok && len(message) > 0 {
 			return messageStore.WriteRowsWithOutbox(ctx, rows, &device.OutboxEntry{MessageID: "", Data: append([]byte(nil), message...), CreatedAt: time.Now().UTC()})
+		}
+		if len(message) == 0 {
+			if committed, ok := store.(device.CommittedWriter); ok {
+				return committed.WriteRowsWithCommittedMessage(ctx, rows)
+			}
 		}
 		return store.WriteRows(ctx, rows)
 	default:
@@ -108,6 +118,9 @@ func (c *LocalClient) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarge
 		if err != nil {
 			return nil, nil, err
 		}
+		if err := validateTargetShard(target, store); err != nil {
+			return nil, nil, err
+		}
 		return store.ReadRows(ctx, req.GetKeys(), req.GetVersionRange(), req.GetOrder(), req.GetColumnNames(), req.GetPage())
 	default:
 		return nil, nil, fmt.Errorf("unsupported read engine %s", target.GetEngine())
@@ -122,11 +135,25 @@ func (c *LocalClient) DeleteRows(ctx context.Context, target *pb.PrimaryStoreTar
 	if err != nil {
 		return err
 	}
+	if err := validateTargetShard(target, store); err != nil {
+		return err
+	}
 	deleter, ok := store.(device.FactDeleter)
 	if !ok {
 		return fmt.Errorf("primary store does not support row deletion")
 	}
+	if committed, ok := store.(device.CommittedDeleter); ok {
+		return committed.DeleteRowsWithCommittedMessage(ctx, keys)
+	}
 	return deleter.DeleteRows(ctx, keys)
+}
+
+func (c *LocalClient) ListOutbox(ctx context.Context, after uint64, maxItems, maxBytes int) ([]*device.OutboxEntry, error) {
+	store, err := c.factStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.ListOutbox(ctx, after, maxItems, maxBytes)
 }
 
 func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
@@ -134,6 +161,9 @@ func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarge
 	case "", "pebble":
 		store, err := c.factStore()
 		if err != nil {
+			return nil, nil, err
+		}
+		if err := validateTargetShard(target, store); err != nil {
 			return nil, nil, err
 		}
 		if req.GetKeyPrefix() != "" {
@@ -147,18 +177,41 @@ func (c *LocalClient) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarge
 	}
 }
 
+func validateTargetShard(target *pb.PrimaryStoreTarget, store device.FactStore) error {
+	if target == nil {
+		return fmt.Errorf("target is required")
+	}
+	if target.GetNodeId() == "" {
+		return nil
+	}
+	identity, ok := store.(device.ShardIdentity)
+	if !ok {
+		// Lightweight test and remote adapters may not expose a local shard
+		// identity; the concrete Pebble DataShard does and is checked below.
+		return nil
+	}
+	if identity.ShardID() == "" {
+		return fmt.Errorf("DataShard identity is unavailable for target %q", target.GetNodeId())
+	}
+	if target.GetNodeId() != identity.ShardID() {
+		return fmt.Errorf("target shard %q does not match DataShard %q", target.GetNodeId(), identity.ShardID())
+	}
+	return nil
+}
+
 func (c *LocalClient) factStore() (device.FactStore, error) {
 	if c.pebble != nil {
 		return c.pebble, nil
 	}
-	if _, ok := c.opened.Load(c.pebblePath); ok {
-		return getPebbleStore(c.pebblePath)
+	key := pebbleStoreKey(c.pebblePath, c.shardID)
+	if _, ok := c.opened.Load(key); ok {
+		return getPebbleStore(c.pebblePath, c.shardID)
 	}
-	store, err := acquirePebbleStore(c.pebblePath)
+	store, err := acquirePebbleStore(c.pebblePath, c.shardID)
 	if err != nil {
 		return nil, err
 	}
-	c.opened.Store(c.pebblePath, struct{}{})
+	c.opened.Store(key, struct{}{})
 	return store, nil
 }
 
@@ -178,9 +231,10 @@ func (c *LocalClient) Close() error {
 	return firstErr
 }
 
-func acquirePebbleStore(path string) (device.FactStore, error) {
+func acquirePebbleStore(path, shardID string) (device.FactStore, error) {
+	storeKey := pebbleStoreKey(path, shardID)
 	pebbleStores.Lock()
-	if shared := pebbleStores.items[path]; shared != nil {
+	if shared := pebbleStores.items[storeKey]; shared != nil {
 		shared.refs++
 		store := shared.store
 		pebbleStores.Unlock()
@@ -188,35 +242,37 @@ func acquirePebbleStore(path string) (device.FactStore, error) {
 	}
 	pebbleStores.Unlock()
 
-	opened, err := devicepebble.Open(devicepebble.Options{Path: path})
+	shardID = normalizedShardID(shardID)
+	opened, err := devicepebble.Open(devicepebble.Options{Path: path, ShardID: shardID})
 	if err != nil {
 		return nil, err
 	}
 
 	pebbleStores.Lock()
 	defer pebbleStores.Unlock()
-	if shared := pebbleStores.items[path]; shared != nil {
+	if shared := pebbleStores.items[storeKey]; shared != nil {
 		shared.refs++
 		_ = opened.Close()
 		return shared.store, nil
 	}
-	pebbleStores.items[path] = &sharedPebbleStore{store: opened, refs: 1}
+	pebbleStores.items[storeKey] = &sharedPebbleStore{store: opened, refs: 1}
 	return opened, nil
 }
 
-func getPebbleStore(path string) (device.FactStore, error) {
+func getPebbleStore(path, shardID string) (device.FactStore, error) {
+	storeKey := pebbleStoreKey(path, shardID)
 	pebbleStores.Lock()
-	if shared := pebbleStores.items[path]; shared != nil {
+	if shared := pebbleStores.items[storeKey]; shared != nil {
 		pebbleStores.Unlock()
 		return shared.store, nil
 	}
 	pebbleStores.Unlock()
-	return acquirePebbleStore(path)
+	return acquirePebbleStore(path, shardID)
 }
 
-func releasePebbleStore(path string) error {
+func releasePebbleStore(storeKey string) error {
 	pebbleStores.Lock()
-	shared := pebbleStores.items[path]
+	shared := pebbleStores.items[storeKey]
 	if shared == nil {
 		pebbleStores.Unlock()
 		return nil
@@ -226,12 +282,23 @@ func releasePebbleStore(path string) error {
 		pebbleStores.Unlock()
 		return nil
 	}
-	delete(pebbleStores.items, path)
+	delete(pebbleStores.items, storeKey)
 	pebbleStores.Unlock()
 	if closer, ok := shared.store.(interface{ Close() error }); ok {
 		return closer.Close()
 	}
 	return nil
+}
+
+func normalizedShardID(shardID string) string {
+	if shardID == "" {
+		return "local"
+	}
+	return shardID
+}
+
+func pebbleStoreKey(path, shardID string) string {
+	return path + "\x00" + normalizedShardID(shardID)
 }
 
 func localPebblePath(root string, pebblePath string) string {

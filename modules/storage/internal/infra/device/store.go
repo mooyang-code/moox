@@ -27,6 +27,23 @@ type FactStore interface {
 	ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error)
 }
 
+// CommittedWriter is implemented by a DataShard that owns event construction.
+// Callers provide only fact patches; the shard creates the RowsCommitted
+// payload after its atomic merge.
+type CommittedWriter interface {
+	WriteRowsWithCommittedMessage(context.Context, []*pb.PrimaryStoreRow) error
+}
+
+// CommittedDeleter is the delete counterpart. A DataShard emits a DELETE
+// RowsCommitted entry in the same Pebble batch as the fact removal.
+type CommittedDeleter interface {
+	DeleteRowsWithCommittedMessage(context.Context, []*pb.PrimaryStoreKey) error
+}
+
+type ShardIdentity interface {
+	ShardID() string
+}
+
 // FactDeleter is optional so read/write-only test stores remain valid. The
 // Pebble implementation provides it for Storage retention maintenance.
 type FactDeleter interface {

@@ -36,7 +36,7 @@ func (r Relay) RunOnce(ctx context.Context, limit int) error {
 		if row.Topic == "moox.trade.reconciliation.requested.v1" || row.Topic == "moox.trade.rebalance.requested.v1" {
 			kind = messagepb.MessageKind_MESSAGE_KIND_COMMAND
 		}
-		msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: row.MessageID, Topic: row.Topic, Kind: kind, Producer: &messagepb.Producer{ServiceName: "moox-trade", InstanceId: r.InstanceID, BootId: r.BootID, Version: "v2"}, Trace: &messagepb.TraceContext{TraceId: row.TraceID, RequestId: row.RequestID}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=google.protobuf.BytesValue", Payload: payload}
+		msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: row.MessageID, Topic: row.Topic, Kind: kind, Producer: &messagepb.Producer{ServiceName: "moox-trade", InstanceId: r.InstanceID, BootId: r.BootID, Version: "v2"}, Trace: &messagepb.TraceContext{TraceId: row.TraceID, RequestId: row.RequestID}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=google.protobuf.BytesValue", MessageType: "moox.trade.payload.v1", Payload: payload}
 		if _, e := r.Publisher.Publish(ctx, msg, jetstream.WithOrderingKey(row.MessageID)); e != nil {
 			_ = r.Store.ReleaseOutbox(ctx, row.ID, e.Error())
 			return e

@@ -36,16 +36,32 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_spaces WHERE c_space_id = ?`, []any{spaceID}, func() *pb.Space { return &pb.Space{} })
+	return scanMessageWithSQLTimestamps(s.db.QueryRowContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
 }
 
 func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
-	query := `SELECT c_attrs_json FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id`
-	items, err := queryMessages(ctx, s.db, query, []any{owner, owner}, func() *pb.Space { return &pb.Space{} })
+	pageNo, size, offset := normalizePage(page)
+	rows, err := s.db.QueryContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, size, offset)
 	if err != nil {
 		return nil, nil, err
 	}
-	return pageItems(items, page)
+	defer rows.Close()
+	items := make([]*pb.Space, 0, size)
+	for rows.Next() {
+		item, err := scanMessageWithSQLTimestamps(rows, func() *pb.Space { return &pb.Space{} })
+		if err != nil {
+			return nil, nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	var total uint32
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_spaces WHERE (? = '' OR c_owner = ?)`, owner, owner).Scan(&total); err != nil {
+		return nil, nil, err
+	}
+	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: uint64(offset)+uint64(len(items)) < uint64(total)}, nil
 }
 
 func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error) {

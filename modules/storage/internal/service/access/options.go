@@ -21,6 +21,7 @@ type Options struct {
 	ParquetPath        string
 	PrimaryClient      primary.Client
 	PrimaryServiceName string
+	ShardID            string
 	Events             eventbus.Publisher
 	ViewErrors         ViewErrorReporter
 }

@@ -57,7 +57,7 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		return nil, err
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_primary_dataset_id, c_dataset_ids_json, c_grain_keys_json, c_filter_json, c_engine, c_retention_window, c_active_index_id, c_view_version, c_active_view_version, c_active_columns_json, c_active_schema_hash, c_active_coverage_start, c_active_coverage_end, c_status, c_attrs_json)
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_primary_dataset_id, c_dataset_ids_json, c_grain_keys_json, c_filter_json, c_engine, c_retention_window, c_active_index_id, c_view_version, c_active_view_version, c_active_columns_json, c_active_schema_hash, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
 			c_name = excluded.c_name,
@@ -73,11 +73,11 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 			c_active_view_version = excluded.c_active_view_version,
 			c_active_columns_json = excluded.c_active_columns_json,
 			c_active_schema_hash = excluded.c_active_schema_hash,
-			c_active_coverage_start = excluded.c_active_coverage_start,
-			c_active_coverage_end = excluded.c_active_coverage_end,
+			c_indexed_from = excluded.c_indexed_from,
+			c_indexed_to = excluded.c_indexed_to,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetPrimaryDatasetId(), datasetIDs, grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetRetentionWindow(), next.GetActiveIndexId(), next.GetViewVersion(), next.GetActiveViewVersion(), activeColumns, next.GetActiveSchemaHash(), next.GetActiveCoverageStart(), next.GetActiveCoverageEnd(), next.GetStatus(), raw)
+	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetPrimaryDatasetId(), datasetIDs, grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetRetentionWindow(), next.GetActiveIndexId(), next.GetViewVersion(), next.GetActiveViewVersion(), activeColumns, next.GetActiveSchemaHash(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}

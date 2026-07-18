@@ -25,6 +25,27 @@ var (
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )
 
+var storageInternalMethods = map[string]struct{}{
+	"ClaimViewIndexBuild":  {},
+	"UpdateViewIndexBuild": {},
+	"ActivateViewIndex":    {},
+	"FailViewIndexBuild":   {},
+	"ScanTimeSeriesRows":   {},
+	"ScanRecordRows":       {},
+	"WritePrimaryRows":     {},
+	"ReadPrimaryRows":      {},
+	"ScanPrimaryRows":      {},
+	"DeletePrimaryRows":    {},
+	"DeleteTimeSeriesRows": {},
+	"PrepareViewIndex":     {},
+	"WriteViewIndex":       {},
+	"StatViewIndex":        {},
+	"RemoveViewIndex":      {},
+	"ListViewIndexes":      {},
+	"QueryTimeSeriesIndex": {},
+	"SearchRecordIndex":    {},
+}
+
 type Route struct {
 	ServiceID      string   `json:"service_id,omitempty"`
 	Address        string   `json:"address,omitempty"`
@@ -69,6 +90,16 @@ func ValidateRoute(route Route) error {
 	}
 	if route.MaxBodyBytes < 0 || route.MaxBodyBytes > maxMaxBodyBytes {
 		return fmt.Errorf("max_body_bytes must be between 1 and %d, or zero for the default", maxMaxBodyBytes)
+	}
+	if route.ServiceID == "storage" {
+		if len(route.AllowedMethods) == 0 {
+			return fmt.Errorf("storage route requires a nonempty allowed_methods list")
+		}
+		for _, method := range route.AllowedMethods {
+			if _, internal := storageInternalMethods[method]; internal {
+				return fmt.Errorf("storage method %q is internal and cannot be routed", method)
+			}
+		}
 	}
 	return nil
 }

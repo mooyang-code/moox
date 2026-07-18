@@ -22,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // Options 保存 Bleve 索引打开与初始化配置。
@@ -163,6 +164,20 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 	batch := i.index.NewBatch()
 	seenDocs := make(map[string]bool, len(rows))
 	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		docID := documentID(row)
+		existing, err := i.existingRecordRow(docID)
+		if err != nil {
+			return err
+		}
+		if existing == nil && len(textIndexedColumns) > 1 && len(row.GetColumns()) < len(textIndexedColumns) {
+			continue
+		}
+		if existing != nil {
+			row = mergeRecordRow(existing, row)
+		}
 		raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(row)
 		if err != nil {
 			return err
@@ -196,7 +211,6 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 				doc[columnNonEmptyField(field)] = "1"
 			}
 		}
-		docID := documentID(row)
 		if !seenDocs[docID] {
 			exists, err := i.documentExists(docID)
 			if err != nil {
@@ -217,6 +231,114 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 		return err
 	}
 	return i.index.Batch(batch)
+}
+
+func (i *Index) DeleteRows(ctx context.Context, rows []*pb.RecordRow) error {
+	_ = ctx
+	if len(rows) == 0 {
+		return nil
+	}
+	i.writeMu.Lock()
+	defer i.writeMu.Unlock()
+	stats, err := i.readStats()
+	if err != nil {
+		return err
+	}
+	batch := i.index.NewBatch()
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		docID := documentID(row)
+		if _, ok := seen[docID]; ok {
+			continue
+		}
+		seen[docID] = struct{}{}
+		exists, err := i.documentExists(docID)
+		if err != nil {
+			return err
+		}
+		if exists && stats.EntryCount > 0 {
+			stats.EntryCount--
+		}
+		batch.Delete(docID)
+	}
+	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := batch.Index(statsDocumentID, stats.toDocument()); err != nil {
+		return err
+	}
+	return i.index.Batch(batch)
+}
+
+func (i *Index) existingRecordRow(docID string) (*pb.RecordRow, error) {
+	doc, err := i.index.Document(docID)
+	if err != nil || doc == nil {
+		return nil, err
+	}
+	var raw string
+	doc.VisitFields(func(field index.Field) {
+		if field.Name() == "_row_json" {
+			raw = string(field.Value())
+		}
+	})
+	if raw == "" {
+		return nil, nil
+	}
+	row := &pb.RecordRow{}
+	if err := i.unmarshalRow([]byte(raw), row); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func mergeRecordRow(base, patch *pb.RecordRow) *pb.RecordRow {
+	if base == nil {
+		return proto.Clone(patch).(*pb.RecordRow)
+	}
+	merged := proto.Clone(base).(*pb.RecordRow)
+	merged.Key = proto.Clone(patch.GetKey()).(*pb.RecordKey)
+	positions := make(map[string]int, len(merged.GetColumns()))
+	for idx, column := range merged.GetColumns() {
+		positions[column.GetColumnName()] = idx
+	}
+	for _, column := range patch.GetColumns() {
+		if column == nil {
+			continue
+		}
+		copied := proto.Clone(column).(*pb.ColumnValue)
+		if idx, ok := positions[column.GetColumnName()]; ok {
+			if copied.GetValue() == nil || isNullTypedValue(copied.GetValue()) {
+				merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
+				positions = make(map[string]int, len(merged.Columns))
+				for pos, value := range merged.Columns {
+					positions[value.GetColumnName()] = pos
+				}
+				continue
+			}
+			merged.Columns[idx] = copied
+			continue
+		}
+		positions[column.GetColumnName()] = len(merged.Columns)
+		merged.Columns = append(merged.Columns, copied)
+	}
+	if len(patch.GetAttributes()) > 0 {
+		if merged.Attributes == nil {
+			merged.Attributes = make(map[string]string, len(patch.GetAttributes()))
+		}
+		for key, value := range patch.GetAttributes() {
+			merged.Attributes[key] = value
+		}
+	}
+	return merged
+}
+
+func isNullTypedValue(value *pb.TypedValue) bool {
+	if value == nil {
+		return true
+	}
+	_, explicit := value.GetValue().(*pb.TypedValue_NullValue)
+	return explicit
 }
 
 func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {

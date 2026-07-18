@@ -106,7 +106,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		return nil, err
 	}
 	publishedAt := time.Now().UTC()
-	msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: msgID.String(), Topic: hostTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: a.id.AgentID, NodeId: a.hostname, BootId: a.bootID, Version: a.version}, SpaceId: "moox_system", Sequence: 0, OccurredAt: timestamppb.New(now), PublishedAt: timestamppb.New(publishedAt), ContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", Payload: payload}
+	msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: msgID.String(), Topic: hostTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: a.id.AgentID, NodeId: a.hostname, BootId: a.bootID, Version: a.version}, SpaceId: "moox_system", Sequence: 0, OccurredAt: timestamppb.New(now), PublishedAt: timestamppb.New(publishedAt), ContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", MessageType: "moox.hostagent.host_metric.v1", Payload: payload}
 	client, err := a.eventbus(ctx)
 	if err != nil {
 		a.dropped.Add(1)

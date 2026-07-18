@@ -59,8 +59,8 @@ func TestWritePrimaryRowsWithOutboxMessage(t *testing.T) {
 		OutboxMessage: msg,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.NotNil(t, store.outboxEntry)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	assert.Nil(t, store.outboxEntry)
 }
 
 func TestReadPrimaryRowsReturnsStoredRows(t *testing.T) {

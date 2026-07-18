@@ -91,7 +91,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := timestamppb.New(observed)
-	message := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "monitor-metric-e2e-1", Topic: metrics.MetricTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "fixture-service", InstanceId: "fixture-1", BootId: "boot-1", NodeId: "node-1", Version: "test"}, SpaceId: metrics.InternalMetricSpaceID, OccurredAt: now, PublishedAt: now, ContentType: metrics.MetricContentType, Payload: payload}
+	message := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "monitor-metric-e2e-1", Topic: metrics.MetricTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "fixture-service", InstanceId: "fixture-1", BootId: "boot-1", NodeId: "node-1", Version: "test"}, SpaceId: metrics.InternalMetricSpaceID, OccurredAt: now, PublishedAt: now, ContentType: metrics.MetricContentType, MessageType: "moox.metrics.snapshot.reported.v1", Payload: payload}
 	if _, err := eventClient.Publish(ctx, message); err != nil {
 		t.Fatal(err)
 	}

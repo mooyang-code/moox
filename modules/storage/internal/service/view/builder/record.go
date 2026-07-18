@@ -25,12 +25,16 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 	return s.processRecordRowsBatch(ctx, rows)
 }
 
-func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordRow) error {
+func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordRow, deleteBatches ...[]*pb.RecordRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	if s == nil || s.metadata == nil {
 		return errors.New("view builder record processor requires metadata client")
+	}
+	var deletes []*pb.RecordRow
+	if len(deleteBatches) > 0 {
+		deletes = deleteBatches[0]
 	}
 	grouped := make(map[projectionDatasetKey][]*pb.RecordRow)
 	for _, row := range rows {
@@ -40,6 +44,18 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 		}
 		groupKey := projectionDatasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
 		grouped[groupKey] = append(grouped[groupKey], row)
+	}
+	groupedDeletes := make(map[projectionDatasetKey][]*pb.RecordRow)
+	for _, row := range deletes {
+		if row != nil && row.GetKey() != nil {
+			key := row.GetKey()
+			groupedDeletes[projectionDatasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}] = append(groupedDeletes[projectionDatasetKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}], row)
+		}
+	}
+	for key := range groupedDeletes {
+		if _, ok := grouped[key]; !ok {
+			grouped[key] = nil
+		}
 	}
 	for key, datasetRows := range grouped {
 		views, err := s.metadata.ListViewsByDataset(ctx, key.spaceID, key.datasetID)
@@ -59,6 +75,7 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 				return err
 			}
 			writable := writableIndexSet(item)
+			datasetDeletes := groupedDeletes[key]
 			if writable[item.GetActiveIndexId()] {
 				activeColumns := item.GetActiveColumns()
 				if len(activeColumns) == 0 {
@@ -71,8 +88,8 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 				if !ok {
 					return errors.New("view " + item.GetViewId() + " active schema is not projectable")
 				}
-				if len(projected) > 0 {
-					if err := engine.Write(ctx, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, nil, projected, false)); err != nil {
+				if len(projected) > 0 || len(datasetDeletes) > 0 {
+					if err := applyViewIndexWithDeletes(ctx, engine, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, nil, projected, false), nil, datasetDeletes); err != nil {
 						return fmt.Errorf("derive engine=bleve view_id=%s rows=%d active write: %w", item.GetViewId(), len(projected), err)
 					}
 				}
@@ -85,8 +102,8 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 				if !ok {
 					return errors.New("view " + item.GetViewId() + " build schema is not projectable")
 				}
-				if len(projected) > 0 {
-					if err := engine.Write(ctx, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, nil, projected, true)); err != nil {
+				if len(projected) > 0 || len(datasetDeletes) > 0 {
+					if err := applyViewIndexWithDeletes(ctx, engine, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, nil, projected, true), nil, datasetDeletes); err != nil {
 						return fmt.Errorf("derive engine=bleve view_id=%s rows=%d build write: %w", item.GetViewId(), len(projected), err)
 					}
 				}

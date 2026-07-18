@@ -346,7 +346,7 @@ func (c *Consumer) retry(ctx context.Context, d *jetstream.Delivery, err error) 
 func rejectionMessage(original *messagepb.MooxMessage, reason, service, instance string) *messagepb.MooxMessage {
 	payload, _ := proto.Marshal(original)
 	now := timestamppb.Now()
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: original.GetMessageId() + ".rejected", Topic: MetricDLQTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", Payload: payload, Attributes: map[string]string{"rejection_reason": reason, "original_topic": original.GetTopic()}}
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: original.GetMessageId() + ".rejected", Topic: MetricDLQTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.monitor.rejected.v1", Payload: payload, Attributes: map[string]string{"rejection_reason": reason, "original_topic": original.GetTopic()}}
 }
 
 func malformedRejectionMessage(delivery *jetstream.Delivery, reason, service, instance string) *messagepb.MooxMessage {
@@ -381,6 +381,7 @@ func malformedRejectionMessage(delivery *jetstream.Delivery, reason, service, in
 		OccurredAt:      now,
 		PublishedAt:     now,
 		ContentType:     "application/octet-stream",
+		MessageType:     "moox.monitor.rejected.v1",
 		Payload:         payload,
 		Attributes:      map[string]string{"rejection_reason": reason, "original_topic": topic, "original_message_id": id},
 	}

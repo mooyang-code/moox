@@ -38,7 +38,7 @@ func TestPersistentRestartAndDeliverySemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPullConsumer() error = %v", err)
 	}
-	msg := testMessage("e2e-storage-1", "moox.storage.time_series.rows_updated.v1", []byte("row"))
+	msg := testMessage("e2e-storage-1", "moox.storage.time_series.rows_committed.v1", []byte("row"))
 	ack, err := client.Publish(ctx, msg)
 	if err != nil || ack == nil || ack.Stream != "MOOX_STORAGE" {
 		t.Fatalf("Publish() ack=%+v err=%v", ack, err)
@@ -270,7 +270,7 @@ func fetchEventually(ctx context.Context, consumer *jetstream.PullConsumer, batc
 
 func testMessage(id, topic string, payload []byte) *messagepb.MooxMessage {
 	now := timestamppb.Now()
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", Payload: payload}
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.eventbus.payload.v1", Payload: payload}
 }
 
 func freePort(t *testing.T) int {

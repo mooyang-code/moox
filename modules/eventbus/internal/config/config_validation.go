@@ -251,7 +251,7 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 	if _, ok := findStream(cfg, c.Stream); !ok {
 		return fmt.Errorf("consumer %q references unknown stream %q", c.Durable, c.Stream)
 	}
-	if err := validateSubject(c.FilterSubject, false); err != nil {
+	if err := validateSubject(c.FilterSubject, true); err != nil {
 		return fmt.Errorf("consumer %q filter: %w", c.Durable, err)
 	}
 	covered := false

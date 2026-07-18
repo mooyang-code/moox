@@ -93,6 +93,41 @@ func (m *IndexManager) Write(ctx context.Context, indexID string, batch viewinde
 	return store.Write(ctx, indexTableName, batch)
 }
 
+func (m *IndexManager) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	if err := batch.Validate(); err != nil {
+		return err
+	}
+	if len(batch.CheckpointUpdates) > 0 || batch.IndexRangeUpdate != nil {
+		return errors.New("duckdb checkpoint and index range persistence is not configured")
+	}
+	rows := make([]*pb.TimeSeriesRow, 0, len(batch.RowWrites))
+	for _, write := range batch.RowWrites {
+		if write.Key.TimeSeriesKey == nil {
+			return errors.New("duckdb apply requires time-series row keys")
+		}
+		if write.Operation == viewindex.RowWriteOperationDelete {
+			if err := m.DeleteTimeSeriesRows(ctx, indexID, []*pb.TimeSeriesRow{{Key: write.Key.TimeSeriesKey}}); err != nil {
+				return err
+			}
+			continue
+		}
+		rows = append(rows, &pb.TimeSeriesRow{Key: write.Key.TimeSeriesKey, Columns: write.Columns, Attributes: write.Attributes})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return m.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: rows, ViewVersion: batch.ViewVersion, SchemaHash: batch.ViewSchemaHash})
+}
+
+func (m *IndexManager) DeleteTimeSeriesRows(ctx context.Context, indexID string, rows []*pb.TimeSeriesRow) error {
+	store, release, err := m.acquire(indexID, false)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return store.DeleteRows(ctx, indexTableName, rows)
+}
+
 func (m *IndexManager) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
 	ref, err := viewindex.ParseViewIndexID(indexID)
 	if err != nil {

@@ -236,10 +236,10 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	res, err := tx.ExecContext(ctx, `
 		UPDATE t_views SET c_active_index_id = ?, c_active_view_version = ?,
 			c_active_columns_json = ?, c_active_schema_hash = ?,
-			c_active_coverage_start = ?, c_active_coverage_end = ?, c_attrs_json = ?
+		c_indexed_from = ?, c_indexed_to = ?, c_attrs_json = ?
 		WHERE c_space_id = ? AND c_view_id = ? AND c_view_version = ?
 	`, view.GetActiveIndexId(), view.GetActiveViewVersion(), activeColumns, view.GetActiveSchemaHash(),
-		view.GetActiveCoverageStart(), view.GetActiveCoverageEnd(), raw, view.GetSpaceId(), view.GetViewId(), build.GetTargetViewVersion())
+		view.GetIndexedFrom(), view.GetIndexedTo(), raw, view.GetSpaceId(), view.GetViewId(), build.GetTargetViewVersion())
 	if err != nil {
 		return nil, err
 	}

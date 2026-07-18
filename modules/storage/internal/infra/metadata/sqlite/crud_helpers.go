@@ -12,6 +12,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // rowScanner 抽象 sql.Row 和 sql.Rows 的扫描能力。
@@ -150,6 +151,45 @@ func scanMessage[T proto.Message](row rowScanner, newMessage func() T) (T, error
 		return zero, err
 	}
 	return msg, nil
+}
+
+func scanMessageWithSQLTimestamps[T proto.Message](row rowScanner, newMessage func() T) (T, error) {
+	var raw, createdAt, updatedAt string
+	if err := row.Scan(&raw, &createdAt, &updatedAt); err != nil {
+		var zero T
+		if errors.Is(err, sql.ErrNoRows) {
+			return zero, fmt.Errorf("metadata row not found: %w", err)
+		}
+		return zero, err
+	}
+	msg := newMessage()
+	if err := unmarshalOptions.Unmarshal([]byte(raw), msg); err != nil {
+		var zero T
+		return zero, err
+	}
+	setStringField(msg, "created_at", normalizeSQLTimestamp(createdAt))
+	setStringField(msg, "updated_at", normalizeSQLTimestamp(updatedAt))
+	return msg, nil
+}
+
+func setStringField(msg proto.Message, name, value string) {
+	if value == "" {
+		return
+	}
+	field := msg.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(name))
+	if field != nil && field.Kind() == protoreflect.StringKind {
+		msg.ProtoReflect().Set(field, protoreflect.ValueOfString(value))
+	}
+}
+
+func normalizeSQLTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return value
 }
 
 func marshal(msg proto.Message) (string, error) {

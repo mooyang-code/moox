@@ -49,16 +49,62 @@ func (s *Store) stageOutbox(batch *cpebble.Batch, entry *device.OutboxEntry) err
 		return err
 	}
 	entry.Sequence = seq
+	msg := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(entry.Data, msg); err != nil {
+		return fmt.Errorf("decode outbox message: %w", err)
+	}
+	msg.Sequence = seq
+	if err := setCommittedPayloadSequence(msg, seq); err != nil {
+		return err
+	}
+	raw, err := (proto.MarshalOptions{Deterministic: true}).Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal outbox message: %w", err)
+	}
+	if err := jetstream.ValidateMessage(msg, 16<<20); err != nil {
+		return fmt.Errorf("validate final outbox message: %w", err)
+	}
+	entry.Data = raw
+	entry.MessageID = msg.GetMessageId()
+	entry.Topic = msg.GetTopic()
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
 	key := []byte(outboxKey(seq))
-	if err := batch.Set(key, append([]byte(nil), entry.Data...), s.writeOptions); err != nil {
+	if err := batch.Set(key, append([]byte(nil), raw...), s.writeOptions); err != nil {
 		return err
 	}
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], seq)
 	return batch.Set([]byte(outboxSequence), buf[:], s.writeOptions)
+}
+
+func setCommittedPayloadSequence(msg *messagepb.MooxMessage, sequence uint64) error {
+	switch msg.GetMessageType() {
+	case timeSeriesRowsCommittedType:
+		event := &pb.TimeSeriesRowsCommitted{}
+		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
+			return fmt.Errorf("decode time-series rows committed payload: %w", err)
+		}
+		event.Sequence = sequence
+		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+		if err != nil {
+			return fmt.Errorf("marshal time-series rows committed payload: %w", err)
+		}
+		msg.Payload = payload
+	case recordRowsCommittedType:
+		event := &pb.RecordRowsCommitted{}
+		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
+			return fmt.Errorf("decode record rows committed payload: %w", err)
+		}
+		event.Sequence = sequence
+		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+		if err != nil {
+			return fmt.Errorf("marshal record rows committed payload: %w", err)
+		}
+		msg.Payload = payload
+	}
+	return nil
 }
 
 func (s *Store) nextOutboxSequence() (uint64, error) {

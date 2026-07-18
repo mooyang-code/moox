@@ -107,7 +107,7 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	cfg.Archive.StateDir = filepath.Join(dir, "state")
 	cfg.Archive.EventBus.URLs = []string{natsURL}
 	cfg.Archive.EventBus.Stream = fmt.Sprintf("MOOX_STORAGE_%d", time.Now().UnixNano())
-	cfg.Archive.EventBus.Subject = "moox.storage.time_series.rows_updated.v1"
+	cfg.Archive.EventBus.Subject = "moox.storage.rows_committed.time_series.v1.*"
 	cfg.Archive.EventBus.Durable = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second
 	cfg.Archive.COS.Enabled = false

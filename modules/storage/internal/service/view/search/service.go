@@ -98,6 +98,41 @@ func (s *Service) Write(ctx context.Context, indexID string, batch viewindex.Vie
 	return index.IndexRows(ctx, batch.RecordRows, indexed)
 }
 
+func (s *Service) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	if err := batch.Validate(); err != nil {
+		return err
+	}
+	if len(batch.CheckpointUpdates) > 0 || batch.IndexRangeUpdate != nil {
+		return errors.New("bleve checkpoint and index range persistence is not configured")
+	}
+	rows := make([]*pb.RecordRow, 0, len(batch.RowWrites))
+	for _, write := range batch.RowWrites {
+		if write.Key.RecordKey == nil {
+			return errors.New("bleve apply requires record row keys")
+		}
+		if write.Operation == viewindex.RowWriteOperationDelete {
+			if err := s.DeleteRecordRows(ctx, indexID, []*pb.RecordRow{{Key: write.Key.RecordKey}}); err != nil {
+				return err
+			}
+			continue
+		}
+		rows = append(rows, &pb.RecordRow{Key: write.Key.RecordKey, Columns: write.Columns, Attributes: write.Attributes})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return s.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: rows, ViewVersion: batch.ViewVersion, SchemaHash: batch.ViewSchemaHash})
+}
+
+func (s *Service) DeleteRecordRows(ctx context.Context, indexID string, rows []*pb.RecordRow) error {
+	index, release, err := s.acquire(indexID, false)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return index.DeleteRows(ctx, rows)
+}
+
 func (s *Service) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
 	path, err := s.pathFor(indexID)
 	if err != nil {

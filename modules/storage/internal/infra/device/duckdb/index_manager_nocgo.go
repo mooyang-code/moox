@@ -35,6 +35,10 @@ func (m *IndexManager) Write(context.Context, string, viewindex.ViewIndexBatch) 
 	return errDuckDBRequiresCGO
 }
 
+func (m *IndexManager) DeleteTimeSeriesRows(context.Context, string, []*pb.TimeSeriesRow) error {
+	return errDuckDBRequiresCGO
+}
+
 func (m *IndexManager) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{}, errDuckDBRequiresCGO
 }

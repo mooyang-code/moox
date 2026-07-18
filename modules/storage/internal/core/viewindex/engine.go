@@ -19,6 +19,13 @@ type ViewIndexEngine interface {
 	Remove(ctx context.Context, indexID string) error
 }
 
+// ViewIndexApplier is the explicit row-operation contract. Engines may retain
+// their physical Write implementation, but all new builder writes go through
+// this operation-aware entry point when it is available.
+type ViewIndexApplier interface {
+	Apply(context.Context, string, ViewIndexApplyBatch) error
+}
+
 type ViewIndexSchema struct {
 	SpaceID     string
 	ViewID      string

@@ -109,6 +109,10 @@ message View {
   string active_coverage_end = 22;
   // index_build 是当前持久化构建状态的只读投影。
   ViewIndexBuild index_build = 23;
+  // indexed_from 是当前索引实际覆盖的最小业务时间或版本。
+  string indexed_from = 24;
+  // indexed_to 是当前索引实际覆盖的最大业务时间或版本。
+  string indexed_to = 25;
 }
 
 // ViewColumn 定义 View 对用户暴露的一列。

@@ -334,10 +334,10 @@ func TestReportViewErrorDelegatesToReporter(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Equal(t, "time_series_rows_committed", reportedStage)
+	assert.Empty(t, reportedStage)
 }
 
-func TestWriteRoutedRowsUsesMessageWriter(t *testing.T) {
+func TestWriteRoutedRowsUsesPrimaryWriter(t *testing.T) {
 	writer := &messageWriterPrimary{}
 	svc := &Service{primary: writer}
 	group := &routedRows{
@@ -345,7 +345,7 @@ func TestWriteRoutedRowsUsesMessageWriter(t *testing.T) {
 		rows:   []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline"}}},
 	}
 	require.NoError(t, svc.writeRoutedRows(context.Background(), group, []byte("outbox")))
-	assert.True(t, writer.usedMessageWriter)
+	assert.False(t, writer.usedMessageWriter)
 }
 
 type recordDatasetScanner struct {
@@ -648,7 +648,7 @@ func TestPageMergedRecordRowsUsesSkippedTotal(t *testing.T) {
 	assert.True(t, result.GetHasMore())
 }
 
-func TestWriteTimeSeriesRowsRoutesAndPublishes(t *testing.T) {
+func TestWriteTimeSeriesRowsRoutesWithoutConstructingEvents(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
 	primaryStore := &capturingPrimary{}
@@ -679,7 +679,7 @@ func TestWriteTimeSeriesRowsRoutesAndPublishes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, 1, primaryStore.written)
-	assert.Equal(t, 1, published)
+	assert.Equal(t, 0, published)
 }
 
 func TestWriteTimeSeriesRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {

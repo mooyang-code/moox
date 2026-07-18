@@ -11,6 +11,7 @@ import (
 
 type Scalar struct {
 	Type   storagepb.FieldValueType `json:"type"`
+	Null   bool                     `json:"null,omitempty"`
 	String *string                  `json:"string,omitempty"`
 	Int    *int64                   `json:"int,omitempty"`
 	Double *float64                 `json:"double,omitempty"`
@@ -104,6 +105,11 @@ func ScalarFromColumn(column *storagepb.ColumnValue) (Scalar, error) {
 	}
 	s := Scalar{Type: column.GetValueType()}
 	switch value := column.GetValue().GetValue().(type) {
+	case *storagepb.TypedValue_NullValue:
+		if value.NullValue != storagepb.NullValue_NULL_VALUE {
+			return Scalar{}, fmt.Errorf("unspecified null value for %s", column.GetColumnName())
+		}
+		s.Null = true
 	case *storagepb.TypedValue_StringValue:
 		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING {
 			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
@@ -207,6 +213,10 @@ func MergePatch(base ArchiveRow, patch RowPatch) ArchiveRow {
 		out.Columns = map[string]Scalar{}
 	}
 	for k, v := range patch.Columns {
+		if v.Null {
+			delete(out.Columns, k)
+			continue
+		}
 		out.Columns[k] = v.clone()
 	}
 	return out

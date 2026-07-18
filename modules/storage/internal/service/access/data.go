@@ -6,25 +6,18 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
-	"github.com/rs/xid"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const maxDatasetScanRows = 10000
 
 const primaryDatasetScanPageSize = uint32(1000)
-
-var fallbackRowsCommittedSequence atomic.Uint64
 
 func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) (*pb.WriteTimeSeriesRowsRsp, error) {
 	if err := s.validator.ValidateWriteTimeSeriesRows(ctx, req.GetRows()); err != nil {
@@ -36,22 +29,10 @@ func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeri
 	}
 	written := make([]string, 0, len(req.GetRows()))
 	for _, group := range groups {
-		message, event, err := timeSeriesUpdateMessage(group)
-		if err != nil {
-			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err), WrittenKeys: written}, nil
-		}
-		// DataShard owns message construction and sequence allocation. The
-		// prebuilt event remains only for in-process test/fallback publishers.
-		_ = message
-		if err := s.writeRoutedRows(ctx, group, nil); err != nil {
+		if err := s.writeRoutedRows(ctx, group); err != nil {
 			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), WrittenKeys: written}, nil
 		}
 		written = append(written, timeSeriesWrittenKeys(group.timeSeriesKeys)...)
-		if event != nil && !s.hasMessageWriter() && s.events != nil {
-			if err := s.events.PublishTimeSeriesRowsCommitted(ctx, event); err != nil {
-				s.reportViewError(ctx, "time_series_rows_committed", err)
-			}
-		}
 	}
 	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success"), WrittenKeys: written}, nil
 }
@@ -365,20 +346,10 @@ func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsRe
 	}
 	var written []*pb.RecordKey
 	for _, group := range groups {
-		message, event, err := recordUpdateMessage(group)
-		if err != nil {
-			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err), Keys: cloneRecordKeys(written)}, nil
-		}
-		_ = message
-		if err := s.writeRoutedRows(ctx, group, nil); err != nil {
+		if err := s.writeRoutedRows(ctx, group); err != nil {
 			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), Keys: cloneRecordKeys(written)}, nil
 		}
 		written = append(written, group.recordKeys...)
-		if event != nil && !s.hasMessageWriter() && s.events != nil {
-			if err := s.events.PublishRecordRowsCommitted(ctx, event); err != nil {
-				s.reportViewError(ctx, "record_rows_committed", err)
-			}
-		}
 	}
 	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
@@ -732,90 +703,8 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 	return out, nil
 }
 
-func (s *Service) hasMessageWriter() bool { _, ok := s.primary.(primary.MessageWriter); return ok }
-
-func (s *Service) writeRoutedRows(ctx context.Context, group *routedRows, message []byte) error {
-	if writer, ok := s.primary.(primary.MessageWriter); ok {
-		return writer.WriteRowsWithMessage(ctx, group.target, group.rows, message)
-	}
+func (s *Service) writeRoutedRows(ctx context.Context, group *routedRows, _ ...[]byte) error {
 	return s.primary.WriteRows(ctx, group.target, group.rows)
-}
-
-func timeSeriesUpdateMessage(group *routedRows) ([]byte, *pb.TimeSeriesRowsCommitted, error) {
-	if group == nil || len(group.timeSeriesRows) == 0 {
-		return nil, nil, errors.New("time-series rows are required")
-	}
-	id := xid.New().String()
-	now := time.Now().UTC()
-	shardID := firstNonEmpty(group.target.GetNodeId(), "local")
-	topic, err := rowsCommittedTopic("time_series", shardID)
-	if err != nil {
-		return nil, nil, err
-	}
-	event := &pb.TimeSeriesRowsCommitted{ShardId: shardID, SpaceId: group.target.GetSpaceId(), DatasetId: group.timeSeriesRows[0].GetKey().GetDatasetId(), Writes: timeSeriesRowWrites(group.timeSeriesRows)}
-	raw, err := marshalUpdateMessage(id, topic, "moox.storage.time_series.rows_committed.v1", fallbackRowsCommittedSequence.Add(1), event, group.target.GetSpaceId(), group.target.GetNodeId(), now)
-	return raw, event, err
-}
-
-func recordUpdateMessage(group *routedRows) ([]byte, *pb.RecordRowsCommitted, error) {
-	if group == nil || len(group.recordRows) == 0 {
-		return nil, nil, errors.New("record rows are required")
-	}
-	id := xid.New().String()
-	now := time.Now().UTC()
-	shardID := firstNonEmpty(group.target.GetNodeId(), "local")
-	topic, err := rowsCommittedTopic("record", shardID)
-	if err != nil {
-		return nil, nil, err
-	}
-	event := &pb.RecordRowsCommitted{ShardId: shardID, SpaceId: group.target.GetSpaceId(), DatasetId: group.recordRows[0].GetKey().GetDatasetId(), Writes: recordRowWrites(group.recordRows)}
-	raw, err := marshalUpdateMessage(id, topic, "moox.storage.record.rows_committed.v1", fallbackRowsCommittedSequence.Add(1), event, group.target.GetSpaceId(), group.target.GetNodeId(), now)
-	return raw, event, err
-}
-
-func marshalUpdateMessage(id, topic, messageType string, sequence uint64, payload proto.Message, spaceID, nodeID string, now time.Time) ([]byte, error) {
-	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	contentType := "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted"
-	if messageType == "moox.storage.record.rows_committed.v1" {
-		contentType = "application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted"
-	}
-	msg := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "moox-storage", InstanceId: firstNonEmpty(nodeID, "storage")}, SpaceId: spaceID, Sequence: sequence, OccurredAt: timestamppb.New(now), PublishedAt: timestamppb.New(now), ContentType: contentType, MessageType: messageType, Payload: data}
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-	return raw, nil
-}
-
-func rowsCommittedTopic(kind, shardID string) (string, error) {
-	token, err := jetstream.EncodeShardToken(shardID)
-	if err != nil {
-		return "", err
-	}
-	return "moox.storage.rows_committed." + kind + ".v1." + token, nil
-}
-
-func timeSeriesRowWrites(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRowWrite {
-	out := make([]*pb.TimeSeriesRowWrite, 0, len(rows))
-	for _, row := range rows {
-		if row != nil {
-			out = append(out, &pb.TimeSeriesRowWrite{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: proto.Clone(row).(*pb.TimeSeriesRow)})
-		}
-	}
-	return out
-}
-
-func recordRowWrites(rows []*pb.RecordRow) []*pb.RecordRowWrite {
-	out := make([]*pb.RecordRowWrite, 0, len(rows))
-	for _, row := range rows {
-		if row != nil {
-			out = append(out, &pb.RecordRowWrite{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: proto.Clone(row).(*pb.RecordRow)})
-		}
-	}
-	return out
 }
 
 func cloneTimeSeriesRows(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {
@@ -836,22 +725,6 @@ func cloneRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
 	}
 	return out
 }
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func (s *Service) reportViewError(ctx context.Context, stage string, err error) {
-	if s == nil || s.report == nil || err == nil {
-		return
-	}
-	s.report(ctx, stage, err)
-}
-
 func cloneTimeSeriesKeys(keys []*pb.TimeSeriesKey) []*pb.TimeSeriesKey {
 	out := make([]*pb.TimeSeriesKey, 0, len(keys))
 	for _, key := range keys {

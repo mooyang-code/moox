@@ -19,6 +19,7 @@ import (
 type Options struct {
 	Root       string
 	PebblePath string
+	ShardID    string
 	Pebble     device.FactStore
 	Publisher  MessagePublisher
 	Outbox     OutboxConfig
@@ -37,7 +38,7 @@ type Service struct {
 var _ pb.PrimaryStoreService = (*Service)(nil)
 
 func NewService(opts Options) *Service {
-	svc := &Service{client: NewLocalClient(LocalClientOptions{Root: opts.Root, PebblePath: opts.PebblePath, Pebble: opts.Pebble, Outbox: opts.Outbox})}
+	svc := &Service{client: NewLocalClient(LocalClientOptions{Root: opts.Root, PebblePath: opts.PebblePath, ShardID: opts.ShardID, Pebble: opts.Pebble, Outbox: opts.Outbox})}
 	if opts.Publisher != nil {
 		if store, err := svc.client.factStore(); err == nil {
 			svc.relay = NewOutboxRelay(store, opts.Publisher, opts.Outbox)
@@ -61,15 +62,10 @@ func (s *Service) WritePrimaryRows(ctx context.Context, req *pb.WritePrimaryRows
 	if req == nil {
 		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
-	var err error
 	if len(req.GetOutboxMessage()) > 0 {
-		if err := validateOutboxMessage(req); err != nil {
-			return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
-		err = s.client.WriteRowsWithMessage(ctx, req.GetTarget(), req.GetRows(), req.GetOutboxMessage())
-	} else {
-		err = s.client.WriteRows(ctx, req.GetTarget(), req.GetRows())
+		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("caller-provided outbox messages are not supported; DataShard creates committed events"))}, nil
 	}
+	err := s.client.WriteRows(ctx, req.GetTarget(), req.GetRows())
 	if err != nil {
 		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}

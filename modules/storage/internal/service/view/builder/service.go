@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,8 @@ type serviceRun struct {
 	recordSub         eventbus.Subscription
 	timeSeriesBatcher *batcher[timeSeriesDeriveItem]
 	recordBatcher     *batcher[recordDeriveItem]
+	lane              chan laneRequest
+	sequenceByShard   map[string]uint64
 	wg                sync.WaitGroup
 	startOnce         sync.Once
 	startDone         chan struct{}
@@ -46,14 +49,67 @@ type serviceRun struct {
 	stopErr           error
 }
 
+type laneRequest struct {
+	ctx      context.Context
+	shardID  string
+	sequence uint64
+	fn       func(context.Context) error
+	result   chan error
+}
+
 func newServiceRun(parent context.Context, opts BatchOptions) *serviceRun {
 	ctx, cancel := context.WithCancel(parent)
 	return &serviceRun{
 		ctx: ctx, cancel: cancel,
 		timeSeriesBatcher: newBatcher[timeSeriesDeriveItem](opts),
 		recordBatcher:     newBatcher[recordDeriveItem](opts),
+		lane:              make(chan laneRequest),
+		sequenceByShard:   make(map[string]uint64),
 		startDone:         make(chan struct{}),
 		stopDone:          make(chan struct{}),
+	}
+}
+
+func (r *serviceRun) dispatch(ctx context.Context, shardID string, sequence uint64, fn func(context.Context) error) error {
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	request := laneRequest{ctx: ctx, shardID: shardID, sequence: sequence, fn: fn, result: make(chan error, 1)}
+	select {
+	case r.lane <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.ctx.Done():
+		return r.ctx.Err()
+	}
+	select {
+	case err := <-request.result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *serviceRun) runLane() {
+	defer r.wg.Done()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case request := <-r.lane:
+			if request.sequence != 0 && request.shardID != "" {
+				last := r.sequenceByShard[request.shardID]
+				if last != 0 && request.sequence != last+1 {
+					request.result <- fmt.Errorf("view builder shard %q sequence gap or reorder: got %d after %d", request.shardID, request.sequence, last)
+					continue
+				}
+			}
+			err := request.fn(request.ctx)
+			if err == nil && request.sequence != 0 && request.shardID != "" {
+				r.sequenceByShard[request.shardID] = request.sequence
+			}
+			request.result <- err
+		}
 	}
 }
 
@@ -79,11 +135,13 @@ func (r *serviceRun) stop() error {
 
 type timeSeriesDeriveItem struct {
 	row        *pb.TimeSeriesRow
+	delete     bool
 	completion *deriveCompletion
 }
 
 type recordDeriveItem struct {
 	row        *pb.RecordRow
+	delete     bool
 	completion *deriveCompletion
 }
 
@@ -159,7 +217,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.run = run
 	timeSeriesOut := make(chan []timeSeriesDeriveItem, s.maxWorkers)
 	recordOut := make(chan []recordDeriveItem, s.maxWorkers)
-	run.wg.Add(2 + 2*s.maxWorkers)
+	run.wg.Add(3 + 2*s.maxWorkers)
 	s.mu.Unlock()
 	defer run.finishStart()
 
@@ -173,6 +231,7 @@ func (s *Service) Start(ctx context.Context) error {
 		defer close(recordOut)
 		run.recordBatcher.run(run.ctx, recordOut)
 	}()
+	go run.runLane()
 	for i := 0; i < s.maxWorkers; i++ {
 		go func() {
 			defer run.wg.Done()
@@ -189,7 +248,9 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsCommitted(run.ctx, func(handlerCtx context.Context, event *pb.TimeSeriesRowsCommitted) error {
-		return s.enqueueTimeSeriesRun(handlerCtx, run, event)
+		return run.dispatch(handlerCtx, event.GetShardId(), event.GetSequence(), func(ctx context.Context) error {
+			return s.enqueueTimeSeriesRun(ctx, run, event)
+		})
 	})
 	if err != nil {
 		run.finishStart()
@@ -199,7 +260,9 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	run.timeSeriesSub = timeSeriesSub
 	recordSub, err := s.events.SubscribeRecordRowsCommitted(run.ctx, func(handlerCtx context.Context, event *pb.RecordRowsCommitted) error {
-		return s.enqueueRecordRun(handlerCtx, run, event)
+		return run.dispatch(handlerCtx, event.GetShardId(), event.GetSequence(), func(ctx context.Context) error {
+			return s.enqueueRecordRun(ctx, run, event)
+		})
 	})
 	if err != nil {
 		run.finishStart()
@@ -270,22 +333,28 @@ func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, eve
 	batcher := run.timeSeriesBatcher
 	addCtx := run.ctx
 	rows := make([]*pb.TimeSeriesRow, 0, len(event.GetWrites()))
+	deletes := make([]*pb.TimeSeriesRow, 0, len(event.GetWrites()))
 	for _, write := range event.GetWrites() {
 		row := write.GetRow()
-		if write.GetOperation() == pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE || row == nil {
+		if row == nil {
 			continue
 		}
-		rows = append(rows, proto.Clone(row).(*pb.TimeSeriesRow))
+		if write.GetOperation() == pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
+			deletes = append(deletes, proto.Clone(row).(*pb.TimeSeriesRow))
+		} else {
+			rows = append(rows, proto.Clone(row).(*pb.TimeSeriesRow))
+		}
 	}
-	completion := newDeriveCompletion(len(rows))
+	completion := newDeriveCompletion(len(rows) + len(deletes))
 	s.viewMetrics().IncDeriveInFlight()
 	defer func() {
 		s.viewMetrics().DecDeriveInFlight()
 		s.viewMetrics().ObserveDerive("time_series", deriveResult(retErr))
 	}()
-	for i, row := range rows {
+	for i, row := range append(deletes, rows...) {
 		item := timeSeriesDeriveItem{
 			row:        row,
+			delete:     i < len(deletes),
 			completion: completion,
 		}
 		if err := batcher.add(addCtx, item); err != nil {
@@ -318,22 +387,28 @@ func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *
 	batcher := run.recordBatcher
 	addCtx := run.ctx
 	rows := make([]*pb.RecordRow, 0, len(event.GetWrites()))
+	deletes := make([]*pb.RecordRow, 0, len(event.GetWrites()))
 	for _, write := range event.GetWrites() {
 		row := write.GetRow()
-		if write.GetOperation() == pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE || row == nil {
+		if row == nil {
 			continue
 		}
-		rows = append(rows, proto.Clone(row).(*pb.RecordRow))
+		if write.GetOperation() == pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
+			deletes = append(deletes, proto.Clone(row).(*pb.RecordRow))
+		} else {
+			rows = append(rows, proto.Clone(row).(*pb.RecordRow))
+		}
 	}
-	completion := newDeriveCompletion(len(rows))
+	completion := newDeriveCompletion(len(rows) + len(deletes))
 	s.viewMetrics().IncDeriveInFlight()
 	defer func() {
 		s.viewMetrics().DecDeriveInFlight()
 		s.viewMetrics().ObserveDerive("record", deriveResult(retErr))
 	}()
-	for i, row := range rows {
+	for i, row := range append(deletes, rows...) {
 		item := recordDeriveItem{
 			row:        row,
+			delete:     i < len(deletes),
 			completion: completion,
 		}
 		if err := batcher.add(addCtx, item); err != nil {
@@ -349,12 +424,17 @@ func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *
 func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {
 	started := time.Now()
 	rows := make([]*pb.TimeSeriesRow, 0, len(items))
+	deletes := make([]*pb.TimeSeriesRow, 0, len(items))
 	for _, item := range items {
 		if item.row != nil {
-			rows = append(rows, item.row)
+			if item.delete {
+				deletes = append(deletes, item.row)
+			} else {
+				rows = append(rows, item.row)
+			}
 		}
 	}
-	err := s.processTimeSeriesRowsBatch(ctx, rows)
+	err := s.processTimeSeriesRowsBatch(ctx, rows, deletes)
 	s.viewMetrics().ObserveBatch("duckdb", deriveResult(err), time.Since(started))
 	for _, item := range items {
 		item.completion.complete(err)
@@ -364,12 +444,17 @@ func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSe
 func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
 	started := time.Now()
 	rows := make([]*pb.RecordRow, 0, len(items))
+	deletes := make([]*pb.RecordRow, 0, len(items))
 	for _, item := range items {
 		if item.row != nil {
-			rows = append(rows, item.row)
+			if item.delete {
+				deletes = append(deletes, item.row)
+			} else {
+				rows = append(rows, item.row)
+			}
 		}
 	}
-	err := s.processRecordRowsBatch(ctx, rows)
+	err := s.processRecordRowsBatch(ctx, rows, deletes)
 	s.viewMetrics().ObserveBatch("bleve", deriveResult(err), time.Since(started))
 	for _, item := range items {
 		item.completion.complete(err)

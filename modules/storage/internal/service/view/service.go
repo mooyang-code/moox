@@ -71,6 +71,9 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
+	if err := s.validateTimeSeriesFreshness(ctx, req, viewMeta); err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
+	}
 	if viewMeta.GetActiveIndexId() == "" {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("view active_index_id is empty"))}, nil
 	}
@@ -246,6 +249,52 @@ func (s *Service) validateTimeSeriesView(ctx context.Context, viewMeta *pb.View)
 		return errors.New("time series view requires time series primary dataset")
 	}
 	return nil
+}
+
+func (s *Service) validateTimeSeriesFreshness(ctx context.Context, req *pb.QueryTimeSeriesRowsReq, viewMeta *pb.View) error {
+	if status := strings.ToLower(strings.TrimSpace(viewMeta.GetStatus())); status != "" && status != "active" {
+		return errors.New("view is inactive")
+	}
+	dataset, err := s.metadata.GetDataset(ctx, viewMeta.GetSpaceId(), viewMeta.GetPrimaryDatasetId())
+	if err != nil {
+		return err
+	}
+	if status := strings.ToLower(strings.TrimSpace(dataset.GetStatus())); status != "" && status != "active" {
+		return errors.New("dataset is inactive")
+	}
+	start, end := strings.TrimSpace(viewMeta.GetIndexedFrom()), strings.TrimSpace(viewMeta.GetIndexedTo())
+	if start != "" || end != "" {
+		queryStart, queryEnd := "", ""
+		if req.GetTimeRange() != nil {
+			queryStart, queryEnd = req.GetTimeRange().GetStartTime(), req.GetTimeRange().GetEndTime()
+		}
+		if queryStart != "" && start != "" && compareRFC3339(queryStart, start) < 0 {
+			return errors.New("query starts before indexed_from")
+		}
+		if queryEnd != "" && end != "" && compareRFC3339(queryEnd, end) > 0 {
+			return errors.New("query ends after indexed_to")
+		}
+	}
+	attrs := viewMeta.GetAttributes()
+	if attrs["checkpoint_sequence"] != "" && attrs["shard_head_sequence"] != "" && attrs["checkpoint_sequence"] != attrs["shard_head_sequence"] {
+		return errors.New("view checkpoint is behind shard head")
+	}
+	return nil
+}
+
+func compareRFC3339(left, right string) int {
+	l, lok := factvalue.ParseTime(left)
+	r, rok := factvalue.ParseTime(right)
+	if lok && rok {
+		if l.Before(r) {
+			return -1
+		}
+		if l.After(r) {
+			return 1
+		}
+		return 0
+	}
+	return strings.Compare(left, right)
 }
 
 func (s *Service) validateRecordView(ctx context.Context, viewMeta *pb.View) error {

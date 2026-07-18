@@ -23,6 +23,7 @@ message TimeSeriesRowsCommitted {
   string space_id = 2;
   string dataset_id = 3;
   repeated TimeSeriesRowWrite writes = 4;
+  uint64 sequence = 5;
 }
 
 message RecordRowWrite {
@@ -35,4 +36,5 @@ message RecordRowsCommitted {
   string space_id = 2;
   string dataset_id = 3;
   repeated RecordRowWrite writes = 4;
+  uint64 sequence = 5;
 }
