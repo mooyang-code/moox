@@ -60,9 +60,9 @@
 | View 缺行恢复 | MERGE 目标不存在时整批不落盘、不推进 Checkpoint，并返回全部缺失 RowKey；ViewBuilder 批量读取这些行的所有来源后以 REPLACE 重试 |
 | DuckDB/Bleve | 共用显式 MERGE/REPLACE/DELETE 协议；MERGE 都先读取本地完整行再合并，Bleve 不再直接用局部文档覆盖 |
 | 共享包边界 | 删除含糊的 `internal/core` 总目录；真正跨服务复用的代码只保留顶层 `internal/rowkey`、`internal/typedvalue`、`internal/retinfo` |
-| ViewIndex 写入模型 | 不创建独立 `viewrow` 包；`RowKey`、`RowWrite`、`BatchWrite` 作为 ViewIndex 写入契约，由 `internal/service/viewindex` 持有 |
+| ViewIndex 写入模型 | 不创建独立 `viewrow` 包；`RowKey`、`RowWrite`、`ViewIndexApplyBatch` 作为 ViewIndex 写入契约，由 `internal/service/viewindex` 持有 |
 | ViewIndex 写操作 | `RowWrite.operation` 只允许 `MERGE` / `REPLACE` / `DELETE`；MERGE 携带单一来源列片段，REPLACE 携带完整 View 行，DELETE 只携带 Key；统一通过 `ViewIndex.Apply` 提交 |
-| ViewIndex 写入进度 | `BatchWrite.checkpoint_updates` 保存一个或多个带 Expected/Last Sequence 的 `ShardCheckpointUpdate`；可选 `IndexRangeUpdate` 只由进度协调逻辑产生 |
+| ViewIndex 写入进度 | `ViewIndexApplyBatch.checkpoint_updates` 保存一个或多个带 Expected/Last Sequence 的 `ShardCheckpointUpdate`；可选 `IndexRangeUpdate` 只由进度协调逻辑产生 |
 | View Schema Fence | 使用 `view_schema_hash` / `ViewSchemaHash`，明确区别于 Dataset `schema_hash`；它与 `view_version` 共同拒绝过期写入 |
 | 错误与返回信息 | 错误码、类型化错误和 `pb.RetInfo` 转换统一放入 `internal/retinfo`；不拆分 `errorcode`、`rpcresult`，不保留 `response` 包 |
 | Archive 范围 | 只处理配置白名单中的 TimeSeries Dataset；永久保留每个历史业务 Key 的最新完整状态 |
@@ -745,7 +745,7 @@ type IndexRangeUpdate struct {
     IndexedTo   *string
 }
 
-type BatchWrite struct {
+type ViewIndexApplyBatch struct {
     RowWrites         []RowWrite
     CheckpointUpdates []ShardCheckpointUpdate
     ViewVersion       uint64
@@ -758,7 +758,7 @@ type BatchWrite struct {
 
 Proto 使用 `ViewIndexRowWriteOperation`、`ViewIndexRowKey`、`ViewIndexRowWrite`、`ViewIndexShardCheckpointUpdate`、`ViewIndexRangeUpdate`、`ViewIndexBatchWrite`；枚举固定为 `UNSPECIFIED=0`、`MERGE=1`、`REPLACE=2`、`DELETE=3`。`IndexRangeUpdate.indexed_from/indexed_to` 在 Proto 中使用 `optional string`，保留“不修改”和“设置新值”的区别。
 
-将 `ViewIndexEngine.Write` 和内部 `WriteViewIndex` RPC 原子改为 `Apply` / `ApplyViewIndex`，请求体使用 `ViewIndexBatchWrite`；不保留旧方法 Alias。`BatchWrite` 是一次完整索引应用命令，不是 EventBatcher 的内存聚合批次。
+将 `ViewIndexEngine.Write` 和内部 `WriteViewIndex` RPC 原子改为 `Apply` / `ApplyViewIndex`，请求体使用 `ViewIndexApplyBatch`；不保留旧方法 Alias。`ViewIndexApplyBatch` 是一次完整索引应用命令，不是 EventBatcher 的内存聚合批次。
 
 - [ ] **Step 2: 明确 View Schema Fence**
 
