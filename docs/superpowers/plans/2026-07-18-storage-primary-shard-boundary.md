@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不保留历史兼容层的前提下，修复 Storage 的事件一致性、分页、删除、覆盖范围、分片边界、Metadata 扩展性和运行可靠性，并完成 Storage、PrimaryStore、DataShard、DataView、ViewBuilder、ViewIndex 的最终命名与两进程部署收敛。
+**Goal:** 在不保留历史兼容层的前提下，修复 Storage 的消息一致性、Merge、分页、删除、覆盖范围、分片边界、Metadata 扩展性和运行可靠性，建立 Admin Gateway + Node Service Gateway 双网关链路，并完成 Storage、PrimaryStore、DataShard、DataView、ViewBuilder、ViewIndex 的最终命名、垂直代码组织与两进程部署收敛。
 
-**Architecture:** PrimaryStore 是单点的事实数据编排服务，负责校验、路由和跨 DataShard 聚合；每个 DataShard 独立持有一个 Pebble 和本地连续的 Outbox Sequence，并在同一 Pebble Batch 中提交事实行和 `DataChange`。storage-view 以 `DataChange` 作为失效通知，按 Shard 有序消费、按 ViewRowKey 合并和串行处理、批量回读最新事实行，再向 DuckDB/Bleve 写入完整 View 行。Archive 只归档历史写入数据，忽略 Delete，不参与在线删除。
+**Architecture:** PrimaryStore 是单点的事实数据编排服务，负责校验、路由和跨 DataShard 聚合；每个 DataShard 独立持有一个 Pebble 和本地连续的 Outbox Sequence，并在同一 Pebble Batch 中提交事实行和类型明确的 `TimeSeriesRowsChanged` / `RecordRowsChanged`。storage-view 以 RowsChanged 消息作为失效通知，按 Shard 有序消费、按 ViewRowKey 合并和串行处理、批量回读最新事实行，再向 DuckDB/Bleve 写入完整 View 行。浏览器经 Admin Gateway 进入 Node Service Gateway，服务间调用直接进入同一 Node Service Gateway；Archive 只归档历史写入数据，忽略 Delete，不参与在线删除。
 
 **Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、Pebble、SQLite、NATS JetStream、DuckDB、Bleve、Parquet、Vue 3、TypeScript、Vitest、Shell。
 
@@ -40,21 +40,24 @@
 
 | 主题 | 最终决定 |
 | --- | --- |
-| 对外入口 | 浏览器和外部 HTTP 只使用 `/api/admin/storage/{method}` |
+| 浏览器入口 | Browser -> Admin Gateway `/api/admin/storage/{method}` -> Node Service Gateway -> Storage |
+| 服务间入口 | Go Service -> Node Service Gateway 原生 tRPC Listener -> Storage |
+| 网关职责 | Admin Gateway 负责用户会话、权限和 HTTP/BFF 适配；Node Service Gateway 负责 Service HMAC、tRPC 路由、限流和追踪 |
 | 默认部署 | 仅 `storage-primary` 和 `storage-view` 两个进程 |
 | Metadata | 独立代码服务，和 PrimaryStore 装配在 `storage-primary` 进程 |
 | PrimaryStore | 单点逻辑事实服务，负责校验、路由、聚合，不直接拥有 Pebble |
 | DataShard | 内部物理事实分片，固定 `shard_id`，独立部署或嵌入 `storage-primary` |
 | 分片能力 | 只提供单副本容量分片；不实现副本、自动故障转移、迁移、再平衡和跨分片事务 |
-| 消息 Envelope | 统一使用 `MooxMessage`；新增 `message_type` |
-| 事实变更消息 | 使用 `DataChange` 和 `RowChange`，不使用 Mutation、FactMutation、DataChangeMsg |
+| 公共消息 | 统一使用 `MooxMessage`；新增 `message_type`，代码和文档不再使用 Envelope 作为别名 |
+| 事实变更消息 | 保留两种显式领域消息并改名为 `TimeSeriesRowsChanged`、`RecordRowsChanged`；不使用 Mutation、FactMutation、DataChange、DataChangeMsg |
 | 消息 ID | 只使用 `MooxMessage.message_id`，Payload 不重复 |
 | 消息顺序 | `MooxMessage.sequence` 是 DataShard 内连续序列；不增加全局 `write_version`，不使用雪花算法 |
 | 行内版本 | 同一事实 Key 只属于一个 DataShard，内部版本为 `shard_id + last_sequence` |
 | View 消费进度 | 每个 ViewIndex 记录各 DataShard 的 `last_applied_sequence` |
-| View 物化 | 事件只触发刷新；ViewBuilder 批量回读最新事实数据并生成完整 View 行 |
+| 事实写入 | `WriteTimeSeriesRows` / `WriteRecordRows` 改为 `MergeTimeSeriesRows` / `MergeRecordRows`；未提供字段保留，行不存在则创建 |
+| View 物化 | RowsChanged 只触发刷新；ViewBuilder 批量回读最新事实数据并生成完整 View 行 |
 | View 行并发 | 同一 `ViewRowKey` 串行处理，不比较不同 DataShard 的 Sequence |
-| DuckDB/Bleve | 共用同一物化协议；两者都完整 Replace/Upsert，不接收 Patch |
+| DuckDB/Bleve | 共用同一物化协议；两者都完整 Replace/Upsert，不接收 Merge 请求中的局部字段 |
 | Archive 范围 | 只处理配置白名单中的 TimeSeries Dataset；永久保留每个历史业务 Key 的最新完整状态 |
 | Archive 删除 | Archive 忽略 Delete 并 ACK，不写 Tombstone，不删除 Parquet/COS |
 | View 范围 | 使用成对的 `indexed_from` / `indexed_to`，删除 `active_coverage_start/end` |
@@ -69,6 +72,8 @@
 - 不实现 DataShard 副本、自动 Failover、在线迁移或自动 Rebalance。
 - 不实现跨 DataShard 事务；跨分片批次继续返回明确的部分成功结果。
 - 不通过 PrimaryStore 转发 DataView 查询。
+- 不允许浏览器绕过 Admin Gateway 直接访问 Node Service Gateway；Admin Gateway 不直接连接具体 Storage 进程。
+- 不在 Admin Gateway 复制 Storage 业务逻辑；它只执行用户鉴权、静态方法白名单、HTTP/BFF 适配和向 Node Service Gateway 的受信 tRPC 调用。
 - 不让 Archive 跟随在线删除，也不把 Archive 定义为“当前状态备份”。
 - 不保留 Access、旧物理 PrimaryStore、通用 Device、旧 Runtime Role 或旧配置别名。
 - 不为旧 SQLite/Pebble 数据增加迁移代码；开发和部署使用全新数据目录。
@@ -87,6 +92,9 @@
 10. View 查询不得把超出 `indexed_from/indexed_to` 或尚未追平的数据伪装成完整成功。
 11. DataShard 只接受发给自身 `shard_id` 的请求，并验证请求内所有 Space、Dataset、Key 一致。
 12. Dataset 拓扑锁定后，任何会改变既有 Key 放置位置的 Metadata 变更都必须失败。
+13. Merge 必须在 DataShard 的同一原子边界内读取旧行、合并提供字段、校验完整行，并把同一完整结果写入 Pebble 和 RowsChanged MooxMessage。
+14. TimeSeriesRowsChanged 和 RecordRowsChanged 共用每个 DataShard 的同一条 Sequence；ViewBuilder 必须通过一个逻辑 Shard Lane 和一个 Checkpoint 消费两类消息。
+15. 浏览器只能经过 Admin Gateway；Admin Gateway 和其他 Go 服务只能经过 Node Service Gateway 调用可路由的 Storage 服务，失败时不得绕过网关直连。
 
 ## 目标代码结构
 
@@ -95,42 +103,45 @@ modules/storage/
   cmd/server/                         # 只负责装配、配置、健康和关闭
   internal/service/
     metadata/                         # Metadata RPC 与目录管理
+      sqlite/                         # Metadata 唯一持久化实现
+      cache/                          # 小型目录缓存
     primarystore/                     # 事实校验、路由、跨 Shard 聚合、内部扫描
-    datashard/                        # Pebble、Outbox、物理读写、固定 Shard 身份
+      schema/                         # Merge 后完整行的 Schema Contract
+      shardrouter/                    # Dataset 到 DataShard 的锁定路由
+    datashard/                        # 物理读写、固定 Shard 身份
+      pebble/                         # 事实行、Sequence 和 Outbox
+      messagepublisher/               # MooxMessage 发布适配器
     dataview/                         # 对外派生查询
-    viewbuilder/                      # DataChange 消费、批处理、回读、物化
-    viewindex/                        # DuckDB/Bleve 生命周期和内部 RPC
+    viewbuilder/                      # RowsChanged 消费、批处理、回读、物化
+      eventconsumer/                  # JetStream 领域消息消费适配器
+      rowmapper/                      # 多 DataShard 事实行到 ViewRow 的映射
+    viewindex/                        # ViewIndex 生命周期和内部 RPC
+      duckdb/                         # 结构化索引实现
+      bleve/                          # 全文索引实现
   internal/core/
-    factkey/
-    factvalue/
-    schema/
-    shardrouter/
-    viewrow/                          # ViewRowKey、RowMapper、过滤和来源字段映射
-  internal/infra/
-    pebble/
-    duckdb/
-    bleve/
-    metadata/sqlite/
-    metadata/cache/
+    rowkey/                           # 事实行 Key 规范化、解析、维度哈希和时间格式
+    typedvalue/                       # TypedValue 转换、比较和 Null 基础语义
+    viewrow/                          # ViewBuilder/ViewIndex 共享的不可变 ViewRow DTO
 ```
 
-Admin Gateway 是公开 `Storage` Facade；Storage 模块内不再创建一个额外的转发进程或 God Service。
+Storage 不再保留横向的 `internal/infra` 技术分层：有唯一生命周期所有者的实现必须和所属领域服务放在一起；真正跨模块复用的 JetStream、鉴权和协议能力继续使用 `packages/*`。Admin Gateway 是浏览器 BFF，Node Service Gateway 是唯一内部服务入口；Storage 模块内不再创建额外转发进程或 God Service。
 
 | 身份 | 最终名称 | 部署位置 | 可见性 |
 | --- | --- | --- | --- |
-| 浏览器 Facade | `/api/admin/storage/{method}` | Admin Gateway | 唯一公开入口，静态方法白名单 |
-| Metadata | `trpc.moox.storage.Metadata` | `storage-primary` | 内部，由 Facade 和受信服务调用 |
-| 事实编排 | `trpc.moox.storage.PrimaryStore` | `storage-primary` | 内部，不进入普通 Gateway 路由 |
-| 有界扫描 | `trpc.moox.storage.PrimaryStoreScan` | `storage-primary` | 仅 ViewBuilder、Archive 和维护任务 |
-| 物理分片 | `trpc.moox.storage.DataShard` | 嵌入或私网独立进程 | 仅 PrimaryStore 和受控维护调用 |
-| 派生查询 | `trpc.moox.storage.DataView` | `storage-view` | 内部，由公开 Facade 直接分发，不经过 PrimaryStore |
+| 浏览器 Facade | `/api/admin/storage/{method}` | Admin Gateway | 用户会话入口，静态方法白名单，转发到 Node Service Gateway |
+| 内部逻辑入口 | Storage tRPC Callee/Method | Node Service Gateway | 原生 tRPC、Service HMAC、按 `(callee, method)` 路由 |
+| Metadata | `trpc.moox.storage.Metadata` | `storage-primary` | 仅由 Node Service Gateway 和进程内受信组件调用 |
+| 事实编排 | `trpc.moox.storage.PrimaryStore` | `storage-primary` | 仅由 Node Service Gateway 路由，不直接公开物理地址 |
+| 有界扫描 | `trpc.moox.storage.PrimaryStoreScan` | `storage-primary` | Service Gateway 特权路由，仅允许 ViewBuilder、Archive 和维护身份 |
+| 物理分片 | `trpc.moox.storage.DataShard` | 嵌入或私网独立进程 | 嵌入时 LocalClient；独立时经所在节点 Service Gateway 特权路由，仅允许 PrimaryStore |
+| 派生查询 | `trpc.moox.storage.DataView` | `storage-view` | 由 Node Service Gateway 按方法路由，不经过 PrimaryStore |
 | 派生写入 | `trpc.moox.storage.ViewIndex` | `storage-view` | 仅进程内 ViewBuilder/维护调用 |
 
 ## 阶段门禁
 
 | 阶段 | 任务 | 进入下一阶段前必须满足 |
 | --- | --- | --- |
-| A. 一致性协议 | Task 1-10 | Patch、乱序、分页、Delete、View 范围、Schema 和错误契约的回归测试全部通过 |
+| A. 一致性协议 | Task 1-10 | Merge、乱序、分页、Delete、View 范围、Schema 和错误契约的回归测试全部通过 |
 | B. 分片与 Metadata | Task 11-12 | Shard 身份、拓扑冻结、Metadata 真分页和缓存测试通过 |
 | C. 结构收敛 | Task 13-15 | 最终包名、Proto、角色、配置和健康检查通过；旧名字扫描为零 |
 | D. 对外与交付 | Task 16-18 | Gateway、前端热点、发布、文档、全量 Verify 和 E2E 全部通过 |
@@ -145,9 +156,9 @@ Admin Gateway 是公开 `Storage` Facade；Storage 模块内不再创建一个�
 
 该 Contract Test 使用 `//go:build storage_consistency_contract`，只由专用脚本显式运行。在 Stage A 完成前不得接入默认 `make verify`，避免把后续各任务的中间提交永久置于红色；每个具体修复仍必须在所属包增加默认执行的单元/集成测试。
 
-- [ ] **Step 1: 添加 Patch 物化失败测试**
+- [ ] **Step 1: 添加 Merge 物化失败测试**
 
-构造同一 TimeSeries/Record Key 的两次写入：第一次写完整列，第二次只写一列。测试必须证明 PrimaryStore 最终行保留未修改列，并要求 DuckDB、Bleve、Archive 接收到的 Upsert 行也是合并后的完整行。
+分别调用 `MergeTimeSeriesRows` / `MergeRecordRows` 构造同一 Key 的两次写入：第一次提供完整列，第二次只提供一列。测试必须证明 PrimaryStore 最终行保留未修改列，并要求 DuckDB、Bleve、Archive 接收到的 Upsert 行也是合并后的完整行；目标行不存在时 Merge 必须创建新行。
 
 - [ ] **Step 2: 添加 Outbox 非连续 ACK 测试**
 
@@ -184,12 +195,12 @@ git add modules/storage/test/storage_consistency_contract_test.go scripts/test-s
 git commit -m "test(storage): lock consistency remediation contract"
 ```
 
-### Task 2: 统一 MooxMessage 和 DataChange 协议
+### Task 2: 统一 MooxMessage 和 RowsChanged 协议
 
 **Files:**
 - Modify: `packages/messagepb/moox_message.proto`
 - Regenerate: `packages/messagepb/moox_message.pb.go`
-- Rename/Rewrite: `modules/storage/proto/message.proto` -> `modules/storage/proto/data_change.proto`
+- Rename/Rewrite: `modules/storage/proto/message.proto` -> `modules/storage/proto/rows_changed.proto`
 - Modify: `modules/storage/proto/Makefile`
 - Regenerate: `modules/storage/proto/storagegen/*`
 - Modify: `packages/jetstream/codec.go`
@@ -218,6 +229,11 @@ git commit -m "test(storage): lock consistency remediation contract"
 - Modify: `packages/report/handler_test.go`
 - Modify: `modules/archive/internal/consumer/decode.go`
 - Modify: `modules/archive/internal/consumer/decode_test.go`
+- Modify: `modules/archive/internal/consumer/handler.go`
+- Modify: `modules/archive/internal/consumer/handler_test.go`
+- Modify: `modules/archive/internal/consumer/runner.go`
+- Modify: `modules/archive/internal/consumer/runner_test.go`
+- Modify: `modules/archive/internal/journal/store.go`
 - Modify: `modules/archive/test/archive_e2e_test.go`
 - Modify: `modules/archive/config/app.yaml`
 - Modify: `modules/eventbus/internal/config/config_defaults.go`
@@ -237,7 +253,11 @@ git commit -m "test(storage): lock consistency remediation contract"
 - Modify: `modules/storage/config/trpc_go.yaml`
 - Modify: `modules/storage/config/trpc_go.access.yaml`
 
-- [ ] **Step 1: 为 Envelope 增加业务消息类型**
+- Modify: `modules/storage/internal/service/primary/service.go`
+- Modify: `modules/storage/internal/service/primary/outbox_relay.go`
+- Modify: `modules/storage/internal/service/primary/outbox_relay_test.go`
+
+- [ ] **Step 1: 为 MooxMessage 增加业务消息类型**
 
 新增：
 
@@ -247,9 +267,9 @@ string message_type = 14;
 
 字段职责固定为：`kind` 表示 EVENT/COMMAND/SNAPSHOT，`message_type` 表示 Payload Schema，`topic` 只负责路由，`content_type` 表示编码。
 
-- [ ] **Step 2: 定义 Storage DataChange**
+- [ ] **Step 2: 定义两个显式 Storage RowsChanged 消息**
 
-删除 `TimeSeriesRowsUpdated` 和 `RecordRowsUpdated`，定义：
+不删除 TimeSeries 和 Record 两种领域消息概念，只把容易误解为“普通更新成功”的旧名 `TimeSeriesRowsUpdated`、`RecordRowsUpdated` 改为 `TimeSeriesRowsChanged`、`RecordRowsChanged`。两类消息保持独立，使 Factor、Archive 可以只订阅 TimeSeries，避免用一个 `oneof DataChange` 隐藏不同的 Key 和范围语义：
 
 ```proto
 enum RowChangeOperation {
@@ -258,43 +278,70 @@ enum RowChangeOperation {
   ROW_CHANGE_OPERATION_DELETE = 2;
 }
 
-message RowChange {
+message TimeSeriesRowChange {
   RowChangeOperation operation = 1;
-  oneof row {
-    TimeSeriesRow time_series_row = 2;
-    RecordRow record_row = 3;
-  }
+  TimeSeriesRow row = 2;
 }
 
-message DataChange {
+message TimeSeriesRowsChanged {
   string shard_id = 1;
   string space_id = 2;
   string dataset_id = 3;
-  repeated RowChange rows = 4;
+  repeated TimeSeriesRowChange changes = 4;
+}
+
+message RecordRowChange {
+  RowChangeOperation operation = 1;
+  RecordRow row = 2;
+}
+
+message RecordRowsChanged {
+  string shard_id = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  repeated RecordRowChange changes = 4;
 }
 ```
 
 DELETE 的 Row 只携带完整 Key；UPSERT 携带 DataShard 合并后的完整事实行。Payload 不重复 `message_id`、`sequence`、`occurred_at`。
 
-- [ ] **Step 3: 固定消息类型和 Topic**
+- [ ] **Step 3: 固定两类消息的 Message Type 和 Topic**
 
 ```text
-message_type: moox.storage.data_change.v1
-topic:        moox.storage.data_change.v1.<shard_token>
-kind:         MESSAGE_KIND_EVENT
-content_type: application/x-protobuf; message=trpc.moox.storage.DataChange
-sequence:     DataShard 本地 Sequence
+TimeSeries:
+  message_type: moox.storage.time_series.rows_changed.v1
+  topic:        moox.storage.rows_changed.time_series.v1.<shard_token>
+  content_type: application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsChanged
+
+Record:
+  message_type: moox.storage.record.rows_changed.v1
+  topic:        moox.storage.rows_changed.record.v1.<shard_token>
+  content_type: application/x-protobuf; message=trpc.moox.storage.RecordRowsChanged
+
+Both:
+  kind:         MESSAGE_KIND_EVENT
+  sequence:     DataShard 本地统一 Sequence
 ```
 
-`shard_token` 固定为 Shard ID UTF-8 字节的无 Padding 小写 Base32，确保它始终是单个 NATS Token；生产者和消费者共用 `packages/jetstream` 的 Encode/Decode Helper，禁止调用方直接拼接任意 Subject。
+`shard_token` 固定为 Shard ID UTF-8 字节的无 Padding 小写 Base32，确保它始终是单个 NATS Token；生产者和消费者共用 `packages/jetstream` 的 Encode/Decode Helper，禁止调用方直接拼接任意 Subject。两类消息进入同一个 Storage Change Stream；DataShard Outbox 按统一 Sequence 串行发布。ViewBuilder 使用同一个 Durable 和两个 Filter Subject 接收两类消息，再进入同一条按 Shard 排序的处理通道，不能为两类消息分别推进 Checkpoint。
 
-- [ ] **Step 4: 强化 Envelope 校验**
+- [ ] **Step 4: 强化 MooxMessage 校验并清除 Envelope 别名**
 
-所有新 Envelope 的 `message_type`、`message_id`、`producer`、`topic` 和 `payload` 缺失时拒绝；Storage DataChange 还必须拒绝 Sequence=0，并满足 Topic Shard 与 Payload `shard_id` 一致。一次性更新仓库内所有生产者，为每种 Payload 设置带命名空间和版本的 Message Type，不能只让 Storage 使用新字段。
+所有新 MooxMessage 的 `message_type`、`message_id`、`producer`、`topic` 和 `payload` 缺失时拒绝；Storage RowsChanged 还必须拒绝 Sequence=0，并满足 Topic Shard 与 Payload `shard_id` 一致。一次性更新仓库内所有生产者，为每种 Payload 设置带命名空间和版本的 Message Type，不能只让 Storage 使用新字段。
 
-- [ ] **Step 5: 原子更新所有 DataChange 消费者**
+代码和现行文档统一使用实际类型名 `MooxMessage`，同时完成以下无兼容重命名：`EnvelopePublisher` -> `MessagePublisher`、`PublishEnvelope` -> `PublishMessage`、`Envelope()` -> `Message()`、`RawEnvelope` -> `RawMessage`、`fixtureEnvelope` -> `fixtureMessage`。不得创建新的 `Envelope` 类型，也不得把它改叫 `MessageHeader`，因为外层对象同时拥有 Payload。
 
-Archive、Factor、ViewBuilder 和 EventBus Registry 一次性从 RowsUpdated 切换到 `moox.storage.data_change.v1`。所有消费者使用 `moox.storage.data_change.v1.*` Shard Topic Family，各自保留独立 Durable；Registry 只允许该 Topic Family，Storage 生产者和所有 DataChange 消费者还必须校验 Topic 最后一段解码后等于 Payload `shard_id`。Factor 只从 UPSERT 的 TimeSeries Row 提取触发 Key；Archive 归档完整 UPSERT 并忽略 DELETE；ViewBuilder 同时处理 UPSERT/DELETE。未知 `message_type` 不得尝试按 Topic 猜 Payload。旧的 Storage 内 Archive 虽会在 Task 14 删除，但在该任务前仍须保持编译和测试通过。
+```go
+type MessagePublisher interface {
+    PublishMessage(context.Context, []byte) error
+}
+```
+
+Outbox Relay 在 Task 4 固定为按 Sequence 逐条等待 ACK，因此删除批量 `PublishEnvelopes`/`PublishMessages` 接口，不保留两套发布语义。
+
+- [ ] **Step 5: 原子更新所有 RowsChanged 消费者**
+
+Archive、Factor、ViewBuilder 和 EventBus Registry 一次性从 RowsUpdated 切换到两个 RowsChanged Message Type。Factor 和 Archive 只订阅 TimeSeries Topic Family；ViewBuilder 用一个 Durable 同时过滤 TimeSeries 和 Record Topic Family；各消费者保留独立 Durable。Registry 允许这两个 Topic Family，Storage 生产者和所有消费者还必须校验 Topic 最后一段解码后等于 Payload `shard_id`。Factor 只从 UPSERT TimeSeries Row 提取触发 Key；Archive 归档完整 UPSERT 并忽略 DELETE；ViewBuilder 将两种外部消息归一为内部 `ChangeBatch` 后处理 UPSERT/DELETE。未知 `message_type` 不得尝试按 Topic 猜 Payload。旧的 Storage 内 Archive 虽会在 Task 14 删除，但在该任务前仍须保持编译和测试通过。
 
 - [ ] **Step 6: 重新生成代码**
 
@@ -305,7 +352,7 @@ make -C modules/storage/proto all
 gofmt -w packages/messagepb/moox_message.pb.go modules/storage/proto/storagegen/*.go
 ```
 
-Expected: 生成代码只暴露 `DataChange`/`RowChange`；旧 `message.pb.go` 和 RowsUpdated 类型消失，生成文件名为 `data_change.pb.go`。
+Expected: 生成代码只暴露 `TimeSeriesRowsChanged`、`RecordRowsChanged` 和各自的 Row Change；旧 `message.pb.go` 和 RowsUpdated 类型消失，生成文件名为 `rows_changed.pb.go`。
 
 - [ ] **Step 7: Run and commit**
 
@@ -328,10 +375,10 @@ git add packages/messagepb packages/jetstream packages/report \
   modules/archive modules/eventbus modules/factor \
   modules/cloudnode/internal/jobqueue modules/hostagent/internal/app modules/monitor/internal/hostmetrics modules/monitor/internal/metrics \
   modules/strategy/internal/bus modules/trade/internal/infra/bus
-git commit -m "refactor(storage): define data change event contract"
+git commit -m "refactor(storage): define rows changed message contracts"
 ```
 
-### Task 3: 让 DataShard 原子生成完整 DataChange
+### Task 3: 让 DataShard 原子生成完整 RowsChanged
 
 **Files:**
 - Modify: `modules/storage/proto/store.proto`
@@ -349,7 +396,7 @@ git commit -m "refactor(storage): define data change event contract"
 
 - [ ] **Step 1: 移除调用方预编码 Outbox**
 
-从物理写请求删除 `outbox_message`。PrimaryStore 只传规范化事实 Patch、AuthInfo、预期 `shard_id` 和按 Dataset 缓存编译的只读 Schema Contract；最终 MooxMessage 必须由 DataShard 创建。Schema Contract 只包含列名、类型、Required 集合和 Schema Hash，DataShard 不查询 Metadata。
+从物理写请求删除 `outbox_message`。PrimaryStore 只传规范化事实 Merge 请求、AuthInfo、预期 `shard_id` 和按 Dataset 缓存编译的只读 Schema Contract；最终 MooxMessage 必须由 DataShard 创建。Schema Contract 只包含列名、类型、Required 集合和 Schema Hash，DataShard 不查询 Metadata。
 
 - [ ] **Step 2: 固定 DataShard 身份**
 
@@ -361,12 +408,12 @@ Pebble 写入内部必须先按规范化 ShardKey 排序获取行锁，再持有
 
 ```text
 读取旧行
-合并 Patch
+合并请求中提供的字段
 使用 Schema Contract 校验合并后完整行
 分配下一 Shard Sequence
-用完整行构造 DataChange
+按数据类型用完整行构造 TimeSeriesRowsChanged 或 RecordRowsChanged
 构造 MooxMessage
-校验编码后的 Envelope 不超过 EventBus MaxPayload
+校验编码后的 MooxMessage 不超过 EventBus MaxPayload
 Batch.Set 事实行
 Batch.Set Outbox
 Batch.Set Sequence High Water
@@ -377,9 +424,9 @@ Batch.Commit(Sync)
 
 - [ ] **Step 4: 保存行的来源序列**
 
-在内部 ShardRow 中保存 `last_sequence`，但不在外部 TimeSeriesRow/RecordRow API 暴露为业务 Version。一次 Batch 内的所有成功行使用同一个 Sequence。
+在内部 ShardRow 中保存 `last_sequence`，但不在外部 TimeSeriesRow/RecordRow API 暴露为业务 Version。一次 Batch 内的所有成功行使用同一个 Sequence。读取旧行、合并字段、校验、写事实行和写 Outbox 必须处于同一组行锁与 Pebble Sync Batch 边界，使权威行和消息中的完整行永远表示同一次提交。
 
-- [ ] **Step 5: 修正 Null Patch**
+- [ ] **Step 5: 修正 Merge 的 Null 语义**
 
 暂时保持“未携带列不变”，但不得继续把显式 Null 静默当作未携带；完整 Null/Unset 语义在 Task 10 一次性落地。
 
@@ -488,7 +535,7 @@ git commit -m "fix(storage): make fact pagination lossless"
 ### Task 6: 明确 Delete 在线传播和 Archive 保留语义
 
 **Files:**
-- Modify: `modules/storage/proto/data_change.proto`
+- Modify: `modules/storage/proto/rows_changed.proto`
 - Modify: `modules/storage/proto/store.proto`
 - Modify: `modules/storage/internal/infra/device/pebble/store.go`
 - Modify: `modules/storage/internal/service/access/data.go`
@@ -498,9 +545,9 @@ git commit -m "fix(storage): make fact pagination lossless"
 - Modify: `modules/archive/internal/consumer/decode.go`
 - Modify: `modules/archive/internal/consumer/decode_test.go`
 
-- [ ] **Step 1: 原子提交 Delete 和 DataChange**
+- [ ] **Step 1: 原子提交 Delete 和 RowsChanged**
 
-Pebble 删除事实 Key、分配 Sequence、写入 DELETE DataChange Outbox 必须在同一个 Sync Batch 中完成。不存在的 Key 删除仍发布一次幂等刷新通知，以便清除可能残留的 View；Archive 始终忽略这类通知。
+Pebble 删除事实 Key、分配 Sequence、按数据类型写入 DELETE `TimeSeriesRowsChanged` 或 `RecordRowsChanged` Outbox 必须在同一个 Sync Batch 中完成。不存在的 Key 删除仍发布一次幂等刷新通知，以便清除可能残留的 View；Archive 始终忽略这类通知。
 
 - [ ] **Step 2: ViewBuilder 传播删除**
 
@@ -512,11 +559,11 @@ DuckDB 按完整主键删除，Bleve 按稳定 Document ID 删除。删除成功
 
 - [ ] **Step 4: Archive 明确忽略 Delete**
 
-Archive Decoder 对 DELETE 返回 Ignore/ACK，不追加 Journal，不写 Tombstone，不改 Parquet/COS。架构测试必须证明删除在线事实后归档行仍可读取。Archive 白名单外的 Dataset 明确忽略；白名单内每次完整 UPSERT 都进入 Journal，同一历史业务 Key 的新快照替换 Parquet/COS 中该 Key 的旧物化值，但不会删除其他历史时间点。Archive 不是 Patch 审计日志，不额外保存同一业务 Key 的每次修改；需要修订身份时由 Dataset 自身的 `revision` 业务列表达。默认 48H Host Metrics Cleanup 的 Dataset 必须与 Archive 白名单互斥；未来若要自动清理已归档事实，必须另行设计 Archive Completeness Checkpoint，本计划不得仅凭“已发布到 JetStream”删除可用于补档的事实。
+Archive Decoder 对 DELETE 返回 Ignore/ACK，不追加 Journal，不写 Tombstone，不改 Parquet/COS。架构测试必须证明删除在线事实后归档行仍可读取。Archive 白名单外的 Dataset 明确忽略；白名单内每次完整 UPSERT 都进入 Journal，同一历史业务 Key 的新快照替换 Parquet/COS 中该 Key 的旧物化值，但不会删除其他历史时间点。Archive 不是 Merge 命令审计日志，不额外保存同一业务 Key 的每次修改；需要修订身份时由 Dataset 自身的 `revision` 业务列表达。默认 48H Host Metrics Cleanup 的 Dataset 必须与 Archive 白名单互斥；未来若要自动清理已归档事实，必须另行设计 Archive Completeness Checkpoint，本计划不得仅凭“已发布到 JetStream”删除可用于补档的事实。
 
 - [ ] **Step 5: 收紧公开面**
 
-把用于 48H Host Metrics 清理的删除能力移动到受信内部接口；Public Storage Facade 不公开任意范围 Delete。
+把用于 48H Host Metrics 清理的删除能力移动到受信内部接口；Admin Gateway 的浏览器方法白名单和 Node Service Gateway 的普通服务路由都不公开任意范围 Delete。
 
 - [ ] **Step 6: Run and commit**
 
@@ -532,8 +579,8 @@ git commit -m "fix(storage): propagate online deletes to views"
 **Files:**
 - Rename: `modules/storage/internal/service/view/builder/batcher.go` -> `modules/storage/internal/service/view/builder/event_batcher.go`
 - Rename: `modules/storage/internal/service/view/builder/batcher_test.go` -> `modules/storage/internal/service/view/builder/event_batcher_test.go`
-- Rename: `modules/storage/internal/service/view/projection.go` -> `modules/storage/internal/core/viewrow/row_mapper.go`
-- Rename: `modules/storage/internal/service/view/projection_test.go` -> `modules/storage/internal/core/viewrow/row_mapper_test.go`
+- Rename: `modules/storage/internal/service/view/projection.go` -> `modules/storage/internal/service/view/builder/rowmapper/row_mapper.go`
+- Rename: `modules/storage/internal/service/view/projection_test.go` -> `modules/storage/internal/service/view/builder/rowmapper/row_mapper_test.go`
 - Modify: `modules/storage/internal/service/view/builder/service.go`
 - Modify: `modules/storage/internal/service/view/builder/service_test.go`
 - Modify: `modules/storage/internal/service/view/builder/time_series.go`
@@ -549,9 +596,26 @@ git commit -m "fix(storage): propagate online deletes to views"
 
 批量合并组件命名为 `EventBatcher`；行组合组件命名为 `RowMapper`。将 `ProjectionReader` 改为 `SourceReader`，`ProjectionGrainKey` 改为 `ViewRowKey`，`ViewProjectionDatasets` 改为 `SourceDatasetIDs`。
 
-- [ ] **Step 2: DataChange 只作为刷新触发器**
+- [ ] **Step 2: RowsChanged 只作为刷新触发器**
 
-ViewBuilder 从 DataChange 读取 Shard ID、Sequence、Operation 和事实 Key。UPSERT Payload 中的完整行可用于日志和 Archive，但 View 稳态物化仍批量读取当前事实状态，不直接把事件快照当最终 View 行。
+ViewBuilder 分别解码 `TimeSeriesRowsChanged` 和 `RecordRowsChanged`，归一为只在进程内部存在的 `ChangeBatch`，读取 Shard ID、MooxMessage Sequence、Operation 和事实 Key。UPSERT Payload 中的完整行可用于日志和 Archive，但 View 稳态物化仍批量读取当前事实状态，不直接把事件快照当最终 View 行。
+
+```go
+type ChangeBatch struct {
+    MessageID string
+    ShardID   string
+    Sequence  uint64
+    Changes   []ChangeKey
+}
+
+type ChangeKey struct {
+    Operation     pb.RowChangeOperation
+    TimeSeriesKey *pb.TimeSeriesKey
+    RecordKey     *pb.RecordKey
+}
+```
+
+每个 `ChangeKey` 必须且只能设置一种 Key；外部消息中的完整 UPSERT Row 在归一化后不进入稳态物化输入。EventConsumer 另外持有 JetStream Delivery/完成通知，不能把 ACK 生命周期塞进可批量合并的纯 `ChangeBatch`。
 
 - [ ] **Step 3: 按 Shard 保序**
 
@@ -582,7 +646,7 @@ write_timeout: 10s
 
 - [ ] **Step 7: 生成完整 View 行**
 
-RowMapper 必须读取所有 ViewColumn 的来源 Dataset，应用固定 Filter，输出完整列集合和稳定 ViewRowKey。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。
+`rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。它必须读取所有 ViewColumn 的来源 Dataset，应用固定 Filter，输出完整列集合和稳定 ViewRowKey。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。`internal/core/viewrow` 只允许保存 ViewBuilder 与 ViewIndex 共同依赖的不可变 ViewRow/ViewRowKey DTO，不得包含事实读取或映射流程。
 
 - [ ] **Step 8: ACK/NAK 必须等待持久化结果**
 
@@ -593,7 +657,7 @@ JetStream Handler 为每条输入消息保留完成通知；EventBatcher 可以�
 - [ ] **Step 9: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/core/viewrow ./internal/service/view/builder ./internal/observability)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/core/viewrow ./internal/service/view/builder/... ./internal/observability)
 git add modules/storage/internal/core/viewrow modules/storage/internal/service/view
 git commit -m "refactor(storage): batch and serialize view refreshes"
 ```
@@ -727,7 +791,7 @@ git add modules/storage
 git commit -m "fix(storage): enforce materialized view ranges"
 ```
 
-### Task 10: 落实 Schema、Patch 和错误契约
+### Task 10: 落实 Schema、Merge 和错误契约
 
 **Files:**
 - Modify: `modules/storage/proto/access.proto`
@@ -748,6 +812,13 @@ git commit -m "fix(storage): enforce materialized view ranges"
 - Modify: `modules/storage/internal/infra/metadata/sqlite/crud_dataset.go`
 - Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
 - Modify: `modules/storage/schema/metadata.sql`
+- Modify: `modules/cli/internal/command/storage_import.go`
+- Modify: `modules/collector/internal/sources/binance/storage_rpc.go`
+- Modify: `modules/factor/internal/storageio/client.go`
+- Modify: `modules/factor/internal/storageio/writeback.go`
+- Modify: `modules/monitor/internal/hostmetrics/storage_writer.go`
+- Modify: `modules/monitor/internal/metrics/storage.go`
+- Modify: `modules/storage/cmd/bench/main_scenarios.go`
 - Modify: `web/src/api/storage/types.ts`
 - Modify: `web/src/views/data/fields/components/FieldEditorDrawer.vue`
 - Modify: `web/src/views/data/datasets/components/dataset-column-panel.vue`
@@ -763,9 +834,11 @@ git commit -m "fix(storage): enforce materialized view ranges"
 
 - [ ] **Step 2: 拒绝模糊批次**
 
-拒绝空写入、Nil Row/Key、重复 Key、重复列、未知列、跨 Space/Dataset 批次、超过最大行数或总字节数的请求。默认公共请求上限为 1000 行/4MiB、单行编码后 1MiB；DataShard 还必须在 Commit 前验证完整 DataChange Envelope 不超过 EventBus 配置的 8MiB MaxPayload。若合并旧值后批次超限，返回类型化 `BATCH_TOO_LARGE`；PrimaryStore 只可对尚未提交的该 Shard Batch 做有界二分重试，单行仍超限则明确失败，不能提交事实后才发现事件发不出去。
+拒绝空写入、Nil Row/Key、重复 Key、重复列、未知列、跨 Space/Dataset 批次、超过最大行数或总字节数的请求。默认公共请求上限为 1000 行/4MiB、单行编码后 1MiB；DataShard 还必须在 Commit 前验证完整 RowsChanged MooxMessage 不超过 EventBus 配置的 8MiB MaxPayload。若合并旧值后批次超限，返回类型化 `BATCH_TOO_LARGE`；PrimaryStore 只可对尚未提交的该 Shard Batch 做有界二分重试，单行仍超限则明确失败，不能提交事实后才发现事件发不出去。
 
-- [ ] **Step 3: 定义 Patch 三态**
+- [ ] **Step 3: 把事实写入明确命名为 Merge 并定义三态**
+
+无兼容地把 `WriteTimeSeriesRows` / `WriteRecordRows` 及其 Req/Rsp 改为 `MergeTimeSeriesRows` / `MergeRecordRows`。同步修改 CLI、Collector、Factor、Monitor、Bench、Web 和测试调用方。Merge 的契约固定为“提供的字段合并到现有行，未提供字段保持不变，目标行不存在时创建”；本计划不增加 `write_mode`，也不增加没有实际调用场景的 Replace RPC。
 
 ```text
 列未出现                 -> 保留旧值
@@ -774,7 +847,7 @@ removed_column_names     -> 删除已存单元格
 removed_attribute_names  -> 删除 Attribute
 ```
 
-在 `TimeSeriesRow` 和 `RecordRow` 增加 `repeated string removed_column_names = 4` 与 `repeated string removed_attribute_names = 5`。服务端拒绝同一个列/属性同时出现在 Set 和 Remove 集合中；DataChange 的完整 UPSERT 快照不得携带 Remove 集合。
+在 `TimeSeriesRow` 和 `RecordRow` 增加 `repeated string removed_column_names = 4` 与 `repeated string removed_attribute_names = 5`。服务端拒绝同一个列/属性同时出现在 Set 和 Remove 集合中；RowsChanged 的完整 UPSERT 快照不得携带 Remove 集合。
 
 Required 列在合并后的完整行上校验，不能被 Null 或 Remove。
 
@@ -817,11 +890,11 @@ Expected: Stage A 的全部 Contract Subtest 通过；此时把 `test-storage-co
 
 - [ ] **Step 1: 显式建模 Shard**
 
-将 `PrimaryStoreNode/Route` 改为 `ShardNode/ShardRoute`。ShardNode 直接描述 `shard_id`、私有 Endpoint、Pebble 所有权和状态，不再通过通用 Device 间接寻找第一个 Pebble。
+将 `PrimaryStoreNode/Route` 改为 `ShardNode/ShardRoute`。ShardNode 直接描述 `shard_id`、所在 Node Service Gateway ID/Target、Pebble 所有权和状态，不保存 DataShard 物理 Listener，不再通过通用 Device 间接寻找第一个 Pebble。
 
 - [ ] **Step 2: 请求绑定 Endpoint 和 Shard**
 
-PrimaryStore 根据 Route 选择已绑定 Shard Client；物理请求只携带期望 `shard_id`，DataShard 必须与启动配置比对。删除调用方可指定 `device_table`、任意 Node ID 或 Engine 的能力。
+PrimaryStore 根据 Route 选择已绑定 Shard Client；嵌入 Shard 使用 LocalClient，独立 Shard 使用目标节点 Service Gateway 的特权 tRPC Route。物理请求只携带期望 `shard_id`，DataShard 必须与启动配置比对。删除调用方可指定 DataShard 物理地址、`device_table`、任意 Node ID 或 Engine 的能力。
 
 - [ ] **Step 3: 首次写入锁定拓扑**
 
@@ -904,11 +977,27 @@ git commit -m "perf(storage): bound metadata queries and cache"
 - Rename: `modules/storage/internal/service/access/` -> split `metadata/` and `primarystore/`
 - Rename: `modules/storage/internal/service/primary/` -> `datashard/`
 - Rename: `modules/storage/internal/service/view/` -> `dataview/` plus `viewbuilder/`
+- Rename: `modules/storage/internal/service/view/builder/access_reader.go` -> `modules/storage/internal/service/viewbuilder/source_reader.go`
+- Move: `modules/storage/internal/service/view/remote_metadata.go` -> `modules/storage/internal/service/dataview/remote_metadata.go`
 - Consolidate: `modules/storage/internal/service/viewindex/` as final `viewindex/`
-- Rename: `modules/storage/internal/core/router/` -> `shardrouter/`
-- Rename: `modules/storage/internal/infra/device/pebble/` -> `modules/storage/internal/infra/pebble/`
-- Rename: `modules/storage/internal/infra/device/duckdb/` -> `modules/storage/internal/infra/duckdb/`
-- Rename: `modules/storage/internal/infra/device/bleve/` -> `modules/storage/internal/infra/bleve/`
+- Rename: `modules/storage/internal/core/factkey/` -> `modules/storage/internal/core/rowkey/`
+- Split: `modules/storage/internal/core/factvalue/` -> `modules/storage/internal/core/typedvalue/` plus owner-local helpers
+- Move: `modules/storage/internal/core/schema/` -> `modules/storage/internal/service/primarystore/schema/`
+- Move: `modules/storage/internal/core/router/` -> `modules/storage/internal/service/primarystore/shardrouter/`
+- Move: `modules/storage/internal/core/metadata/store.go` -> `modules/storage/internal/service/metadata/contracts.go`
+- Move: `modules/storage/internal/core/viewindex/engine.go` -> `modules/storage/internal/service/viewindex/engine.go`
+- Move: `modules/storage/internal/core/viewindex/engine_test.go` -> `modules/storage/internal/service/viewindex/engine_test.go`
+- Move: `modules/storage/internal/core/viewindex/path.go` -> `modules/storage/internal/service/viewindex/path.go`
+- Move: `modules/storage/internal/core/viewindex/path_test.go` -> `modules/storage/internal/service/viewindex/path_test.go`
+- Delete: `modules/storage/internal/core/eventbus/` after replacing it with DataShard `MessagePublisher`, ViewBuilder `EventConsumer`, and owner-local test fakes
+- Move: `modules/storage/internal/infra/metadata/sqlite/` -> `modules/storage/internal/service/metadata/sqlite/`
+- Move: `modules/storage/internal/infra/metadata/cache/` -> `modules/storage/internal/service/metadata/cache/`
+- Move: `modules/storage/internal/infra/device/pebble/` -> `modules/storage/internal/service/datashard/pebble/`
+- Move: `modules/storage/internal/infra/device/duckdb/` -> `modules/storage/internal/service/viewindex/duckdb/`
+- Move: `modules/storage/internal/infra/device/bleve/` -> `modules/storage/internal/service/viewindex/bleve/`
+- Move: `modules/storage/internal/infra/eventbus/` -> `modules/storage/internal/service/datashard/messagepublisher/`
+- Move: Storage RowsChanged consumer adapter -> `modules/storage/internal/service/viewbuilder/eventconsumer/`
+- Move: `modules/storage/internal/bootstrap/eventbus/` assembly -> focused files under `modules/storage/cmd/server/`
 - Regenerate: `modules/storage/proto/storagegen/*`
 - Modify: `modules/storage/cmd/server/main.go`
 - Modify: `modules/storage/cmd/server/main_test.go`
@@ -948,11 +1037,11 @@ git commit -m "perf(storage): bound metadata queries and cache"
 
 - [ ] **Step 1: 拆分 God Service**
 
-`metadata` 只实现 Metadata RPC 和目录用例；`primarystore` 只实现事实校验、路由、聚合和内部 Scan；`datashard` 只实现物理 Pebble/Outbox。三个服务通过窄接口装配，不互相读取具体实现字段。
+`metadata` 只实现 Metadata RPC 和目录用例，并拥有 SQLite/Cache；`primarystore` 只实现事实校验、路由、聚合和内部 Scan，并拥有 Schema/ShardRouter；`datashard` 只实现物理 Pebble/Outbox，并拥有 MessagePublisher。三个服务通过窄接口装配，不互相读取具体实现字段。
 
 - [ ] **Step 2: 整理 View 边界**
 
-`dataview` 只查询活动索引；`viewbuilder` 只消费 DataChange、回读和物化；`viewindex` 只拥有 DuckDB/Bleve 文件与内部 RPC；纯 RowMapper 放在 `core/viewrow`。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
+`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsChanged、回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件与内部 RPC。`core/viewrow` 只保留 ViewBuilder 和 ViewIndex 共享的不可变 DTO。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
 
 - [ ] **Step 3: 原子替换服务名**
 
@@ -960,6 +1049,11 @@ git commit -m "perf(storage): bound metadata queries and cache"
 Access             -> PrimaryStore
 AccessScan         -> PrimaryStoreScan
 physical PrimaryStore -> DataShard
+WriteTimeSeriesRows -> MergeTimeSeriesRows
+WriteRecordRows     -> MergeRecordRows
+WritePrimaryRows    -> MergeRows
+ReadPrimaryRows     -> ReadRows
+DeletePrimaryRows   -> DeleteRows
 storage-access     -> storage-primary
 role access        -> role primary
 old role primary   -> role shard
@@ -967,25 +1061,31 @@ old role primary   -> role shard
 
 不添加 Alias、Forwarding Package、Deprecated Service 或旧配置兼容分支。
 
-- [ ] **Step 4: 拆分超大 Metadata Proto**
+- [ ] **Step 4: 完成 Core 命名与 Infra 垂直归属**
+
+`factkey` 实际表达行身份规范化，因此统一改为 `rowkey`；其职责固定为 TimeSeries/Record Key 构造解析、维度排序转义哈希和 UTC 时间格式。`factvalue` 中 TypedValue String/Numeric/Compare 移到 `typedvalue`，无生产调用的 `TimeInRange`/`ParseTime` 及其孤立测试直接删除，简单 `StringSet` 放回唯一调用方。禁止创建含糊的 `key`、`value` 通用包。
+
+完成 Pebble -> DataShard、DuckDB/Bleve -> ViewIndex、SQLite/Cache -> Metadata、Schema/ShardRouter -> PrimaryStore、RowMapper/EventConsumer -> ViewBuilder 的物理移动。删除组合 Publisher/Subscriber 的 Storage `Bus` 和运行时 MemoryBus；DataShard 只依赖窄 `MessagePublisher`，ViewBuilder 只依赖窄 `EventConsumer`，测试在各所有者包内使用 Fake。只有通用 JetStream 编解码、发布和鉴权留在 `packages/jetstream`。移动完成后，活动 Storage 代码不得从 `internal/infra` 导入任何实现。
+
+- [ ] **Step 5: 拆分超大 Metadata Proto**
 
 创建 `catalog.proto`、`view_metadata.proto`、`shard_metadata.proto`、`archive_registry.proto` 和 `metadata_service.proto`；仍然只暴露一个 Metadata Service，不增加微服务。
 
-- [ ] **Step 5: 更新所有模块调用方**
+- [ ] **Step 6: 更新所有模块调用方**
 
 同步 Collector、CloudNode、Archive、CLI、Admin、Web、测试、Mock、Seed、脚本和文档中的生成类型及服务名。
 
-- [ ] **Step 6: 运行旧名扫描**
+- [ ] **Step 7: 运行旧名扫描**
 
 ```bash
-rg -n 'trpc\.moox\.storage\.(Access|AccessScan)|WritePrimaryRows|ReadPrimaryRows|PrimaryStore(Node|Route|Target|Key|Row)|storage[_-]access|moox-storage-access|ProjectionReader|active_coverage_' \
+rg -n 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|PrimaryStore(Node|Route|Target|Key|Row)|storage[_-]access|moox-storage-access|ProjectionReader|active_coverage_|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' \
   modules packages scripts web/src examples skills/moox docs \
   --glob '!superpowers/**' --glob '!代码审查报告-*.md'
 ```
 
 Expected: 活动代码和当前文档无匹配；历史 Git 记录不需要修改。
 
-- [ ] **Step 7: Run and commit**
+- [ ] **Step 8: Run and commit**
 
 ```bash
 make proto
@@ -1002,15 +1102,18 @@ git commit -m "refactor(storage): establish final service boundaries"
 - Delete: `modules/storage/internal/infra/device/parquet/`
 - Delete: `modules/storage/internal/infra/device/store.go`
 - Delete: `modules/storage/internal/infra/device/` after engine moves leave it empty
+- Delete: `modules/storage/internal/infra/metadata/` after Metadata moves leave it empty
+- Delete: `modules/storage/internal/infra/eventbus/` after adapters move leave it empty
+- Delete: `modules/storage/internal/infra/` after all live owners move and dead implementations are removed
 - Delete: `modules/storage/core`
 - Modify: `modules/storage/proto/shard_metadata.proto`
 - Modify: `modules/storage/proto/archive_registry.proto`
 - Regenerate: `modules/storage/proto/storagegen/*`
 - Modify: `modules/storage/schema/metadata.sql`
-- Modify: `modules/storage/internal/core/metadata/store.go`
-- Modify: `modules/storage/internal/infra/metadata/cache/store.go`
-- Modify: `modules/storage/internal/infra/metadata/cache/store_test.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_store.go`
+- Modify: `modules/storage/internal/service/metadata/contracts.go`
+- Modify: `modules/storage/internal/service/metadata/cache/store.go`
+- Modify: `modules/storage/internal/service/metadata/cache/store_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_store.go`
 - Modify: `modules/storage/internal/service/metadata/infrastructure.go`
 - Modify: `modules/storage/internal/service/metadata/infrastructure_test.go`
 - Modify: `modules/storage/config/metadata.seed.yaml`
@@ -1025,7 +1128,7 @@ git commit -m "refactor(storage): establish final service boundaries"
 - Modify: `modules/archive/internal/registry/client.go`
 - Modify: `modules/archive/cmd/cli/main_test.go`
 - Modify: `modules/storage/internal/config/loader.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/store.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/store.go`
 - Modify: `modules/storage/cmd/server/runtime_config.go`
 - Modify: `modules/storage/cmd/server/runtime_config_test.go`
 - Modify: `modules/storage/cmd/server/main.go`
@@ -1037,7 +1140,7 @@ git commit -m "refactor(storage): establish final service boundaries"
 
 - [ ] **Step 2: 删除通用 Device**
 
-Pebble 归属 ShardNode；DuckDB/Bleve 归属 storage-view 本地 ViewIndex；Archive 使用 `ArchiveStore`/`archive_store_id`。删除试图统一 Pebble、DuckDB、Bleve、Parquet 的 Device 类型和路由。
+Pebble 归属 DataShard；DuckDB/Bleve 归属 storage-view 本地 ViewIndex；Archive 使用 `ArchiveStore`/`archive_store_id`。删除试图统一 Pebble、DuckDB、Bleve、Parquet 的 Device 类型和路由，并断言 Storage 活动树中不存在 `internal/infra` 目录。
 
 - [ ] **Step 3: 删除兼容代码**
 
@@ -1072,10 +1175,10 @@ git commit -m "refactor(storage): remove obsolete device abstractions"
 - Modify: `modules/storage/internal/service/dataview/service.go`
 - Modify: `modules/storage/internal/service/viewbuilder/service.go`
 - Modify: `modules/storage/internal/service/viewindex/service.go`
-- Modify: `modules/storage/internal/infra/pebble/store.go`
-- Modify: `modules/storage/internal/infra/pebble/store_test.go`
-- Modify: `modules/storage/internal/infra/bleve/index.go`
-- Modify: `modules/storage/internal/infra/bleve/index_test.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store_test.go`
+- Modify: `modules/storage/internal/service/viewindex/bleve/index.go`
+- Modify: `modules/storage/internal/service/viewindex/bleve/index_test.go`
 - Modify: `modules/storage/internal/service/viewbuilder/schedule.go`
 - Modify: `modules/storage/internal/service/viewbuilder/schedule_test.go`
 - Modify: `packages/timerjob/job.go`
@@ -1120,15 +1223,57 @@ git add modules/storage
 git commit -m "fix(storage): fail closed on runtime health"
 ```
 
-### Task 16: 收敛公开 Facade、发布和前端
+### Task 16: 建立双网关 Storage 链路并收敛发布和前端
 
 **Files:**
-- Create: `modules/admin/internal/gateway/storage_facade.go`
-- Create: `modules/admin/internal/gateway/storage_facade_test.go`
+- Create: `modules/admin/internal/gateway/storage_bff.go`
+- Create: `modules/admin/internal/gateway/storage_bff_test.go`
+- Create: `modules/admin/internal/gateway/storage_gateway_client.go`
+- Create: `modules/admin/internal/gateway/storage_gateway_client_test.go`
 - Modify: `modules/admin/internal/gateway/gateway.go`
 - Modify: `modules/admin/internal/gateway/gateway_test.go`
 - Modify: `modules/admin/internal/gateway/forward.go`
 - Modify: `modules/admin/internal/gateway/forward_test.go`
+- Modify: `packages/gatewayauth/auth.go`
+- Modify: `packages/gatewayauth/auth_test.go`
+- Modify: `packages/gatewayauth/client.go`
+- Modify: `packages/gatewayauth/client_test.go`
+- Create: `packages/gatewayauth/trpc.go`
+- Create: `packages/gatewayauth/trpc_test.go`
+- Modify: `packages/gatewayproxy/route.go`
+- Modify: `packages/gatewayproxy/route_test.go`
+- Modify: `packages/gatewayproxy/table.go`
+- Modify: `packages/gatewayproxy/table_test.go`
+- Create: `packages/gatewayproxy/trpc_frame.go`
+- Create: `packages/gatewayproxy/trpc_frame_test.go`
+- Create: `modules/gateway/internal/router/trpc_router.go`
+- Create: `modules/gateway/internal/router/trpc_router_test.go`
+- Modify: `modules/gateway/internal/router/router.go`
+- Modify: `modules/gateway/internal/bootstrap/bootstrap.go`
+- Modify: `modules/gateway/internal/bootstrap/bootstrap_test.go`
+- Modify: `modules/gateway/internal/config/config.go`
+- Modify: `modules/gateway/internal/config/config_test.go`
+- Modify: `modules/gateway/config/app.yaml`
+- Modify: `modules/gateway/config/trpc_go.yaml`
+- Modify: `modules/gateway/test/e2e_test.go`
+- Modify: `modules/gateway/README.md`
+- Modify: `modules/collector/config/app.yaml`
+- Modify: `modules/collector/internal/sources/binance/storage_config.go`
+- Modify: `modules/collector/internal/sources/binance/storage_rpc.go`
+- Modify: `modules/factor/config/app.yaml`
+- Modify: `modules/factor/internal/storageio/client.go`
+- Modify: `modules/factor/internal/registry/metadata_sync.go`
+- Modify: `modules/monitor/config/app.yaml`
+- Modify: `modules/monitor/internal/config/config.go`
+- Modify: `modules/monitor/internal/metrics/storage.go`
+- Modify: `modules/monitor/internal/hostmetrics/storage_reader.go`
+- Modify: `modules/monitor/internal/hostmetrics/storage_writer.go`
+- Modify: `modules/archive/config/app.yaml`
+- Modify: `modules/archive/internal/config/config.go`
+- Modify: `modules/archive/internal/backfill/backfill.go`
+- Modify: `modules/archive/internal/registry/client.go`
+- Modify: `modules/storage/internal/service/viewbuilder/source_reader.go`
+- Modify: `modules/storage/internal/service/dataview/remote_metadata.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Modify: `modules/admin/internal/service/sysdeploy/dao.go`
@@ -1156,36 +1301,78 @@ git commit -m "fix(storage): fail closed on runtime health"
 - Modify: `modules/cli/internal/setup/deploy/service_test.go`
 - Modify: `examples/service-deployments.seed.yaml`
 
-- [ ] **Step 1: Gateway 使用静态白名单**
+- [ ] **Step 1: 把路由表提升为方法级路由**
 
-`/api/admin/storage/{method}` 按明确表分发到 Metadata、PrimaryStore 或 DataView。PrimaryStoreScan、DataShard、ViewIndex、Timer、Maintenance、任意 Delete Range 不得公开。
+`gatewayproxy.Table` 从只按 `service_id` 解析改为按 `(service_id, method)` 和 `(callee, method)` 解析，并为每条方法路由增加非空 `allowed_callers`。同一个逻辑 `storage` 允许存在多个 Route，但 `allowed_methods` 必须非空且互不重叠；空方法表、空 Caller 表、重复方法、同一 Key 指向多个 Upstream 必须使整个路由快照校验失败。HTTP 路由使用 `(service_id, method)`，原生 tRPC 路由使用请求头中的 `(callee, func)`，两种协议共享同一份不可变 Snapshot、超时、Body 上限、方法白名单和 Caller ACL。
 
-- [ ] **Step 2: 内部服务不可直接从浏览器访问**
+SysDeploy 的服务部署 ExtraConfig 增加必填 `gateway_callers` 字符串数组，并原样编译为 Route `allowed_callers`；`*` 只允许出现在明确标记为所有已认证服务可调用的普通路由，Storage 特权路由禁止 `*`。Route Hash 的规范化输入必须包含排序去重后的 Methods 和 Callers，ACL 变更必须触发 Gateway 刷新。
 
-`storage_metadata`、`storage_primary`、`storage_view`、`storage_shard` 及 tRPC 身份全部 `gateway_enabled=false`。直接请求返回 404。
+- [ ] **Step 2: Node Service Gateway 增加原生 tRPC Unary Listener**
 
-- [ ] **Step 3: 前端统一 Storage URL**
+在现有 `/api/service/{service}/{method}` HTTP Listener 之外增加原生 tRPC TCP Listener。使用 tRPC-Go 官方 Frame/Codec 解码固定头和 `RequestProtocol`，只读取 Callee、Func、序列化方式、Request ID、Timeout 和认证元数据；业务 Payload 保持原始字节，不反序列化 Storage Proto。路由成功后只替换网络目标，保留 Callee/Func、Protobuf 或 JSON 序列化标记和响应错误语义。第一阶段只支持 Unary Request/Response；Streaming、Oneway、未知协议、超限 Frame 和方法白名单外调用必须明确拒绝。Frame 测试必须覆盖 TCP 分片/粘包、同连接连续及并发请求、乱序响应的 Request ID 对应、上游半关闭、Deadline 取消、响应超限和客户端提前断开；任何路径都必须释放上游连接和 Timeout。
+
+Service HMAC 扩展到 tRPC Metadata，签名输入固定包含 Key ID、Caller、Target Gateway Node、Callee、Func、Timestamp、Nonce 和 Payload SHA-256；复用现有 Nonce Store 防重放。Gateway 的 `auth.credentials_file` 在启动时 Fail Closed 加载 `key_id -> caller + secret` 映射，Caller 必须由服务端根据 Key ID 得出，不能相信请求自报身份；凭证文件和单服务 Key File 都必须是 0600，暂不做热加载。Gateway 删除调用方伪造的内部身份字段，再向上游写入已验证 Caller、Trace 和 Gateway 身份。HTTP 与 tRPC Auth 共用凭证注册表、时钟偏差和审计指标，但不得混用用户登录令牌。
+
+```yaml
+version: 1
+credentials:
+  - key_id: admin-gateway
+    caller: admin-gateway
+    secret_file: secrets/admin-gateway.key
+  - key_id: storage-view
+    caller: storage-view
+    secret_file: secrets/storage-view.key
+```
+
+配置拒绝未知字段、重复 Key ID、重复 Caller、空 Secret 和不安全文件权限。路由 ACL 只保存 Caller，不保存 Key ID 或 Secret。
+
+- [ ] **Step 3: Admin Gateway 只做浏览器 BFF**
+
+浏览器只访问 `/api/admin/storage/{method}`。Admin Gateway 校验用户登录态和 Storage 静态方法白名单，然后以固定 Caller `admin-gateway` 使用 Service HMAC 调用 Node Service Gateway 的原生 tRPC Listener，不得从 SysDeploy 解析并直连 Metadata、PrimaryStore 或 DataView 地址。BFF 的静态表只描述 `method -> callee`：事实方法到 PrimaryStore，Metadata 方法到 Metadata，查询方法到 DataView；PrimaryStoreScan、DataShard、ViewIndex、Timer、Maintenance 和任意范围 Delete 不得列入，Service Gateway 的 Caller ACL 还必须再次拒绝 `admin-gateway` 调用这些特权方法。
+
+Admin BFF 不复制 Storage 业务类型或校验逻辑：将浏览器 JSON 作为 tRPC JSON Serialization Payload 发送，Node Gateway 原样转发，由目标 tRPC Handler 反序列化为生成的 Req；响应也以 JSON Serialization 原样返回浏览器。测试必须使用真实生成的 Storage Handler 证明 JSON/RetInfo 往返，而不是只断言 Mock 被调用。
+
+- [ ] **Step 4: 服务间调用统一经过 Node Service Gateway**
+
+Collector、Factor、Monitor、Archive、ViewBuilder 等服务继续使用生成的 tRPC Client 和 Protobuf Payload，但 Client Target 配置为 Node Service Gateway，原始 Callee/Func 用于方法级路由；调用方不得保存 Storage 物理地址。统一把各模块的 `access_target` / `metadata_target` 改为一份 `storage_rpc.gateway_target`、`gateway_node_id`、`key_id`、`hmac_key_file` 配置，不保留旧字段。部署工具为 `admin-gateway`、`collector`、`factor`、`monitor`、`archive`、`storage-view`、`storage-primary` 生成或引用独立 Key ID/Secret；禁止让所有服务共享一个可冒充任意 Caller 的密钥。
+
+Metadata、PrimaryStore、DataView 是普通受信服务路由；PrimaryStoreScan 是只允许 `storage-view`、`archive` 和明确维护身份的特权路由。DataShard 嵌入时走 LocalClient；独立部署时注册在所在节点 Gateway，只允许 `storage-primary` Caller，PrimaryStore 保存目标 Gateway 而不是 DataShard 物理地址。ViewIndex 始终进程内调用，不注册任何 Gateway Route。所有 Storage 物理 Listener 只绑定 Loopback，远端调用先到目标节点 Gateway。
+
+浏览器直接调用 `/api/service/storage/...` 必须因缺少 Service HMAC 返回 401；已登录用户令牌不能替代 Service HMAC。Admin Gateway 到 Node Gateway 失败时保留明确的 tRPC Code/RetInfo，不得降级为直连 Storage。
+
+- [ ] **Step 5: 前端统一 Storage URL**
 
 所有 Storage API 使用同一个 Helper 构造 `/api/admin/storage/` URL；删除 `access.ts` 和内部 Service ID 选择逻辑。页面术语统一为 PrimaryStore、DataShard、DataView。
 
-- [ ] **Step 4: 标准发布只有两个 Storage 进程**
+- [ ] **Step 6: 标准发布只有两个 Storage 进程**
 
-Build `all`、Release、Deploy 和 CLI Status 只默认处理 `moox-storage-primary` 和 `moox-storage-view`。`build.sh storage-shard` 可显式构建 `moox-storage-shard`，供高级私网手工部署；它不进入 `all`、Release 归档或默认部署清单，也不得自动注册公开 Gateway 路由。
+Build `all`、Release、Deploy 和 CLI Status 只默认处理 `moox-storage-primary` 和 `moox-storage-view`。默认部署同时为 Node Service Gateway 生成 Metadata、PrimaryStore、DataView 的普通方法级路由，以及带 Caller ACL 的 PrimaryStoreScan 特权路由；不得生成 ViewIndex 路由。`build.sh storage-shard` 可显式构建 `moox-storage-shard`，供高级私网手工部署；它不进入 `all`、Release 归档或默认部署清单，只能在目标节点生成限制为 `storage-primary` Caller 的 DataShard 特权路由，不得注册浏览器或普通服务路由。
 
-- [ ] **Step 5: 明示单副本限制**
+- [ ] **Step 7: 明示单副本限制**
 
 Shard 管理页面和部署文档必须说明：无副本、无自动故障转移、无自动迁移；Shard 不可用时相关数据不可用，需人工修复或恢复。
 
-- [ ] **Step 6: Run and commit**
+- [ ] **Step 8: 双协议和双网关 E2E**
+
+使用真实 tRPC Storage 测试服务覆盖两条完整链路：`Browser JSON -> Admin Gateway -> tRPC Node Gateway -> Storage`，以及 `Generated tRPC Client -> Node Gateway -> Storage`。同时断言方法级分流到 Metadata/PrimaryStore/DataView、用户令牌不能访问 Service Gateway、Service HMAC 重放被拒绝、未知方法被拒绝、后端 tRPC Code 原样返回、路由刷新后两个协议同时切换且失败刷新继续使用最后一份合法快照。
+
+- [ ] **Step 9: Run and commit**
 
 ```bash
 (cd modules/admin && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/gateway ./internal/service/sysdeploy)
+(cd modules/gateway && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/... ./test)
+(cd packages/gatewayauth && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
+(cd packages/gatewayproxy && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
+(cd modules/collector && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/sources/binance)
+(cd modules/factor && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/storageio ./internal/registry)
+(cd modules/monitor && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/config ./internal/metrics ./internal/hostmetrics)
+(cd modules/archive && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/config ./internal/backfill ./internal/registry)
 (cd modules/cli && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/setup/...)
 pnpm --dir web exec vitest run src/api/storage
 bash scripts/test-deploy-moox-storage-profile.sh
 bash scripts/test-deploy-moox-storage-view.sh
-git add modules/admin modules/cli web scripts examples
-git commit -m "refactor(storage): expose one storage facade"
+git add modules/admin modules/gateway modules/cli packages/gatewayauth packages/gatewayproxy web scripts examples
+git commit -m "feat(gateway): route storage through admin and service gateways"
 ```
 
 ### Task 17: 按职责拆分剩余前端维护热点
@@ -1271,6 +1458,7 @@ git commit -m "refactor(web): split storage and cloud node workflows"
 - Modify: `docs/存储概念与设计意图.md`
 - Modify: `docs/存储目标架构与元数据.md`
 - Modify: `docs/协议设计.md`
+- Modify: `docs/节点服务网关架构.md`
 - Modify: `docs/量化金融数据概念.md`
 - Modify: `docs/内置市场行情采集架构.md`
 - Modify: `docs/采集任务管理.md`
@@ -1292,6 +1480,7 @@ git commit -m "refactor(web): split storage and cloud node workflows"
 - Modify: `scripts/test-quality-gates.sh`
 - Modify: `scripts/test-storage-boundary-contract.sh`
 - Modify: `scripts/test-storage-consistency-contract.sh`
+- Modify: `scripts/check-package-boundaries.sh`
 - Modify: `Makefile`
 
 - [ ] **Step 1: 文档写清最终数据流**
@@ -1299,16 +1488,19 @@ git commit -m "refactor(web): split storage and cloud node workflows"
 `docs/存储层架构.md` 必须覆盖：
 
 ```text
-External -> Admin Gateway Storage Facade -> Metadata | PrimaryStore | DataView
-PrimaryStore -> DataShard -> Pebble + DataChange Outbox
-DataChange -> ViewBuilder -> batch reread -> RowMapper -> DuckDB/Bleve
-DataChange UPSERT -> Archive Journal/Parquet/COS
-DataChange DELETE -> View 删除；Archive Ignore/ACK
+Browser -> Admin Gateway /api/admin/storage/{method} -> Node Service Gateway tRPC -> Metadata | PrimaryStore | DataView
+Go Service -> Node Service Gateway tRPC -> Metadata | PrimaryStore | DataView
+PrimaryStore -> DataShard -> Pebble + RowsChanged MooxMessage Outbox
+TimeSeriesRowsChanged | RecordRowsChanged -> ViewBuilder -> ChangeBatch -> batch reread -> RowMapper -> DuckDB/Bleve
+TimeSeriesRowsChanged UPSERT -> Archive Journal/Parquet/COS
+RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 ```
 
 - [ ] **Step 2: 文档写清一致性和限制**
 
-说明 Shard Sequence、ViewIndex Checkpoint、`indexed_from/indexed_to`、Patch 三态、Outbox 连续前缀、View 完整行替换、部分成功、重建流程、Archive 非当前状态备份，以及无 HA/Failover/Migration/Rebalance。
+说明 Shard Sequence、ViewIndex Checkpoint、`indexed_from/indexed_to`、Merge 三态、Outbox 连续前缀、View 完整行替换、部分成功、重建流程、Archive 非当前状态备份，以及无 HA/Failover/Migration/Rebalance。明确 `rowkey`、`typedvalue`、`MooxMessage`、两种 RowsChanged 消息的职责，并说明 Pebble/Outbox、DuckDB/Bleve、SQLite/Cache、RowMapper/EventConsumer 分别由哪个领域服务拥有。
+
+单独画出双网关信任边界：浏览器只能持用户令牌并进入 Admin Gateway；Admin Gateway 使用 Service HMAC 通过 Node Service Gateway 调用 Storage；服务间生成客户端直接通过 Node Service Gateway；任何调用方都不得保存或使用 Metadata、PrimaryStore、DataView 的物理地址。
 
 - [ ] **Step 3: 文档写清磁盘治理**
 
@@ -1316,11 +1508,11 @@ DataChange DELETE -> View 删除；Archive Ignore/ACK
 
 - [ ] **Step 4: 添加架构扫描门禁**
 
-脚本必须拒绝活动源码和现行文档中的旧 Access/PrimaryStore 物理命名、Mutation/Projection、`active_coverage_*`、通用 Device、旧 Runtime Role、旧配置和过时文档链接，并验证 `docs/架构总览.md` 链接 `docs/存储层架构.md`。`docs/superpowers/` 执行历史和带日期的历史审查报告可以保留原文，但不得被现行架构文档引用为当前事实源。
+脚本必须拒绝活动源码和现行文档中的旧 Access/PrimaryStore 物理命名、Mutation/DataChange/Projection、`active_coverage_*`、`factkey`、`factvalue`、Envelope 别名、通用 Device、Storage `internal/infra`、旧 Runtime Role、旧配置和过时文档链接，并验证 `docs/架构总览.md` 链接 `docs/存储层架构.md`。Package Boundary 必须断言 Pebble 只能被 DataShard 导入、DuckDB/Bleve 只能被 ViewIndex 导入、SQLite/Cache 只能被 Metadata 导入、RowMapper/EventConsumer 只能属于 ViewBuilder。`docs/superpowers/` 执行历史和带日期的历史审查报告可以保留原文，但不得被现行架构文档引用为当前事实源。
 
 - [ ] **Step 5: 固化最初 CR 和后续讨论的已完成项**
 
-在现有契约上增加或保留以下断言：Strategy 位于 `build.sh all`、Release 和默认 Deploy，SysDeploy 默认 Active/Gateway Enabled，前端入口所调用服务可达；`ListStrategyRuns`、`GetStrategyPerformance` 对非法 RFC3339、From>To 返回参数错误；架构总览覆盖 `go.work` 全部 Module；`make verify` 必须包含 Package Boundary、gofmt、Prettier、零 Warning ESLint；生产 Go 文件无 `context.Background()`；Gateway Route Refresh 和 HostAgent Sample 继续使用官方 tRPC Timer；Factor 继续使用 `EventBatcher`；Host Metrics Cleanup 继续使用 48H、有界 10 批、每批 1000、超时、防重入；活动树中不存在 `packages/crypto`。
+在现有契约上增加或保留以下断言：Strategy 位于 `build.sh all`、Release 和默认 Deploy，SysDeploy 默认 Active/Gateway Enabled，前端入口所调用服务可达；`ListStrategyRuns`、`GetStrategyPerformance` 对非法 RFC3339、From>To 返回参数错误；架构总览覆盖 `go.work` 全部 Module；`make verify` 必须包含 Package Boundary、gofmt、Prettier、零 Warning ESLint；生产 Go 文件无 `context.Background()`；Gateway Route Refresh 和 HostAgent Sample 继续使用官方 tRPC Timer；Node Service Gateway 的 HTTP/tRPC 两种协议共享方法级路由且浏览器不能绕过 Admin Gateway；Factor 继续使用 `EventBatcher`；Host Metrics Cleanup 继续使用 48H、有界 10 批、每批 1000、超时、防重入；活动树中不存在 `packages/crypto`。
 
 ```bash
 test -z "$(rg -l 'context\.Background\(\)' --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' .)"
@@ -1338,11 +1530,11 @@ bash scripts/test-quality-gates.sh
 
 - [ ] **Step 6: 完整 Storage E2E**
 
-在全新临时目录启动 Embedded JetStream、`storage-primary` 和 `storage-view`，验收：
+在全新临时目录启动 Embedded JetStream、Admin Gateway、Node Service Gateway、`storage-primary` 和 `storage-view`，为每个测试 Caller 使用独立 HMAC Key，验收：
 
 ```text
-完整写 -> Patch -> PrimaryStore 完整行
-DataChange sequence 连续且 Payload 完整
+首次 Merge 创建 -> 再次局部 Merge -> PrimaryStore 完整行
+TimeSeriesRowsChanged/RecordRowsChanged 共用的 Shard Sequence 连续且 Payload 完整
 DuckDB/Bleve 查询结果一致
 乱序 ACK 不删除非连续 Outbox
 1001 行分页无漏数
@@ -1350,6 +1542,9 @@ Delete 后 View 消失而 Archive 保留
 重启后 Outbox、Checkpoint 和 Sequence 恢复
 超出 indexed_from/indexed_to 查询明确失败
 错误 shard_id 和拓扑变更明确失败
+Browser -> Admin Gateway -> tRPC Node Gateway -> Storage 成功
+Generated tRPC Client -> Node Gateway -> Storage 成功
+浏览器直连 Service Gateway、HMAC 重放和未授权方法明确失败
 ```
 
 - [ ] **Step 7: 全量验证**
@@ -1358,7 +1553,10 @@ Delete 后 View 消失而 Archive 保留
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./...)
 (cd modules/archive && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
 (cd modules/admin && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
+(cd modules/gateway && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
 (cd modules/cli && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
+(cd packages/gatewayauth && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
+(cd packages/gatewayproxy && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go vet ./...)
 bash scripts/check-package-boundaries.sh
 bash scripts/test-storage-boundary-contract.sh
@@ -1393,14 +1591,14 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 
 | 审查问题 | 负责任务 |
 | --- | --- |
-| Patch 事件被当完整行 | Task 1、2、3、7、8 |
+| 局部 Merge 消息被当完整行 | Task 1、2、3、7、8 |
 | Outbox 乱序和派生回退 | Task 1、3、4、7、8 |
 | 分页跳过 26-1000 | Task 1、5 |
 | Delete 不传播 | Task 1、2、3、6 |
 | View 范围未校验 | Task 1、8、9 |
 | DataShard 不是严格边界 | Task 3、11、13 |
 | 动态加权路由无迁移 | Task 11、17 |
-| 类型、Schema、Patch 校验不足 | Task 10 |
+| 类型、Schema、Merge 校验不足 | Task 10 |
 | 配置失败后静默默认 | Task 15 |
 | Pebble/Bleve 忽略 Context | Task 15 |
 | View Timer 吞错和全局实例 | Task 15 |
@@ -1409,33 +1607,41 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 | Access God Service | Task 13 |
 | Metadata 时间戳漂移 | Task 12 |
 | 死 Archive/Parquet、空文件、兼容分支 | Task 14 |
-| 命名、对外 Facade、两进程部署 | Task 13、15、16 |
+| 命名、双网关边界、两进程部署 | Task 13、15、16 |
 | Strategy 发布入口和非法时间参数回归 | Task 18 |
 | `go.work`/README/架构总览漂移 | Task 18 |
 | Package Boundary、gofmt、ESLint、Prettier 门禁 | Task 18 |
 | CloudNode、View Browse 维护热点 | Task 17 |
 | tRPC Context、Timer、Host Metrics Cleanup、Security 包命名回归 | Task 15、18 |
 | 文档漂移和缺少运维信心 | Task 18 |
+| `factkey`/`factvalue` 语义含糊 | Task 13、14、18 |
+| Storage Infra 与领域生命周期分离 | Task 13、14、18 |
+| 浏览器与服务间调用缺少双网关边界 | Task 16、18 |
+| RowsUpdated 删除概念且通用 DataChange 隐藏领域差异 | Task 2、3、6、7 |
+| Envelope 与实际 MooxMessage 命名重复 | Task 2、13、18 |
+| Patch 命名不直观且完整行生成边界不清 | Task 1、3、10、18 |
 
 ## 最终验收清单
 
-- [ ] 外部调用方只看到 `Storage` Facade。
-- [ ] PrimaryStore、PrimaryStoreScan、DataShard、ViewIndex 均为内部服务。
+- [ ] 浏览器只通过 Admin Gateway `/api/admin/storage/{method}` 访问 Storage；Admin Gateway 再通过 Node Service Gateway 原生 tRPC 转发。
+- [ ] 服务间生成客户端统一通过 Node Service Gateway 调用 Metadata、PrimaryStore、DataView，不保存其物理地址。
+- [ ] PrimaryStoreScan、独立 DataShard 只进入带 Caller ACL 的特权 Service Gateway 路由；ViewIndex 不进入任何 Gateway 路由。
 - [ ] 默认只部署 `storage-primary` 和 `storage-view`，每个进程只读取一个 YAML；可选私网 DataShard 也使用独立单 YAML。
 - [ ] 每个 DataShard 有固定 Shard ID、独立 Pebble、连续 Sequence 和单 Relay。
 - [ ] 不存在全局 `write_version`、Snowflake Version 或跨 Shard 总序假设。
-- [ ] DataChange 由 DataShard 原子生成；MooxMessage 只保存一份消息 ID、类型和 Sequence。
-- [ ] UPSERT DataChange 携带完整提交后行；ViewBuilder 仍以批量回读作为最终事实来源。
+- [ ] TimeSeriesRowsChanged/RecordRowsChanged 由 DataShard 原子生成；MooxMessage 只保存一份消息 ID、类型和 Sequence。
+- [ ] UPSERT RowsChanged 携带完整提交后行；ViewBuilder 仍以批量回读作为最终事实来源。
 - [ ] Outbox 永不跨过失败项删除，重放不会增加 DuckDB/Bleve Entry Count。
 - [ ] DuckDB/Bleve 接收完整 View 行并拥有一致的 Upsert/Delete/Checkpoint 语义。
 - [ ] Archive 忽略 Delete，不写 Tombstone，不删除历史文件。
 - [ ] `indexed_from/indexed_to` 和 Shard Checkpoint 能解释查询范围和新鲜度。
 - [ ] 1001 行、1/25/999 页面、ASC/DESC 全部无遗漏和重复。
 - [ ] Dataset 写入后不能改变 Key 放置；Shard 故障不会自动重路由。
-- [ ] Schema、Patch、Null、Remove、Required、批次大小和类型错误全部有确定契约。
+- [ ] `MergeTimeSeriesRows` / `MergeRecordRows`、Null、Remove、Required、批次大小和类型错误全部有确定契约。
 - [ ] Metadata 使用 SQL 真分页、小型目录缓存和 SQL 时间戳事实源。
 - [ ] 配置、构造、Timer、健康和 Context 全部 Fail Closed。
 - [ ] 旧 Access、旧物理 PrimaryStore、Mutation、Projection、Coverage、Device 和兼容角色从活动树清零。
+- [ ] `factkey`、`factvalue`、Envelope 别名、DataChange 和 Storage `internal/infra` 从活动树清零；最终使用 `rowkey`、`typedvalue`、MooxMessage 和垂直领域目录。
 - [ ] Strategy 构建、发布、默认部署、入口可达性和严格时间参数契约继续通过。
 - [ ] Gateway/HostAgent tRPC Timer、Factor EventBatcher、48H Host Metrics Cleanup 和 `packages/security` 无回归。
 - [ ] CloudNode、View Browse 已按工作流与展示职责拆分，桌面和移动端核心流程通过。
