@@ -74,12 +74,12 @@ CreateView / column|join shape change / Rebuild
 
 ### Modified
 
-- `modules/storage/internal/infra/eventbus/producer_bus.go` — subject / publish / subscribe 命名与 payload。
-- `modules/storage/internal/core/eventbus/bus.go` — Bus API 从 Changed → Updated。
+- `modules/storage/internal/service/eventbus/producer_bus.go` — subject / publish / subscribe 命名与 payload。
+- `modules/storage/internal/service/eventbus/bus.go` — Bus API 从 Changed → Updated。
 - `modules/storage/internal/services/access/data.go` — 发布 `rows` 而非 `keys`。
 - `modules/storage/internal/services/view/builder/service.go` — 异步入队、启动 writer。
 - `modules/storage/internal/services/view/builder/time_series.go` — 改为 patch 路径。
-- `modules/storage/internal/infra/device/duckdb/view_store.go` — partial-column upsert；允许半行插入。
+- `modules/storage/internal/service/dataview/index/duckdb/view_store.go` — partial-column upsert；允许半行插入。
 - `modules/storage/internal/config/loader.go` + `modules/storage/config/storage.yaml` — `backfill_window`。
 - `modules/storage/cmd/server/main.go` — 接线配置。
 - `docs/存储引擎架构.md`、`modules/storage/README.md` — 物化模型说明。
@@ -153,8 +153,8 @@ EOF
 ### Task 2: Event Bus Subjects And APIs
 
 **Files:**
-- Modify: `modules/storage/internal/infra/eventbus/producer_bus.go`
-- Modify: `modules/storage/internal/core/eventbus/bus.go`
+- Modify: `modules/storage/internal/service/eventbus/producer_bus.go`
+- Modify: `modules/storage/internal/service/eventbus/bus.go`
 - Modify: archive/view subscriptions that still say `Changed`
 
 - [ ] **Step 1: Rename subjects**
@@ -352,8 +352,8 @@ EOF
 ### Task 7: DuckDB Partial-Column Upsert (Allow Half-Row Insert)
 
 **Files:**
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
 - [ ] **Step 1: Failing tests**
 
@@ -551,8 +551,8 @@ EOF
 - [ ] **Step 1: Unit tests**
 
 ```bash
-go test ./modules/storage/internal/config ./modules/storage/internal/services/view/builder ./modules/storage/internal/services/view ./modules/storage/internal/services/access ./modules/storage/internal/infra/eventbus -count=1
-go test ./modules/storage/internal/infra/device/duckdb -count=1
+go test ./modules/storage/internal/config ./modules/storage/internal/services/view/builder ./modules/storage/internal/services/view ./modules/storage/internal/services/access ./modules/storage/internal/service/eventbus -count=1
+go test ./modules/storage/internal/service/dataview/index/duckdb -count=1
 ```
 
 - [ ] **Step 2: Scenario checks (local or remote)**

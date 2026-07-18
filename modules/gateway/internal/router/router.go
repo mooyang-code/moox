@@ -22,6 +22,7 @@ type nonceConsumer interface {
 
 type routeTable interface {
 	Resolve(string) (gatewayproxy.Route, bool)
+	ResolveMethod(string, string) (gatewayproxy.Route, bool)
 }
 
 type Metrics interface {
@@ -108,7 +109,7 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusServiceUnavailable)
 		return
 	}
-	route, ok := handler.options.Table.Resolve(requestedService)
+	route, ok := handler.options.Table.ResolveMethod(requestedService, requestedMethod)
 	if !ok {
 		status = http.StatusNotFound
 		writeError(response, http.StatusNotFound)

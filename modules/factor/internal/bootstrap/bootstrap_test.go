@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"path/filepath"
@@ -141,7 +142,7 @@ func TestStartRealtimeLoopAndDrainEventBatch(t *testing.T) {
 }
 
 func TestMetadataClientAdapter_DelegatesCalls(t *testing.T) {
-	adapter := newMetadataClient(Default().Storage.MetadataTarget)
+	adapter := newMetadataClient(Default().Storage.GatewayTarget, "", gatewayauth.CredentialsFromEnv())
 	require.NotNil(t, adapter)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

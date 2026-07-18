@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
-	duckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
+	device "github.com/mooyang-code/moox/modules/storage/internal/service/datashard/contracts"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datashard/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/dataview"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/dataview/search"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	duckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
@@ -33,38 +33,38 @@ import (
 // that the storage remediation is expected to make true across the current
 // physical stores and the public service facades.
 func TestStorageConsistencyContractMergePreservesColumns(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary"), ShardID: "contract-shard"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	key := &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC%7C1m%7C", Version: "2026-07-18T00:00:00Z"}
-	if err := store.WriteRows(context.Background(), []*pb.PrimaryStoreRow{{Key: key, Columns: []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil {
+	key := &pb.ShardKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC%7C1m%7C", Version: "2026-07-18T00:00:00Z"}
+	if err := store.WriteRows(context.Background(), []*pb.ShardRow{{Key: key, Columns: []*pb.ColumnValue{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteRows(context.Background(), []*pb.PrimaryStoreRow{{Key: key, Columns: []*pb.ColumnValue{{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil {
+	if err := store.WriteRows(context.Background(), []*pb.ShardRow{{Key: key, Columns: []*pb.ColumnValue{{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := store.ReadRows(context.Background(), []*pb.PrimaryStoreKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
+	rows, _, err := store.ReadRows(context.Background(), []*pb.ShardKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
 	if err != nil || len(rows) != 1 || len(rows[0].GetColumns()) != 2 {
 		t.Fatalf("merged rows=%v err=%v, want one row with two columns", rows, err)
 	}
 }
 
 func TestStorageConsistencyContractDeleteRemovesFact(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary"), ShardID: "contract-shard"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	key := &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC%7C1m%7C", Version: "2026-07-18T00:00:00Z"}
-	if err := store.WriteRows(context.Background(), []*pb.PrimaryStoreRow{{Key: key}}); err != nil {
+	key := &pb.ShardKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC%7C1m%7C", Version: "2026-07-18T00:00:00Z"}
+	if err := store.WriteRows(context.Background(), []*pb.ShardRow{{Key: key}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeleteRows(context.Background(), []*pb.PrimaryStoreKey{key}); err != nil {
+	if err := store.DeleteRows(context.Background(), []*pb.ShardKey{key}); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := store.ReadRows(context.Background(), []*pb.PrimaryStoreKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
+	rows, _, err := store.ReadRows(context.Background(), []*pb.ShardKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, nil)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("rows after fact delete=%v err=%v, want empty", rows, err)
 	}
@@ -144,10 +144,10 @@ func testViewMergeAndMissingRowRecovery(t *testing.T) {
 		}
 		full := timeSeriesViewRow("2026-07-18T01:00:00Z", 101, 0.8, 1.2)
 		patch := timeSeriesViewPatch(full.GetKey().GetDataTime(), 102)
-		if err := manager.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{full}, Columns: columns}); err != nil {
+		if err := manager.Write(ctx, indexID, viewindex.BatchWrite{TimeSeriesRows: []*pb.TimeSeriesRow{full}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
-		if err := manager.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{patch}, Columns: columns}); err != nil {
+		if err := manager.Write(ctx, indexID, viewindex.BatchWrite{TimeSeriesRows: []*pb.TimeSeriesRow{patch}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
 		_, rows, _, err := manager.QueryTimeSeriesRows(ctx, indexID, &pb.QueryTimeSeriesRowsReq{SpaceId: "crypto", Page: &pb.Page{Size: 10}})
@@ -165,7 +165,7 @@ func testViewMergeAndMissingRowRecovery(t *testing.T) {
 		if err := manager.Prepare(ctx, indexID, schema); err != nil {
 			t.Fatal(err)
 		}
-		if err := manager.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{patch}, Columns: columns}); err != nil {
+		if err := manager.Write(ctx, indexID, viewindex.BatchWrite{TimeSeriesRows: []*pb.TimeSeriesRow{patch}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
 		_, rows, _, err = manager.QueryTimeSeriesRows(ctx, indexID, &pb.QueryTimeSeriesRowsReq{SpaceId: "crypto", Page: &pb.Page{Size: 10}})
@@ -189,10 +189,10 @@ func testViewMergeAndMissingRowRecovery(t *testing.T) {
 		}
 		full := recordViewRow("2026-07-18T01:00:00Z", 0.9, 0.8, 1.2)
 		patch := recordViewPatch(full.GetKey().GetVersion(), 0.95)
-		if err := service.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: []*pb.RecordRow{full}, Columns: columns}); err != nil {
+		if err := service.Write(ctx, indexID, viewindex.BatchWrite{RecordRows: []*pb.RecordRow{full}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
-		if err := service.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: []*pb.RecordRow{patch}, Columns: columns}); err != nil {
+		if err := service.Write(ctx, indexID, viewindex.BatchWrite{RecordRows: []*pb.RecordRow{patch}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
 		rows, _, err := service.SearchRecordRows(ctx, search.SearchRequest{IndexID: indexID, SpaceID: "crypto", DatasetID: "records", Page: &pb.Page{Size: 10}})
@@ -210,7 +210,7 @@ func testViewMergeAndMissingRowRecovery(t *testing.T) {
 		if err := service.Prepare(ctx, indexID, schema); err != nil {
 			t.Fatal(err)
 		}
-		if err := service.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: []*pb.RecordRow{patch}, Columns: columns}); err != nil {
+		if err := service.Write(ctx, indexID, viewindex.BatchWrite{RecordRows: []*pb.RecordRow{patch}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
 		rows, _, err = service.SearchRecordRows(ctx, search.SearchRequest{IndexID: indexID, SpaceID: "crypto", DatasetID: "records", Page: &pb.Page{Size: 10}})
@@ -225,15 +225,15 @@ func testViewMergeAndMissingRowRecovery(t *testing.T) {
 
 func testOutboxNonContiguousACK(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary"), ShardID: "contract-shard"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	for i := 1; i <= 3; i++ {
 		message := contractMessage(fmt.Sprintf("message-%d", i))
-		row := &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC-USDT|1m|_", Version: fmt.Sprintf("2026-07-18T%02d:00:00Z", i)}}
-		if err := store.WriteRowsWithOutbox(ctx, []*pb.PrimaryStoreRow{row}, &device.OutboxEntry{Data: message}); err != nil {
+		row := &pb.ShardRow{Key: &pb.ShardKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC-USDT|1m|_", Version: fmt.Sprintf("2026-07-18T%02d:00:00Z", i)}}
+		if err := store.WriteRowsWithOutbox(ctx, []*pb.ShardRow{row}, &device.OutboxEntry{Data: message}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -266,14 +266,14 @@ func testOutboxNonContiguousACK(t *testing.T) {
 
 func testPagination1001ASCAndDESC(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "primary"), ShardID: "contract-shard"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	for i := 0; i < 1001; i++ {
-		row := &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC-USDT|1m|_", Version: time.Date(2026, 7, 18, 0, 0, i, 0, time.UTC).Format(time.RFC3339Nano)}}
-		if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{row}); err != nil {
+		row := &pb.ShardRow{Key: &pb.ShardKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC-USDT|1m|_", Version: time.Date(2026, 7, 18, 0, 0, i, 0, time.UTC).Format(time.RFC3339Nano)}}
+		if err := store.WriteRows(ctx, []*pb.ShardRow{row}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -284,7 +284,7 @@ func testPagination1001ASCAndDESC(t *testing.T) {
 				var versions []string
 				cursor := ""
 				for {
-					rows, page, err := store.ScanRows(ctx, &pb.PrimaryStoreTarget{SpaceId: "crypto", DatasetId: "kline"}, pb.DataKind_DATA_KIND_TIME_SERIES, nil, order, nil, &pb.Page{Size: size, Cursor: cursor})
+					rows, page, err := store.ScanRows(ctx, &pb.ShardTarget{SpaceId: "crypto", DatasetId: "kline"}, pb.DataKind_DATA_KIND_TIME_SERIES, nil, order, nil, &pb.Page{Size: size, Cursor: cursor})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -318,14 +318,14 @@ func testDeletePropagation(t *testing.T) {
 	t.Run("duckdb", func(t *testing.T) {
 		ctx := context.Background()
 		root := t.TempDir()
-		store, err := pebble.Open(pebble.Options{Path: filepath.Join(root, "primary")})
+		store, err := pebble.Open(pebble.Options{Path: filepath.Join(root, "primary"), ShardID: "contract-shard"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer store.Close()
 		row := timeSeriesViewRow("2026-07-18T02:00:00Z", 101, 0.8, 1.2)
-		primaryRow := &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC-USDT|1m|_", Version: row.GetKey().GetDataTime()}}
-		if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{primaryRow}); err != nil {
+		primaryRow := &pb.ShardRow{Key: &pb.ShardKey{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Key: "BTC-USDT|1m|_", Version: row.GetKey().GetDataTime()}}
+		if err := store.WriteRows(ctx, []*pb.ShardRow{primaryRow}); err != nil {
 			t.Fatal(err)
 		}
 		manager, err := duckdb.OpenIndexManager(duckdb.IndexManagerOptions{Root: filepath.Join(root, "view")})
@@ -344,11 +344,11 @@ func testDeletePropagation(t *testing.T) {
 			}
 			t.Fatal(err)
 		}
-		if err := manager.Write(ctx, indexID, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{row}, Columns: columns}); err != nil {
+		if err := manager.Write(ctx, indexID, viewindex.BatchWrite{TimeSeriesRows: []*pb.TimeSeriesRow{row}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
 		archive := proto.Clone(row).(*pb.TimeSeriesRow)
-		if err := store.DeleteRows(ctx, []*pb.PrimaryStoreKey{primaryRow.GetKey()}); err != nil {
+		if err := store.DeleteRows(ctx, []*pb.ShardKey{primaryRow.GetKey()}); err != nil {
 			t.Fatal(err)
 		}
 		if err := manager.DeleteTimeSeriesRows(ctx, indexID, []*pb.TimeSeriesRow{row}); err != nil {
@@ -370,14 +370,14 @@ func testDeletePropagation(t *testing.T) {
 	t.Run("bleve", func(t *testing.T) {
 		ctx := context.Background()
 		root := t.TempDir()
-		store, err := pebble.Open(pebble.Options{Path: filepath.Join(root, "primary")})
+		store, err := pebble.Open(pebble.Options{Path: filepath.Join(root, "primary"), ShardID: "contract-shard"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer store.Close()
 		row := recordViewRow("2026-07-18T02:00:00Z", 0.9, 0.8, 1.2)
-		primaryRow := &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "records", DataKind: pb.DataKind_DATA_KIND_RECORD, Key: "record-1", Version: row.GetKey().GetVersion()}}
-		if err := store.WriteRows(ctx, []*pb.PrimaryStoreRow{primaryRow}); err != nil {
+		primaryRow := &pb.ShardRow{Key: &pb.ShardKey{SpaceId: "crypto", DatasetId: "records", DataKind: pb.DataKind_DATA_KIND_RECORD, Key: "record-1", Version: row.GetKey().GetVersion()}}
+		if err := store.WriteRows(ctx, []*pb.ShardRow{primaryRow}); err != nil {
 			t.Fatal(err)
 		}
 		service := search.NewService(search.Options{Root: filepath.Join(root, "view")})
@@ -387,11 +387,11 @@ func testDeletePropagation(t *testing.T) {
 		if err := service.Prepare(ctx, indexID, viewindex.ViewIndexSchema{SpaceID: "crypto", ViewID: "record_view", Engine: "bleve", Columns: columns, SchemaHash: "contract"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := service.Write(ctx, indexID, viewindex.ViewIndexBatch{RecordRows: []*pb.RecordRow{row}, Columns: columns}); err != nil {
+		if err := service.Write(ctx, indexID, viewindex.BatchWrite{RecordRows: []*pb.RecordRow{row}, Columns: columns}); err != nil {
 			t.Fatal(err)
 		}
 		archive := proto.Clone(row).(*pb.RecordRow)
-		if err := store.DeleteRows(ctx, []*pb.PrimaryStoreKey{primaryRow.GetKey()}); err != nil {
+		if err := store.DeleteRows(ctx, []*pb.ShardKey{primaryRow.GetKey()}); err != nil {
 			t.Fatal(err)
 		}
 		if err := service.DeleteRecordRows(ctx, indexID, []*pb.RecordRow{row}); err != nil {
@@ -411,9 +411,9 @@ func testDeletePropagation(t *testing.T) {
 	})
 }
 
-func assertPrimaryDeleted(t *testing.T, ctx context.Context, store *pebble.Store, key *pb.PrimaryStoreKey) {
+func assertPrimaryDeleted(t *testing.T, ctx context.Context, store *pebble.Store, key *pb.ShardKey) {
 	t.Helper()
-	facts, _, err := store.ReadRows(ctx, []*pb.PrimaryStoreKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 10})
+	facts, _, err := store.ReadRows(ctx, []*pb.ShardKey{key}, nil, pb.SortOrder_SORT_ORDER_ASC, nil, &pb.Page{Size: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,25 +494,19 @@ type contractPrimary struct {
 	bus   *contractBus
 }
 
-func (p *contractPrimary) WriteRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
+func (p *contractPrimary) WriteRows(ctx context.Context, target *pb.ShardTarget, rows []*pb.ShardRow) error {
 	if err := p.local.WriteRows(ctx, target, rows); err != nil {
 		return err
 	}
 	return p.publishLatest(ctx)
 }
-func (p *contractPrimary) WriteRowsWithMessage(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, _ []byte) error {
-	if err := p.local.WriteRows(ctx, target, rows); err != nil {
-		return err
-	}
-	return p.publishLatest(ctx)
-}
-func (p *contractPrimary) ReadRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (p *contractPrimary) ReadRows(ctx context.Context, target *pb.ShardTarget, req *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return p.local.ReadRows(ctx, target, req)
 }
-func (p *contractPrimary) ScanRows(ctx context.Context, target *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (p *contractPrimary) ScanRows(ctx context.Context, target *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return p.local.ScanRows(ctx, target, req)
 }
-func (p *contractPrimary) DeleteRows(ctx context.Context, target *pb.PrimaryStoreTarget, keys []*pb.PrimaryStoreKey) error {
+func (p *contractPrimary) DeleteRows(ctx context.Context, target *pb.ShardTarget, keys []*pb.ShardKey) error {
 	if err := p.local.DeleteRows(ctx, target, keys); err != nil {
 		return err
 	}
@@ -556,9 +550,9 @@ func newContractPrimaryStoreService(t *testing.T, bus *contractBus) *primarystor
 	t.Cleanup(func() { _ = svc.Close() })
 	spaceRsp, err := svc.CreateSpace(ctx, &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}})
 	mustContractOK(t, spaceRsp, err)
-	nodeRsp, err := svc.CreatePrimaryStoreNode(ctx, &pb.CreatePrimaryStoreNodeReq{Node: &pb.PrimaryStoreNode{NodeId: "node-1", Name: "Node 1", Status: "active"}})
+	nodeRsp, err := svc.CreatePrimaryStoreNode(ctx, &pb.CreatePrimaryStoreNodeReq{Node: &pb.PrimaryStoreNode{NodeId: "node-1", Name: "Node 1", Status: "active", Attributes: map[string]string{"shard_id": "node-1"}}})
 	mustContractOK(t, nodeRsp, err)
-	deviceRsp, err := svc.CreateDevice(ctx, &pb.CreateDeviceReq{Device: &pb.Device{DeviceId: "device-1", NodeId: "node-1", Engine: "pebble", Status: "active"}})
+	deviceRsp, err := svc.CreateDevice(ctx, &pb.CreateDeviceReq{Device: &pb.Device{DeviceId: "device-1", NodeId: "node-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "node-1"}}})
 	mustContractOK(t, deviceRsp, err)
 	sourceRsp, err := svc.CreateDataSource(ctx, &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: "crypto", DataSourceId: "source", Name: "Source", Kind: "internal", Status: "active"}})
 	mustContractOK(t, sourceRsp, err)

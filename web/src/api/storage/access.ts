@@ -29,7 +29,7 @@ export interface ReadRecordRowsReq {
 }
 
 export function writeTimeSeriesRows(rows: TimeSeriesRow[]) {
-  return callStorage<{ rows: TimeSeriesRow[] }, { ret_info: RetInfo }>("WriteTimeSeriesRows", { rows });
+  return callStorage<{ rows: TimeSeriesRow[] }, { ret_info: RetInfo }>("MergeTimeSeriesRows", { rows });
 }
 
 export function readTimeSeriesRows(req: ReadTimeSeriesRowsReq) {
@@ -40,7 +40,7 @@ export function readTimeSeriesRows(req: ReadTimeSeriesRowsReq) {
 }
 
 export function writeRecordRows(rows: RecordRow[]) {
-  return callStorage<{ rows: RecordRow[] }, { ret_info: RetInfo; keys: RecordKey[] }>("WriteRecordRows", { rows });
+  return callStorage<{ rows: RecordRow[] }, { ret_info: RetInfo }>("MergeRecordRows", { rows });
 }
 
 export function readRecordRows(req: ReadRecordRowsReq) {

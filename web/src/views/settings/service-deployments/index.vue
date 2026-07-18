@@ -139,7 +139,7 @@
             </a-select>
           </a-form-item>
           <a-form-item field="service_name" label="服务名" required>
-            <a-input v-model="form.service_name" :disabled="editing" placeholder="例如 storage_access" />
+            <a-input v-model="form.service_name" :disabled="editing" placeholder="例如 storage_primary" />
           </a-form-item>
           <a-form-item field="service_kind" label="服务类型" required>
             <a-input v-model="form.service_kind" placeholder="gateway/storage/admin_rpc/frontend/trade" />

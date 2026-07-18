@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	"github.com/mooyang-code/moox/modules/storage/internal/rowkey"
+	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datashard/messagepublisher"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/schema"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/shardrouter"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -264,27 +264,27 @@ type multiKeyPrimary struct {
 	pageSizes  []uint32
 }
 
-func (*multiKeyPrimary) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (*multiKeyPrimary) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
 	return nil
 }
 
-func (p *multiKeyPrimary) ReadRows(_ context.Context, _ *pb.PrimaryStoreTarget, req *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (p *multiKeyPrimary) ReadRows(_ context.Context, _ *pb.ShardTarget, req *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	size := uint32(1000)
 	if req.GetPage().GetSize() > 0 {
 		size = req.GetPage().GetSize()
 	}
 	p.pageSizes = append(p.pageSizes, size)
 	count := min(int(size), p.rowsPerKey)
-	rows := make([]*pb.PrimaryStoreRow, 0, count)
+	rows := make([]*pb.ShardRow, 0, count)
 	for i := 0; i < count; i++ {
-		key := proto.Clone(req.GetKeys()[0]).(*pb.PrimaryStoreKey)
+		key := proto.Clone(req.GetKeys()[0]).(*pb.ShardKey)
 		key.Version = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
-		rows = append(rows, &pb.PrimaryStoreRow{Key: key, Attributes: map[string]string{"sequence": fmt.Sprint(i)}})
+		rows = append(rows, &pb.ShardRow{Key: key, Attributes: map[string]string{"sequence": fmt.Sprint(i)}})
 	}
 	return rows, &pb.PageResult{Size: size, HasMore: count < p.rowsPerKey, TotalState: pb.TotalState_SKIPPED}, nil
 }
 
-func (*multiKeyPrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*multiKeyPrimary) ScanRows(context.Context, *pb.ShardTarget, *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
@@ -304,7 +304,7 @@ func TestScanRecordDatasetReturnsSortedRows(t *testing.T) {
 
 func TestReportViewErrorDelegatesToReporter(t *testing.T) {
 	ctx := context.Background()
-	bus := eventbus.NewMemoryBus()
+	bus := messagepublisher.NewMemoryBus()
 	_, err := bus.SubscribeTimeSeriesRowsCommitted(ctx, func(context.Context, *pb.TimeSeriesRowsCommitted) error {
 		return errors.New("publish failed")
 	})
@@ -338,14 +338,14 @@ func TestReportViewErrorDelegatesToReporter(t *testing.T) {
 }
 
 func TestWriteRoutedRowsUsesPrimaryWriter(t *testing.T) {
-	writer := &messageWriterPrimary{}
+	writer := &plainPrimary{}
 	svc := &Service{primary: writer}
 	group := &routedRows{
-		target: &pb.PrimaryStoreTarget{NodeId: "node-1"},
-		rows:   []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline"}}},
+		target: &pb.ShardTarget{NodeId: "node-1"},
+		rows:   []*pb.ShardRow{{Key: &pb.ShardKey{SpaceId: "crypto", DatasetId: "kline"}}},
 	}
-	require.NoError(t, svc.writeRoutedRows(context.Background(), group, []byte("outbox")))
-	assert.False(t, writer.usedMessageWriter)
+	require.NoError(t, svc.writeRoutedRows(context.Background(), group))
+	assert.Equal(t, 1, writer.writes)
 }
 
 type recordDatasetScanner struct {
@@ -353,22 +353,22 @@ type recordDatasetScanner struct {
 	pages       int
 }
 
-func (r recordDatasetScanner) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (r recordDatasetScanner) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
 	return nil
 }
 
-func (r recordDatasetScanner) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (r recordDatasetScanner) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (r recordDatasetScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (r recordDatasetScanner) ScanRows(_ context.Context, _ *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	pageNo := uint32(1)
 	if req.GetPage().GetCursor() != "" {
 		_, _ = fmt.Sscanf(req.GetPage().GetCursor(), "%d", &pageNo)
 	}
-	rows := make([]*pb.PrimaryStoreRow, r.rowsPerPage)
+	rows := make([]*pb.ShardRow, r.rowsPerPage)
 	for i := range rows {
-		rows[i] = &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{
+		rows[i] = &pb.ShardRow{Key: &pb.ShardKey{
 			SpaceId:   "crypto",
 			DatasetId: "news",
 			DataKind:  pb.DataKind_DATA_KIND_RECORD,
@@ -382,31 +382,27 @@ func (r recordDatasetScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarg
 	}, nil
 }
 
-type messageWriterPrimary struct {
-	usedMessageWriter bool
+type plainPrimary struct {
+	writes int
 }
 
-func (m *messageWriterPrimary) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (m *plainPrimary) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
+	m.writes++
 	return nil
 }
 
-func (m *messageWriterPrimary) WriteRowsWithMessage(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow, []byte) error {
-	m.usedMessageWriter = true
-	return nil
-}
-
-func (*messageWriterPrimary) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*plainPrimary) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (*messageWriterPrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*plainPrimary) ScanRows(context.Context, *pb.ShardTarget, *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
 func TestScanAllPrimaryRowsStopsAtGuardLimit(t *testing.T) {
 	svc := &Service{primary: fakePrimaryScanner{rowsPerPage: 1000, pages: (maxDatasetScanRows / 1000) + 2}}
 
-	_, err := svc.scanAllPrimaryRows(context.Background(), nil, &pb.PrimaryStoreTarget{},
+	_, err := svc.scanAllPrimaryRows(context.Background(), nil, &pb.ShardTarget{},
 		pb.DataKind_DATA_KIND_TIME_SERIES, nil, nil)
 	if err == nil {
 		t.Fatal("scanAllPrimaryRows() error = nil, want broad scan guard error")
@@ -440,26 +436,26 @@ type fakePrimaryScanner struct {
 	pages       int
 }
 
-func (f fakePrimaryScanner) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (f fakePrimaryScanner) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
 	return nil
 }
 
-func (f fakePrimaryScanner) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (f fakePrimaryScanner) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (f fakePrimaryScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (f fakePrimaryScanner) ScanRows(_ context.Context, _ *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	pageNo := uint32(1)
 	if req.GetPage().GetCursor() != "" {
 		_, _ = fmt.Sscanf(req.GetPage().GetCursor(), "%d", &pageNo)
 	}
-	rows := make([]*pb.PrimaryStoreRow, f.rowsPerPage)
+	rows := make([]*pb.ShardRow, f.rowsPerPage)
 	for i := range rows {
-		rows[i] = &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{
+		rows[i] = &pb.ShardRow{Key: &pb.ShardKey{
 			SpaceId:   "crypto",
 			DatasetId: "kline",
 			DataKind:  req.GetDataKind(),
-			Key:       factkey.BuildTimeSeriesDataKey(fmt.Sprintf("sub-%d-%d", pageNo, i), "1m", nil),
+			Key:       rowkey.BuildTimeSeriesDataKey(fmt.Sprintf("sub-%d-%d", pageNo, i), "1m", nil),
 			Version:   fmt.Sprintf("2026-07-09T00:00:%02dZ", i%60),
 		}}
 	}
@@ -488,7 +484,7 @@ func (fakeRouteReader) GetPrimaryStoreNode(context.Context, string) (*pb.Primary
 }
 
 func (fakeRouteReader) ListDevices(context.Context, string, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return []*pb.Device{{DeviceId: "dev-1", Engine: "pebble", Status: "active"}}, &pb.PageResult{}, nil
+	return []*pb.Device{{DeviceId: "dev-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "storage-primary-0"}}}, &pb.PageResult{}, nil
 }
 
 func containsAll(value string, parts ...string) bool {
@@ -591,7 +587,7 @@ func TestTimeSeriesKeyAdapterRoundTrip(t *testing.T) {
 		Attributes: map[string]string{"source": "test"},
 	}
 
-	primaryRow, err := timeSeriesRowToPrimaryStoreRow(row)
+	primaryRow, err := timeSeriesRowToShardRow(row)
 	require.NoError(t, err)
 	assert.Equal(t, "crypto", primaryRow.GetKey().GetSpaceId())
 	assert.Contains(t, primaryRow.GetAttributes(), timeSeriesDimensionsAttribute)
@@ -610,7 +606,7 @@ func TestRecordKeyAdapterRoundTrip(t *testing.T) {
 		Columns: []*pb.ColumnValue{{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}},
 	}
 
-	primaryRow, err := recordRowToPrimaryStoreRow(row)
+	primaryRow, err := recordRowToShardRow(row)
 	require.NoError(t, err)
 	assert.Equal(t, pb.DataKind_DATA_KIND_RECORD, primaryRow.GetKey().GetDataKind())
 
@@ -650,7 +646,7 @@ func TestPageMergedRecordRowsUsesSkippedTotal(t *testing.T) {
 
 func TestMergeTimeSeriesRowsRoutesWithoutConstructingEvents(t *testing.T) {
 	ctx := context.Background()
-	bus := eventbus.NewMemoryBus()
+	bus := messagepublisher.NewMemoryBus()
 	primaryStore := &capturingPrimary{}
 	svc := &Service{
 		validator: schema.NewValidator(writeValidatorMetadata{}),
@@ -738,7 +734,7 @@ func TestMergeRecordRowsAssignsTimestampVersion(t *testing.T) {
 		validator: schema.NewValidator(writeValidatorMetadata{record: true}),
 		router:    router.NewResolver(fakeRouteReader{}),
 		primary:   primaryStore,
-		events:    eventbus.NewMemoryBus(),
+		events:    messagepublisher.NewMemoryBus(),
 	}
 
 	rsp, err := svc.MergeRecordRows(ctx, &pb.MergeRecordRowsReq{Rows: []*pb.RecordRow{{
@@ -791,16 +787,16 @@ type capturingPrimary struct {
 	written int
 }
 
-func (p *capturingPrimary) WriteRows(_ context.Context, _ *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow) error {
+func (p *capturingPrimary) WriteRows(_ context.Context, _ *pb.ShardTarget, rows []*pb.ShardRow) error {
 	p.written += len(rows)
 	return nil
 }
 
-func (*capturingPrimary) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*capturingPrimary) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (*capturingPrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*capturingPrimary) ScanRows(context.Context, *pb.ShardTarget, *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
@@ -811,7 +807,7 @@ type partialFailurePrimary struct {
 	calls    []string
 }
 
-func (p *partialFailurePrimary) WriteRows(_ context.Context, target *pb.PrimaryStoreTarget, _ []*pb.PrimaryStoreRow) error {
+func (p *partialFailurePrimary) WriteRows(_ context.Context, target *pb.ShardTarget, _ []*pb.ShardRow) error {
 	p.calls = append(p.calls, target.GetNodeId())
 	if target.GetNodeId() == p.failNode {
 		return errors.New("injected target failure")
@@ -819,11 +815,11 @@ func (p *partialFailurePrimary) WriteRows(_ context.Context, target *pb.PrimaryS
 	return nil
 }
 
-func (*partialFailurePrimary) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*partialFailurePrimary) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (*partialFailurePrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*partialFailurePrimary) ScanRows(context.Context, *pb.ShardTarget, *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
@@ -841,7 +837,7 @@ func (twoTargetRouteReader) GetPrimaryStoreNode(_ context.Context, nodeID string
 }
 
 func (twoTargetRouteReader) ListDevices(_ context.Context, nodeID, _ string, _ *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return []*pb.Device{{DeviceId: "device-" + nodeID, NodeId: nodeID, Engine: "pebble", Status: "active"}}, &pb.PageResult{}, nil
+	return []*pb.Device{{DeviceId: "device-" + nodeID, NodeId: nodeID, Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "shard-" + nodeID}}}, &pb.PageResult{}, nil
 }
 
 var _ primary.Client = (*partialFailurePrimary)(nil)

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/infra/eventbus"
+	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
+	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 

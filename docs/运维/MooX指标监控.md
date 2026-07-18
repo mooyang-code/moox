@@ -77,7 +77,7 @@ Counter 保留绝对值，RATE/INCREASE 在 Monitor 使用按时间排序的历�
 | Monitor 启动但没有 ingest | `monitor` 日志中的 metadata schema status；确认 Space/Dataset/columns/route 已通过 `metadata apply` |
 | 单个服务 stale | 使用 health HMAC 请求服务 `/metrics`、检查 timer 日志、`MOOX_BOOT_ID`、EventBus 连接和 producer 注册 |
 | DLQ 增长 | `moox.dlq.message.rejected.v1` consumer、原始 message_id、rejection_reason；修复 schema 或 producer 后重新发布新 message_id |
-| 看板历史缺口 | Storage PrimaryStore 路由、WriteTimeSeriesRows 错误、series dimensions 是否完整；不要只按 subject_id 查询 |
+| 看板历史缺口 | Storage PrimaryStore 路由、MergeTimeSeriesRows 错误、series dimensions 是否完整；不要只按 subject_id 查询 |
 
 Malformed envelope、gzip bomb、未知 producer、错误 content type 和不兼容 snapshot 不会影响 Monitor 原有 HTTP/TCP 可用性检查；这些消息写入 DLQ 并终止原 delivery。重复 message_id 在 SQLite dedupe 后 ACK，不重复写入 latest。
 

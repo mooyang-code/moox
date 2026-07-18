@@ -4,7 +4,7 @@ package trpc.moox.storage;
 
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storagegen;storagepb";
 
-import "access.proto";
+import "rows.proto";
 
 enum RowWriteOperation {
   ROW_WRITE_OPERATION_UNSPECIFIED = 0;
@@ -16,6 +16,8 @@ enum RowWriteOperation {
 message TimeSeriesRowWrite {
   RowWriteOperation operation = 1;
   TimeSeriesRow row = 2;
+  string source_shard_id = 3;
+  uint64 source_sequence = 4;
 }
 
 message TimeSeriesRowsCommitted {
@@ -29,6 +31,8 @@ message TimeSeriesRowsCommitted {
 message RecordRowWrite {
   RowWriteOperation operation = 1;
   RecordRow row = 2;
+  string source_shard_id = 3;
+  uint64 source_sequence = 4;
 }
 
 message RecordRowsCommitted {

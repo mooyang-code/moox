@@ -43,7 +43,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
 [[ -f "${ARCHIVE}" ]]
 mkdir "${TMP_ROOT}/unpacked"
 tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
-for binary in moox-storage moox-storage-cli moox-storage-access moox-storage-view; do
+for binary in moox-storage moox-storage-cli moox-storage-primary moox-storage-view; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing storage binary: ${binary}" >&2; exit 1; }
 done
 for binary in moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
@@ -56,8 +56,8 @@ done
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
 [[ $(find "${TMP_ROOT}/unpacked/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]]
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]
-grep -A 20 '^server:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.access.yaml" | grep -q 'ip: 0.0.0.0'
-grep -A 5 '^  admin:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.access.yaml" | grep -q 'ip: 127.0.0.1'
+grep -A 20 '^server:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.primary.yaml" | grep -q 'ip: 0.0.0.0'
+grep -A 5 '^  admin:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.primary.yaml" | grep -q 'ip: 127.0.0.1'
 grep -q 'target: ip://127.0.0.1:20201' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q '^    - view$' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 

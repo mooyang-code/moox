@@ -214,7 +214,7 @@ func GetStorageMetadataTarget() string {
 	if runtimeMetadata != "" {
 		return runtimeMetadata
 	}
-	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_METADATA_TARGET")); IsStorageTRPCTarget(envTarget) {
+	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")); IsStorageTRPCTarget(envTarget) {
 		return trimTarget(envTarget)
 	}
 	if LocalAppConfig == nil {
@@ -224,7 +224,7 @@ func GetStorageMetadataTarget() string {
 	localAppConfigMu.RLock()
 	localTarget := ""
 	if LocalAppConfig != nil && LocalAppConfig.System != nil {
-		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageMetadataTarget)
+		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageRPC.GatewayTarget)
 	}
 	localAppConfigMu.RUnlock()
 
@@ -241,7 +241,7 @@ func GetStoragePrimaryTarget() string {
 	if runtimeAccess != "" {
 		return runtimeAccess
 	}
-	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET")); IsStorageTRPCTarget(envTarget) {
+	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")); IsStorageTRPCTarget(envTarget) {
 		return trimTarget(envTarget)
 	}
 	if LocalAppConfig == nil {
@@ -251,7 +251,7 @@ func GetStoragePrimaryTarget() string {
 	localAppConfigMu.RLock()
 	localTarget := ""
 	if LocalAppConfig != nil && LocalAppConfig.System != nil {
-		localTarget = strings.TrimSpace(LocalAppConfig.System.StoragePrimaryTarget)
+		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageRPC.GatewayTarget)
 	}
 	localAppConfigMu.RUnlock()
 

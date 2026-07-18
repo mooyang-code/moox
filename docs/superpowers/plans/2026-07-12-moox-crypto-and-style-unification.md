@@ -269,8 +269,8 @@
 - Move: `modules/cli/cmd/{auth.go,collector.go,data.go,data_remote.go,metadata.go,storage.go,storage_import.go,tencent_ops.go,tencent_ops_firewall_open.go}`
 - Modify: `modules/cli/cmd/root.go`
 - Keep: `modules/cli/cmd/moox-cli/main.go`
-- Split: `modules/storage/internal/infra/device/duckdb/view_store.go`
-- Split: `modules/storage/internal/infra/metadata/sqlite/crud.go`
+- Split: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
+- Split: `modules/storage/internal/service/metadata/sqlite/crud.go`
 - Split: `modules/storage/cmd/bench/main.go`
 - Split: `modules/cli/internal/command/metadata.go`
 - Modify: `modules/eventbus/internal/config/config.go`

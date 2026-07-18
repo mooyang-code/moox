@@ -121,3 +121,42 @@ func TestTableDeepCopiesAllowedMethods(t *testing.T) {
 		t.Fatalf("resolved method slice was live: %+v", again)
 	}
 }
+
+func TestTableResolveMethodSelectsDisjointServiceRoute(t *testing.T) {
+	snapshot, err := NormalizeAndHash("node-1", []Route{
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}},
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20201", ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"ReadTimeSeriesRows"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	route, ok := table.ResolveMethod("storage-primary", "ReadTimeSeriesRows")
+	if !ok || route.Address != "127.0.0.1:20201" {
+		t.Fatalf("ResolveMethod = %+v, %v", route, ok)
+	}
+}
+
+func TestTableResolveRPCUsesServicePathAndMethodAllowlist(t *testing.T) {
+	snapshot, err := NormalizeAndHash("node-1", []Route{{
+		ServiceID: "storage-primary", Address: "127.0.0.1:20102",
+		ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"MergeRows"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	route, method, ok := table.ResolveRPC("/trpc.moox.storage.PrimaryStore/MergeRows")
+	if !ok || route.ServiceID != "storage-primary" || method != "MergeRows" {
+		t.Fatalf("ResolveRPC = %+v, %q, %v", route, method, ok)
+	}
+	if _, _, ok := table.ResolveRPC("/trpc.moox.storage.PrimaryStore/ReadRows"); ok {
+		t.Fatal("ResolveRPC allowed a method outside the route allowlist")
+	}
+}

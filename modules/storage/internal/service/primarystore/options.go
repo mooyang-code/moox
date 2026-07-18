@@ -3,9 +3,9 @@ package primarystore
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datashard/messagepublisher"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 )
 
 type ViewErrorReporter func(ctx context.Context, stage string, err error)
@@ -18,10 +18,9 @@ type Options struct {
 	MetadataPath       string
 	InitSchemaPath     string
 	PebblePath         string
-	ParquetPath        string
 	PrimaryClient      primary.Client
 	PrimaryServiceName string
 	ShardID            string
-	Events             eventbus.Publisher
+	Events             messagepublisher.Publisher
 	ViewErrors         ViewErrorReporter
 }

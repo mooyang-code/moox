@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
-	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/service/view"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
+	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/service/dataview"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/dataview/search"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -73,7 +73,7 @@ func TestViewIndexDualDatabaseSwitch(t *testing.T) {
 		t.Fatalf("GetView(ts_view): %v", err)
 	}
 	oldTimeIndex := tsView.GetActiveIndexId()
-	if err := duck.Write(ctx, oldTimeIndex, viewindex.ViewIndexBatch{TimeSeriesRows: []*pb.TimeSeriesRow{
+	if err := duck.Write(ctx, oldTimeIndex, viewindex.BatchWrite{TimeSeriesRows: []*pb.TimeSeriesRow{
 		integrationTimeRow(now.Add(-48*time.Hour), 90),
 	}}); err != nil {
 		t.Fatalf("write stale row into active slot: %v", err)
@@ -149,7 +149,7 @@ type callbackManagedIndex struct {
 	onWrite func()
 }
 
-func (e *callbackManagedIndex) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+func (e *callbackManagedIndex) Write(ctx context.Context, indexID string, batch viewindex.BatchWrite) error {
 	if e.onWrite != nil {
 		e.onWrite()
 	}

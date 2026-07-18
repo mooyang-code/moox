@@ -60,8 +60,8 @@ Agent 不得读取、解析、打印、复制或 `source` `custom.toml` 中的�
 ./bin/moox-cli setup deploy-service \
   --file ./custom.toml \
   --host compute \
-  --service storage-access \
-  --package ./release/moox-storage-access-linux-amd64.zip \
+  --service storage-primary \
+  --package ./release/moox-storage-primary-linux-amd64.zip \
   --deploy-dir ~/moox/storage
 ```
 

@@ -50,7 +50,11 @@ func TestLoadServiceDeploymentSeed_MatchesDefaultDeploymentContract(t *testing.T
 		require.Equal(t, want.Description, got.Description, want.ServiceName)
 		var wantExtra map[string]any
 		require.NoError(t, json.Unmarshal([]byte(want.ExtraConfig), &wantExtra))
-		require.Equal(t, wantExtra, got.ExtraConfig, want.ServiceName)
+		gotExtraJSON, err := json.Marshal(got.ExtraConfig)
+		require.NoError(t, err)
+		var normalizedGotExtra map[string]any
+		require.NoError(t, json.Unmarshal(gotExtraJSON, &normalizedGotExtra))
+		require.Equal(t, wantExtra, normalizedGotExtra, want.ServiceName)
 	}
 }
 

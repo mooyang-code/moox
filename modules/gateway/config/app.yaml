@@ -3,6 +3,7 @@ node:
 
 server:
   service_addr: 127.0.0.1:11002
+  native_addr: 127.0.0.1:11003
   health_addr: 127.0.0.1:11012
 
 control_plane:

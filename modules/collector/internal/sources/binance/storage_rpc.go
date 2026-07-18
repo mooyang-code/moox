@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
@@ -19,12 +21,17 @@ type storageWriter struct {
 }
 
 func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo) *storageWriter {
+	target := gatewayauth.ServiceGatewayTarget(accessTarget)
+	if strings.TrimSpace(target) == "" {
+		target = metadataTarget
+	}
+	if strings.TrimSpace(target) == "" {
+		target = "ip://127.0.0.1:11003"
+	}
+	serviceOptions := gatewayauth.NewTRPCClientOptions(normalizeStorageTarget(target, "11003"), strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
-		access: storagepb.NewPrimaryStoreClientProxy(client.WithTarget(normalizeStorageTarget(accessTarget, "20102"))),
-		metadata: storagepb.NewMetadataClientProxy(
-			client.WithTarget(normalizeStorageTarget(metadataTarget, "20100")),
-			client.WithTransport(transport.DefaultClientTransport),
-		),
+		access:   storagepb.NewPrimaryStoreClientProxy(serviceOptions...),
+		metadata: storagepb.NewMetadataClientProxy(append(serviceOptions, client.WithTransport(transport.DefaultClientTransport))...),
 		authInfo: authInfo,
 	}
 }

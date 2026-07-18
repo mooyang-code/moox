@@ -40,5 +40,5 @@ exec "${deploy}/bin/moox-collector-scf" \
   -service-gateway-target http://127.0.0.1:11002 \
   -node-id "${collector_node_id}" \
   -storage-metadata-target 127.0.0.1:20100 \
-  -storage-access-target 127.0.0.1:20102 \
+  -storage-primary-target 127.0.0.1:20102 \
   -timeout "${timeout}"

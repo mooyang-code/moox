@@ -7,8 +7,10 @@ database:
   conn_max_idle_time: 10m
 
 storage:
-  metadata_target: "127.0.0.1:20100"
-  access_target: "127.0.0.1:20102"
+  gateway_target: "ip://127.0.0.1:11003"
+  gateway_node_id: ""
+  key_id: "factor"
+  hmac_key_file: ""
 
 nats:
   urls:

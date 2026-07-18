@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/factkey"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/rowkey"
+	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -21,20 +21,22 @@ const primaryDatasetScanPageSize = uint32(1000)
 
 func (s *Service) MergeTimeSeriesRows(ctx context.Context, req *pb.MergeTimeSeriesRowsReq) (*pb.MergeTimeSeriesRowsRsp, error) {
 	if err := s.validator.ValidateMergeTimeSeriesRows(ctx, req.GetRows()); err != nil {
-		return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.MergeTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	groups, err := s.groupTimeSeriesRowsByPrimaryStoreTarget(ctx, req.GetRows())
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
+	groups, err := s.groupTimeSeriesRowsByShardTarget(ctx, req.GetRows())
 	if err != nil {
-		return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
+		return &pb.MergeTimeSeriesRowsRsp{RetInfo: retinfo.Error(groupRowsErrorCode(err), err)}, nil
 	}
 	written := make([]string, 0, len(req.GetRows()))
 	for _, group := range groups {
 		if err := s.writeRoutedRows(ctx, group); err != nil {
-			return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), WrittenKeys: written}, nil
+			return &pb.MergeTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err), WrittenKeys: written}, nil
 		}
 		written = append(written, timeSeriesWrittenKeys(group.timeSeriesKeys)...)
 	}
-	return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Success("success"), WrittenKeys: written}, nil
+	return &pb.MergeTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), WrittenKeys: written}, nil
 }
 
 func timeSeriesWrittenKeys(keys []*pb.TimeSeriesKey) []string {
@@ -44,11 +46,11 @@ func timeSeriesWrittenKeys(keys []*pb.TimeSeriesKey) []string {
 			continue
 		}
 		written = append(written, strings.Join([]string{
-			factkey.EscapePart(key.GetSpaceId()),
-			factkey.EscapePart(key.GetDatasetId()),
-			factkey.EscapePart(key.GetSubjectId()),
-			factkey.EscapePart(key.GetFreq()),
-			factkey.EscapePart(key.GetDataTime()),
+			rowkey.EscapePart(key.GetSpaceId()),
+			rowkey.EscapePart(key.GetDatasetId()),
+			rowkey.EscapePart(key.GetSubjectId()),
+			rowkey.EscapePart(key.GetFreq()),
+			rowkey.EscapePart(key.GetDataTime()),
 		}, "|"))
 	}
 	return written
@@ -56,47 +58,51 @@ func timeSeriesWrittenKeys(keys []*pb.TimeSeriesKey) []string {
 
 func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	if s == nil || s.metadataReader == nil {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata reader is unavailable"))}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata reader is unavailable"))}, nil
 	}
 	dataset, err := s.metadataReader.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
 	}
 	if dataset == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset must be time_series"))}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset must be time_series"))}, nil
 	}
 	if err := validateTimeRange(req.GetTimeRange()); err != nil || req.GetTimeRange().GetEndTime() == "" {
 		if err == nil {
 			err = errors.New("delete requires an end_time")
 		}
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	rangeValue, err := timeRangeToVersionRange(req.GetTimeRange())
 	if err != nil {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	page := req.GetPage()
 	size := page.GetSize()
+	pageNo := page.GetPage()
+	if pageNo == 0 {
+		pageNo = 1
+	}
 	if size == 0 {
 		size = primaryDatasetScanPageSize
 	}
 	if size > primaryDatasetScanPageSize {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("delete batch size must be <= 1000"))}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("delete batch size must be <= 1000"))}, nil
 	}
 	targets, err := s.router.ResolveDatasetTargets(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
-		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
 	deleted := uint32(0)
 	for _, target := range targets {
-		rows, _, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, VersionRange: rangeValue, Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: 1, Size: size}})
+		rows, _, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanRowsReq{Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, VersionRange: rangeValue, Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: pageNo, Size: size}})
 		if scanErr != nil {
-			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, scanErr)}, nil
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, scanErr)}, nil
 		}
-		keys := make([]*pb.PrimaryStoreKey, 0, len(rows))
+		keys := make([]*pb.ShardKey, 0, len(rows))
 		for _, row := range rows {
 			if row != nil {
 				keys = append(keys, row.GetKey())
@@ -107,19 +113,19 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 		}
 		deleter, ok := s.primary.(primary.Deleter)
 		if !ok {
-			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INNER_ERR, errors.New("primary store deletion is unavailable"))}, nil
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("primary store deletion is unavailable"))}, nil
 		}
 		if err := deleter.DeleteRows(ctx, target, keys); err != nil {
-			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		deleted += uint32(len(keys))
 	}
-	return &pb.DeleteTimeSeriesRowsRsp{RetInfo: response.Success("success"), Deleted: deleted}, nil
+	return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Deleted: deleted}, nil
 }
 
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	if err := validateTimeRange(req.GetTimeRange()); err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if isTimeSeriesSubjectScan(req) {
 		return s.scanTimeSeriesSubject(ctx, req)
@@ -132,52 +138,52 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		var err error
 		mergePlan, err = newMultiKeyPagePlan(req.GetPage(), len(req.GetKeys()), timeSeriesPerKeyPageCap(req))
 		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 	}
 	var out []*pb.TimeSeriesRow
 	var sourceHasMore bool
 	for _, key := range req.GetKeys() {
 		if err := validateTimeSeriesKeyTemplate(key); err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		storeKey, err := timeSeriesKeyToPrimaryStoreKey(key, false)
+		storeKey, err := timeSeriesKeyToShardKey(key, false)
 		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
 		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		if versionRange != nil {
 			storeKey.Version = ""
 		}
 		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetSubjectId())
 		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 		}
 		page := req.GetPage()
 		if mergePlan != nil {
 			page = &pb.Page{Page: 1, Size: mergePlan.fetchSize}
 		}
-		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadPrimaryRowsReq{
+		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadRowsReq{
 			AuthInfo:     req.GetAuthInfo(),
 			Target:       target,
-			Keys:         []*pb.PrimaryStoreKey{storeKey},
+			Keys:         []*pb.ShardKey{storeKey},
 			VersionRange: versionRange,
 			Order:        req.GetOrder(),
 			ColumnNames:  req.GetColumnNames(),
 			Page:         page,
 		})
 		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 		}
 		sourceHasMore = sourceHasMore || pageResult.GetHasMore()
 		for _, row := range rows {
 			out = append(out, primaryStoreRowToTimeSeriesRow(row, key))
 		}
 		if len(req.GetKeys()) == 1 {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: pageResult}, nil
 		}
 	}
 	sortTimeSeriesRows(out)
@@ -185,7 +191,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		reverseTimeSeriesRows(out)
 	}
 	out, pageResult := pageMergedTimeSeriesRows(out, mergePlan, sourceHasMore)
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
 func isTimeSeriesDatasetScan(req *pb.ReadTimeSeriesRowsReq) bool {
@@ -217,18 +223,18 @@ func isTimeSeriesSubjectScan(req *pb.ReadTimeSeriesRowsReq) bool {
 func (s *Service) scanTimeSeriesSubject(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	key := req.GetKeys()[0]
 	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
 	}
 	if err := validateTimeSeriesKeyTemplate(key); err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
 	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetSubjectId())
 	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
 	page := req.GetPage()
 	size := page.GetSize()
@@ -241,20 +247,20 @@ func (s *Service) scanTimeSeriesSubject(ctx context.Context, req *pb.ReadTimeSer
 	var nextCursor string
 	for len(rows) < int(size) {
 		remaining := uint32(int(size) - len(rows))
-		primaryRows, primaryPage, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+		primaryRows, primaryPage, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanRowsReq{
 			AuthInfo: req.GetAuthInfo(), Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 			VersionRange: versionRange, ColumnNames: req.GetColumnNames(), Order: req.GetOrder(),
-			KeyPrefix: factkey.EscapePart(key.GetSubjectId()) + "%7C" + factkey.EscapePart(key.GetFreq()) + "%7C",
+			KeyPrefix: rowkey.EscapePart(key.GetSubjectId()) + "%7C" + rowkey.EscapePart(key.GetFreq()) + "%7C",
 			Page:      &pb.Page{Size: remaining, Cursor: cursor},
 		})
 		if scanErr != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(scanErr), scanErr)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(scanErr), scanErr)}, nil
 		}
 		for _, row := range primaryRows {
 			if row == nil || row.GetKey() == nil {
 				continue
 			}
-			subjectID, freq, _, parseErr := factkey.ParseTimeSeriesDataKey(row.GetKey().GetKey())
+			subjectID, freq, _, parseErr := rowkey.ParseTimeSeriesDataKey(row.GetKey().GetKey())
 			if parseErr != nil || subjectID != key.GetSubjectId() || freq != key.GetFreq() {
 				continue
 			}
@@ -271,28 +277,28 @@ func (s *Service) scanTimeSeriesSubject(ctx context.Context, req *pb.ReadTimeSer
 		cursor = nextCursor
 	}
 	result := &pb.PageResult{Page: page.GetPage(), Size: size, HasMore: hasMore, NextCursor: nextCursor}
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: result}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: rows, PageResult: result}, nil
 }
 
 func (s *Service) scanTimeSeriesDataset(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	key := req.GetKeys()[0]
 	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
 	}
 	versionRange, err := timeRangeToVersionRange(req.GetTimeRange())
 	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
 	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
 	var out []*pb.TimeSeriesRow
 	seen := make(map[string]bool)
 	for _, target := range targets {
 		rows, err := s.scanAllPrimaryRows(ctx, req.GetAuthInfo(), target, pb.DataKind_DATA_KIND_TIME_SERIES, versionRange, req.GetColumnNames())
 		if err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 		}
 		for _, row := range rows {
 			id := primaryStoreRowID(row)
@@ -308,7 +314,7 @@ func (s *Service) scanTimeSeriesDataset(ctx context.Context, req *pb.ReadTimeSer
 		reverseTimeSeriesRows(out)
 	}
 	out, pageResult := pageTimeSeriesRows(out, req.GetPage())
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
 func (s *Service) scanTimeSeriesDatasetPageRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) ([]*pb.TimeSeriesRow, *pb.PageResult, error) {
@@ -338,20 +344,22 @@ func (s *Service) scanTimeSeriesDatasetPageRows(ctx context.Context, req *pb.Rea
 func (s *Service) MergeRecordRows(ctx context.Context, req *pb.MergeRecordRowsReq) (*pb.MergeRecordRowsRsp, error) {
 	rows := s.normalizeMergeRecordRows(req.GetRows())
 	if err := s.validator.ValidateMergeRecordRows(ctx, rows); err != nil {
-		return &pb.MergeRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.MergeRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	groups, err := s.groupRecordRowsByPrimaryStoreTarget(ctx, rows)
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
+	groups, err := s.groupRecordRowsByShardTarget(ctx, rows)
 	if err != nil {
-		return &pb.MergeRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
+		return &pb.MergeRecordRowsRsp{RetInfo: retinfo.Error(groupRowsErrorCode(err), err)}, nil
 	}
 	var written []*pb.RecordKey
 	for _, group := range groups {
 		if err := s.writeRoutedRows(ctx, group); err != nil {
-			return &pb.MergeRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), Keys: cloneRecordKeys(written)}, nil
+			return &pb.MergeRecordRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err), Keys: cloneRecordKeys(written)}, nil
 		}
 		written = append(written, group.recordKeys...)
 	}
-	return &pb.MergeRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
+	return &pb.MergeRecordRowsRsp{RetInfo: retinfo.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
 
 func (s *Service) normalizeMergeRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
@@ -363,7 +371,7 @@ func (s *Service) normalizeMergeRecordRows(rows []*pb.RecordRow) []*pb.RecordRow
 		}
 		copied := proto.Clone(row).(*pb.RecordRow)
 		if copied.Key != nil && strings.TrimSpace(copied.Key.GetVersion()) == "" {
-			copied.Key.Version = s.nextRecordVersion().Format(factkey.TimeVersionLayout)
+			copied.Key.Version = s.nextRecordVersion().Format(rowkey.TimeVersionLayout)
 		}
 		out = append(out, copied)
 	}
@@ -393,18 +401,18 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		var err error
 		mergePlan, err = newMultiKeyPagePlan(req.GetPage(), len(req.GetKeys()), recordPerKeyPageCap(req))
 		if err != nil {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 	}
 	var out []*pb.RecordRow
 	var sourceHasMore bool
 	for _, key := range req.GetKeys() {
 		if err := validateRecordKeyTemplate(key); err != nil {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		storeKey, err := recordKeyToPrimaryStoreKey(key, true)
+		storeKey, err := recordKeyToShardKey(key, true)
 		if err != nil {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		versionRange := req.GetVersionRange()
 		if versionRange != nil {
@@ -412,30 +420,30 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		}
 		target, err := s.router.Resolve(ctx, key.GetSpaceId(), key.GetDatasetId(), key.GetRecordId())
 		if err != nil {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 		}
 		page := req.GetPage()
 		if mergePlan != nil {
 			page = &pb.Page{Page: 1, Size: mergePlan.fetchSize}
 		}
-		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadPrimaryRowsReq{
+		rows, pageResult, err := s.primary.ReadRows(ctx, target, &pb.ReadRowsReq{
 			AuthInfo:     req.GetAuthInfo(),
 			Target:       target,
-			Keys:         []*pb.PrimaryStoreKey{storeKey},
+			Keys:         []*pb.ShardKey{storeKey},
 			VersionRange: versionRange,
 			Order:        req.GetOrder(),
 			ColumnNames:  req.GetColumnNames(),
 			Page:         page,
 		})
 		if err != nil {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 		}
 		sourceHasMore = sourceHasMore || pageResult.GetHasMore()
 		for _, row := range rows {
 			out = append(out, primaryStoreRowToRecordRow(row, key))
 		}
 		if len(req.GetKeys()) == 1 {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: pageResult}, nil
 		}
 	}
 	sortRecordRows(out)
@@ -443,7 +451,7 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		reverseRecordRows(out)
 	}
 	out, pageResult := pageMergedRecordRows(out, mergePlan, sourceHasMore)
-	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+	return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
 func isRecordDatasetScan(req *pb.ReadRecordRowsReq) bool {
@@ -454,18 +462,18 @@ func isRecordDatasetScan(req *pb.ReadRecordRowsReq) bool {
 func (s *Service) scanRecordDataset(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
 	key := req.GetKeys()[0]
 	if err := validateRecordKey(key, false); err != nil {
-		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	targets, err := s.router.ResolveDatasetTargets(ctx, key.GetSpaceId(), key.GetDatasetId())
 	if err != nil {
-		return &pb.ReadRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
+		return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
 	}
 	var out []*pb.RecordRow
 	seen := make(map[string]bool)
 	for _, target := range targets {
 		rows, err := s.scanAllPrimaryRows(ctx, req.GetAuthInfo(), target, pb.DataKind_DATA_KIND_RECORD, req.GetVersionRange(), req.GetColumnNames())
 		if err != nil {
-			return &pb.ReadRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+			return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 		}
 		for _, row := range rows {
 			id := primaryStoreRowID(row)
@@ -481,7 +489,7 @@ func (s *Service) scanRecordDataset(ctx context.Context, req *pb.ReadRecordRowsR
 		reverseRecordRows(out)
 	}
 	out, pageResult := pageRecordRows(out, req.GetPage())
-	return &pb.ReadRecordRowsRsp{RetInfo: response.Success("success"), Rows: out, PageResult: pageResult}, nil
+	return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: pageResult}, nil
 }
 
 func (s *Service) scanRecordDatasetPageRows(ctx context.Context, req *pb.ReadRecordRowsReq) ([]*pb.RecordRow, *pb.PageResult, error) {
@@ -504,11 +512,11 @@ func (s *Service) scanRecordDatasetPageRows(ctx context.Context, req *pb.ReadRec
 	return out, page, nil
 }
 
-func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, target *pb.PrimaryStoreTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string) ([]*pb.PrimaryStoreRow, error) {
-	var out []*pb.PrimaryStoreRow
+func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, target *pb.ShardTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string) ([]*pb.ShardRow, error) {
+	var out []*pb.ShardRow
 	cursor := ""
 	for {
-		rows, page, err := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
+		rows, page, err := s.primary.ScanRows(ctx, target, &pb.ScanRowsReq{
 			AuthInfo:     auth,
 			Target:       target,
 			DataKind:     kind,
@@ -531,7 +539,7 @@ func (s *Service) scanAllPrimaryRows(ctx context.Context, auth *pb.AuthInfo, tar
 	return out, nil
 }
 
-func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, targets []*pb.PrimaryStoreTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, targets []*pb.ShardTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
 	if len(targets) == 0 {
 		return nil, &pb.PageResult{}, nil
 	}
@@ -546,10 +554,10 @@ func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, ta
 	if targetIndex >= len(targets) {
 		return nil, &pb.PageResult{Page: page.GetPage(), Size: size}, nil
 	}
-	var out []*pb.PrimaryStoreRow
+	var out []*pb.ShardRow
 	for targetIndex < len(targets) && uint32(len(out)) < size {
 		remaining := size - uint32(len(out))
-		rows, next, err := s.primary.ScanRows(ctx, targets[targetIndex], &pb.ScanPrimaryRowsReq{
+		rows, next, err := s.primary.ScanRows(ctx, targets[targetIndex], &pb.ScanRowsReq{
 			AuthInfo:     auth,
 			Target:       targets[targetIndex],
 			DataKind:     kind,
@@ -619,24 +627,27 @@ func groupRowsErrorCode(err error) pb.ErrorCode {
 
 // routedRows 保存路由到同一主存目标的一批写入行。
 type routedRows struct {
-	target         *pb.PrimaryStoreTarget
-	rows           []*pb.PrimaryStoreRow
+	target         *pb.ShardTarget
+	rows           []*pb.ShardRow
 	timeSeriesRows []*pb.TimeSeriesRow
 	recordRows     []*pb.RecordRow
 	timeSeriesKeys []*pb.TimeSeriesKey
 	recordKeys     []*pb.RecordKey
 }
 
-func (s *Service) groupTimeSeriesRowsByPrimaryStoreTarget(ctx context.Context, rows []*pb.TimeSeriesRow) ([]*routedRows, error) {
+func (s *Service) groupTimeSeriesRowsByShardTarget(ctx context.Context, rows []*pb.TimeSeriesRow) ([]*routedRows, error) {
 	groups := make(map[string]*routedRows)
 	var order []string
-	resolved := make(map[string]*pb.PrimaryStoreTarget)
+	resolved := make(map[string]*pb.ShardTarget)
 	for _, row := range rows {
-		converted, err := timeSeriesRowToPrimaryStoreRow(row)
+		converted, err := timeSeriesRowToShardRow(row)
 		if err != nil {
 			return nil, err
 		}
 		key := row.GetKey()
+		if err := s.lockDatasetTopology(ctx, key.GetSpaceId(), key.GetDatasetId()); err != nil {
+			return nil, err
+		}
 		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetSubjectId()
 		target, ok := resolved[routeKey]
 		if !ok {
@@ -665,16 +676,19 @@ func (s *Service) groupTimeSeriesRowsByPrimaryStoreTarget(ctx context.Context, r
 	return out, nil
 }
 
-func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows []*pb.RecordRow) ([]*routedRows, error) {
+func (s *Service) groupRecordRowsByShardTarget(ctx context.Context, rows []*pb.RecordRow) ([]*routedRows, error) {
 	groups := make(map[string]*routedRows)
 	var order []string
-	resolved := make(map[string]*pb.PrimaryStoreTarget)
+	resolved := make(map[string]*pb.ShardTarget)
 	for _, row := range rows {
-		converted, err := recordRowToPrimaryStoreRow(row)
+		converted, err := recordRowToShardRow(row)
 		if err != nil {
 			return nil, err
 		}
 		key := row.GetKey()
+		if err := s.lockDatasetTopology(ctx, key.GetSpaceId(), key.GetDatasetId()); err != nil {
+			return nil, err
+		}
 		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetRecordId()
 		target, ok := resolved[routeKey]
 		if !ok {
@@ -703,8 +717,29 @@ func (s *Service) groupRecordRowsByPrimaryStoreTarget(ctx context.Context, rows 
 	return out, nil
 }
 
-func (s *Service) writeRoutedRows(ctx context.Context, group *routedRows, _ ...[]byte) error {
-	return s.primary.WriteRows(ctx, group.target, group.rows)
+func (s *Service) writeRoutedRows(ctx context.Context, group *routedRows) error {
+	if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
+		return err
+	}
+	if locker, ok := s.metadata.(interface {
+		LockDatasetTopology(context.Context, string, string) error
+	}); ok && group != nil && group.target != nil {
+		// Keep this idempotent fallback for internal maintenance callers that
+		// construct routedRows directly.
+		if err := locker.LockDatasetTopology(ctx, group.target.GetSpaceId(), group.target.GetDatasetId()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) lockDatasetTopology(ctx context.Context, spaceID, datasetID string) error {
+	if locker, ok := s.metadata.(interface {
+		LockDatasetTopology(context.Context, string, string) error
+	}); ok {
+		return locker.LockDatasetTopology(ctx, spaceID, datasetID)
+	}
+	return nil
 }
 
 func cloneTimeSeriesRows(rows []*pb.TimeSeriesRow) []*pb.TimeSeriesRow {

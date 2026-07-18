@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	ServiceAddress            = "127.0.0.1:11002"
-	HealthAddress             = "127.0.0.1:11012"
-	DefaultMaxBodyBytes int64 = 4 << 20
+	ServiceAddress             = "127.0.0.1:11002"
+	NativeServiceAddress       = "127.0.0.1:11003"
+	HealthAddress              = "127.0.0.1:11012"
+	DefaultMaxBodyBytes  int64 = 4 << 20
 )
 
 type Config struct {
@@ -26,6 +27,7 @@ type Config struct {
 	} `yaml:"node"`
 	Server struct {
 		ServiceAddr string `yaml:"service_addr"`
+		NativeAddr  string `yaml:"native_addr"`
 		HealthAddr  string `yaml:"health_addr"`
 	} `yaml:"server"`
 	ControlPlane struct {
@@ -50,6 +52,7 @@ type fileConfig struct {
 	} `yaml:"node"`
 	Server struct {
 		ServiceAddr string `yaml:"service_addr"`
+		NativeAddr  string `yaml:"native_addr"`
 		HealthAddr  string `yaml:"health_addr"`
 	} `yaml:"server"`
 	ControlPlane struct {
@@ -89,6 +92,10 @@ func Load(path string) (Config, error) {
 	var cfg Config
 	cfg.Node.ID = strings.TrimSpace(raw.Node.ID)
 	cfg.Server.ServiceAddr = strings.TrimSpace(raw.Server.ServiceAddr)
+	cfg.Server.NativeAddr = strings.TrimSpace(raw.Server.NativeAddr)
+	if cfg.Server.NativeAddr == "" {
+		cfg.Server.NativeAddr = NativeServiceAddress
+	}
 	cfg.Server.HealthAddr = strings.TrimSpace(raw.Server.HealthAddr)
 	cfg.ControlPlane.BaseURL = strings.TrimRight(strings.TrimSpace(raw.ControlPlane.BaseURL), "/")
 	cfg.ControlPlane.HMACKeyFile = resolvePath(path, raw.ControlPlane.HMACKeyFile)
@@ -111,6 +118,9 @@ func Validate(cfg Config) error {
 	}
 	if cfg.Server.ServiceAddr != ServiceAddress {
 		return fmt.Errorf("server.service_addr must be %s", ServiceAddress)
+	}
+	if cfg.Server.NativeAddr != NativeServiceAddress {
+		return fmt.Errorf("server.native_addr must be %s", NativeServiceAddress)
 	}
 	if cfg.Server.HealthAddr != HealthAddress {
 		return fmt.Errorf("server.health_addr must be %s", HealthAddress)

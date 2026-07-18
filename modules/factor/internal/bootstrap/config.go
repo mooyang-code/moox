@@ -2,6 +2,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,8 +38,10 @@ type DatabaseConfig struct {
 
 // StorageConfig describes storage service tRPC targets.
 type StorageConfig struct {
-	MetadataTarget string `yaml:"metadata_target"`
-	PrimaryTarget  string `yaml:"access_target"`
+	GatewayTarget string `yaml:"gateway_target"`
+	GatewayNodeID string `yaml:"gateway_node_id"`
+	KeyID         string `yaml:"key_id"`
+	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 // NATSConfig describes the Storage event stream subscription.
@@ -97,7 +101,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
@@ -121,8 +127,7 @@ func Default() *Config {
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
 		Storage: StorageConfig{
-			MetadataTarget: "127.0.0.1:20100",
-			PrimaryTarget:  "127.0.0.1:20102",
+			GatewayTarget: "ip://127.0.0.1:11003",
 		},
 		NATS: NATSConfig{
 			URLs:     []string{"nats://127.0.0.1:4222"},
@@ -181,11 +186,8 @@ func (c *Config) applyDefaults() {
 	if c.Database.ConnMaxIdleTime == 0 {
 		c.Database.ConnMaxIdleTime = 10 * time.Minute
 	}
-	if c.Storage.MetadataTarget == "" {
-		c.Storage.MetadataTarget = "127.0.0.1:20100"
-	}
-	if c.Storage.PrimaryTarget == "" {
-		c.Storage.PrimaryTarget = "127.0.0.1:20102"
+	if c.Storage.GatewayTarget == "" {
+		c.Storage.GatewayTarget = "ip://127.0.0.1:11003"
 	}
 	if c.NATS.URL == "" {
 		c.NATS.URL = "nats://127.0.0.1:4222"
@@ -262,11 +264,17 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_FACTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_FACTOR_STORAGE_METADATA_TARGET"); v != "" {
-		c.Storage.MetadataTarget = v
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
+		c.Storage.GatewayTarget = v
 	}
-	if v := os.Getenv("MOOX_FACTOR_STORAGE_ACCESS_TARGET"); v != "" {
-		c.Storage.PrimaryTarget = v
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
+		c.Storage.GatewayNodeID = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_KEY_ID"); v != "" {
+		c.Storage.KeyID = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
+		c.Storage.HMACKeyFile = v
 	}
 	if v, ok := os.LookupEnv("MOOX_FACTOR_NATS_URL"); ok {
 		c.NATS.URL = v
@@ -297,11 +305,13 @@ func (c *Config) validateStorageTargets() error {
 	if c.Engine.MaxBatchParallelism > c.Engine.Workers {
 		return fmt.Errorf("engine.max_batch_parallelism=%d exceeds workers=%d", c.Engine.MaxBatchParallelism, c.Engine.Workers)
 	}
-	if !isTRPCTarget(c.Storage.MetadataTarget) {
-		return fmt.Errorf("storage.metadata_target must be a tRPC target, got %q", c.Storage.MetadataTarget)
+	if !isTRPCTarget(c.Storage.GatewayTarget) {
+		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
 	}
-	if !isTRPCTarget(c.Storage.PrimaryTarget) {
-		return fmt.Errorf("storage.access_target must be a tRPC target, got %q", c.Storage.PrimaryTarget)
+	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
+		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
+			return fmt.Errorf("storage hmac credentials: %w", err)
+		}
 	}
 	return nil
 }

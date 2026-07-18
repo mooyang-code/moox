@@ -124,7 +124,7 @@ GATEWAY_ARGS=(
   --no-monitor \
   "${GATEWAY_ARGS[@]}" >/dev/null
 
-for binary in moox-storage-access moox-storage-view; do
+for binary in moox-storage-primary moox-storage-view; do
   assert_file "${DEPLOY_DIR}/bin/${binary}"
 done
 for binary in moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
@@ -156,8 +156,8 @@ assert_grep 'health probe failed' "${DEPLOY_DIR}/healthcheck.sh"
 assert_grep '"\$\{ROOT\}/stop\.sh" "\$\{name\}"' "${DEPLOY_DIR}/healthcheck.sh"
 assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthcheck.sh"
 
-assert_grep 'start_storage_process "storage-access" "moox-storage-access"' "${DEPLOY_DIR}/start.sh"
-assert_grep 'storage\.access\.yaml' "${DEPLOY_DIR}/start.sh"
+assert_grep 'start_storage_process "storage-primary" "moox-storage-primary"' "${DEPLOY_DIR}/start.sh"
+assert_grep 'storage\.primary\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"
@@ -168,11 +168,11 @@ if grep -Eq 'storage-view-(index|builder|query)|storage\.view_(index|builder|que
 fi
 
 assert_order "${DEPLOY_DIR}/start.sh" \
-  '^  start_storage_access$' \
+  '^  start_storage_primary$' \
   '^  start_storage_view$'
 assert_order "${DEPLOY_DIR}/stop.sh" \
   'stop_service "storage-view"' \
-  'stop_service "storage-access"'
+  'stop_service "storage-primary"'
 
 assert_file "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 [[ $(find "${DEPLOY_DIR}/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]] || {
@@ -188,8 +188,8 @@ if grep -ERq 'duckdb_path:|bleve_path:|rotation:|op=rotate' "${DEPLOY_DIR}/stora
   exit 1
 fi
 
-assert_grep 'enabled: true' "${DEPLOY_DIR}/storage/config/storage.access.yaml"
-assert_grep 'log_path: \.\./logs/storage-access' "${DEPLOY_DIR}/storage/config/trpc_go.access.yaml"
+assert_grep 'enabled: true' "${DEPLOY_DIR}/storage/config/storage.primary.yaml"
+assert_grep 'log_path: \.\./logs/storage-primary' "${DEPLOY_DIR}/storage/config/trpc_go.primary.yaml"
 assert_grep 'log_path: \.\./logs/storage-view' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20104' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20202' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
@@ -244,4 +244,4 @@ if "${DEPLOY_DIR}/reset-storage-view-indexes.sh" --root "${TMP_ROOT}/unsafe-stor
 	exit 1
 fi
 
-echo "storage access plus unified storage-view deployment package verified"
+echo "storage-primary plus unified storage-view deployment package verified"

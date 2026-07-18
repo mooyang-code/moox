@@ -92,8 +92,8 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["storage-primary"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage-primary extra_config = %s", byName["storage-primary"].ExtraConfig)
 	}
-	if item := byName["storage-primary"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage" {
-		t.Fatalf("storage-primary endpoint = %d/%s, want 20200/trpc.moox.storage", item.Port, item.GatewayPath)
+	if item := byName["storage-primary"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage.Metadata" {
+		t.Fatalf("storage-primary endpoint = %d/%s, want 20200/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
 	}
 	if healthURL(byName["storage-view"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
 		t.Fatalf("storage-view extra_config = %s", byName["storage-view"].ExtraConfig)

@@ -44,8 +44,9 @@ services:
     protocol: http
     host: 127.0.0.1
     port: 20200
-    gateway_path: trpc.moox.storage
-    gateway_enabled: false
+    gateway_path: trpc.moox.storage.Metadata
+    gateway_service_id: storage-primary
+    gateway_enabled: true
     scope: public
     status: active
     description: moox-storage PrimaryStore + Metadata 服务
@@ -53,14 +54,20 @@ services:
       health_url: http://127.0.0.1:20210/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, GetView, ListViews, UpsertViewColumn, ListViewColumns, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, BindDatasetSubject, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, CreatePrimaryStoreNode, UpdatePrimaryStoreNode, GetPrimaryStoreNode, ListPrimaryStoreNodes, CreatePrimaryStoreRoute, UpdatePrimaryStoreRoute, GetPrimaryStoreRoute, ListPrimaryStoreRoutes, RegisterArchiveFile, ListArchiveFiles]
+      gateway_routes:
+        - service_path: trpc.moox.storage.PrimaryStore
+          port: 20201
+          gateway_methods: [MergeTimeSeriesRows, ReadTimeSeriesRows, MergeRecordRows, ReadRecordRows]
   - name: storage-view
     kind: storage
     deployment_mode: process
     protocol: http
     host: 127.0.0.1
     port: 20202
-    gateway_path: trpc.moox.storage
-    gateway_enabled: false
+    gateway_path: trpc.moox.storage.DataView
+    gateway_service_id: storage-view
+    gateway_enabled: true
     scope: public
     status: active
     description: moox-storage DataView + ViewBuilder 服务
@@ -68,6 +75,7 @@ services:
       health_url: http://127.0.0.1:20211/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
   - name: eventbus
     kind: eventbus
     deployment_mode: process

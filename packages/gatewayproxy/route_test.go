@@ -160,6 +160,20 @@ func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndHashAllowsDisjointMethodsForOneServiceID(t *testing.T) {
+	routes := []Route{
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}},
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20201", ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"ReadTimeSeriesRows"}},
+	}
+	snapshot, err := NormalizeAndHash("node-1", routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Routes) != 2 {
+		t.Fatalf("routes = %+v", snapshot.Routes)
+	}
+}
+
 func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
 	enabled, err := NormalizeAndHashState("node-1", false, nil)
 	if err != nil {

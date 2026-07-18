@@ -29,6 +29,14 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 					"scope":        "public",
 					"status":       "active",
 				},
+				"service_gateway_internal": map[string]any{
+					"service_name": "service_gateway_internal",
+					"protocol":     "trpc",
+					"host":         "127.0.0.1",
+					"port":         11003,
+					"scope":        "internal",
+					"status":       "active",
+				},
 				"storage-primary": map[string]any{
 					"service_name": "storage-primary",
 					"protocol":     "trpc",
@@ -47,8 +55,7 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
 	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
 	cfg.SysDeploy.ServiceAuth.TargetNode = "gateway-gz-122"
-	cfg.Storage.MetadataTarget = "127.0.0.1:20100"
-	cfg.Storage.PrimaryTarget = "127.0.0.1:20102"
+	cfg.Storage.GatewayTarget = "ip://127.0.0.1:11003"
 
 	deps, err := Resolve(context.Background(), cfg)
 	if err != nil {
@@ -57,11 +64,11 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if deps.ServiceGatewayTarget != "http://gw.example.com:11000" {
 		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
 	}
-	if deps.StorageMetadataTarget != "storage.example.com:20100" {
-		t.Fatalf("StorageMetadataTarget = %q, want storage.example.com:20100", deps.StorageMetadataTarget)
+	if deps.StorageMetadataTarget != "127.0.0.1:11003" {
+		t.Fatalf("StorageMetadataTarget = %q, want native service gateway target", deps.StorageMetadataTarget)
 	}
-	if deps.StoragePrimaryTarget != "storage.example.com:20100" {
-		t.Fatalf("StoragePrimaryTarget = %q, want storage.example.com:20100", deps.StoragePrimaryTarget)
+	if deps.StoragePrimaryTarget != "127.0.0.1:11003" {
+		t.Fatalf("StoragePrimaryTarget = %q, want native service gateway target", deps.StoragePrimaryTarget)
 	}
 }
 

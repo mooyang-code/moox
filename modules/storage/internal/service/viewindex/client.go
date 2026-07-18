@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-
-	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"strings"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -41,7 +39,7 @@ func (c *Client) Engine() string {
 	return c.engine
 }
 
-func (c *Client) Prepare(ctx context.Context, indexID string, schema coreviewindex.ViewIndexSchema) error {
+func (c *Client) Prepare(ctx context.Context, indexID string, schema ViewIndexSchema) error {
 	rsp, err := c.proxy.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		IndexId: indexID,
 		Engine:  c.engine,
@@ -56,14 +54,14 @@ func (c *Client) Prepare(ctx context.Context, indexID string, schema coreviewind
 	return ownerRetInfoError(rsp.GetRetInfo())
 }
 
-func (c *Client) Write(ctx context.Context, indexID string, batch coreviewindex.ViewIndexBatch) error {
-	return c.Apply(ctx, indexID, coreviewindex.ViewIndexApplyBatch{
+func (c *Client) Write(ctx context.Context, indexID string, batch BatchWrite) error {
+	return c.Apply(ctx, indexID, ViewIndexApplyBatch{
 		ViewVersion: batch.ViewVersion, ViewSchemaHash: batch.SchemaHash,
 		RowWrites: rowsFromLegacyBatch(batch),
 	})
 }
 
-func (c *Client) Apply(ctx context.Context, indexID string, batch coreviewindex.ViewIndexApplyBatch) error {
+func (c *Client) Apply(ctx context.Context, indexID string, batch ViewIndexApplyBatch) error {
 	rsp, err := c.proxy.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{
 		IndexId: indexID,
 		Engine:  c.engine,
@@ -75,13 +73,13 @@ func (c *Client) Apply(ctx context.Context, indexID string, batch coreviewindex.
 	return ownerRetInfoError(rsp.GetRetInfo())
 }
 
-func (c *Client) Stat(ctx context.Context, indexID string) (coreviewindex.ViewIndexStats, error) {
+func (c *Client) Stat(ctx context.Context, indexID string) (ViewIndexStats, error) {
 	rsp, err := c.proxy.StatViewIndex(ctx, &pb.StatViewIndexReq{IndexId: indexID, Engine: c.engine})
 	if err != nil {
-		return coreviewindex.ViewIndexStats{}, err
+		return ViewIndexStats{}, err
 	}
 	if err := ownerRetInfoError(rsp.GetRetInfo()); err != nil {
-		return coreviewindex.ViewIndexStats{}, err
+		return ViewIndexStats{}, err
 	}
 	return statsFromProto(rsp.GetStats()), nil
 }
@@ -153,25 +151,25 @@ func (p *localViewIndexProxy) ApplyViewIndex(ctx context.Context, req *pb.ApplyV
 	return p.service.ApplyViewIndex(ctx, req)
 }
 
-func rowsFromLegacyBatch(batch coreviewindex.ViewIndexBatch) []coreviewindex.RowWrite {
-	rows := make([]coreviewindex.RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))
+func rowsFromLegacyBatch(batch BatchWrite) []RowWrite {
+	rows := make([]RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))
 	for _, row := range batch.TimeSeriesRows {
 		if row != nil && row.GetKey() != nil {
-			rows = append(rows, coreviewindex.RowWrite{Operation: coreviewindex.RowWriteOperationMerge, Key: coreviewindex.RowKey{TimeSeriesKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+			rows = append(rows, RowWrite{Operation: RowWriteOperationMerge, Key: RowKey{TimeSeriesKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes(), RemovedColumns: row.GetRemovedColumns(), SourceShardID: row.GetSourceShardId(), SourceSequence: row.GetSourceSequence()})
 		}
 	}
 	for _, row := range batch.RecordRows {
 		if row != nil && row.GetKey() != nil {
-			rows = append(rows, coreviewindex.RowWrite{Operation: coreviewindex.RowWriteOperationMerge, Key: coreviewindex.RowKey{RecordKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+			rows = append(rows, RowWrite{Operation: RowWriteOperationMerge, Key: RowKey{RecordKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes(), RemovedColumns: row.GetRemovedColumns(), SourceShardID: row.GetSourceShardId(), SourceSequence: row.GetSourceSequence()})
 		}
 	}
 	return rows
 }
 
-func applyBatchToProto(batch coreviewindex.ViewIndexApplyBatch) *pb.ViewIndexApplyBatch {
+func applyBatchToProto(batch ViewIndexApplyBatch) *pb.ViewIndexApplyBatch {
 	out := &pb.ViewIndexApplyBatch{ViewVersion: batch.ViewVersion, ViewSchemaHash: batch.ViewSchemaHash, RequiredColumnNames: append([]string(nil), batch.RequiredColumnNames...)}
 	for _, write := range batch.RowWrites {
-		item := &pb.ViewIndexRowWrite{Operation: pb.ViewIndexRowWriteOperation(write.Operation), Columns: write.Columns, Attributes: write.Attributes, AttributesToDelete: write.AttributesToDelete, RemovedColumnNames: write.RemovedColumnNames, Key: &pb.ViewIndexRowKey{}}
+		item := &pb.ViewIndexRowWrite{Operation: pb.ViewIndexRowWriteOperation(write.Operation), Columns: write.Columns, Attributes: write.Attributes, AttributesToDelete: write.AttributesToDelete, RemovedColumnNames: write.RemovedColumnNames, RemovedColumns: write.RemovedColumns, SourceShardId: write.SourceShardID, SourceSequence: write.SourceSequence, Key: &pb.ViewIndexRowKey{}}
 		if write.Key.TimeSeriesKey != nil {
 			item.Key.Key = &pb.ViewIndexRowKey_TimeSeriesKey{TimeSeriesKey: write.Key.TimeSeriesKey}
 		} else if write.Key.RecordKey != nil {

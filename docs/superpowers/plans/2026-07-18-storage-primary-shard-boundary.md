@@ -217,10 +217,10 @@ git commit -m "test(storage): lock consistency remediation contract"
 - Create/Modify: `packages/jetstream/codec_test.go`
 - Create: `packages/jetstream/subject_token.go`
 - Create: `packages/jetstream/subject_token_test.go`
-- Modify: `modules/storage/internal/core/eventbus/bus.go`
-- Modify: `modules/storage/internal/core/eventbus/bus_test.go`
-- Modify: `modules/storage/internal/infra/eventbus/producer_bus.go`
-- Modify: `modules/storage/internal/infra/eventbus/producer_bus_test.go`
+- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/bus.go`
+- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/bus_test.go`
+- Modify: `modules/storage/internal/service/datashard/messagepublisher/messagepublisher.go`
+- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus_test.go`
 - Modify: `modules/storage/internal/bootstrap/eventbus/factory.go`
 - Modify: `modules/storage/internal/bootstrap/eventbus/factory_test.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue.go`
@@ -263,9 +263,9 @@ git commit -m "test(storage): lock consistency remediation contract"
 - Modify: `modules/storage/config/trpc_go.yaml`
 - Modify: `modules/storage/config/trpc_go.access.yaml`
 
-- Modify: `modules/storage/internal/service/primary/service.go`
-- Modify: `modules/storage/internal/service/primary/outbox_relay.go`
-- Modify: `modules/storage/internal/service/primary/outbox_relay_test.go`
+- Modify: `modules/storage/internal/service/datashard/service.go`
+- Modify: `modules/storage/internal/service/datashard/outbox_relay.go`
+- Modify: `modules/storage/internal/service/datashard/outbox_relay_test.go`
 
 - [ ] **Step 1: 为 MooxMessage 增加业务消息类型**
 
@@ -370,7 +370,7 @@ Expected: 生成代码只暴露 `TimeSeriesRowsCommitted`、`RecordRowsCommitted
 ```bash
 (cd packages/messagepb && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
 (cd packages/jetstream && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/core/eventbus ./internal/infra/eventbus ./internal/service/view/builder ./internal/service/archive ./test)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/core/eventbus ./internal/infra/eventbus ./internal/service/viewbuilder ./internal/service/archive ./test)
 (cd modules/archive && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
 (cd modules/factor && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/trigger)
 (cd modules/eventbus && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/config)
@@ -381,8 +381,8 @@ Expected: 生成代码只暴露 `TimeSeriesRowsCommitted`、`RecordRowsCommitted
 (cd modules/trade && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/infra/bus)
 (cd packages/report && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
 git add packages/messagepb packages/jetstream packages/report \
-  modules/storage/proto modules/storage/internal/core/eventbus modules/storage/internal/infra/eventbus modules/storage/internal/bootstrap/eventbus \
-  modules/storage/internal/service/archive modules/storage/internal/service/view/builder modules/storage/test modules/storage/config \
+  modules/storage/proto modules/storage/internal/service/viewbuilder/eventconsumer modules/storage/internal/service/viewbuilder/eventconsumer modules/storage/internal/bootstrap/eventbus \
+  modules/storage/internal/service/archive modules/storage/internal/service/viewbuilder modules/storage/test modules/storage/config \
   modules/archive modules/eventbus modules/factor \
   modules/cloudnode/internal/jobqueue modules/hostagent/internal/app modules/monitor/internal/hostmetrics modules/monitor/internal/metrics \
   modules/strategy/internal/bus modules/trade/internal/infra/bus
@@ -393,17 +393,17 @@ git commit -m "refactor(storage): define rows committed message contracts"
 
 **Files:**
 - Modify: `modules/storage/proto/store.proto`
-- Modify: `modules/storage/internal/infra/device/store.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store.go`
-- Modify: `modules/storage/internal/infra/device/pebble/outbox.go`
-- Modify: `modules/storage/internal/service/primary/service.go`
-- Modify: `modules/storage/internal/service/primary/local.go`
-- Modify: `modules/storage/internal/service/primary/remote.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store_test.go`
-- Modify: `modules/storage/internal/infra/device/pebble/outbox_test.go`
-- Modify: `modules/storage/internal/service/primary/service_test.go`
-- Modify: `modules/storage/internal/service/primary/local_test.go`
-- Modify: `modules/storage/internal/service/primary/remote_test.go`
+- Modify: `modules/storage/internal/service/datashard/contracts/store.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/outbox.go`
+- Modify: `modules/storage/internal/service/datashard/service.go`
+- Modify: `modules/storage/internal/service/datashard/local.go`
+- Modify: `modules/storage/internal/service/datashard/remote.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store_test.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/outbox_test.go`
+- Modify: `modules/storage/internal/service/datashard/service_test.go`
+- Modify: `modules/storage/internal/service/datashard/local_test.go`
+- Modify: `modules/storage/internal/service/datashard/remote_test.go`
 
 - [ ] **Step 1: 移除调用方预编码 Outbox**
 
@@ -450,7 +450,7 @@ Batch.Commit(Sync)
 - [ ] **Step 7: Run**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/infra/device/pebble ./internal/service/primary)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/datashard/pebble ./internal/service/datashard)
 ```
 
 Expected: 原子性、完整 UPSERT、来源戳、固定 Shard 身份测试通过。
@@ -458,16 +458,16 @@ Expected: 原子性、完整 UPSERT、来源戳、固定 Shard 身份测试通�
 - [ ] **Step 8: Commit**
 
 ```bash
-git add modules/storage/proto modules/storage/internal/infra/device modules/storage/internal/service/primary
+git add modules/storage/proto modules/storage/internal/service/datashard modules/storage/internal/service/datashard/contracts
 git commit -m "fix(storage): create shard changes atomically with facts"
 ```
 
 ### Task 4: 修复 Outbox 顺序、重试和可观测性
 
 **Files:**
-- Modify: `modules/storage/internal/service/primary/outbox_relay.go`
-- Modify: `modules/storage/internal/service/primary/outbox_relay_test.go`
-- Modify: `modules/storage/internal/infra/device/pebble/outbox.go`
+- Modify: `modules/storage/internal/service/datashard/outbox_relay.go`
+- Modify: `modules/storage/internal/service/datashard/outbox_relay_test.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/outbox.go`
 - Modify: `modules/storage/internal/observability/view_metrics.go`
 - Modify: `modules/storage/internal/observability/view_metrics_test.go`
 - Create: `modules/storage/internal/observability/shard_metrics.go`
@@ -506,7 +506,7 @@ Pebble 不可读、Outbox 超过配置行数/字节数/年龄、Relay 未启动�
 - [ ] **Step 6: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/primary ./internal/infra/device/pebble ./internal/observability ./cmd/server)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/datashard ./internal/service/datashard/pebble ./internal/observability ./cmd/server)
 git add modules/storage
 git commit -m "fix(storage): preserve shard outbox ordering"
 ```
@@ -514,12 +514,12 @@ git commit -m "fix(storage): preserve shard outbox ordering"
 ### Task 5: 修复权威读取分页漏数
 
 **Files:**
-- Modify: `modules/storage/internal/service/access/data.go`
-- Modify: `modules/storage/internal/service/access/data_test.go`
-- Modify: `modules/storage/internal/service/access/factreader.go`
-- Modify: `modules/storage/internal/service/access/factreader_test.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store_test.go`
+- Modify: `modules/storage/internal/service/primarystore/data.go`
+- Modify: `modules/storage/internal/service/primarystore/data_test.go`
+- Modify: `modules/storage/internal/service/primarystore/factreader.go`
+- Modify: `modules/storage/internal/service/primarystore/factreader_test.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store_test.go`
 
 - [ ] **Step 1: 禁止预取后丢弃**
 
@@ -540,8 +540,8 @@ Cursor 必须编码最后一条已经返回给调用方的规范化 ShardKey；A
 - [ ] **Step 5: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/access ./internal/infra/device/pebble)
-git add modules/storage/internal/service/access modules/storage/internal/infra/device/pebble
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/primarystore ./internal/service/datashard/pebble)
+git add modules/storage/internal/service/primarystore modules/storage/internal/service/datashard/pebble
 git commit -m "fix(storage): make fact pagination lossless"
 ```
 
@@ -550,11 +550,11 @@ git commit -m "fix(storage): make fact pagination lossless"
 **Files:**
 - Modify: `modules/storage/proto/rows_committed.proto`
 - Modify: `modules/storage/proto/store.proto`
-- Modify: `modules/storage/internal/infra/device/pebble/store.go`
-- Modify: `modules/storage/internal/service/access/data.go`
-- Modify: `modules/storage/internal/service/view/builder/service.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_write.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index.go`
+- Modify: `modules/storage/internal/service/datashard/pebble/store.go`
+- Modify: `modules/storage/internal/service/primarystore/data.go`
+- Modify: `modules/storage/internal/service/viewbuilder/service.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_write.go`
+- Modify: `modules/storage/internal/service/viewindex/bleve/index.go`
 - Modify: `modules/archive/internal/consumer/decode.go`
 - Modify: `modules/archive/internal/consumer/decode_test.go`
 
@@ -581,7 +581,7 @@ Archive Decoder 对 DELETE 返回 Ignore/ACK，不追加 Journal，不写 Tombst
 - [ ] **Step 6: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./internal/infra/device/... ./internal/service/access ./internal/service/view/...)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./internal/service/datashard/... ./internal/service/primarystore ./internal/service/dataview/...)
 (cd modules/archive && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
 git add modules/storage modules/archive
 git commit -m "fix(storage): propagate online deletes to views"
@@ -590,20 +590,20 @@ git commit -m "fix(storage): propagate online deletes to views"
 ### Task 7: 重写 ViewBuilder 为有界批量刷新流水线
 
 **Files:**
-- Rename: `modules/storage/internal/service/view/builder/batcher.go` -> `modules/storage/internal/service/view/builder/event_batcher.go`
-- Rename: `modules/storage/internal/service/view/builder/batcher_test.go` -> `modules/storage/internal/service/view/builder/event_batcher_test.go`
-- Rename: `modules/storage/internal/service/view/projection.go` -> `modules/storage/internal/service/view/builder/rowmapper/row_mapper.go`
-- Rename: `modules/storage/internal/service/view/projection_test.go` -> `modules/storage/internal/service/view/builder/rowmapper/row_mapper_test.go`
-- Modify: `modules/storage/internal/service/view/builder/service.go`
-- Modify: `modules/storage/internal/service/view/builder/service_test.go`
-- Modify: `modules/storage/internal/service/view/builder/time_series.go`
-- Modify: `modules/storage/internal/service/view/builder/time_series_test.go`
-- Modify: `modules/storage/internal/service/view/builder/record.go`
-- Modify: `modules/storage/internal/service/view/builder/record_test.go`
-- Modify: `modules/storage/internal/service/view/builder/options.go`
-- Modify: `modules/storage/internal/service/view/builder/options_test.go`
-- Create: `modules/storage/internal/core/viewindex/batch_write.go`
-- Create: `modules/storage/internal/core/viewindex/batch_write_test.go`
+- Rename: `modules/storage/internal/service/viewbuilder/batcher.go` -> `modules/storage/internal/service/viewbuilder/event_batcher.go`
+- Rename: `modules/storage/internal/service/viewbuilder/batcher_test.go` -> `modules/storage/internal/service/viewbuilder/event_batcher_test.go`
+- Rename: `modules/storage/internal/service/dataview/projection.go` -> `modules/storage/internal/service/viewbuilder/rowmapper/row_mapper.go`
+- Rename: `modules/storage/internal/service/dataview/projection_test.go` -> `modules/storage/internal/service/viewbuilder/rowmapper/row_mapper_test.go`
+- Modify: `modules/storage/internal/service/viewbuilder/service.go`
+- Modify: `modules/storage/internal/service/viewbuilder/service_test.go`
+- Modify: `modules/storage/internal/service/viewbuilder/time_series.go`
+- Modify: `modules/storage/internal/service/viewbuilder/time_series_test.go`
+- Modify: `modules/storage/internal/service/viewbuilder/record.go`
+- Modify: `modules/storage/internal/service/viewbuilder/record_test.go`
+- Modify: `modules/storage/internal/service/viewbuilder/options.go`
+- Modify: `modules/storage/internal/service/viewbuilder/options_test.go`
+- Create: `modules/storage/internal/service/viewindex/batch_write.go`
+- Create: `modules/storage/internal/service/viewindex/batch_write_test.go`
 - Modify: `modules/storage/internal/observability/view_metrics.go`
 - Modify: `modules/storage/internal/observability/view_metrics_test.go`
 
@@ -665,7 +665,7 @@ write_timeout: 10s
 
 `rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。正常 MERGE 只输出本次变更来源拥有的 View 列；缺行恢复、回填和重建才读取所有 ViewColumn 来源并输出完整列集合。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。
 
-不创建独立 `viewrow` 包。ViewBuilder 和 ViewIndex 之间统一使用 ViewIndex 所拥有的 `viewindex.RowKey`、`viewindex.RowWrite`、`viewindex.BatchWrite` 写入契约；本任务先在现有 `internal/core/viewindex` 中建立这些类型，Task 13 再随整个 ViewIndex 契约原子移动到 `internal/service/viewindex`。RowMapper 只负责生成稳定 Key 和完整列集合，ViewBuilder 再将其包装为 UPSERT/DELETE RowWrite；这些类型不得包含事实回读、Filter 或 RowMapper 流程。
+不创建独立 `viewrow` 包。ViewBuilder 和 ViewIndex 之间统一使用 ViewIndex 所拥有的 `viewindex.RowKey`、`viewindex.RowWrite`、`viewindex.BatchWrite` 写入契约；本任务先在现有 `internal/service/viewindex` 中建立这些类型，Task 13 再随整个 ViewIndex 契约原子移动到 `internal/service/viewindex`。RowMapper 只负责生成稳定 Key 和完整列集合，ViewBuilder 再将其包装为 UPSERT/DELETE RowWrite；这些类型不得包含事实回读、Filter 或 RowMapper 流程。
 
 - [ ] **Step 8: ACK/NAK 必须等待持久化结果**
 
@@ -676,39 +676,39 @@ JetStream Handler 为每条输入消息保留完成通知；EventBatcher 可以�
 - [ ] **Step 9: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/core/viewindex ./internal/service/view/builder/... ./internal/service/viewindex ./internal/observability)
-git add modules/storage/internal/core/viewindex modules/storage/internal/service/view modules/storage/internal/service/viewindex
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/viewindex ./internal/service/viewbuilder/... ./internal/service/viewindex ./internal/observability)
+git add modules/storage/internal/service/viewindex modules/storage/internal/service/dataview modules/storage/internal/service/viewindex
 git commit -m "refactor(storage): batch and serialize view refreshes"
 ```
 
 ### Task 8: 统一 DuckDB/Bleve BatchWrite、范围和 Checkpoint
 
 **Files:**
-- Modify: `modules/storage/internal/core/viewindex/engine.go`
-- Modify: `modules/storage/internal/core/viewindex/batch_write.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_write.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_schema.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_lifecycle.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/index_manager.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index.go`
+- Modify: `modules/storage/internal/service/viewindex/engine.go`
+- Modify: `modules/storage/internal/service/viewindex/batch_write.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_write.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_schema.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_lifecycle.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/index_manager.go`
+- Modify: `modules/storage/internal/service/viewindex/bleve/index.go`
 - Modify: `modules/storage/internal/service/viewindex/service.go`
 - Modify: `modules/storage/internal/service/viewindex/client.go`
-- Modify: `modules/storage/internal/service/view/builder/options.go`
-- Modify: `modules/storage/internal/service/view/builder/time_series.go`
-- Modify: `modules/storage/internal/service/view/builder/record.go`
-- Modify: `modules/storage/internal/service/view/maintenance.go`
-- Modify: `modules/storage/internal/service/view/search/service.go`
+- Modify: `modules/storage/internal/service/viewbuilder/options.go`
+- Modify: `modules/storage/internal/service/viewbuilder/time_series.go`
+- Modify: `modules/storage/internal/service/viewbuilder/record.go`
+- Modify: `modules/storage/internal/service/dataview/maintenance.go`
+- Modify: `modules/storage/internal/service/dataview/search/service.go`
 - Modify: `modules/storage/proto/view_index.proto`
 - Modify: `modules/storage/proto/metadata.proto`
 - Regenerate: `modules/storage/proto/storagegen/*`
 - Modify: `modules/storage/schema/metadata.sql`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view_index.go`
-- Modify: `modules/storage/internal/core/viewindex/engine_test.go`
-- Modify: `modules/storage/internal/core/viewindex/batch_write_test.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/index_manager_test.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
+- Modify: `modules/storage/internal/service/viewindex/engine_test.go`
+- Modify: `modules/storage/internal/service/viewindex/batch_write_test.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_test.go`
+- Modify: `modules/storage/internal/service/viewindex/duckdb/index_manager_test.go`
+- Modify: `modules/storage/internal/service/viewindex/bleve/index_test.go`
 - Modify: `modules/storage/internal/service/viewindex/service_test.go`
 
 - [ ] **Step 1: 定义 BatchWrite 写入契约**
@@ -806,7 +806,7 @@ updated_at
 
 ```bash
 make proto
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./internal/core/viewindex ./internal/infra/device/duckdb ./internal/infra/device/bleve ./internal/service/view/... ./internal/service/viewindex)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./internal/service/viewindex ./internal/service/viewindex/duckdb ./internal/service/viewindex/bleve ./internal/service/dataview/... ./internal/service/viewindex)
 git add modules/storage
 git commit -m "fix(storage): unify view index materialization semantics"
 ```
@@ -818,20 +818,20 @@ git commit -m "fix(storage): unify view index materialization semantics"
 - Modify: `modules/storage/proto/view.proto`
 - Modify: `modules/storage/proto/view_index.proto`
 - Modify: `modules/storage/proto/store.proto`
-- Modify: `modules/storage/internal/service/primary/service.go`
-- Modify: `modules/storage/internal/service/primary/local.go`
-- Modify: `modules/storage/internal/service/primary/remote.go`
-- Modify: `modules/storage/internal/service/view/maintenance.go`
-- Modify: `modules/storage/internal/service/view/service.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view_index.go`
-- Modify: `modules/storage/internal/service/primary/service_test.go`
-- Modify: `modules/storage/internal/service/primary/local_test.go`
-- Modify: `modules/storage/internal/service/primary/remote_test.go`
-- Modify: `modules/storage/internal/service/view/maintenance_test.go`
-- Modify: `modules/storage/internal/service/view/service_test.go`
+- Modify: `modules/storage/internal/service/datashard/service.go`
+- Modify: `modules/storage/internal/service/datashard/local.go`
+- Modify: `modules/storage/internal/service/datashard/remote.go`
+- Modify: `modules/storage/internal/service/dataview/maintenance.go`
+- Modify: `modules/storage/internal/service/dataview/service.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
+- Modify: `modules/storage/internal/service/datashard/service_test.go`
+- Modify: `modules/storage/internal/service/datashard/local_test.go`
+- Modify: `modules/storage/internal/service/datashard/remote_test.go`
+- Modify: `modules/storage/internal/service/dataview/maintenance_test.go`
+- Modify: `modules/storage/internal/service/dataview/service_test.go`
 - Modify: `modules/storage/internal/service/viewindex/service_test.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
 
 - [ ] **Step 1: 删除旧 Coverage 字段**
 
@@ -866,7 +866,7 @@ TimeSeries/Record 查询响应增加 `served_range` 和 `complete`。成功响�
 - [ ] **Step 7: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./internal/service/view/... ./internal/service/viewindex ./internal/infra/metadata/sqlite)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./internal/service/dataview/... ./internal/service/viewindex ./internal/service/metadata/sqlite)
 git add modules/storage
 git commit -m "fix(storage): enforce materialized view ranges"
 ```
@@ -877,21 +877,21 @@ git commit -m "fix(storage): enforce materialized view ranges"
 - Modify: `modules/storage/proto/access.proto`
 - Modify: `modules/storage/proto/common.proto`
 - Modify: `modules/storage/proto/metadata.proto`
-- Modify: `modules/storage/internal/core/schema/validator.go`
-- Modify: `modules/storage/internal/core/schema/validator_test.go`
-- Modify: `modules/storage/internal/service/access/validate.go`
-- Modify: `modules/storage/internal/service/access/validate_test.go`
-- Modify: `modules/storage/internal/service/access/errors.go`
-- Rename: `modules/storage/internal/core/response/` -> `modules/storage/internal/retinfo/`
+- Modify: `modules/storage/internal/service/primarystore/schema/validator.go`
+- Modify: `modules/storage/internal/service/primarystore/schema/validator_test.go`
+- Modify: `modules/storage/internal/service/primarystore/validate.go`
+- Modify: `modules/storage/internal/service/primarystore/validate_test.go`
+- Modify: `modules/storage/internal/service/primarystore/errors.go`
+- Rename: `modules/storage/internal/retinfo/` -> `modules/storage/internal/retinfo/`
 - Modify: `modules/storage/internal/retinfo/retinfo.go`
 - Modify: `modules/storage/internal/retinfo/retinfo_test.go`
-- Modify: `modules/storage/internal/service/primary/remote.go`
-- Modify: `modules/storage/internal/service/primary/remote_test.go`
+- Modify: `modules/storage/internal/service/datashard/remote.go`
+- Modify: `modules/storage/internal/service/datashard/remote_test.go`
 - Modify: `modules/storage/internal/bootstrap/metadata/seed.go`
 - Modify: `modules/storage/internal/bootstrap/metadata/seed_test.go`
 - Modify: `modules/storage/config/metadata.seed.yaml`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_dataset.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_dataset.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
 - Modify: `modules/storage/schema/metadata.sql`
 - Modify: `modules/cli/internal/command/storage_import.go`
 - Modify: `modules/collector/internal/sources/binance/storage_rpc.go`
@@ -945,7 +945,7 @@ Required 列在合并后的完整行上校验，不能被 Null 或 Remove。
 - [ ] **Step 6: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/core/schema ./internal/retinfo ./internal/service/access ./internal/service/primary ./internal/infra/metadata/sqlite)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/primarystore/schema ./internal/retinfo ./internal/service/primarystore ./internal/service/datashard ./internal/service/metadata/sqlite)
 bash scripts/test-storage-consistency-contract.sh
 pnpm --dir web exec vitest run src/views/data/fields/field-workbench.test.ts src/views/data/metadata-catalog.test.ts
 pnpm --dir web exec eslint . --max-warnings=0
@@ -961,15 +961,15 @@ Expected: Stage A 的全部 Contract Subtest 通过；此时把 `test-storage-co
 
 **Files:**
 - Modify: `modules/storage/proto/metadata.proto`
-- Modify: `modules/storage/internal/core/router/resolver.go`
-- Modify: `modules/storage/internal/core/router/resolver_test.go`
-- Modify: `modules/storage/internal/service/access/metadata_infra.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_store.go`
+- Modify: `modules/storage/internal/service/primarystore/shardrouter/resolver.go`
+- Modify: `modules/storage/internal/service/primarystore/shardrouter/resolver_test.go`
+- Modify: `modules/storage/internal/service/primarystore/metadata_infra.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_store.go`
 - Modify: `modules/storage/schema/metadata.sql`
 - Modify: `modules/storage/config/metadata.seed.yaml`
 - Modify: `modules/storage/internal/bootstrap/metadata/seed.go`
 - Modify: `modules/storage/internal/bootstrap/metadata/seed_test.go`
-- Modify: `modules/storage/internal/service/access/metadata_infra_test.go`
+- Modify: `modules/storage/internal/service/primarystore/metadata_infra_test.go`
 
 - [ ] **Step 1: 显式建模 Shard**
 
@@ -994,7 +994,7 @@ Metadata 保存 Dataset 的 `topology_hash` 和 `topology_locked_at`。PrimarySt
 - [ ] **Step 6: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/core/router ./internal/service/access ./internal/infra/metadata/sqlite)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/primarystore/shardrouter ./internal/service/primarystore ./internal/service/metadata/sqlite)
 git add modules/storage examples
 git commit -m "fix(storage): lock dataset shard placement"
 ```
@@ -1002,21 +1002,21 @@ git commit -m "fix(storage): lock dataset shard placement"
 ### Task 12: 修复 Metadata 真分页、缓存和时间戳
 
 **Files:**
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_helpers.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_dataset.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_field_group.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_space.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_store.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_subject.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view_index.go`
-- Modify: `modules/storage/internal/infra/metadata/cache/store.go`
-- Modify: `modules/storage/internal/infra/metadata/cache/store_test.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/store.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_helpers.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_dataset.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_field_group.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_space.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_store.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_subject.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
+- Modify: `modules/storage/internal/service/metadata/cache/store.go`
+- Modify: `modules/storage/internal/service/metadata/cache/store_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/store.go`
 - Modify: `modules/storage/schema/metadata.sql`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/store_test.go`
-- Modify: `modules/storage/internal/service/access/service_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/store_test.go`
+- Modify: `modules/storage/internal/service/primarystore/service_test.go`
 
 - [ ] **Step 1: SQL 层完成真实分页**
 
@@ -1045,7 +1045,7 @@ CRUD 成功后只更新/失效受影响实体和二级索引。禁止每次写�
 - [ ] **Step 7: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/infra/metadata/sqlite ./internal/infra/metadata/cache ./internal/service/access)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/metadata/sqlite ./internal/service/metadata/cache ./internal/service/primarystore)
 git add modules/storage
 git commit -m "perf(storage): bound metadata queries and cache"
 ```
@@ -1057,32 +1057,32 @@ git commit -m "perf(storage): bound metadata queries and cache"
 - Rename: `modules/storage/proto/store.proto` -> `modules/storage/proto/data_shard.proto`
 - Rename: `modules/storage/proto/view.proto` -> `modules/storage/proto/data_view.proto`
 - Split: `modules/storage/proto/metadata.proto` into focused metadata Proto files
-- Rename: `modules/storage/internal/service/access/` -> split `metadata/` and `primarystore/`
-- Rename: `modules/storage/internal/service/primary/` -> `datashard/`
-- Rename: `modules/storage/internal/service/view/` -> `dataview/` plus `viewbuilder/`
-- Rename: `modules/storage/internal/service/view/builder/access_reader.go` -> `modules/storage/internal/service/viewbuilder/source_reader.go`
-- Move: `modules/storage/internal/service/view/remote_metadata.go` -> `modules/storage/internal/service/dataview/remote_metadata.go`
+- Rename: `modules/storage/internal/service/primarystore/` -> split `metadata/` and `primarystore/`
+- Rename: `modules/storage/internal/service/datashard/` -> `datashard/`
+- Rename: `modules/storage/internal/service/dataview/` -> `dataview/` plus `viewbuilder/`
+- Rename: `modules/storage/internal/service/viewbuilder/access_reader.go` -> `modules/storage/internal/service/viewbuilder/source_reader.go`
+- Move: `modules/storage/internal/service/dataview/remote_metadata.go` -> `modules/storage/internal/service/dataview/remote_metadata.go`
 - Consolidate: `modules/storage/internal/service/viewindex/` as final `viewindex/`
-- Rename: `modules/storage/internal/core/factkey/` -> `modules/storage/internal/rowkey/`
-- Split: `modules/storage/internal/core/factvalue/` -> `modules/storage/internal/typedvalue/` plus owner-local helpers
+- Rename: `modules/storage/internal/rowkey/` -> `modules/storage/internal/rowkey/`
+- Split: `modules/storage/internal/typedvalue/` -> `modules/storage/internal/typedvalue/` plus owner-local helpers
 - Keep: `modules/storage/internal/retinfo/` as the single error-code and RPC RetInfo package established by Task 10
-- Move: `modules/storage/internal/core/schema/` -> `modules/storage/internal/service/primarystore/schema/`
-- Move: `modules/storage/internal/core/router/` -> `modules/storage/internal/service/primarystore/shardrouter/`
-- Move: `modules/storage/internal/core/metadata/store.go` -> `modules/storage/internal/service/metadata/contracts.go`
-- Move: `modules/storage/internal/core/viewindex/engine.go` -> `modules/storage/internal/service/viewindex/engine.go`
-- Move: `modules/storage/internal/core/viewindex/engine_test.go` -> `modules/storage/internal/service/viewindex/engine_test.go`
-- Move: `modules/storage/internal/core/viewindex/path.go` -> `modules/storage/internal/service/viewindex/path.go`
-- Move: `modules/storage/internal/core/viewindex/path_test.go` -> `modules/storage/internal/service/viewindex/path_test.go`
-- Move: `modules/storage/internal/core/viewindex/batch_write.go` -> `modules/storage/internal/service/viewindex/batch_write.go`
-- Move: `modules/storage/internal/core/viewindex/batch_write_test.go` -> `modules/storage/internal/service/viewindex/batch_write_test.go`
-- Delete: `modules/storage/internal/core/eventbus/` after replacing it with DataShard `MessagePublisher`, ViewBuilder `EventConsumer`, and owner-local test fakes
+- Move: `modules/storage/internal/service/primarystore/schema/` -> `modules/storage/internal/service/primarystore/schema/`
+- Move: `modules/storage/internal/service/primarystore/shardrouter/` -> `modules/storage/internal/service/primarystore/shardrouter/`
+- Move: `modules/storage/internal/service/metadata/store.go` -> `modules/storage/internal/service/metadata/contracts.go`
+- Move: `modules/storage/internal/service/viewindex/engine.go` -> `modules/storage/internal/service/viewindex/engine.go`
+- Move: `modules/storage/internal/service/viewindex/engine_test.go` -> `modules/storage/internal/service/viewindex/engine_test.go`
+- Move: `modules/storage/internal/service/viewindex/path.go` -> `modules/storage/internal/service/viewindex/path.go`
+- Move: `modules/storage/internal/service/viewindex/path_test.go` -> `modules/storage/internal/service/viewindex/path_test.go`
+- Move: `modules/storage/internal/service/viewindex/batch_write.go` -> `modules/storage/internal/service/viewindex/batch_write.go`
+- Move: `modules/storage/internal/service/viewindex/batch_write_test.go` -> `modules/storage/internal/service/viewindex/batch_write_test.go`
+- Delete: `modules/storage/internal/service/viewbuilder/eventconsumer/` after replacing it with DataShard `MessagePublisher`, ViewBuilder `EventConsumer`, and owner-local test fakes
 - Delete: `modules/storage/internal/core/` after all remaining packages have moved to their final owners
-- Move: `modules/storage/internal/infra/metadata/sqlite/` -> `modules/storage/internal/service/metadata/sqlite/`
-- Move: `modules/storage/internal/infra/metadata/cache/` -> `modules/storage/internal/service/metadata/cache/`
-- Move: `modules/storage/internal/infra/device/pebble/` -> `modules/storage/internal/service/datashard/pebble/`
-- Move: `modules/storage/internal/infra/device/duckdb/` -> `modules/storage/internal/service/viewindex/duckdb/`
-- Move: `modules/storage/internal/infra/device/bleve/` -> `modules/storage/internal/service/viewindex/bleve/`
-- Move: `modules/storage/internal/infra/eventbus/` -> `modules/storage/internal/service/datashard/messagepublisher/`
+- Move: `modules/storage/internal/service/metadata/sqlite/` -> `modules/storage/internal/service/metadata/sqlite/`
+- Move: `modules/storage/internal/service/metadata/cache/` -> `modules/storage/internal/service/metadata/cache/`
+- Move: `modules/storage/internal/service/datashard/pebble/` -> `modules/storage/internal/service/datashard/pebble/`
+- Move: `modules/storage/internal/service/viewindex/duckdb/` -> `modules/storage/internal/service/viewindex/duckdb/`
+- Move: `modules/storage/internal/service/viewindex/bleve/` -> `modules/storage/internal/service/viewindex/bleve/`
+- Move: `modules/storage/internal/service/viewbuilder/eventconsumer/` -> `modules/storage/internal/service/datashard/messagepublisher/`
 - Move: Storage RowsChanged consumer adapter -> `modules/storage/internal/service/viewbuilder/eventconsumer/`
 - Move: `modules/storage/internal/bootstrap/eventbus/` assembly -> focused files under `modules/storage/cmd/server/`
 - Regenerate: `modules/storage/proto/storagegen/*`
@@ -1194,12 +1194,11 @@ git commit -m "refactor(storage): establish final service boundaries"
 
 **Files:**
 - Delete: `modules/storage/internal/service/archive/`
-- Delete: `modules/storage/internal/infra/device/parquet/`
-- Delete: `modules/storage/internal/infra/device/store.go`
-- Delete: `modules/storage/internal/infra/device/` after engine moves leave it empty
-- Delete: `modules/storage/internal/infra/metadata/` after Metadata moves leave it empty
-- Delete: `modules/storage/internal/infra/eventbus/` after adapters move leave it empty
-- Delete: `modules/storage/internal/infra/` after all live owners move and dead implementations are removed
+- Delete: `modules/storage/internal/service/archive/parquet/`
+- Delete: the obsolete `datashard/device` path after the engine move leaves it empty
+- Delete: `modules/storage/internal/service/metadata/` after Metadata moves leave it empty
+- Delete: `modules/storage/internal/service/viewbuilder/eventconsumer/` after adapters move leave it empty
+- Delete: `modules/storage/internal/service/` after all live owners move and dead implementations are removed
 - Verify absent: `modules/storage/internal/core/` after Task 13 moved all owner-specific and shared packages
 - Delete: `modules/storage/core`
 - Modify: `modules/storage/proto/shard_metadata.proto`

@@ -55,8 +55,8 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		AdminGatewayURL:       defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceGatewayTarget:  defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceAuth:           cfg.SysDeploy.ServiceAuth,
-		StorageMetadataTarget: cfg.Storage.MetadataTarget,
-		StoragePrimaryTarget:  cfg.Storage.PrimaryTarget,
+		StorageMetadataTarget: cfg.Storage.GatewayTarget,
+		StoragePrimaryTarget:  cfg.Storage.GatewayTarget,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -68,13 +68,14 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	if v := endpointAddress(active, "moox_cloudnode", "cloudnode"); v != "" {
 		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
 	}
-	// Prefer the loopback service gateway for co-located processes. The public
-	// gateway may resolve to the host's external address, which is intentionally
-	// rejected by the service gateway transport to prevent SSRF-style routing.
-	if v := endpointGatewayTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
+	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
 		deps.ServiceGatewayTarget = v
 	}
-	if v := endpointTRPCTarget(active, "storage-primary"); v != "" {
+	// Storage clients use the native tRPC listener, never the public HTTP
+	// gateway endpoint. A deployment without a native target leaves the local
+	// gateway configuration intact rather than silently falling back to a
+	// physical Storage listener.
+	if v := endpointTRPCTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
 		deps.StorageMetadataTarget = v
 		deps.StoragePrimaryTarget = v
 	}

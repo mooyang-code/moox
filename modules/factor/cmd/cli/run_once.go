@@ -17,7 +17,7 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -46,14 +46,19 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 
 	appCfg := bootstrap.Default()
 	auth := serviceAuth()
-	metaProxy := storagepb.NewMetadataClientProxy(client.WithTarget(storageio.NormalizeStorageTarget(appCfg.Storage.MetadataTarget, "20100")))
+	credentials, err := gatewayauth.ResolveCredentials(appCfg.Storage.KeyID, appCfg.Storage.HMACKeyFile)
+	if err != nil {
+		return err
+	}
+	metaTarget := gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(appCfg.Storage.GatewayTarget, "11003"))
+	metaProxy := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(metaTarget, appCfg.Storage.GatewayNodeID, credentials)...)
 	syncer := registry.NewMetadataSync(metadataAdapter{proxy: metaProxy}, auth)
 	if err := syncer.SyncResultDataset(ctx, cfg.SpaceID, cfg.DatasetID, cfg.Freq, factors); err != nil {
 		return err
 	}
 
 	task := buildTask(cfg, factors)
-	storageClient := storageio.NewClient(appCfg.Storage.PrimaryTarget, auth)
+	storageClient := storageio.NewClientWithCredentials(appCfg.Storage.GatewayTarget, appCfg.Storage.GatewayNodeID, credentials, auth)
 	frame, err := storageClient.ReadWindow(ctx, storageio.WindowKey{
 		SpaceID:       cfg.SpaceID,
 		SourceDataset: cfg.DatasetID,

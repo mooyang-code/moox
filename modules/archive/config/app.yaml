@@ -23,8 +23,10 @@ archive:
     row_group_rows: 65536
     shutdown_timeout: 2m
   storage_rpc:
-    access_target: ip://127.0.0.1:20102
-    metadata_target: ip://127.0.0.1:20100
+    gateway_target: ip://127.0.0.1:11003
+    gateway_node_id: ""
+    key_id: archive
+    hmac_key_file: ""
   cos:
     enabled: false
     region: ""

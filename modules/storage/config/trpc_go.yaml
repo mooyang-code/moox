@@ -49,6 +49,11 @@ server:
       port: 20101
       network: tcp # 注意：若是多机分布式部署，此处应改为tcp（单机也可设置tcp，只是unix域套接字本机通信效率更高）
       protocol: trpc
+    - name: trpc.moox.storage.DataShard
+      ip: 127.0.0.1
+      port: 20106
+      network: tcp
+      protocol: trpc
     - name: trpc.moox.storage.Metadata.trpc
       ip: 127.0.0.1
       port: 20100

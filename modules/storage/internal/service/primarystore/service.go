@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/schema"
-	metacache "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/cache"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datashard/messagepublisher"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/schema"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/shardrouter"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -25,16 +25,16 @@ import (
 // Service 实现元数据、写入、权威读取和视图查询入口。
 type Service struct {
 	root              string
-	parquetPath       string
 	metadata          metadata.Store
 	metadataReader    metadata.Reader
 	metadataCache     *metacache.Store
 	validator         *schema.Validator
 	router            *router.Resolver
 	primary           primary.Client
-	events            eventbus.Publisher
+	events            messagepublisher.Publisher
 	report            ViewErrorReporter
 	cleanupDeleteRows func(context.Context, *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error)
+	topologyMu        sync.Mutex
 	recordVersionMu   sync.Mutex
 	lastRecordVersion time.Time
 }
@@ -73,7 +73,7 @@ func NewServiceWithOptions(opts Options) *Service {
 	}
 	events := opts.Events
 	if events == nil {
-		events = eventbus.NewMemoryBus()
+		events = messagepublisher.NewMemoryBus()
 	}
 	reporter := opts.ViewErrors
 	if reporter == nil {
@@ -81,7 +81,6 @@ func NewServiceWithOptions(opts Options) *Service {
 	}
 	svc := &Service{
 		root:           root,
-		parquetPath:    opts.ParquetPath,
 		metadata:       meta,
 		metadataReader: reader,
 		metadataCache:  cacheReader,
@@ -217,5 +216,5 @@ func logViewError(ctx context.Context, stage string, err error) {
 	if err == nil {
 		return
 	}
-	log.WarnContextf(ctx, "[StorageAccess] view stage %s failed: %v", stage, err)
+	log.WarnContextf(ctx, "[StoragePrimary] view stage %s failed: %v", stage, err)
 }

@@ -110,9 +110,6 @@ func TestStorageConfigApplyHomeRootRebasesDefaultPaths(t *testing.T) {
 	if cfg.Storage.Devices.PebblePath != "/data/moox/storage/pebble" {
 		t.Fatalf("Devices.PebblePath = %q", cfg.Storage.Devices.PebblePath)
 	}
-	if cfg.Storage.Devices.ParquetPath != "/data/moox/storage/archive" {
-		t.Fatalf("Devices.ParquetPath = %q", cfg.Storage.Devices.ParquetPath)
-	}
 }
 
 func TestStorageConfigApplyHomeRootKeepsAbsoluteCustomPaths(t *testing.T) {
@@ -145,7 +142,6 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 		Devices: StorageDevices{
 			PebblePath:    "/old/storage/pebble",
 			ViewIndexRoot: "/old/storage/view-indexes",
-			ParquetPath:   "/old/storage/archive",
 		},
 		EventBus: StorageEventBus{
 			Embedded: StorageEmbeddedEventBus{
@@ -164,9 +160,6 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 	}
 	if cfg.Devices.PebblePath != "/new/storage/pebble" {
 		t.Fatalf("Devices.PebblePath = %q", cfg.Devices.PebblePath)
-	}
-	if cfg.Devices.ParquetPath != "/new/storage/archive" {
-		t.Fatalf("Devices.ParquetPath = %q", cfg.Devices.ParquetPath)
 	}
 	if cfg.EventBus.Embedded.StoreDir != "/new/storage/nats" {
 		t.Fatalf("EventBus.Embedded.StoreDir = %q", cfg.EventBus.Embedded.StoreDir)

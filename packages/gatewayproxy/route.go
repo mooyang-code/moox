@@ -91,7 +91,7 @@ func ValidateRoute(route Route) error {
 	if route.MaxBodyBytes < 0 || route.MaxBodyBytes > maxMaxBodyBytes {
 		return fmt.Errorf("max_body_bytes must be between 1 and %d, or zero for the default", maxMaxBodyBytes)
 	}
-	if route.ServiceID == "storage" {
+	if route.ServiceID == "storage" || route.ServiceID == "storage-primary" || route.ServiceID == "storage-view" {
 		if len(route.AllowedMethods) == 0 {
 			return fmt.Errorf("storage route requires a nonempty allowed_methods list")
 		}
@@ -155,11 +155,22 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 		}
 	}
 	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].ServiceID == normalized[j].ServiceID {
+			return normalized[i].ServicePath < normalized[j].ServicePath
+		}
 		return normalized[i].ServiceID < normalized[j].ServiceID
 	})
 	for index := 1; index < len(normalized); index++ {
 		if normalized[index-1].ServiceID == normalized[index].ServiceID {
-			return Snapshot{}, fmt.Errorf("duplicate service_id %q", normalized[index].ServiceID)
+			left, right := normalized[index-1], normalized[index]
+			if len(left.AllowedMethods) == 0 || len(right.AllowedMethods) == 0 {
+				return Snapshot{}, fmt.Errorf("duplicate service_id %q requires method allowlists", left.ServiceID)
+			}
+			for _, method := range left.AllowedMethods {
+				if right.AllowsMethod(method) {
+					return Snapshot{}, fmt.Errorf("duplicate service_id %q method %q", left.ServiceID, method)
+				}
+			}
 		}
 	}
 	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Disabled: disabled, Routes: normalized})

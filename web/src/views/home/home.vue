@@ -560,7 +560,7 @@ const taskPulse = [
 const visibleDeployments = computed(() => {
   const fallback = [
     { name: "admin-gateway", status: "active", addr: "same-origin", tone: "ok" },
-    { name: "storage-access", status: "active", addr: ":20201", tone: "ok" },
+    { name: "storage-primary", status: "active", addr: ":20201", tone: "ok" },
     { name: "collector", status: "active", addr: ":11402", tone: "ok" },
     { name: "cloudnode", status: "active", addr: ":11401", tone: "ok" },
     { name: "trade", status: "watch", addr: ":11200", tone: "warn" }

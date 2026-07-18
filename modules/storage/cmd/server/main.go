@@ -9,9 +9,9 @@ import (
 
 	bootstrapeventbus "github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
+	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
@@ -86,11 +86,11 @@ func main() {
 			}
 		}()
 	}
-	accessReader := accessReaderForRuntime(cfg.Storage, storageService)
+	sourceReader := sourceReaderForRuntime(cfg.Storage, storageService)
 
 	if cfg.Storage.HasRole("primary") {
 		if storageService == nil {
-			exitWithStartupError("access role requires storage service", nil)
+			exitWithStartupError("primary role requires storage service", nil)
 		}
 		pb.RegisterMetadataService(s, storageService)
 		pb.RegisterPrimaryStoreService(s, storageService)
@@ -103,7 +103,7 @@ func main() {
 	var runtimeView *viewRuntime
 	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
 		var err error
-		runtimeView, err = registerViewRole(s, cfg.Storage, rowsCommittedBus, storageService, accessReader)
+		runtimeView, err = registerViewRole(s, cfg.Storage, rowsCommittedBus, storageService, sourceReader)
 		if err != nil {
 			exitWithStartupError("初始化 ViewService 失败", err)
 		}
@@ -143,7 +143,11 @@ func main() {
 				log.Errorf("关闭 primary service 失败: %v", err)
 			}
 		}()
-		pb.RegisterDataShardService(s, primaryService)
+		dataShardService := s.Service("trpc.moox.storage.DataShard")
+		if dataShardService == nil {
+			exitWithStartupError("DataShard service listener is not configured", nil)
+		}
+		pb.RegisterDataShardService(dataShardService, primaryService)
 	}
 	if err := registerStorageHealth(s, cfg.Storage, storageHealthDependencies{
 		eventbus: rowsCommittedBus,
@@ -177,12 +181,8 @@ func registerStorageMetricsReporter(s *server.Server, storage storageconfig.Stor
 	switch {
 	case storage.HasRole("primary") && !storage.HasRole("view"):
 		serviceName = "storage_primary_trpc"
-	case storage.HasRole("view_index") && !storage.HasRole("primary"):
-		serviceName, timerName = "storage_view_index", "trpc.moox.storage.view_index.metrics.timer"
-	case storage.HasRole("view_builder") && !storage.HasRole("primary"):
-		serviceName, timerName = "storage_view_builder", "trpc.moox.storage.view_builder.metrics.timer"
-	case storage.HasRole("view_query") && !storage.HasRole("primary"):
-		serviceName, timerName = "storage_view_query", "trpc.moox.storage.view_query.metrics.timer"
+	case storage.HasRole("shard"):
+		serviceName, timerName = "storage-shard", "trpc.moox.storage.shard.metrics.timer"
 	case storage.HasRole("view") && !storage.HasRole("primary"):
 		serviceName, timerName = "storage_view", "trpc.moox.storage.view.metrics.timer"
 	}

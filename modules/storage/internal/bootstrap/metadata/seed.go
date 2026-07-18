@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"gopkg.in/yaml.v2"
 )

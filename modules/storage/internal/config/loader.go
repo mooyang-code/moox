@@ -43,7 +43,6 @@ type StorageMetadata struct {
 type StorageDevices struct {
 	PebblePath    string `yaml:"pebble_path"`
 	ViewIndexRoot string `yaml:"view_index_root"`
-	ParquetPath   string `yaml:"parquet_path"`
 }
 
 // StorageEventBus 保存事件总线传输配置。
@@ -86,6 +85,14 @@ type StorageView struct {
 	BatchWaitMS                 int                    `yaml:"batch_wait_ms"`
 	MaxWorkers                  int                    `yaml:"max_workers"`
 	Maintenance                 StorageViewMaintenance `yaml:"maintenance"`
+	StorageRPC                  StorageRPCConfig       `yaml:"storage_rpc"`
+}
+
+type StorageRPCConfig struct {
+	GatewayTarget string `yaml:"gateway_target"`
+	GatewayNodeID string `yaml:"gateway_node_id"`
+	KeyID         string `yaml:"key_id"`
+	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 type StorageViewMaintenance struct {
@@ -203,6 +210,12 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.Primary.ShardID == "" {
 		c.Primary.ShardID = "storage-primary-0"
 	}
+	if c.View.StorageRPC.GatewayTarget == "" {
+		c.View.StorageRPC.GatewayTarget = "ip://127.0.0.1:11003"
+	}
+	if c.View.StorageRPC.KeyID == "" {
+		c.View.StorageRPC.KeyID = "storage-view"
+	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
 	}
@@ -211,9 +224,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Devices.ViewIndexRoot == "" {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
-	}
-	if c.Devices.ParquetPath == "" {
-		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
 	}
 	cleanup := &c.Maintenance.HostMetricsCleanup
 	if cleanup.Enabled == nil {
@@ -432,7 +442,6 @@ func (c *StorageConfig) ApplyHomeRoot(root string) {
 	c.Metadata.Path = rebaseStoragePath(c.Metadata.Path, oldRoot, root, filepath.Join("metadata", "storage_metadata.db"))
 	c.Devices.PebblePath = rebaseStoragePath(c.Devices.PebblePath, oldRoot, root, "pebble")
 	c.Devices.ViewIndexRoot = rebaseStoragePath(c.Devices.ViewIndexRoot, oldRoot, root, "view-indexes")
-	c.Devices.ParquetPath = rebaseStoragePath(c.Devices.ParquetPath, oldRoot, root, "archive")
 	if c.EventBus.Embedded.StoreDir != "" {
 		c.EventBus.Embedded.StoreDir = rebaseStoragePath(c.EventBus.Embedded.StoreDir, oldRoot, root, "nats")
 	}

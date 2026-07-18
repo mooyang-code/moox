@@ -39,7 +39,7 @@ func storageHealthSnapshot(storage storageconfig.StorageConfig, state *health.St
 		serviceName := storageServiceName(storage)
 		roleSummary := storageRoleSummary(storage)
 		rootReady := storage.Root != "" && pathExists(storage.Root)
-		metadataRequired := roleSummary != "view_index"
+		metadataRequired := roleSummary != "shard"
 		metadataReady := !metadataRequired || (storage.Metadata.Path != "" && pathExists(storage.Metadata.Path))
 		eventbusReady := !needsRowsCommittedBus(storage) || (deps.eventbus != nil && deps.eventbus.Ready())
 		viewRequired := shouldRegisterViewQueryRole(storage) || shouldStartViewBuilderRole(storage) || shouldStartViewIndexRole(storage)
@@ -74,14 +74,10 @@ func pathExists(path string) bool {
 func storageServiceName(storage storageconfig.StorageConfig) string {
 	roleSummary := storageRoleSummary(storage)
 	switch roleSummary {
-	case "view_query":
-		return "storage-view-query"
-	case "view_builder":
-		return "storage-view-builder"
-	case "view_index":
-		return "storage-view-index"
 	case "primary":
 		return "storage-primary"
+	case "shard":
+		return "storage-shard"
 	case "view":
 		return "storage-view"
 	case "access,view":

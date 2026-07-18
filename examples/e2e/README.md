@@ -47,13 +47,13 @@ moox-trade      -> modules/trade/schema
 1. 启动 `moox-admin`，生成新的 `data/admin.db`。
 2. 启动 `moox-cloudnode`，生成新的 cloudnode 数据库。
 3. 启动 `moox-collector`，生成新的 collector 数据库。
-4. 启动 storage metadata/access/primary/view/archive 相关进程。
+4. 启动 `storage-primary` 和 `storage-view`；需要物理分片时另外启动私网 `storage-shard`。
 5. 在管理台创建演示用 Space，例如 `crypto`。
 6. 使用 `moox-cli metadata import` 导入平台拓扑和业务元数据。
 7. 在管理台或通过 cloudnode API 创建云账户、两阶段上传 collector SCF 代码包（`InitPackageUpload` → COS 直传 → `CompletePackageUpload`）、部署云节点。
 8. 在采集规则页面创建规则，由 `moox-collector` 根据 dataset subjects 生成 task instances，并提交给 `moox-cloudnode` 的 JobItem 队列。
 9. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行采集并写入 storage。
-10. 如果 view/archive 需要历史重建，使用 storage view rebuild，而不是依赖事件回放历史。
+10. 如果 View 需要历史重建，执行 ViewBuilder 的 `op=maintain` 维护流程；Archive 由独立 `modules/archive` 服务负责，不通过 Storage View rebuild。
 
 ## Metadata seed 导入
 
@@ -109,12 +109,12 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 
 删除所有运行时数据后，一个最小的端到端演示环境应按下面的边界重建：
 
-1. `moox-admin` 启动后，可以登录管理台并看到 `moox_cloudnode`、`moox_collector`、storage access/metadata/view 等服务部署记录。
-2. `moox-storage` metadata/access/primary/view 进程启动后，导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space。
+1. `moox-admin` 启动后，可以登录管理台并看到 `moox_cloudnode`、`moox_collector`、storage-primary/metadata/view 等服务部署记录。
+2. `moox-storage` 的 `storage-primary` 和 `storage-view` 进程启动后，导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space。
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
 5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；规则根据 `binance_spot_kline_1h` 数据集里的 Subject 生成 task instances。
-6. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行后通过 storage Access RPC 写入 K 线，并通过 `/api/service/collectmgr/ReportTaskStatus` 回写任务状态。
+6. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行后通过 Node Service Gateway 的 Storage PrimaryStore RPC 写入 K 线，并通过 `/api/service/collectmgr/ReportTaskStatus` 回写任务状态。
 7. 通过数据浏览或视图浏览页面确认 `binance_spot_1h_view` 能看到最新现货 K 线。
 
 如果第 7 步没有数据，不要回写 SQLite。按链路依次检查：服务部署地址、SCF 心跳、collector 任务实例、CloudNode JobItem、storage 写入、view rebuild/事件更新。
@@ -143,7 +143,7 @@ examples/metadata-quant-initial.seed.yaml --spaces crypto
 - collector 生成 task instances 且写入 `cloud_job_item_id`；
 - cloudnode JobItems 全部成功；
 - collector task instances 全部成功；
-- storage access 中能扫描到 `binance_spot_kline_1h` 时序 K 线数据。
+- storage-primary 中能扫描到 `binance_spot_kline_1h` 时序 K 线数据。
 
 SCF 步骤从部署目录的 `secrets/gateway-service.env` 读取节点和服务身份，将公开 CA 证书以 `MOOX_GATEWAY_CA_PEM_B64` 传入运行时，并通过独立 Gateway `127.0.0.1:11002` 访问 `/api/service/*`。任一身份或 CA 配置缺失时会在调用前失败，不会打印密钥。
 

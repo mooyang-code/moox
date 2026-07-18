@@ -16,6 +16,9 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/filter"
 )
 
 const (
@@ -37,6 +40,68 @@ func TestServiceRouterProxiesAuthenticatedRequestAndPreservesHeaders(t *testing.
 
 	if recorder.Code != http.StatusCreated || recorder.Header().Get("trpc-ret") != "0" || recorder.Header().Get("X-Trace-Id") != "trace-123" {
 		t.Fatalf("response = %d headers=%v body=%q", recorder.Code, recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestNativeServiceDescUsesWildcardMethod(t *testing.T) {
+	desc, implementation := NativeServiceDesc(NativeOptions{Table: &gatewayproxy.Table{}})
+	if implementation == nil || desc == nil || len(desc.Methods) != 1 || desc.Methods[0].Name != "*" {
+		t.Fatalf("native descriptor = %+v implementation=%T", desc, implementation)
+	}
+}
+
+func TestNativeGatewayAuthenticatesReplaysAndEnforcesRouteBodyLimit(t *testing.T) {
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+		ServiceID: "echo", Address: "127.0.0.1:1", ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, MaxBodyBytes: 1,
+	}})
+	require.NoError(t, err)
+	var table gatewayproxy.Table
+	require.NoError(t, table.Replace(snapshot))
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	require.NoError(t, err)
+	defer nonces.Close()
+	desc, _ := NativeServiceDesc(NativeOptions{
+		NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, Table: &table, Nonces: nonces,
+	})
+	call := func(body []byte, headers http.Header) error {
+		ctx, message := codec.EnsureMessage(context.Background())
+		message.WithServerRPCName("/trpc.test.Echo/Echo")
+		metadata := codec.MetaData{}
+		for key, values := range headers {
+			if len(values) > 0 {
+				metadata[key] = []byte(values[0])
+			}
+		}
+		message.WithServerMetaData(metadata)
+		_, callErr := desc.Methods[0].Func(nil, ctx, func(request interface{}) (filter.ServerChain, error) {
+			request.(*codec.Body).Data = body
+			return filter.ServerChain{}, nil
+		})
+		return callErr
+	}
+	overSizedHeaders, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
+		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Body: []byte("too large"),
+	}, time.Now())
+	require.NoError(t, err)
+	if err := call([]byte("too large"), overSizedHeaders); err == nil || !strings.Contains(err.Error(), "body exceeds route limit") {
+		t.Fatalf("oversized native request error = %v", err)
+	}
+
+	// Use a fresh one-byte body so authentication reaches the upstream call;
+	// the unavailable upstream is expected, while the second delivery must be
+	// rejected by the persistent nonce store before dialing it again.
+	body := []byte("x")
+	signedHeaders, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
+		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Body: body,
+	}, time.Now())
+	require.NoError(t, err)
+	first := call(body, signedHeaders)
+	if first == nil || strings.Contains(first.Error(), "replayed") {
+		t.Fatalf("first native request error = %v, want upstream error", first)
+	}
+	second := call(body, signedHeaders)
+	if second == nil || !strings.Contains(second.Error(), "replayed") {
+		t.Fatalf("replayed native request error = %v", second)
 	}
 }
 

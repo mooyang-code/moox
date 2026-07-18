@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/shardrouter"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,18 +59,18 @@ type recordPrimaryScanner struct {
 	rowsPerPage int
 }
 
-func (r recordPrimaryScanner) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (r recordPrimaryScanner) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
 	return nil
 }
 
-func (r recordPrimaryScanner) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (r recordPrimaryScanner) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 
-func (r recordPrimaryScanner) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
-	rows := make([]*pb.PrimaryStoreRow, r.rowsPerPage)
+func (r recordPrimaryScanner) ScanRows(_ context.Context, _ *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
+	rows := make([]*pb.ShardRow, r.rowsPerPage)
 	for i := range rows {
-		rows[i] = &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{
+		rows[i] = &pb.ShardRow{Key: &pb.ShardKey{
 			SpaceId: "crypto", DatasetId: "news", DataKind: pb.DataKind_DATA_KIND_RECORD,
 			Key: "news-1", Version: "2026-07-11T00:00:00Z",
 		}}

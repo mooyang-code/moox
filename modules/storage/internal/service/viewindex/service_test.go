@@ -3,10 +3,8 @@ package viewindex
 import (
 	"context"
 	"errors"
-	"testing"
-
-	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"testing"
 )
 
 func TestServiceRoutesLifecycleByEngine(t *testing.T) {
@@ -17,7 +15,7 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 		TimeSeries: duck,
 		Records:    bleve,
 	})
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	rsp, err := service.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
 		IndexId: indexID,
 		Engine:  "duckdb",
@@ -57,7 +55,7 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 
 func TestServiceRestartRejectsStaleViewVersionWithSameSchemaHash(t *testing.T) {
 	duck := &fakeManagedEngine{name: "duckdb"}
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	first := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
 	prepared, err := first.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
 		IndexId: indexID,
@@ -92,7 +90,7 @@ func TestServiceRoutesTypedQueries(t *testing.T) {
 		TimeSeries: duck,
 		Records:    bleve,
 	})
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	timeRsp, err := service.QueryTimeSeriesIndex(context.Background(), &pb.QueryTimeSeriesIndexReq{
 		IndexId: indexID,
 		Query:   &pb.QueryTimeSeriesRowsReq{SpaceId: "crypto", Page: &pb.Page{Page: 1, Size: 25}},
@@ -113,7 +111,7 @@ func TestServiceRoutesTypedQueries(t *testing.T) {
 func TestServiceMapsEngineErrorsToRetInfo(t *testing.T) {
 	duck := &fakeManagedEngine{name: "duckdb", err: errors.New("disk full")}
 	service := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}, TimeSeries: duck})
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	rsp, err := service.StatViewIndex(context.Background(), &pb.StatViewIndexReq{IndexId: indexID, Engine: "duckdb"})
 	if err != nil {
 		t.Fatalf("StatViewIndex transport error = %v", err)
@@ -153,30 +151,30 @@ type fakeManagedEngine struct {
 
 func (e *fakeManagedEngine) Engine() string { return e.name }
 
-func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, schema coreviewindex.ViewIndexSchema) error {
+func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, schema ViewIndexSchema) error {
 	e.prepared = indexID
 	e.viewVersion = schema.ViewVersion
 	e.schemaHash = schema.SchemaHash
 	return e.err
 }
 
-func (e *fakeManagedEngine) Write(context.Context, string, coreviewindex.ViewIndexBatch) error {
+func (e *fakeManagedEngine) Write(context.Context, string, BatchWrite) error {
 	return e.err
 }
 
-func (e *fakeManagedEngine) Apply(context.Context, string, coreviewindex.ViewIndexApplyBatch) error {
+func (e *fakeManagedEngine) Apply(context.Context, string, ViewIndexApplyBatch) error {
 	return e.err
 }
 
-func (e *fakeManagedEngine) Stat(context.Context, string) (coreviewindex.ViewIndexStats, error) {
+func (e *fakeManagedEngine) Stat(context.Context, string) (ViewIndexStats, error) {
 	e.statCalls++
-	return coreviewindex.ViewIndexStats{Exists: e.err == nil, ViewVersion: e.viewVersion, EntryCount: 1, SchemaHash: e.schemaHash}, e.err
+	return ViewIndexStats{Exists: e.err == nil, ViewVersion: e.viewVersion, EntryCount: 1, SchemaHash: e.schemaHash}, e.err
 }
 
 func (e *fakeManagedEngine) Remove(context.Context, string) error { return e.err }
 
 func (e *fakeManagedEngine) List(context.Context) ([]string, error) {
-	return []string{coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)}, e.err
+	return []string{ViewIndexID("crypto", "spot", SlotA)}, e.err
 }
 
 func (e *fakeManagedEngine) QueryTimeSeriesRows(context.Context, string, *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, error) {

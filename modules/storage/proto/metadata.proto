@@ -401,7 +401,7 @@ message Device {
   string node_id = 2;
   // name 是设备名称，通常用于管理台展示。
   string name = 3;
-  // engine 是存储引擎，例如 pebble、duckdb、bleve 或 parquet_archive。
+  // engine 是存储引擎，例如 pebble、duckdb 或 bleve。
   string engine = 4;
   // endpoint 是连接地址、文件路径或 URI。
   string endpoint = 5;

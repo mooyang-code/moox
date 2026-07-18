@@ -3,7 +3,7 @@ package primarystore
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -69,25 +69,25 @@ func (s *Service) scanRecordRows(ctx context.Context, spaceID string, datasetID 
 // ViewBuilder processes. Each request reads one bounded PrimaryStore page.
 func (s *Service) ScanTimeSeriesRows(ctx context.Context, req *pb.ScanTimeSeriesRowsReq) (*pb.ScanTimeSeriesRowsRsp, error) {
 	if req.GetSpaceId() == "" || req.GetDatasetId() == "" {
-		return &pb.ScanTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
+		return &pb.ScanTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
 	}
 	rows, page, err := s.scanTimeSeriesRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetTimeRange(), req.GetColumnNames(), req.GetPage())
 	if err != nil {
-		return &pb.ScanTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		return &pb.ScanTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 	}
-	return &pb.ScanTimeSeriesRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: page}, nil
+	return &pb.ScanTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: rows, PageResult: page}, nil
 }
 
 // ScanRecordRows is the record counterpart of ScanTimeSeriesRows.
 func (s *Service) ScanRecordRows(ctx context.Context, req *pb.ScanRecordRowsReq) (*pb.ScanRecordRowsRsp, error) {
 	if req.GetSpaceId() == "" || req.GetDatasetId() == "" {
-		return &pb.ScanRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
+		return &pb.ScanRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errText("space_id and dataset_id are required"))}, nil
 	}
 	rows, page, err := s.scanRecordRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetVersionRange(), req.GetColumnNames(), req.GetPage())
 	if err != nil {
-		return &pb.ScanRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err)}, nil
+		return &pb.ScanRecordRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 	}
-	return &pb.ScanRecordRowsRsp{RetInfo: response.Success("success"), Rows: rows, PageResult: page}, nil
+	return &pb.ScanRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: rows, PageResult: page}, nil
 }
 
 func (r *primaryFactReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {

@@ -4,8 +4,11 @@ system:
   version: "v0.0.3"
   environment: "Production"
   timezone: "UTC"
-  storage_metadata_target: "127.0.0.1:20200" # 本地默认值；SCF 运行时由控制面 keepalive 下发 storage-primary
-  storage_primary_target: "127.0.0.1:20200"   # 本地默认值；SCF 运行时由控制面 keepalive 下发 storage-primary
+  storage_rpc:
+    gateway_target: "ip://127.0.0.1:11003"
+    gateway_node_id: ""
+    key_id: "collector"
+    hmac_key_file: ""
   service_auth:
     target_node: ""
     ca_file: ""

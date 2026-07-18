@@ -224,14 +224,13 @@ const storageConfigTemplate = `
 storage:
   root: %s
   roles:
-    - access
+    - primary
     - view
   metadata:
     path: %s
   devices:
     pebble_path: %s
     view_index_root: %s
-    parquet_path: %s
   primary:
     service_name: ""
   eventbus:

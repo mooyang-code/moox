@@ -1,15 +1,21 @@
 package sysdeploy
 
+import "fmt"
+
 // defaultPublicHost records the current bootstrap deployment host only.
 // New deployments should update public rows through SysDeploy/UI after the admin plane is reachable.
 const defaultPublicHost = "106.53.107.122"
+
+const storageMetadataGatewayMethods = "[\"CreateSpace\",\"UpdateSpace\",\"GetSpace\",\"ListSpaces\",\"CreateView\",\"UpdateView\",\"GetView\",\"ListViews\",\"UpsertViewColumn\",\"ListViewColumns\",\"CreateDataSource\",\"UpdateDataSource\",\"GetDataSource\",\"ListDataSources\",\"UpsertSubject\",\"UpsertSubjectSymbol\",\"RegisterDataSubject\",\"GetSubject\",\"ListSubjects\",\"ListSubjectSymbols\",\"CreateDataset\",\"UpdateDataset\",\"GetDataset\",\"ListDatasets\",\"BindDatasetSubject\",\"ListDatasetSubjects\",\"CreateFieldGroup\",\"UpdateFieldGroup\",\"GetFieldGroup\",\"ListFieldGroups\",\"CreateField\",\"UpdateField\",\"GetField\",\"ListFields\",\"BatchUpdateFields\",\"DeleteFieldGroup\",\"CreateFactor\",\"UpdateFactor\",\"GetFactor\",\"ListFactors\",\"UpsertDatasetColumn\",\"ListDatasetColumns\",\"CreatePrimaryStoreNode\",\"UpdatePrimaryStoreNode\",\"GetPrimaryStoreNode\",\"ListPrimaryStoreNodes\",\"CreatePrimaryStoreRoute\",\"UpdatePrimaryStoreRoute\",\"GetPrimaryStoreRoute\",\"ListPrimaryStoreRoutes\",\"RegisterArchiveFile\",\"ListArchiveFiles\"]"
+const storagePrimaryGatewayMethods = "[\"MergeTimeSeriesRows\",\"ReadTimeSeriesRows\",\"MergeRecordRows\",\"ReadRecordRows\"]"
+const storageViewGatewayMethods = "[\"QueryTimeSeriesRows\",\"SearchRecordRows\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("web_host", "frontend", "https", defaultPublicHost, 9527, "", "public", "Caddy 管理台 HTTPS 页面入口；web-host 上游仅绑定 loopback"), `{"health_url":"http://127.0.0.1:19527/readyz","health_kind":"readiness","monitor_enabled":true}`),
-		withExtra(deployment("storage-primary", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage", "public", "moox-storage PrimaryStore + Metadata 服务"), `{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true}`),
-		withExtra(deployment("storage-view", "storage", "http", defaultPublicHost, 20202, "trpc.moox.storage", "public", "moox-storage DataView + ViewBuilder 服务"), `{"health_url":"http://127.0.0.1:20211/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("storage-primary", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage.Metadata", "public", "moox-storage PrimaryStore + Metadata 服务"), storagePrimaryExtraConfig()),
+		withExtra(deployment("storage-view", "storage", "http", defaultPublicHost, 20202, "trpc.moox.storage.DataView", "public", "moox-storage DataView + ViewBuilder 服务"), storageViewExtraConfig()),
 		deployment("admin_auth", "admin_rpc", "http", "127.0.0.1", 11100, "trpc.moox.infra.Auth", "internal", "认证 RPC 服务"),
 		deployment("dnsproxy", "admin_rpc", "http", "127.0.0.1", 11101, "trpc.moox.infra.Dns", "internal", "DNS 代理 RPC 服务"),
 		withExtra(deployment("moox_monitor", "monitor", "http", "127.0.0.1", 11410, "trpc.moox.monitor.MonitorMgr", "internal", "独立服务监控模块，承载 HTTP/TCP 探测、告警和多实例协同"), `{"health_url":"http://127.0.0.1:11409/readyz","health_kind":"readiness","monitor_enabled":true}`),
@@ -42,6 +48,14 @@ func DefaultDeployments(nodeID string) []Deployment {
 	}
 	for i := range rows {
 		rows[i].NodeID = nodeID
+		switch rows[i].ServiceName {
+		case "storage-primary", "storage-view":
+			// Storage BFF traffic enters the node gateway; keep both independently
+			// deployed storage roles in the route snapshot by default.
+			rows[i].Host = "127.0.0.1"
+			rows[i].GatewayServiceID = rows[i].ServiceName
+			rows[i].GatewayEnabled = true
+		}
 		if serviceID, ok := canonical[rows[i].ServiceName]; ok && rows[i].GatewayPath != "" {
 			rows[i].GatewayServiceID, rows[i].GatewayEnabled = serviceID, true
 		}
@@ -59,6 +73,14 @@ func withExtra(item Deployment, extra string) Deployment {
 	item.ExtraConfig = extra
 	normalizeDeployment(&item)
 	return item
+}
+
+func storagePrimaryExtraConfig() string {
+	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20201,"gateway_methods":%s}]}`, storageMetadataGatewayMethods, storagePrimaryGatewayMethods)
+}
+
+func storageViewExtraConfig() string {
+	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20211/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s}`, storageViewGatewayMethods)
 }
 
 func deployment(name, kind, protocol, host string, port int32, gatewayPath, scope, description string) Deployment {

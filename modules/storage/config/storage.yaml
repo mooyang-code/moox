@@ -8,7 +8,6 @@ storage:
   devices:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
-    parquet_path: ./var/storage/archive
   eventbus:
     type: jetstream
     urls:
@@ -38,6 +37,11 @@ storage:
       backoff_base_ms: 200
       backoff_max_ms: 30000
   view:
+    storage_rpc:
+      gateway_target: ip://127.0.0.1:11003
+      gateway_node_id: ""
+      key_id: storage-view
+      hmac_key_file: ""
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore
     primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan

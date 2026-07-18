@@ -17,7 +17,8 @@ database or proxies to another machine. See the canonical
 
 ## Runtime
 
-- Service endpoint: `127.0.0.1:11002`
+- Service endpoint: `127.0.0.1:11002` (HTTP `/api/service/*`)
+- Native tRPC endpoint: `127.0.0.1:11003` (signed service-to-service calls)
 - Local diagnostics: `127.0.0.1:11012`
 - Control-plane refresh: every 15 seconds through `trpc.moox.gateway.route_refresh.timer`
 - Route cache: `<store.path>/routes.json`

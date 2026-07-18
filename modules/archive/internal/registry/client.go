@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -38,7 +39,11 @@ func (c *Client) RegisterPartition(ctx context.Context, key domain.PartitionKey,
 }
 
 func NewClient(target string) *Client {
-	return &Client{proxy: storagepb.NewMetadataClientProxy(client.WithTarget(target))}
+	return NewClientWithCredentials(target, gatewayauth.ServiceGatewayNodeID(), gatewayauth.CredentialsFromEnv())
+}
+
+func NewClientWithCredentials(target, targetNode string, credentials gatewayauth.Credentials) *Client {
+	return &Client{proxy: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...)}
 }
 
 func StableArchiveFileID(key domain.PartitionKey) string {

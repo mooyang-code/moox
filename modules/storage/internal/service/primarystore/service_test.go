@@ -2,9 +2,9 @@ package primarystore
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/router"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/shardrouter"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,27 +75,27 @@ func (*deleteMetadata) GetPrimaryStoreNode(context.Context, string) (*pb.Primary
 	return &pb.PrimaryStoreNode{NodeId: "node-1", Status: "active"}, nil
 }
 func (*deleteMetadata) ListDevices(context.Context, string, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return []*pb.Device{{DeviceId: "device-1", NodeId: "node-1", Engine: "pebble", Status: "active"}}, &pb.PageResult{}, nil
+	return []*pb.Device{{DeviceId: "device-1", NodeId: "node-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "storage-primary-0"}}}, &pb.PageResult{}, nil
 }
 
 type deletePrimary struct {
-	deleted []*pb.PrimaryStoreKey
+	deleted []*pb.ShardKey
 }
 
-func (*deletePrimary) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (*deletePrimary) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
 	return nil
 }
-func (*deletePrimary) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*deletePrimary) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (p *deletePrimary) ScanRows(_ context.Context, _ *pb.PrimaryStoreTarget, req *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
-	rows := []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "moox_system", DatasetId: "host_resource_v1", Key: "agent-1|1m|_", Version: "2026-07-10T23:59:00.000000000Z"}}}
+func (p *deletePrimary) ScanRows(_ context.Context, _ *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
+	rows := []*pb.ShardRow{{Key: &pb.ShardKey{SpaceId: "moox_system", DatasetId: "host_resource_v1", Key: "agent-1|1m|_", Version: "2026-07-10T23:59:00.000000000Z"}}}
 	if req.GetVersionRange().GetEndVersion() >= "2026-07-11T00:00:00.000000000Z" {
-		rows = append(rows, &pb.PrimaryStoreRow{Key: &pb.PrimaryStoreKey{SpaceId: "moox_system", DatasetId: "host_resource_v1", Key: "agent-1|1m|_", Version: "2026-07-11T00:00:00.000000000Z"}})
+		rows = append(rows, &pb.ShardRow{Key: &pb.ShardKey{SpaceId: "moox_system", DatasetId: "host_resource_v1", Key: "agent-1|1m|_", Version: "2026-07-11T00:00:00.000000000Z"}})
 	}
 	return rows, &pb.PageResult{}, nil
 }
-func (p *deletePrimary) DeleteRows(_ context.Context, _ *pb.PrimaryStoreTarget, keys []*pb.PrimaryStoreKey) error {
+func (p *deletePrimary) DeleteRows(_ context.Context, _ *pb.ShardTarget, keys []*pb.ShardKey) error {
 	p.deleted = append(p.deleted, keys...)
 	return nil
 }
@@ -105,14 +105,14 @@ var _ primary.Deleter = (*deletePrimary)(nil)
 
 type dimensionPrimary struct{}
 
-func (*dimensionPrimary) WriteRows(context.Context, *pb.PrimaryStoreTarget, []*pb.PrimaryStoreRow) error {
+func (*dimensionPrimary) WriteRows(context.Context, *pb.ShardTarget, []*pb.ShardRow) error {
 	return nil
 }
-func (*dimensionPrimary) ReadRows(context.Context, *pb.PrimaryStoreTarget, *pb.ReadPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
+func (*dimensionPrimary) ReadRows(context.Context, *pb.ShardTarget, *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (*dimensionPrimary) ScanRows(context.Context, *pb.PrimaryStoreTarget, *pb.ScanPrimaryRowsReq) ([]*pb.PrimaryStoreRow, *pb.PageResult, error) {
-	return []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "moox_system", DatasetId: "host_fs_v1", Key: "agent-1|1m|dimensions", Version: "2026-07-11T00:00:00.000000000Z"}, Attributes: map[string]string{"__moox_time_series_dimensions": `{"device":"/dev/sda1"}`}}}, &pb.PageResult{}, nil
+func (*dimensionPrimary) ScanRows(context.Context, *pb.ShardTarget, *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
+	return []*pb.ShardRow{{Key: &pb.ShardKey{SpaceId: "moox_system", DatasetId: "host_fs_v1", Key: "agent-1|1m|dimensions", Version: "2026-07-11T00:00:00.000000000Z"}, Attributes: map[string]string{"__moox_time_series_dimensions": `{"device":"/dev/sda1"}`}}}, &pb.PageResult{}, nil
 }
 
 var _ primary.Client = (*dimensionPrimary)(nil)

@@ -3,18 +3,16 @@ package viewindex
 import (
 	"context"
 	"errors"
-	"testing"
-
-	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"testing"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestClientImplementsLifecycleAndTypedQueries(t *testing.T) {
 	proxy := &fakeViewIndexProxy{}
 	remote := newClientWithProxy("duckdb", proxy)
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
-	if err := remote.Prepare(context.Background(), indexID, coreviewindex.ViewIndexSchema{
+	indexID := ViewIndexID("crypto", "spot", SlotA)
+	if err := remote.Prepare(context.Background(), indexID, ViewIndexSchema{
 		SpaceID: "crypto", ViewID: "spot", Engine: "duckdb", SchemaHash: "schema-1",
 	}); err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -44,13 +42,13 @@ func TestLocalClientUsesOwnerWriteFence(t *testing.T) {
 	duck := &fakeManagedEngine{name: "duckdb"}
 	owner := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
 	local := NewLocalClient(owner, "duckdb")
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
-	if err := local.Prepare(context.Background(), indexID, coreviewindex.ViewIndexSchema{
+	indexID := ViewIndexID("crypto", "spot", SlotA)
+	if err := local.Prepare(context.Background(), indexID, ViewIndexSchema{
 		SpaceID: "crypto", ViewID: "spot", ViewVersion: 2, Engine: "duckdb", SchemaHash: "schema-1",
 	}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := local.Write(context.Background(), indexID, coreviewindex.ViewIndexBatch{ViewVersion: 1, SchemaHash: "schema-1"}); err == nil {
+	if err := local.Write(context.Background(), indexID, BatchWrite{ViewVersion: 1, SchemaHash: "schema-1"}); err == nil {
 		t.Fatal("local client bypassed owner write fence")
 	}
 }

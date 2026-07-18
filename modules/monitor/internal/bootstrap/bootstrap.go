@@ -13,8 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -53,8 +53,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	var hostGate *hostmetrics.StorageGate
 	var hostRuleCache *hostmetrics.RuleCache
 	if cfg.Metrics.HostStorage.Enabled {
-		hostAccess := storagepb.NewPrimaryStoreClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.AccessTarget)))
-		hostMetadata := storagepb.NewMetadataClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.MetadataTarget)))
+		credentials, credErr := gatewayauth.ResolveCredentials(cfg.Metrics.HostStorage.KeyID, cfg.Metrics.HostStorage.HMACKeyFile)
+		if credErr != nil {
+			_ = runtime.Close()
+			return nil, credErr
+		}
+		options := gatewayauth.NewTRPCClientOptions(normalizeHostStorageTarget(cfg.Metrics.HostStorage.GatewayTarget), cfg.Metrics.HostStorage.GatewayNodeID, credentials)
+		hostAccess := storagepb.NewPrimaryStoreClientProxy(options...)
+		hostMetadata := storagepb.NewMetadataClientProxy(options...)
 		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
 		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)
 		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)

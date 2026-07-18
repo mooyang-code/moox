@@ -54,7 +54,7 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
 - **M1 run-once 不依赖 binding**：run-once 直接对"选定 source dataset/freq/subject + 全部 enabled 因子定义"计算，target dataset 由 `ResultDataset(source)` 推导，命令行可选 `--factors id1,id2` 覆盖。binding 表在 M2 起才成为实时链路的权威来源；M3 提供 binding 的 RPC/CLI 创建。这样 M1 端到端不被管理面阻塞。
 - 新建 `modules/factor/cmd/cli`，提供 `init`、`import`、`run-once` 三个子命令；CLI 只操作 factor 自己的 SQLite 和公开 Storage RPC。
 - 新建 `modules/factor/proto/factor.proto`，生成包放在 `modules/factor/proto/factorgen`，并加入 `go.work`。
-- Trigger 直接使用 `github.com/nats-io/nats.go`；不能 import `modules/storage/internal/infra/transport`，因为模块边界脚本禁止跨模块 internal 依赖。
+- Trigger 直接使用 `github.com/nats-io/nats.go`；不能 import `modules/storage/internal/service/transport`，因为模块边界脚本禁止跨模块 internal 依赖。
 - M5 截面结果默认写入独立 Dataset，命名 `{source_dataset去掉_kline}_section`，避免事件只含 key 时无法区分时序列写回与截面列写回。
 - 当前 `web/src/views/data/factors` 是 Storage Metadata 的低层因子字典页；M3 新增 `web/src/views/factor/*` 作为生产 factor 管理面，不覆盖原页面。
 

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/infra/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/builder"
-	viewsearch "github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
+	viewsearch "github.com/mooyang-code/moox/modules/storage/internal/service/dataview/search"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder"
+	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -53,7 +53,7 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	const ackWait = 3 * time.Second
-	const durable = "storage_view_builder_rows_committed_v1"
+	const durable = "storage_view_rows_committed_v1"
 	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{
 		Name: durable, Durable: durable, FilterSubject: infraeventbus.RowsCommittedSubjectWildcard(infraeventbus.DefaultSubjectPrefix),
 		AckPolicy: nats.AckExplicitPolicy, AckWait: ackWait, MaxDeliver: -1, MaxAckPending: 128,
@@ -103,6 +103,12 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("prepare %s: %v", prepared.name, err)
 		}
+	}
+	if err := bleve.Apply(context.Background(), bleveIndex, viewindex.ViewIndexApplyBatch{
+		ViewVersion:       1,
+		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", LastAppliedSequence: 1}},
+	}); err != nil {
+		t.Fatalf("seed bleve checkpoint: %v", err)
 	}
 
 	duckFailOnce := &failOnceEngine{ViewIndexEngine: duck}

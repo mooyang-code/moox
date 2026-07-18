@@ -82,6 +82,11 @@ func TestMetadataInfraCRUDFlow(t *testing.T) {
 
 	listRoutesRsp, err := svc.ListPrimaryStoreRoutes(ctx, &pb.ListPrimaryStoreRoutesReq{SpaceId: "crypto"})
 	mustRetOK(t, listRoutesRsp, err)
+	locker, ok := svc.metadata.(interface {
+		LockDatasetTopology(context.Context, string, string) error
+	})
+	require.True(t, ok)
+	require.NoError(t, locker.LockDatasetTopology(ctx, "crypto", "kline"))
 
 	lockedRsp, err := svc.CreatePrimaryStoreRoute(ctx, &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{
 		SpaceId: "crypto", DatasetId: "kline", RouteId: "route-2", NodeId: "node-2", Status: "active",

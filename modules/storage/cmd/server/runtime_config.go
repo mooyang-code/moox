@@ -74,7 +74,6 @@ func storageOptionsFromConfig(storage storageconfig.StorageConfig) storagesvc.Op
 		Root:               storage.Root,
 		MetadataPath:       storage.Metadata.Path,
 		PebblePath:         storage.Devices.PebblePath,
-		ParquetPath:        storage.Devices.ParquetPath,
 		PrimaryServiceName: storage.Primary.ServiceName,
 		ShardID:            storage.Primary.ShardID,
 	}

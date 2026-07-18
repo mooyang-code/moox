@@ -2163,7 +2163,7 @@ type Device struct {
 	NodeId string `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	// name 是设备名称，通常用于管理台展示。
 	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	// engine 是存储引擎，例如 pebble、duckdb、bleve 或 parquet_archive。
+	// engine 是存储引擎，例如 pebble、duckdb 或 bleve。
 	Engine string `protobuf:"bytes,4,opt,name=engine,proto3" json:"engine,omitempty"`
 	// endpoint 是连接地址、文件路径或 URI。
 	Endpoint string `protobuf:"bytes,5,opt,name=endpoint,proto3" json:"endpoint,omitempty"`

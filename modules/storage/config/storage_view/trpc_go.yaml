@@ -105,9 +105,8 @@ storage:
   devices:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
-    parquet_path: ./var/storage/archive
   primary:
-    service_name: trpc.moox.storage.PrimaryStore
+    service_name: trpc.moox.storage.DataShard
   eventbus:
     type: jetstream
     urls:
@@ -120,11 +119,16 @@ storage:
     max_age_hours: 24
     max_msgs: 500000
     max_bytes: 268435456
-    max_in_flight: 128
+    max_in_flight: 1
     max_ack_pending: 128
     ack_wait_ms: 120000
     max_deliver: -1
   view:
+    storage_rpc:
+      gateway_target: ip://127.0.0.1:11003
+      gateway_node_id: ""
+      key_id: storage-view
+      hmac_key_file: ""
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore
     primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan

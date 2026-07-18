@@ -150,7 +150,7 @@ consumers:
     max_ack_pending: 256
     max_deliver: 3
   - stream: MOOX_STORAGE
-    durable: storage_view_builder_rows_committed_v1
+    durable: storage_view_rows_committed_v1
     filter_subject: moox.storage.rows_committed.>
     ack_policy: explicit
     deliver_policy: all

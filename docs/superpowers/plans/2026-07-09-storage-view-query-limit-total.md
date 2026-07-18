@@ -48,9 +48,9 @@
   - Validate query options before calling DuckDB.
 - `modules/storage/internal/services/access/query.go`
   - Validate query options for the access-layer view-query path as well.
-- `modules/storage/internal/infra/device/duckdb/view_store.go`
+- `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
   - Build either preview-limit SQL or page SQL; set `PageResult.total_state`.
-- `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
   - Unit tests for default size 25, preview limit 1000, `AUTO` count rules, and exact-total override.
 - `web/src/api/storage/types.ts`
   - Add `TotalMode`, `TotalState`, `PageResult.total_state`.
@@ -336,12 +336,12 @@ git commit -m "feat(storage): validate time series view query options"
 ### Task 3: Implement DuckDB Query Planning For Limit And Total Modes
 
 **Files:**
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
 - [ ] **Step 1: Add failing DuckDB query-planning tests**
 
-Append these tests near the existing `TestBuildTimeSeriesQuerySkipsCountForUnboundedBrowse` in `modules/storage/internal/infra/device/duckdb/view_store_test.go`:
+Append these tests near the existing `TestBuildTimeSeriesQuerySkipsCountForUnboundedBrowse` in `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`:
 
 ```go
 func TestBuildTimeSeriesQueryPreviewLimitSkipsCount(t *testing.T) {
@@ -421,14 +421,14 @@ func TestBuildTimeSeriesQueryExactCountsUnboundedQuery(t *testing.T) {
 Run:
 
 ```bash
-go test ./modules/storage/internal/infra/device/duckdb -run 'TestBuildTimeSeriesQuery' -count=1
+go test ./modules/storage/internal/service/dataview/index/duckdb -run 'TestBuildTimeSeriesQuery' -count=1
 ```
 
 Expected: compile failure because `buildTimeSeriesQuery` still returns multiple values instead of a query plan.
 
 - [ ] **Step 3: Introduce query plan struct**
 
-In `modules/storage/internal/infra/device/duckdb/view_store.go`, add near `QueryTimeSeriesRows`:
+In `modules/storage/internal/service/dataview/index/duckdb/view_store.go`, add near `QueryTimeSeriesRows`:
 
 ```go
 type timeSeriesQueryPlan struct {
@@ -599,7 +599,7 @@ func normalizePage(page *pb.Page) (uint32, uint32) {
 Run:
 
 ```bash
-go test ./modules/storage/internal/infra/device/duckdb -run 'TestBuildTimeSeriesQuery|TestViewStore' -count=1
+go test ./modules/storage/internal/service/dataview/index/duckdb -run 'TestBuildTimeSeriesQuery|TestViewStore' -count=1
 ```
 
 Expected: focused DuckDB tests pass.
@@ -607,7 +607,7 @@ Expected: focused DuckDB tests pass.
 - [ ] **Step 8: Commit DuckDB query changes**
 
 ```bash
-git add modules/storage/internal/infra/device/duckdb/view_store.go modules/storage/internal/infra/device/duckdb/view_store_test.go
+git add modules/storage/internal/service/dataview/index/duckdb/view_store.go modules/storage/internal/service/dataview/index/duckdb/view_store_test.go
 git commit -m "feat(storage): support preview limit for time series view queries"
 ```
 
@@ -881,7 +881,7 @@ git commit -m "docs(storage): document view query limit semantics"
 Run:
 
 ```bash
-go test ./modules/storage/internal/services/view ./modules/storage/internal/services/access ./modules/storage/internal/infra/device/duckdb -count=1
+go test ./modules/storage/internal/services/view ./modules/storage/internal/services/access ./modules/storage/internal/service/dataview/index/duckdb -count=1
 ```
 
 Expected: all selected storage tests pass.

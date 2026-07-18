@@ -52,10 +52,8 @@ func TestStorageSplitViewRolePredicates(t *testing.T) {
 		wantIndex   bool
 	}{
 		{name: "bundled view", roles: []string{"view"}, wantQuery: true, wantBuilder: true, wantIndex: true},
-		{name: "query only", roles: []string{"view_query"}, wantQuery: true},
-		{name: "builder only", roles: []string{"view_builder"}, wantBuilder: true},
-		{name: "index owner only", roles: []string{"view_index"}, wantIndex: true},
-		{name: "access only", roles: []string{"primary"}},
+		{name: "primary only", roles: []string{"primary"}},
+		{name: "shard only", roles: []string{"shard"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,7 +91,7 @@ func TestStorageHealthSnapshot(t *testing.T) {
 	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{eventbus: fakeReadyState(true), view: fakeReadyState(true)})(context.Background())
 
 	if rsp.Module != "storage" || !rsp.Ready || rsp.Status != "ok" {
-		t.Fatalf("health response = %+v", rsp)
+		t.Fatalf("health retinfo = %+v", rsp)
 	}
 	if rsp.Details["roles"] != "primary,view" {
 		t.Fatalf("roles = %v", rsp.Details["roles"])
@@ -103,44 +101,12 @@ func TestStorageHealthSnapshot(t *testing.T) {
 	}
 }
 
-func TestStorageHealthSnapshotNamesSplitViewQueryRole(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"view_query"}}
-	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
-		t.Fatalf("create metadata file: %v", err)
-	}
-	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
-
-	if rsp.Service != "storage-view-query" {
-		t.Fatalf("Service = %q, want storage-view-query", rsp.Service)
-	}
-	if rsp.InstanceID != "storage-view-query" {
-		t.Fatalf("InstanceID = %q, want storage-view-query", rsp.InstanceID)
-	}
-	if rsp.Details["role"] != "view_query" {
-		t.Fatalf("role = %v, want view_query", rsp.Details["role"])
-	}
-}
-
-func TestStorageHealthSnapshotNamesViewIndexOwnerRole(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"view_index"}}
-	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
-		t.Fatalf("create metadata file: %v", err)
-	}
-	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
-
-	if rsp.Service != "storage-view-index" {
-		t.Fatalf("Service = %q, want storage-view-index", rsp.Service)
-	}
-}
-
 func TestStorageHealthSnapshotReportsMissingDependencies(t *testing.T) {
 	cfg := storageconfig.StorageConfig{Roles: []string{"primary"}}
 	state := health.New("storage", "storage", "", "")
 	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
 	if rsp.Ready {
-		t.Fatalf("health response = %+v, want not ready", rsp)
+		t.Fatalf("health retinfo = %+v, want not ready", rsp)
 	}
 }
 
@@ -157,7 +123,7 @@ func TestStorageHealthSnapshotRequiresUnifiedViewRuntimeAndEventBus(t *testing.T
 		t.Fatalf("health identity = %q/%q, want storage-view/storage-view", rsp.Service, rsp.InstanceID)
 	}
 	if rsp.Ready {
-		t.Fatalf("health response = %+v, want not ready", rsp)
+		t.Fatalf("health retinfo = %+v, want not ready", rsp)
 	}
 	if rsp.Details["eventbus_ready"] != false || rsp.Details["view_runtime_ready"] != false {
 		t.Fatalf("health details = %+v", rsp.Details)

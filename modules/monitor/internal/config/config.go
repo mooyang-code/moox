@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -97,8 +98,10 @@ type MetricsConfig struct {
 	HostStorage            HostStorageConfig    `yaml:"host_storage"`
 }
 type MetricsStorageConfig struct {
-	AccessTarget               string        `yaml:"access_target"`
-	MetadataTarget             string        `yaml:"metadata_target"`
+	GatewayTarget              string        `yaml:"gateway_target"`
+	GatewayNodeID              string        `yaml:"gateway_node_id"`
+	KeyID                      string        `yaml:"key_id"`
+	HMACKeyFile                string        `yaml:"hmac_key_file"`
 	SpaceID                    string        `yaml:"space_id"`
 	DatasetID                  string        `yaml:"dataset_id"`
 	Frequency                  string        `yaml:"frequency"`
@@ -109,8 +112,10 @@ type MetricsStorageConfig struct {
 // HostStorageConfig controls the direct Storage path for host snapshots.
 type HostStorageConfig struct {
 	Enabled                 bool          `yaml:"enabled"`
-	AccessTarget            string        `yaml:"access_target"`
-	MetadataTarget          string        `yaml:"metadata_target"`
+	GatewayTarget           string        `yaml:"gateway_target"`
+	GatewayNodeID           string        `yaml:"gateway_node_id"`
+	KeyID                   string        `yaml:"key_id"`
+	HMACKeyFile             string        `yaml:"hmac_key_file"`
 	SpaceID                 string        `yaml:"space_id"`
 	Frequency               string        `yaml:"frequency"`
 	WriteTimeout            time.Duration `yaml:"write_timeout"`
@@ -176,7 +181,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -255,11 +260,11 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
 	}
-	if c.Metrics.Storage.AccessTarget == "" {
-		c.Metrics.Storage.AccessTarget = metricsDefaults.Storage.AccessTarget
+	if c.Metrics.Storage.GatewayTarget == "" {
+		c.Metrics.Storage.GatewayTarget = metricsDefaults.Storage.GatewayTarget
 	}
-	if c.Metrics.Storage.MetadataTarget == "" {
-		c.Metrics.Storage.MetadataTarget = metricsDefaults.Storage.MetadataTarget
+	if c.Metrics.Storage.KeyID == "" {
+		c.Metrics.Storage.KeyID = metricsDefaults.Storage.KeyID
 	}
 	if c.Metrics.Storage.SpaceID == "" {
 		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
@@ -276,11 +281,11 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
 	}
-	if c.Metrics.HostStorage.AccessTarget == "" {
-		c.Metrics.HostStorage.AccessTarget = metricsDefaults.HostStorage.AccessTarget
+	if c.Metrics.HostStorage.GatewayTarget == "" {
+		c.Metrics.HostStorage.GatewayTarget = metricsDefaults.HostStorage.GatewayTarget
 	}
-	if c.Metrics.HostStorage.MetadataTarget == "" {
-		c.Metrics.HostStorage.MetadataTarget = metricsDefaults.HostStorage.MetadataTarget
+	if c.Metrics.HostStorage.KeyID == "" {
+		c.Metrics.HostStorage.KeyID = metricsDefaults.HostStorage.KeyID
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
@@ -389,6 +394,16 @@ func (c *Config) Validate() error {
 	for i, peer := range c.Peer.Peers {
 		if peer.InstanceID == "" || peer.GatewayURL == "" || peer.NodeID == "" {
 			return fmt.Errorf("peer.peers[%d] requires instance_id, gateway_url, and node_id", i)
+		}
+	}
+	for name, values := range map[string][2]string{
+		"metrics.storage":      {c.Metrics.Storage.KeyID, c.Metrics.Storage.HMACKeyFile},
+		"metrics.host_storage": {c.Metrics.HostStorage.KeyID, c.Metrics.HostStorage.HMACKeyFile},
+	} {
+		if strings.TrimSpace(values[1]) != "" {
+			if _, err := gatewayauth.CredentialsFromKeyFile(values[0], values[1]); err != nil {
+				return fmt.Errorf("%s hmac credentials: %w", name, err)
+			}
 		}
 	}
 	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (strings.TrimSpace(c.Peer.ServiceAuth.KeyID) == "" || strings.TrimSpace(c.Peer.ServiceAuth.SecretKey) == "") {

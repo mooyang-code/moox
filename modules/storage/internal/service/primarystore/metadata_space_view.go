@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -16,7 +16,7 @@ import (
 func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.CreateSpaceRsp, error) {
 	space := req.GetSpace()
 	if space == nil || (space.GetSpaceId() == "" && space.GetName() == "") {
-		return &pb.CreateSpaceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id or name is required"))}, nil
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id or name is required"))}, nil
 	}
 	if space.SpaceId == "" {
 		space.SpaceId = defaultID(space.GetName(), "space")
@@ -26,108 +26,108 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	}
 	created, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
-		return &pb.CreateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.CreateSpaceRsp{RetInfo: response.Success("success"), Space: created}, nil
+	return &pb.CreateSpaceRsp{RetInfo: retinfo.Success("success"), Space: created}, nil
 }
 
 func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.UpdateSpaceRsp, error) {
 	space := req.GetSpace()
 	if space == nil || space.GetSpaceId() == "" {
-		return &pb.UpdateSpaceRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
 	}
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
 	updated, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
-		return &pb.UpdateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateSpaceRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.UpdateSpaceRsp{RetInfo: response.Success("success"), Space: updated}, nil
+	return &pb.UpdateSpaceRsp{RetInfo: retinfo.Success("success"), Space: updated}, nil
 }
 
 func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
 	space, err := s.metadata.GetSpace(ctx, req.GetSpaceId())
 	if err != nil {
-		return &pb.GetSpaceRsp{RetInfo: response.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
+		return &pb.GetSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
 	}
-	return &pb.GetSpaceRsp{RetInfo: response.Success("success"), Space: space}, nil
+	return &pb.GetSpaceRsp{RetInfo: retinfo.Success("success"), Space: space}, nil
 }
 
 func (s *Service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
 	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetPage())
 	if err != nil {
-		return &pb.ListSpacesRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.ListSpacesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.ListSpacesRsp{RetInfo: response.Success("success"), Spaces: items, PageResult: page}, nil
+	return &pb.ListSpacesRsp{RetInfo: retinfo.Success("success"), Spaces: items, PageResult: page}, nil
 }
 
 func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.CreateViewRsp, error) {
 	view := req.GetView()
 	if view == nil || view.GetSpaceId() == "" || (view.GetViewId() == "" && view.GetName() == "") {
-		return &pb.CreateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id or name are required"))}, nil
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id or name are required"))}, nil
 	}
 	if view.ViewId == "" {
 		view.ViewId = defaultID(view.GetName(), "view")
 	}
 	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
 	}
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	clearViewIndexRuntimeState(view)
 	created, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.CreateViewRsp{RetInfo: response.Success("success"), View: created}, nil
+	return &pb.CreateViewRsp{RetInfo: retinfo.Success("success"), View: created}, nil
 }
 
 func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.UpdateViewRsp, error) {
 	view := req.GetView()
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
 	}
 	if view.Name == "" {
 		view.Name = view.GetViewId()
 	}
 	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
 	}
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	clearViewIndexRuntimeState(view)
 	updated, err := s.metadata.UpsertView(ctx, view)
 	if err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.UpdateViewRsp{RetInfo: response.Success("success"), View: updated}, nil
+	return &pb.UpdateViewRsp{RetInfo: retinfo.Success("success"), View: updated}, nil
 }
 
 func clearViewIndexRuntimeState(view *pb.View) {
@@ -224,44 +224,44 @@ func normalizeTimeSeriesViewFilterJSON(raw string) (string, string, error) {
 func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
 	view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
-		return &pb.GetViewRsp{RetInfo: response.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+		return &pb.GetViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
-	return &pb.GetViewRsp{RetInfo: response.Success("success"), View: view}, nil
+	return &pb.GetViewRsp{RetInfo: retinfo.Success("success"), View: view}, nil
 }
 
 func (s *Service) ListViews(ctx context.Context, req *pb.ListViewsReq) (*pb.ListViewsRsp, error) {
 	items, page, err := s.metadata.ListViews(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetStatus(), req.GetPage())
 	if err != nil {
-		return &pb.ListViewsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.ListViewsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.ListViewsRsp{RetInfo: response.Success("success"), Views: items, PageResult: page}, nil
+	return &pb.ListViewsRsp{RetInfo: retinfo.Success("success"), Views: items, PageResult: page}, nil
 }
 
 func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumnReq) (*pb.UpsertViewColumnRsp, error) {
 	column := req.GetColumn()
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
 	}
 	if err := validateColumnDisplayName("view column display_name", column.GetSpaceId(), column.GetAttributes()); err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)
 	if err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpsertViewColumnRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.UpsertViewColumnRsp{RetInfo: response.Success("success"), Column: created}, nil
+	return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Success("success"), Column: created}, nil
 }
 
 func (s *Service) ListViewColumns(ctx context.Context, req *pb.ListViewColumnsReq) (*pb.ListViewColumnsRsp, error) {
 	items, page, err := s.metadata.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), req.GetPage())
 	if err != nil {
-		return &pb.ListViewColumnsRsp{RetInfo: response.Error(response.MetadataStoreCode(err), err)}, nil
+		return &pb.ListViewColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.ListViewColumnsRsp{RetInfo: response.Success("success"), Columns: items, PageResult: page}, nil
+	return &pb.ListViewColumnsRsp{RetInfo: retinfo.Success("success"), Columns: items, PageResult: page}, nil
 }

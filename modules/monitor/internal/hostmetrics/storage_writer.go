@@ -29,7 +29,7 @@ func NewStorageWriter(access hostStorageAccess, cfg monconfig.HostStorageConfig)
 
 func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time, messageID string) error {
 	if w == nil || w.access == nil {
-		return fmt.Errorf("host storage access client is nil")
+		return fmt.Errorf("host storage-primary client is nil")
 	}
 	if snapshot == nil || agentID == "" {
 		return fmt.Errorf("host snapshot and agent id are required")

@@ -14,7 +14,7 @@
 - Modify: `modules/storage/internal/config/loader.go`, `loader_test.go`
 - Modify: all `modules/storage/config/storage*.yaml`
 - Modify: `modules/storage/internal/bootstrap/eventbus/factory.go`, `factory_test.go`
-- Modify: `modules/storage/internal/infra/eventbus/producer_bus.go`, `producer_bus_test.go`
+- Modify: `modules/storage/internal/service/eventbus/producer_bus.go`, `producer_bus_test.go`
 
 - [ ] Add RED tests for defaults and validation: `ack_wait_ms >= 3000`, `max_in_flight >= 1`, `max_ack_pending >= 1`, and `max_in_flight <= max_ack_pending`.
 - [ ] Add `max_ack_pending` (default/config value 128) separately from handler concurrency. Keep it aligned with the existing durable topology; never derive durable MaxAckPending from a smaller concurrency value because `BindPullConsumer` validates exact durable configuration.
@@ -29,8 +29,8 @@ go test ./internal/config ./internal/bootstrap/eventbus ./internal/infra/eventbu
 ### Task 2: Implement an event-level completion tracker
 
 **Files:**
-- Create: `modules/storage/internal/service/view/builder/completion.go`, `completion_test.go`
-- Modify: `modules/storage/internal/service/view/builder/service.go`, `service_test.go`
+- Create: `modules/storage/internal/service/dataviewbuilder/completion.go`, `completion_test.go`
+- Modify: `modules/storage/internal/service/dataviewbuilder/service.go`, `service_test.go`
 
 - [ ] Add RED tests proving: empty/nil rows return immediately; one event spanning batches waits for its final item; merged events all receive a batch error; an enqueue failure marks unqueued items failed but still waits for already queued items; cancellation and late completion never panic/block.
 - [ ] Track remaining item count, first error, and a once-closed done channel. Do not wake on the first error. Add the tracker reference to each derive item.
@@ -40,9 +40,9 @@ go test ./internal/config ./internal/bootstrap/eventbus ./internal/infra/eventbu
 ### Task 3: Report every batch result and prove idempotency
 
 **Files:**
-- Modify: `modules/storage/internal/service/view/builder/service.go`, `time_series.go`, `record.go` and tests
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index_test.go`
+- Modify: `modules/storage/internal/service/dataviewbuilder/service.go`, `time_series.go`, `record.go` and tests
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/bleve/index_test.go`
 
 - [ ] Add RED tests for successful batch, DuckDB failure, Bleve failure, and multi-item completion timing.
 - [ ] Stop discarding batch errors. Decorate errors with fixed diagnostic context (engine, view ID, batch row count) and complete every batch item with the shared batch result.
@@ -51,14 +51,14 @@ go test ./internal/config ./internal/bootstrap/eventbus ./internal/infra/eventbu
 
 ```bash
 cd modules/storage
-go test ./internal/service/view/builder -count=1
+go test ./internal/service/dataviewbuilder -count=1
 CGO_ENABLED=1 go test ./internal/infra/device/duckdb ./internal/infra/device/bleve -count=1
 ```
 
 ### Task 4: Implement the delivery state machine
 
 **Files:**
-- Modify: `modules/storage/internal/infra/eventbus/producer_bus.go`, `producer_bus_test.go`
+- Modify: `modules/storage/internal/service/eventbus/producer_bus.go`, `producer_bus_test.go`
 
 - [ ] Extract a narrow internal delivery interface and deterministic `processDelivery` test surface.
 - [ ] Add RED tests for handler-success-before-AckSync ordering, error-to-NakWithDelay, ACK failure without a follow-up Nak, periodic `InProgress`, heartbeat failure without changing the terminal action, heartbeat stopped/joined before ACK/Nak, and deadlines on every transport action context.
@@ -75,8 +75,8 @@ go test -race ./internal/infra/eventbus -count=1
 ### Task 5: Close intake before workers and drain safely
 
 **Files:**
-- Modify Subscriber/Subscription close logic in `modules/storage/internal/infra/eventbus/producer_bus.go`
-- Modify builder/batcher close logic under `modules/storage/internal/service/view/builder/`
+- Modify Subscriber/Subscription close logic in `modules/storage/internal/service/eventbus/producer_bus.go`
+- Modify builder/batcher close logic under `modules/storage/internal/service/dataviewbuilder/`
 - Modify runtime assembly/close ordering in `modules/storage/cmd/server/main.go` or the backend refactor runtime owner
 - Add focused close tests
 
@@ -88,7 +88,7 @@ go test -race ./internal/infra/eventbus -count=1
 
 ```bash
 cd modules/storage
-go test -race ./internal/infra/eventbus ./internal/service/view/builder ./cmd/server -count=1
+go test -race ./internal/infra/eventbus ./internal/service/dataviewbuilder ./cmd/server -count=1
 ```
 
 ### Task 6: Add low-cardinality metrics and structured logs
@@ -104,7 +104,7 @@ go test -race ./internal/infra/eventbus ./internal/service/view/builder ./cmd/se
 ### Task 7: Preserve primary-write behavior and MemoryBus semantics
 
 **Files:**
-- Modify tests: `modules/storage/internal/core/eventbus/bus_test.go`, `modules/storage/internal/service/access/data_test.go`
+- Modify tests: `modules/storage/internal/service/eventbus/bus_test.go`, `modules/storage/internal/service/access/data_test.go`
 - Modify: `modules/storage/README.md`
 
 - [ ] Prove MemoryBus publish waits for builder terminal completion and returns its error.
@@ -124,7 +124,7 @@ go test -race ./internal/infra/eventbus ./internal/service/view/builder ./cmd/se
 ```bash
 cd modules/storage
 CGO_ENABLED=1 go test -tags=integration ./test -run 'TestViewDerivationReliability' -count=2
-go test -race ./internal/core/eventbus ./internal/infra/eventbus ./internal/service/view/builder -count=1
+go test -race ./internal/core/eventbus ./internal/infra/eventbus ./internal/service/dataviewbuilder -count=1
 go test ./... -count=1
 ```
 

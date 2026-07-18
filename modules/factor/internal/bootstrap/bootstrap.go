@@ -21,12 +21,12 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -92,14 +92,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 factor schema 失败: %v", err)
 		return nil, err
 	}
+	storageCredentials, err := gatewayauth.ResolveCredentials(cfg.Storage.KeyID, cfg.Storage.HMACKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load factor storage gateway credentials: %w", err)
+	}
 
 	authInfo := factorAuthInfo()
 	factorRepo := dbm.Factors()
 	bindingRepo := dbm.Bindings()
-	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.MetadataTarget), authInfo)
+	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials), authInfo)
 	_ = registry.NewService(factorRepo, meta, registry.Options{FactorsDir: cfg.Engine.FactorsDir})
 
-	storage := storageio.NewClient(cfg.Storage.PrimaryTarget, authInfo)
+	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo)
 	runtimeExec, err = engine.NewRuntimePoolExecutor(ctx, cfg.Engine.Workers, process.Config{PythonBin: cfg.Engine.PythonBin, WorkerPath: "./pyworker/worker.py", Args: []string{"--factors-dir", cfg.Engine.FactorsDir, "--sections-dir", cfg.Engine.SectionsDir, "--encoding", cfg.Engine.Encoding}, TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond, Limits: process.DefaultLimits()})
 	if err != nil {
 		log.ErrorContextf(ctx, "启动 factor Python worker 失败: %v", err)
@@ -233,7 +237,7 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Servic
 			"role":            cfg.Instance.Role,
 			"worker_count":    cfg.Engine.Workers,
 			"nats_enabled":    cfg.NATS.URL != "",
-			"storage_primary": cfg.Storage.PrimaryTarget,
+			"storage_gateway": cfg.Storage.GatewayTarget,
 		}
 		return rsp
 	}
@@ -260,9 +264,10 @@ type metadataClientAdapter struct {
 	client storagepb.MetadataClientProxy
 }
 
-func newMetadataClient(target string) *metadataClientAdapter {
+func newMetadataClient(target, targetNode string, credentials gatewayauth.Credentials) *metadataClientAdapter {
+	target = gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(target, "11003"))
 	return &metadataClientAdapter{
-		client: storagepb.NewMetadataClientProxy(client.WithTarget(storageio.NormalizeStorageTarget(target, "20100"))),
+		client: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...),
 	}
 }
 

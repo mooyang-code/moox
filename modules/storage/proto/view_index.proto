@@ -6,7 +6,7 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 
 import "moox_common.proto";
 import "common.proto";
-import "access.proto";
+import "rows.proto";
 import "metadata.proto";
 import "view.proto";
 
@@ -41,6 +41,9 @@ message ViewIndexRowWrite {
   map<string, string> attributes = 4;
   repeated string attributes_to_delete = 5;
   repeated string removed_column_names = 6;
+  string source_shard_id = 7;
+  uint64 source_sequence = 8;
+  repeated ColumnRemoval removed_columns = 9;
 }
 
 message ViewIndexShardCheckpointUpdate {

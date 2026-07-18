@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
+	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

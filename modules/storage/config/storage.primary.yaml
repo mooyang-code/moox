@@ -6,7 +6,6 @@ storage:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
     pebble_path: ./var/storage/pebble
-    parquet_path: ./var/storage/archive
   primary:
     service_name: ""
   eventbus:

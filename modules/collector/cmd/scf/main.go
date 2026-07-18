@@ -34,7 +34,7 @@ func main() {
 	flag.StringVar(&opts.ServiceGatewayTarget, "service-gateway-target", opts.ServiceGatewayTarget, "service gateway target for CloudRuntime callbacks")
 	flag.StringVar(&opts.NodeID, "node-id", opts.NodeID, "runtime node id")
 	flag.StringVar(&opts.StorageMetadataTarget, "storage-metadata-target", opts.StorageMetadataTarget, "storage metadata tRPC target")
-	flag.StringVar(&opts.StoragePrimaryTarget, "storage-primary-target", opts.StoragePrimaryTarget, "storage access tRPC target")
+	flag.StringVar(&opts.StoragePrimaryTarget, "storage-primary-target", opts.StoragePrimaryTarget, "storage-primary tRPC target")
 	flag.DurationVar(&opts.Timeout, "timeout", opts.Timeout, "one-shot execution timeout")
 	flag.Parse()
 

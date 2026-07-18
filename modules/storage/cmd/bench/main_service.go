@@ -135,7 +135,6 @@ func (e *serviceEnv) writeConfig() error {
 		filepath.Join(storageRoot, "metadata", "metadata.db"),
 		filepath.Join(storageRoot, "pebble"),
 		filepath.Join(storageRoot, "view-indexes"),
-		filepath.Join(storageRoot, "archive"),
 	)
 	if err := os.WriteFile(e.storageCfg, []byte(storageCfg), 0o644); err != nil {
 		return err

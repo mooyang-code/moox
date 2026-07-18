@@ -49,9 +49,9 @@ Storage 的事实主存统一按 `key + version` 定位一行数据，PrimarySto
 
 ### View 版本与切换
 
-View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有确定性的 `a`、`b` 两个槽位：TimeSeries 槽位是一份独立 DuckDB 文件，Record 槽位是一个独立 Bleve 目录。`view_index` 是唯一可以打开、查询和删除这些文件的进程；`view_builder` 与 `view_query` 仅调用其 RPC。
+View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有确定性的 `a`、`b` 两个槽位：TimeSeries 槽位是一份独立 DuckDB 文件，Record 槽位是一个独立 Bleve 目录。`storage-view` 是唯一可以打开、查询和删除这些文件的进程；PrimaryStore 只通过 DataView/ViewIndex RPC 访问它。
 
-只要 View 定义或字段变化，`view_version` 就递增，旧构建声明立即失效。`view_builder` 先持久化 `PREPARING` 构建租约，再创建非活跃槽位，按页从 PrimaryStore 回扫 `retention_window`，保存游标并续租；追平增量后通过一次 `ActivateViewIndex` CAS 原子切换读取指针。旧槽位在引用排空及宽限期结束后整库删除，因此无需依赖 DuckDB 行删除或压缩回收空间。
+只要 View 定义或字段变化，`view_version` 就递增，旧构建声明立即失效。`view` 先持久化 `PREPARING` 构建租约，再创建非活跃槽位，按页从 PrimaryStore 回扫 `retention_window`，保存游标并续租；追平增量后通过一次 `ActivateViewIndex` CAS 原子切换读取指针。旧槽位在引用排空及宽限期结束后整库删除，因此无需依赖 DuckDB 行删除或压缩回收空间。
 
 TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真实物理列。`QueryTimeSeriesRows` 将 key、时间范围、结构化过滤、排序、`limit` 和分页下推到 DuckDB。Bleve 同样在引擎内完成版本范围、排序和 `size+1` 分页，查询端不会先加载完整命中集。
 
@@ -117,8 +117,7 @@ storage:
     path: ./var/storage/metadata/storage_metadata.db   # 元数据 SQLite 文件
   devices:
     pebble_path:  ./var/storage/pebble                 # 在线主存目录
-    view_index_root: ./var/storage/view-indexes        # 仅 view_index owner 使用
-    parquet_path: ./var/storage/archive                # 归档目录
+    view_index_root: ./var/storage/view-indexes        # 仅 storage-view 使用
   primary:
     service_name: ""        # 留空=同进程内嵌主存；填服务名=走远程 PrimaryStore（分布式）
   eventbus:
@@ -182,23 +181,19 @@ storage:
 | 角色 | 职责 |
 | --- | --- |
 | `primary` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
-| `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
-| `view_index` | 唯一物理 owner；管理每个 View/槽位的 DuckDB 文件与 Bleve 目录，并提供内部生命周期和查询 RPC。 |
-| `view_builder` | 消费行变更事件，向 owner 双写活动/构建槽位，并执行有租约、可续跑的维护状态机。 |
-| `view_query` | 对外提供 DataView；读取元数据中的 `active_index_id` 并通过 owner 查询。 |
-| `view` | 标准部署角色，在一个进程内承载 owner、builder 和 query，但仍通过相同接口分层。 |
-| `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/PrimaryStore RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
+| `shard` | 拥有固定 `shard_id` 的 Pebble DataShard；可嵌入 `primary` 或作为私网进程运行。 |
+| `view` | 消费 RowsCommitted 事件，管理本地 ViewIndex 物理 owner，向活动/构建槽位物化并提供 DataView 查询。 |
 
-默认运行角色是 `primary + view`，不包含显式 `primary`。当 `primary` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，PrimaryStore 走远程 PrimaryStore，除非显式加入 `primary` 角色。
+默认运行角色是 `primary + view`。当 `primary.service_name` 为空时，进程内嵌本地 DataShard；当它非空时，PrimaryStore 通过 Node Service Gateway 调用远程 DataShard。
 
 标准部署将 PrimaryStore 和 View 分为 `storage-primary`、`storage-view` 两个进程。`storage-view` 使用 `config/storage_view/trpc_go.yaml` 作为唯一配置文件，其中同时声明 tRPC listener/client、`roles: [view]`、JetStream、ViewIndex 路径和维护参数；不再发布独立的 builder、query、index 进程配置。
 
 仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递事件，不提供写后立即可查派生结果的契约。分布式部署或希望持久化事件时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
-- `${prefix}.time_series.rows_changed.v1`
-- `${prefix}.record.rows_changed.v1`
+- `${prefix}.time_series.rows_committed.v1`
+- `${prefix}.record.rows_committed.v1`
 
-NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件处理失败会向上传递错误，由 JetStream `Nak` 并重试；历史补仓、断档追数和索引重建统一交给 view_builder 的 `op=maintain`。`max_age_hours`、`max_msgs`、`max_bytes` 限制 stream 保留，`max_in_flight`、`ack_wait_ms`、`max_deliver` 控制消费压力。维护参数位于 `view.maintenance`。
+NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeSeries 与 Record 消费者冲突。实时事件处理失败会向上传递错误，由 JetStream `Nak` 并重试；历史补仓、断档追数和索引重建统一交给 view 的 `op=maintain`。`max_age_hours`、`max_msgs`、`max_bytes` 限制 stream 保留，`max_in_flight`、`ack_wait_ms`、`max_deliver` 控制消费压力。维护参数位于 `view.maintenance`。
 
 ### `config/trpc_go.yaml` 默认服务端口
 
@@ -215,7 +210,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
-| `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；bootstrap 固定执行 `op=maintain`，只在 view_builder 注册 | 开（每 30s） |
+| `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；bootstrap 固定执行 `op=maintain`，只在 view 注册 | 开（每 30s） |
 | `trpc.moox.storage.host_metrics_cleanup.timer` | 清理四个 Host Dataset 中严格早于 48 小时的事实；每数据集最多 10 批 | primary 每小时执行，启动时立即执行 |
 
 主机指标清理的 Handler 同步执行、Clone 调用 Context、设置 60 秒执行超时，并通过进程内状态跳过重叠调用。`DefaultScheduler` 不提供跨进程互斥，多副本部署时只能指定一个清理 owner，或改用分布式 scheduler。
@@ -244,7 +239,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | **View** | 查询入口，必须指定 `primary_dataset_id`；TimeSeries View 物化到 DuckDB，Record View 索引到 Bleve | Space |
 | **ViewColumn** | View 对外暴露的列 | View |
 | **PrimaryStoreNode** | 在线事实主存节点（Pebble），`endpoint` 决定访问地址（`local`=同进程） | — |
-| **Device** | 节点上的设备，`engine` ∈ `pebble`/`duckdb`/`bleve`/`parquet_archive`；路由只用 `pebble` 设备 | PrimaryStoreNode |
+| **Device** | 节点上的设备，`engine` ∈ `pebble`/`duckdb`/`bleve`；路由只用 `pebble` 设备 | PrimaryStoreNode |
 | **PrimaryStoreRoute** | 把 `(space, dataset[, subject/pattern])` 路由到 PrimaryStoreNode，`hash_rule` 决定分片 | Space + Dataset + PrimaryStoreNode |
 
 > Space 边界说明：Storage 中的 `space_id` 是存储隔离标签和元数据根键，不主动向 Control/Admin 校验 Space 是否存在，也不建立跨服务外键。管理台顶部 Space 选择器的数据来源是 Control/Admin；Storage 的 `ListSpaces` / `GetSpace` 只返回 Storage 自身登记的元数据。写错 `space_id` 可能产生孤立的 Storage 元数据或事实数据，接入方应统一使用 Control/Admin 选中的 `space_id`，或通过初始化脚本显式同步 Storage 侧 Space 元数据。
@@ -257,7 +252,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 - `value_type`：`string` / `int` / `double` / `bool` / `time` / `json` / `bytes`
 - `dataset_columns.origin_type`：`field` / `factor` / `system`
 - `view_columns.origin_type`：`dataset_column` / `expression` / `system`
-- `engine`（设备）：`pebble` / `duckdb` / `bleve` / `parquet_archive`
+- `engine`（设备）：`pebble` / `duckdb` / `bleve`
 
 ## 配置与导入元数据
 
@@ -425,13 +420,12 @@ primary_store_routes:
 cat > config/storage.local.yaml <<'YAML'
 storage:
   root: ./var/storage
-  roles: [primary, primary, view]
+  roles: [primary, view]
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
-    parquet_path: ./var/storage/archive
   primary:
     service_name: ""
   eventbus:
@@ -491,7 +485,7 @@ storage:
     - primary
     - view
   primary:
-    service_name: trpc.moox.storage.PrimaryStore   # 走远程主存
+    service_name: trpc.moox.storage.DataShard   # 走远程物理分片
   eventbus:
     type: nats
     nats_url: nats://10.0.0.9:4222
@@ -550,8 +544,8 @@ primary_store_routes:
 `moox-storage` 二进制只注册 `storage.roles` 启用的服务。常见拆分：
 
 - **View 节点**：启用 `view` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve。当前物理索引是本地单 owner，标准部署只启动一个 `storage-view` 实例。
-- **Archive 节点**：启用 `archive` 角色，消费 NATS 行变更事件，并通过 Metadata/PrimaryStore RPC 读取元数据与主存事实数据；后续 Parquet 归档策略在该角色内补齐，不放在 view 进程中。
-- 元数据 SQLite 是控制面单点，建议集中在 PrimaryStore/控制节点；独立 view/archive 节点通过 RPC 访问 Metadata/PrimaryStore。
+- **Archive 服务**：归档能力属于独立的 `modules/archive`，消费行变更事件，并通过 Metadata/PrimaryStore RPC 读取元数据与主存事实数据；不在 `moox-storage` runtime 中注册 `archive` 角色。
+- 元数据 SQLite 是控制面单点，集中在 `storage-primary`；独立 `storage-view` 和 Archive 服务通过 RPC 访问 Metadata/PrimaryStore。
 
 ### 启动验证
 
@@ -581,7 +575,7 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
 
 3. **读写链路**：通过 PrimaryStore 写一行再读回，等待 `op=maintain` 激活首个索引后查询 DataView。
 
-4. **分布式额外检查**：PrimaryStore 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 PrimaryStore 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
+4. **分布式额外检查**：PrimaryStore 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 PrimaryStore 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_committed.v1` / `moox.storage.record.rows_committed.v1` 主题有消息。
 
 5. **远程 View 验证**：线上或远程发布后通过 admin gateway `11000` 调用 `/api/admin/storage/QueryTimeSeriesRows` 或 `/api/admin/storage/SearchRecordRows`，请求必须使用小 `limit` / 小分页并跳过精确总数（例如 `total_mode=NONE`），不要做无界生产扫描。
 
@@ -612,11 +606,11 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 | `QueryTimeSeriesRows` | 查询 TimeSeries + DuckDB 派生 View；不存在返回 `VIEW_NOT_FOUND` |
 | `SearchRecordRows` | 搜索 Record + Bleve 派生 View，支持全文 + 结构化过滤 |
 
-View 索引生命周期由 `view_builder` 角色的 `op=maintain` 调度驱动，不提供手动重建 RPC。`QueryTimeSeriesRows` / `SearchRecordRows` 始终通过 owner 读取 `active_index_id`；完整历史以 PrimaryStore KV/Pebble 为准。
+View 索引生命周期由 `view` 角色的 `op=maintain` 调度驱动，不提供手动重建 RPC。`QueryTimeSeriesRows` / `SearchRecordRows` 始终通过 owner 读取 `active_index_id`；完整历史以 PrimaryStore KV/Pebble 为准。
 
 ### PrimaryStore — 在线主存（端口 20101，内部服务）
 
-`MergePrimaryRows` / `ReadPrimaryRows`，通常由 PrimaryStore 内部调用；仅在主存独立部署时对外。
+`MergeRows` / `ReadRows` / `ScanRows` / `DeleteRows`，仅供 PrimaryStore 通过 Node Service Gateway 调用。
 
 ### 常见返回错误码
 
@@ -644,8 +638,14 @@ proto/              协议定义与生成代码
 internal/
   bootstrap/        启动期装配（schema 初始化、seed 导入、eventbus 工厂）
   config/           运行配置加载
-  core/             领域抽象（eventbus/metadata/router/schema/factvalue/response）
-  infra/            底层实现（device/metadata/eventbus/transport）
-  services/         primary / primary / view / archive
+  rowkey/           事实键规范化、解析和维度哈希
+  typedvalue/       TypedValue 转换与比较
+  retinfo/          错误码和 RPC 返回状态
+  service/metadata/ Metadata RPC 与 SQLite/缓存目录
+  service/primarystore/ 路由、契约校验和跨 DataShard 编排
+  service/datashard/    固定 shard_id 的 Pebble 主存与 Outbox
+  service/dataview/     派生查询入口
+  service/viewbuilder/  RowsCommitted 消费、映射和恢复
+  service/viewindex/    ViewIndex 生命周期与 DuckDB/Bleve owner
 docs/               架构与设计文档
 ```

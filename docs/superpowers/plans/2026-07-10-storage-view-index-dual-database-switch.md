@@ -268,7 +268,7 @@ If the lease expires, another builder claims the same `build_id` and resumes its
 - Modify: `modules/storage/proto/Makefile`
 - Regenerate: `modules/storage/proto/gen/*.pb.go`
 - Regenerate: `modules/storage/proto/gen/*.trpc.go`
-- Test: `modules/storage/internal/core/viewindex/engine_test.go`
+- Test: `modules/storage/internal/service/dataview/index/engine_test.go`
 
 - [x] **Step 1: Write failing protocol-shape tests**
 
@@ -279,7 +279,7 @@ Add compile-time tests that construct `pb.View{ActiveIndexId: ...}`, `pb.ViewInd
 Run:
 
 ```bash
-go test -count=1 ./modules/storage/internal/core/viewindex
+go test -count=1 ./modules/storage/internal/service/dataview/index
 ```
 
 Expected: compilation fails because `ActiveIndexId`, `ViewIndexBuild`, and the new RPC messages do not exist.
@@ -312,7 +312,7 @@ Expected: `trpc-open create` succeeds for all seven proto files, including `view
 Run:
 
 ```bash
-go test -count=1 ./modules/storage/internal/core/viewindex ./modules/storage/proto/gen
+go test -count=1 ./modules/storage/internal/service/dataview/index ./modules/storage/proto/gen
 ```
 
 Expected: PASS after call sites are updated within this task; no generated file contains `active_result` or `building_result`.
@@ -320,10 +320,10 @@ Expected: PASS after call sites are updated within this task; no generated file 
 ### Task 2: Introduce Parseable Index IDs And Physical Paths
 
 **Files:**
-- Modify: `modules/storage/internal/core/viewindex/engine.go`
-- Modify: `modules/storage/internal/core/viewindex/engine_test.go`
-- Create: `modules/storage/internal/core/viewindex/path.go`
-- Create: `modules/storage/internal/core/viewindex/path_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/engine.go`
+- Modify: `modules/storage/internal/service/dataview/index/engine_test.go`
+- Create: `modules/storage/internal/service/dataview/index/path.go`
+- Create: `modules/storage/internal/service/dataview/index/path_test.go`
 
 - [x] **Step 1: Write failing tests**
 
@@ -342,7 +342,7 @@ Also reject malformed IDs, unknown slots, path traversal, and mismatched space/v
 - [x] **Step 2: Run and verify RED**
 
 ```bash
-go test -count=1 ./modules/storage/internal/core/viewindex -run 'Test(ViewIndexID|PhysicalPath)'
+go test -count=1 ./modules/storage/internal/service/dataview/index -run 'Test(ViewIndexID|PhysicalPath)'
 ```
 
 Expected: FAIL because `ParseViewIndexID`, `Ref`, and path helpers are missing.
@@ -365,7 +365,7 @@ Keep hex encoding so directory names are stable and cannot escape the root. `Ina
 - [x] **Step 4: Run and verify GREEN**
 
 ```bash
-go test -count=1 ./modules/storage/internal/core/viewindex
+go test -count=1 ./modules/storage/internal/service/dataview/index
 ```
 
 Expected: PASS.
@@ -414,9 +414,9 @@ Expected: PASS and `rg -n 'duckdb_path|bleve_path|rotation:' modules/storage/con
 
 **Files:**
 - Modify: `modules/storage/schema/metadata.sql`
-- Modify: `modules/storage/internal/core/metadata/store.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/store.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
 - Modify: `modules/storage/internal/services/access/metadata_space_view.go`
 - Create: `modules/storage/internal/services/access/metadata_view_index.go`
 - Modify: `modules/storage/internal/services/view/metadata.go`
@@ -440,7 +440,7 @@ public UpdateView cannot mutate active_index_id or index_build
 - [x] **Step 2: Run and verify RED**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/metadata/sqlite ./modules/storage/internal/services/access -run 'Test.*ViewIndex'
+go test -count=1 ./modules/storage/internal/service/metadata/sqlite ./modules/storage/internal/services/access -run 'Test.*ViewIndex'
 ```
 
 Expected: FAIL because the build table and methods do not exist.
@@ -469,7 +469,7 @@ The builder must call these RPCs directly. Delete the current clone-and-`UpdateV
 - [x] **Step 6: Run and verify GREEN**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/metadata/sqlite ./modules/storage/internal/services/access ./modules/storage/internal/services/view -run 'Test.*(ViewIndex|Metadata)'
+go test -count=1 ./modules/storage/internal/service/metadata/sqlite ./modules/storage/internal/services/access ./modules/storage/internal/services/view -run 'Test.*(ViewIndex|Metadata)'
 ```
 
 Expected: PASS.
@@ -477,11 +477,11 @@ Expected: PASS.
 ### Task 5: Build The Per-Slot DuckDB Manager
 
 **Files:**
-- Create: `modules/storage/internal/infra/device/duckdb/index_manager.go`
-- Create: `modules/storage/internal/infra/device/duckdb/index_manager_test.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_nocgo.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- Create: `modules/storage/internal/service/dataview/index/duckdb/index_manager.go`
+- Create: `modules/storage/internal/service/dataview/index/duckdb/index_manager_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_nocgo.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
 - [x] **Step 1: Write failing manager tests**
 
@@ -500,7 +500,7 @@ reopening the manager discovers an existing slot
 - [x] **Step 2: Run and verify RED**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/device/duckdb -run TestIndexManager
+go test -count=1 ./modules/storage/internal/service/dataview/index/duckdb -run TestIndexManager
 ```
 
 Expected: FAIL because `IndexManager` is missing.
@@ -522,7 +522,7 @@ Maintain one `moox_view_index_meta` row transactionally with writes. Do not run 
 - [x] **Step 5: Run and verify GREEN**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/device/duckdb
+go test -count=1 ./modules/storage/internal/service/dataview/index/duckdb
 ```
 
 Expected: PASS, including existing query paging tests.
@@ -530,8 +530,8 @@ Expected: PASS, including existing query paging tests.
 ### Task 6: Build The Per-Slot Bleve Manager And Push Down Paging
 
 **Files:**
-- Modify: `modules/storage/internal/infra/device/bleve/index.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/bleve/index.go`
+- Modify: `modules/storage/internal/service/dataview/index/bleve/index_test.go`
 - Rewrite: `modules/storage/internal/services/view/search/service.go`
 - Modify: `modules/storage/internal/services/view/search/service_test.go`
 
@@ -542,7 +542,7 @@ Test independent a/b directories, reference-safe removal, exact stats, version-r
 - [x] **Step 2: Run and verify RED**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/device/bleve ./modules/storage/internal/services/view/search
+go test -count=1 ./modules/storage/internal/service/dataview/index/bleve ./modules/storage/internal/services/view/search
 ```
 
 Expected: the bounded-deserialization test fails because current code reads every 10,000-hit batch.
@@ -554,7 +554,7 @@ Build version range queries in Bleve, set requested sort fields, request `size+1
 - [x] **Step 4: Run and verify GREEN**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/device/bleve ./modules/storage/internal/services/view/search
+go test -count=1 ./modules/storage/internal/service/dataview/index/bleve ./modules/storage/internal/services/view/search
 ```
 
 Expected: PASS.

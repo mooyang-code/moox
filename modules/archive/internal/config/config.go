@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,8 +56,10 @@ type MaterializeConfig struct {
 }
 
 type StorageRPCConfig struct {
-	AccessTarget   string `yaml:"access_target"`
-	MetadataTarget string `yaml:"metadata_target"`
+	GatewayTarget string `yaml:"gateway_target"`
+	GatewayNodeID string `yaml:"gateway_node_id"`
+	KeyID         string `yaml:"key_id"`
+	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 type COSConfig struct {
@@ -91,7 +94,7 @@ func Default() *Config {
 				MaxAckPending: 256, DedupeRetention: 168 * time.Hour,
 			},
 			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
-			StorageRPC:  StorageRPCConfig{AccessTarget: "ip://127.0.0.1:20102", MetadataTarget: "ip://127.0.0.1:20100"},
+			StorageRPC:  StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "archive"},
 			COS:         COSConfig{Prefix: "moox/archive", Workers: 2},
 		},
 		Health: HealthConfig{Addr: "127.0.0.1:11416"},
@@ -176,6 +179,12 @@ func (c *Config) applyDefaults() {
 	if c.Health.Addr == "" {
 		c.Health.Addr = d.Health.Addr
 	}
+	if c.Archive.StorageRPC.GatewayTarget == "" {
+		c.Archive.StorageRPC.GatewayTarget = d.Archive.StorageRPC.GatewayTarget
+	}
+	if c.Archive.StorageRPC.KeyID == "" {
+		c.Archive.StorageRPC.KeyID = d.Archive.StorageRPC.KeyID
+	}
 }
 
 func (c *Config) SourceSpaceIDs() []string {
@@ -245,6 +254,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Archive.COS.Enabled && (strings.TrimSpace(c.Archive.COS.Region) == "" || strings.TrimSpace(c.Archive.COS.Bucket) == "") {
 		return fmt.Errorf("archive cos region and bucket are required")
+	}
+	if strings.TrimSpace(c.Archive.StorageRPC.HMACKeyFile) != "" {
+		if _, err := gatewayauth.CredentialsFromKeyFile(c.Archive.StorageRPC.KeyID, c.Archive.StorageRPC.HMACKeyFile); err != nil {
+			return fmt.Errorf("archive storage hmac credentials: %w", err)
+		}
 	}
 	return nil
 }

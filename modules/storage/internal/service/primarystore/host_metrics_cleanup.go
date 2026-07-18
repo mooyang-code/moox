@@ -56,7 +56,7 @@ func (s *Service) CleanupExpiredHostMetrics(ctx context.Context, opts HostMetric
 				break
 			}
 			if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-				message := "missing response"
+				message := "missing retinfo"
 				if rsp != nil && rsp.GetRetInfo() != nil && strings.TrimSpace(rsp.GetRetInfo().GetMsg()) != "" {
 					message = rsp.GetRetInfo().GetMsg()
 				}

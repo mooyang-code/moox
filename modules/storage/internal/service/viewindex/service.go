@@ -8,13 +8,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/response"
-	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type ManagedEngine interface {
-	coreviewindex.ViewIndexEngine
+	ViewIndexEngine
 	List(ctx context.Context) ([]string, error)
 }
 
@@ -37,7 +36,7 @@ type Service struct {
 	timeSeries TimeSeriesQuerier
 	records    RecordQuerier
 	mu         sync.RWMutex
-	schemas    map[string]coreviewindex.ViewIndexSchema
+	schemas    map[string]ViewIndexSchema
 }
 
 var _ pb.ViewIndexService = (*Service)(nil)
@@ -49,7 +48,7 @@ func NewService(opts Options) *Service {
 			engines[strings.ToLower(strings.TrimSpace(name))] = engine
 		}
 	}
-	return &Service{engines: engines, timeSeries: opts.TimeSeries, records: opts.Records, schemas: make(map[string]coreviewindex.ViewIndexSchema)}
+	return &Service{engines: engines, timeSeries: opts.TimeSeries, records: opts.Records, schemas: make(map[string]ViewIndexSchema)}
 }
 
 func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndexReq) (*pb.PrepareViewIndexRsp, error) {
@@ -68,7 +67,7 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	if err != nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.PrepareViewIndexRsp{RetInfo: response.Success("success")}, nil
+	return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
 func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq) (*pb.ApplyViewIndexRsp, error) {
@@ -81,7 +80,7 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 		err = s.validateApplyFence(ctx, req.GetIndexId(), engine, batch)
 	}
 	if err == nil {
-		applier, ok := engine.(coreviewindex.ViewIndexApplier)
+		applier, ok := engine.(ViewIndexApplier)
 		if !ok {
 			err = errors.New("view index engine does not support atomic apply")
 		} else {
@@ -91,12 +90,12 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 	if err != nil {
 		return &pb.ApplyViewIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.ApplyViewIndexRsp{RetInfo: response.Success("success")}, nil
+	return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
 func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (*pb.StatViewIndexRsp, error) {
 	engine, err := s.requestEngine(req.GetEngine())
-	var stats coreviewindex.ViewIndexStats
+	var stats ViewIndexStats
 	if err == nil {
 		err = validateIndexID(req.GetIndexId(), engine)
 	}
@@ -106,7 +105,7 @@ func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (
 	if err != nil {
 		return &pb.StatViewIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.StatViewIndexRsp{RetInfo: response.Success("success"), Stats: statsToProto(stats)}, nil
+	return &pb.StatViewIndexRsp{RetInfo: retinfo.Success("success"), Stats: statsToProto(stats)}, nil
 }
 
 func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexReq) (*pb.RemoveViewIndexRsp, error) {
@@ -123,7 +122,7 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	if err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.RemoveViewIndexRsp{RetInfo: response.Success("success")}, nil
+	return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
 func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesReq) (*pb.ListViewIndexesRsp, error) {
@@ -147,7 +146,7 @@ func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesRe
 			return &pb.ListViewIndexesRsp{RetInfo: indexError(err)}, nil
 		}
 		for _, indexID := range ids {
-			ref, err := coreviewindex.ParseViewIndexID(indexID)
+			ref, err := ParseViewIndexID(indexID)
 			if err != nil {
 				continue
 			}
@@ -168,7 +167,7 @@ func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesRe
 			descriptors = append(descriptors, descriptor)
 		}
 	}
-	return &pb.ListViewIndexesRsp{RetInfo: response.Success("success"), Indexes: descriptors}, nil
+	return &pb.ListViewIndexesRsp{RetInfo: retinfo.Success("success"), Indexes: descriptors}, nil
 }
 
 func (s *Service) QueryTimeSeriesIndex(ctx context.Context, req *pb.QueryTimeSeriesIndexReq) (*pb.QueryTimeSeriesIndexRsp, error) {
@@ -182,7 +181,7 @@ func (s *Service) QueryTimeSeriesIndex(ctx context.Context, req *pb.QueryTimeSer
 	if err != nil {
 		return &pb.QueryTimeSeriesIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.QueryTimeSeriesIndexRsp{RetInfo: response.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
+	return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
 }
 
 func (s *Service) SearchRecordIndex(ctx context.Context, req *pb.SearchRecordIndexReq) (*pb.SearchRecordIndexRsp, error) {
@@ -196,7 +195,7 @@ func (s *Service) SearchRecordIndex(ctx context.Context, req *pb.SearchRecordInd
 	if err != nil {
 		return &pb.SearchRecordIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.SearchRecordIndexRsp{RetInfo: response.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
+	return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Success("success"), Columns: columns, Rows: rows, PageResult: page}, nil
 }
 
 func (s *Service) requestEngine(name string) (ManagedEngine, error) {
@@ -215,7 +214,7 @@ func validateIndexID(indexID string, engine ManagedEngine) error {
 	if strings.TrimSpace(indexID) == "" {
 		return errors.New("index_id is required")
 	}
-	if _, err := coreviewindex.ParseViewIndexID(indexID); err != nil {
+	if _, err := ParseViewIndexID(indexID); err != nil {
 		return err
 	}
 	if engine == nil || strings.TrimSpace(engine.Engine()) == "" {
@@ -224,14 +223,14 @@ func validateIndexID(indexID string, engine ManagedEngine) error {
 	return nil
 }
 
-func validateApplyIndexRequest(indexID string, engine ManagedEngine, batch coreviewindex.ViewIndexApplyBatch) error {
+func validateApplyIndexRequest(indexID string, engine ManagedEngine, batch ViewIndexApplyBatch) error {
 	if err := validateIndexID(indexID, engine); err != nil {
 		return err
 	}
 	if batch.ViewVersion == 0 || strings.TrimSpace(batch.ViewSchemaHash) == "" {
 		return errors.New("view_version and view_schema_hash are required for fenced index apply")
 	}
-	ref, _ := coreviewindex.ParseViewIndexID(indexID)
+	ref, _ := ParseViewIndexID(indexID)
 	if err := batch.Validate(); err != nil {
 		return err
 	}
@@ -250,7 +249,7 @@ func validateQueryIndexID(indexID string, spaceID string) error {
 	if strings.TrimSpace(indexID) == "" || strings.TrimSpace(spaceID) == "" {
 		return errors.New("index_id and query space_id are required")
 	}
-	ref, err := coreviewindex.ParseViewIndexID(indexID)
+	ref, err := ParseViewIndexID(indexID)
 	if err != nil {
 		return err
 	}
@@ -260,7 +259,7 @@ func validateQueryIndexID(indexID string, spaceID string) error {
 	return nil
 }
 
-func (s *Service) validateApplyFence(ctx context.Context, indexID string, engine ManagedEngine, batch coreviewindex.ViewIndexApplyBatch) error {
+func (s *Service) validateApplyFence(ctx context.Context, indexID string, engine ManagedEngine, batch ViewIndexApplyBatch) error {
 	s.mu.RLock()
 	schema, prepared := s.schemas[indexID]
 	s.mu.RUnlock()
@@ -287,7 +286,7 @@ func validatePrepareRequest(req *pb.PrepareViewIndexReq) error {
 	if !strings.EqualFold(strings.TrimSpace(req.GetEngine()), strings.TrimSpace(req.GetSchema().GetEngine())) {
 		return errors.New("request engine does not match schema engine")
 	}
-	ref, err := coreviewindex.ParseViewIndexID(req.GetIndexId())
+	ref, err := ParseViewIndexID(req.GetIndexId())
 	if err != nil {
 		return err
 	}
@@ -297,45 +296,45 @@ func validatePrepareRequest(req *pb.PrepareViewIndexReq) error {
 	return nil
 }
 
-func schemaFromProto(schema *pb.ViewIndexSchema) coreviewindex.ViewIndexSchema {
+func schemaFromProto(schema *pb.ViewIndexSchema) ViewIndexSchema {
 	if schema == nil {
-		return coreviewindex.ViewIndexSchema{}
+		return ViewIndexSchema{}
 	}
-	return coreviewindex.ViewIndexSchema{
+	return ViewIndexSchema{
 		SpaceID: schema.GetSpaceId(), ViewID: schema.GetViewId(), ViewVersion: schema.GetViewVersion(),
 		Engine: schema.GetEngine(), Columns: schema.GetColumns(), SchemaHash: schema.GetViewSchemaHash(),
 	}
 }
 
-func batchFromProto(batch *pb.ViewIndexApplyBatch) coreviewindex.ViewIndexApplyBatch {
+func batchFromProto(batch *pb.ViewIndexApplyBatch) ViewIndexApplyBatch {
 	if batch == nil {
-		return coreviewindex.ViewIndexApplyBatch{}
+		return ViewIndexApplyBatch{}
 	}
-	out := coreviewindex.ViewIndexApplyBatch{ViewVersion: batch.GetViewVersion(), ViewSchemaHash: batch.GetViewSchemaHash(), RequiredColumnNames: append([]string(nil), batch.GetRequiredColumnNames()...)}
+	out := ViewIndexApplyBatch{ViewVersion: batch.GetViewVersion(), ViewSchemaHash: batch.GetViewSchemaHash(), RequiredColumnNames: append([]string(nil), batch.GetRequiredColumnNames()...)}
 	for _, item := range batch.GetRowWrites() {
 		if item == nil || item.GetKey() == nil {
 			continue
 		}
-		out.RowWrites = append(out.RowWrites, coreviewindex.RowWrite{
-			Operation: coreviewindex.RowWriteOperation(item.GetOperation()),
-			Key:       coreviewindex.RowKey{TimeSeriesKey: item.GetKey().GetTimeSeriesKey(), RecordKey: item.GetKey().GetRecordKey()},
-			Columns:   item.GetColumns(), Attributes: item.GetAttributes(), AttributesToDelete: item.GetAttributesToDelete(), RemovedColumnNames: item.GetRemovedColumnNames(),
+		out.RowWrites = append(out.RowWrites, RowWrite{
+			Operation: RowWriteOperation(item.GetOperation()),
+			Key:       RowKey{TimeSeriesKey: item.GetKey().GetTimeSeriesKey(), RecordKey: item.GetKey().GetRecordKey()},
+			Columns:   item.GetColumns(), Attributes: item.GetAttributes(), AttributesToDelete: item.GetAttributesToDelete(), RemovedColumnNames: item.GetRemovedColumnNames(), RemovedColumns: item.GetRemovedColumns(), SourceShardID: item.GetSourceShardId(), SourceSequence: item.GetSourceSequence(),
 		})
 	}
 	for _, item := range batch.GetCheckpointUpdates() {
 		if item != nil {
-			out.CheckpointUpdates = append(out.CheckpointUpdates, coreviewindex.ShardCheckpointUpdate{ShardID: item.GetShardId(), ExpectedLastAppliedSequence: item.GetExpectedLastAppliedSequence(), LastAppliedSequence: item.GetLastAppliedSequence()})
+			out.CheckpointUpdates = append(out.CheckpointUpdates, ShardCheckpointUpdate{ShardID: item.GetShardId(), ExpectedLastAppliedSequence: item.GetExpectedLastAppliedSequence(), LastAppliedSequence: item.GetLastAppliedSequence()})
 		}
 	}
 	if update := batch.GetIndexRangeUpdate(); update != nil {
-		out.IndexRangeUpdate = &coreviewindex.IndexRangeUpdate{}
+		out.IndexRangeUpdate = &IndexRangeUpdate{}
 		out.IndexRangeUpdate.IndexedFrom = update.IndexedFrom
 		out.IndexRangeUpdate.IndexedTo = update.IndexedTo
 	}
 	return out
 }
 
-func statsToProto(stats coreviewindex.ViewIndexStats) *pb.ViewIndexStats {
+func statsToProto(stats ViewIndexStats) *pb.ViewIndexStats {
 	count := uint64(0)
 	if stats.EntryCount > 0 {
 		count = uint64(stats.EntryCount)
@@ -351,15 +350,15 @@ func statsToProto(stats coreviewindex.ViewIndexStats) *pb.ViewIndexStats {
 	return out
 }
 
-func statsFromProto(stats *pb.ViewIndexStats) coreviewindex.ViewIndexStats {
+func statsFromProto(stats *pb.ViewIndexStats) ViewIndexStats {
 	if stats == nil {
-		return coreviewindex.ViewIndexStats{}
+		return ViewIndexStats{}
 	}
 	count := stats.GetEntryCount()
 	if count > math.MaxInt64 {
 		count = math.MaxInt64
 	}
-	out := coreviewindex.ViewIndexStats{
+	out := ViewIndexStats{
 		Exists: stats.GetExists(), ViewVersion: stats.GetViewVersion(), EntryCount: int64(count), MinVersion: stats.GetMinVersion(), MaxVersion: stats.GetMaxVersion(),
 		SchemaHash: stats.GetViewSchemaHash(), PhysicalBytes: stats.GetPhysicalBytes(), UpdatedAt: stats.GetUpdatedAt(), FreeDiskBytes: stats.GetFreeDiskBytes(), IndexedFrom: stats.GetIndexedFrom(), IndexedTo: stats.GetIndexedTo(), ShardCheckpoints: make(map[string]uint64),
 	}
@@ -373,7 +372,7 @@ func statsFromProto(stats *pb.ViewIndexStats) coreviewindex.ViewIndexStats {
 
 func indexError(err error) *pb.RetInfo {
 	if err == nil {
-		return response.Success("success")
+		return retinfo.Success("success")
 	}
-	return response.Error(pb.ErrorCode_INNER_ERR, err)
+	return retinfo.Error(pb.ErrorCode_INNER_ERR, err)
 }

@@ -31,9 +31,3 @@ devices:
     engine: bleve
     endpoint: ./var/storage/bleve
     status: active
-  - device_id: parquet-local
-    node_id: local
-    name: local-parquet-archive
-    engine: parquet_archive
-    endpoint: ./var/storage/archive
-    status: active
