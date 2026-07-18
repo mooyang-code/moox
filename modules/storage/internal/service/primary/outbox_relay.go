@@ -2,6 +2,7 @@ package primary
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -130,38 +131,28 @@ func (r *OutboxRelay) flush(ctx context.Context) (int, error) {
 	if err != nil || len(entries) == 0 {
 		return 0, err
 	}
-	messages := make([][]byte, len(entries))
-	for i, entry := range entries {
-		messages[i] = entry.Data
-	}
-	acks := make([]error, len(entries))
-	if batch, ok := r.publisher.(interface {
-		PublishEnvelopes(context.Context, [][]byte) []error
-	}); ok {
-		acks = batch.PublishEnvelopes(ctx, messages)
-	} else {
-		for i, data := range messages {
-			acks[i] = r.publisher.PublishEnvelope(ctx, data)
+	// A shard's outbox is a single ordered lane. Publish and acknowledge one
+	// entry at a time so a later sequence can never overtake a failed entry.
+	var confirmed []uint64
+	for _, entry := range entries {
+		if entry == nil {
+			return len(confirmed), errors.New("storage outbox contains nil entry")
 		}
-	}
-	var success []uint64
-	for i, err := range acks {
-		if err == nil {
-			success = append(success, entries[i].Sequence)
-			r.lastAck.Store(time.Now().UnixNano())
+		if err := r.publisher.PublishEnvelope(ctx, entry.Data); err != nil {
+			if len(confirmed) > 0 {
+				if deleteErr := r.store.DeleteOutbox(ctx, confirmed); deleteErr != nil {
+					return len(confirmed), errors.Join(err, deleteErr)
+				}
+			}
+			return len(confirmed), err
 		}
+		confirmed = append(confirmed, entry.Sequence)
+		r.lastAck.Store(time.Now().UnixNano())
 	}
-	if len(success) > 0 {
-		if err := r.store.DeleteOutbox(ctx, success); err != nil {
-			return len(success), err
-		}
+	if err := r.store.DeleteOutbox(ctx, confirmed); err != nil {
+		return len(confirmed), err
 	}
-	for _, err := range acks {
-		if err != nil {
-			return len(success), err
-		}
-	}
-	return len(success), nil
+	return len(confirmed), nil
 }
 
 func (r *OutboxRelay) FailureCount() uint64 {

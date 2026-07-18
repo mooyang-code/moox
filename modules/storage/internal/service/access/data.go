@@ -253,11 +253,12 @@ func (s *Service) scanTimeSeriesSubject(ctx context.Context, req *pb.ReadTimeSer
 	var hasMore bool
 	var nextCursor string
 	for len(rows) < int(size) {
+		remaining := uint32(int(size) - len(rows))
 		primaryRows, primaryPage, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanPrimaryRowsReq{
 			AuthInfo: req.GetAuthInfo(), Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 			VersionRange: versionRange, ColumnNames: req.GetColumnNames(), Order: req.GetOrder(),
 			KeyPrefix: factkey.EscapePart(key.GetSubjectId()) + "%7C" + factkey.EscapePart(key.GetFreq()) + "%7C",
-			Page:      &pb.Page{Size: primaryDatasetScanPageSize, Cursor: cursor},
+			Page:      &pb.Page{Size: remaining, Cursor: cursor},
 		})
 		if scanErr != nil {
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(scanErr), scanErr)}, nil

@@ -38,6 +38,12 @@ func ValidateMessage(msg *messagepb.MooxMessage, maxPayload int) error {
 	if strings.TrimSpace(msg.GetContentType()) == "" {
 		return fmt.Errorf("%w: content_type is required", ErrInvalidMessage)
 	}
+	if strings.TrimSpace(msg.GetMessageType()) == "" {
+		return fmt.Errorf("%w: message_type is required", ErrInvalidMessage)
+	}
+	if len(msg.GetPayload()) == 0 {
+		return fmt.Errorf("%w: payload is required", ErrInvalidMessage)
+	}
 	if maxPayload > 0 && len(msg.GetPayload()) > maxPayload {
 		return fmt.Errorf("%w: payload size %d exceeds %d", ErrInvalidMessage, len(msg.GetPayload()), maxPayload)
 	}

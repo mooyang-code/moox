@@ -22,6 +22,7 @@ func TestMooxMessageContract(t *testing.T) {
 		"payload":          11,
 		"trace":            12,
 		"attributes":       13,
+		"message_type":     14,
 	}
 	for name, number := range want {
 		field := d.Fields().ByName(name)

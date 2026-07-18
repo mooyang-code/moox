@@ -40,4 +40,5 @@ message MooxMessage {
   bytes payload = 11;
   TraceContext trace = 12;
   map<string, string> attributes = 13;
+  string message_type = 14;
 }

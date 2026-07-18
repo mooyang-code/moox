@@ -384,6 +384,7 @@ func validTestMessage(id, topic string) *messagepb.MooxMessage {
 		PublishedAt: now,
 		ContentType: "application/json",
 		Payload:     []byte(`{"ok":true}`),
+		MessageType: "test.message.v1",
 		Attributes:  map[string]string{"test": "true"},
 	}
 }

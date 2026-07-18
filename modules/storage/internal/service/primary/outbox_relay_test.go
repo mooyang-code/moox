@@ -43,6 +43,22 @@ func TestOutboxRelayFlushReturnsPublishError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOutboxRelayFlushStopsAtFirstFailureAndDeletesOnlyPrefix(t *testing.T) {
+	msg := testOutboxMessage(t, "node-1")
+	store := &relayTestStore{entries: []*device.OutboxEntry{
+		{Sequence: 1, Data: msg},
+		{Sequence: 2, Data: msg},
+		{Sequence: 3, Data: msg},
+	}}
+	publisher := &sequencePublisher{errs: []error{nil, assert.AnError, nil}}
+	relay := NewOutboxRelay(store, publisher, OutboxConfig{FlushBatchSize: 10})
+	count, err := relay.flush(context.Background())
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, []uint64{1}, store.deleted)
+	assert.Equal(t, 2, publisher.calls)
+}
+
 func TestOutboxRelayStartAndClose(t *testing.T) {
 	store := &relayTestStore{}
 	publisher := &relayTestPublisher{}
@@ -78,6 +94,20 @@ func (s *relayTestStore) ScanRows(context.Context, *pb.PrimaryStoreTarget, pb.Da
 
 type relayTestPublisher struct {
 	err error
+}
+
+type sequencePublisher struct {
+	errs  []error
+	calls int
+}
+
+func (p *sequencePublisher) PublishEnvelope(context.Context, []byte) error {
+	idx := p.calls
+	p.calls++
+	if idx >= len(p.errs) {
+		return nil
+	}
+	return p.errs[idx]
 }
 
 func (p *relayTestPublisher) PublishEnvelope(context.Context, []byte) error {
