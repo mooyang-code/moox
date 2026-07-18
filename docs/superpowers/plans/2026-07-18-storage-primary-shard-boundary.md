@@ -1586,8 +1586,8 @@ git commit -m "refactor(web): split storage and cloud node workflows"
 Browser -> Admin Gateway /api/admin/storage/{method} -> Node Service Gateway tRPC -> Metadata | PrimaryStore | DataView
 Go Service -> Node Service Gateway tRPC -> Metadata | PrimaryStore | DataView
 PrimaryStore -> DataShard -> Pebble + RowsChanged MooxMessage Outbox
-TimeSeriesRowsChanged | RecordRowsChanged -> ViewBuilder -> ChangeBatch -> batch reread -> RowMapper -> BatchWrite -> ViewIndex.Apply -> DuckDB/Bleve
-TimeSeriesRowsChanged UPSERT -> Archive Journal/Parquet/COS
+TimeSeriesRowsCommitted | RecordRowsCommitted -> ViewBuilder -> CommittedBatch -> MERGE（缺行时批量回读后 REPLACE） -> RowMapper -> BatchWrite -> ViewIndex.Apply -> DuckDB/Bleve
+TimeSeriesRowsCommitted UPSERT -> Archive Journal/Parquet/COS
 RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 ```
 
@@ -1635,7 +1635,7 @@ bash scripts/test-quality-gates.sh
 
 ```text
 首次 Merge 创建 -> 再次局部 Merge -> PrimaryStore 完整行
-TimeSeriesRowsChanged/RecordRowsChanged 共用的 Shard Sequence 连续且 Payload 完整
+TimeSeriesRowsCommitted/RecordRowsCommitted 共用的 Shard Sequence 连续且 Payload 完整
 BatchWrite UPSERT/DELETE、Checkpoint CAS、ViewVersion/ViewSchemaHash Fence 全部生效
 DuckDB/Bleve 查询结果一致
 乱序 ACK 不删除非连续 Outbox
