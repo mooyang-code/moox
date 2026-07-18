@@ -59,7 +59,10 @@
 | View 行并发 | 同一 `ViewRowKey` 串行处理，不比较不同 DataShard 的 Sequence |
 | DuckDB/Bleve | 共用同一物化协议；两者都完整 Replace/Upsert，不接收 Merge 请求中的局部字段 |
 | 共享包边界 | 删除含糊的 `internal/core` 总目录；真正跨服务复用的代码只保留顶层 `internal/rowkey`、`internal/typedvalue`、`internal/retinfo` |
-| ViewIndex 行模型 | 不创建独立 `viewrow` 包；`Row`、`RowKey`、`Batch` 作为 ViewIndex 写入契约，由 `internal/service/viewindex` 持有 |
+| ViewIndex 写入模型 | 不创建独立 `viewrow` 包；`RowKey`、`RowWrite`、`BatchWrite` 作为 ViewIndex 写入契约，由 `internal/service/viewindex` 持有 |
+| ViewIndex 写操作 | `RowWrite.operation` 只允许 `UPSERT` / `DELETE`；UPSERT 必须携带完整列，DELETE 只携带 Key；统一通过 `ViewIndex.Apply` 提交 |
+| ViewIndex 写入进度 | `BatchWrite.checkpoint_updates` 保存一个或多个带 Expected/Last Sequence 的 `ShardCheckpointUpdate`；可选 `IndexRangeUpdate` 只由进度协调逻辑产生 |
+| View Schema Fence | 使用 `view_schema_hash` / `ViewSchemaHash`，明确区别于 Dataset `schema_hash`；它与 `view_version` 共同拒绝过期写入 |
 | 错误与返回信息 | 错误码、类型化错误和 `pb.RetInfo` 转换统一放入 `internal/retinfo`；不拆分 `errorcode`、`rpcresult`，不保留 `response` 包 |
 | Archive 范围 | 只处理配置白名单中的 TimeSeries Dataset；永久保留每个历史业务 Key 的最新完整状态 |
 | Archive 删除 | Archive 忽略 Delete 并 ACK，不写 Tombstone，不删除 Parquet/COS |
@@ -88,7 +91,7 @@
 3. Outbox 只能删除从队首开始连续发布成功的前缀，不能跨过失败项。
 4. ViewBuilder 只有在所有受影响的活动/构建中 ViewIndex 都写入成功后才 ACK。
 5. 同一 Shard 的消息严格按 Sequence 处理；同一 ViewRowKey 不并发写入。
-6. ViewIndex 只接受完整 View 行；DuckDB 和 Bleve 的写入语义一致。
+6. ViewIndex 只接受包含明确 UPSERT/DELETE 的 `BatchWrite`；UPSERT 必须是完整 View 行，DuckDB 和 Bleve 的写入语义一致。
 7. ViewIndex 数据写入成功后才能推进对应 Shard Checkpoint；崩溃最多造成重放，不得造成跳过。
 8. Delete 必须从 PrimaryStore 传播到 DuckDB/Bleve；Archive 必须忽略 Delete。
 9. Cursor 必须指向最后一条实际返回或明确消费的数据，不能因为底层预取跳过未返回行。
@@ -591,8 +594,8 @@ git commit -m "fix(storage): propagate online deletes to views"
 - Modify: `modules/storage/internal/service/view/builder/record_test.go`
 - Modify: `modules/storage/internal/service/view/builder/options.go`
 - Modify: `modules/storage/internal/service/view/builder/options_test.go`
-- Create: `modules/storage/internal/core/viewindex/row.go`
-- Create: `modules/storage/internal/core/viewindex/row_test.go`
+- Create: `modules/storage/internal/core/viewindex/batch_write.go`
+- Create: `modules/storage/internal/core/viewindex/batch_write_test.go`
 - Modify: `modules/storage/internal/observability/view_metrics.go`
 - Modify: `modules/storage/internal/observability/view_metrics_test.go`
 
@@ -652,7 +655,7 @@ write_timeout: 10s
 
 `rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。它必须读取所有 ViewColumn 的来源 Dataset，应用固定 Filter，输出完整列集合和稳定 ViewRowKey。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。
 
-不创建独立 `viewrow` 包。ViewBuilder 和 ViewIndex 之间统一使用 ViewIndex 所拥有的 `viewindex.Row`、`viewindex.RowKey`、`viewindex.Batch` 写入契约；本任务先在现有 `internal/core/viewindex` 中建立这些类型，Task 13 再随整个 ViewIndex 契约原子移动到 `internal/service/viewindex`。这些类型只能表达不可变的完整派生行、稳定行身份和有界批次，不得包含事实回读、Filter 或 RowMapper 流程。
+不创建独立 `viewrow` 包。ViewBuilder 和 ViewIndex 之间统一使用 ViewIndex 所拥有的 `viewindex.RowKey`、`viewindex.RowWrite`、`viewindex.BatchWrite` 写入契约；本任务先在现有 `internal/core/viewindex` 中建立这些类型，Task 13 再随整个 ViewIndex 契约原子移动到 `internal/service/viewindex`。RowMapper 只负责生成稳定 Key 和完整列集合，ViewBuilder 再将其包装为 UPSERT/DELETE RowWrite；这些类型不得包含事实回读、Filter 或 RowMapper 流程。
 
 - [ ] **Step 8: ACK/NAK 必须等待持久化结果**
 
@@ -668,62 +671,108 @@ git add modules/storage/internal/core/viewindex modules/storage/internal/service
 git commit -m "refactor(storage): batch and serialize view refreshes"
 ```
 
-### Task 8: 统一 DuckDB/Bleve 写入、范围和 Checkpoint
+### Task 8: 统一 DuckDB/Bleve BatchWrite、范围和 Checkpoint
 
 **Files:**
 - Modify: `modules/storage/internal/core/viewindex/engine.go`
+- Modify: `modules/storage/internal/core/viewindex/batch_write.go`
 - Modify: `modules/storage/internal/infra/device/duckdb/view_store_write.go`
 - Modify: `modules/storage/internal/infra/device/duckdb/view_store_schema.go`
 - Modify: `modules/storage/internal/infra/device/duckdb/view_store_lifecycle.go`
+- Modify: `modules/storage/internal/infra/device/duckdb/index_manager.go`
 - Modify: `modules/storage/internal/infra/device/bleve/index.go`
 - Modify: `modules/storage/internal/service/viewindex/service.go`
+- Modify: `modules/storage/internal/service/viewindex/client.go`
+- Modify: `modules/storage/internal/service/view/builder/options.go`
+- Modify: `modules/storage/internal/service/view/builder/time_series.go`
+- Modify: `modules/storage/internal/service/view/builder/record.go`
+- Modify: `modules/storage/internal/service/view/maintenance.go`
+- Modify: `modules/storage/internal/service/view/search/service.go`
 - Modify: `modules/storage/proto/view_index.proto`
+- Modify: `modules/storage/proto/metadata.proto`
+- Regenerate: `modules/storage/proto/storagegen/*`
+- Modify: `modules/storage/schema/metadata.sql`
+- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view.go`
+- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_view_index.go`
 - Modify: `modules/storage/internal/core/viewindex/engine_test.go`
+- Modify: `modules/storage/internal/core/viewindex/batch_write_test.go`
 - Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
 - Modify: `modules/storage/internal/infra/device/duckdb/index_manager_test.go`
 - Modify: `modules/storage/internal/infra/device/bleve/index_test.go`
 - Modify: `modules/storage/internal/service/viewindex/service_test.go`
 
-- [ ] **Step 1: 定义 ViewIndex 写入契约**
+- [ ] **Step 1: 定义 BatchWrite 写入契约**
 
 ```go
+type RowWriteOperation uint8
+
+const (
+    RowWriteOperationUnspecified RowWriteOperation = iota
+    RowWriteOperationUpsert
+    RowWriteOperationDelete
+)
+
 type RowKey struct {
     TimeSeriesKey *pb.TimeSeriesKey
     RecordKey     *pb.RecordKey
 }
 
-type Row struct {
-    TimeSeries *pb.TimeSeriesRow
-    Record     *pb.RecordRow
+type RowWrite struct {
+    Operation  RowWriteOperation
+    Key        RowKey
+    Columns    []*pb.ColumnValue
+    Attributes map[string]string
 }
 
-type Batch struct {
-    Upserts     []Row
-    DeleteKeys  []RowKey
-    ShardID     string
-    Sequence    uint64
-    IndexedFrom string
-    IndexedTo   string
-    ViewVersion uint64
-    SchemaHash  string
+type ShardCheckpointUpdate struct {
+    ShardID                     string
+    ExpectedLastAppliedSequence uint64
+    LastAppliedSequence         uint64
+}
+
+type IndexRangeUpdate struct {
+    IndexedFrom *string
+    IndexedTo   *string
+}
+
+type BatchWrite struct {
+    RowWrites         []RowWrite
+    CheckpointUpdates []ShardCheckpointUpdate
+    ViewVersion       uint64
+    ViewSchemaHash    string
+    IndexRangeUpdate  *IndexRangeUpdate
 }
 ```
 
-每个 `Row` 和 `RowKey` 必须且只能设置 TimeSeries/Record 中的一种；`Batch` 只接收 RowMapper 生成的完整行，不接收事实 Merge 的局部字段。不得增加全局 `write_version`。
+每个 `RowKey` 必须且只能设置 TimeSeries/Record 中的一种。`RowWrite.operation` 的零值必须拒绝；UPSERT 必须携带 RowMapper 生成的完整 Columns/Attributes，DELETE 必须只携带 Key 并拒绝非空 Columns/Attributes。同一 BatchWrite 中同一 RowKey 只能出现一次，不接收事实 Merge 的局部字段，不增加全局 `write_version`。允许 RowWrites 为空的 Checkpoint-only 或 Range-only Apply，但 RowWrites、CheckpointUpdates、IndexRangeUpdate 三者不能同时为空。
 
-- [ ] **Step 2: DuckDB 改为完整 Replace**
+Proto 使用 `ViewIndexRowWriteOperation`、`ViewIndexRowKey`、`ViewIndexRowWrite`、`ViewIndexShardCheckpointUpdate`、`ViewIndexRangeUpdate`、`ViewIndexBatchWrite`；枚举固定为 `UNSPECIFIED=0`、`UPSERT=1`、`DELETE=2`。`IndexRangeUpdate.indexed_from/indexed_to` 在 Proto 中使用 `optional string`，保留“不修改”和“设置新值”的区别。
 
-删除“读取旧 `row_json` 再合并输入列”的逻辑。RowMapper 输出完整行，DuckDB 在一个事务中删除/Upsert 完整行、更新 `indexed_from/indexed_to` 和 Shard Checkpoint。
+将 `ViewIndexEngine.Write` 和内部 `WriteViewIndex` RPC 原子改为 `Apply` / `ApplyViewIndex`，请求体使用 `ViewIndexBatchWrite`；不保留旧方法 Alias。`BatchWrite` 是一次完整索引应用命令，不是 EventBatcher 的内存聚合批次。
 
-- [ ] **Step 3: Bleve 保持完整 Document Replace**
+- [ ] **Step 2: 明确 View Schema Fence**
 
-Bleve Batch 同时写完整文档、删除文档和内部状态文档。状态文档保存 View Version、Schema Hash、范围及每个 Shard 的 Last Applied Sequence。
+所有 ViewIndex 协议和状态中的通用 `schema_hash` 改为 `view_schema_hash` / `ViewSchemaHash`：包括 `ViewIndexSchema`、`ViewIndexBatchWrite`、`ViewIndexStats`、`ViewIndexBuild`，以及 View 上的 `active_schema_hash -> active_view_schema_hash`。Dataset 自身的 `schema_hash` 保持不变。
 
-- [ ] **Step 4: Checkpoint 提交顺序**
+`ViewSchemaHash` 是物化 View 结构指纹，由 Space ID、View ID、索引引擎和有序 ViewColumn 的名称、来源、类型、顺序稳定计算；它不包含行数据，也不代替 `ViewVersion`。ViewIndex Apply 必须同时校验 ViewVersion 和 ViewSchemaHash，任一不匹配都拒绝过期 Builder 写入。
 
-数据与 Checkpoint 能原子提交时必须原子提交；否则只能先写数据后写 Checkpoint。禁止先推进 Checkpoint。崩溃重放必须保持 Entry Count 和内容不变。
+- [ ] **Step 3: DuckDB 改为完整 Replace**
 
-- [ ] **Step 5: 统一 Stat**
+删除“读取旧 `row_json` 再合并输入列”的逻辑。DuckDB 在一个事务中应用 RowWrite 的完整 UPSERT/DELETE、Checkpoint 和可选 IndexRangeUpdate。
+
+- [ ] **Step 4: Bleve 保持完整 Document Replace**
+
+Bleve Batch 同时应用完整文档 UPSERT、DELETE 和内部状态文档。状态文档保存 View Version、View Schema Hash、Index Range 及每个 Shard 的 Last Applied Sequence。
+
+- [ ] **Step 5: 明确 Checkpoint 来源和提交顺序**
+
+DataShard 是 Shard ID 和 Sequence 的唯一权威来源；ViewBuilder 从已验证的 MooxMessage 复制它们，并把处理前的持久化位置写入 `ShardCheckpointUpdate.expected_last_applied_sequence`、当前连续成功前缀的最高 Sequence 写入 `last_applied_sequence`，不得自行生成 Sequence。普通实时 Apply 通常只提交一个 Checkpoint Update；重建完成可以一次提交多个相关 Shard 的 Checkpoint Update。
+
+ViewIndex 必须拒绝重复 Shard ID、`Last <= Expected` 和 CAS 不匹配。只有 BatchWrite 中所有 Checkpoint Update 的“当前持久化值都等于 Expected”时，才允许应用全部 RowWrites 并推进到各自 Last；批量合并连续消息时 Last 可以跨越多个 Sequence，因此不能仅凭数值跳跃判错。若所有当前值都已经大于等于各自 Last，整次 BatchWrite 视为已被后续提交覆盖，必须跳过全部 RowWrites 并按幂等成功处理；一部分待推进、一部分已覆盖，或当前值落在 Expected 与 Last 之间/低于 Expected 时统一返回 Checkpoint Conflict，不能选择性重放无法归属到单个 Shard 的 RowWrites。
+
+单个 ViewIndex 内的 RowWrites、CheckpointUpdates 和可选 IndexRangeUpdate 必须作为一个原子提交；DuckDB 使用同一事务，Bleve 使用同一 Batch 写入数据与内部状态文档，不提供非原子降级实现。活动槽与构建槽之间不要求跨引擎事务，但 ViewBuilder 只有在所有目标成功后才 ACK；部分目标成功时通过重投让已成功目标幂等跳过、失败目标继续 Apply。崩溃重放必须保持 Entry Count、内容和持久化进度不变。
+
+- [ ] **Step 6: 统一 Stat**
 
 `ViewIndexStats` 返回：
 
@@ -733,19 +782,20 @@ indexed_to
 shard_checkpoints[]
 entry_count
 view_version
-schema_hash
+view_schema_hash
 updated_at
 physical_bytes
 ```
 
-- [ ] **Step 6: 跨引擎契约测试**
+- [ ] **Step 7: 跨引擎契约测试**
 
-用同一组测试验证 DuckDB/Bleve：重复 Upsert、旧 Sequence 重放、完整替换、Delete、Checkpoint 不超前、范围更新、Schema 不匹配拒绝。
+用同一组测试验证 DuckDB/Bleve：UNSPECIFIED 拒绝、UPSERT 完整替换、DELETE 不允许行内容、重复 RowKey 拒绝、空 Apply 拒绝、Checkpoint-only/Range-only Apply、多 Sequence 连续前缀、幂等重放、Checkpoint CAS 冲突、多 Shard Checkpoint、Checkpoint 不超前、受控范围更新、View Version/View Schema Hash 不匹配拒绝。
 
-- [ ] **Step 7: Run and commit**
+- [ ] **Step 8: Run and commit**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./internal/core/viewindex ./internal/infra/device/duckdb ./internal/infra/device/bleve ./internal/service/viewindex)
+make proto
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./internal/core/viewindex ./internal/infra/device/duckdb ./internal/infra/device/bleve ./internal/service/view/... ./internal/service/viewindex)
 git add modules/storage
 git commit -m "fix(storage): unify view index materialization semantics"
 ```
@@ -774,15 +824,19 @@ git commit -m "fix(storage): unify view index materialization semantics"
 
 - [ ] **Step 1: 删除旧 Coverage 字段**
 
-删除 `active_coverage_start/end`。定义 `ViewIndexState`，包含 `index_id`、`indexed_from`、`indexed_to`、`shard_checkpoints`、`view_version`、`schema_hash`。
+删除 `active_coverage_start/end`。定义 `ViewIndexState`，包含 `index_id`、可空 `index_range`、`shard_checkpoints`、`view_version`、`view_schema_hash`；未完成首次构建时整个 Index Range 为空，不使用两个空字符串伪装有效范围。
 
 - [ ] **Step 2: 定义范围语义**
 
-`indexed_from/indexed_to` 是闭区间，表示当前索引经过 Backfill 和 Catch-up 后承诺服务的业务时间/版本范围；它们不是文件中实际最小/最大行，也不是消息发布时间。
+`indexed_from/indexed_to` 是闭区间，值统一为归一化后的 UTC RFC3339Nano（`2006-01-02T15:04:05.000000000Z`）。TimeSeries View 使用 `TimeSeriesKey.data_time` 的值域；Record View 使用 `RecordKey.version` 的值域，Task 10 必须保证 Record Version 可规范化为同一时间格式。
+
+它们表示当前索引经过 Backfill 和 Catch-up 后承诺完整服务的业务时间/版本范围，不是 Shard Sequence、消息发布时间、View Version、系统当前时间的简单复制，也不是 DuckDB/Bleve 中实际存在行或当前 BatchWrite 的最小/最大时间。区间内没有返回行表示“确认没有数据”，不能表示“尚未构建”。
 
 - [ ] **Step 3: 构建和增量更新范围**
 
-Backfill 完成时设置 `indexed_from = snapshot_end - retention_window`。只有 ViewBuilder 已追平构建时观察到的所有相关 Shard Head 后，才设置/推进 `indexed_to`。定时维护在所有 Shard Checkpoint 追平当前 Head 时推进安静时段的 `indexed_to`。View 物理清理或 48H Host Metrics 清理产生的 DELETE 全部应用成功后，再把 `indexed_from` 推进到新的清理边界；先推进范围再删除，或删除失败仍推进范围，均视为正确性错误。
+Backfill 捕获归一化 `snapshot_end`，计算 `indexed_from = snapshot_end - retention_window`，扫描该闭区间并 Catch-up。只有 ViewBuilder 已追平构建时观察到的所有相关 Shard Head 后，Maintenance/重建进度协调逻辑才能通过 `IndexRangeUpdate` 设置或推进 `indexed_to`。普通实时 BatchWrite 默认 `IndexRangeUpdate=nil`，不能根据本批行时间自行扩大范围；定时维护只有在所有 Shard Checkpoint 追平当前 Head 时才能推进安静时段的 `indexed_to`。
+
+View 物理清理或 48H Host Metrics 清理产生的 DELETE 全部 Apply 成功后，才能通过 `IndexRangeUpdate` 推进 `indexed_from` 到新的清理边界。两个边界只能向前推进且必须满足 `indexed_from <= indexed_to`；先推进范围再删除、删除失败仍推进范围、单个 Shard 未追平却推进 `indexed_to`，均视为正确性错误。
 
 新增内部 `GetShardState` RPC，返回固定 Shard ID、`last_committed_sequence` 和 `last_committed_at`。PrimaryStore 只向 ViewBuilder/Maintenance 聚合暴露相关 Dataset 的 Shard Head；该 RPC 不进入 Gateway。Sequence=0 的空 Shard 视为已追平，使用 Backfill Snapshot End 作为范围上界。
 
@@ -1008,8 +1062,8 @@ git commit -m "perf(storage): bound metadata queries and cache"
 - Move: `modules/storage/internal/core/viewindex/engine_test.go` -> `modules/storage/internal/service/viewindex/engine_test.go`
 - Move: `modules/storage/internal/core/viewindex/path.go` -> `modules/storage/internal/service/viewindex/path.go`
 - Move: `modules/storage/internal/core/viewindex/path_test.go` -> `modules/storage/internal/service/viewindex/path_test.go`
-- Move: `modules/storage/internal/core/viewindex/row.go` -> `modules/storage/internal/service/viewindex/row.go`
-- Move: `modules/storage/internal/core/viewindex/row_test.go` -> `modules/storage/internal/service/viewindex/row_test.go`
+- Move: `modules/storage/internal/core/viewindex/batch_write.go` -> `modules/storage/internal/service/viewindex/batch_write.go`
+- Move: `modules/storage/internal/core/viewindex/batch_write_test.go` -> `modules/storage/internal/service/viewindex/batch_write_test.go`
 - Delete: `modules/storage/internal/core/eventbus/` after replacing it with DataShard `MessagePublisher`, ViewBuilder `EventConsumer`, and owner-local test fakes
 - Delete: `modules/storage/internal/core/` after all remaining packages have moved to their final owners
 - Move: `modules/storage/internal/infra/metadata/sqlite/` -> `modules/storage/internal/service/metadata/sqlite/`
@@ -1063,7 +1117,7 @@ git commit -m "perf(storage): bound metadata queries and cache"
 
 - [ ] **Step 2: 整理 View 边界**
 
-`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsChanged、回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件、内部 RPC 及其写入契约。ViewBuilder 输出 `viewindex.Row` / `viewindex.Batch`，ViewIndex 负责持有 `RowKey` 及完整行的不变式；不创建独立 `viewrow` 包。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
+`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsChanged、回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件、内部 RPC 及其写入契约。ViewBuilder 生成 `viewindex.RowWrite` 并通过 `viewindex.BatchWrite` 调用 ViewIndex Apply；ViewIndex 负责校验 `RowKey`、UPSERT/DELETE、Shard Checkpoint、View Version/View Schema Hash 和可选 Index Range Update，不创建独立 `viewrow` 包。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
 
 - [ ] **Step 3: 原子替换服务名**
 
@@ -1076,6 +1130,9 @@ WriteRecordRows     -> MergeRecordRows
 WritePrimaryRows    -> MergeRows
 ReadPrimaryRows     -> ReadRows
 DeletePrimaryRows   -> DeleteRows
+WriteViewIndex      -> ApplyViewIndex
+ViewIndexBatch      -> ViewIndexBatchWrite
+ViewIndex SchemaHash -> ViewSchemaHash
 storage-access     -> storage-primary
 role access        -> role primary
 old role primary   -> role shard
@@ -1087,7 +1144,7 @@ old role primary   -> role shard
 
 不使用 `core`、`common`、`shared` 之类的总括目录。`factkey` 实际表达行身份规范化，因此直接移动为顶层 `internal/rowkey`；其职责固定为 TimeSeries/Record Key 构造解析、维度排序转义哈希和 UTC 时间格式。`factvalue` 中 TypedValue String/Numeric/Compare 移到顶层 `internal/typedvalue`，无生产调用的 `TimeInRange`/`ParseTime` 及其孤立测试直接删除，简单 `StringSet` 放回唯一调用方。错误码和 RPC 返回信息只使用 Task 10 建立的顶层 `internal/retinfo`。禁止创建含糊的 `key`、`value`、`response` 通用包，也不得创建 `errorcode`、`rpcresult` 平行包。
 
-完成 Pebble -> DataShard、DuckDB/Bleve 与 Row/RowKey/Batch -> ViewIndex、SQLite/Cache -> Metadata、Schema/ShardRouter -> PrimaryStore、RowMapper/EventConsumer -> ViewBuilder 的物理移动。删除组合 Publisher/Subscriber 的 Storage `Bus` 和运行时 MemoryBus；DataShard 只依赖窄 `MessagePublisher`，ViewBuilder 只依赖窄 `EventConsumer`，测试在各所有者包内使用 Fake。只有通用 JetStream 编解码、发布和鉴权留在 `packages/jetstream`。移动完成后，活动 Storage 代码不得存在 `internal/core`、`internal/infra` 或独立 `viewrow` 目录。
+完成 Pebble -> DataShard、DuckDB/Bleve 与 RowKey/RowWrite/BatchWrite -> ViewIndex、SQLite/Cache -> Metadata、Schema/ShardRouter -> PrimaryStore、RowMapper/EventConsumer -> ViewBuilder 的物理移动。删除组合 Publisher/Subscriber 的 Storage `Bus` 和运行时 MemoryBus；DataShard 只依赖窄 `MessagePublisher`，ViewBuilder 只依赖窄 `EventConsumer`，测试在各所有者包内使用 Fake。只有通用 JetStream 编解码、发布和鉴权留在 `packages/jetstream`。移动完成后，活动 Storage 代码不得存在 `internal/core`、`internal/infra` 或独立 `viewrow` 目录。
 
 - [ ] **Step 5: 拆分超大 Metadata Proto**
 
@@ -1100,7 +1157,7 @@ old role primary   -> role shard
 - [ ] **Step 7: 运行旧名扫描**
 
 ```bash
-rg -n 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|PrimaryStore(Node|Route|Target|Key|Row)|storage[_-]access|moox-storage-access|ProjectionReader|active_coverage_|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' \
+rg -n 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_schema_hash|PrimaryStore(Node|Route|Target|Key|Row)|storage[_-]access|moox-storage-access|ProjectionReader|active_coverage_|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' \
   modules packages scripts web/src examples skills/moox docs \
   --glob '!superpowers/**' --glob '!代码审查报告-*.md'
 test ! -d modules/storage/internal/core
@@ -1519,14 +1576,14 @@ git commit -m "refactor(web): split storage and cloud node workflows"
 Browser -> Admin Gateway /api/admin/storage/{method} -> Node Service Gateway tRPC -> Metadata | PrimaryStore | DataView
 Go Service -> Node Service Gateway tRPC -> Metadata | PrimaryStore | DataView
 PrimaryStore -> DataShard -> Pebble + RowsChanged MooxMessage Outbox
-TimeSeriesRowsChanged | RecordRowsChanged -> ViewBuilder -> ChangeBatch -> batch reread -> RowMapper -> DuckDB/Bleve
+TimeSeriesRowsChanged | RecordRowsChanged -> ViewBuilder -> ChangeBatch -> batch reread -> RowMapper -> BatchWrite -> ViewIndex.Apply -> DuckDB/Bleve
 TimeSeriesRowsChanged UPSERT -> Archive Journal/Parquet/COS
 RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 ```
 
 - [ ] **Step 2: 文档写清一致性和限制**
 
-说明 Shard Sequence、ViewIndex Checkpoint、`indexed_from/indexed_to`、Merge 三态、Outbox 连续前缀、View 完整行替换、部分成功、重建流程、Archive 非当前状态备份，以及无 HA/Failover/Migration/Rebalance。明确 `rowkey`、`typedvalue`、`retinfo`、`MooxMessage`、两种 RowsChanged 消息的职责；说明 `Row`、`RowKey`、`Batch` 是 ViewIndex 写入契约而不是独立 `viewrow` 包，并说明 Pebble/Outbox、DuckDB/Bleve、SQLite/Cache、RowMapper/EventConsumer 分别由哪个领域服务拥有。
+说明 Shard Sequence、ViewIndex Checkpoint、`indexed_from/indexed_to`、Merge 三态、Outbox 连续前缀、View 完整行替换、部分成功、重建流程、Archive 非当前状态备份，以及无 HA/Failover/Migration/Rebalance。明确 `rowkey`、`typedvalue`、`retinfo`、`MooxMessage`、两种 RowsChanged 消息的职责；说明 `RowKey`、`RowWrite`、`BatchWrite` 是 ViewIndex Apply 契约而不是独立 `viewrow` 包，解释 UPSERT/DELETE、Checkpoint 来源、`ViewSchemaHash` Fence 和 `IndexRangeUpdate` 的受控推进规则。明确 `indexed_from/indexed_to` 使用 UTC RFC3339Nano，TimeSeries 对应 `data_time`、Record 对应时间化 `version`，不是实际行 Min/Max。并说明 Pebble/Outbox、DuckDB/Bleve、SQLite/Cache、RowMapper/EventConsumer 分别由哪个领域服务拥有。
 
 单独画出双网关信任边界：浏览器只能持用户令牌并进入 Admin Gateway；Admin Gateway 使用 Service HMAC 通过 Node Service Gateway 调用 Storage；服务间生成客户端直接通过 Node Service Gateway；任何调用方都不得保存或使用 Metadata、PrimaryStore、DataView 的物理地址。
 
@@ -1536,7 +1593,7 @@ RowsChanged DELETE -> View 删除；Archive Ignore/ACK
 
 - [ ] **Step 4: 添加架构扫描门禁**
 
-脚本必须拒绝活动源码和现行文档中的旧 Access/PrimaryStore 物理命名、Mutation/DataChange/Projection、`active_coverage_*`、`factkey`、`factvalue`、Envelope 别名、通用 Device、Storage `internal/core` / `internal/infra`、独立 `viewrow`、`response`、`errorcode`、`rpcresult` 包、旧 Runtime Role、旧配置和过时文档链接，并验证 `docs/架构总览.md` 链接 `docs/存储层架构.md`。Package Boundary 必须断言 Pebble 只能被 DataShard 导入、DuckDB/Bleve 及 `Row`/`RowKey`/`Batch` 只能被 ViewIndex 持有、SQLite/Cache 只能被 Metadata 导入、RowMapper/EventConsumer 只能属于 ViewBuilder；`retinfo` 不得包含日志、数据库错误识别和业务规则。`docs/superpowers/` 执行历史和带日期的历史审查报告可以保留原文，但不得被现行架构文档引用为当前事实源。
+脚本必须拒绝活动源码和现行文档中的旧 Access/PrimaryStore 物理命名、Mutation/DataChange/Projection、`active_coverage_*`、ViewIndex 通用 `schema_hash` / `active_schema_hash`、旧的精确符号 `ViewIndexBatch` / `WriteViewIndex`、`factkey`、`factvalue`、Envelope 别名、通用 Device、Storage `internal/core` / `internal/infra`、独立 `viewrow`、`response`、`errorcode`、`rpcresult` 包、旧 Runtime Role、旧配置和过时文档链接；扫描 `ViewIndexBatch` 时必须使用词边界，不能误伤新类型 `ViewIndexBatchWrite`。同时验证 `docs/架构总览.md` 链接 `docs/存储层架构.md`。Package Boundary 必须断言 Pebble 只能被 DataShard 导入、DuckDB/Bleve 及 `RowKey`/`RowWrite`/`BatchWrite` 只能被 ViewIndex 持有、SQLite/Cache 只能被 Metadata 导入、RowMapper/EventConsumer 只能属于 ViewBuilder；`retinfo` 不得包含日志、数据库错误识别和业务规则。`docs/superpowers/` 执行历史和带日期的历史审查报告可以保留原文，但不得被现行架构文档引用为当前事实源。
 
 - [ ] **Step 5: 固化最初 CR 和后续讨论的已完成项**
 
@@ -1569,12 +1626,14 @@ bash scripts/test-quality-gates.sh
 ```text
 首次 Merge 创建 -> 再次局部 Merge -> PrimaryStore 完整行
 TimeSeriesRowsChanged/RecordRowsChanged 共用的 Shard Sequence 连续且 Payload 完整
+BatchWrite UPSERT/DELETE、Checkpoint CAS、ViewVersion/ViewSchemaHash Fence 全部生效
 DuckDB/Bleve 查询结果一致
 乱序 ACK 不删除非连续 Outbox
 1001 行分页无漏数
 Delete 后 View 消失而 Archive 保留
 重启后 Outbox、Checkpoint 和 Sequence 恢复
 超出 indexed_from/indexed_to 查询明确失败
+indexed_from/indexed_to 对 TimeSeries data_time 与 Record version 使用 UTC RFC3339Nano，普通实时写入不能自行推进
 错误 shard_id 和拓扑变更明确失败
 Browser -> Admin Gateway -> tRPC Node Gateway -> Storage 成功
 Generated tRPC Client -> Node Gateway -> Storage 成功
@@ -1651,6 +1710,7 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 | `factkey`/`factvalue` 语义含糊 | Task 13、14、18 |
 | `internal/core` 总目录缺少明确所有权 | Task 13、14、18 |
 | `viewrow` 小包与 `rowkey` 边界不清 | Task 7、8、13、18 |
+| ViewIndex `Batch`、`SchemaHash`、Shard 进度和范围更新语义不清 | Task 7、8、9、13、18 |
 | `response` 混合错误分类和 RPC 返回构造 | Task 10、13、18 |
 | Storage Infra 与领域生命周期分离 | Task 13、14、18 |
 | 浏览器与服务间调用缺少双网关边界 | Task 16、18 |
@@ -1669,9 +1729,10 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 - [ ] TimeSeriesRowsChanged/RecordRowsChanged 由 DataShard 原子生成；MooxMessage 只保存一份消息 ID、类型和 Sequence。
 - [ ] UPSERT RowsChanged 携带完整提交后行；ViewBuilder 仍以批量回读作为最终事实来源。
 - [ ] Outbox 永不跨过失败项删除，重放不会增加 DuckDB/Bleve Entry Count。
-- [ ] DuckDB/Bleve 通过 ViewIndex 拥有的 `Row`、`RowKey`、`Batch` 接收完整 View 行，并拥有一致的 Upsert/Delete/Checkpoint 语义；不存在独立 `viewrow` 包。
+- [ ] DuckDB/Bleve 通过 ViewIndex 拥有的 `RowKey`、`RowWrite`、`BatchWrite` 接收明确 UPSERT/DELETE，并拥有一致的 Apply/Checkpoint/IndexRangeUpdate 语义；不存在独立 `viewrow` 包。
+- [ ] ViewIndex 使用 `ViewVersion + ViewSchemaHash` Fence；Dataset `schema_hash` 与 View `view_schema_hash` 命名和职责明确分离。
 - [ ] Archive 忽略 Delete，不写 Tombstone，不删除历史文件。
-- [ ] `indexed_from/indexed_to` 和 Shard Checkpoint 能解释查询范围和新鲜度。
+- [ ] `indexed_from/indexed_to` 使用 UTC RFC3339Nano，分别对应 TimeSeries `data_time` / Record `version`；它们与带 CAS 的 Shard Checkpoint 能解释查询范围和新鲜度。
 - [ ] 1001 行、1/25/999 页面、ASC/DESC 全部无遗漏和重复。
 - [ ] Dataset 写入后不能改变 Key 放置；Shard 故障不会自动重路由。
 - [ ] `MergeTimeSeriesRows` / `MergeRecordRows`、Null、Remove、Required、批次大小和类型错误全部有确定契约。
