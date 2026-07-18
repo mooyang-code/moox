@@ -794,8 +794,9 @@ entry_count
 view_version
 view_schema_hash
 updated_at
-physical_bytes
 ```
+
+`ViewIndexStats` 不返回 `physical_bytes`。磁盘占用属于运维观测指标，不参与 ViewIndex 一致性协议；DuckDB/Bleve 的实际文件大小由文件系统监控、Prometheus 指标或独立运维检查提供。
 
 - [ ] **Step 7: 跨引擎契约测试**
 
