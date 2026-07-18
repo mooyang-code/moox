@@ -4,7 +4,7 @@
 
 **Goal:** 在不保留历史兼容层的前提下，修复 Storage 的消息一致性、Merge、分页、删除、覆盖范围、分片边界、Metadata 扩展性和运行可靠性，建立 Admin Gateway + Node Service Gateway 双网关链路，并完成 Storage、PrimaryStore、DataShard、DataView、ViewBuilder、ViewIndex 的最终命名、垂直代码组织与两进程部署收敛。
 
-**Architecture:** PrimaryStore 是单点的事实数据编排服务，负责校验、路由和跨 DataShard 聚合；每个 DataShard 独立持有一个 Pebble 和本地连续的 Outbox Sequence，并在同一 Pebble Batch 中提交事实行和类型明确的 `TimeSeriesRowsChanged` / `RecordRowsChanged`。storage-view 以 RowsChanged 消息作为失效通知，按 Shard 有序消费、按 ViewRowKey 合并和串行处理、批量回读最新事实行，再向 DuckDB/Bleve 写入完整 View 行。浏览器经 Admin Gateway 进入 Node Service Gateway，服务间调用直接进入同一 Node Service Gateway；Archive 只归档历史写入数据，忽略 Delete，不参与在线删除。
+**Architecture:** PrimaryStore 是单点的事实数据编排服务，负责校验、路由和跨 DataShard 聚合；每个 DataShard 独立持有一个 Pebble 和本地连续的 Outbox Sequence，并在同一 Pebble Batch 中提交事实行和类型明确的 `TimeSeriesRowsCommitted` / `RecordRowsCommitted`。storage-view 按 Shard 有序消费已提交的完整事实快照，把发生变化的 Dataset 映射为该来源拥有的 View 列片段，再通过 ViewIndex 显式 `MERGE` 到本地已有完整 View 行；只有目标行缺失时才批量读取组成该行的全部来源并用 `REPLACE` 恢复，不在每次 A 更新时重复读取未变化的 B。浏览器经 Admin Gateway 进入 Node Service Gateway，服务间调用直接进入同一 Node Service Gateway；Archive 只归档历史写入数据，忽略 Delete，不参与在线删除。
 
 **Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、Pebble、SQLite、NATS JetStream、DuckDB、Bleve、Parquet、Vue 3、TypeScript、Vitest、Shell。
 
@@ -49,18 +49,19 @@
 | DataShard | 内部物理事实分片，固定 `shard_id`，独立部署或嵌入 `storage-primary` |
 | 分片能力 | 只提供单副本容量分片；不实现副本、自动故障转移、迁移、再平衡和跨分片事务 |
 | 公共消息 | 统一使用 `MooxMessage`；新增 `message_type`，代码和文档不再使用 Envelope 作为别名 |
-| 事实变更消息 | 保留两种显式领域消息并改名为 `TimeSeriesRowsChanged`、`RecordRowsChanged`；不使用 Mutation、FactMutation、DataChange、DataChangeMsg |
+| 事实提交消息 | 保留两种显式领域消息并改名为 `TimeSeriesRowsCommitted`、`RecordRowsCommitted`；行元素使用 `TimeSeriesRowWrite`、`RecordRowWrite`，不使用 RowsChanged、RowChange、Mutation、FactMutation、DataChange、DataChangeMsg |
 | 消息 ID | 只使用 `MooxMessage.message_id`，Payload 不重复 |
 | 消息顺序 | `MooxMessage.sequence` 是 DataShard 内连续序列；不增加全局 `write_version`，不使用雪花算法 |
 | 行内版本 | 同一事实 Key 只属于一个 DataShard，内部版本为 `shard_id + last_sequence` |
 | View 消费进度 | 每个 ViewIndex 记录各 DataShard 的 `last_applied_sequence` |
 | 事实写入 | `WriteTimeSeriesRows` / `WriteRecordRows` 改为 `MergeTimeSeriesRows` / `MergeRecordRows`；未提供字段保留，行不存在则创建 |
-| View 物化 | RowsChanged 只触发刷新；ViewBuilder 批量回读最新事实数据并生成完整 View 行 |
+| View 物化 | 已提交消息携带完整事实快照；稳态只映射本次变化来源拥有的列并在 ViewIndex 本地 MERGE，不重复回读未变化来源 |
 | View 行并发 | 同一 `ViewRowKey` 串行处理，不比较不同 DataShard 的 Sequence |
-| DuckDB/Bleve | 共用同一物化协议；两者都完整 Replace/Upsert，不接收 Merge 请求中的局部字段 |
+| View 缺行恢复 | MERGE 目标不存在时整批不落盘、不推进 Checkpoint，并返回全部缺失 RowKey；ViewBuilder 批量读取这些行的所有来源后以 REPLACE 重试 |
+| DuckDB/Bleve | 共用显式 MERGE/REPLACE/DELETE 协议；MERGE 都先读取本地完整行再合并，Bleve 不再直接用局部文档覆盖 |
 | 共享包边界 | 删除含糊的 `internal/core` 总目录；真正跨服务复用的代码只保留顶层 `internal/rowkey`、`internal/typedvalue`、`internal/retinfo` |
 | ViewIndex 写入模型 | 不创建独立 `viewrow` 包；`RowKey`、`RowWrite`、`BatchWrite` 作为 ViewIndex 写入契约，由 `internal/service/viewindex` 持有 |
-| ViewIndex 写操作 | `RowWrite.operation` 只允许 `UPSERT` / `DELETE`；UPSERT 必须携带完整列，DELETE 只携带 Key；统一通过 `ViewIndex.Apply` 提交 |
+| ViewIndex 写操作 | `RowWrite.operation` 只允许 `MERGE` / `REPLACE` / `DELETE`；MERGE 携带单一来源列片段，REPLACE 携带完整 View 行，DELETE 只携带 Key；统一通过 `ViewIndex.Apply` 提交 |
 | ViewIndex 写入进度 | `BatchWrite.checkpoint_updates` 保存一个或多个带 Expected/Last Sequence 的 `ShardCheckpointUpdate`；可选 `IndexRangeUpdate` 只由进度协调逻辑产生 |
 | View Schema Fence | 使用 `view_schema_hash` / `ViewSchemaHash`，明确区别于 Dataset `schema_hash`；它与 `view_version` 共同拒绝过期写入 |
 | 错误与返回信息 | 错误码、类型化错误和 `pb.RetInfo` 转换统一放入 `internal/retinfo`；不拆分 `errorcode`、`rpcresult`，不保留 `response` 包 |
@@ -91,16 +92,18 @@
 3. Outbox 只能删除从队首开始连续发布成功的前缀，不能跨过失败项。
 4. ViewBuilder 只有在所有受影响的活动/构建中 ViewIndex 都写入成功后才 ACK。
 5. 同一 Shard 的消息严格按 Sequence 处理；同一 ViewRowKey 不并发写入。
-6. ViewIndex 只接受包含明确 UPSERT/DELETE 的 `BatchWrite`；UPSERT 必须是完整 View 行，DuckDB 和 Bleve 的写入语义一致。
+6. ViewIndex 只接受包含明确 MERGE/REPLACE/DELETE 的 `BatchWrite`；MERGE 不得创建缺列行，REPLACE 必须是完整 View 行，DuckDB 和 Bleve 的写入语义一致。
 7. ViewIndex 数据写入成功后才能推进对应 Shard Checkpoint；崩溃最多造成重放，不得造成跳过。
 8. Delete 必须从 PrimaryStore 传播到 DuckDB/Bleve；Archive 必须忽略 Delete。
 9. Cursor 必须指向最后一条实际返回或明确消费的数据，不能因为底层预取跳过未返回行。
 10. View 查询不得把超出 `indexed_from/indexed_to` 或尚未追平的数据伪装成完整成功。
 11. DataShard 只接受发给自身 `shard_id` 的请求，并验证请求内所有 Space、Dataset、Key 一致。
 12. Dataset 拓扑锁定后，任何会改变既有 Key 放置位置的 Metadata 变更都必须失败。
-13. Merge 必须在 DataShard 的同一原子边界内读取旧行、合并提供字段、校验完整行，并把同一完整结果写入 Pebble 和 RowsChanged MooxMessage。
-14. TimeSeriesRowsChanged 和 RecordRowsChanged 共用每个 DataShard 的同一条 Sequence；ViewBuilder 必须通过一个逻辑 Shard Lane 和一个 Checkpoint 消费两类消息。
-15. 浏览器只能经过 Admin Gateway；Admin Gateway 和其他 Go 服务只能经过 Node Service Gateway 调用可路由的 Storage 服务，失败时不得绕过网关直连。
+13. 事实 Merge 必须在 DataShard 的同一原子边界内读取旧行、合并提供字段、校验完整行，并把同一完整结果写入 Pebble 和 RowsCommitted MooxMessage。
+14. TimeSeriesRowsCommitted 和 RecordRowsCommitted 共用每个 DataShard 的同一条 Sequence；ViewBuilder 必须通过一个逻辑 Shard Lane 和一个 Checkpoint 消费两类消息。
+15. 稳态 View MERGE 只修改消息所属 Dataset 拥有的列；未变化来源的列必须从 ViewIndex 本地已有行保留，不能在每次事件中回读，也不能被局部文档覆盖。
+16. MERGE 缺行恢复读取到的每个事实快照必须携带内部 `shard_id + last_sequence` 来源戳；ViewIndex 保存每个来源的最新戳并忽略更旧片段，防止恢复时读取到的新状态被随后到达的旧消息回滚。
+17. 浏览器只能经过 Admin Gateway；Admin Gateway 和其他 Go 服务只能经过 Node Service Gateway 调用可路由的 Storage 服务，失败时不得绕过网关直连。
 
 ## 目标代码结构
 
@@ -118,7 +121,7 @@ modules/storage/
       pebble/                         # 事实行、Sequence 和 Outbox
       messagepublisher/               # MooxMessage 发布适配器
     dataview/                         # 对外派生查询
-    viewbuilder/                      # RowsChanged 消费、批处理、回读、物化
+    viewbuilder/                      # RowsCommitted 消费、列片段映射、缺行恢复、物化
       eventconsumer/                  # JetStream 领域消息消费适配器
       rowmapper/                      # 多 DataShard 事实行到 ViewRow 的映射
     viewindex/                        # ViewIndex 生命周期和内部 RPC
@@ -163,7 +166,9 @@ Storage 不再保留横向的 `internal/infra` 技术分层：有唯一生命周
 
 - [ ] **Step 1: 添加 Merge 物化失败测试**
 
-分别调用 `MergeTimeSeriesRows` / `MergeRecordRows` 构造同一 Key 的两次写入：第一次提供完整列，第二次只提供一列。测试必须证明 PrimaryStore 最终行保留未修改列，并要求 DuckDB、Bleve、Archive 接收到的 Upsert 行也是合并后的完整行；目标行不存在时 Merge 必须创建新行。
+分别调用 `MergeTimeSeriesRows` / `MergeRecordRows` 构造同一 Key 的两次事实写入：第一次提供完整列，第二次只提供一列。测试必须证明 PrimaryStore 最终行保留未修改列，`TimeSeriesRowsCommitted` / `RecordRowsCommitted` 和 Archive 收到的是 DataShard 合并后的完整事实快照。另建一个由 kline 与 factor 组成的 View，证明只更新 kline.close 时 ViewBuilder 不读取 factor，DuckDB/Bleve 都通过 MERGE 保留已有 momentum/volatility，不能把局部列当完整文档覆盖。
+
+增加缺行恢复用例：先删除或损坏活动 ViewIndex 中的一行，再消费任一来源消息。第一次 Apply 必须返回全部缺失 RowKey，且 RowWrites 和 Checkpoint 均未提交；ViewBuilder 随后批量读取这些 RowKey 的全部来源，以 REPLACE 重试并恢复完整行。恢复读取到的来源状态若领先于待消费旧消息，后续旧消息必须被来源戳抑制，不能把列回滚。
 
 - [ ] **Step 2: 添加 Outbox 非连续 ACK 测试**
 
@@ -200,12 +205,12 @@ git add modules/storage/test/storage_consistency_contract_test.go scripts/test-s
 git commit -m "test(storage): lock consistency remediation contract"
 ```
 
-### Task 2: 统一 MooxMessage 和 RowsChanged 协议
+### Task 2: 统一 MooxMessage 和 RowsCommitted 协议
 
 **Files:**
 - Modify: `packages/messagepb/moox_message.proto`
 - Regenerate: `packages/messagepb/moox_message.pb.go`
-- Rename/Rewrite: `modules/storage/proto/message.proto` -> `modules/storage/proto/rows_changed.proto`
+- Rename/Rewrite: `modules/storage/proto/message.proto` -> `modules/storage/proto/rows_committed.proto`
 - Modify: `modules/storage/proto/Makefile`
 - Regenerate: `modules/storage/proto/storagegen/*`
 - Modify: `packages/jetstream/codec.go`
@@ -272,56 +277,57 @@ string message_type = 14;
 
 字段职责固定为：`kind` 表示 EVENT/COMMAND/SNAPSHOT，`message_type` 表示 Payload Schema，`topic` 只负责路由，`content_type` 表示编码。
 
-- [ ] **Step 2: 定义两个显式 Storage RowsChanged 消息**
+- [ ] **Step 2: 定义两个显式 Storage RowsCommitted 消息**
 
-不删除 TimeSeries 和 Record 两种领域消息概念，只把容易误解为“普通更新成功”的旧名 `TimeSeriesRowsUpdated`、`RecordRowsUpdated` 改为 `TimeSeriesRowsChanged`、`RecordRowsChanged`。两类消息保持独立，使 Factor、Archive 可以只订阅 TimeSeries，避免用一个 `oneof DataChange` 隐藏不同的 Key 和范围语义：
+不删除 TimeSeries 和 Record 两种领域消息概念。旧名 `TimeSeriesRowsUpdated`、`RecordRowsUpdated` 容易让人误解为普通 RPC 成功通知，`RowsChanged` / `RowChange` 又只表达模糊的“发生变化”，因此最终命名为外层批次 `TimeSeriesRowsCommitted`、`RecordRowsCommitted`，内层动作 `TimeSeriesRowWrite`、`RecordRowWrite`。两类消息保持独立，使 Factor、Archive 可以只订阅 TimeSeries，避免用一个 `oneof DataChange` 隐藏不同的 Key 和范围语义：
 
 ```proto
-enum RowChangeOperation {
-  ROW_CHANGE_OPERATION_UNSPECIFIED = 0;
-  ROW_CHANGE_OPERATION_UPSERT = 1;
-  ROW_CHANGE_OPERATION_DELETE = 2;
+enum RowWriteOperation {
+  ROW_WRITE_OPERATION_UNSPECIFIED = 0;
+  ROW_WRITE_OPERATION_MERGE = 1;
+  ROW_WRITE_OPERATION_REPLACE = 2;
+  ROW_WRITE_OPERATION_DELETE = 3;
 }
 
-message TimeSeriesRowChange {
-  RowChangeOperation operation = 1;
+message TimeSeriesRowWrite {
+  RowWriteOperation operation = 1;
   TimeSeriesRow row = 2;
 }
 
-message TimeSeriesRowsChanged {
+message TimeSeriesRowsCommitted {
   string shard_id = 1;
   string space_id = 2;
   string dataset_id = 3;
-  repeated TimeSeriesRowChange changes = 4;
+  repeated TimeSeriesRowWrite writes = 4;
 }
 
-message RecordRowChange {
-  RowChangeOperation operation = 1;
+message RecordRowWrite {
+  RowWriteOperation operation = 1;
   RecordRow row = 2;
 }
 
-message RecordRowsChanged {
+message RecordRowsCommitted {
   string shard_id = 1;
   string space_id = 2;
   string dataset_id = 3;
-  repeated RecordRowChange changes = 4;
+  repeated RecordRowWrite writes = 4;
 }
 ```
 
-DELETE 的 Row 只携带完整 Key；UPSERT 携带 DataShard 合并后的完整事实行。Payload 不重复 `message_id`、`sequence`、`occurred_at`。
+DELETE 的 Row 只携带完整 Key；UPSERT 携带 DataShard 合并后的完整事实行。`Committed` 表示 Pebble 事实行与 Outbox 已在同一个 Sync Batch 中提交，不表示 View 已完成派生。Payload 不重复 `message_id`、`sequence`、`occurred_at`。
 
 - [ ] **Step 3: 固定两类消息的 Message Type 和 Topic**
 
 ```text
 TimeSeries:
-  message_type: moox.storage.time_series.rows_changed.v1
-  topic:        moox.storage.rows_changed.time_series.v1.<shard_token>
-  content_type: application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsChanged
+  message_type: moox.storage.time_series.rows_committed.v1
+  topic:        moox.storage.rows_committed.time_series.v1.<shard_token>
+  content_type: application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted
 
 Record:
-  message_type: moox.storage.record.rows_changed.v1
-  topic:        moox.storage.rows_changed.record.v1.<shard_token>
-  content_type: application/x-protobuf; message=trpc.moox.storage.RecordRowsChanged
+  message_type: moox.storage.record.rows_committed.v1
+  topic:        moox.storage.rows_committed.record.v1.<shard_token>
+  content_type: application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted
 
 Both:
   kind:         MESSAGE_KIND_EVENT
@@ -332,7 +338,7 @@ Both:
 
 - [ ] **Step 4: 强化 MooxMessage 校验并清除 Envelope 别名**
 
-所有新 MooxMessage 的 `message_type`、`message_id`、`producer`、`topic` 和 `payload` 缺失时拒绝；Storage RowsChanged 还必须拒绝 Sequence=0，并满足 Topic Shard 与 Payload `shard_id` 一致。一次性更新仓库内所有生产者，为每种 Payload 设置带命名空间和版本的 Message Type，不能只让 Storage 使用新字段。
+所有新 MooxMessage 的 `message_type`、`message_id`、`producer`、`topic` 和 `payload` 缺失时拒绝；Storage RowsCommitted 还必须拒绝 Sequence=0，并满足 Topic Shard 与 Payload `shard_id` 一致。一次性更新仓库内所有生产者，为每种 Payload 设置带命名空间和版本的 Message Type，不能只让 Storage 使用新字段。
 
 代码和现行文档统一使用实际类型名 `MooxMessage`，同时完成以下无兼容重命名：`EnvelopePublisher` -> `MessagePublisher`、`PublishEnvelope` -> `PublishMessage`、`Envelope()` -> `Message()`、`RawEnvelope` -> `RawMessage`、`fixtureEnvelope` -> `fixtureMessage`。不得创建新的 `Envelope` 类型，也不得把它改叫 `MessageHeader`，因为外层对象同时拥有 Payload。
 
@@ -344,9 +350,9 @@ type MessagePublisher interface {
 
 Outbox Relay 在 Task 4 固定为按 Sequence 逐条等待 ACK，因此删除批量 `PublishEnvelopes`/`PublishMessages` 接口，不保留两套发布语义。
 
-- [ ] **Step 5: 原子更新所有 RowsChanged 消费者**
+- [ ] **Step 5: 原子更新所有 RowsCommitted 消费者**
 
-Archive、Factor、ViewBuilder 和 EventBus Registry 一次性从 RowsUpdated 切换到两个 RowsChanged Message Type。Factor 和 Archive 只订阅 TimeSeries Topic Family；ViewBuilder 用一个 Durable 同时过滤 TimeSeries 和 Record Topic Family；各消费者保留独立 Durable。Registry 允许这两个 Topic Family，Storage 生产者和所有消费者还必须校验 Topic 最后一段解码后等于 Payload `shard_id`。Factor 只从 UPSERT TimeSeries Row 提取触发 Key；Archive 归档完整 UPSERT 并忽略 DELETE；ViewBuilder 将两种外部消息归一为内部 `ChangeBatch` 后处理 UPSERT/DELETE。未知 `message_type` 不得尝试按 Topic 猜 Payload。旧的 Storage 内 Archive 虽会在 Task 14 删除，但在该任务前仍须保持编译和测试通过。
+Archive、Factor、ViewBuilder 和 EventBus Registry 一次性从 RowsUpdated 切换到两个 RowsCommitted Message Type。Factor 和 Archive 只订阅 TimeSeries Topic Family；ViewBuilder 用一个 Durable 同时过滤 TimeSeries 和 Record Topic Family；各消费者保留独立 Durable。Registry 允许这两个 Topic Family，Storage 生产者和所有消费者还必须校验 Topic 最后一段解码后等于 Payload `shard_id`。Factor 只从 UPSERT TimeSeries Row 提取触发 Key；Archive 归档完整 UPSERT 并忽略 DELETE；ViewBuilder 将两种外部消息归一为内部 `CommittedBatch` 后处理 UPSERT/DELETE。未知 `message_type` 不得尝试按 Topic 猜 Payload。旧的 Storage 内 Archive 虽会在 Task 14 删除，但在该任务前仍须保持编译和测试通过。
 
 - [ ] **Step 6: 重新生成代码**
 
@@ -357,7 +363,7 @@ make -C modules/storage/proto all
 gofmt -w packages/messagepb/moox_message.pb.go modules/storage/proto/storagegen/*.go
 ```
 
-Expected: 生成代码只暴露 `TimeSeriesRowsChanged`、`RecordRowsChanged` 和各自的 Row Change；旧 `message.pb.go` 和 RowsUpdated 类型消失，生成文件名为 `rows_changed.pb.go`。
+Expected: 生成代码只暴露 `TimeSeriesRowsCommitted`、`RecordRowsCommitted` 和各自的 RowWrite；旧 `message.pb.go`、RowsUpdated、RowsChanged、RowChange 类型消失，生成文件名为 `rows_committed.pb.go`。
 
 - [ ] **Step 7: Run and commit**
 
@@ -380,10 +386,10 @@ git add packages/messagepb packages/jetstream packages/report \
   modules/archive modules/eventbus modules/factor \
   modules/cloudnode/internal/jobqueue modules/hostagent/internal/app modules/monitor/internal/hostmetrics modules/monitor/internal/metrics \
   modules/strategy/internal/bus modules/trade/internal/infra/bus
-git commit -m "refactor(storage): define rows changed message contracts"
+git commit -m "refactor(storage): define rows committed message contracts"
 ```
 
-### Task 3: 让 DataShard 原子生成完整 RowsChanged
+### Task 3: 让 DataShard 原子生成完整 RowsCommitted
 
 **Files:**
 - Modify: `modules/storage/proto/store.proto`
@@ -416,7 +422,7 @@ Pebble 写入内部必须先按规范化 ShardKey 排序获取行锁，再持有
 合并请求中提供的字段
 使用 Schema Contract 校验合并后完整行
 分配下一 Shard Sequence
-按数据类型用完整行构造 TimeSeriesRowsChanged 或 RecordRowsChanged
+按数据类型用完整行构造 TimeSeriesRowsCommitted 或 RecordRowsCommitted
 构造 MooxMessage
 校验编码后的 MooxMessage 不超过 EventBus MaxPayload
 Batch.Set 事实行
@@ -429,7 +435,9 @@ Batch.Commit(Sync)
 
 - [ ] **Step 4: 保存行的来源序列**
 
-在内部 ShardRow 中保存 `last_sequence`，但不在外部 TimeSeriesRow/RecordRow API 暴露为业务 Version。一次 Batch 内的所有成功行使用同一个 Sequence。读取旧行、合并字段、校验、写事实行和写 Outbox 必须处于同一组行锁与 Pebble Sync Batch 边界，使权威行和消息中的完整行永远表示同一次提交。
+在内部 ShardRow 中保存 `last_sequence`，但不在公共 TimeSeriesRow/RecordRow API 暴露为业务 Version。一次 Batch 内的所有成功行使用同一个 Sequence。读取旧行、合并字段、校验、写事实行和写 Outbox 必须处于同一组行锁与 Pebble Sync Batch 边界，使权威行和消息中的完整行永远表示同一次提交。
+
+供 ViewBuilder 缺行恢复和重建使用的特权读取/扫描结果必须另外返回 `SourceStamp{dataset_id, shard_id, last_sequence}`。它是内部派生一致性元数据，不是用户数据列，也不能进入 DataView 查询响应。RowsCommitted 的 UPSERT 直接使用 MooxMessage 的 Shard ID/Sequence 作为该事实快照的来源戳。
 
 - [ ] **Step 5: 修正 Merge 的 Null 语义**
 
@@ -445,7 +453,7 @@ Batch.Commit(Sync)
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/infra/device/pebble ./internal/service/primary)
 ```
 
-Expected: 原子性、完整 Upsert、固定 Shard 身份测试通过。
+Expected: 原子性、完整 UPSERT、来源戳、固定 Shard 身份测试通过。
 
 - [ ] **Step 8: Commit**
 
@@ -540,7 +548,7 @@ git commit -m "fix(storage): make fact pagination lossless"
 ### Task 6: 明确 Delete 在线传播和 Archive 保留语义
 
 **Files:**
-- Modify: `modules/storage/proto/rows_changed.proto`
+- Modify: `modules/storage/proto/rows_committed.proto`
 - Modify: `modules/storage/proto/store.proto`
 - Modify: `modules/storage/internal/infra/device/pebble/store.go`
 - Modify: `modules/storage/internal/service/access/data.go`
@@ -550,13 +558,13 @@ git commit -m "fix(storage): make fact pagination lossless"
 - Modify: `modules/archive/internal/consumer/decode.go`
 - Modify: `modules/archive/internal/consumer/decode_test.go`
 
-- [ ] **Step 1: 原子提交 Delete 和 RowsChanged**
+- [ ] **Step 1: 原子提交 Delete 和 RowsCommitted**
 
-Pebble 删除事实 Key、分配 Sequence、按数据类型写入 DELETE `TimeSeriesRowsChanged` 或 `RecordRowsChanged` Outbox 必须在同一个 Sync Batch 中完成。不存在的 Key 删除仍发布一次幂等刷新通知，以便清除可能残留的 View；Archive 始终忽略这类通知。
+Pebble 删除事实 Key、分配 Sequence、按数据类型写入 DELETE `TimeSeriesRowsCommitted` 或 `RecordRowsCommitted` Outbox 必须在同一个 Sync Batch 中完成。不存在的 Key 删除仍发布一次幂等提交消息，以便清除可能残留的 View；Archive 始终忽略这类消息。
 
 - [ ] **Step 2: ViewBuilder 传播删除**
 
-DELETE 必须按 ViewRowKey 找到受影响 View。若仍有其他来源行可组成 View 行，则重新物化；若主数据集行不存在，则删除整个 View 行。
+DELETE 必须按 ViewRowKey 找到受影响 View。主 Dataset 删除映射为整行 DELETE；附属 Dataset 删除映射为 MERGE，把该来源拥有的列显式写成 Null，保留主 Dataset 和其他附属来源的列。若目标 View 行缺失，仍走 Task 7 的批量缺行恢复，不能创建只有 Null 片段的残缺行。
 
 - [ ] **Step 3: 两个引擎实现同一删除接口**
 
@@ -603,26 +611,26 @@ git commit -m "fix(storage): propagate online deletes to views"
 
 批量合并组件命名为 `EventBatcher`；行组合组件命名为 `RowMapper`。将 `ProjectionReader` 改为 `SourceReader`，`ProjectionGrainKey` 改为 `ViewRowKey`，`ViewProjectionDatasets` 改为 `SourceDatasetIDs`。
 
-- [ ] **Step 2: RowsChanged 只作为刷新触发器**
+- [ ] **Step 2: RowsCommitted 作为提交事实与刷新输入**
 
-ViewBuilder 分别解码 `TimeSeriesRowsChanged` 和 `RecordRowsChanged`，归一为只在进程内部存在的 `ChangeBatch`，读取 Shard ID、MooxMessage Sequence、Operation 和事实 Key。UPSERT Payload 中的完整行可用于日志和 Archive，但 View 稳态物化仍批量读取当前事实状态，不直接把事件快照当最终 View 行。
+ViewBuilder 分别解码 `TimeSeriesRowsCommitted` 和 `RecordRowsCommitted`，归一为只在进程内部存在的 `CommittedBatch`，读取 Shard ID、MooxMessage Sequence、Operation 和事实 Key。UPSERT Payload 必须是 DataShard 合并后的完整事实快照，可供日志、Archive 和缺行恢复使用；正常增量刷新使用来源列片段 MERGE，不因每次来源变更而回读未变化的 Dataset。
 
 ```go
-type ChangeBatch struct {
+type CommittedBatch struct {
     MessageID string
     ShardID   string
     Sequence  uint64
-    Changes   []ChangeKey
+    Writes    []CommittedWrite
 }
 
-type ChangeKey struct {
-    Operation     pb.RowChangeOperation
+type CommittedWrite struct {
+    Operation     pb.RowWriteOperation
     TimeSeriesKey *pb.TimeSeriesKey
     RecordKey     *pb.RecordKey
 }
 ```
 
-每个 `ChangeKey` 必须且只能设置一种 Key；外部消息中的完整 UPSERT Row 在归一化后不进入稳态物化输入。EventConsumer 另外持有 JetStream Delivery/完成通知，不能把 ACK 生命周期塞进可批量合并的纯 `ChangeBatch`。
+每个 `CommittedWrite` 必须且只能设置一种 Key。EventConsumer 另外持有 JetStream Delivery/完成通知，不能把 ACK 生命周期塞进可批量合并的纯 `CommittedBatch`。
 
 - [ ] **Step 3: 按 Shard 保序**
 
@@ -632,9 +640,11 @@ type ChangeKey struct {
 
 EventBatcher 在固定等待窗口内把相同 ViewRowKey 合并为一次刷新。不同 Dataset 但映射到同一个 ViewRowKey 的事件进入同一个串行 Lane，避免跨 Shard 并发覆盖。
 
-- [ ] **Step 5: 批量回读并限制资源**
+- [ ] **Step 5: 优先复用 ViewIndex，缺行时才批量回读**
 
-按目标 Shard 对事实 Key 分组，使用现有批量 Read RPC；一次读取结果复用于所有相关 View。配置必须包含并验证：
+RowMapper 按每个来源 Dataset 生成该来源拥有的 View 列片段。对已存在的 View 行，ViewIndex 以显式 `MERGE` 保留其他 Dataset 已物化的列，因此 A 的变更不会触发对未变化 B 的读取。只有 ViewIndex 预检发现 MERGE 目标缺行时，ViewBuilder 才按 ViewRowKey 批量读取该行涉及的所有来源 Dataset，并以完整 `REPLACE` 重试；不能用局部列创建半行。重建、回填和缺行恢复统一使用 `REPLACE`。
+
+按目标 Shard 对缺行恢复所需的事实 Key 分组，使用现有批量 Read RPC；一次读取结果复用于所有相关 View。配置必须包含并验证：
 
 ```yaml
 batch_size: 500
@@ -653,7 +663,7 @@ write_timeout: 10s
 
 - [ ] **Step 7: 生成完整 View 行**
 
-`rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。它必须读取所有 ViewColumn 的来源 Dataset，应用固定 Filter，输出完整列集合和稳定 ViewRowKey。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。
+`rowmapper` 属于 ViewBuilder，不是通用 Infra 或 Core 算法。正常 MERGE 只输出本次变更来源拥有的 View 列；缺行恢复、回填和重建才读取所有 ViewColumn 来源并输出完整列集合。缺少主数据集行返回“删除 View 行”，缺少非主来源列输出明确 Null。
 
 不创建独立 `viewrow` 包。ViewBuilder 和 ViewIndex 之间统一使用 ViewIndex 所拥有的 `viewindex.RowKey`、`viewindex.RowWrite`、`viewindex.BatchWrite` 写入契约；本任务先在现有 `internal/core/viewindex` 中建立这些类型，Task 13 再随整个 ViewIndex 契约原子移动到 `internal/service/viewindex`。RowMapper 只负责生成稳定 Key 和完整列集合，ViewBuilder 再将其包装为 UPSERT/DELETE RowWrite；这些类型不得包含事实回读、Filter 或 RowMapper 流程。
 
@@ -744,9 +754,9 @@ type BatchWrite struct {
 }
 ```
 
-每个 `RowKey` 必须且只能设置 TimeSeries/Record 中的一种。`RowWrite.operation` 的零值必须拒绝；UPSERT 必须携带 RowMapper 生成的完整 Columns/Attributes，DELETE 必须只携带 Key 并拒绝非空 Columns/Attributes。同一 BatchWrite 中同一 RowKey 只能出现一次，不接收事实 Merge 的局部字段，不增加全局 `write_version`。允许 RowWrites 为空的 Checkpoint-only 或 Range-only Apply，但 RowWrites、CheckpointUpdates、IndexRangeUpdate 三者不能同时为空。
+每个 `RowKey` 必须且只能设置 TimeSeries/Record 中的一种。`RowWrite.operation` 的零值必须拒绝。`MERGE` 只携带本次来源拥有的列并保留现有 View 行的其他来源列，目标行不存在时返回全部缺失 RowKey；`REPLACE` 必须携带完整 View 行，用于重建、回填和缺行恢复；`DELETE` 只携带 Key 并拒绝非空 Columns/Attributes。同一 BatchWrite 中同一 RowKey 只能出现一次，不增加全局 `write_version`。允许 RowWrites 为空的 Checkpoint-only 或 Range-only Apply，但 RowWrites、CheckpointUpdates、IndexRangeUpdate 三者不能同时为空。
 
-Proto 使用 `ViewIndexRowWriteOperation`、`ViewIndexRowKey`、`ViewIndexRowWrite`、`ViewIndexShardCheckpointUpdate`、`ViewIndexRangeUpdate`、`ViewIndexBatchWrite`；枚举固定为 `UNSPECIFIED=0`、`UPSERT=1`、`DELETE=2`。`IndexRangeUpdate.indexed_from/indexed_to` 在 Proto 中使用 `optional string`，保留“不修改”和“设置新值”的区别。
+Proto 使用 `ViewIndexRowWriteOperation`、`ViewIndexRowKey`、`ViewIndexRowWrite`、`ViewIndexShardCheckpointUpdate`、`ViewIndexRangeUpdate`、`ViewIndexBatchWrite`；枚举固定为 `UNSPECIFIED=0`、`MERGE=1`、`REPLACE=2`、`DELETE=3`。`IndexRangeUpdate.indexed_from/indexed_to` 在 Proto 中使用 `optional string`，保留“不修改”和“设置新值”的区别。
 
 将 `ViewIndexEngine.Write` 和内部 `WriteViewIndex` RPC 原子改为 `Apply` / `ApplyViewIndex`，请求体使用 `ViewIndexBatchWrite`；不保留旧方法 Alias。`BatchWrite` 是一次完整索引应用命令，不是 EventBatcher 的内存聚合批次。
 
@@ -758,11 +768,11 @@ Proto 使用 `ViewIndexRowWriteOperation`、`ViewIndexRowKey`、`ViewIndexRowWri
 
 - [ ] **Step 3: DuckDB 改为完整 Replace**
 
-删除“读取旧 `row_json` 再合并输入列”的逻辑。DuckDB 在一个事务中应用 RowWrite 的完整 UPSERT/DELETE、Checkpoint 和可选 IndexRangeUpdate。
+保留“读取旧 `row_json`”作为 MERGE 的明确实现，而不是隐式 Patch 语义。DuckDB 在一个事务中预检 MERGE 目标、合并来源列，或应用完整 REPLACE/DELETE，同时提交 Checkpoint 和可选 IndexRangeUpdate。MERGE 缺行时整批不落盘、不推进 Checkpoint，由 ViewBuilder 批量回读所有来源后以 REPLACE 重试。
 
 - [ ] **Step 4: Bleve 保持完整 Document Replace**
 
-Bleve Batch 同时应用完整文档 UPSERT、DELETE 和内部状态文档。状态文档保存 View Version、View Schema Hash、Index Range 及每个 Shard 的 Last Applied Sequence。
+Bleve Batch 必须与 DuckDB 采用相同语义：MERGE 先加载已存完整文档再合并来源列，REPLACE 写入完整文档，DELETE 删除整行，并与内部状态文档同一 Batch 提交。状态文档保存 View Version、View Schema Hash、Index Range 及每个 Shard 的 Last Applied Sequence。
 
 - [ ] **Step 5: 明确 Checkpoint 来源和提交顺序**
 
@@ -1117,7 +1127,7 @@ git commit -m "perf(storage): bound metadata queries and cache"
 
 - [ ] **Step 2: 整理 View 边界**
 
-`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsChanged、回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件、内部 RPC 及其写入契约。ViewBuilder 生成 `viewindex.RowWrite` 并通过 `viewindex.BatchWrite` 调用 ViewIndex Apply；ViewIndex 负责校验 `RowKey`、UPSERT/DELETE、Shard Checkpoint、View Version/View Schema Hash 和可选 Index Range Update，不创建独立 `viewrow` 包。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
+`dataview` 只查询活动索引；`viewbuilder` 拥有 EventConsumer 和 RowMapper，只消费 RowsCommitted、按需回读和物化；`viewindex` 拥有 DuckDB/Bleve 文件、内部 RPC 及其写入契约。ViewBuilder 生成 `viewindex.RowWrite` 并通过 `viewindex.BatchWrite` 调用 ViewIndex Apply；ViewIndex 负责校验 `RowKey`、MERGE/REPLACE/DELETE、Shard Checkpoint、View Version/View Schema Hash 和可选 Index Range Update，不创建独立 `viewrow` 包。DataView 和 ViewIndex 继续是独立包，在同一个 `storage-view` 进程中通过窄的 Typed LocalClient 接口调用，不读取对方具体字段，也不绕本机网络做 HTTP/tRPC 回环。
 
 - [ ] **Step 3: 原子替换服务名**
 
@@ -1726,10 +1736,10 @@ Expected: Push 成功，`main` 与 `origin/main` 同步，工作区干净。
 - [ ] 默认只部署 `storage-primary` 和 `storage-view`，每个进程只读取一个 YAML；可选私网 DataShard 也使用独立单 YAML。
 - [ ] 每个 DataShard 有固定 Shard ID、独立 Pebble、连续 Sequence 和单 Relay。
 - [ ] 不存在全局 `write_version`、Snowflake Version 或跨 Shard 总序假设。
-- [ ] TimeSeriesRowsChanged/RecordRowsChanged 由 DataShard 原子生成；MooxMessage 只保存一份消息 ID、类型和 Sequence。
-- [ ] UPSERT RowsChanged 携带完整提交后行；ViewBuilder 仍以批量回读作为最终事实来源。
+- [ ] TimeSeriesRowsCommitted/RecordRowsCommitted 由 DataShard 原子生成；MooxMessage 只保存一份消息 ID、类型和 Sequence。
+- [ ] RowsCommitted 的 UPSERT 携带完整提交后事实行；ViewBuilder 正常增量使用 ViewIndex MERGE，只有缺行、重建和回填才批量读取全部来源并 REPLACE。
 - [ ] Outbox 永不跨过失败项删除，重放不会增加 DuckDB/Bleve Entry Count。
-- [ ] DuckDB/Bleve 通过 ViewIndex 拥有的 `RowKey`、`RowWrite`、`BatchWrite` 接收明确 UPSERT/DELETE，并拥有一致的 Apply/Checkpoint/IndexRangeUpdate 语义；不存在独立 `viewrow` 包。
+- [ ] DuckDB/Bleve 通过 ViewIndex 拥有的 `RowKey`、`RowWrite`、`BatchWrite` 接收明确 MERGE/REPLACE/DELETE，并拥有一致的 Apply/Checkpoint/IndexRangeUpdate 语义；不存在独立 `viewrow` 包。
 - [ ] ViewIndex 使用 `ViewVersion + ViewSchemaHash` Fence；Dataset `schema_hash` 与 View `view_schema_hash` 命名和职责明确分离。
 - [ ] Archive 忽略 Delete，不写 Tombstone，不删除历史文件。
 - [ ] `indexed_from/indexed_to` 使用 UTC RFC3339Nano，分别对应 TimeSeries `data_time` / Record `version`；它们与带 CAS 的 Shard Checkpoint 能解释查询范围和新鲜度。
