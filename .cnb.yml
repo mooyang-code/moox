@@ -1,4 +1,19 @@
 $:
+  pull_request:
+    - stages:
+        - name: Scan pull request changes for secrets
+          image: ghcr.io/gitleaks/gitleaks:v8.30.1
+          args:
+            - git
+            - --redact
+            - --exit-code
+            - "1"
+            - --log-opts=$CNB_PULL_REQUEST_TARGET_SHA..$CNB_PULL_REQUEST_SHA
+            - .
+        - name: Validate security scan configuration
+          image: cnbcool/code-security-config
+          args:
+            - validate
   tag_push:
     - docker:
         image: golang:1.24-bookworm

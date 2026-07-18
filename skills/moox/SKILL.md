@@ -56,6 +56,11 @@ make deploy
 服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的 SSH 主机指纹完成上传、解压、
 回滚和健康检查；不要在命令行中拼接密码。
 
+敏感信息扫描已接入 CNB 和 GitHub CI 的 Pull Request 流程：`.cnb.yml` 的 `pull_request`
+流水线和 `.github/workflows/ci.yml` 的 `Secret scan` 任务都会扫描本次 PR 的提交范围，
+命中密码、令牌或密钥时以非零状态失败。要真正阻止合并，还需要在两个平台的 `main` 分支
+保护规则中将 `Secret scan` 和常规验证任务设置为必需状态检查；CNB 同时启用“需要通过状态检查”。
+
 Protocol generation:
 
 ```bash

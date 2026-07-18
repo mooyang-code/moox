@@ -29,5 +29,6 @@ grep -Fq 'git ls-files' scripts/check-gofmt.sh
 grep -Fq ':!web-host/internal/statik/statik.go' scripts/check-gofmt.sh
 grep -Fxq '/src/auto-import.d.ts' web/.prettierignore
 grep -Fxq '/src/components.d.ts' web/.prettierignore
+bash scripts/test-secret-scan-contract.sh
 
 echo 'quality gate contract passed'
