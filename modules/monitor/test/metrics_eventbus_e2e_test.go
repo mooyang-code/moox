@@ -125,9 +125,9 @@ type metricsE2EAccess struct {
 	rows []*storagepb.TimeSeriesRow
 }
 
-func (a *metricsE2EAccess) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
+func (a *metricsE2EAccess) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
 	a.rows = append(a.rows, req.GetRows()...)
-	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {

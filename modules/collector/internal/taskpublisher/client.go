@@ -48,7 +48,7 @@ type Config struct {
 	// EventServiceGatewayTarget is the gateway target passed to SCF wake events.
 	EventServiceGatewayTarget string
 	StorageMetadataTarget     string
-	StorageAccessTarget       string
+	StoragePrimaryTarget      string
 	Auth                      AuthConfig
 }
 
@@ -57,7 +57,7 @@ type Client struct {
 	serviceGatewayTarget      string
 	eventServiceGatewayTarget string
 	storageMetadataTarget     string
-	storageAccessTarget       string
+	storagePrimaryTarget      string
 	auth                      AuthConfig
 	httpClient                *http.Client
 	httpClientErr             error
@@ -88,7 +88,7 @@ func New(cfg Config) *Client {
 		serviceGatewayTarget:      normalizeGatewayTarget(controlTarget),
 		eventServiceGatewayTarget: normalizeGatewayTarget(eventTarget),
 		storageMetadataTarget:     strings.TrimSpace(cfg.StorageMetadataTarget),
-		storageAccessTarget:       strings.TrimSpace(cfg.StorageAccessTarget),
+		storagePrimaryTarget:      strings.TrimSpace(cfg.StoragePrimaryTarget),
 		auth:                      cfg.Auth,
 		httpClient:                httpClient,
 		httpClientErr:             httpClientErr,
@@ -342,7 +342,7 @@ func (c *Client) buildWakeEvent() (map[string]any, error) {
 		"timestamp":               time.Now().UTC().Format(time.RFC3339),
 		"service_gateway_target":  c.eventServiceGatewayTarget,
 		"storage_metadata_target": c.storageMetadataTarget,
-		"storage_access_target":   c.storageAccessTarget,
+		"storage_primary_target":  c.storagePrimaryTarget,
 		"data": map[string]any{
 			"wake_reason": "collector_job_items",
 		},

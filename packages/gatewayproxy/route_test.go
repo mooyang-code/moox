@@ -113,9 +113,9 @@ func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testi
 	for _, method := range []string{
 		"ClaimViewIndexBuild",
 		"ScanRecordRows",
-		"WritePrimaryRows",
+		"MergePrimaryRows",
 		"DeletePrimaryRows",
-		"WriteViewIndex",
+		"ApplyViewIndex",
 	} {
 		route := base
 		route.AllowedMethods = []string{method}

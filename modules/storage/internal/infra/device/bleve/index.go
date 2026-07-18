@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -55,12 +56,15 @@ const (
 )
 
 type indexStatsDocument struct {
-	ViewVersion uint64 `json:"view_version"`
-	EntryCount  int64  `json:"entry_count"`
-	MinVersion  string `json:"min_version"`
-	MaxVersion  string `json:"max_version"`
-	SchemaHash  string `json:"schema_hash"`
-	UpdatedAt   string `json:"updated_at"`
+	ViewVersion uint64            `json:"view_version"`
+	EntryCount  int64             `json:"entry_count"`
+	MinVersion  string            `json:"min_version"`
+	MaxVersion  string            `json:"max_version"`
+	SchemaHash  string            `json:"schema_hash"`
+	UpdatedAt   string            `json:"updated_at"`
+	IndexedFrom string            `json:"indexed_from,omitempty"`
+	IndexedTo   string            `json:"indexed_to,omitempty"`
+	Checkpoints map[string]uint64 `json:"checkpoints,omitempty"`
 }
 
 func Open(opts Options) (*Index, error) {
@@ -139,6 +143,8 @@ func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash st
 	}
 	stats.ViewVersion = viewVersion
 	stats.SchemaHash = schemaHash
+	stats.IndexedFrom, stats.IndexedTo = "", ""
+	stats.Checkpoints = make(map[string]uint64)
 	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return i.index.Index(statsDocumentID, stats.toDocument())
 }
@@ -271,6 +277,193 @@ func (i *Index) DeleteRows(ctx context.Context, rows []*pb.RecordRow) error {
 	return i.index.Batch(batch)
 }
 
+// ApplyRows applies MERGE, REPLACE and DELETE operations in one Bleve batch.
+func (i *Index) ApplyRows(ctx context.Context, apply viewindex.ViewIndexApplyBatch) error {
+	_ = ctx
+	if err := apply.Validate(); err != nil {
+		return err
+	}
+	i.writeMu.Lock()
+	defer i.writeMu.Unlock()
+	stats, err := i.readStats()
+	if err != nil {
+		return err
+	}
+	if stats.Checkpoints == nil {
+		stats.Checkpoints = make(map[string]uint64)
+	}
+	if stats.ViewVersion != 0 && apply.ViewVersion == 0 {
+		return errors.New("view schema version is required")
+	}
+	if apply.ViewVersion != 0 && stats.ViewVersion != 0 && apply.ViewVersion != stats.ViewVersion {
+		return fmt.Errorf("view schema version conflict: current=%d requested=%d", stats.ViewVersion, apply.ViewVersion)
+	}
+	if stats.SchemaHash != "" && apply.ViewSchemaHash == "" {
+		return errors.New("view schema hash is required")
+	}
+	if apply.ViewSchemaHash != "" && stats.SchemaHash != "" && apply.ViewSchemaHash != stats.SchemaHash {
+		return fmt.Errorf("view schema hash conflict: current=%s requested=%s", stats.SchemaHash, apply.ViewSchemaHash)
+	}
+	covered, err := validateBleveProgress(stats.Checkpoints, apply.CheckpointUpdates)
+	if err != nil {
+		return err
+	}
+	if covered {
+		return nil
+	}
+	textIndexedColumns := make(map[string]bool)
+	var missing []*pb.RecordKey
+	for _, write := range apply.RowWrites {
+		for _, column := range write.Columns {
+			if column != nil && column.GetColumnName() != "" {
+				textIndexedColumns[column.GetColumnName()] = true
+			}
+		}
+	}
+	for _, write := range apply.RowWrites {
+		if write.Key.RecordKey == nil {
+			return errors.New("bleve apply requires record row keys")
+		}
+		if write.Operation == viewindex.RowWriteOperationMerge {
+			existing, err := i.existingRecordRow(documentID(&pb.RecordRow{Key: write.Key.RecordKey}))
+			if err != nil {
+				return err
+			}
+			if existing == nil {
+				missing = append(missing, write.Key.RecordKey)
+				continue
+			}
+			for _, column := range existing.GetColumns() {
+				if column != nil && column.GetColumnName() != "" {
+					textIndexedColumns[column.GetColumnName()] = true
+				}
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return &viewindex.MissingRowsError{RecordKeys: missing}
+	}
+	batch := i.index.NewBatch()
+	seen := make(map[string]struct{}, len(apply.RowWrites))
+	for _, write := range apply.RowWrites {
+		row := &pb.RecordRow{Key: write.Key.RecordKey, Columns: write.Columns, Attributes: write.Attributes, AttributesToDelete: write.AttributesToDelete, RemovedColumnNames: write.RemovedColumnNames}
+		docID := documentID(row)
+		if _, ok := seen[docID]; ok {
+			continue
+		}
+		seen[docID] = struct{}{}
+		switch write.Operation {
+		case viewindex.RowWriteOperationDelete:
+			exists, err := i.documentExists(docID)
+			if err != nil {
+				return err
+			}
+			if exists && stats.EntryCount > 0 {
+				stats.EntryCount--
+			}
+			batch.Delete(docID)
+		case viewindex.RowWriteOperationMerge, viewindex.RowWriteOperationReplace:
+			existing, err := i.existingRecordRow(docID)
+			if err != nil {
+				return err
+			}
+			if write.Operation == viewindex.RowWriteOperationMerge {
+				row = mergeRecordRow(existing, row)
+			}
+			row.AttributesToDelete = nil
+			doc, err := recordDocument(row, textIndexedColumns)
+			if err != nil {
+				return err
+			}
+			if existing == nil {
+				stats.EntryCount++
+			}
+			updateStatsVersion(&stats, factkey.NormalizeVersion(row.GetKey().GetVersion()))
+			if err := batch.Index(docID, doc); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported row operation %d", write.Operation)
+		}
+	}
+	for _, update := range apply.CheckpointUpdates {
+		stats.Checkpoints[update.ShardID] = update.LastAppliedSequence
+	}
+	if apply.IndexRangeUpdate != nil {
+		if apply.IndexRangeUpdate.IndexedFrom != nil {
+			stats.IndexedFrom = *apply.IndexRangeUpdate.IndexedFrom
+		}
+		if apply.IndexRangeUpdate.IndexedTo != nil {
+			stats.IndexedTo = *apply.IndexRangeUpdate.IndexedTo
+		}
+	}
+	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := batch.Index(statsDocumentID, stats.toDocument()); err != nil {
+		return err
+	}
+	return i.index.Batch(batch)
+}
+
+func validateBleveProgress(current map[string]uint64, updates []viewindex.ShardCheckpointUpdate) (bool, error) {
+	if len(updates) == 0 {
+		return false, nil
+	}
+	seen := make(map[string]struct{}, len(updates))
+	covered := true
+	sawCovered := false
+	sawPending := false
+	for _, update := range updates {
+		if _, ok := seen[update.ShardID]; ok {
+			return false, fmt.Errorf("duplicate checkpoint shard %q", update.ShardID)
+		}
+		seen[update.ShardID] = struct{}{}
+		value := current[update.ShardID]
+		if value == update.ExpectedLastAppliedSequence {
+			covered = false
+			sawPending = true
+			continue
+		}
+		if value >= update.LastAppliedSequence {
+			sawCovered = true
+			continue
+		}
+		return false, fmt.Errorf("checkpoint conflict for shard %q", update.ShardID)
+	}
+	if sawCovered && sawPending {
+		return false, errors.New("checkpoint apply mixes covered and pending shards")
+	}
+	return covered, nil
+}
+
+func recordDocument(row *pb.RecordRow, textIndexedColumns map[string]bool) (map[string]any, error) {
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(row)
+	if err != nil {
+		return nil, err
+	}
+	key := row.GetKey()
+	doc := map[string]any{"_doc_type": "row", "space_id": key.GetSpaceId(), "dataset_id": key.GetDatasetId(), "record_id": key.GetRecordId(), "version": factkey.NormalizeVersion(key.GetVersion()), "_row_json": string(raw)}
+	for _, column := range row.GetColumns() {
+		name := strings.TrimSpace(column.GetColumnName())
+		if !textIndexedColumns[name] || column.GetValue() == nil {
+			continue
+		}
+		doc[columnIndexField(name)] = bleveFieldValue(column.GetValue())
+		doc[columnExistsField(name)] = "1"
+		if text := factvalue.String(column.GetValue()); text != "" {
+			doc[columnNonEmptyField(name)] = "1"
+			doc[allTextField] = strings.TrimSpace(strings.TrimSpace(anyString(doc[allTextField])) + " " + text)
+		}
+	}
+	for _, field := range []string{"record_id", "version"} {
+		value := doc[field].(string)
+		doc[columnExistsField(field)] = "1"
+		if value != "" {
+			doc[columnNonEmptyField(field)] = "1"
+		}
+	}
+	return doc, nil
+}
+
 func (i *Index) existingRecordRow(docID string) (*pb.RecordRow, error) {
 	doc, err := i.index.Document(docID)
 	if err != nil || doc == nil {
@@ -308,19 +501,20 @@ func mergeRecordRow(base, patch *pb.RecordRow) *pb.RecordRow {
 		}
 		copied := proto.Clone(column).(*pb.ColumnValue)
 		if idx, ok := positions[column.GetColumnName()]; ok {
-			if copied.GetValue() == nil || isNullTypedValue(copied.GetValue()) {
-				merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
-				positions = make(map[string]int, len(merged.Columns))
-				for pos, value := range merged.Columns {
-					positions[value.GetColumnName()] = pos
-				}
-				continue
-			}
 			merged.Columns[idx] = copied
 			continue
 		}
 		positions[column.GetColumnName()] = len(merged.Columns)
 		merged.Columns = append(merged.Columns, copied)
+	}
+	for _, name := range patch.GetRemovedColumnNames() {
+		if idx, ok := positions[name]; ok {
+			merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
+			positions = make(map[string]int, len(merged.Columns))
+			for pos, value := range merged.Columns {
+				positions[value.GetColumnName()] = pos
+			}
+		}
 	}
 	if len(patch.GetAttributes()) > 0 {
 		if merged.Attributes == nil {
@@ -330,15 +524,11 @@ func mergeRecordRow(base, patch *pb.RecordRow) *pb.RecordRow {
 			merged.Attributes[key] = value
 		}
 	}
-	return merged
-}
-
-func isNullTypedValue(value *pb.TypedValue) bool {
-	if value == nil {
-		return true
+	for _, key := range patch.GetAttributesToDelete() {
+		delete(merged.Attributes, key)
 	}
-	_, explicit := value.GetValue().(*pb.TypedValue_NullValue)
-	return explicit
+	merged.RemovedColumnNames = nil
+	return merged
 }
 
 func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
@@ -348,13 +538,16 @@ func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
 		return viewindex.ViewIndexStats{}, err
 	}
 	return viewindex.ViewIndexStats{
-		Exists:      true,
-		ViewVersion: stats.ViewVersion,
-		EntryCount:  stats.EntryCount,
-		MinVersion:  stats.MinVersion,
-		MaxVersion:  stats.MaxVersion,
-		SchemaHash:  stats.SchemaHash,
-		UpdatedAt:   stats.UpdatedAt,
+		Exists:           true,
+		ViewVersion:      stats.ViewVersion,
+		EntryCount:       stats.EntryCount,
+		MinVersion:       stats.MinVersion,
+		MaxVersion:       stats.MaxVersion,
+		SchemaHash:       stats.SchemaHash,
+		UpdatedAt:        stats.UpdatedAt,
+		IndexedFrom:      stats.IndexedFrom,
+		IndexedTo:        stats.IndexedTo,
+		ShardCheckpoints: stats.Checkpoints,
 	}, nil
 }
 

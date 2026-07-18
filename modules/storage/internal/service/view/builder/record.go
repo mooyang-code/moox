@@ -22,19 +22,26 @@ func (s *Service) processRecordBatch(ctx context.Context, keys []*pb.RecordKey) 
 	if err != nil {
 		return err
 	}
-	return s.processRecordRowsBatch(ctx, rows)
+	return s.processRecordRowsBatch(ctx, rows, nil)
 }
 
-func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordRow, deleteBatches ...[]*pb.RecordRow) error {
-	if len(rows) == 0 {
-		return nil
-	}
+func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordRow, deleteBatches [][]*pb.RecordRow, progressBatches ...applyProgress) error {
 	if s == nil || s.metadata == nil {
 		return errors.New("view builder record processor requires metadata client")
 	}
 	var deletes []*pb.RecordRow
 	if len(deleteBatches) > 0 {
 		deletes = deleteBatches[0]
+	}
+	var progress applyProgress
+	if len(progressBatches) > 0 {
+		progress = progressBatches[0]
+	}
+	if len(rows) == 0 && len(deletes) == 0 {
+		if progress.shardID == "" || progress.sequence == 0 || progress.spaceID == "" || progress.datasetID == "" {
+			return nil
+		}
+		return s.applyCheckpointOnly(ctx, progress, "bleve")
 	}
 	grouped := make(map[projectionDatasetKey][]*pb.RecordRow)
 	for _, row := range rows {
@@ -81,29 +88,35 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 				if len(activeColumns) == 0 {
 					return errors.New("view " + item.GetViewId() + " has an active index without an active schema")
 				}
-				projected, ok, err := viewsvc.RecordRowsForView(ctx, item, activeColumns, datasetRows, s.readRecordProjectionRows)
+				projected, ok, err := viewsvc.RecordRowsForView(ctx, item, activeColumns, datasetRows, nil)
 				if err != nil {
 					return err
 				}
 				if !ok {
 					return errors.New("view " + item.GetViewId() + " active schema is not projectable")
 				}
-				if len(projected) > 0 || len(datasetDeletes) > 0 {
-					if err := applyViewIndexWithDeletes(ctx, engine, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, nil, projected, false), nil, datasetDeletes); err != nil {
+				projected = recordFragments(item, activeColumns, datasetRows)
+				partialDeletes, fullDeletes := splitRecordDeletes(item, activeColumns, datasetDeletes)
+				projected = append(projected, partialDeletes...)
+				if len(projected) > 0 || len(datasetDeletes) > 0 || progress.sequence != 0 {
+					if err := s.applyRecordIndexWithRecovery(ctx, engine, item, item.GetActiveIndexId(), activeColumns, projected, fullDeletes, false, progress); err != nil {
 						return fmt.Errorf("derive engine=bleve view_id=%s rows=%d active write: %w", item.GetViewId(), len(projected), err)
 					}
 				}
 			}
 			if writable[item.GetIndexBuild().GetIndexId()] && item.GetIndexBuild().GetIndexId() != item.GetActiveIndexId() {
-				projected, ok, err := viewsvc.RecordRowsForView(ctx, item, columns, datasetRows, s.readRecordProjectionRows)
+				projected, ok, err := viewsvc.RecordRowsForView(ctx, item, columns, datasetRows, nil)
 				if err != nil {
 					return err
 				}
 				if !ok {
 					return errors.New("view " + item.GetViewId() + " build schema is not projectable")
 				}
-				if len(projected) > 0 || len(datasetDeletes) > 0 {
-					if err := applyViewIndexWithDeletes(ctx, engine, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, nil, projected, true), nil, datasetDeletes); err != nil {
+				projected = recordFragments(item, columns, datasetRows)
+				partialDeletes, fullDeletes := splitRecordDeletes(item, columns, datasetDeletes)
+				projected = append(projected, partialDeletes...)
+				if len(projected) > 0 || len(datasetDeletes) > 0 || progress.sequence != 0 {
+					if err := s.applyRecordIndexWithRecovery(ctx, engine, item, item.GetIndexBuild().GetIndexId(), columns, projected, fullDeletes, true, progress); err != nil {
 						return fmt.Errorf("derive engine=bleve view_id=%s rows=%d build write: %w", item.GetViewId(), len(projected), err)
 					}
 				}

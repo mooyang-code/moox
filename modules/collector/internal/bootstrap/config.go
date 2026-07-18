@@ -38,7 +38,7 @@ type CloudNodeConfig struct {
 // StorageConfig describes storage service addresses.
 type StorageConfig struct {
 	MetadataTarget string `yaml:"metadata_target"`
-	AccessTarget   string `yaml:"access_target"`
+	PrimaryTarget  string `yaml:"access_target"`
 	MetadataURL    string `yaml:"metadata_url"` // Deprecated: use metadata_target.
 	AccessURL      string `yaml:"access_url"`   // Deprecated: use access_target.
 }
@@ -107,7 +107,7 @@ func (c *Config) applyEnv() {
 		c.Storage.MetadataTarget = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_ACCESS_TARGET"); v != "" {
-		c.Storage.AccessTarget = v
+		c.Storage.PrimaryTarget = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
@@ -118,8 +118,8 @@ func (c *Config) validateStorageTargets() error {
 	if !isStorageTRPCTarget(c.Storage.MetadataTarget) {
 		return fmt.Errorf("storage.metadata_target must be a tRPC target, got %q", c.Storage.MetadataTarget)
 	}
-	if !isStorageTRPCTarget(c.Storage.AccessTarget) {
-		return fmt.Errorf("storage.access_target must be a tRPC target, got %q", c.Storage.AccessTarget)
+	if !isStorageTRPCTarget(c.Storage.PrimaryTarget) {
+		return fmt.Errorf("storage.access_target must be a tRPC target, got %q", c.Storage.PrimaryTarget)
 	}
 	return nil
 }
@@ -146,7 +146,7 @@ func Default() *Config {
 		},
 		Storage: StorageConfig{
 			MetadataTarget: "127.0.0.1:20100",
-			AccessTarget:   "127.0.0.1:20102",
+			PrimaryTarget:  "127.0.0.1:20102",
 		},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},

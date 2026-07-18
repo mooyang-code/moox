@@ -25,8 +25,8 @@ func TestOnceOptionsFromEnv(t *testing.T) {
 	if opts.StorageMetadataTarget != "127.0.0.1:20100" {
 		t.Fatalf("StorageMetadataTarget = %q, want 127.0.0.1:20100", opts.StorageMetadataTarget)
 	}
-	if opts.StorageAccessTarget != "127.0.0.1:20102" {
-		t.Fatalf("StorageAccessTarget = %q, want 127.0.0.1:20102", opts.StorageAccessTarget)
+	if opts.StoragePrimaryTarget != "127.0.0.1:20102" {
+		t.Fatalf("StoragePrimaryTarget = %q, want 127.0.0.1:20102", opts.StoragePrimaryTarget)
 	}
 }
 

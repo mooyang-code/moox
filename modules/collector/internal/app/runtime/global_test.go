@@ -10,8 +10,8 @@ func TestStorageTargetsUseEnvironmentBeforeLocalConfig(t *testing.T) {
 	if got := GetStorageMetadataTarget(); got != "ip://metadata.example.com:20100" {
 		t.Fatalf("GetStorageMetadataTarget() = %q", got)
 	}
-	if got := GetStorageAccessTarget(); got != "ip://access.example.com:20102" {
-		t.Fatalf("GetStorageAccessTarget() = %q", got)
+	if got := GetStoragePrimaryTarget(); got != "ip://access.example.com:20102" {
+		t.Fatalf("GetStoragePrimaryTarget() = %q", got)
 	}
 }
 
@@ -25,8 +25,8 @@ func TestStorageRuntimeTargetsOverrideEnvironment(t *testing.T) {
 	if got := GetStorageMetadataTarget(); got != "ip://runtime-metadata.example.com:20100" {
 		t.Fatalf("GetStorageMetadataTarget() = %q", got)
 	}
-	if got := GetStorageAccessTarget(); got != "ip://runtime-access.example.com:20102" {
-		t.Fatalf("GetStorageAccessTarget() = %q", got)
+	if got := GetStoragePrimaryTarget(); got != "ip://runtime-access.example.com:20102" {
+		t.Fatalf("GetStoragePrimaryTarget() = %q", got)
 	}
 }
 
@@ -56,7 +56,7 @@ func resetStorageTargetState(t *testing.T) {
 	oldLocal := LocalAppConfig
 	LocalAppConfig = &AppConfig{System: &SystemConfig{
 		StorageMetadataTarget: "127.0.0.1:20100",
-		StorageAccessTarget:   "127.0.0.1:20102",
+		StoragePrimaryTarget:  "127.0.0.1:20102",
 	}}
 	localAppConfigMu.Unlock()
 

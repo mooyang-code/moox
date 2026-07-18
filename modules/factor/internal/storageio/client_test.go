@@ -135,16 +135,16 @@ func TestValueForFrameRowAndAsFloat64CoverEdges(t *testing.T) {
 }
 
 type fakeAccessClient struct {
-	writeReqs []*storagepb.WriteTimeSeriesRowsReq
+	writeReqs []*storagepb.MergeTimeSeriesRowsReq
 }
 
 func (f *fakeAccessClient) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: successRet()}, nil
 }
 
-func (f *fakeAccessClient) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
+func (f *fakeAccessClient) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
 	f.writeReqs = append(f.writeReqs, req)
-	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: successRet()}, nil
+	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: successRet()}, nil
 }
 
 func klineRow(t time.Time, columns map[string]*storagepb.ColumnValue) *storagepb.TimeSeriesRow {

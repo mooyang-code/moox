@@ -17,10 +17,10 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
-// PrimaryStoreService defines service.
-type PrimaryStoreService interface {
-	// WritePrimaryRows WritePrimaryRows 将已完成路由的数据行写入在线主存。
-	WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq) (*WritePrimaryRowsRsp, error)
+// DataShardService defines service.
+type DataShardService interface {
+	// MergePrimaryRows MergePrimaryRows 将已完成路由的数据行写入在线主存。
+	MergePrimaryRows(ctx context.Context, req *MergePrimaryRowsReq) (*MergePrimaryRowsRsp, error)
 	// ReadPrimaryRows ReadPrimaryRows 从在线主存读取数据行。
 	ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error)
 	// ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
@@ -29,14 +29,14 @@ type PrimaryStoreService interface {
 	DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq) (*DeletePrimaryRowsRsp, error)
 }
 
-func PrimaryStoreService_WritePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WritePrimaryRowsReq{}
+func DataShardService_MergePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &MergePrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).WritePrimaryRows(ctx, reqbody.(*WritePrimaryRowsReq))
+		return svr.(DataShardService).MergePrimaryRows(ctx, reqbody.(*MergePrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -47,14 +47,14 @@ func PrimaryStoreService_WritePrimaryRows_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func PrimaryStoreService_ReadPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataShardService_ReadPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadPrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).ReadPrimaryRows(ctx, reqbody.(*ReadPrimaryRowsReq))
+		return svr.(DataShardService).ReadPrimaryRows(ctx, reqbody.(*ReadPrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -65,14 +65,14 @@ func PrimaryStoreService_ReadPrimaryRows_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func PrimaryStoreService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataShardService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ScanPrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).ScanPrimaryRows(ctx, reqbody.(*ScanPrimaryRowsReq))
+		return svr.(DataShardService).ScanPrimaryRows(ctx, reqbody.(*ScanPrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -83,14 +83,14 @@ func PrimaryStoreService_ScanPrimaryRows_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func PrimaryStoreService_DeletePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataShardService_DeletePrimaryRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &DeletePrimaryRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).DeletePrimaryRows(ctx, reqbody.(*DeletePrimaryRowsReq))
+		return svr.(DataShardService).DeletePrimaryRows(ctx, reqbody.(*DeletePrimaryRowsReq))
 	}
 
 	var rsp interface{}
@@ -101,57 +101,57 @@ func PrimaryStoreService_DeletePrimaryRows_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-// PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
-var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.storage.PrimaryStore",
-	HandlerType: ((*PrimaryStoreService)(nil)),
+// DataShardServer_ServiceDesc descriptor for server.RegisterService.
+var DataShardServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataShard",
+	HandlerType: ((*DataShardService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/WritePrimaryRows",
-			Func: PrimaryStoreService_WritePrimaryRows_Handler,
+			Name: "/trpc.moox.storage.DataShard/MergePrimaryRows",
+			Func: DataShardService_MergePrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/ReadPrimaryRows",
-			Func: PrimaryStoreService_ReadPrimaryRows_Handler,
+			Name: "/trpc.moox.storage.DataShard/ReadPrimaryRows",
+			Func: DataShardService_ReadPrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/ScanPrimaryRows",
-			Func: PrimaryStoreService_ScanPrimaryRows_Handler,
+			Name: "/trpc.moox.storage.DataShard/ScanPrimaryRows",
+			Func: DataShardService_ScanPrimaryRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/DeletePrimaryRows",
-			Func: PrimaryStoreService_DeletePrimaryRows_Handler,
+			Name: "/trpc.moox.storage.DataShard/DeletePrimaryRows",
+			Func: DataShardService_DeletePrimaryRows_Handler,
 		},
 	},
 }
 
-// RegisterPrimaryStoreService registers service.
-func RegisterPrimaryStoreService(s server.Service, svr PrimaryStoreService) {
-	if err := s.Register(&PrimaryStoreServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("PrimaryStore register error:%v", err))
+// RegisterDataShardService registers service.
+func RegisterDataShardService(s server.Service, svr DataShardService) {
+	if err := s.Register(&DataShardServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataShard register error:%v", err))
 	}
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
-type UnimplementedPrimaryStore struct{}
+type UnimplementedDataShard struct{}
 
-// WritePrimaryRows WritePrimaryRows 将已完成路由的数据行写入在线主存。
-func (s *UnimplementedPrimaryStore) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq) (*WritePrimaryRowsRsp, error) {
-	return nil, errors.New("rpc WritePrimaryRows of service PrimaryStore is not implemented")
+// MergePrimaryRows MergePrimaryRows 将已完成路由的数据行写入在线主存。
+func (s *UnimplementedDataShard) MergePrimaryRows(ctx context.Context, req *MergePrimaryRowsReq) (*MergePrimaryRowsRsp, error) {
+	return nil, errors.New("rpc MergePrimaryRows of service DataShard is not implemented")
 }
 
 // ReadPrimaryRows ReadPrimaryRows 从在线主存读取数据行。
-func (s *UnimplementedPrimaryStore) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error) {
-	return nil, errors.New("rpc ReadPrimaryRows of service PrimaryStore is not implemented")
+func (s *UnimplementedDataShard) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq) (*ReadPrimaryRowsRsp, error) {
+	return nil, errors.New("rpc ReadPrimaryRows of service DataShard is not implemented")
 }
 
 // ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
-func (s *UnimplementedPrimaryStore) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error) {
-	return nil, errors.New("rpc ScanPrimaryRows of service PrimaryStore is not implemented")
+func (s *UnimplementedDataShard) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq) (*ScanPrimaryRowsRsp, error) {
+	return nil, errors.New("rpc ScanPrimaryRows of service DataShard is not implemented")
 }
-func (s *UnimplementedPrimaryStore) DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq) (*DeletePrimaryRowsRsp, error) {
-	return nil, errors.New("rpc DeletePrimaryRows of service PrimaryStore is not implemented")
+func (s *UnimplementedDataShard) DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq) (*DeletePrimaryRowsRsp, error) {
+	return nil, errors.New("rpc DeletePrimaryRows of service DataShard is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -160,10 +160,10 @@ func (s *UnimplementedPrimaryStore) DeletePrimaryRows(ctx context.Context, req *
 
 // START ======================================= Client Service Definition ======================================= START
 
-// PrimaryStoreClientProxy defines service client proxy
-type PrimaryStoreClientProxy interface {
-	// WritePrimaryRows WritePrimaryRows 将已完成路由的数据行写入在线主存。
-	WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq, opts ...client.Option) (rsp *WritePrimaryRowsRsp, err error)
+// DataShardClientProxy defines service client proxy
+type DataShardClientProxy interface {
+	// MergePrimaryRows MergePrimaryRows 将已完成路由的数据行写入在线主存。
+	MergePrimaryRows(ctx context.Context, req *MergePrimaryRowsReq, opts ...client.Option) (rsp *MergePrimaryRowsRsp, err error)
 	// ReadPrimaryRows ReadPrimaryRows 从在线主存读取数据行。
 	ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (rsp *ReadPrimaryRowsRsp, err error)
 	// ScanPrimaryRows ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
@@ -172,43 +172,43 @@ type PrimaryStoreClientProxy interface {
 	DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq, opts ...client.Option) (rsp *DeletePrimaryRowsRsp, err error)
 }
 
-type PrimaryStoreClientProxyImpl struct {
+type DataShardClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewPrimaryStoreClientProxy = func(opts ...client.Option) PrimaryStoreClientProxy {
-	return &PrimaryStoreClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewDataShardClientProxy = func(opts ...client.Option) DataShardClientProxy {
+	return &DataShardClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *PrimaryStoreClientProxyImpl) WritePrimaryRows(ctx context.Context, req *WritePrimaryRowsReq, opts ...client.Option) (*WritePrimaryRowsRsp, error) {
+func (c *DataShardClientProxyImpl) MergePrimaryRows(ctx context.Context, req *MergePrimaryRowsReq, opts ...client.Option) (*MergePrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WritePrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataShard/MergePrimaryRows")
+	msg.WithCalleeServiceName(DataShardServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("WritePrimaryRows")
+	msg.WithCalleeService("DataShard")
+	msg.WithCalleeMethod("MergePrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &WritePrimaryRowsRsp{}
+	rsp := &MergePrimaryRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (*ReadPrimaryRowsRsp, error) {
+func (c *DataShardClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *ReadPrimaryRowsReq, opts ...client.Option) (*ReadPrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadPrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataShard/ReadPrimaryRows")
+	msg.WithCalleeServiceName(DataShardServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeService("DataShard")
 	msg.WithCalleeMethod("ReadPrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -221,14 +221,14 @@ func (c *PrimaryStoreClientProxyImpl) ReadPrimaryRows(ctx context.Context, req *
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (*ScanPrimaryRowsRsp, error) {
+func (c *DataShardClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *ScanPrimaryRowsReq, opts ...client.Option) (*ScanPrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ScanPrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataShard/ScanPrimaryRows")
+	msg.WithCalleeServiceName(DataShardServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeService("DataShard")
 	msg.WithCalleeMethod("ScanPrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -241,14 +241,14 @@ func (c *PrimaryStoreClientProxyImpl) ScanPrimaryRows(ctx context.Context, req *
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq, opts ...client.Option) (*DeletePrimaryRowsRsp, error) {
+func (c *DataShardClientProxyImpl) DeletePrimaryRows(ctx context.Context, req *DeletePrimaryRowsReq, opts ...client.Option) (*DeletePrimaryRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/DeletePrimaryRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataShard/DeletePrimaryRows")
+	msg.WithCalleeServiceName(DataShardServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeService("DataShard")
 	msg.WithCalleeMethod("DeletePrimaryRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))

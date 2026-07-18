@@ -7,10 +7,10 @@ import (
 )
 
 func TestStorageTopologyWarnings_StorageService_ShouldReturnWarning(t *testing.T) {
-	warnings := storageTopologyWarnings("storage_metadata")
+	warnings := storageTopologyWarnings("storage-primary")
 	assert.Len(t, warnings, 1)
 	assert.Equal(t, "storage_topology_overlap", warnings[0].Code)
-	assert.Equal(t, "storage_metadata", warnings[0].ServiceName)
+	assert.Equal(t, "storage-primary", warnings[0].ServiceName)
 }
 
 func TestStorageTopologyWarnings_NonStorageService_ShouldReturnNil(t *testing.T) {
@@ -24,7 +24,7 @@ func TestStorageTopologyWarnings_EmptyService_ShouldReturnWarning(t *testing.T) 
 
 func TestIsStorageDeployment_KnownNames_ShouldReturnTrue(t *testing.T) {
 	for _, name := range []string{
-		"storage_metadata", "storage_access", "storage_view",
+		"storage-primary", "storage-view",
 	} {
 		assert.True(t, isStorageDeployment(name), name)
 	}

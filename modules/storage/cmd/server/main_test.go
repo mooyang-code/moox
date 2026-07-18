@@ -55,8 +55,7 @@ func TestStorageSplitViewRolePredicates(t *testing.T) {
 		{name: "query only", roles: []string{"view_query"}, wantQuery: true},
 		{name: "builder only", roles: []string{"view_builder"}, wantBuilder: true},
 		{name: "index owner only", roles: []string{"view_index"}, wantIndex: true},
-		{name: "access only", roles: []string{"access"}},
-		{name: "all", roles: []string{"all"}, wantQuery: true, wantBuilder: true, wantIndex: true},
+		{name: "access only", roles: []string{"primary"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,7 +85,7 @@ func TestMaintenanceOwnerIDUsesConfiguredValueOrUniqueStartupSuffix(t *testing.T
 }
 
 func TestStorageHealthSnapshot(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"access", "view"}}
+	cfg := storageconfig.StorageConfig{Root: t.TempDir(), Metadata: storageconfig.StorageMetadata{Path: filepath.Join(t.TempDir(), "metadata.db")}, Roles: []string{"primary", "view"}}
 	if err := os.WriteFile(cfg.Metadata.Path, nil, 0o644); err != nil {
 		t.Fatalf("create metadata file: %v", err)
 	}
@@ -96,10 +95,10 @@ func TestStorageHealthSnapshot(t *testing.T) {
 	if rsp.Module != "storage" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
 	}
-	if rsp.Details["roles"] != "access,view" {
+	if rsp.Details["roles"] != "primary,view" {
 		t.Fatalf("roles = %v", rsp.Details["roles"])
 	}
-	if rsp.Service != "storage" || rsp.Details["service"] != "storage" || rsp.Details["role"] != "access,view" {
+	if rsp.Service != "storage-primary-view" || rsp.Details["service"] != "storage-primary-view" || rsp.Details["role"] != "primary,view" {
 		t.Fatalf("service metadata = service:%q details:%+v", rsp.Service, rsp.Details)
 	}
 }
@@ -137,7 +136,7 @@ func TestStorageHealthSnapshotNamesViewIndexOwnerRole(t *testing.T) {
 }
 
 func TestStorageHealthSnapshotReportsMissingDependencies(t *testing.T) {
-	cfg := storageconfig.StorageConfig{Roles: []string{"access"}}
+	cfg := storageconfig.StorageConfig{Roles: []string{"primary"}}
 	state := health.New("storage", "storage", "", "")
 	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{})(context.Background())
 	if rsp.Ready {

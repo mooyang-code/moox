@@ -18,7 +18,7 @@ import (
 )
 
 type AccessClient interface {
-	WriteTimeSeriesRows(context.Context, *storagepb.WriteTimeSeriesRowsReq, ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error)
+	MergeTimeSeriesRows(context.Context, *storagepb.MergeTimeSeriesRowsReq, ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 type MetadataClient interface {
@@ -40,7 +40,7 @@ func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconf
 	return &StorageAdapter{access: access, metadata: metadata, cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return NewStorageAdapter(storagepb.NewAccessClientProxy(client.WithTarget(normalizeTarget(cfg.AccessTarget, "20102"))), storagepb.NewMetadataClientProxy(client.WithTarget(normalizeTarget(cfg.MetadataTarget, "20100"))), cfg)
+	return NewStorageAdapter(storagepb.NewPrimaryStoreClientProxy(client.WithTarget(normalizeTarget(cfg.AccessTarget, "20102"))), storagepb.NewMetadataClientProxy(client.WithTarget(normalizeTarget(cfg.MetadataTarget, "20100"))), cfg)
 }
 
 func normalizeTarget(raw, port string) string {
@@ -263,7 +263,7 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 			}
 			rows = append(rows, sampleRow(a.cfg, sample))
 		}
-		rsp, err := a.access.WriteTimeSeriesRows(ctx, &storagepb.WriteTimeSeriesRowsReq{Rows: rows})
+		rsp, err := a.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{Rows: rows})
 		if err != nil {
 			return fmt.Errorf("write metrics history: %w", err)
 		}

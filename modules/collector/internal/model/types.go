@@ -80,7 +80,7 @@ type CloudFunctionEvent struct {
 	ServerIP              string                       `json:"server_ip,omitempty"`               // Deprecated: use service_gateway_target.
 	ServerPort            int                          `json:"server_port,omitempty"`             // Deprecated: use service_gateway_target.
 	StorageMetadataTarget string                       `json:"storage_metadata_target,omitempty"` // storage metadata tRPC target
-	StorageAccessTarget   string                       `json:"storage_access_target,omitempty"`   // storage access tRPC target
+	StoragePrimaryTarget  string                       `json:"storage_primary_target,omitempty"`  // storage access tRPC target
 	StorageServerURL      string                       `json:"storage_server_url,omitempty"`      // Deprecated: storage access 直连 URL
 	ServiceDeployments    map[string]ServiceDeployment `json:"service_deployments,omitempty"`     // 控制面下发的 active 服务部署信息
 }

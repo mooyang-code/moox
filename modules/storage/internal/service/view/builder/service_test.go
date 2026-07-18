@@ -137,6 +137,12 @@ type blockingSubscriber struct {
 	entered chan struct{}
 }
 
+func (s *blockingSubscriber) SubscribeRowsCommitted(ctx context.Context, _ eventbus.RowsCommittedHandler) (eventbus.Subscription, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (s *blockingSubscriber) SubscribeTimeSeriesRowsCommitted(ctx context.Context, _ eventbus.TimeSeriesRowsCommittedHandler) (eventbus.Subscription, error) {
 	close(s.entered)
 	<-ctx.Done()

@@ -269,12 +269,24 @@ func (b *ProducerBus) publish(ctx context.Context, topic, messageType, spaceID, 
 	if b == nil || b.client == nil {
 		return errors.New("storage eventbus client is nil")
 	}
+	sequence := b.nextSequence.Add(1)
+	id := fmt.Sprintf("storage-%d", sequence)
+	// The DataShard sequence is copied into both the envelope and the
+	// domain payload so relays and consumers can cross-check the boundary.
+	switch event := payload.(type) {
+	case *pb.TimeSeriesRowsCommitted:
+		cloned := proto.Clone(event).(*pb.TimeSeriesRowsCommitted)
+		cloned.Sequence = sequence
+		payload = cloned
+	case *pb.RecordRowsCommitted:
+		cloned := proto.Clone(event).(*pb.RecordRowsCommitted)
+		cloned.Sequence = sequence
+		payload = cloned
+	}
 	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal storage update: %w", err)
 	}
-	sequence := b.nextSequence.Add(1)
-	id := fmt.Sprintf("storage-%d", sequence)
 	now := timestamppb.Now()
 	msg := &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,
@@ -338,6 +350,7 @@ func validateRowsCommittedMessage(msg *messagepb.MooxMessage, expectedShardID st
 	}
 	base := strings.Join(tokens[:len(tokens)-1], ".")
 	var payloadShard, payloadSpace, payloadDataset string
+	var payloadSequence uint64
 	switch msg.GetMessageType() {
 	case defaultTimeSeriesRowsCommittedType:
 		if !strings.HasSuffix(base, "."+defaultTimeSeriesRowsCommittedBase) {
@@ -347,7 +360,7 @@ func validateRowsCommittedMessage(msg *messagepb.MooxMessage, expectedShardID st
 		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
 			return fmt.Errorf("decode time-series rows committed payload: %w", err)
 		}
-		payloadShard, payloadSpace, payloadDataset = event.GetShardId(), event.GetSpaceId(), event.GetDatasetId()
+		payloadShard, payloadSpace, payloadDataset, payloadSequence = event.GetShardId(), event.GetSpaceId(), event.GetDatasetId(), event.GetSequence()
 	case defaultRecordRowsCommittedType:
 		if !strings.HasSuffix(base, "."+defaultRecordRowsCommittedBase) {
 			return fmt.Errorf("record message topic %q is invalid", msg.GetTopic())
@@ -356,12 +369,15 @@ func validateRowsCommittedMessage(msg *messagepb.MooxMessage, expectedShardID st
 		if err := proto.Unmarshal(msg.GetPayload(), event); err != nil {
 			return fmt.Errorf("decode record rows committed payload: %w", err)
 		}
-		payloadShard, payloadSpace, payloadDataset = event.GetShardId(), event.GetSpaceId(), event.GetDatasetId()
+		payloadShard, payloadSpace, payloadDataset, payloadSequence = event.GetShardId(), event.GetSpaceId(), event.GetDatasetId(), event.GetSequence()
 	default:
 		return fmt.Errorf("unknown storage message_type %q", msg.GetMessageType())
 	}
 	if payloadShard == "" || payloadShard != shardID {
 		return fmt.Errorf("storage payload shard_id %q does not match topic shard %q", payloadShard, shardID)
+	}
+	if payloadSequence == 0 || payloadSequence != msg.GetSequence() {
+		return fmt.Errorf("storage payload sequence %d does not match message sequence %d", payloadSequence, msg.GetSequence())
 	}
 	if msg.GetSpaceId() != payloadSpace {
 		return fmt.Errorf("storage payload space_id %q does not match message space_id %q", payloadSpace, msg.GetSpaceId())
@@ -413,6 +429,30 @@ func NewSubscriberBus(client *jetstream.Client, prefix string, opts SubscriberOp
 		recordHandlers:     make(map[uint64]*subscriberRecordHandler),
 		opts:               normalized,
 	}, nil
+}
+
+// SubscribeRowsCommitted presents the two wire payloads as one logical
+// subscription. Both registrations share the same durable pull consumer; the
+// ViewBuilder uses this method so the shard sequence lane is not split by
+// payload kind.
+func (b *SubscriberBus) SubscribeRowsCommitted(ctx context.Context, handler coreeventbus.RowsCommittedHandler) (coreeventbus.Subscription, error) {
+	if handler == nil {
+		return noopSubscription{}, nil
+	}
+	timeSub, err := b.SubscribeTimeSeriesRowsCommitted(ctx, func(handlerCtx context.Context, event *pb.TimeSeriesRowsCommitted) error {
+		return handler(handlerCtx, &coreeventbus.RowsCommittedEvent{TimeSeries: event})
+	})
+	if err != nil {
+		return nil, err
+	}
+	recordSub, err := b.SubscribeRecordRowsCommitted(ctx, func(handlerCtx context.Context, event *pb.RecordRowsCommitted) error {
+		return handler(handlerCtx, &coreeventbus.RowsCommittedEvent{Record: event})
+	})
+	if err != nil {
+		_ = timeSub.Close()
+		return nil, err
+	}
+	return &combinedSubscription{items: []coreeventbus.Subscription{timeSub, recordSub}}, nil
 }
 
 func (b *SubscriberBus) consumerRef(_ bool) jetstream.ConsumerRef {
@@ -486,6 +526,9 @@ func (b *SubscriberBus) startLoop(consumer *jetstream.PullConsumer) {
 	fetchWG.Add(1)
 	go func() {
 		defer fetchWG.Done()
+		// The shared builder lane decides sequence eligibility. Keep enough
+		// deliveries in flight for a failed earlier message to be retried while
+		// a later delivery is waiting on that same lane.
 		semaphore := make(chan struct{}, b.opts.MaxInFlight)
 		for {
 			select {
@@ -796,6 +839,18 @@ func (b *SubscriberBus) Close() error {
 }
 
 type subscriberBusSubscription struct{ close func() error }
+
+type combinedSubscription struct{ items []coreeventbus.Subscription }
+
+func (s *combinedSubscription) Close() error {
+	var err error
+	for _, item := range s.items {
+		if item != nil {
+			err = errors.Join(err, item.Close())
+		}
+	}
+	return err
+}
 
 func (s *subscriberBusSubscription) Close() error {
 	if s == nil || s.close == nil {

@@ -276,14 +276,14 @@ type writerAccessFailFake struct {
 	badRet bool
 }
 
-func (f *writerAccessFailFake) WriteTimeSeriesRows(_ context.Context, _ *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
+func (f *writerAccessFailFake) MergeTimeSeriesRows(_ context.Context, _ *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	if f.badRet {
-		return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "no"}}, nil
+		return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "no"}}, nil
 	}
-	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestStorageWriterIncludesRateColumnsWhenAvailable(t *testing.T) {

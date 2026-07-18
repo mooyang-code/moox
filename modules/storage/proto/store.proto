@@ -30,6 +30,10 @@ message PrimaryStoreRow {
   repeated ColumnValue columns = 2;
   // attributes 是附加属性，更新时按 key 覆盖。
   map<string, string> attributes = 3;
+  // attributes_to_delete explicitly removes attributes during a merge.
+  repeated string attributes_to_delete = 4;
+  // removed_column_names explicitly removes stored columns during a merge.
+  repeated string removed_column_names = 5;
 }
 
 // PrimaryStoreTarget 是 Access 根据 PrimaryStoreRoute 解析后的主存执行目标。
@@ -48,10 +52,12 @@ message PrimaryStoreTarget {
   string device_table = 6;
   // endpoint 是 PrimaryStore 服务节点访问地址；为空时使用默认 PrimaryStore 服务名。
   string endpoint = 7;
+  // shard_id 是 DataShard 的物理身份，与服务节点 node_id 独立。
+  string shard_id = 8;
 }
 
-// WritePrimaryRowsReq 表示写入在线主存行的内部请求。
-message WritePrimaryRowsReq {
+// MergePrimaryRowsReq 表示写入在线主存行的内部请求。
+message MergePrimaryRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
@@ -63,8 +69,8 @@ message WritePrimaryRowsReq {
   bytes outbox_message = 4;
 }
 
-// WritePrimaryRowsRsp 表示在线主存行写入结果。
-message WritePrimaryRowsRsp {
+// MergePrimaryRowsRsp 表示在线主存行写入结果。
+message MergePrimaryRowsRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
 }
@@ -138,10 +144,10 @@ message DeletePrimaryRowsRsp {
   uint32 deleted = 2;
 }
 
-// PrimaryStore 是 Access 调用在线事实主存的内部执行服务。
-service PrimaryStore {
-  // WritePrimaryRows 将已完成路由的数据行写入在线主存。
-  rpc WritePrimaryRows(WritePrimaryRowsReq) returns (WritePrimaryRowsRsp);
+// DataShard 是 PrimaryStore 调用的内部物理事实分片服务。
+service DataShard {
+  // MergePrimaryRows 将已完成路由的数据行写入在线主存。
+  rpc MergePrimaryRows(MergePrimaryRowsReq) returns (MergePrimaryRowsRsp);
   // ReadPrimaryRows 从在线主存读取数据行。
   rpc ReadPrimaryRows(ReadPrimaryRowsReq) returns (ReadPrimaryRowsRsp);
   // ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。

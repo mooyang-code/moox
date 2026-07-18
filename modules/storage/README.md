@@ -6,7 +6,7 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 
 ## 能力一览
 
-- **统一写入与读取**：所有数据访问都经由 Access 入口；时序数据使用 `TimeSeriesKey + TimeRange`，记录数据使用 `RecordKey + VersionRange`，写入按事实键做列级更新。
+- **统一写入与读取**：所有数据访问都经由 PrimaryStore 入口；时序数据使用 `TimeSeriesKey + TimeRange`，记录数据使用 `RecordKey + VersionRange`，写入按事实键做列级更新。
 - **多形态数据**：时序（K 线/tick/快照）、记录（公司/交易对资料）、事件、文档、通用表格，以及参数化因子结果。
 - **Record 全文检索**：登记 Record View 后由 Bleve 维护 a/b 双槽索引，支持 `text_query` 与结构化过滤。
 - **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护 a/b 双库，`QueryTimeSeriesRows` 只读取已激活槽位。
@@ -40,10 +40,10 @@ Storage 不使用一条全局规则删除所有历史。不同存储层的生命
 
 ### 事实数据版本语义
 
-Storage 的事实主存统一按 `key + version` 定位一行数据，Access 对外拆成两套更贴近业务的接口：
+Storage 的事实主存统一按 `key + version` 定位一行数据，PrimaryStore 对外拆成两套更贴近业务的接口：
 
 - **TimeSeries**：`TimeSeriesKey` 由 `space_id + dataset_id + subject_id + freq + dimensions + data_time` 组成，其中 `data_time` 就是版本时间，必须使用 RFC3339/RFC3339Nano。K 线、tick 等有固定 Subject 和固定频率的数据应使用这一类。
-- **Record**：`RecordKey` 由 `space_id + dataset_id + record_id + version` 组成。`version` 允许调用方传入；为空时由 Access 使用当前 UTC 时间生成默认版本，写入响应会返回最终 `RecordKey`。
+- **Record**：`RecordKey` 由 `space_id + dataset_id + record_id + version` 组成。`version` 允许调用方传入；为空时由 PrimaryStore 使用当前 UTC 时间生成默认版本，写入响应会返回最终 `RecordKey`。
 - **列级更新**：同一个 key+version 再次写入时，只更新本次携带的列；未携带列保留旧值。携带 `NULL` 值不会覆盖已有非空值，便于多批因子或资料字段逐步补齐。
 - **绑定关系**：TimeSeries 写入不强制校验 `DatasetSubject`，Record 写入也不自动维护对象绑定；这些关系由应用层通过 Metadata 独立登记，便于管理台展示和治理。
 
@@ -63,7 +63,7 @@ TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真�
 | `active_view_version` | 当前线上读取的 View 版本 |
 | `active_index_id` | 当前线上读取的 a/b 槽位标识 |
 | `active_columns` / `active_schema_hash` | 与读取指针同时激活的字段快照，即使索引为空也可校验查询字段 |
-| `active_coverage_start` / `active_coverage_end` | 当前索引的保留范围 |
+| `indexed_from` / `indexed_to` | 当前索引的保留范围 |
 | `index_build` | 当前构建租约，含 `build_id`、目标版本、状态、owner、游标、范围、计数和错误 |
 
 构建状态依次为 `PREPARING -> BUILDING -> CATCHING_UP -> READY`；失败进入 `FAILED`。增量事件只写当前活动槽位，以及版本和 schema 都匹配的 `BUILDING/CATCHING_UP` 槽位。活动指针在最终 CAS 成功前保持不变，因此切换期间没有读空窗；新增字段在新槽位激活前返回 `VIEW_NOT_READY`。
@@ -111,7 +111,7 @@ CGO_ENABLED=1 go build -o bin/moox-storage-cli ./cmd/cli
 storage:
   root: ./var/storage                                  # 数据根目录
   roles:                                              # 本进程承担的运行角色
-    - access
+    - primary
     - view
   metadata:
     path: ./var/storage/metadata/storage_metadata.db   # 元数据 SQLite 文件
@@ -137,7 +137,7 @@ storage:
       enabled: false        # type=nats 时可显式开启内嵌 JetStream
   view:
     metadata_service_name: trpc.moox.storage.Metadata
-    access_service_name: trpc.moox.storage.Access  # 留空=同进程本地 Access reader
+    primary_store_service_name: trpc.moox.storage.PrimaryStore  # 留空=同进程本地 PrimaryStore reader
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
@@ -181,17 +181,17 @@ storage:
 
 | 角色 | 职责 |
 | --- | --- |
-| `access` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
+| `primary` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
 | `primary` | 拥有 Pebble PrimaryStore RPC；可按路由和配置部署多个 primary 服务。 |
 | `view_index` | 唯一物理 owner；管理每个 View/槽位的 DuckDB 文件与 Bleve 目录，并提供内部生命周期和查询 RPC。 |
 | `view_builder` | 消费行变更事件，向 owner 双写活动/构建槽位，并执行有租约、可续跑的维护状态机。 |
 | `view_query` | 对外提供 DataView；读取元数据中的 `active_index_id` 并通过 owner 查询。 |
 | `view` | 标准部署角色，在一个进程内承载 owner、builder 和 query，但仍通过相同接口分层。 |
-| `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/Access RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
+| `archive` | 独立归档运行时；消费行变更事件，通过 Metadata/PrimaryStore RPC 读取元数据与主存事实数据，后续将写入 Parquet 冷归档。 |
 
-默认运行角色是 `access + view`，不包含显式 `primary`。当 `access` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，Access 走远程 PrimaryStore，除非显式加入 `primary` 角色。
+默认运行角色是 `primary + view`，不包含显式 `primary`。当 `primary` 的 `primary.service_name` 为空时，进程会同时暴露本地 `PrimaryStore`，保持单进程/本地主存部署可用；当 `primary.service_name` 非空时，PrimaryStore 走远程 PrimaryStore，除非显式加入 `primary` 角色。
 
-标准部署将 Access 和 View 分为 `storage-access`、`storage-view` 两个进程。`storage-view` 使用 `config/storage_view/trpc_go.yaml` 作为唯一配置文件，其中同时声明 tRPC listener/client、`roles: [view]`、JetStream、ViewIndex 路径和维护参数；不再发布独立的 builder、query、index 进程配置。
+标准部署将 PrimaryStore 和 View 分为 `storage-primary`、`storage-view` 两个进程。`storage-view` 使用 `config/storage_view/trpc_go.yaml` 作为唯一配置文件，其中同时声明 tRPC listener/client、`roles: [view]`、JetStream、ViewIndex 路径和维护参数；不再发布独立的 builder、query、index 进程配置。
 
 仓库默认事件总线是 `memory`，适合单进程开发和个人部署；它仍然异步投递事件，不提供写后立即可查派生结果的契约。分布式部署或希望持久化事件时，把 `eventbus.type` 改为 `nats`，可连接独立 NATS，也可显式开启 `eventbus.embedded.enabled` 使用内嵌 JetStream。NATS 行变更 subject 使用 `eventbus.subject_prefix` 拼接：
 
@@ -206,7 +206,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | --- | --- | --- | --- |
 | Metadata | 20100 | 20200 | 元数据控制面 |
 | PrimaryStore | 20101 | - | 在线主存（内部服务） |
-| Access | 20102 | 20201 | 事实数据读写 |
+| PrimaryStore | 20102 | 20201 | 事实数据读写 |
 | DataView | 20103 | 20202 | 视图/检索查询 |
 | ViewIndex | 20104 | - | 内部物理索引 owner |
 | admin | 20000 | - | tRPC 管理端口（`/cmds`、`/debug/pprof/*`，仅绑定本机） |
@@ -216,7 +216,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | 计时器服务 | 作用 | 默认 |
 | --- | --- | --- |
 | `trpc.moox.storage.view.timer` | 统一 View 索引维护：schema 抢占、容量/保留范围切换、追平、激活和 orphan 清理；bootstrap 固定执行 `op=maintain`，只在 view_builder 注册 | 开（每 30s） |
-| `trpc.moox.storage.host_metrics_cleanup.timer` | 清理四个 Host Dataset 中严格早于 48 小时的事实；每数据集最多 10 批 | access 每小时执行，启动时立即执行 |
+| `trpc.moox.storage.host_metrics_cleanup.timer` | 清理四个 Host Dataset 中严格早于 48 小时的事实；每数据集最多 10 批 | primary 每小时执行，启动时立即执行 |
 
 主机指标清理的 Handler 同步执行、Clone 调用 Context、设置 60 秒执行超时，并通过进程内状态跳过重叠调用。`DefaultScheduler` 不提供跨进程互斥，多副本部署时只能指定一个清理 owner，或改用分布式 scheduler。
 
@@ -307,7 +307,7 @@ datasets:
     freqs: ["1m", "1h", "1d"]
     status: active
 
-# Dataset 与 Subject 绑定（应用层关系；Access 写入链路不强制校验）
+# Dataset 与 Subject 绑定（应用层关系；PrimaryStore 写入链路不强制校验）
 dataset_subjects:
   - space_id: crypto
     dataset_id: binance_spot_kline
@@ -417,7 +417,7 @@ primary_store_routes:
 
 ### 单进程开发/测试部署
 
-单进程开发/测试模式下，使用仓库自带的 `config/storage.yaml` 即可：它启用 `access + view`，`primary.service_name` 留空时自动暴露同进程 `PrimaryStore`，并通过 `eventbus.embedded.enabled: true` 内嵌 JetStream，不需要单独启动 `nats-server`。
+单进程开发/测试模式下，使用仓库自带的 `config/storage.yaml` 即可：它启用 `primary + view`，`primary.service_name` 留空时自动暴露同进程 `PrimaryStore`，并通过 `eventbus.embedded.enabled: true` 内嵌 JetStream，不需要单独启动 `nats-server`。
 
 如果只跑极简内存事件总线测试，可新建一份本地配置：
 
@@ -425,7 +425,7 @@ primary_store_routes:
 cat > config/storage.local.yaml <<'YAML'
 storage:
   root: ./var/storage
-  roles: [access, primary, view]
+  roles: [primary, primary, view]
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
@@ -438,7 +438,7 @@ storage:
     type: memory
   view:
     metadata_service_name: trpc.moox.storage.Metadata
-    access_service_name: ""
+    primary_store_service_name: ""
     batch_size: 100
     batch_wait_ms: 50
     max_workers: 1
@@ -461,10 +461,10 @@ YAML
 
 ### 分布式部署
 
-把在线主存（Pebble 分片）与 Access/Query/物化等角色拆到不同机器。两点前提：
+把在线主存（Pebble 分片）与 PrimaryStore/Query/物化等角色拆到不同机器。两点前提：
 
 1. **事件总线必须用 NATS 或等价跨进程传输**（`eventbus.type: nats`，配 `nats_url`），否则行变更事件无法跨进程传播到派生存储（全文索引、视图）。可选择一台节点启用 `eventbus.embedded.enabled: true` 作为内嵌 broker，也可统一连接独立部署的 NATS。
-2. **主存走远程**：Access 节点的 `storage.primary.service_name` 必须非空，并在元数据里把 PrimaryStoreNode 的 `endpoint` 指向真实主存地址。
+2. **主存走远程**：PrimaryStore 节点的 `storage.primary.service_name` 必须非空，并在元数据里把 PrimaryStoreNode 的 `endpoint` 指向真实主存地址。
 
 #### 角色拆分示例（2 层）
 
@@ -483,12 +483,12 @@ storage:
 
 只需对外暴露 `PrimaryStore`（`config/trpc_go.yaml` 里该 service 的 `network` 设为 `tcp`、`ip` 设为可被访问的地址）。这些节点上可关闭 view/archive 计时器。
 
-**Access 节点（Metadata/Data/Query + 物化/归档）** —— `storage.yaml`：
+**PrimaryStore 节点（Metadata/Data/Query + 物化/归档）** —— `storage.yaml`：
 
 ```yaml
 storage:
   roles:
-    - access
+    - primary
     - view
   primary:
     service_name: trpc.moox.storage.PrimaryStore   # 走远程主存
@@ -497,7 +497,7 @@ storage:
     nats_url: nats://10.0.0.9:4222
   view:
     metadata_service_name: trpc.moox.storage.Metadata
-    access_service_name: trpc.moox.storage.Access
+    primary_store_service_name: trpc.moox.storage.PrimaryStore
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
@@ -550,8 +550,8 @@ primary_store_routes:
 `moox-storage` 二进制只注册 `storage.roles` 启用的服务。常见拆分：
 
 - **View 节点**：启用 `view` 角色，消费 NATS 行变更事件并写 DuckDB/Bleve。当前物理索引是本地单 owner，标准部署只启动一个 `storage-view` 实例。
-- **Archive 节点**：启用 `archive` 角色，消费 NATS 行变更事件，并通过 Metadata/Access RPC 读取元数据与主存事实数据；后续 Parquet 归档策略在该角色内补齐，不放在 view 进程中。
-- 元数据 SQLite 是控制面单点，建议集中在 Access/控制节点；独立 view/archive 节点通过 RPC 访问 Metadata/Access。
+- **Archive 节点**：启用 `archive` 角色，消费 NATS 行变更事件，并通过 Metadata/PrimaryStore RPC 读取元数据与主存事实数据；后续 Parquet 归档策略在该角色内补齐，不放在 view 进程中。
+- 元数据 SQLite 是控制面单点，建议集中在 PrimaryStore/控制节点；独立 view/archive 节点通过 RPC 访问 Metadata/PrimaryStore。
 
 ### 启动验证
 
@@ -579,11 +579,11 @@ curl -s -XPOST http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListSpaces \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-3. **读写链路**：通过 Access 写一行再读回，等待 `op=maintain` 激活首个索引后查询 DataView。
+3. **读写链路**：通过 PrimaryStore 写一行再读回，等待 `op=maintain` 激活首个索引后查询 DataView。
 
-4. **分布式额外检查**：Access 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 Access 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
+4. **分布式额外检查**：PrimaryStore 节点日志无"primary store"连接错误；主存节点 `PrimaryStore` 端口可被 PrimaryStore 节点 `telnet`/`nc` 通；NATS 上能看到 `moox.storage.time_series.rows_changed.v1` / `moox.storage.record.rows_changed.v1` 主题有消息。
 
-5. **远程 View 验证**：线上或远程发布后通过 admin gateway `11000` 调用 `/api/admin/storage_view/QueryTimeSeriesRows` 或 `/api/admin/storage_view/SearchRecordRows`，请求必须使用小 `limit` / 小分页并跳过精确总数（例如 `total_mode=NONE`），不要做无界生产扫描。
+5. **远程 View 验证**：线上或远程发布后通过 admin gateway `11000` 调用 `/api/admin/storage/QueryTimeSeriesRows` 或 `/api/admin/storage/SearchRecordRows`，请求必须使用小 `limit` / 小分页并跳过精确总数（例如 `total_mode=NONE`），不要做无界生产扫描。
 
 ## 提供的接口
 
@@ -596,14 +596,14 @@ Space、View（+ViewColumn）、DataSource、Subject（+SubjectSymbol）、Datas
 
 > `moox-storage-cli import-seed` 即是对这些接口的批量封装。
 
-### Access — 事实数据读写（端口 20102 / HTTP 20201）
+### PrimaryStore — 事实数据读写（端口 20102 / HTTP 20201）
 
 | RPC | 说明 |
 | --- | --- |
-| `WriteTimeSeriesRows` / `ReadTimeSeriesRows` | 写入/读取固定 `subject_id + freq` 下按 `data_time` 演进的时序数据 |
-| `WriteRecordRows` / `ReadRecordRows` | 写入/读取记录数据，按 `record_id + version` 定位 |
+| `MergeTimeSeriesRows` / `ReadTimeSeriesRows` | 写入/读取固定 `subject_id + freq` 下按 `data_time` 演进的时序数据 |
+| `MergeRecordRows` / `ReadRecordRows` | 写入/读取记录数据，按 `record_id + version` 定位 |
 
-批量写入按主存目标分组提交，跨目标请求不保证整体原子性。`WriteTimeSeriesRowsRsp.written_keys` 和 `WriteRecordRowsRsp.keys` 在后续目标失败时仍会返回此前已经提交的键，调用方可据此只重试未提交部分。
+批量写入按主存目标分组提交，跨目标请求不保证整体原子性。`MergeTimeSeriesRowsRsp.written_keys` 和 `MergeRecordRowsRsp.keys` 在后续目标失败时仍会返回此前已经提交的键，调用方可据此只重试未提交部分。
 
 ### DataView — 用户侧查询（端口 20103 / HTTP 20202）
 
@@ -616,7 +616,7 @@ View 索引生命周期由 `view_builder` 角色的 `op=maintain` 调度驱动�
 
 ### PrimaryStore — 在线主存（端口 20101，内部服务）
 
-`WritePrimaryRows` / `ReadPrimaryRows`，通常由 Access 内部调用；仅在主存独立部署时对外。
+`MergePrimaryRows` / `ReadPrimaryRows`，通常由 PrimaryStore 内部调用；仅在主存独立部署时对外。
 
 ### 常见返回错误码
 
@@ -646,6 +646,6 @@ internal/
   config/           运行配置加载
   core/             领域抽象（eventbus/metadata/router/schema/factvalue/response）
   infra/            底层实现（device/metadata/eventbus/transport）
-  services/         access / primary / view / archive
+  services/         primary / primary / view / archive
 docs/               架构与设计文档
 ```

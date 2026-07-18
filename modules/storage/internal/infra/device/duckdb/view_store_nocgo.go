@@ -44,6 +44,10 @@ func (s *ViewStore) Write(ctx context.Context, indexID string, batch viewindex.V
 	return errDuckDBRequiresCGO
 }
 
+func (s *ViewStore) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	return errDuckDBRequiresCGO
+}
+
 func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{}, errDuckDBRequiresCGO
 }

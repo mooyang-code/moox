@@ -29,7 +29,7 @@ type Dependencies struct {
 	// PlannerStorageMetadataTarget is the control-plane's local metadata target.
 	// The public target remains in StorageMetadataTarget for SCF wake events.
 	PlannerStorageMetadataTarget string
-	StorageAccessTarget          string
+	StoragePrimaryTarget         string
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -57,7 +57,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 			ServiceGatewayTarget:      deps.AdminGatewayURL,
 			EventServiceGatewayTarget: deps.ServiceGatewayTarget,
 			StorageMetadataTarget:     deps.StorageMetadataTarget,
-			StorageAccessTarget:       deps.StorageAccessTarget,
+			StoragePrimaryTarget:      deps.StoragePrimaryTarget,
 			Auth:                      deps.ServiceAuth,
 		}),
 	}

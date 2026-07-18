@@ -109,7 +109,7 @@ type storageImportSummary struct {
 	Freq                     string `json:"freq,omitempty"`
 	ValidatedRows            int    `json:"validated_rows"`
 	WrittenRows              int    `json:"written_rows,omitempty"`
-	WouldWriteTimeSeriesRows int    `json:"would_write_time_series_rows,omitempty"`
+	WouldMergeTimeSeriesRows int    `json:"would_write_time_series_rows,omitempty"`
 	Batches                  int    `json:"batches,omitempty"`
 	BoundSubject             bool   `json:"bound_subject,omitempty"`
 	WouldBindSubject         bool   `json:"would_bind_subject,omitempty"`
@@ -127,7 +127,7 @@ type storageImportMetadataClient interface {
 
 // storageDataWriter 定义数据导入写入 Storage 的接口。
 type storageDataWriter interface {
-	WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq) error
+	MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error
 }
 
 // storageFileImporter 定义一种本地数据文件格式的导入器。
@@ -230,7 +230,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	}
 	if opts.DryRun {
 		summary.Status = "dry_run"
-		summary.WouldWriteTimeSeriesRows = len(result.Rows)
+		summary.WouldMergeTimeSeriesRows = len(result.Rows)
 		summary.WouldBindSubject = needsBind
 		return summary, nil
 	}
@@ -251,7 +251,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		if err := writeStorageImportRows(ctx, writer, &pb.WriteTimeSeriesRowsReq{Rows: result.Rows[start:end]}, true); err != nil {
+		if err := writeStorageImportRows(ctx, writer, &pb.MergeTimeSeriesRowsReq{Rows: result.Rows[start:end]}, true); err != nil {
 			return storageImportSummary{}, err
 		}
 		summary.Batches++
@@ -260,8 +260,8 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	return summary, nil
 }
 
-func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.WriteTimeSeriesRowsReq, allowMetadataRetry bool) error {
-	err := writer.WriteTimeSeriesRows(ctx, req)
+func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.MergeTimeSeriesRowsReq, allowMetadataRetry bool) error {
+	err := writer.MergeTimeSeriesRows(ctx, req)
 	if err == nil || !allowMetadataRetry || !retryableStorageImportWriteError(err) {
 		return err
 	}
@@ -272,7 +272,7 @@ func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *
 			return ctx.Err()
 		case <-time.After(storageImportRetryDelay):
 		}
-		err = writer.WriteTimeSeriesRows(ctx, req)
+		err = writer.MergeTimeSeriesRows(ctx, req)
 		if err == nil {
 			return nil
 		}
@@ -744,8 +744,8 @@ func (c httpStorageImportMetadataClient) BindDatasetSubject(ctx context.Context,
 	return postStorage(ctx, c.URL, metadataServiceName, "BindDatasetSubject", &pb.BindDatasetSubjectReq{DatasetSubject: item}, &pb.BindDatasetSubjectRsp{})
 }
 
-func (w httpStorageDataWriter) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) error {
-	return postStorage(ctx, w.URL, accessServiceName, "WriteTimeSeriesRows", req, &pb.WriteTimeSeriesRowsRsp{})
+func (w httpStorageDataWriter) MergeTimeSeriesRows(ctx context.Context, req *pb.MergeTimeSeriesRowsReq) error {
+	return postStorage(ctx, w.URL, accessServiceName, "MergeTimeSeriesRows", req, &pb.MergeTimeSeriesRowsRsp{})
 }
 
 func init() {

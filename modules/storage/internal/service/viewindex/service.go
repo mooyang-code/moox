@@ -71,22 +71,27 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	return &pb.PrepareViewIndexRsp{RetInfo: response.Success("success")}, nil
 }
 
-func (s *Service) WriteViewIndex(ctx context.Context, req *pb.WriteViewIndexReq) (*pb.WriteViewIndexRsp, error) {
+func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq) (*pb.ApplyViewIndexRsp, error) {
 	engine, err := s.requestEngine(req.GetEngine())
 	batch := batchFromProto(req.GetBatch())
 	if err == nil {
-		err = validateWriteIndexRequest(req.GetIndexId(), engine, batch)
+		err = validateApplyIndexRequest(req.GetIndexId(), engine, batch)
 	}
 	if err == nil {
-		err = s.validateWriteFence(ctx, req.GetIndexId(), engine, batch)
+		err = s.validateApplyFence(ctx, req.GetIndexId(), engine, batch)
 	}
 	if err == nil {
-		err = engine.Write(ctx, req.GetIndexId(), batch)
+		applier, ok := engine.(coreviewindex.ViewIndexApplier)
+		if !ok {
+			err = errors.New("view index engine does not support atomic apply")
+		} else {
+			err = applier.Apply(ctx, req.GetIndexId(), batch)
+		}
 	}
 	if err != nil {
-		return &pb.WriteViewIndexRsp{RetInfo: indexError(err)}, nil
+		return &pb.ApplyViewIndexRsp{RetInfo: indexError(err)}, nil
 	}
-	return &pb.WriteViewIndexRsp{RetInfo: response.Success("success")}, nil
+	return &pb.ApplyViewIndexRsp{RetInfo: response.Success("success")}, nil
 }
 
 func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (*pb.StatViewIndexRsp, error) {
@@ -219,21 +224,22 @@ func validateIndexID(indexID string, engine ManagedEngine) error {
 	return nil
 }
 
-func validateWriteIndexRequest(indexID string, engine ManagedEngine, batch coreviewindex.ViewIndexBatch) error {
+func validateApplyIndexRequest(indexID string, engine ManagedEngine, batch coreviewindex.ViewIndexApplyBatch) error {
 	if err := validateIndexID(indexID, engine); err != nil {
 		return err
 	}
-	if batch.ViewVersion == 0 || strings.TrimSpace(batch.SchemaHash) == "" {
-		return errors.New("view_version and schema_hash are required for fenced index writes")
+	if batch.ViewVersion == 0 || strings.TrimSpace(batch.ViewSchemaHash) == "" {
+		return errors.New("view_version and view_schema_hash are required for fenced index apply")
 	}
 	ref, _ := coreviewindex.ParseViewIndexID(indexID)
-	for _, row := range batch.TimeSeriesRows {
-		if row.GetKey().GetSpaceId() != "" && row.GetKey().GetSpaceId() != ref.SpaceID {
+	if err := batch.Validate(); err != nil {
+		return err
+	}
+	for _, row := range batch.RowWrites {
+		if row.Key.TimeSeriesKey != nil && row.Key.TimeSeriesKey.GetSpaceId() != "" && row.Key.TimeSeriesKey.GetSpaceId() != ref.SpaceID {
 			return errors.New("time series row space_id does not match index_id")
 		}
-	}
-	for _, row := range batch.RecordRows {
-		if row.GetKey().GetSpaceId() != "" && row.GetKey().GetSpaceId() != ref.SpaceID {
+		if row.Key.RecordKey != nil && row.Key.RecordKey.GetSpaceId() != "" && row.Key.RecordKey.GetSpaceId() != ref.SpaceID {
 			return errors.New("record row space_id does not match index_id")
 		}
 	}
@@ -254,12 +260,12 @@ func validateQueryIndexID(indexID string, spaceID string) error {
 	return nil
 }
 
-func (s *Service) validateWriteFence(ctx context.Context, indexID string, engine ManagedEngine, batch coreviewindex.ViewIndexBatch) error {
+func (s *Service) validateApplyFence(ctx context.Context, indexID string, engine ManagedEngine, batch coreviewindex.ViewIndexApplyBatch) error {
 	s.mu.RLock()
 	schema, prepared := s.schemas[indexID]
 	s.mu.RUnlock()
 	if prepared {
-		if schema.ViewVersion != batch.ViewVersion || schema.SchemaHash != batch.SchemaHash {
+		if schema.ViewVersion != batch.ViewVersion || schema.SchemaHash != batch.ViewSchemaHash {
 			return errors.New("stale view index write rejected by schema fence")
 		}
 		return nil
@@ -268,7 +274,7 @@ func (s *Service) validateWriteFence(ctx context.Context, indexID string, engine
 	if err != nil {
 		return err
 	}
-	if !stats.Exists || stats.ViewVersion != batch.ViewVersion || stats.SchemaHash != batch.SchemaHash {
+	if !stats.Exists || stats.ViewVersion != batch.ViewVersion || stats.SchemaHash != batch.ViewSchemaHash {
 		return errors.New("view index write does not match the prepared physical schema")
 	}
 	return nil
@@ -297,18 +303,36 @@ func schemaFromProto(schema *pb.ViewIndexSchema) coreviewindex.ViewIndexSchema {
 	}
 	return coreviewindex.ViewIndexSchema{
 		SpaceID: schema.GetSpaceId(), ViewID: schema.GetViewId(), ViewVersion: schema.GetViewVersion(),
-		Engine: schema.GetEngine(), Columns: schema.GetColumns(), SchemaHash: schema.GetSchemaHash(),
+		Engine: schema.GetEngine(), Columns: schema.GetColumns(), SchemaHash: schema.GetViewSchemaHash(),
 	}
 }
 
-func batchFromProto(batch *pb.ViewIndexBatch) coreviewindex.ViewIndexBatch {
+func batchFromProto(batch *pb.ViewIndexApplyBatch) coreviewindex.ViewIndexApplyBatch {
 	if batch == nil {
-		return coreviewindex.ViewIndexBatch{}
+		return coreviewindex.ViewIndexApplyBatch{}
 	}
-	return coreviewindex.ViewIndexBatch{
-		TimeSeriesRows: batch.GetTimeSeriesRows(), RecordRows: batch.GetRecordRows(), Columns: batch.GetColumns(),
-		ViewVersion: batch.GetViewVersion(), SchemaHash: batch.GetSchemaHash(),
+	out := coreviewindex.ViewIndexApplyBatch{ViewVersion: batch.GetViewVersion(), ViewSchemaHash: batch.GetViewSchemaHash(), RequiredColumnNames: append([]string(nil), batch.GetRequiredColumnNames()...)}
+	for _, item := range batch.GetRowWrites() {
+		if item == nil || item.GetKey() == nil {
+			continue
+		}
+		out.RowWrites = append(out.RowWrites, coreviewindex.RowWrite{
+			Operation: coreviewindex.RowWriteOperation(item.GetOperation()),
+			Key:       coreviewindex.RowKey{TimeSeriesKey: item.GetKey().GetTimeSeriesKey(), RecordKey: item.GetKey().GetRecordKey()},
+			Columns:   item.GetColumns(), Attributes: item.GetAttributes(), AttributesToDelete: item.GetAttributesToDelete(), RemovedColumnNames: item.GetRemovedColumnNames(),
+		})
 	}
+	for _, item := range batch.GetCheckpointUpdates() {
+		if item != nil {
+			out.CheckpointUpdates = append(out.CheckpointUpdates, coreviewindex.ShardCheckpointUpdate{ShardID: item.GetShardId(), ExpectedLastAppliedSequence: item.GetExpectedLastAppliedSequence(), LastAppliedSequence: item.GetLastAppliedSequence()})
+		}
+	}
+	if update := batch.GetIndexRangeUpdate(); update != nil {
+		out.IndexRangeUpdate = &coreviewindex.IndexRangeUpdate{}
+		out.IndexRangeUpdate.IndexedFrom = update.IndexedFrom
+		out.IndexRangeUpdate.IndexedTo = update.IndexedTo
+	}
+	return out
 }
 
 func statsToProto(stats coreviewindex.ViewIndexStats) *pb.ViewIndexStats {
@@ -316,10 +340,15 @@ func statsToProto(stats coreviewindex.ViewIndexStats) *pb.ViewIndexStats {
 	if stats.EntryCount > 0 {
 		count = uint64(stats.EntryCount)
 	}
-	return &pb.ViewIndexStats{
+	out := &pb.ViewIndexStats{
 		Exists: stats.Exists, ViewVersion: stats.ViewVersion, EntryCount: count, MinVersion: stats.MinVersion, MaxVersion: stats.MaxVersion,
-		SchemaHash: stats.SchemaHash, PhysicalBytes: stats.PhysicalBytes, UpdatedAt: stats.UpdatedAt, FreeDiskBytes: stats.FreeDiskBytes,
+		ViewSchemaHash: stats.SchemaHash, PhysicalBytes: stats.PhysicalBytes, UpdatedAt: stats.UpdatedAt, FreeDiskBytes: stats.FreeDiskBytes,
 	}
+	out.IndexedFrom, out.IndexedTo = stats.IndexedFrom, stats.IndexedTo
+	for shardID, sequence := range stats.ShardCheckpoints {
+		out.ShardCheckpoints = append(out.ShardCheckpoints, &pb.ViewIndexShardCheckpointUpdate{ShardId: shardID, LastAppliedSequence: sequence})
+	}
+	return out
 }
 
 func statsFromProto(stats *pb.ViewIndexStats) coreviewindex.ViewIndexStats {
@@ -330,10 +359,16 @@ func statsFromProto(stats *pb.ViewIndexStats) coreviewindex.ViewIndexStats {
 	if count > math.MaxInt64 {
 		count = math.MaxInt64
 	}
-	return coreviewindex.ViewIndexStats{
+	out := coreviewindex.ViewIndexStats{
 		Exists: stats.GetExists(), ViewVersion: stats.GetViewVersion(), EntryCount: int64(count), MinVersion: stats.GetMinVersion(), MaxVersion: stats.GetMaxVersion(),
-		SchemaHash: stats.GetSchemaHash(), PhysicalBytes: stats.GetPhysicalBytes(), UpdatedAt: stats.GetUpdatedAt(), FreeDiskBytes: stats.GetFreeDiskBytes(),
+		SchemaHash: stats.GetViewSchemaHash(), PhysicalBytes: stats.GetPhysicalBytes(), UpdatedAt: stats.GetUpdatedAt(), FreeDiskBytes: stats.GetFreeDiskBytes(), IndexedFrom: stats.GetIndexedFrom(), IndexedTo: stats.GetIndexedTo(), ShardCheckpoints: make(map[string]uint64),
 	}
+	for _, checkpoint := range stats.GetShardCheckpoints() {
+		if checkpoint != nil {
+			out.ShardCheckpoints[checkpoint.GetShardId()] = checkpoint.GetLastAppliedSequence()
+		}
+	}
+	return out
 }
 
 func indexError(err error) *pb.RetInfo {

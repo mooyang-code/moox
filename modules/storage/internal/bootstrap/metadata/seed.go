@@ -234,7 +234,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.Devices {
 		if _, err := store.UpsertDevice(ctx, &pb.Device{
 			DeviceId: item.DeviceID, NodeId: item.NodeID, Name: item.Name, Engine: item.Engine,
-			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status,
+			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("device", item.DeviceID, err)
 		}
@@ -537,13 +537,14 @@ type seedPrimaryStoreNode struct {
 
 // seedDevice 描述待初始化的物理存储设备。
 type seedDevice struct {
-	DeviceID   string `yaml:"device_id"`
-	NodeID     string `yaml:"node_id"`
-	Name       string `yaml:"name"`
-	Engine     string `yaml:"engine"`
-	Endpoint   string `yaml:"endpoint"`
-	ConfigJSON string `yaml:"config_json"`
-	Status     string `yaml:"status"`
+	DeviceID   string            `yaml:"device_id"`
+	NodeID     string            `yaml:"node_id"`
+	Name       string            `yaml:"name"`
+	Engine     string            `yaml:"engine"`
+	Endpoint   string            `yaml:"endpoint"`
+	ConfigJSON string            `yaml:"config_json"`
+	Status     string            `yaml:"status"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedPrimaryStoreRoute 描述待初始化的主存路由。

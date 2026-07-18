@@ -17,7 +17,7 @@ import (
 // AccessClient is the Storage Access RPC subset used by factor.
 type AccessClient interface {
 	ReadTimeSeriesRows(ctx context.Context, req *storagepb.ReadTimeSeriesRowsReq, opts ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
-	WriteTimeSeriesRows(ctx context.Context, req *storagepb.WriteTimeSeriesRowsReq, opts ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error)
+	MergeTimeSeriesRows(ctx context.Context, req *storagepb.MergeTimeSeriesRowsReq, opts ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
 }
 
 // WindowKey identifies one source time-series scope.
@@ -37,7 +37,7 @@ type Client struct {
 // NewClient creates a StorageIO client from a target string.
 func NewClient(accessTarget string, auth *commonpb.AuthInfo) *Client {
 	return &Client{
-		access: storagepb.NewAccessClientProxy(client.WithTarget(NormalizeStorageTarget(accessTarget, "20102"))),
+		access: storagepb.NewPrimaryStoreClientProxy(client.WithTarget(NormalizeStorageTarget(accessTarget, "20102"))),
 		auth:   auth,
 	}
 }

@@ -93,6 +93,20 @@ func TestViewIndexApplyBatchValidateRejectsDuplicateRowKeys(t *testing.T) {
 	}
 }
 
+func TestViewIndexApplyBatchValidateRejectsIncompleteReplace(t *testing.T) {
+	batch := ViewIndexApplyBatch{
+		RequiredColumnNames: []string{"close", "momentum"},
+		RowWrites: []RowWrite{{
+			Operation: RowWriteOperationReplace,
+			Key:       RowKey{RecordKey: &pb.RecordKey{SpaceId: "space", DatasetId: "prices", RecordId: "n-1"}},
+			Columns:   []*pb.ColumnValue{{ColumnName: "close"}},
+		}},
+	}
+	if err := batch.Validate(); err == nil || !strings.Contains(err.Error(), "momentum") {
+		t.Fatalf("Validate() error = %v, want missing column error", err)
+	}
+}
+
 func TestViewIndexApplyBatchValidateRejectsCheckpointRegression(t *testing.T) {
 	batch := ViewIndexApplyBatch{
 		CheckpointUpdates: []ShardCheckpointUpdate{{
@@ -107,12 +121,12 @@ func TestViewIndexApplyBatchValidateRejectsCheckpointRegression(t *testing.T) {
 	}
 }
 
-func TestViewIndexApplyBatchValidateRejectsCheckpointJump(t *testing.T) {
+func TestViewIndexApplyBatchValidateAcceptsCheckpointPrefix(t *testing.T) {
 	batch := ViewIndexApplyBatch{CheckpointUpdates: []ShardCheckpointUpdate{{
 		ShardID: "shard-1", ExpectedLastAppliedSequence: 10, LastAppliedSequence: 12,
 	}}}
-	if err := batch.Validate(); err == nil {
-		t.Fatal("Validate() accepted a checkpoint jump")
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -139,7 +153,7 @@ func TestViewIndexApplyBatchValidateAcceptsEachApplyPart(t *testing.T) {
 		{
 			name: "checkpoint updates",
 			batch: ViewIndexApplyBatch{CheckpointUpdates: []ShardCheckpointUpdate{{
-				ShardID: "shard-1", ExpectedLastAppliedSequence: 10, LastAppliedSequence: 10,
+				ShardID: "shard-1", ExpectedLastAppliedSequence: 10, LastAppliedSequence: 11,
 			}}},
 		},
 		{

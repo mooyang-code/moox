@@ -152,7 +152,7 @@ func seedRecordMetadata(ctx context.Context, meta pb.MetadataClientProxy) error 
 	return nil
 }
 
-func waitMetadataReady(ctx context.Context, data pb.AccessClientProxy, files []bench.KlineFile, opts options) (metadataReadyReport, error) {
+func waitMetadataReady(ctx context.Context, data pb.PrimaryStoreClientProxy, files []bench.KlineFile, opts options) (metadataReadyReport, error) {
 	report := metadataReadyReport{
 		RefreshIntervalHint: metadataRefreshIntervalHint,
 		TimeoutSeconds:      opts.metadataWait.Seconds(),
@@ -205,29 +205,29 @@ func metadataReadyRecordRows(opts options) []*pb.RecordRow {
 	return syntheticRecordRows(1)
 }
 
-func runMetadataReadyProbe(ctx context.Context, data pb.AccessClientProxy, timeSeriesRows []*pb.TimeSeriesRow, recordRows []*pb.RecordRow) error {
+func runMetadataReadyProbe(ctx context.Context, data pb.PrimaryStoreClientProxy, timeSeriesRows []*pb.TimeSeriesRow, recordRows []*pb.RecordRow) error {
 	if len(timeSeriesRows) > 0 {
-		rsp, err := data.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: timeSeriesRows})
+		rsp, err := data.MergeTimeSeriesRows(ctx, &pb.MergeTimeSeriesRowsReq{Rows: timeSeriesRows})
 		if err != nil {
 			return err
 		}
-		if err := retErr("WriteTimeSeriesRows metadata ready probe", rsp.GetRetInfo()); err != nil {
+		if err := retErr("MergeTimeSeriesRows metadata ready probe", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 	}
 	if len(recordRows) > 0 {
-		rsp, err := data.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: recordRows})
+		rsp, err := data.MergeRecordRows(ctx, &pb.MergeRecordRowsReq{Rows: recordRows})
 		if err != nil {
 			return err
 		}
-		if err := retErr("WriteRecordRows metadata ready probe", rsp.GetRetInfo()); err != nil {
+		if err := retErr("MergeRecordRows metadata ready probe", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeKlines(ctx context.Context, data pb.AccessClientProxy, files []bench.KlineFile, opts options) (writeReport, map[string]int, []querySample, error) {
+func writeKlines(ctx context.Context, data pb.PrimaryStoreClientProxy, files []bench.KlineFile, opts options) (writeReport, map[string]int, []querySample, error) {
 	var report writeReport
 	var recorder bench.LatencyRecorder
 	var batchDurations []time.Duration
@@ -255,14 +255,14 @@ func writeKlines(ctx context.Context, data pb.AccessClientProxy, files []bench.K
 			if end > len(timeSeriesRows) {
 				end = len(timeSeriesRows)
 			}
-			req := &pb.WriteTimeSeriesRowsReq{Rows: timeSeriesRows[start:end]}
+			req := &pb.MergeTimeSeriesRowsReq{Rows: timeSeriesRows[start:end]}
 			begin := time.Now()
 			if err := retry(30*time.Second, time.Second, func() error {
-				rsp, err := data.WriteTimeSeriesRows(ctx, req)
+				rsp, err := data.MergeTimeSeriesRows(ctx, req)
 				if err != nil {
 					return err
 				}
-				return retErr("WriteTimeSeriesRows", rsp.GetRetInfo())
+				return retErr("MergeTimeSeriesRows", rsp.GetRetInfo())
 			}); err != nil {
 				return report, nil, nil, err
 			}
@@ -279,7 +279,7 @@ func writeKlines(ctx context.Context, data pb.AccessClientProxy, files []bench.K
 	return report, datasetRows, samples, nil
 }
 
-func writeRecords(ctx context.Context, data pb.AccessClientProxy, opts options) (writeReport, error) {
+func mergeRecords(ctx context.Context, data pb.PrimaryStoreClientProxy, opts options) (writeReport, error) {
 	var report writeReport
 	if opts.recordRows == 0 {
 		return report, nil
@@ -293,14 +293,14 @@ func writeRecords(ctx context.Context, data pb.AccessClientProxy, opts options) 
 		if end > len(rows) {
 			end = len(rows)
 		}
-		req := &pb.WriteRecordRowsReq{Rows: rows[start:end]}
+		req := &pb.MergeRecordRowsReq{Rows: rows[start:end]}
 		begin := time.Now()
 		if err := retry(30*time.Second, time.Second, func() error {
-			rsp, err := data.WriteRecordRows(ctx, req)
+			rsp, err := data.MergeRecordRows(ctx, req)
 			if err != nil {
 				return err
 			}
-			return retErr("WriteRecordRows", rsp.GetRetInfo())
+			return retErr("MergeRecordRows", rsp.GetRetInfo())
 		}); err != nil {
 			return report, err
 		}

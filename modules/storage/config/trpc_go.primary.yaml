@@ -21,12 +21,12 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.storage.Access.trpc
+    - name: trpc.moox.storage.PrimaryStore.trpc
       ip: 127.0.0.1
       port: 20102
       network: tcp
       protocol: trpc
-    - name: trpc.moox.storage.AccessScan.trpc
+    - name: trpc.moox.storage.PrimaryStoreScan.trpc
       ip: 127.0.0.1
       port: 20105
       network: tcp
@@ -43,7 +43,7 @@ server:
       network: tcp
       protocol: trpc
       transport: go-net
-    - name: trpc.moox.storage.Access.http
+    - name: trpc.moox.storage.PrimaryStore.http
       ip: 127.0.0.1
       port: 20201
       network: tcp
@@ -53,7 +53,7 @@ server:
       port: 20200
       network: tcp
       protocol: http
-    - name: trpc.moox.storage.access.metrics.timer
+    - name: trpc.moox.storage.primary.metrics.timer
       port: 20303
       network: "*/30 * * * * *"
       protocol: timer

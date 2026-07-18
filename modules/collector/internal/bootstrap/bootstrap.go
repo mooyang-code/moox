@@ -66,7 +66,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		ServiceAuth:                  taskpublisherAuth(deps.ServiceAuth),
 		StorageMetadataTarget:        deps.StorageMetadataTarget,
 		PlannerStorageMetadataTarget: cfg.Storage.MetadataTarget,
-		StorageAccessTarget:          deps.StorageAccessTarget,
+		StoragePrimaryTarget:         deps.StoragePrimaryTarget,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
@@ -128,7 +128,7 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 			"database":                databaseReady,
 			"cloudnode_address":       cfg.CloudNode.Address,
 			"storage_metadata_target": cfg.Storage.MetadataTarget,
-			"storage_access_target":   cfg.Storage.AccessTarget,
+			"storage_primary_target":  cfg.Storage.PrimaryTarget,
 		}
 		return rsp
 	}

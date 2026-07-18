@@ -47,7 +47,7 @@ func (c *Client) Prepare(ctx context.Context, indexID string, schema coreviewind
 		Engine:  c.engine,
 		Schema: &pb.ViewIndexSchema{
 			SpaceId: schema.SpaceID, ViewId: schema.ViewID, ViewVersion: schema.ViewVersion,
-			Engine: c.engine, Columns: schema.Columns, SchemaHash: schema.SchemaHash,
+			Engine: c.engine, Columns: schema.Columns, ViewSchemaHash: schema.SchemaHash,
 		},
 	})
 	if err != nil {
@@ -57,13 +57,17 @@ func (c *Client) Prepare(ctx context.Context, indexID string, schema coreviewind
 }
 
 func (c *Client) Write(ctx context.Context, indexID string, batch coreviewindex.ViewIndexBatch) error {
-	rsp, err := c.proxy.WriteViewIndex(ctx, &pb.WriteViewIndexReq{
+	return c.Apply(ctx, indexID, coreviewindex.ViewIndexApplyBatch{
+		ViewVersion: batch.ViewVersion, ViewSchemaHash: batch.SchemaHash,
+		RowWrites: rowsFromLegacyBatch(batch),
+	})
+}
+
+func (c *Client) Apply(ctx context.Context, indexID string, batch coreviewindex.ViewIndexApplyBatch) error {
+	rsp, err := c.proxy.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{
 		IndexId: indexID,
 		Engine:  c.engine,
-		Batch: &pb.ViewIndexBatch{
-			TimeSeriesRows: batch.TimeSeriesRows, RecordRows: batch.RecordRows, Columns: batch.Columns,
-			ViewVersion: batch.ViewVersion, SchemaHash: batch.SchemaHash,
-		},
+		Batch:   applyBatchToProto(batch),
 	})
 	if err != nil {
 		return err
@@ -145,8 +149,49 @@ func (p *localViewIndexProxy) PrepareViewIndex(ctx context.Context, req *pb.Prep
 	return p.service.PrepareViewIndex(ctx, req)
 }
 
-func (p *localViewIndexProxy) WriteViewIndex(ctx context.Context, req *pb.WriteViewIndexReq, _ ...client.Option) (*pb.WriteViewIndexRsp, error) {
-	return p.service.WriteViewIndex(ctx, req)
+func (p *localViewIndexProxy) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq, _ ...client.Option) (*pb.ApplyViewIndexRsp, error) {
+	return p.service.ApplyViewIndex(ctx, req)
+}
+
+func rowsFromLegacyBatch(batch coreviewindex.ViewIndexBatch) []coreviewindex.RowWrite {
+	rows := make([]coreviewindex.RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))
+	for _, row := range batch.TimeSeriesRows {
+		if row != nil && row.GetKey() != nil {
+			rows = append(rows, coreviewindex.RowWrite{Operation: coreviewindex.RowWriteOperationMerge, Key: coreviewindex.RowKey{TimeSeriesKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+		}
+	}
+	for _, row := range batch.RecordRows {
+		if row != nil && row.GetKey() != nil {
+			rows = append(rows, coreviewindex.RowWrite{Operation: coreviewindex.RowWriteOperationMerge, Key: coreviewindex.RowKey{RecordKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+		}
+	}
+	return rows
+}
+
+func applyBatchToProto(batch coreviewindex.ViewIndexApplyBatch) *pb.ViewIndexApplyBatch {
+	out := &pb.ViewIndexApplyBatch{ViewVersion: batch.ViewVersion, ViewSchemaHash: batch.ViewSchemaHash, RequiredColumnNames: append([]string(nil), batch.RequiredColumnNames...)}
+	for _, write := range batch.RowWrites {
+		item := &pb.ViewIndexRowWrite{Operation: pb.ViewIndexRowWriteOperation(write.Operation), Columns: write.Columns, Attributes: write.Attributes, AttributesToDelete: write.AttributesToDelete, RemovedColumnNames: write.RemovedColumnNames, Key: &pb.ViewIndexRowKey{}}
+		if write.Key.TimeSeriesKey != nil {
+			item.Key.Key = &pb.ViewIndexRowKey_TimeSeriesKey{TimeSeriesKey: write.Key.TimeSeriesKey}
+		} else if write.Key.RecordKey != nil {
+			item.Key.Key = &pb.ViewIndexRowKey_RecordKey{RecordKey: write.Key.RecordKey}
+		}
+		out.RowWrites = append(out.RowWrites, item)
+	}
+	for _, update := range batch.CheckpointUpdates {
+		out.CheckpointUpdates = append(out.CheckpointUpdates, &pb.ViewIndexShardCheckpointUpdate{ShardId: update.ShardID, ExpectedLastAppliedSequence: update.ExpectedLastAppliedSequence, LastAppliedSequence: update.LastAppliedSequence})
+	}
+	if batch.IndexRangeUpdate != nil {
+		out.IndexRangeUpdate = &pb.ViewIndexRangeUpdate{}
+		if batch.IndexRangeUpdate.IndexedFrom != nil {
+			out.IndexRangeUpdate.IndexedFrom = batch.IndexRangeUpdate.IndexedFrom
+		}
+		if batch.IndexRangeUpdate.IndexedTo != nil {
+			out.IndexRangeUpdate.IndexedTo = batch.IndexRangeUpdate.IndexedTo
+		}
+	}
+	return out
 }
 
 func (p *localViewIndexProxy) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq, _ ...client.Option) (*pb.StatViewIndexRsp, error) {

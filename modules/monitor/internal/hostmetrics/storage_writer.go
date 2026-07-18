@@ -13,7 +13,7 @@ import (
 )
 
 type hostStorageAccess interface {
-	WriteTimeSeriesRows(context.Context, *storagepb.WriteTimeSeriesRowsReq, ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error)
+	MergeTimeSeriesRows(context.Context, *storagepb.MergeTimeSeriesRowsReq, ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
 }
 
 // StorageWriter converts one validated host snapshot into the four Host
@@ -65,7 +65,7 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		if w.cfg.WriteTimeout > 0 {
 			writeCtx, cancel = context.WithTimeout(ctx, w.cfg.WriteTimeout)
 		}
-		rsp, err := w.access.WriteTimeSeriesRows(writeCtx, &storagepb.WriteTimeSeriesRowsReq{Rows: group})
+		rsp, err := w.access.MergeTimeSeriesRows(writeCtx, &storagepb.MergeTimeSeriesRowsReq{Rows: group})
 		cancel()
 		if err != nil {
 			return fmt.Errorf("write host dataset %q: %w", group[0].GetKey().GetDatasetId(), err)

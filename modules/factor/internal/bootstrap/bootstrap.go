@@ -99,7 +99,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.MetadataTarget), authInfo)
 	_ = registry.NewService(factorRepo, meta, registry.Options{FactorsDir: cfg.Engine.FactorsDir})
 
-	storage := storageio.NewClient(cfg.Storage.AccessTarget, authInfo)
+	storage := storageio.NewClient(cfg.Storage.PrimaryTarget, authInfo)
 	runtimeExec, err = engine.NewRuntimePoolExecutor(ctx, cfg.Engine.Workers, process.Config{PythonBin: cfg.Engine.PythonBin, WorkerPath: "./pyworker/worker.py", Args: []string{"--factors-dir", cfg.Engine.FactorsDir, "--sections-dir", cfg.Engine.SectionsDir, "--encoding", cfg.Engine.Encoding}, TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond, Limits: process.DefaultLimits()})
 	if err != nil {
 		log.ErrorContextf(ctx, "启动 factor Python worker 失败: %v", err)
@@ -233,7 +233,7 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Servic
 			"role":            cfg.Instance.Role,
 			"worker_count":    cfg.Engine.Workers,
 			"nats_enabled":    cfg.NATS.URL != "",
-			"storage_access":  cfg.Storage.AccessTarget,
+			"storage_primary": cfg.Storage.PrimaryTarget,
 		}
 		return rsp
 	}

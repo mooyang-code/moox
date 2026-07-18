@@ -1,4 +1,4 @@
-package access
+package primarystore
 
 import (
 	"context"
@@ -40,9 +40,9 @@ type Service struct {
 }
 
 var (
-	_ pb.MetadataService   = (*Service)(nil)
-	_ pb.AccessService     = (*Service)(nil)
-	_ pb.AccessScanService = (*Service)(nil)
+	_ pb.MetadataService         = (*Service)(nil)
+	_ pb.PrimaryStoreService     = (*Service)(nil)
+	_ pb.PrimaryStoreScanService = (*Service)(nil)
 )
 
 func NewServiceWithOptions(opts Options) *Service {

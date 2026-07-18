@@ -29,7 +29,7 @@ func (c *RemoteClient) WriteRowsWithMessage(ctx context.Context, target *pb.Prim
 }
 
 func (c *RemoteClient) writeRows(ctx context.Context, target *pb.PrimaryStoreTarget, rows []*pb.PrimaryStoreRow, message []byte) error {
-	rsp, err := c.proxyFor(target).WritePrimaryRows(ctx, &pb.WritePrimaryRowsReq{
+	rsp, err := c.proxyFor(target).MergePrimaryRows(ctx, &pb.MergePrimaryRowsReq{
 		Target:        target,
 		Rows:          rows,
 		OutboxMessage: message,
@@ -93,18 +93,18 @@ func (c *RemoteClient) DeleteRows(ctx context.Context, target *pb.PrimaryStoreTa
 	return retInfoError(rsp.GetRetInfo())
 }
 
-func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.PrimaryStoreClientProxy {
+func (c *RemoteClient) proxyFor(target *pb.PrimaryStoreTarget) pb.DataShardClientProxy {
 	endpoint := ""
 	if target != nil {
 		endpoint = strings.TrimSpace(target.GetEndpoint())
 	}
 	key := c.serviceName + "|" + endpoint
 	if value, ok := c.proxies.Load(key); ok {
-		return value.(pb.PrimaryStoreClientProxy)
+		return value.(pb.DataShardClientProxy)
 	}
-	proxy := pb.NewPrimaryStoreClientProxy(remoteClientOptions(c.serviceName, endpoint)...)
+	proxy := pb.NewDataShardClientProxy(remoteClientOptions(c.serviceName, endpoint)...)
 	actual, _ := c.proxies.LoadOrStore(key, proxy)
-	return actual.(pb.PrimaryStoreClientProxy)
+	return actual.(pb.DataShardClientProxy)
 }
 
 func remoteClientOptions(serviceName string, endpoint string) []client.Option {

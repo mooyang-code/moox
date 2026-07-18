@@ -487,8 +487,8 @@ func seedMaintenanceNamedView(t *testing.T, ctx context.Context, store *metasqli
 	if activeIndexID != "" {
 		view.ActiveViewVersion = 1
 		view.ActiveColumns = view.Columns
-		view.ActiveCoverageStart = "2026-07-09T12:00:00Z"
-		view.ActiveCoverageEnd = "2026-07-10T12:00:00Z"
+		view.IndexedFrom = "2026-07-09T12:00:00Z"
+		view.IndexedTo = "2026-07-10T12:00:00Z"
 		view.ActiveSchemaHash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{
 			SpaceID: "crypto", ViewID: viewID, Engine: engine, Columns: view.Columns,
 		})
@@ -587,6 +587,18 @@ func (e *maintenanceEngine) Write(_ context.Context, indexID string, batch viewi
 	stat.EntryCount = int64(len(keys))
 	e.stats[indexID] = stat
 	return nil
+}
+
+func (e *maintenanceEngine) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	legacy := viewindex.ViewIndexBatch{ViewVersion: batch.ViewVersion, SchemaHash: batch.ViewSchemaHash}
+	for _, write := range batch.RowWrites {
+		if write.Key.TimeSeriesKey != nil {
+			legacy.TimeSeriesRows = append(legacy.TimeSeriesRows, &pb.TimeSeriesRow{Key: write.Key.TimeSeriesKey, Columns: write.Columns, Attributes: write.Attributes})
+		} else if write.Key.RecordKey != nil {
+			legacy.RecordRows = append(legacy.RecordRows, &pb.RecordRow{Key: write.Key.RecordKey, Columns: write.Columns, Attributes: write.Attributes})
+		}
+	}
+	return e.Write(ctx, indexID, legacy)
 }
 
 func (e *maintenanceEngine) Stat(_ context.Context, indexID string) (viewindex.ViewIndexStats, error) {

@@ -126,7 +126,7 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		Columns: []*pb.ColumnValue{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: doubleValue(1)}},
 	}
 	if err := bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{
-		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "spot", Writes: []*pb.TimeSeriesRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: timeRow}},
+		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "spot", Sequence: 1, Writes: []*pb.TimeSeriesRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: timeRow}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		Columns: []*pb.ColumnValue{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: doubleValue(2)}},
 	}
 	if err := bus.PublishRecordRowsCommitted(context.Background(), &pb.RecordRowsCommitted{
-		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "news", Writes: []*pb.RecordRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: recordRow}},
+		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "news", Sequence: 2, Writes: []*pb.RecordRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: recordRow}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,18 +164,22 @@ type failOnceEngine struct {
 	attempts int
 }
 
-func (e *failOnceEngine) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+func (e *failOnceEngine) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	applier, ok := e.ViewIndexEngine.(viewindex.ViewIndexApplier)
+	if !ok {
+		return errors.New("test engine does not support atomic apply")
+	}
 	e.mu.Lock()
 	e.attempts++
 	attempt := e.attempts
 	e.mu.Unlock()
 	if attempt == 1 {
-		if err := e.ViewIndexEngine.Write(ctx, indexID, batch); err != nil {
+		if err := applier.Apply(ctx, indexID, batch); err != nil {
 			return err
 		}
 		return errors.New("injected post-write acknowledgement failure")
 	}
-	return e.ViewIndexEngine.Write(ctx, indexID, batch)
+	return applier.Apply(ctx, indexID, batch)
 }
 
 func (e *failOnceEngine) Attempts() int {

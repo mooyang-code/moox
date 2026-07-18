@@ -23,7 +23,7 @@ func NewValidator(store MetadataReader) *Validator {
 	return &Validator{metadata: store}
 }
 
-func (v *Validator) ValidateWriteTimeSeriesRows(ctx context.Context, rows []*pb.TimeSeriesRow) error {
+func (v *Validator) ValidateMergeTimeSeriesRows(ctx context.Context, rows []*pb.TimeSeriesRow) error {
 	for _, row := range rows {
 		key := row.GetKey()
 		if key == nil {
@@ -36,7 +36,7 @@ func (v *Validator) ValidateWriteTimeSeriesRows(ctx context.Context, rows []*pb.
 	return nil
 }
 
-func (v *Validator) ValidateWriteRecordRows(ctx context.Context, rows []*pb.RecordRow) error {
+func (v *Validator) ValidateMergeRecordRows(ctx context.Context, rows []*pb.RecordRow) error {
 	for _, row := range rows {
 		key := row.GetKey()
 		if key == nil {

@@ -61,9 +61,9 @@ func TestRejectOutboxBacklogEnforcesLimits(t *testing.T) {
 
 func TestLocalClientOpensSharedPebbleStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pebble", "main")
-	clientA := NewLocalClient(LocalClientOptions{PebblePath: filepath.Dir(path)})
-	clientB := NewLocalClient(LocalClientOptions{PebblePath: filepath.Dir(path)})
-	target := &pb.PrimaryStoreTarget{Engine: "pebble"}
+	clientA := NewLocalClient(LocalClientOptions{PebblePath: filepath.Dir(path), ShardID: "test-shard"})
+	clientB := NewLocalClient(LocalClientOptions{PebblePath: filepath.Dir(path), ShardID: "test-shard"})
+	target := &pb.PrimaryStoreTarget{Engine: "pebble", NodeId: "test-shard"}
 	row := testPrimaryTimeSeriesRow("2026-07-11T00:00:00.000000000Z")
 	require.NoError(t, clientA.WriteRows(context.Background(), target, []*pb.PrimaryStoreRow{row}))
 	got, _, err := clientB.ReadRows(context.Background(), target, &pb.ReadPrimaryRowsReq{

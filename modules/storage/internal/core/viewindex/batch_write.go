@@ -28,10 +28,24 @@ type RowKey struct {
 
 // RowWrite is one atomic row operation within a ViewIndex apply.
 type RowWrite struct {
-	Operation  RowWriteOperation
-	Key        RowKey
-	Columns    []*pb.ColumnValue
-	Attributes map[string]string
+	Operation          RowWriteOperation
+	Key                RowKey
+	Columns            []*pb.ColumnValue
+	Attributes         map[string]string
+	AttributesToDelete []string
+	RemovedColumnNames []string
+}
+
+// MissingRowsError reports MERGE targets that are absent from an index. The
+// builder can use the keys to rebuild complete rows from their source datasets
+// and retry the same atomic batch as REPLACE operations.
+type MissingRowsError struct {
+	TimeSeriesKeys []*pb.TimeSeriesKey
+	RecordKeys     []*pb.RecordKey
+}
+
+func (e *MissingRowsError) Error() string {
+	return fmt.Sprintf("view index merge targets are missing: %d", len(e.TimeSeriesKeys)+len(e.RecordKeys))
 }
 
 // ShardCheckpointUpdate advances one source shard checkpoint with a compare
@@ -47,8 +61,8 @@ func (u ShardCheckpointUpdate) Validate() error {
 	if u.ShardID == "" {
 		return errors.New("ShardID is required")
 	}
-	if u.LastAppliedSequence < u.ExpectedLastAppliedSequence || u.LastAppliedSequence > u.ExpectedLastAppliedSequence+1 {
-		return fmt.Errorf("LastAppliedSequence %d must equal ExpectedLastAppliedSequence %d or advance it by one", u.LastAppliedSequence, u.ExpectedLastAppliedSequence)
+	if u.LastAppliedSequence <= u.ExpectedLastAppliedSequence {
+		return fmt.Errorf("LastAppliedSequence %d must advance ExpectedLastAppliedSequence %d", u.LastAppliedSequence, u.ExpectedLastAppliedSequence)
 	}
 	return nil
 }
@@ -64,11 +78,12 @@ type IndexRangeUpdate struct {
 // At least one of RowWrites, CheckpointUpdates, or IndexRangeUpdate must be
 // present.
 type ViewIndexApplyBatch struct {
-	RowWrites         []RowWrite
-	CheckpointUpdates []ShardCheckpointUpdate
-	ViewVersion       uint64
-	ViewSchemaHash    string
-	IndexRangeUpdate  *IndexRangeUpdate
+	RowWrites           []RowWrite
+	CheckpointUpdates   []ShardCheckpointUpdate
+	ViewVersion         uint64
+	ViewSchemaHash      string
+	IndexRangeUpdate    *IndexRangeUpdate
+	RequiredColumnNames []string
 }
 
 // Validate checks that the key is represented by exactly one row-key variant.
@@ -91,7 +106,7 @@ func (w RowWrite) Validate() error {
 	switch w.Operation {
 	case RowWriteOperationMerge, RowWriteOperationReplace:
 	case RowWriteOperationDelete:
-		if len(w.Columns) != 0 || len(w.Attributes) != 0 {
+		if len(w.Columns) != 0 || len(w.Attributes) != 0 || len(w.AttributesToDelete) != 0 || len(w.RemovedColumnNames) != 0 {
 			return errors.New("DELETE row write must not include columns or attributes")
 		}
 	default:
@@ -123,6 +138,22 @@ func (b ViewIndexApplyBatch) Validate() error {
 			return fmt.Errorf("row write %d duplicates a row key", i)
 		}
 		seen[identity] = struct{}{}
+		if write.Operation == RowWriteOperationReplace && len(b.RequiredColumnNames) > 0 {
+			present := make(map[string]struct{}, len(write.Columns))
+			for _, column := range write.Columns {
+				if column != nil && column.GetColumnName() != "" {
+					present[column.GetColumnName()] = struct{}{}
+				}
+			}
+			for _, name := range b.RequiredColumnNames {
+				if name == "" {
+					continue
+				}
+				if _, ok := present[name]; !ok {
+					return fmt.Errorf("row write %d REPLACE is missing view column %q", i, name)
+				}
+			}
+		}
 	}
 
 	for i, update := range b.CheckpointUpdates {

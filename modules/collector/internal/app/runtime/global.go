@@ -16,7 +16,7 @@ type Config struct {
 	ServiceGatewayTarget  string
 	NodeInfo              NodeInfoConfig
 	StorageMetadataTarget string
-	StorageAccessTarget   string
+	StoragePrimaryTarget  string
 	// 后续扩展其他配置项
 	// Database DatabaseConfig
 	// Cache CacheConfig
@@ -136,14 +136,14 @@ func UpdateStorageTargets(metadataTarget string, accessTarget string) {
 		GlobalConfig.StorageMetadataTarget = trimTarget(metadataTarget)
 	}
 	if IsStorageTRPCTarget(accessTarget) {
-		GlobalConfig.StorageAccessTarget = trimTarget(accessTarget)
+		GlobalConfig.StoragePrimaryTarget = trimTarget(accessTarget)
 	}
 }
 
 func getRuntimeStorageTargets() (string, string) {
 	configMu.RLock()
 	defer configMu.RUnlock()
-	return GlobalConfig.StorageMetadataTarget, GlobalConfig.StorageAccessTarget
+	return GlobalConfig.StorageMetadataTarget, GlobalConfig.StoragePrimaryTarget
 }
 
 // UpdateNodeInfo 更新节点信息配置
@@ -208,7 +208,7 @@ func InitLocalAppConfig() {
 }
 
 // GetStorageMetadataTarget returns the metadata tRPC target.
-// SCF/远程采集器优先使用控制面 keepalive 下发的 storage_metadata_trpc 部署。
+// SCF/远程采集器优先使用控制面 keepalive 下发的 storage-primary 部署。
 func GetStorageMetadataTarget() string {
 	runtimeMetadata, _ := getRuntimeStorageTargets()
 	if runtimeMetadata != "" {
@@ -234,9 +234,9 @@ func GetStorageMetadataTarget() string {
 	return trimTarget(localTarget)
 }
 
-// GetStorageAccessTarget returns the access tRPC target.
+// GetStoragePrimaryTarget returns the access tRPC target.
 // Deprecated system.storage_url is intentionally not consumed by the storage tRPC proxy path.
-func GetStorageAccessTarget() string {
+func GetStoragePrimaryTarget() string {
 	_, runtimeAccess := getRuntimeStorageTargets()
 	if runtimeAccess != "" {
 		return runtimeAccess
@@ -251,7 +251,7 @@ func GetStorageAccessTarget() string {
 	localAppConfigMu.RLock()
 	localTarget := ""
 	if LocalAppConfig != nil && LocalAppConfig.System != nil {
-		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageAccessTarget)
+		localTarget = strings.TrimSpace(LocalAppConfig.System.StoragePrimaryTarget)
 	}
 	localAppConfigMu.RUnlock()
 

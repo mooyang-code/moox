@@ -10,7 +10,7 @@ func TestPluginConfigsInitialize(t *testing.T) {
 	t.Setenv("MOOX_OTEL_ENDPOINT", "")
 	configs := []string{
 		"../../config/trpc_go.yaml",
-		"../../config/trpc_go.access.yaml",
+		"../../config/trpc_go.primary.yaml",
 		"../../config/storage_view/trpc_go.yaml",
 	}
 	for _, path := range configs {

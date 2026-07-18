@@ -294,6 +294,17 @@ func (w *recordingViewIndexEngine) Write(_ context.Context, indexID string, batc
 	return nil
 }
 
+func (w *recordingViewIndexEngine) Apply(_ context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	if w.writeErr != nil {
+		return w.writeErr
+	}
+	if w.writes == nil {
+		w.writes = map[string]int{}
+	}
+	w.writes[indexID] += len(batch.RowWrites)
+	return nil
+}
+
 func (w *recordingViewIndexEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{}, nil
 }

@@ -103,10 +103,6 @@ message View {
   repeated ViewColumn active_columns = 19;
   // active_schema_hash 是当前线上索引的列形态哈希。
   string active_schema_hash = 20;
-  // active_coverage_start 是当前索引覆盖的最小版本或时间。
-  string active_coverage_start = 21;
-  // active_coverage_end 是当前索引覆盖的最大版本或时间。
-  string active_coverage_end = 22;
   // index_build 是当前持久化构建状态的只读投影。
   ViewIndexBuild index_build = 23;
   // indexed_from 是当前索引实际覆盖的最小业务时间或版本。

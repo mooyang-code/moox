@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -41,10 +42,44 @@ func NewEventConsumer(opts EventConsumerOptions) *EventConsumer {
 		handleRecord = noopRecordArchiveEvent
 	}
 	return &EventConsumer{
-		events:           opts.Events,
-		handleTimeSeries: handleTimeSeries,
-		handleRecord:     handleRecord,
+		events: opts.Events,
+		handleTimeSeries: func(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error {
+			return handleTimeSeries(ctx, withoutTimeSeriesDeletes(event))
+		},
+		handleRecord: func(ctx context.Context, event *pb.RecordRowsCommitted) error {
+			return handleRecord(ctx, withoutRecordDeletes(event))
+		},
 	}
+}
+
+func withoutTimeSeriesDeletes(event *pb.TimeSeriesRowsCommitted) *pb.TimeSeriesRowsCommitted {
+	if event == nil {
+		return nil
+	}
+	out := proto.Clone(event).(*pb.TimeSeriesRowsCommitted)
+	writes := out.Writes[:0]
+	for _, write := range out.GetWrites() {
+		if write.GetOperation() != pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
+			writes = append(writes, write)
+		}
+	}
+	out.Writes = writes
+	return out
+}
+
+func withoutRecordDeletes(event *pb.RecordRowsCommitted) *pb.RecordRowsCommitted {
+	if event == nil {
+		return nil
+	}
+	out := proto.Clone(event).(*pb.RecordRowsCommitted)
+	writes := out.Writes[:0]
+	for _, write := range out.GetWrites() {
+		if write.GetOperation() != pb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
+			writes = append(writes, write)
+		}
+	}
+	out.Writes = writes
+	return out
 }
 
 func (c *EventConsumer) Start(ctx context.Context) error {

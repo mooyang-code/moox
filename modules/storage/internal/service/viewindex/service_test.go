@@ -22,7 +22,7 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 		IndexId: indexID,
 		Engine:  "duckdb",
 		Schema: &pb.ViewIndexSchema{
-			SpaceId: "crypto", ViewId: "spot", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1",
+			SpaceId: "crypto", ViewId: "spot", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1",
 		},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -31,14 +31,15 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 	if duck.prepared != indexID || bleve.prepared != "" {
 		t.Fatalf("prepared duck=%q bleve=%q", duck.prepared, bleve.prepared)
 	}
-	writeRsp, err := service.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
-		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexBatch{ViewVersion: 1, SchemaHash: "schema-1"},
+	rowWrite := &pb.ViewIndexRowWrite{Operation: pb.ViewIndexRowWriteOperation_VIEW_INDEX_ROW_WRITE_OPERATION_MERGE, Key: &pb.ViewIndexRowKey{Key: &pb.ViewIndexRowKey_TimeSeriesKey{TimeSeriesKey: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC", Freq: "1m", DataTime: "2026-01-01T00:00:00Z"}}}}
+	writeRsp, err := service.ApplyViewIndex(context.Background(), &pb.ApplyViewIndexReq{
+		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexApplyBatch{ViewVersion: 1, ViewSchemaHash: "schema-1", RowWrites: []*pb.ViewIndexRowWrite{rowWrite}},
 	})
 	if err != nil || writeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("fenced write rsp=%+v err=%v", writeRsp, err)
 	}
-	staleRsp, err := service.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
-		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexBatch{ViewVersion: 2, SchemaHash: "schema-1"},
+	staleRsp, err := service.ApplyViewIndex(context.Background(), &pb.ApplyViewIndexReq{
+		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexApplyBatch{ViewVersion: 2, ViewSchemaHash: "schema-1", RowWrites: []*pb.ViewIndexRowWrite{rowWrite}},
 	})
 	if err != nil || staleRsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		t.Fatalf("stale write rsp=%+v err=%v", staleRsp, err)
@@ -62,7 +63,7 @@ func TestServiceRestartRejectsStaleViewVersionWithSameSchemaHash(t *testing.T) {
 		IndexId: indexID,
 		Engine:  "duckdb",
 		Schema: &pb.ViewIndexSchema{
-			SpaceId: "crypto", ViewId: "spot", ViewVersion: 2, Engine: "duckdb", SchemaHash: "unchanged-shape",
+			SpaceId: "crypto", ViewId: "spot", ViewVersion: 2, Engine: "duckdb", ViewSchemaHash: "unchanged-shape",
 		},
 	})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -70,13 +71,13 @@ func TestServiceRestartRejectsStaleViewVersionWithSameSchemaHash(t *testing.T) {
 	}
 
 	restarted := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
-	stale, err := restarted.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
+	stale, err := restarted.ApplyViewIndex(context.Background(), &pb.ApplyViewIndexReq{
 		IndexId: indexID,
 		Engine:  "duckdb",
-		Batch:   &pb.ViewIndexBatch{ViewVersion: 1, SchemaHash: "unchanged-shape"},
+		Batch:   &pb.ViewIndexApplyBatch{ViewVersion: 1, ViewSchemaHash: "unchanged-shape"},
 	})
 	if err != nil {
-		t.Fatalf("WriteViewIndex transport error: %v", err)
+		t.Fatalf("ApplyViewIndex transport error: %v", err)
 	}
 	if stale.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		t.Fatalf("stale write accepted after owner restart: %+v", stale)
@@ -160,6 +161,10 @@ func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, schema co
 }
 
 func (e *fakeManagedEngine) Write(context.Context, string, coreviewindex.ViewIndexBatch) error {
+	return e.err
+}
+
+func (e *fakeManagedEngine) Apply(context.Context, string, coreviewindex.ViewIndexApplyBatch) error {
 	return e.err
 }
 

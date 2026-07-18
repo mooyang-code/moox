@@ -80,8 +80,8 @@ func storageServiceName(storage storageconfig.StorageConfig) string {
 		return "storage-view-builder"
 	case "view_index":
 		return "storage-view-index"
-	case "access":
-		return "storage-access"
+	case "primary":
+		return "storage-primary"
 	case "view":
 		return "storage-view"
 	case "access,view":

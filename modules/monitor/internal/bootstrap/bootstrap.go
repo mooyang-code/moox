@@ -53,7 +53,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	var hostGate *hostmetrics.StorageGate
 	var hostRuleCache *hostmetrics.RuleCache
 	if cfg.Metrics.HostStorage.Enabled {
-		hostAccess := storagepb.NewAccessClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.AccessTarget)))
+		hostAccess := storagepb.NewPrimaryStoreClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.AccessTarget)))
 		hostMetadata := storagepb.NewMetadataClientProxy(client.WithTarget(normalizeHostStorageTarget(cfg.Metrics.HostStorage.MetadataTarget)))
 		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
 		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)

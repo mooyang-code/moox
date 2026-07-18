@@ -94,6 +94,9 @@ type persistedIndexMeta struct {
 	maxVersion  string
 	schemaHash  string
 	updatedAt   string
+	indexedFrom string
+	indexedTo   string
+	checkpoints map[string]uint64
 }
 
 func (s *ViewStore) insertRowsIntoEmptyTable(ctx context.Context, quotedTableName string, columns []*pb.ResultColumn, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, error) {

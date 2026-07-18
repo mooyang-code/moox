@@ -181,20 +181,24 @@ func validateTargetShard(target *pb.PrimaryStoreTarget, store device.FactStore) 
 	if target == nil {
 		return fmt.Errorf("target is required")
 	}
-	if target.GetNodeId() == "" {
-		return nil
-	}
 	identity, ok := store.(device.ShardIdentity)
 	if !ok {
 		// Lightweight test and remote adapters may not expose a local shard
 		// identity; the concrete Pebble DataShard does and is checked below.
 		return nil
 	}
+	identityTarget := target.GetShardId()
+	if identityTarget == "" {
+		identityTarget = target.GetNodeId()
+	}
+	if identityTarget == "" {
+		return fmt.Errorf("target shard identity is required")
+	}
 	if identity.ShardID() == "" {
 		return fmt.Errorf("DataShard identity is unavailable for target %q", target.GetNodeId())
 	}
-	if target.GetNodeId() != identity.ShardID() {
-		return fmt.Errorf("target shard %q does not match DataShard %q", target.GetNodeId(), identity.ShardID())
+	if identityTarget != identity.ShardID() {
+		return fmt.Errorf("target shard %q does not match DataShard %q", identityTarget, identity.ShardID())
 	}
 	return nil
 }

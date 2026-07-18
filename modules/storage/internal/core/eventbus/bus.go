@@ -12,6 +12,16 @@ import (
 type TimeSeriesRowsCommittedHandler func(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error
 type RecordRowsCommittedHandler func(ctx context.Context, event *pb.RecordRowsCommitted) error
 
+// RowsCommittedEvent is the single logical delivery lane for DataShard
+// commits. The two payload types retain their domain-specific schemas, but a
+// ViewBuilder must consume them through one ordered subscription.
+type RowsCommittedEvent struct {
+	TimeSeries *pb.TimeSeriesRowsCommitted
+	Record     *pb.RecordRowsCommitted
+}
+
+type RowsCommittedHandler func(ctx context.Context, event *RowsCommittedEvent) error
+
 // Publisher publishes committed PrimaryStore changes.
 type Publisher interface {
 	PublishTimeSeriesRowsCommitted(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error
@@ -25,6 +35,7 @@ type Subscription interface {
 
 // Subscriber consumes PrimaryStore changes.
 type Subscriber interface {
+	SubscribeRowsCommitted(ctx context.Context, handler RowsCommittedHandler) (Subscription, error)
 	SubscribeTimeSeriesRowsCommitted(ctx context.Context, handler TimeSeriesRowsCommittedHandler) (Subscription, error)
 	SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error)
 }
@@ -44,6 +55,7 @@ type MemoryBus struct {
 	nextID             uint64
 	timeSeriesHandlers map[uint64]*memoryTimeSeriesHandler
 	recordHandlers     map[uint64]*memoryRecordHandler
+	committedHandlers  map[uint64]*memoryCommittedHandler
 	inFlight           int
 	closed             bool
 }
@@ -52,9 +64,27 @@ func NewMemoryBus() *MemoryBus {
 	bus := &MemoryBus{
 		timeSeriesHandlers: make(map[uint64]*memoryTimeSeriesHandler),
 		recordHandlers:     make(map[uint64]*memoryRecordHandler),
+		committedHandlers:  make(map[uint64]*memoryCommittedHandler),
 	}
 	bus.closeCond = sync.NewCond(&bus.mu)
 	return bus
+}
+
+func (b *MemoryBus) SubscribeRowsCommitted(ctx context.Context, handler RowsCommittedHandler) (Subscription, error) {
+	_ = ctx
+	if handler == nil {
+		return noopSubscription{}, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, context.Canceled
+	}
+	b.nextID++
+	id := b.nextID
+	entry := &memoryCommittedHandler{handler: handler, lifecycle: newHandlerLifecycle()}
+	b.committedHandlers[id] = entry
+	return &memorySubscription{close: func() { b.deleteCommittedHandler(id, entry) }}, nil
 }
 
 func (b *MemoryBus) Ready() bool {
@@ -135,6 +165,7 @@ func (b *MemoryBus) PublishTimeSeriesRowsCommitted(ctx context.Context, event *p
 		next++
 		err = errors.Join(err, entry.call(ctx, cloneTimeSeriesRowsCommitted(event)))
 	}
+	err = errors.Join(err, b.publishCommitted(ctx, &RowsCommittedEvent{TimeSeries: cloneTimeSeriesRowsCommitted(event)}))
 	return err
 }
 
@@ -165,6 +196,23 @@ func (b *MemoryBus) PublishRecordRowsCommitted(ctx context.Context, event *pb.Re
 		next++
 		err = errors.Join(err, entry.call(ctx, cloneRecordRowsCommitted(event)))
 	}
+	err = errors.Join(err, b.publishCommitted(ctx, &RowsCommittedEvent{Record: cloneRecordRowsCommitted(event)}))
+	return err
+}
+
+func (b *MemoryBus) publishCommitted(ctx context.Context, event *RowsCommittedEvent) error {
+	b.mu.Lock()
+	handlers := make([]*memoryCommittedHandler, 0, len(b.committedHandlers))
+	for _, entry := range b.committedHandlers {
+		if entry.lifecycle.acquire() {
+			handlers = append(handlers, entry)
+		}
+	}
+	b.mu.Unlock()
+	var err error
+	for _, entry := range handlers {
+		err = errors.Join(err, entry.call(ctx, event))
+	}
 	return err
 }
 
@@ -173,12 +221,17 @@ func (b *MemoryBus) Close() error {
 	b.closed = true
 	timeSeriesHandlers := b.timeSeriesHandlers
 	recordHandlers := b.recordHandlers
+	committedHandlers := b.committedHandlers
 	b.timeSeriesHandlers = nil
 	b.recordHandlers = nil
+	b.committedHandlers = nil
 	for _, entry := range timeSeriesHandlers {
 		entry.lifecycle.beginClose()
 	}
 	for _, entry := range recordHandlers {
+		entry.lifecycle.beginClose()
+	}
+	for _, entry := range committedHandlers {
 		entry.lifecycle.beginClose()
 	}
 	for b.inFlight > 0 {
@@ -189,6 +242,9 @@ func (b *MemoryBus) Close() error {
 		entry.lifecycle.wait()
 	}
 	for _, entry := range recordHandlers {
+		entry.lifecycle.wait()
+	}
+	for _, entry := range committedHandlers {
 		entry.lifecycle.wait()
 	}
 	return nil
@@ -219,6 +275,14 @@ func (b *MemoryBus) deleteRecordHandler(id uint64, entry *memoryRecordHandler) {
 	entry.lifecycle.wait()
 }
 
+func (b *MemoryBus) deleteCommittedHandler(id uint64, entry *memoryCommittedHandler) {
+	b.mu.Lock()
+	delete(b.committedHandlers, id)
+	entry.lifecycle.beginClose()
+	b.mu.Unlock()
+	entry.lifecycle.wait()
+}
+
 type memoryTimeSeriesHandler struct {
 	handler   TimeSeriesRowsCommittedHandler
 	lifecycle *handlerLifecycle
@@ -232,6 +296,16 @@ func (h *memoryTimeSeriesHandler) call(ctx context.Context, event *pb.TimeSeries
 type memoryRecordHandler struct {
 	handler   RecordRowsCommittedHandler
 	lifecycle *handlerLifecycle
+}
+
+type memoryCommittedHandler struct {
+	handler   RowsCommittedHandler
+	lifecycle *handlerLifecycle
+}
+
+func (h *memoryCommittedHandler) call(ctx context.Context, event *RowsCommittedEvent) error {
+	defer h.lifecycle.release()
+	return h.handler(ctx, event)
 }
 
 func (h *memoryRecordHandler) call(ctx context.Context, event *pb.RecordRowsCommitted) error {

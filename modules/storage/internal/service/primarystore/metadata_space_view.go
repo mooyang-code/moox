@@ -1,4 +1,4 @@
-package access
+package primarystore
 
 import (
 	"context"
@@ -138,8 +138,8 @@ func clearViewIndexRuntimeState(view *pb.View) {
 	view.ActiveViewVersion = 0
 	view.ActiveColumns = nil
 	view.ActiveSchemaHash = ""
-	view.ActiveCoverageStart = ""
-	view.ActiveCoverageEnd = ""
+	view.IndexedFrom = ""
+	view.IndexedTo = ""
 	view.IndexBuild = nil
 }
 

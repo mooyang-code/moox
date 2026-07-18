@@ -78,14 +78,14 @@ type StorageEmbeddedEventBus struct {
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName   string                 `yaml:"metadata_service_name"`
-	AccessServiceName     string                 `yaml:"access_service_name"`
-	AccessScanServiceName string                 `yaml:"access_scan_service_name"`
-	IndexServiceName      string                 `yaml:"index_service_name"`
-	BatchSize             int                    `yaml:"batch_size"`
-	BatchWaitMS           int                    `yaml:"batch_wait_ms"`
-	MaxWorkers            int                    `yaml:"max_workers"`
-	Maintenance           StorageViewMaintenance `yaml:"maintenance"`
+	MetadataServiceName         string                 `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName     string                 `yaml:"primary_store_service_name"`
+	PrimaryStoreScanServiceName string                 `yaml:"primary_store_scan_service_name"`
+	IndexServiceName            string                 `yaml:"index_service_name"`
+	BatchSize                   int                    `yaml:"batch_size"`
+	BatchWaitMS                 int                    `yaml:"batch_wait_ms"`
+	MaxWorkers                  int                    `yaml:"max_workers"`
+	Maintenance                 StorageViewMaintenance `yaml:"maintenance"`
 }
 
 type StorageViewMaintenance struct {
@@ -198,7 +198,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Root = "./var/storage"
 	}
 	if len(c.Roles) == 0 {
-		c.Roles = []string{"access", "view"}
+		c.Roles = []string{"primary", "view"}
 	}
 	if c.Primary.ShardID == "" {
 		c.Primary.ShardID = "storage-primary-0"
@@ -314,11 +314,11 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.MetadataServiceName == "" {
 		c.View.MetadataServiceName = "trpc.moox.storage.Metadata"
 	}
-	if c.View.AccessServiceName == "" {
-		c.View.AccessServiceName = "trpc.moox.storage.Access"
+	if c.View.PrimaryStoreServiceName == "" {
+		c.View.PrimaryStoreServiceName = "trpc.moox.storage.PrimaryStore"
 	}
-	if c.View.AccessScanServiceName == "" {
-		c.View.AccessScanServiceName = "trpc.moox.storage.AccessScan"
+	if c.View.PrimaryStoreScanServiceName == "" {
+		c.View.PrimaryStoreScanServiceName = "trpc.moox.storage.PrimaryStoreScan"
 	}
 	if c.View.IndexServiceName == "" {
 		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"
@@ -330,7 +330,9 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.BatchWaitMS = 200
 	}
 	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 2
+		c.View.MaxWorkers = 1
+	} else if c.View.MaxWorkers > 1 {
+		c.View.MaxWorkers = 1
 	}
 	if c.View.Maintenance.Enabled == nil {
 		enabled := true
@@ -478,7 +480,7 @@ func (c *StorageConfig) HasRole(role string) bool {
 	}
 	for _, candidate := range c.Roles {
 		candidate = strings.ToLower(strings.TrimSpace(candidate))
-		if candidate == "all" || candidate == normalized {
+		if candidate == normalized {
 			return true
 		}
 	}
@@ -508,6 +510,19 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
 	}
 
+	return nil
+}
+
+// LoadConfigStrict rejects unknown keys for business configuration files.
+func (c *ConfigLoader) LoadConfigStrict(filename string, config interface{}) error {
+	configPath := filepath.Join(c.baseDir, filename)
+	yamlFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("读取配置文件失败 %s: %w", configPath, err)
+	}
+	if err := yaml.UnmarshalStrict(yamlFile, config); err != nil {
+		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
+	}
 	return nil
 }
 

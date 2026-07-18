@@ -99,6 +99,7 @@ func (s *ViewStore) Stat(ctx context.Context, indexID string) (viewindex.ViewInd
 		MaxVersion:  stats.maxVersion,
 		SchemaHash:  stats.schemaHash,
 		UpdatedAt:   stats.updatedAt,
+		IndexedFrom: stats.indexedFrom, IndexedTo: stats.indexedTo, ShardCheckpoints: stats.checkpoints,
 	}, nil
 }
 
@@ -118,10 +119,16 @@ func (s *ViewStore) init(ctx context.Context) error {
 			entry_count BIGINT NOT NULL DEFAULT 0,
 			min_version VARCHAR NOT NULL DEFAULT '',
 			max_version VARCHAR NOT NULL DEFAULT '',
-			schema_hash VARCHAR NOT NULL DEFAULT '',
-			updated_at VARCHAR NOT NULL DEFAULT ''
+			 schema_hash VARCHAR NOT NULL DEFAULT '',
+			 indexed_from VARCHAR NOT NULL DEFAULT '',
+			 indexed_to VARCHAR NOT NULL DEFAULT '',
+			 checkpoints_json VARCHAR NOT NULL DEFAULT '{}',
+			 updated_at VARCHAR NOT NULL DEFAULT ''
 		);
 		ALTER TABLE moox_view_index_meta ADD COLUMN IF NOT EXISTS view_version UBIGINT DEFAULT 0;
+		ALTER TABLE moox_view_index_meta ADD COLUMN IF NOT EXISTS indexed_from VARCHAR DEFAULT '';
+		ALTER TABLE moox_view_index_meta ADD COLUMN IF NOT EXISTS indexed_to VARCHAR DEFAULT '';
+		ALTER TABLE moox_view_index_meta ADD COLUMN IF NOT EXISTS checkpoints_json VARCHAR DEFAULT '{}';
 	`)
 	return err
 }

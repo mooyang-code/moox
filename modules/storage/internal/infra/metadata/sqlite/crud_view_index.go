@@ -26,8 +26,8 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 	item.ActiveViewVersion = existing.GetActiveViewVersion()
 	item.ActiveColumns = cloneViewColumns(existing.GetActiveColumns())
 	item.ActiveSchemaHash = existing.GetActiveSchemaHash()
-	item.ActiveCoverageStart = existing.GetActiveCoverageStart()
-	item.ActiveCoverageEnd = existing.GetActiveCoverageEnd()
+	item.IndexedFrom = existing.GetIndexedFrom()
+	item.IndexedTo = existing.GetIndexedTo()
 	item.ViewVersion = existing.GetViewVersion()
 	if item.ViewVersion == 0 {
 		item.ViewVersion = 1
@@ -221,8 +221,8 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	view.ActiveViewVersion = build.GetTargetViewVersion()
 	view.ActiveColumns = cloneViewColumns(build.GetColumns())
 	view.ActiveSchemaHash = build.GetSchemaHash()
-	view.ActiveCoverageStart = build.GetCoverageStart()
-	view.ActiveCoverageEnd = build.GetCoverageEnd()
+	view.IndexedFrom = build.GetCoverageStart()
+	view.IndexedTo = build.GetCoverageEnd()
 	view.Columns = nil
 	view.IndexBuild = nil
 	raw, err := marshal(view)

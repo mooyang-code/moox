@@ -244,7 +244,7 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 			if _, ok := event["server_port"]; ok {
 				t.Fatalf("event should not include server_port: %#v", event)
 			}
-			if event["storage_metadata_target"] != "127.0.0.1:20100" || event["storage_access_target"] != "127.0.0.1:20102" {
+			if event["storage_metadata_target"] != "127.0.0.1:20100" || event["storage_primary_target"] != "127.0.0.1:20102" {
 				t.Fatalf("event storage targets = %#v", event)
 			}
 			data, ok := event["data"].(map[string]any)
@@ -263,7 +263,7 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 	client := New(Config{
 		ServiceGatewayTarget:  server.URL,
 		StorageMetadataTarget: "127.0.0.1:20100",
-		StorageAccessTarget:   "127.0.0.1:20102",
+		StoragePrimaryTarget:  "127.0.0.1:20102",
 		Auth: AuthConfig{
 			AccessKey:  "ak",
 			SecretKey:  "sk",

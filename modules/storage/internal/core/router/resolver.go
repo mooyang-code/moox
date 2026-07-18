@@ -228,12 +228,23 @@ func (r *Resolver) targetForRoute(ctx context.Context, spaceID string, datasetID
 	return &pb.PrimaryStoreTarget{
 		SpaceId:     spaceID,
 		NodeId:      node.GetNodeId(),
+		ShardId:     shardIdentity(node, device),
 		DeviceId:    device.GetDeviceId(),
 		Engine:      device.GetEngine(),
 		DatasetId:   datasetID,
 		DeviceTable: path.Join(spaceID, datasetID),
 		Endpoint:    node.GetEndpoint(),
 	}, nil
+}
+
+func shardIdentity(node *pb.PrimaryStoreNode, device *pb.Device) string {
+	if device != nil && device.GetAttributes() != nil && strings.TrimSpace(device.GetAttributes()["shard_id"]) != "" {
+		return strings.TrimSpace(device.GetAttributes()["shard_id"])
+	}
+	if node != nil && node.GetAttributes() != nil && strings.TrimSpace(node.GetAttributes()["shard_id"]) != "" {
+		return strings.TrimSpace(node.GetAttributes()["shard_id"])
+	}
+	return ""
 }
 
 func (r *Resolver) resolvePrimaryDevice(ctx context.Context, nodeID string) (*pb.Device, error) {

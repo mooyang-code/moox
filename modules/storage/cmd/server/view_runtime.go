@@ -15,7 +15,7 @@ import (
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
 	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	deviceduckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/access"
+	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	viewbuilder "github.com/mooyang-code/moox/modules/storage/internal/service/view/builder"
 	searchsvc "github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
@@ -76,7 +76,7 @@ func (r *viewRuntime) Close() error {
 	return err
 }
 
-func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, storageService *storagesvc.Service, accessReader viewbuilder.AccessReader) (*viewRuntime, error) {
+func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, storageService *storagesvc.Service, accessReader viewbuilder.PrimaryStoreReader) (*viewRuntime, error) {
 	runtime := &viewRuntime{}
 	var (
 		duckEngine      view.ManagedViewIndex
@@ -165,7 +165,7 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, eve
 	return runtime, nil
 }
 
-func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, metadata view.Metadata, engines map[string]viewindex.ViewIndexEngine, accessReader viewbuilder.AccessReader) (*viewbuilder.Service, error) {
+func startViewBuilderService(ctx context.Context, storage storageconfig.StorageConfig, events coreeventbus.Subscriber, metadata view.Metadata, engines map[string]viewindex.ViewIndexEngine, accessReader viewbuilder.PrimaryStoreReader) (*viewbuilder.Service, error) {
 	service := viewbuilder.NewService(viewbuilder.Options{
 		Events:     events,
 		Reader:     accessReader,
@@ -289,19 +289,32 @@ func registerTimerHandlerService(name string, service server.Service, handle fun
 }
 
 func validateStorageDeployment(storage storageconfig.StorageConfig) error {
-	if storage.HasRole("access") && storage.Maintenance.HostMetricsCleanup.IsEnabled() {
+	allowedRoles := map[string]struct{}{"primary": {}, "view": {}, "view_query": {}, "view_builder": {}, "view_index": {}}
+	if len(storage.Roles) == 0 {
+		return errors.New("storage roles must not be empty")
+	}
+	for _, role := range storage.Roles {
+		role = strings.ToLower(strings.TrimSpace(role))
+		if _, ok := allowedRoles[role]; !ok {
+			return fmt.Errorf("unsupported storage role %q", role)
+		}
+	}
+	if storage.HasRole("primary") && strings.TrimSpace(storage.Primary.ShardID) == "" {
+		return errors.New("storage primary.shard_id must not be empty")
+	}
+	if storage.HasRole("primary") && storage.Maintenance.HostMetricsCleanup.IsEnabled() {
 		if err := storage.Maintenance.HostMetricsCleanup.Validate(); err != nil {
 			return err
 		}
 	}
-	if shouldStartViewBuilderRole(storage) && !storage.HasRole("access") && isMemoryRowsCommittedBus(storage.EventBus) {
-		return errors.New("storage view builder role requires non-memory eventbus when access role is not in the same process")
+	if shouldStartViewBuilderRole(storage) && !storage.HasRole("primary") && isMemoryRowsCommittedBus(storage.EventBus) {
+		return errors.New("storage view builder role requires non-memory eventbus when primary role is not in the same process")
 	}
 	return nil
 }
 
 func needsRowsCommittedBus(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") || storage.HasRole("primary") || shouldStartViewBuilderRole(storage)
+	return storage.HasRole("primary") || shouldStartViewBuilderRole(storage)
 }
 
 func shouldRegisterViewQueryRole(storage storageconfig.StorageConfig) bool {
@@ -317,30 +330,27 @@ func shouldStartViewIndexRole(storage storageconfig.StorageConfig) bool {
 }
 
 func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access")
+	return storage.HasRole("primary")
 }
 
 func shouldCreatePrimaryService(storage storageconfig.StorageConfig) bool {
-	if storage.HasRole("primary") {
-		return true
-	}
-	return storage.HasRole("access") && strings.TrimSpace(storage.Primary.ServiceName) == ""
+	return storage.HasRole("primary")
 }
 
-func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) viewbuilder.AccessReader {
-	var local viewbuilder.AccessReader
-	accessServiceName := storage.View.AccessServiceName
-	scanServiceName := storage.View.AccessScanServiceName
-	if storageService != nil && storage.HasRole("access") {
+func accessReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) viewbuilder.PrimaryStoreReader {
+	var local viewbuilder.PrimaryStoreReader
+	accessServiceName := storage.View.PrimaryStoreServiceName
+	scanServiceName := storage.View.PrimaryStoreScanServiceName
+	if storageService != nil && storage.HasRole("primary") {
 		local = storageService.FactReader()
 		accessServiceName = ""
 		scanServiceName = ""
 	}
-	return viewbuilder.NewAccessReader(local, accessServiceName, scanServiceName)
+	return viewbuilder.NewPrimaryStoreReader(local, accessServiceName, scanServiceName)
 }
 
-func shouldUseLocalAccessReader(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("access") && shouldStartViewBuilderRole(storage) && isMemoryRowsCommittedBus(storage.EventBus)
+func shouldUseLocalPrimaryStoreReader(storage storageconfig.StorageConfig) bool {
+	return storage.HasRole("primary") && shouldStartViewBuilderRole(storage) && isMemoryRowsCommittedBus(storage.EventBus)
 }
 
 func isMemoryRowsCommittedBus(cfg storageconfig.StorageEventBus) bool {

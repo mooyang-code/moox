@@ -89,17 +89,14 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if !monitorEnabled(byName["moox_strategy"].ExtraConfig) {
 		t.Fatal("moox_strategy monitoring must be enabled after standard release integration")
 	}
-	if healthURL(byName["storage_metadata"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
-		t.Fatalf("storage_metadata extra_config = %s", byName["storage_metadata"].ExtraConfig)
+	if healthURL(byName["storage-primary"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
+		t.Fatalf("storage-primary extra_config = %s", byName["storage-primary"].ExtraConfig)
 	}
-	if item := byName["storage_metadata"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage.Metadata" {
-		t.Fatalf("storage_metadata endpoint = %d/%s, want 20200/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
+	if item := byName["storage-primary"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage" {
+		t.Fatalf("storage-primary endpoint = %d/%s, want 20200/trpc.moox.storage", item.Port, item.GatewayPath)
 	}
-	if healthURL(byName["storage_access"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
-		t.Fatalf("storage_access extra_config = %s", byName["storage_access"].ExtraConfig)
-	}
-	if healthURL(byName["storage_view"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
-		t.Fatalf("storage_view extra_config = %s", byName["storage_view"].ExtraConfig)
+	if healthURL(byName["storage-view"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
+		t.Fatalf("storage-view extra_config = %s", byName["storage-view"].ExtraConfig)
 	}
 	for _, name := range []string{"storage_view_builder", "storage_view_query", "storage_view_index"} {
 		if _, exists := byName[name]; exists {

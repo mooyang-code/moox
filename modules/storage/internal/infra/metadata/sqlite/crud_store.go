@@ -98,6 +98,23 @@ func (s *Store) UpsertPrimaryStoreRoute(ctx context.Context, item *pb.PrimarySto
 	if item == nil || item.GetSpaceId() == "" || item.GetRouteId() == "" || item.GetDatasetId() == "" || item.GetNodeId() == "" {
 		return nil, errors.New("space_id, route_id, dataset_id and node_id are required")
 	}
+	if existing, err := s.GetPrimaryStoreRoute(ctx, item.GetSpaceId(), item.GetRouteId()); err == nil && existing != nil {
+		if existing.GetDatasetId() != item.GetDatasetId() || existing.GetNodeId() != item.GetNodeId() ||
+			existing.GetSubjectId() != item.GetSubjectId() || existing.GetSubjectPattern() != item.GetSubjectPattern() ||
+			existing.GetHashRule() != item.GetHashRule() {
+			return nil, errors.New("primary store route topology is immutable after creation")
+		}
+	} else {
+		routes, _, err := s.ListPrimaryStoreRoutes(ctx, item.GetSpaceId(), item.GetDatasetId(), "", "", nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, route := range routes {
+			if route != nil && route.GetRouteId() != item.GetRouteId() {
+				return nil, errors.New("primary store dataset topology is locked after first route creation")
+			}
+		}
+	}
 	item.Status = defaultStatus(item.GetStatus())
 	if item.Priority == 0 {
 		item.Priority = 100

@@ -150,17 +150,8 @@ consumers:
     max_ack_pending: 256
     max_deliver: 3
   - stream: MOOX_STORAGE
-    durable: storage_view_builder_time_series_rows_committed_v1
-    filter_subject: moox.storage.rows_committed.time_series.v1.*
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 120s
-    max_ack_pending: 128
-    max_deliver: -1
-  - stream: MOOX_STORAGE
-    durable: storage_view_builder_record_rows_committed_v1
-    filter_subject: moox.storage.rows_committed.record.v1.*
+    durable: storage_view_builder_rows_committed_v1
+    filter_subject: moox.storage.rows_committed.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant

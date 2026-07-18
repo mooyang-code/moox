@@ -119,6 +119,20 @@ func FilteredTimeSeriesRowsForView(
 	return TimeSeriesRowsForView(ctx, item, columns, filtered, readProjectionRows)
 }
 
+// FilteredTimeSeriesSourceRowsForView applies the view predicate without
+// requiring the primary dataset row. ViewBuilder uses it for secondary-source
+// fragments, which must be merged without rereading unchanged sources.
+func FilteredTimeSeriesSourceRowsForView(item *pb.View, rows []*pb.TimeSeriesRow) ([]*pb.TimeSeriesRow, bool, error) {
+	if item == nil {
+		return nil, false, nil
+	}
+	filtered, err := filterRowsByViewJSON(item, rows)
+	if err != nil {
+		return nil, true, err
+	}
+	return filtered, true, nil
+}
+
 // RecordRowsForView projects record rows into the columns exposed by a view.
 func RecordRowsForView(
 	ctx context.Context,

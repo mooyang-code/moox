@@ -72,8 +72,8 @@ func (p *fakeViewIndexProxy) PrepareViewIndex(_ context.Context, req *pb.Prepare
 	return &pb.PrepareViewIndexRsp{RetInfo: p.ret()}, nil
 }
 
-func (p *fakeViewIndexProxy) WriteViewIndex(context.Context, *pb.WriteViewIndexReq, ...client.Option) (*pb.WriteViewIndexRsp, error) {
-	return &pb.WriteViewIndexRsp{RetInfo: p.ret()}, nil
+func (p *fakeViewIndexProxy) ApplyViewIndex(context.Context, *pb.ApplyViewIndexReq, ...client.Option) (*pb.ApplyViewIndexRsp, error) {
+	return &pb.ApplyViewIndexRsp{RetInfo: p.ret()}, nil
 }
 
 func (p *fakeViewIndexProxy) StatViewIndex(context.Context, *pb.StatViewIndexReq, ...client.Option) (*pb.StatViewIndexRsp, error) {

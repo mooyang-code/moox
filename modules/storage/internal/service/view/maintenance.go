@@ -319,7 +319,7 @@ func (m *MaintenanceManager) pressureCanShrink(stats viewindex.ViewIndexStats, w
 }
 
 func (m *MaintenanceManager) coverageStale(item *pb.View, window time.Duration) bool {
-	start, ok := parseIndexTime(item.GetActiveCoverageStart())
+	start, ok := parseIndexTime(item.GetIndexedFrom())
 	if !ok {
 		return true
 	}
@@ -541,7 +541,10 @@ func (m *MaintenanceManager) processTimeSeriesPage(ctx context.Context, item *pb
 		return 0, nil, errors.New("time series View contains unsupported projection columns")
 	}
 	if len(projected) > 0 {
-		if err := engine.Write(ctx, build.GetIndexId(), viewindex.ViewIndexBatch{TimeSeriesRows: projected, Columns: build.GetColumns(), ViewVersion: build.GetTargetViewVersion(), SchemaHash: build.GetSchemaHash()}); err != nil {
+		if err := applyMaintenanceRows(ctx, engine, build.GetIndexId(), viewindex.ViewIndexApplyBatch{
+			ViewVersion: build.GetTargetViewVersion(), ViewSchemaHash: build.GetSchemaHash(),
+			RowWrites: timeSeriesReplaceWrites(projected),
+		}); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -572,11 +575,42 @@ func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.Vie
 		return 0, nil, errors.New("Record View contains unsupported projection columns")
 	}
 	if len(projected) > 0 {
-		if err := engine.Write(ctx, build.GetIndexId(), viewindex.ViewIndexBatch{RecordRows: projected, Columns: build.GetColumns(), ViewVersion: build.GetTargetViewVersion(), SchemaHash: build.GetSchemaHash()}); err != nil {
+		if err := applyMaintenanceRows(ctx, engine, build.GetIndexId(), viewindex.ViewIndexApplyBatch{
+			ViewVersion: build.GetTargetViewVersion(), ViewSchemaHash: build.GetSchemaHash(),
+			RowWrites: recordReplaceWrites(projected),
+		}); err != nil {
 			return 0, nil, err
 		}
 	}
 	return len(projected), page, nil
+}
+
+func applyMaintenanceRows(ctx context.Context, engine ManagedViewIndex, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	applier, ok := engine.(viewindex.ViewIndexApplier)
+	if !ok {
+		return errors.New("view maintenance engine does not support atomic apply")
+	}
+	return applier.Apply(ctx, indexID, batch)
+}
+
+func timeSeriesReplaceWrites(rows []*pb.TimeSeriesRow) []viewindex.RowWrite {
+	writes := make([]viewindex.RowWrite, 0, len(rows))
+	for _, row := range rows {
+		if row != nil && row.GetKey() != nil {
+			writes = append(writes, viewindex.RowWrite{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{TimeSeriesKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+		}
+	}
+	return writes
+}
+
+func recordReplaceWrites(rows []*pb.RecordRow) []viewindex.RowWrite {
+	writes := make([]viewindex.RowWrite, 0, len(rows))
+	for _, row := range rows {
+		if row != nil && row.GetKey() != nil {
+			writes = append(writes, viewindex.RowWrite{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{RecordKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes()})
+		}
+	}
+	return writes
 }
 
 func (m *MaintenanceManager) buildReady(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, stats viewindex.ViewIndexStats) (bool, error) {

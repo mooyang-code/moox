@@ -17,28 +17,28 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
-// AccessService defines service.
-type AccessService interface {
-	// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
-	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error)
+// PrimaryStoreService defines service.
+type PrimaryStoreService interface {
+	// MergeTimeSeriesRows MergeTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+	MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq) (*MergeTimeSeriesRowsRsp, error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
 	DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq) (*DeleteTimeSeriesRowsRsp, error)
-	// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error)
+	// MergeRecordRows MergeRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
+	MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq) (*MergeRecordRowsRsp, error)
 	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
 }
 
-func AccessService_WriteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteTimeSeriesRowsReq{}
+func PrimaryStoreService_MergeTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &MergeTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessService).WriteTimeSeriesRows(ctx, reqbody.(*WriteTimeSeriesRowsReq))
+		return svr.(PrimaryStoreService).MergeTimeSeriesRows(ctx, reqbody.(*MergeTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -49,14 +49,14 @@ func AccessService_WriteTimeSeriesRows_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func AccessService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
+		return svr.(PrimaryStoreService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -67,14 +67,14 @@ func AccessService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func AccessService_DeleteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreService_DeleteTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &DeleteTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessService).DeleteTimeSeriesRows(ctx, reqbody.(*DeleteTimeSeriesRowsReq))
+		return svr.(PrimaryStoreService).DeleteTimeSeriesRows(ctx, reqbody.(*DeleteTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -85,14 +85,14 @@ func AccessService_DeleteTimeSeriesRows_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func AccessService_WriteRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteRecordRowsReq{}
+func PrimaryStoreService_MergeRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &MergeRecordRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessService).WriteRecordRows(ctx, reqbody.(*WriteRecordRowsReq))
+		return svr.(PrimaryStoreService).MergeRecordRows(ctx, reqbody.(*MergeRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -103,14 +103,14 @@ func AccessService_WriteRecordRows_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
-func AccessService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadRecordRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessService).ReadRecordRows(ctx, reqbody.(*ReadRecordRowsReq))
+		return svr.(PrimaryStoreService).ReadRecordRows(ctx, reqbody.(*ReadRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -121,57 +121,57 @@ func AccessService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
-// AccessServer_ServiceDesc descriptor for server.RegisterService.
-var AccessServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.storage.Access",
-	HandlerType: ((*AccessService)(nil)),
+// PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
+var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.PrimaryStore",
+	HandlerType: ((*PrimaryStoreService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.Access/WriteTimeSeriesRows",
-			Func: AccessService_WriteTimeSeriesRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/MergeTimeSeriesRows",
+			Func: PrimaryStoreService_MergeTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Access/ReadTimeSeriesRows",
-			Func: AccessService_ReadTimeSeriesRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+			Func: PrimaryStoreService_ReadTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Access/DeleteTimeSeriesRows",
-			Func: AccessService_DeleteTimeSeriesRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/DeleteTimeSeriesRows",
+			Func: PrimaryStoreService_DeleteTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Access/WriteRecordRows",
-			Func: AccessService_WriteRecordRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/MergeRecordRows",
+			Func: PrimaryStoreService_MergeRecordRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Access/ReadRecordRows",
-			Func: AccessService_ReadRecordRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/ReadRecordRows",
+			Func: PrimaryStoreService_ReadRecordRows_Handler,
 		},
 	},
 }
 
-// RegisterAccessService registers service.
-func RegisterAccessService(s server.Service, svr AccessService) {
-	if err := s.Register(&AccessServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("Access register error:%v", err))
+// RegisterPrimaryStoreService registers service.
+func RegisterPrimaryStoreService(s server.Service, svr PrimaryStoreService) {
+	if err := s.Register(&PrimaryStoreServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("PrimaryStore register error:%v", err))
 	}
 }
 
-// AccessScanService defines service.
-type AccessScanService interface {
+// PrimaryStoreScanService defines service.
+type PrimaryStoreScanService interface {
 	// ScanTimeSeriesRows ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
 	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error)
 	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error)
 }
 
-func AccessScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ScanTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessScanService).ScanTimeSeriesRows(ctx, reqbody.(*ScanTimeSeriesRowsReq))
+		return svr.(PrimaryStoreScanService).ScanTimeSeriesRows(ctx, reqbody.(*ScanTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -182,14 +182,14 @@ func AccessScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func AccessScanService_ScanRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func PrimaryStoreScanService_ScanRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ScanRecordRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AccessScanService).ScanRecordRows(ctx, reqbody.(*ScanRecordRowsReq))
+		return svr.(PrimaryStoreScanService).ScanRecordRows(ctx, reqbody.(*ScanRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -200,66 +200,66 @@ func AccessScanService_ScanRecordRows_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-// AccessScanServer_ServiceDesc descriptor for server.RegisterService.
-var AccessScanServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.storage.AccessScan",
-	HandlerType: ((*AccessScanService)(nil)),
+// PrimaryStoreScanServer_ServiceDesc descriptor for server.RegisterService.
+var PrimaryStoreScanServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.PrimaryStoreScan",
+	HandlerType: ((*PrimaryStoreScanService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.AccessScan/ScanTimeSeriesRows",
-			Func: AccessScanService_ScanTimeSeriesRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStoreScan/ScanTimeSeriesRows",
+			Func: PrimaryStoreScanService_ScanTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.AccessScan/ScanRecordRows",
-			Func: AccessScanService_ScanRecordRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStoreScan/ScanRecordRows",
+			Func: PrimaryStoreScanService_ScanRecordRows_Handler,
 		},
 	},
 }
 
-// RegisterAccessScanService registers service.
-func RegisterAccessScanService(s server.Service, svr AccessScanService) {
-	if err := s.Register(&AccessScanServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("AccessScan register error:%v", err))
+// RegisterPrimaryStoreScanService registers service.
+func RegisterPrimaryStoreScanService(s server.Service, svr PrimaryStoreScanService) {
+	if err := s.Register(&PrimaryStoreScanServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("PrimaryStoreScan register error:%v", err))
 	}
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
-type UnimplementedAccess struct{}
+type UnimplementedPrimaryStore struct{}
 
-// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
-func (s *UnimplementedAccess) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq) (*WriteTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc WriteTimeSeriesRows of service Access is not implemented")
+// MergeTimeSeriesRows MergeTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+func (s *UnimplementedPrimaryStore) MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq) (*MergeTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc MergeTimeSeriesRows of service PrimaryStore is not implemented")
 }
 
 // ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
-func (s *UnimplementedAccess) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc ReadTimeSeriesRows of service Access is not implemented")
+func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc ReadTimeSeriesRows of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedAccess) DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq) (*DeleteTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc DeleteTimeSeriesRows of service Access is not implemented")
+func (s *UnimplementedPrimaryStore) DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq) (*DeleteTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc DeleteTimeSeriesRows of service PrimaryStore is not implemented")
 }
 
-// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-func (s *UnimplementedAccess) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq) (*WriteRecordRowsRsp, error) {
-	return nil, errors.New("rpc WriteRecordRows of service Access is not implemented")
+// MergeRecordRows MergeRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
+func (s *UnimplementedPrimaryStore) MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq) (*MergeRecordRowsRsp, error) {
+	return nil, errors.New("rpc MergeRecordRows of service PrimaryStore is not implemented")
 }
 
 // ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
-func (s *UnimplementedAccess) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
-	return nil, errors.New("rpc ReadRecordRows of service Access is not implemented")
+func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
+	return nil, errors.New("rpc ReadRecordRows of service PrimaryStore is not implemented")
 }
 
-type UnimplementedAccessScan struct{}
+type UnimplementedPrimaryStoreScan struct{}
 
 // ScanTimeSeriesRows ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
-func (s *UnimplementedAccessScan) ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc ScanTimeSeriesRows of service AccessScan is not implemented")
+func (s *UnimplementedPrimaryStoreScan) ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc ScanTimeSeriesRows of service PrimaryStoreScan is not implemented")
 }
 
 // ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
-func (s *UnimplementedAccessScan) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error) {
-	return nil, errors.New("rpc ScanRecordRows of service AccessScan is not implemented")
+func (s *UnimplementedPrimaryStoreScan) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error) {
+	return nil, errors.New("rpc ScanRecordRows of service PrimaryStoreScan is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -268,57 +268,57 @@ func (s *UnimplementedAccessScan) ScanRecordRows(ctx context.Context, req *ScanR
 
 // START ======================================= Client Service Definition ======================================= START
 
-// AccessClientProxy defines service client proxy
-type AccessClientProxy interface {
-	// WriteTimeSeriesRows WriteTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
-	WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (rsp *WriteTimeSeriesRowsRsp, err error)
+// PrimaryStoreClientProxy defines service client proxy
+type PrimaryStoreClientProxy interface {
+	// MergeTimeSeriesRows MergeTimeSeriesRows 写入固定 subject + freq 下按 data_time 演进的时序事实数据。
+	MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq, opts ...client.Option) (rsp *MergeTimeSeriesRowsRsp, err error)
 	// ReadTimeSeriesRows ReadTimeSeriesRows 按时序业务 key 与闭区间时间范围读取事实数据。
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
 	DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq, opts ...client.Option) (rsp *DeleteTimeSeriesRowsRsp, err error)
-	// WriteRecordRows WriteRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
-	WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (rsp *WriteRecordRowsRsp, err error)
+	// MergeRecordRows MergeRecordRows 写入记录事实数据；非固定 subject+freq 的数据均使用记录接口。
+	MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq, opts ...client.Option) (rsp *MergeRecordRowsRsp, err error)
 	// ReadRecordRows ReadRecordRows 按记录 ID 与闭区间版本范围读取事实数据。
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
 }
 
-type AccessClientProxyImpl struct {
+type PrimaryStoreClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewAccessClientProxy = func(opts ...client.Option) AccessClientProxy {
-	return &AccessClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewPrimaryStoreClientProxy = func(opts ...client.Option) PrimaryStoreClientProxy {
+	return &PrimaryStoreClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *AccessClientProxyImpl) WriteTimeSeriesRows(ctx context.Context, req *WriteTimeSeriesRowsReq, opts ...client.Option) (*WriteTimeSeriesRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq, opts ...client.Option) (*MergeTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Access/WriteTimeSeriesRows")
-	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/MergeTimeSeriesRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Access")
-	msg.WithCalleeMethod("WriteTimeSeriesRows")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("MergeTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &WriteTimeSeriesRowsRsp{}
+	rsp := &MergeTimeSeriesRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Access/ReadTimeSeriesRows")
-	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Access")
+	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("ReadTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -331,14 +331,14 @@ func (c *AccessClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *Rea
 	return rsp, nil
 }
 
-func (c *AccessClientProxyImpl) DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq, opts ...client.Option) (*DeleteTimeSeriesRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) DeleteTimeSeriesRows(ctx context.Context, req *DeleteTimeSeriesRowsReq, opts ...client.Option) (*DeleteTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Access/DeleteTimeSeriesRows")
-	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/DeleteTimeSeriesRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Access")
+	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("DeleteTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -351,34 +351,34 @@ func (c *AccessClientProxyImpl) DeleteTimeSeriesRows(ctx context.Context, req *D
 	return rsp, nil
 }
 
-func (c *AccessClientProxyImpl) WriteRecordRows(ctx context.Context, req *WriteRecordRowsReq, opts ...client.Option) (*WriteRecordRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq, opts ...client.Option) (*MergeRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Access/WriteRecordRows")
-	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/MergeRecordRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Access")
-	msg.WithCalleeMethod("WriteRecordRows")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("MergeRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &WriteRecordRowsRsp{}
+	rsp := &MergeRecordRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *AccessClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Access/ReadRecordRows")
-	msg.WithCalleeServiceName(AccessServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadRecordRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Access")
+	msg.WithCalleeService("PrimaryStore")
 	msg.WithCalleeMethod("ReadRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -391,31 +391,31 @@ func (c *AccessClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRec
 	return rsp, nil
 }
 
-// AccessScanClientProxy defines service client proxy
-type AccessScanClientProxy interface {
+// PrimaryStoreScanClientProxy defines service client proxy
+type PrimaryStoreScanClientProxy interface {
 	// ScanTimeSeriesRows ScanTimeSeriesRows 为 ViewBuilder 提供有界游标扫描。
 	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (rsp *ScanTimeSeriesRowsRsp, err error)
 	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (rsp *ScanRecordRowsRsp, err error)
 }
 
-type AccessScanClientProxyImpl struct {
+type PrimaryStoreScanClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewAccessScanClientProxy = func(opts ...client.Option) AccessScanClientProxy {
-	return &AccessScanClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewPrimaryStoreScanClientProxy = func(opts ...client.Option) PrimaryStoreScanClientProxy {
+	return &PrimaryStoreScanClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *AccessScanClientProxyImpl) ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (*ScanTimeSeriesRowsRsp, error) {
+func (c *PrimaryStoreScanClientProxyImpl) ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (*ScanTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ScanTimeSeriesRows")
-	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStoreScan/ScanTimeSeriesRows")
+	msg.WithCalleeServiceName(PrimaryStoreScanServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeService("PrimaryStoreScan")
 	msg.WithCalleeMethod("ScanTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -428,14 +428,14 @@ func (c *AccessScanClientProxyImpl) ScanTimeSeriesRows(ctx context.Context, req 
 	return rsp, nil
 }
 
-func (c *AccessScanClientProxyImpl) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (*ScanRecordRowsRsp, error) {
+func (c *PrimaryStoreScanClientProxyImpl) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (*ScanRecordRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.AccessScan/ScanRecordRows")
-	msg.WithCalleeServiceName(AccessScanServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStoreScan/ScanRecordRows")
+	msg.WithCalleeServiceName(PrimaryStoreScanServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("AccessScan")
+	msg.WithCalleeService("PrimaryStoreScan")
 	msg.WithCalleeMethod("ScanRecordRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))

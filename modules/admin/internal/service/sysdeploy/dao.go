@@ -225,7 +225,7 @@ func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) 
 }
 
 func migrateUnifiedStorageViewHealth(serviceName, existingRaw, defaultRaw string) (string, bool) {
-	if serviceName != "storage_view" {
+	if serviceName != "storage-view" {
 		return existingRaw, false
 	}
 	existing, defaults := map[string]interface{}{}, map[string]interface{}{}

@@ -442,6 +442,10 @@ func TestPublishNilProducerBusReturnsError(t *testing.T) {
 func testTimeSeriesMessage(payload []byte) *messagepb.MooxMessage {
 	now := timestamppb.Now()
 	token, _ := jetstream.EncodeShardToken("shard-1")
+	event := &pb.TimeSeriesRowsCommitted{}
+	_ = proto.Unmarshal(payload, event)
+	event.Sequence = 1
+	payload, _ = proto.Marshal(event)
 	return &messagepb.MooxMessage{
 		ProtocolVersion: jetstream.ProtocolVersion,
 		MessageId:       "message-1",

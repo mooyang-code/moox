@@ -11,13 +11,8 @@ const PUBLIC_DEPLOYMENTS = new Set([
   "admin_gateway",
   "service_gateway",
   "web_host",
-  "storage_metadata",
-  "storage_access",
-  "storage_view",
-  "storage_metadata_trpc",
-  "storage_primary_trpc",
-  "storage_access_trpc",
-  "storage_view_trpc",
+  "storage-primary",
+  "storage-view",
 ]);
 
 const JOB_STATUS = {
@@ -440,7 +435,7 @@ async function assertManagementRequests(args, token) {
   }
 
   const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", {});
-  if (!active.deployment_map?.storage_metadata || !active.deployment_map?.storage_access) {
+  if (!active.deployment_map?.["storage-primary"] || !active.deployment_map?.["storage-view"]) {
     throw new Error("sysdeploy active deployment map missing storage endpoints");
   }
 
@@ -557,12 +552,12 @@ async function listJobItems(args, token) {
 
 async function storagePost(args, token, group, method, body) {
   const service = {
-    metadata: "storage_metadata",
-    access: "storage_access",
-    view: "storage_view",
+    metadata: "storage-primary",
+    access: "storage-primary",
+    view: "storage-view",
   }[group];
   if (!service) throw new Error(`unknown storage group: ${group}`);
-  return adminPost(args, token, service, method, {
+  return adminPost(args, token, "storage", method, {
     auth_info: {
       ...APP_INFO,
       operator: "moox_e2e",
@@ -587,7 +582,7 @@ async function adminPost(args, token, service, method, body, options = {}) {
   }
   const url = args.phase === "sysdeploy" && service === "sysdeploy"
     ? `http://127.0.0.1:11109/trpc.moox.ops.SysDeploy/${method}`
-    : `${args.gateway}/api/admin/${service}/${method}`;
+    : `${args.gateway}/api/admin/${service === "storage" ? "storage" : service}/${method}`;
   const rsp = await fetchJSON(url, {
     method: "POST",
     headers,

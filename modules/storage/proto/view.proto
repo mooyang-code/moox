@@ -61,6 +61,9 @@ message QueryTimeSeriesRowsRsp {
   repeated TimeSeriesRow rows = 3;
   // page_result 是分页结果。
   common.PageResult page_result = 4;
+  string served_indexed_from = 5;
+  string served_indexed_to = 6;
+  bool complete = 7;
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。
@@ -100,6 +103,9 @@ message SearchRecordRowsRsp {
   repeated RecordRow rows = 3;
   // page_result 是分页结果。
   common.PageResult page_result = 4;
+  string served_indexed_from = 5;
+  string served_indexed_to = 6;
+  bool complete = 7;
 }
 
 // DataView 是用户侧 View 查询服务。

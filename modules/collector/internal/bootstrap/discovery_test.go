@@ -29,19 +29,11 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 					"scope":        "public",
 					"status":       "active",
 				},
-				"storage_metadata_trpc": map[string]any{
-					"service_name": "storage_metadata_trpc",
+				"storage-primary": map[string]any{
+					"service_name": "storage-primary",
 					"protocol":     "trpc",
 					"host":         "storage.example.com",
 					"port":         20100,
-					"scope":        "public",
-					"status":       "active",
-				},
-				"storage_access_trpc": map[string]any{
-					"service_name": "storage_access_trpc",
-					"protocol":     "trpc",
-					"host":         "storage.example.com",
-					"port":         20102,
 					"scope":        "public",
 					"status":       "active",
 				},
@@ -56,7 +48,7 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
 	cfg.SysDeploy.ServiceAuth.TargetNode = "gateway-gz-122"
 	cfg.Storage.MetadataTarget = "127.0.0.1:20100"
-	cfg.Storage.AccessTarget = "127.0.0.1:20102"
+	cfg.Storage.PrimaryTarget = "127.0.0.1:20102"
 
 	deps, err := Resolve(context.Background(), cfg)
 	if err != nil {
@@ -68,8 +60,8 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if deps.StorageMetadataTarget != "storage.example.com:20100" {
 		t.Fatalf("StorageMetadataTarget = %q, want storage.example.com:20100", deps.StorageMetadataTarget)
 	}
-	if deps.StorageAccessTarget != "storage.example.com:20102" {
-		t.Fatalf("StorageAccessTarget = %q, want storage.example.com:20102", deps.StorageAccessTarget)
+	if deps.StoragePrimaryTarget != "storage.example.com:20100" {
+		t.Fatalf("StoragePrimaryTarget = %q, want storage.example.com:20100", deps.StoragePrimaryTarget)
 	}
 }
 

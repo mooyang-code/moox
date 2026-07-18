@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -128,7 +129,8 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if serviceID == "storage" {
+	storageFacade := serviceID == "storage"
+	if storageFacade {
 		mappedServiceID, ok := storageBFFServiceID(method)
 		if !ok {
 			http.NotFound(w, r)
@@ -197,6 +199,19 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
 		writeRequestBodyError(w, err)
+		return
+	}
+	if storageFacade {
+		response, _, err := forwardStorageToNodeGateway(ctx, serviceID, method, body, headers)
+		if err != nil {
+			writeForwardError(ctx, w, err, headers)
+			return
+		}
+		if response != nil {
+			writeNodeGatewayResponse(w, response, headers)
+			return
+		}
+		writeForwardError(ctx, w, errors.New("Node Service Gateway returned no response"), headers)
 		return
 	}
 	detail, err := resolveAdminServiceDetail(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID)

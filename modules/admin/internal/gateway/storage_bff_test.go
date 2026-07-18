@@ -15,10 +15,10 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 		service string
 		allowed bool
 	}{
-		{method: "GetDataSource", service: "storage_metadata", allowed: true},
-		{method: "ListSubjectSymbols", service: "storage_metadata", allowed: true},
-		{method: "WriteRecordRows", service: "storage_access", allowed: true},
-		{method: "SearchRecordRows", service: "storage_view", allowed: true},
+		{method: "GetDataSource", service: "storage-primary", allowed: true},
+		{method: "ListSubjectSymbols", service: "storage-primary", allowed: true},
+		{method: "MergeRecordRows", service: "storage-primary", allowed: true},
+		{method: "SearchRecordRows", service: "storage-view", allowed: true},
 		{method: "ClaimViewIndexBuild", allowed: false},
 		{method: "ScanRecordRows", allowed: false},
 		{method: "WriteViewIndex", allowed: false},
@@ -43,13 +43,17 @@ func TestAdminRouterStorageBFFForwardsToMappedStorageService(t *testing.T) {
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/GetDataSource"}},
 	})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.storage.Metadata/GetDataSource", r.URL.Path)
+		assert.Equal(t, "/api/service/storage-primary/GetDataSource", r.URL.Path)
+		assert.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"data_source":{"id":"source-1"}}`))
 	}))
 	t.Cleanup(upstream.Close)
+	t.Setenv("MOOX_NODE_GATEWAY_URL", upstream.URL)
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "service-secret")
+	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "node-a")
 	provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
-		"admin-node-test:storage_metadata": {Address: upstream.Listener.Addr().String(), Path: "trpc.moox.storage.Metadata"},
+		"admin-node-test:storage-primary": {Address: upstream.Listener.Addr().String(), Path: "trpc.moox.storage.Metadata"},
 	}}
 	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildRouter()
 	recorder := httptest.NewRecorder()
@@ -59,7 +63,30 @@ func TestAdminRouterStorageBFFForwardsToMappedStorageService(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"source-1"`)
-	assert.Equal(t, "admin-node-test", provider.lastNode)
+	assert.Empty(t, provider.lastNode)
+}
+
+func TestAdminRouterStorageBFFCanForwardThroughNodeGateway(t *testing.T) {
+	SetConfig(&Config{
+		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/GetDataSource"}},
+	})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/service/storage-primary/GetDataSource", r.URL.Path)
+		assert.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
+		assert.Equal(t, "node-a", r.Header.Get("X-Moox-Target-Node"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+	}))
+	t.Cleanup(upstream.Close)
+	t.Setenv("MOOX_NODE_GATEWAY_URL", upstream.URL)
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "service-secret")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-gateway-service")
+	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "node-a")
+	router := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test").buildRouter()
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/storage/GetDataSource", bytes.NewBufferString(`{"space_id":"space-1"}`)))
+	assert.Equal(t, http.StatusOK, recorder.Code)
 }
 
 func TestAdminRouterStorageBFFRejectsInternalMethodBeforeResolvingService(t *testing.T) {

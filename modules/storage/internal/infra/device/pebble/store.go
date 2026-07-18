@@ -33,6 +33,8 @@ type Store struct {
 	shardID      string
 }
 
+const shardIdentityKey = "\x00moox/storage/shard-id"
+
 func (s *Store) ShardID() string {
 	if s == nil {
 		return ""
@@ -61,6 +63,31 @@ func Open(opts Options) (*Store, error) {
 	shardID := strings.TrimSpace(opts.ShardID)
 	if shardID == "" {
 		shardID = "local"
+	}
+	stored, closer, err := db.Get([]byte(shardIdentityKey))
+	if err == nil {
+		storedID := string(append([]byte(nil), stored...))
+		_ = closer.Close()
+		if storedID != shardID {
+			_ = db.Close()
+			return nil, fmt.Errorf("pebble shard identity conflict: stored=%q requested=%q", storedID, shardID)
+		}
+	} else if errors.Is(err, cpebble.ErrNotFound) {
+		batch := db.NewBatch()
+		if err := batch.Set([]byte(shardIdentityKey), []byte(shardID), cpebble.Sync); err != nil {
+			_ = batch.Close()
+			_ = db.Close()
+			return nil, err
+		}
+		if err := batch.Commit(cpebble.Sync); err != nil {
+			_ = batch.Close()
+			_ = db.Close()
+			return nil, err
+		}
+		_ = batch.Close()
+	} else {
+		_ = db.Close()
+		return nil, err
 	}
 	return &Store{db: db, writeOptions: writeOptions, locks: make(map[string]*rowLock), shardID: shardID}, nil
 }
@@ -325,7 +352,10 @@ func (s *Store) getRow(key string) (*pb.PrimaryStoreRow, error) {
 
 func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimaryStoreRow {
 	if base == nil {
-		return proto.Clone(patch).(*pb.PrimaryStoreRow)
+		merged := proto.Clone(patch).(*pb.PrimaryStoreRow)
+		merged.AttributesToDelete = nil
+		merged.RemovedColumnNames = nil
+		return merged
 	}
 	merged := proto.Clone(base).(*pb.PrimaryStoreRow)
 	merged.Key = proto.Clone(patch.GetKey()).(*pb.PrimaryStoreKey)
@@ -336,16 +366,17 @@ func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimarySt
 	for _, column := range patch.GetColumns() {
 		copied := proto.Clone(column).(*pb.ColumnValue)
 		if idx, ok := positions[column.GetColumnName()]; ok {
-			if isNullColumn(copied) {
-				merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
-				positions = columnPositions(merged.Columns)
-				continue
-			}
 			merged.Columns[idx] = copied
 			continue
 		}
 		positions[column.GetColumnName()] = len(merged.Columns)
 		merged.Columns = append(merged.Columns, copied)
+	}
+	for _, name := range patch.GetRemovedColumnNames() {
+		if idx, ok := positions[name]; ok {
+			merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
+			positions = columnPositions(merged.Columns)
+		}
 	}
 	if len(patch.GetAttributes()) > 0 {
 		if merged.Attributes == nil {
@@ -355,15 +386,12 @@ func mergeRow(base *pb.PrimaryStoreRow, patch *pb.PrimaryStoreRow) *pb.PrimarySt
 			merged.Attributes[key] = value
 		}
 	}
-	return merged
-}
-
-func isNullColumn(column *pb.ColumnValue) bool {
-	if column == nil || column.GetValue() == nil {
-		return true
+	for _, key := range patch.GetAttributesToDelete() {
+		delete(merged.Attributes, key)
 	}
-	_, explicit := column.GetValue().GetValue().(*pb.TypedValue_NullValue)
-	return explicit
+	merged.AttributesToDelete = nil
+	merged.RemovedColumnNames = nil
+	return merged
 }
 
 func columnPositions(columns []*pb.ColumnValue) map[string]int {

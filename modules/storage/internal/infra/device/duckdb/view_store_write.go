@@ -121,10 +121,17 @@ func (s *ViewStore) resultTableEmpty(ctx context.Context, quotedTableName string
 
 func (s *ViewStore) indexMeta(ctx context.Context, tableName string) (persistedIndexMeta, error) {
 	var meta persistedIndexMeta
+	var checkpointsRaw string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT view_version, entry_count, min_version, max_version, schema_hash, updated_at
+		SELECT view_version, entry_count, min_version, max_version, schema_hash, updated_at, indexed_from, indexed_to, checkpoints_json
 		FROM moox_view_index_meta WHERE table_name = ?
-	`, tableName).Scan(&meta.viewVersion, &meta.entryCount, &meta.minVersion, &meta.maxVersion, &meta.schemaHash, &meta.updatedAt)
+	`, tableName).Scan(&meta.viewVersion, &meta.entryCount, &meta.minVersion, &meta.maxVersion, &meta.schemaHash, &meta.updatedAt, &meta.indexedFrom, &meta.indexedTo, &checkpointsRaw)
+	if err == nil {
+		meta.checkpoints = make(map[string]uint64)
+		if checkpointsRaw != "" {
+			err = json.Unmarshal([]byte(checkpointsRaw), &meta.checkpoints)
+		}
+	}
 	return meta, err
 }
 
@@ -318,29 +325,34 @@ func mergeTimeSeriesRow(base *pb.TimeSeriesRow, patch *pb.TimeSeriesRow) *pb.Tim
 		}
 		copied := proto.Clone(column).(*pb.ColumnValue)
 		if idx, ok := positions[column.GetColumnName()]; ok {
-			if isNullColumn(copied) {
-				merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
-				positions = make(map[string]int, len(merged.Columns))
-				for pos, value := range merged.Columns {
-					positions[value.GetColumnName()] = pos
-				}
-				continue
-			}
 			merged.Columns[idx] = copied
 			continue
 		}
 		positions[column.GetColumnName()] = len(merged.Columns)
 		merged.Columns = append(merged.Columns, copied)
 	}
-	return merged
-}
-
-func isNullColumn(column *pb.ColumnValue) bool {
-	if column == nil || column.GetValue() == nil {
-		return true
+	for _, name := range patch.GetRemovedColumnNames() {
+		if idx, ok := positions[name]; ok {
+			merged.Columns = append(merged.Columns[:idx], merged.Columns[idx+1:]...)
+			positions = make(map[string]int, len(merged.Columns))
+			for pos, value := range merged.Columns {
+				positions[value.GetColumnName()] = pos
+			}
+		}
 	}
-	_, explicit := column.GetValue().GetValue().(*pb.TypedValue_NullValue)
-	return explicit
+	if len(patch.GetAttributes()) > 0 {
+		if merged.Attributes == nil {
+			merged.Attributes = make(map[string]string, len(patch.GetAttributes()))
+		}
+		for key, value := range patch.GetAttributes() {
+			merged.Attributes[key] = value
+		}
+	}
+	for _, key := range patch.GetAttributesToDelete() {
+		delete(merged.Attributes, key)
+	}
+	merged.RemovedColumnNames = nil
+	return merged
 }
 
 func buildInsertSQL(quotedTableName string, columns []*pb.ResultColumn) (string, error) {
@@ -415,6 +427,7 @@ func normalizeTimeSeriesRow(row *pb.TimeSeriesRow) *pb.TimeSeriesRow {
 	if normalized, err := factkey.NormalizeTimeVersion(out.GetKey().GetDataTime()); err == nil {
 		out.Key.DataTime = normalized
 	}
+	out.AttributesToDelete = nil
 	return out
 }
 

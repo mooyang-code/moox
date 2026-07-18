@@ -46,7 +46,7 @@ const (
 	GatewayReady       ReadinessStage = "gateway_ready"
 	WebReady           ReadinessStage = "web_ready"
 	BrowserHTTPSReady  ReadinessStage = "browser_https_ready"
-	StorageAccessReady ReadinessStage = "storage_access_ready"
+	StorageAccessReady ReadinessStage = "storage_primary_ready"
 	StorageViewReady   ReadinessStage = "storage_view_ready"
 )
 
@@ -437,7 +437,7 @@ func probeCommand(stage ReadinessStage) string {
 	case BrowserHTTPSReady:
 		return `curl -fsS --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null`
 	case StorageAccessReady:
-		return `"$HOME/moox/storage/status.sh" storage-access >/dev/null`
+		return `"$HOME/moox/storage/status.sh" storage-primary >/dev/null`
 	case StorageViewReady:
 		return `"$HOME/moox/storage/status.sh" storage-view >/dev/null`
 	default:

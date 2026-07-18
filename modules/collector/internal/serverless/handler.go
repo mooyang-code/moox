@@ -104,20 +104,20 @@ func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event mod
 		log.DebugContextf(ctx, "[CloudFunction] runtime server updated: %s:%d", event.ServerIP, event.ServerPort)
 	}
 
-	metadataTarget := deploymentTRPCTarget(event.ServiceDeployments, "storage_metadata_trpc", "moox-storage-metadata-trpc", "moox_storage_metadata_trpc")
-	accessTarget := deploymentTRPCTarget(event.ServiceDeployments, "storage_access_trpc", "moox-storage-access-trpc", "moox_storage_access_trpc")
+	metadataTarget := deploymentTRPCTarget(event.ServiceDeployments, "storage-primary")
+	accessTarget := metadataTarget
 	if metadataTarget != "" || accessTarget != "" {
 		runtimeapp.UpdateStorageTargets(metadataTarget, accessTarget)
 		if metadataTarget != "" {
 			event.StorageMetadataTarget = metadataTarget
 		}
 		if accessTarget != "" {
-			event.StorageAccessTarget = accessTarget
+			event.StoragePrimaryTarget = accessTarget
 		}
 		log.DebugContextf(ctx, "[CloudFunction] runtime storage targets updated from service_deployments: metadata=%s access=%s", metadataTarget, accessTarget)
-	} else if runtimeapp.IsStorageTRPCTarget(event.StorageMetadataTarget) || runtimeapp.IsStorageTRPCTarget(event.StorageAccessTarget) {
-		runtimeapp.UpdateStorageTargets(event.StorageMetadataTarget, event.StorageAccessTarget)
-		log.DebugContextf(ctx, "[CloudFunction] runtime storage targets updated from event: metadata=%s access=%s", event.StorageMetadataTarget, event.StorageAccessTarget)
+	} else if runtimeapp.IsStorageTRPCTarget(event.StorageMetadataTarget) || runtimeapp.IsStorageTRPCTarget(event.StoragePrimaryTarget) {
+		runtimeapp.UpdateStorageTargets(event.StorageMetadataTarget, event.StoragePrimaryTarget)
+		log.DebugContextf(ctx, "[CloudFunction] runtime storage targets updated from event: metadata=%s access=%s", event.StorageMetadataTarget, event.StoragePrimaryTarget)
 	}
 
 	nodeID := ""

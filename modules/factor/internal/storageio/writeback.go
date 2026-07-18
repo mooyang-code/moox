@@ -60,7 +60,7 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 	if len(rows) == 0 {
 		return nil
 	}
-	rsp, err := c.access.WriteTimeSeriesRows(ctx, &storagepb.WriteTimeSeriesRowsReq{AuthInfo: c.auth, Rows: rows})
+	rsp, err := c.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{AuthInfo: c.auth, Rows: rows})
 	if err != nil {
 		return fmt.Errorf("write factor patch: %w", err)
 	}

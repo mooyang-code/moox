@@ -41,7 +41,7 @@ storage:
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
 	assert.Equal(t, "127.0.0.1:30100", cfg.Storage.MetadataTarget)
-	assert.Equal(t, "127.0.0.1:30102", cfg.Storage.AccessTarget)
+	assert.Equal(t, "127.0.0.1:30102", cfg.Storage.PrimaryTarget)
 }
 
 func TestLoadRejectsHTTPStorageTargets(t *testing.T) {

@@ -8,17 +8,17 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func TestValidateWriteRecordRowsRequiresTimestampVersion(t *testing.T) {
+func TestValidateMergeRecordRowsRequiresTimestampVersion(t *testing.T) {
 	validator := NewValidator(recordVersionMetadata{})
 	row := &pb.RecordRow{Key: &pb.RecordKey{
 		SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "opaque-version",
 	}}
-	if err := validator.ValidateWriteRecordRows(context.Background(), []*pb.RecordRow{row}); err == nil || !strings.Contains(err.Error(), "RFC3339") {
+	if err := validator.ValidateMergeRecordRows(context.Background(), []*pb.RecordRow{row}); err == nil || !strings.Contains(err.Error(), "RFC3339") {
 		t.Fatalf("opaque version error = %v, want RFC3339 validation", err)
 	}
 
 	row.Key.Version = "2026-07-10T12:00:00Z"
-	if err := validator.ValidateWriteRecordRows(context.Background(), []*pb.RecordRow{row}); err != nil {
+	if err := validator.ValidateMergeRecordRows(context.Background(), []*pb.RecordRow{row}); err != nil {
 		t.Fatalf("timestamp version: %v", err)
 	}
 }
@@ -33,15 +33,15 @@ func (recordVersionMetadata) ListDatasetColumns(context.Context, string, string,
 	return nil, &pb.PageResult{}, nil
 }
 
-func TestValidateWriteTimeSeriesRowsRequiresKey(t *testing.T) {
+func TestValidateMergeTimeSeriesRowsRequiresKey(t *testing.T) {
 	validator := NewValidator(recordVersionMetadata{})
-	err := validator.ValidateWriteTimeSeriesRows(context.Background(), []*pb.TimeSeriesRow{{}})
+	err := validator.ValidateMergeTimeSeriesRows(context.Background(), []*pb.TimeSeriesRow{{}})
 	if err == nil || !strings.Contains(err.Error(), "key is required") {
 		t.Fatalf("missing key error = %v, want key is required", err)
 	}
 }
 
-func TestValidateWriteTimeSeriesRowsRejectsUnknownColumn(t *testing.T) {
+func TestValidateMergeTimeSeriesRowsRejectsUnknownColumn(t *testing.T) {
 	validator := NewValidator(timeSeriesColumnMetadata{})
 	row := &pb.TimeSeriesRow{
 		Key: &pb.TimeSeriesKey{
@@ -52,7 +52,7 @@ func TestValidateWriteTimeSeriesRowsRejectsUnknownColumn(t *testing.T) {
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
 	}
-	err := validator.ValidateWriteTimeSeriesRows(context.Background(), []*pb.TimeSeriesRow{row})
+	err := validator.ValidateMergeTimeSeriesRows(context.Background(), []*pb.TimeSeriesRow{row})
 	if err == nil || !strings.Contains(err.Error(), "unknown_metric") {
 		t.Fatalf("unknown column error = %v", err)
 	}

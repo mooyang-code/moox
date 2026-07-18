@@ -13,8 +13,8 @@ func TestDefaultFactorConfig(t *testing.T) {
 	if cfg.Storage.MetadataTarget != "127.0.0.1:20100" {
 		t.Fatalf("metadata target = %q", cfg.Storage.MetadataTarget)
 	}
-	if cfg.Storage.AccessTarget != "127.0.0.1:20102" {
-		t.Fatalf("access target = %q", cfg.Storage.AccessTarget)
+	if cfg.Storage.PrimaryTarget != "127.0.0.1:20102" {
+		t.Fatalf("access target = %q", cfg.Storage.PrimaryTarget)
 	}
 	if cfg.NATS.Stream != "MOOX_STORAGE" {
 		t.Fatalf("nats stream = %q", cfg.NATS.Stream)

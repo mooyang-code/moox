@@ -1,4 +1,4 @@
-package access
+package primarystore
 
 import (
 	"context"
@@ -322,7 +322,7 @@ func TestReportViewErrorDelegatesToReporter(t *testing.T) {
 		},
 	}
 
-	rsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{{
+	rsp, err := svc.MergeTimeSeriesRows(ctx, &pb.MergeTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{{
 		Key: &pb.TimeSeriesKey{
 			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-10T12:00:00Z",
 		},
@@ -571,9 +571,9 @@ func TestListDevicesReturnsStoredDevices(t *testing.T) {
 	assert.Equal(t, "dev-1", rsp.GetDevices()[0].GetDeviceId())
 }
 
-func TestNormalizeWriteRecordRowsFillsVersion(t *testing.T) {
+func TestNormalizeMergeRecordRowsFillsVersion(t *testing.T) {
 	svc := &Service{}
-	rows := svc.normalizeWriteRecordRows([]*pb.RecordRow{{
+	rows := svc.normalizeMergeRecordRows([]*pb.RecordRow{{
 		Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"},
 	}})
 	require.Len(t, rows, 1)
@@ -648,7 +648,7 @@ func TestPageMergedRecordRowsUsesSkippedTotal(t *testing.T) {
 	assert.True(t, result.GetHasMore())
 }
 
-func TestWriteTimeSeriesRowsRoutesWithoutConstructingEvents(t *testing.T) {
+func TestMergeTimeSeriesRowsRoutesWithoutConstructingEvents(t *testing.T) {
 	ctx := context.Background()
 	bus := eventbus.NewMemoryBus()
 	primaryStore := &capturingPrimary{}
@@ -666,7 +666,7 @@ func TestWriteTimeSeriesRowsRoutesWithoutConstructingEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{{
+	rsp, err := svc.MergeTimeSeriesRows(ctx, &pb.MergeTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{{
 		Key: &pb.TimeSeriesKey{
 			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-10T12:00:00Z",
 		},
@@ -682,7 +682,7 @@ func TestWriteTimeSeriesRowsRoutesWithoutConstructingEvents(t *testing.T) {
 	assert.Equal(t, 0, published)
 }
 
-func TestWriteTimeSeriesRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
+func TestMergeTimeSeriesRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
 	ctx := context.Background()
 	primaryStore := &partialFailurePrimary{failNode: "node-2"}
 	svc := &Service{
@@ -695,7 +695,7 @@ func TestWriteTimeSeriesRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.
 		{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "kline", SubjectId: "B", Freq: "1m", DataTime: "2026-07-10T12:01:00Z"}, Columns: []*pb.ColumnValue{doubleColumn("close", 1.3)}},
 	}
 
-	rsp, err := svc.WriteTimeSeriesRows(ctx, &pb.WriteTimeSeriesRowsReq{Rows: rows})
+	rsp, err := svc.MergeTimeSeriesRows(ctx, &pb.MergeTimeSeriesRowsReq{Rows: rows})
 	require.NoError(t, err)
 	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetWrittenKeys(), 1)
@@ -703,7 +703,7 @@ func TestWriteTimeSeriesRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.
 	assert.Equal(t, []string{"node-1", "node-2"}, primaryStore.calls)
 }
 
-func TestWriteRecordRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
+func TestMergeRecordRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
 	ctx := context.Background()
 	primaryStore := &partialFailurePrimary{failNode: "node-2"}
 	svc := &Service{
@@ -716,7 +716,7 @@ func TestWriteRecordRowsReturnsCommittedKeysWhenLaterTargetFails(t *testing.T) {
 		{Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "kline", RecordId: "B", Version: "2026-07-10T12:01:00Z"}, Columns: []*pb.ColumnValue{stringColumn("title", "second")}},
 	}
 
-	rsp, err := svc.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: rows})
+	rsp, err := svc.MergeRecordRows(ctx, &pb.MergeRecordRowsReq{Rows: rows})
 	require.NoError(t, err)
 	assert.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetKeys(), 1)
@@ -731,7 +731,7 @@ func stringColumn(name, value string) *pb.ColumnValue {
 	return &pb.ColumnValue{ColumnName: name, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}}
 }
 
-func TestWriteRecordRowsAssignsTimestampVersion(t *testing.T) {
+func TestMergeRecordRowsAssignsTimestampVersion(t *testing.T) {
 	ctx := context.Background()
 	primaryStore := &capturingPrimary{}
 	svc := &Service{
@@ -741,7 +741,7 @@ func TestWriteRecordRowsAssignsTimestampVersion(t *testing.T) {
 		events:    eventbus.NewMemoryBus(),
 	}
 
-	rsp, err := svc.WriteRecordRows(ctx, &pb.WriteRecordRowsReq{Rows: []*pb.RecordRow{{
+	rsp, err := svc.MergeRecordRows(ctx, &pb.MergeRecordRowsReq{Rows: []*pb.RecordRow{{
 		Key: &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1"},
 		Columns: []*pb.ColumnValue{{
 			ColumnName: "title",

@@ -10,8 +10,8 @@ import (
 	bootstrapeventbus "github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/core/eventbus"
-	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/access"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
@@ -51,7 +51,10 @@ func main() {
 
 	frameworkConfigPath := configPathFromArgs(os.Args)
 	storageConfigPath := storageConfigPathFromArgs(os.Args, frameworkConfigPath)
-	cfg := loadRuntimeConfig(storageConfigPath)
+	cfg, err := loadRuntimeConfig(storageConfigPath)
+	if err != nil {
+		exitWithStartupError("load storage config", err)
+	}
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
 		cfg.Storage.ApplyHomeRoot(root)
 	}
@@ -85,13 +88,13 @@ func main() {
 	}
 	accessReader := accessReaderForRuntime(cfg.Storage, storageService)
 
-	if cfg.Storage.HasRole("access") {
+	if cfg.Storage.HasRole("primary") {
 		if storageService == nil {
 			exitWithStartupError("access role requires storage service", nil)
 		}
 		pb.RegisterMetadataService(s, storageService)
-		pb.RegisterAccessService(s, storageService)
-		registerAccessScanService(s, storageService)
+		pb.RegisterPrimaryStoreService(s, storageService)
+		registerPrimaryStoreScanService(s, storageService)
 	}
 	if err := registerHostMetricsCleanupTimer(s, storageService, cfg.Storage); err != nil {
 		exitWithStartupError("register host metrics cleanup timer", err)
@@ -140,7 +143,7 @@ func main() {
 				log.Errorf("关闭 primary service 失败: %v", err)
 			}
 		}()
-		pb.RegisterPrimaryStoreService(s, primaryService)
+		pb.RegisterDataShardService(s, primaryService)
 	}
 	if err := registerStorageHealth(s, cfg.Storage, storageHealthDependencies{
 		eventbus: rowsCommittedBus,
@@ -169,18 +172,18 @@ func registerStorageMetricsReporter(s *server.Server, storage storageconfig.Stor
 	if s == nil {
 		return
 	}
-	serviceName := "storage_access"
-	timerName := "trpc.moox.storage.access.metrics.timer"
+	serviceName := "storage_primary"
+	timerName := "trpc.moox.storage.primary.metrics.timer"
 	switch {
-	case storage.HasRole("primary") && !storage.HasRole("access"):
+	case storage.HasRole("primary") && !storage.HasRole("view"):
 		serviceName = "storage_primary_trpc"
-	case storage.HasRole("view_index") && !storage.HasRole("access"):
+	case storage.HasRole("view_index") && !storage.HasRole("primary"):
 		serviceName, timerName = "storage_view_index", "trpc.moox.storage.view_index.metrics.timer"
-	case storage.HasRole("view_builder") && !storage.HasRole("access"):
+	case storage.HasRole("view_builder") && !storage.HasRole("primary"):
 		serviceName, timerName = "storage_view_builder", "trpc.moox.storage.view_builder.metrics.timer"
-	case storage.HasRole("view_query") && !storage.HasRole("access"):
+	case storage.HasRole("view_query") && !storage.HasRole("primary"):
 		serviceName, timerName = "storage_view_query", "trpc.moox.storage.view_query.metrics.timer"
-	case storage.HasRole("view") && !storage.HasRole("access"):
+	case storage.HasRole("view") && !storage.HasRole("primary"):
 		serviceName, timerName = "storage_view", "trpc.moox.storage.view.metrics.timer"
 	}
 	h, err := report.NewHandler(report.DefaultConfig(serviceName))
@@ -196,17 +199,17 @@ func registerStorageMetricsReporter(s *server.Server, storage storageconfig.Stor
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerAccessScanService(s *server.Server, service pb.AccessScanService) {
+func registerPrimaryStoreScanService(s *server.Server, service pb.PrimaryStoreScanService) {
 	for _, name := range []string{
-		"trpc.moox.storage.AccessScan.trpc",
-		"trpc.moox.storage.AccessScan",
+		"trpc.moox.storage.PrimaryStoreScan.trpc",
+		"trpc.moox.storage.PrimaryStoreScan",
 	} {
 		if target := s.Service(name); target != nil {
-			pb.RegisterAccessScanService(target, service)
+			pb.RegisterPrimaryStoreScanService(target, service)
 			return
 		}
 	}
-	exitWithStartupError("access role requires the internal AccessScan tRPC service", nil)
+	exitWithStartupError("primary role requires the internal PrimaryStoreScan tRPC service", nil)
 }
 
 func exitWithStartupError(message string, err error) {

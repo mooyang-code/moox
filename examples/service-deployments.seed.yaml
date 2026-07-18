@@ -38,47 +38,32 @@ services:
       health_url: http://127.0.0.1:19527/readyz
       health_kind: readiness
       monitor_enabled: true
-  - name: storage_metadata
+  - name: storage-primary
     kind: storage
     deployment_mode: process
     protocol: http
     host: 127.0.0.1
     port: 20200
-    gateway_path: trpc.moox.storage.Metadata
+    gateway_path: trpc.moox.storage
     gateway_enabled: false
     scope: public
     status: active
-    description: moox-storage 元数据 HTTP 服务
+    description: moox-storage PrimaryStore + Metadata 服务
     extra_config:
       health_url: http://127.0.0.1:20210/readyz
       health_kind: readiness
       monitor_enabled: true
-  - name: storage_access
-    kind: storage
-    deployment_mode: process
-    protocol: http
-    host: 127.0.0.1
-    port: 20201
-    gateway_path: trpc.moox.storage.Access
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连
-    extra_config:
-      health_url: http://127.0.0.1:20210/readyz
-      health_kind: readiness
-      monitor_enabled: true
-  - name: storage_view
+  - name: storage-view
     kind: storage
     deployment_mode: process
     protocol: http
     host: 127.0.0.1
     port: 20202
-    gateway_path: trpc.moox.storage.DataView
+    gateway_path: trpc.moox.storage
     gateway_enabled: false
     scope: public
     status: active
-    description: moox-storage 统一 View 服务，承载索引、物化和查询
+    description: moox-storage DataView + ViewBuilder 服务
     extra_config:
       health_url: http://127.0.0.1:20211/readyz
       health_kind: readiness
@@ -224,54 +209,6 @@ services:
       monitor_enabled: true
 
   # Logical RPC endpoints hosted by the Admin or Storage/Trade process.
-  - name: storage_metadata_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20100
-    gateway_path: trpc.moox.storage.Metadata
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage 元数据 tRPC 服务
-    extra_config: {}
-  - name: storage_primary_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20101
-    gateway_path: trpc.moox.storage.PrimaryStore
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage PrimaryStore tRPC 服务
-    extra_config: {}
-  - name: storage_access_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20102
-    gateway_path: trpc.moox.storage.Access
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage Access tRPC 服务
-    extra_config: {}
-  - name: storage_view_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20103
-    gateway_path: trpc.moox.storage.DataView
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage DataView tRPC 服务
-    extra_config: {}
   - name: admin_auth
     kind: admin_rpc
     deployment_mode: endpoint

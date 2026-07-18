@@ -37,7 +37,7 @@ type DatabaseConfig struct {
 // StorageConfig describes storage service tRPC targets.
 type StorageConfig struct {
 	MetadataTarget string `yaml:"metadata_target"`
-	AccessTarget   string `yaml:"access_target"`
+	PrimaryTarget  string `yaml:"access_target"`
 }
 
 // NATSConfig describes the Storage event stream subscription.
@@ -122,7 +122,7 @@ func Default() *Config {
 		},
 		Storage: StorageConfig{
 			MetadataTarget: "127.0.0.1:20100",
-			AccessTarget:   "127.0.0.1:20102",
+			PrimaryTarget:  "127.0.0.1:20102",
 		},
 		NATS: NATSConfig{
 			URLs:     []string{"nats://127.0.0.1:4222"},
@@ -184,8 +184,8 @@ func (c *Config) applyDefaults() {
 	if c.Storage.MetadataTarget == "" {
 		c.Storage.MetadataTarget = "127.0.0.1:20100"
 	}
-	if c.Storage.AccessTarget == "" {
-		c.Storage.AccessTarget = "127.0.0.1:20102"
+	if c.Storage.PrimaryTarget == "" {
+		c.Storage.PrimaryTarget = "127.0.0.1:20102"
 	}
 	if c.NATS.URL == "" {
 		c.NATS.URL = "nats://127.0.0.1:4222"
@@ -266,7 +266,7 @@ func (c *Config) applyEnv() {
 		c.Storage.MetadataTarget = v
 	}
 	if v := os.Getenv("MOOX_FACTOR_STORAGE_ACCESS_TARGET"); v != "" {
-		c.Storage.AccessTarget = v
+		c.Storage.PrimaryTarget = v
 	}
 	if v, ok := os.LookupEnv("MOOX_FACTOR_NATS_URL"); ok {
 		c.NATS.URL = v
@@ -300,8 +300,8 @@ func (c *Config) validateStorageTargets() error {
 	if !isTRPCTarget(c.Storage.MetadataTarget) {
 		return fmt.Errorf("storage.metadata_target must be a tRPC target, got %q", c.Storage.MetadataTarget)
 	}
-	if !isTRPCTarget(c.Storage.AccessTarget) {
-		return fmt.Errorf("storage.access_target must be a tRPC target, got %q", c.Storage.AccessTarget)
+	if !isTRPCTarget(c.Storage.PrimaryTarget) {
+		return fmt.Errorf("storage.access_target must be a tRPC target, got %q", c.Storage.PrimaryTarget)
 	}
 	return nil
 }

@@ -13,20 +13,20 @@ import (
 	"testing"
 )
 
-func TestWritePrimaryRowsRequiresRequest(t *testing.T) {
+func TestMergePrimaryRowsRequiresRequest(t *testing.T) {
 	svc := NewService(Options{Pebble: &primaryTestStore{}})
 	defer svc.Close()
-	rsp, err := svc.WritePrimaryRows(context.Background(), nil)
+	rsp, err := svc.MergePrimaryRows(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestWritePrimaryRowsWritesRows(t *testing.T) {
+func TestMergePrimaryRowsWritesRows(t *testing.T) {
 	store := &primaryTestStore{}
 	svc := NewService(Options{Pebble: store})
 	defer svc.Close()
 	rows := []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", Key: "BTC|1m|_", Version: "2026-07-11T00:00:00Z"}}}
-	rsp, err := svc.WritePrimaryRows(context.Background(), &pb.WritePrimaryRowsReq{
+	rsp, err := svc.MergePrimaryRows(context.Background(), &pb.MergePrimaryRowsReq{
 		Target: &pb.PrimaryStoreTarget{NodeId: "node-1"},
 		Rows:   rows,
 	})
@@ -35,11 +35,11 @@ func TestWritePrimaryRowsWritesRows(t *testing.T) {
 	assert.Equal(t, rows, store.written)
 }
 
-func TestWritePrimaryRowsValidatesOutboxMessage(t *testing.T) {
+func TestMergePrimaryRowsValidatesOutboxMessage(t *testing.T) {
 	store := &primaryTestStore{}
 	svc := NewService(Options{Pebble: store})
 	defer svc.Close()
-	rsp, err := svc.WritePrimaryRows(context.Background(), &pb.WritePrimaryRowsReq{
+	rsp, err := svc.MergePrimaryRows(context.Background(), &pb.MergePrimaryRowsReq{
 		Target:        &pb.PrimaryStoreTarget{NodeId: "node-1"},
 		Rows:          []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline"}}},
 		OutboxMessage: []byte("invalid"),
@@ -48,12 +48,12 @@ func TestWritePrimaryRowsValidatesOutboxMessage(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestWritePrimaryRowsWithOutboxMessage(t *testing.T) {
+func TestMergePrimaryRowsWithOutboxMessage(t *testing.T) {
 	store := &primaryTestStore{supportsOutbox: true}
 	svc := NewService(Options{Pebble: store})
 	defer svc.Close()
 	msg := testOutboxMessage(t, "node-1")
-	rsp, err := svc.WritePrimaryRows(context.Background(), &pb.WritePrimaryRowsReq{
+	rsp, err := svc.MergePrimaryRows(context.Background(), &pb.MergePrimaryRowsReq{
 		Target:        &pb.PrimaryStoreTarget{NodeId: "node-1"},
 		Rows:          []*pb.PrimaryStoreRow{{Key: &pb.PrimaryStoreKey{SpaceId: "crypto", DatasetId: "kline", Key: "BTC|1m|_"}}},
 		OutboxMessage: msg,
@@ -108,7 +108,7 @@ func TestNormalizeReadPrimaryRowsReqNilRequest(t *testing.T) {
 
 func TestValidateOutboxMessageRejectsMismatchedNode(t *testing.T) {
 	msg := testOutboxMessage(t, "other-node")
-	err := validateOutboxMessage(&pb.WritePrimaryRowsReq{
+	err := validateOutboxMessage(&pb.MergePrimaryRowsReq{
 		Target:        &pb.PrimaryStoreTarget{NodeId: "node-1"},
 		OutboxMessage: msg,
 	})
@@ -264,7 +264,7 @@ func TestNormalizeScanPrimaryRowsReqNilRequest(t *testing.T) {
 
 func TestValidateOutboxMessageRejectsEmptyPayload(t *testing.T) {
 	msg := testOutboxMessage(t, "node-1")
-	err := validateOutboxMessage(&pb.WritePrimaryRowsReq{
+	err := validateOutboxMessage(&pb.MergePrimaryRowsReq{
 		Target:        &pb.PrimaryStoreTarget{NodeId: "node-1"},
 		OutboxMessage: msg[:len(msg)-1],
 	})
@@ -273,7 +273,7 @@ func TestValidateOutboxMessageRejectsEmptyPayload(t *testing.T) {
 
 func TestValidateOutboxMessageRejectsMissingTargetNode(t *testing.T) {
 	msg := testOutboxMessage(t, "node-1")
-	err := validateOutboxMessage(&pb.WritePrimaryRowsReq{OutboxMessage: msg})
+	err := validateOutboxMessage(&pb.MergePrimaryRowsReq{OutboxMessage: msg})
 	require.Error(t, err)
 }
 

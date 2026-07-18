@@ -17,13 +17,10 @@ func TestStorageConfigAppliesHealthDefault(t *testing.T) {
 	}
 }
 
-func TestStorageConfigAllRoleMatchesConcreteRoles(t *testing.T) {
-	cfg := StorageConfig{Roles: []string{"all"}}
-
-	for _, role := range []string{"access", "view", "view_builder", "view_query", "view_index", "archive", "primary"} {
-		if !cfg.HasRole(role) {
-			t.Fatalf("HasRole(%q) = false, want true for all role", role)
-		}
+func TestStorageConfigRolesAreExplicit(t *testing.T) {
+	cfg := StorageConfig{Roles: []string{"primary", "view"}}
+	if !cfg.HasRole("primary") || !cfg.HasRole("view") || cfg.HasRole("view_index") {
+		t.Fatal("role matching must be explicit")
 	}
 }
 
@@ -61,8 +58,8 @@ func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
 	if cfg.Storage.EventBus.MaxDeliver != -1 {
 		t.Fatalf("EventBus.MaxDeliver = %d, want -1", cfg.Storage.EventBus.MaxDeliver)
 	}
-	if cfg.Storage.View.AccessScanServiceName != "trpc.moox.storage.AccessScan" {
-		t.Fatalf("View.AccessScanServiceName = %q, want AccessScan service", cfg.Storage.View.AccessScanServiceName)
+	if cfg.Storage.View.PrimaryStoreScanServiceName != "trpc.moox.storage.PrimaryStoreScan" {
+		t.Fatalf("View.PrimaryStoreScanServiceName = %q, want PrimaryStoreScan service", cfg.Storage.View.PrimaryStoreScanServiceName)
 	}
 }
 
@@ -182,7 +179,7 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 		wantRole   string
 		wantHealth string
 	}{
-		{file: "storage.access.yaml", wantRole: "access", wantHealth: ":20210"},
+		{file: "storage.primary.yaml", wantRole: "primary", wantHealth: ":20210"},
 		{file: "storage_view/trpc_go.yaml", wantRole: "view", wantHealth: ":20211"},
 	}
 	for _, tt := range tests {
@@ -202,7 +199,7 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 }
 
 func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexRoot(t *testing.T) {
-	files := []string{"storage.yaml", "storage.access.yaml", "storage_view/trpc_go.yaml"}
+	files := []string{"storage.yaml", "storage.primary.yaml", "storage_view/trpc_go.yaml"}
 	for _, file := range files {
 		raw, err := os.ReadFile("../../config/" + file)
 		if err != nil {

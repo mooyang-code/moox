@@ -231,7 +231,9 @@ func primaryTimeSeriesRow(row *pb.PrimaryStoreRow) (*pb.TimeSeriesRow, error) {
 	return &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{
 		SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: subject, Freq: freq,
 		Dimensions: dimensions, DataTime: row.GetKey().GetVersion(),
-	}, Columns: cloneColumns(row.GetColumns()), Attributes: attributes}, nil
+	}, Columns: cloneColumns(row.GetColumns()), Attributes: attributes,
+		AttributesToDelete: append([]string(nil), row.GetAttributesToDelete()...),
+		RemovedColumnNames: append([]string(nil), row.GetRemovedColumnNames()...)}, nil
 }
 
 func primaryRecordRow(row *pb.PrimaryStoreRow) (*pb.RecordRow, error) {
@@ -241,7 +243,9 @@ func primaryRecordRow(row *pb.PrimaryStoreRow) (*pb.RecordRow, error) {
 	return &pb.RecordRow{Key: &pb.RecordKey{
 		SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), RecordId: factkey.ParseRecordDataKey(row.GetKey().GetKey()),
 		Version: publicRecordVersion(row.GetKey().GetVersion()),
-	}, Columns: cloneColumns(row.GetColumns()), Attributes: cloneAttributes(row.GetAttributes())}, nil
+	}, Columns: cloneColumns(row.GetColumns()), Attributes: cloneAttributes(row.GetAttributes()),
+		AttributesToDelete: append([]string(nil), row.GetAttributesToDelete()...),
+		RemovedColumnNames: append([]string(nil), row.GetRemovedColumnNames()...)}, nil
 }
 
 func publicRecordVersion(version string) string {

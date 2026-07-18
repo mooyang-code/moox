@@ -2,11 +2,13 @@ package bleve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -68,6 +70,50 @@ func TestBleveIndexRowsReplayDoesNotIncreaseEntryCount(t *testing.T) {
 	})
 	if err != nil || len(rows) != 1 || page.GetTotal() != 1 {
 		t.Fatalf("rows=%d page=%+v err=%v, want one replay-safe result", len(rows), page, err)
+	}
+}
+
+func TestBleveApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	index, err := Open(Options{Path: filepath.Join(t.TempDir(), "record_view")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer index.Close()
+
+	base := bleveTestRecordRow("news-1", "2026-07-09T01:00:00Z")
+	if err := index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{RowWrites: []viewindex.RowWrite{{
+		Operation: viewindex.RowWriteOperationReplace,
+		Key:       viewindex.RowKey{RecordKey: base.GetKey()},
+		Columns:   base.GetColumns(),
+	}}}); err != nil {
+		t.Fatalf("initial Apply: %v", err)
+	}
+	missing := bleveTestRecordRow("news-2", "2026-07-09T01:01:00Z")
+	err = index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{
+		RowWrites: []viewindex.RowWrite{
+			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{RecordKey: base.GetKey()}, Columns: base.GetColumns()},
+			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{RecordKey: missing.GetKey()}, Columns: missing.GetColumns()},
+		},
+		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", ExpectedLastAppliedSequence: 0, LastAppliedSequence: 1}},
+	})
+	var missingErr *viewindex.MissingRowsError
+	if !errors.As(err, &missingErr) || len(missingErr.RecordKeys) != 1 {
+		t.Fatalf("Apply missing error = %v, want one missing key", err)
+	}
+	stats, err := index.Stat(ctx)
+	if err != nil || stats.EntryCount != 1 || len(stats.ShardCheckpoints) != 0 {
+		t.Fatalf("failed Apply changed state: stats=%+v err=%v", stats, err)
+	}
+	if err := index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{
+		RowWrites:         []viewindex.RowWrite{{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{RecordKey: missing.GetKey()}, Columns: missing.GetColumns()}},
+		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", ExpectedLastAppliedSequence: 0, LastAppliedSequence: 1}},
+	}); err != nil {
+		t.Fatalf("recovery Apply: %v", err)
+	}
+	stats, err = index.Stat(ctx)
+	if err != nil || stats.EntryCount != 2 || stats.ShardCheckpoints["shard-1"] != 1 {
+		t.Fatalf("recovered stats=%+v err=%v", stats, err)
 	}
 }
 

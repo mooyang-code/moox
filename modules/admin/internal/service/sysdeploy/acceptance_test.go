@@ -198,7 +198,7 @@ func TestSeedDefaultsRemovesSplitViewRowsAndMigratesUnifiedHealth(t *testing.T) 
 		require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "configured-node", ServiceName: name, Host: "127.0.0.1", Port: 1, Status: "active"}))
 	}
 	require.NoError(t, svc.dao.Create(ctx, &Deployment{
-		NodeID: "configured-node", ServiceName: "storage_view", Host: "127.0.0.1", Port: 20202, Status: "active",
+		NodeID: "configured-node", ServiceName: "storage-view", Host: "127.0.0.1", Port: 20202, Status: "active",
 		ExtraConfig: `{"health_url":"http://127.0.0.1:20212/readyz","health_kind":"readiness","monitor_enabled":true}`,
 	}))
 
@@ -206,7 +206,7 @@ func TestSeedDefaultsRemovesSplitViewRowsAndMigratesUnifiedHealth(t *testing.T) 
 	var count int64
 	require.NoError(t, db.Model(&Deployment{}).Where("c_service_name IN ?", []string{"storage_view_builder", "storage_view_query", "storage_view_index"}).Count(&count).Error)
 	assert.Zero(t, count)
-	view, err := svc.dao.Get(ctx, "configured-node", "storage_view")
+	view, err := svc.dao.Get(ctx, "configured-node", "storage-view")
 	require.NoError(t, err)
 	assert.Equal(t, "http://127.0.0.1:20211/readyz", healthURL(view.ExtraConfig))
 }

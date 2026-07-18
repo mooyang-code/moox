@@ -1,4 +1,4 @@
-package access
+package primarystore
 
 import (
 	"context"
@@ -19,22 +19,22 @@ const maxDatasetScanRows = 10000
 
 const primaryDatasetScanPageSize = uint32(1000)
 
-func (s *Service) WriteTimeSeriesRows(ctx context.Context, req *pb.WriteTimeSeriesRowsReq) (*pb.WriteTimeSeriesRowsRsp, error) {
-	if err := s.validator.ValidateWriteTimeSeriesRows(ctx, req.GetRows()); err != nil {
-		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+func (s *Service) MergeTimeSeriesRows(ctx context.Context, req *pb.MergeTimeSeriesRowsReq) (*pb.MergeTimeSeriesRowsRsp, error) {
+	if err := s.validator.ValidateMergeTimeSeriesRows(ctx, req.GetRows()); err != nil {
+		return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	groups, err := s.groupTimeSeriesRowsByPrimaryStoreTarget(ctx, req.GetRows())
 	if err != nil {
-		return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
+		return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
 	written := make([]string, 0, len(req.GetRows()))
 	for _, group := range groups {
 		if err := s.writeRoutedRows(ctx, group); err != nil {
-			return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), WrittenKeys: written}, nil
+			return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), WrittenKeys: written}, nil
 		}
 		written = append(written, timeSeriesWrittenKeys(group.timeSeriesKeys)...)
 	}
-	return &pb.WriteTimeSeriesRowsRsp{RetInfo: response.Success("success"), WrittenKeys: written}, nil
+	return &pb.MergeTimeSeriesRowsRsp{RetInfo: response.Success("success"), WrittenKeys: written}, nil
 }
 
 func timeSeriesWrittenKeys(keys []*pb.TimeSeriesKey) []string {
@@ -335,26 +335,26 @@ func (s *Service) scanTimeSeriesDatasetPageRows(ctx context.Context, req *pb.Rea
 	return out, page, nil
 }
 
-func (s *Service) WriteRecordRows(ctx context.Context, req *pb.WriteRecordRowsReq) (*pb.WriteRecordRowsRsp, error) {
-	rows := s.normalizeWriteRecordRows(req.GetRows())
-	if err := s.validator.ValidateWriteRecordRows(ctx, rows); err != nil {
-		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+func (s *Service) MergeRecordRows(ctx context.Context, req *pb.MergeRecordRowsReq) (*pb.MergeRecordRowsRsp, error) {
+	rows := s.normalizeMergeRecordRows(req.GetRows())
+	if err := s.validator.ValidateMergeRecordRows(ctx, rows); err != nil {
+		return &pb.MergeRecordRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	groups, err := s.groupRecordRowsByPrimaryStoreTarget(ctx, rows)
 	if err != nil {
-		return &pb.WriteRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
+		return &pb.MergeRecordRowsRsp{RetInfo: response.Error(groupRowsErrorCode(err), err)}, nil
 	}
 	var written []*pb.RecordKey
 	for _, group := range groups {
 		if err := s.writeRoutedRows(ctx, group); err != nil {
-			return &pb.WriteRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), Keys: cloneRecordKeys(written)}, nil
+			return &pb.MergeRecordRowsRsp{RetInfo: response.Error(primaryErrorCode(err), err), Keys: cloneRecordKeys(written)}, nil
 		}
 		written = append(written, group.recordKeys...)
 	}
-	return &pb.WriteRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
+	return &pb.MergeRecordRowsRsp{RetInfo: response.Success("success"), Keys: cloneRecordKeys(written)}, nil
 }
 
-func (s *Service) normalizeWriteRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
+func (s *Service) normalizeMergeRecordRows(rows []*pb.RecordRow) []*pb.RecordRow {
 	out := make([]*pb.RecordRow, 0, len(rows))
 	for _, row := range rows {
 		if row == nil {

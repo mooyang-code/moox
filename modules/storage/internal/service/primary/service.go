@@ -35,7 +35,7 @@ type Service struct {
 	relay  *OutboxRelay
 }
 
-var _ pb.PrimaryStoreService = (*Service)(nil)
+var _ pb.DataShardService = (*Service)(nil)
 
 func NewService(opts Options) *Service {
 	svc := &Service{client: NewLocalClient(LocalClientOptions{Root: opts.Root, PebblePath: opts.PebblePath, ShardID: opts.ShardID, Pebble: opts.Pebble, Outbox: opts.Outbox})}
@@ -58,21 +58,21 @@ func (s *Service) Close() error {
 	return s.client.Close()
 }
 
-func (s *Service) WritePrimaryRows(ctx context.Context, req *pb.WritePrimaryRowsReq) (*pb.WritePrimaryRowsRsp, error) {
+func (s *Service) MergePrimaryRows(ctx context.Context, req *pb.MergePrimaryRowsReq) (*pb.MergePrimaryRowsRsp, error) {
 	if req == nil {
-		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+		return &pb.MergePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
 	if len(req.GetOutboxMessage()) > 0 {
-		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("caller-provided outbox messages are not supported; DataShard creates committed events"))}, nil
+		return &pb.MergePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, errors.New("caller-provided outbox messages are not supported; DataShard creates committed events"))}, nil
 	}
 	err := s.client.WriteRows(ctx, req.GetTarget(), req.GetRows())
 	if err != nil {
-		return &pb.WritePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		return &pb.MergePrimaryRowsRsp{RetInfo: response.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	return &pb.WritePrimaryRowsRsp{RetInfo: response.Success("success")}, nil
+	return &pb.MergePrimaryRowsRsp{RetInfo: response.Success("success")}, nil
 }
 
-func validateOutboxMessage(req *pb.WritePrimaryRowsReq) error {
+func validateOutboxMessage(req *pb.MergePrimaryRowsReq) error {
 	msg := &messagepb.MooxMessage{}
 	if err := proto.Unmarshal(req.GetOutboxMessage(), msg); err != nil {
 		return fmt.Errorf("decode outbox message: %w", err)

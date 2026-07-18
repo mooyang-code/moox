@@ -25,7 +25,7 @@ func (s *ViewStore) Prepare(ctx context.Context, indexID string, schema viewinde
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE moox_view_index_meta SET view_version = ?, schema_hash = ?, updated_at = ? WHERE table_name = ?
+		UPDATE moox_view_index_meta SET view_version = ?, schema_hash = ?, indexed_from = '', indexed_to = '', checkpoints_json = '{}', updated_at = ? WHERE table_name = ?
 	`, schema.ViewVersion, schema.SchemaHash, time.Now().UTC().Format(time.RFC3339Nano), indexID)
 	return err
 }

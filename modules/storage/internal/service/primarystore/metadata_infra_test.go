@@ -1,4 +1,4 @@
-package access
+package primarystore
 
 import (
 	"context"
@@ -82,6 +82,13 @@ func TestMetadataInfraCRUDFlow(t *testing.T) {
 
 	listRoutesRsp, err := svc.ListPrimaryStoreRoutes(ctx, &pb.ListPrimaryStoreRoutesReq{SpaceId: "crypto"})
 	mustRetOK(t, listRoutesRsp, err)
+
+	lockedRsp, err := svc.CreatePrimaryStoreRoute(ctx, &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: &pb.PrimaryStoreRoute{
+		SpaceId: "crypto", DatasetId: "kline", RouteId: "route-2", NodeId: "node-2", Status: "active",
+	}})
+	require.NoError(t, err)
+	assert.NotEqual(t, pb.ErrorCode_SUCCESS, lockedRsp.GetRetInfo().GetCode())
+	assert.Contains(t, lockedRsp.GetRetInfo().GetMsg(), "topology is locked")
 
 	archiveRsp, err := svc.RegisterArchiveFile(ctx, &pb.RegisterArchiveFileReq{ArchiveFile: &pb.ArchiveFile{
 		SpaceId: "crypto", DatasetId: "kline", DeviceId: "dev-1",

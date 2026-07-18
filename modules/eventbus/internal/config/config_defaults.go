@@ -34,8 +34,7 @@ func Default() *Config {
 		},
 		Consumers: []ConsumerConfig{
 			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_time_series_rows_committed_v1", FilterSubject: "moox.storage.rows_committed.time_series.v1.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
-			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_record_rows_committed_v1", FilterSubject: "moox.storage.rows_committed.record.v1.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "storage_view_builder_rows_committed_v1", FilterSubject: "moox.storage.rows_committed.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
 			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.rows_committed.time_series.v1.*", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
 			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.rows_committed.time_series.v1.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
 		},

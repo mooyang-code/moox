@@ -19,7 +19,7 @@ type Dependencies struct {
 	ServiceGatewayTarget  string
 	ServiceAuth           ServiceAuthConfig
 	StorageMetadataTarget string
-	StorageAccessTarget   string
+	StoragePrimaryTarget  string
 }
 
 type retInfo struct {
@@ -56,7 +56,7 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		ServiceGatewayTarget:  defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceAuth:           cfg.SysDeploy.ServiceAuth,
 		StorageMetadataTarget: cfg.Storage.MetadataTarget,
-		StorageAccessTarget:   cfg.Storage.AccessTarget,
+		StoragePrimaryTarget:  cfg.Storage.PrimaryTarget,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -74,11 +74,9 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	if v := endpointGatewayTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
 		deps.ServiceGatewayTarget = v
 	}
-	if v := endpointTRPCTarget(active, "storage_metadata_trpc", "moox_storage_metadata_trpc", "moox-storage-metadata-trpc"); v != "" {
+	if v := endpointTRPCTarget(active, "storage-primary"); v != "" {
 		deps.StorageMetadataTarget = v
-	}
-	if v := endpointTRPCTarget(active, "storage_access_trpc", "moox_storage_access_trpc", "moox-storage-access-trpc"); v != "" {
-		deps.StorageAccessTarget = v
+		deps.StoragePrimaryTarget = v
 	}
 	return deps, nil
 }

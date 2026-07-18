@@ -18,8 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device"
 	duckdb "github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
 	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/access"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/primary"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -82,15 +82,15 @@ func TestStorageConsistencyContract(t *testing.T) {
 func testMergeCompleteSnapshots(t *testing.T) {
 	ctx := context.Background()
 	bus := &contractBus{}
-	svc := newContractAccessService(t, bus)
+	svc := newContractPrimaryStoreService(t, bus)
 
 	firstTime := timeSeriesRow("kline", "BTC-USDT", "2026-07-18T00:00:00Z", map[string]float64{
 		"close":    100,
 		"momentum": 0.8,
 	})
 	secondTime := timeSeriesRow("kline", "BTC-USDT", firstTime.GetKey().GetDataTime(), map[string]float64{"close": 101})
-	writeTimeSeries(t, svc, firstTime)
-	writeTimeSeries(t, svc, secondTime)
+	mergeTimeSeries(t, svc, firstTime)
+	mergeTimeSeries(t, svc, secondTime)
 
 	readTime, err := svc.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{Keys: []*pb.TimeSeriesKey{firstTime.GetKey()}})
 	if err != nil {
@@ -106,8 +106,8 @@ func testMergeCompleteSnapshots(t *testing.T) {
 	version := "2026-07-18T00:00:00Z"
 	firstRecord := recordRow("records", "record-1", version, map[string]float64{"score": 0.8}, "first title")
 	secondRecord := recordRow("records", "record-1", version, map[string]float64{"score": 0.9}, "")
-	writeRecord(t, svc, firstRecord)
-	writeRecord(t, svc, secondRecord)
+	mergeRecord(t, svc, firstRecord)
+	mergeRecord(t, svc, secondRecord)
 
 	readRecord, err := svc.ReadRecordRows(ctx, &pb.ReadRecordRowsReq{Keys: []*pb.RecordKey{firstRecord.GetKey()}})
 	if err != nil {
@@ -426,7 +426,7 @@ func testViewRangeAndState(t *testing.T) {
 	baseView := &pb.View{
 		SpaceId: "crypto", ViewId: "kline_view", PrimaryDatasetId: "kline", DatasetIds: []string{"kline"},
 		Engine: "duckdb", Status: "active", ActiveIndexId: "index-a", ViewVersion: 1, ActiveViewVersion: 1,
-		ActiveCoverageStart: "2026-07-18T10:00:00Z", ActiveCoverageEnd: "2026-07-18T11:00:00Z",
+		IndexedFrom: "2026-07-18T10:00:00Z", IndexedTo: "2026-07-18T11:00:00Z",
 		Attributes: map[string]string{"shard_head_sequence": "10", "checkpoint_sequence": "9"},
 	}
 	metadata := &contractViewMetadata{view: baseView, dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active"}}
@@ -547,12 +547,12 @@ func (p *contractPrimary) publishLatest(ctx context.Context) error {
 	}
 }
 
-func newContractAccessService(t *testing.T, bus *contractBus) *access.Service {
+func newContractPrimaryStoreService(t *testing.T, bus *contractBus) *primarystore.Service {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
 	local := primary.NewLocalClient(primary.LocalClientOptions{PebblePath: filepath.Join(root, "pebble"), ShardID: "node-1"})
-	svc := access.NewServiceWithOptions(access.Options{Root: root, InitSchemaPath: storageSchemaPath(), PrimaryClient: &contractPrimary{local: local, bus: bus}, Events: bus})
+	svc := primarystore.NewServiceWithOptions(primarystore.Options{Root: root, InitSchemaPath: storageSchemaPath(), PrimaryClient: &contractPrimary{local: local, bus: bus}, Events: bus})
 	t.Cleanup(func() { _ = svc.Close() })
 	spaceRsp, err := svc.CreateSpace(ctx, &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}})
 	mustContractOK(t, spaceRsp, err)
@@ -598,15 +598,15 @@ func mustContractOK(t *testing.T, result interface{ GetRetInfo() *pb.RetInfo }, 
 	}
 }
 
-func writeTimeSeries(t *testing.T, svc *access.Service, row *pb.TimeSeriesRow) {
+func mergeTimeSeries(t *testing.T, svc *primarystore.Service, row *pb.TimeSeriesRow) {
 	t.Helper()
-	resp, err := svc.WriteTimeSeriesRows(context.Background(), &pb.WriteTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{row}})
+	resp, err := svc.MergeTimeSeriesRows(context.Background(), &pb.MergeTimeSeriesRowsReq{Rows: []*pb.TimeSeriesRow{row}})
 	mustContractOK(t, resp, err)
 }
 
-func writeRecord(t *testing.T, svc *access.Service, row *pb.RecordRow) {
+func mergeRecord(t *testing.T, svc *primarystore.Service, row *pb.RecordRow) {
 	t.Helper()
-	resp, err := svc.WriteRecordRows(context.Background(), &pb.WriteRecordRowsReq{Rows: []*pb.RecordRow{row}})
+	resp, err := svc.MergeRecordRows(context.Background(), &pb.MergeRecordRowsReq{Rows: []*pb.RecordRow{row}})
 	mustContractOK(t, resp, err)
 }
 

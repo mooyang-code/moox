@@ -35,8 +35,7 @@ type Service struct {
 type serviceRun struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
-	timeSeriesSub     eventbus.Subscription
-	recordSub         eventbus.Subscription
+	committedSub      eventbus.Subscription
 	timeSeriesBatcher *batcher[timeSeriesDeriveItem]
 	recordBatcher     *batcher[recordDeriveItem]
 	lane              chan laneRequest
@@ -119,11 +118,8 @@ func (r *serviceRun) finishStart() {
 
 func (r *serviceRun) stop() error {
 	r.stopOnce.Do(func() {
-		if r.timeSeriesSub != nil {
-			r.stopErr = errors.Join(r.stopErr, r.timeSeriesSub.Close())
-		}
-		if r.recordSub != nil {
-			r.stopErr = errors.Join(r.stopErr, r.recordSub.Close())
+		if r.committedSub != nil {
+			r.stopErr = errors.Join(r.stopErr, r.committedSub.Close())
 		}
 		r.cancel()
 		r.wg.Wait()
@@ -136,12 +132,22 @@ func (r *serviceRun) stop() error {
 type timeSeriesDeriveItem struct {
 	row        *pb.TimeSeriesRow
 	delete     bool
+	shardID    string
+	sequence   uint64
+	spaceID    string
+	datasetID  string
+	checkpoint bool
 	completion *deriveCompletion
 }
 
 type recordDeriveItem struct {
 	row        *pb.RecordRow
 	delete     bool
+	shardID    string
+	sequence   uint64
+	spaceID    string
+	datasetID  string
+	checkpoint bool
 	completion *deriveCompletion
 }
 
@@ -153,6 +159,12 @@ func NewService(opts Options) *Service {
 	})
 	maxWorkers := opts.MaxWorkers
 	if maxWorkers <= 0 {
+		maxWorkers = defaultMaxWorkers
+	}
+	// One logical shard lane owns checkpoint order. Keep physical application
+	// serial until a future per-ViewRowKey scheduler can prove finer-grained
+	// concurrency without reordering checkpoints.
+	if maxWorkers > defaultMaxWorkers {
 		maxWorkers = defaultMaxWorkers
 	}
 	engines := make(map[string]viewindex.ViewIndexEngine, len(opts.Engines))
@@ -247,10 +259,21 @@ func (s *Service) Start(ctx context.Context) error {
 		}()
 	}
 
-	timeSeriesSub, err := s.events.SubscribeTimeSeriesRowsCommitted(run.ctx, func(handlerCtx context.Context, event *pb.TimeSeriesRowsCommitted) error {
-		return run.dispatch(handlerCtx, event.GetShardId(), event.GetSequence(), func(ctx context.Context) error {
-			return s.enqueueTimeSeriesRun(ctx, run, event)
-		})
+	committedSub, err := s.events.SubscribeRowsCommitted(run.ctx, func(handlerCtx context.Context, event *eventbus.RowsCommittedEvent) error {
+		if event == nil {
+			return errors.New("view builder received nil committed event")
+		}
+		if event.TimeSeries != nil {
+			return run.dispatch(handlerCtx, event.TimeSeries.GetShardId(), event.TimeSeries.GetSequence(), func(ctx context.Context) error {
+				return s.enqueueTimeSeriesRun(ctx, run, event.TimeSeries)
+			})
+		}
+		if event.Record != nil {
+			return run.dispatch(handlerCtx, event.Record.GetShardId(), event.Record.GetSequence(), func(ctx context.Context) error {
+				return s.enqueueRecordRun(ctx, run, event.Record)
+			})
+		}
+		return errors.New("view builder committed event has no payload")
 	})
 	if err != nil {
 		run.finishStart()
@@ -258,19 +281,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.clearRun(run)
 		return err
 	}
-	run.timeSeriesSub = timeSeriesSub
-	recordSub, err := s.events.SubscribeRecordRowsCommitted(run.ctx, func(handlerCtx context.Context, event *pb.RecordRowsCommitted) error {
-		return run.dispatch(handlerCtx, event.GetShardId(), event.GetSequence(), func(ctx context.Context) error {
-			return s.enqueueRecordRun(ctx, run, event)
-		})
-	})
-	if err != nil {
-		run.finishStart()
-		_ = run.stop()
-		s.clearRun(run)
-		return err
-	}
-	run.recordSub = recordSub
+	run.committedSub = committedSub
 	return nil
 }
 
@@ -346,19 +357,28 @@ func (s *Service) enqueueTimeSeriesRun(ctx context.Context, run *serviceRun, eve
 		}
 	}
 	completion := newDeriveCompletion(len(rows) + len(deletes))
+	if len(rows) == 0 && len(deletes) == 0 {
+		completion = newDeriveCompletion(1)
+	}
 	s.viewMetrics().IncDeriveInFlight()
 	defer func() {
 		s.viewMetrics().DecDeriveInFlight()
 		s.viewMetrics().ObserveDerive("time_series", deriveResult(retErr))
 	}()
-	for i, row := range append(deletes, rows...) {
+	items := append(append([]*pb.TimeSeriesRow{}, deletes...), rows...)
+	for i, row := range items {
 		item := timeSeriesDeriveItem{
 			row:        row,
 			delete:     i < len(deletes),
+			shardID:    event.GetShardId(),
+			sequence:   event.GetSequence(),
+			spaceID:    event.GetSpaceId(),
+			datasetID:  event.GetDatasetId(),
+			checkpoint: i == len(items)-1,
 			completion: completion,
 		}
 		if err := batcher.add(addCtx, item); err != nil {
-			for range rows[i:] {
+			for range items[i:] {
 				completion.complete(err)
 			}
 			return completion.wait(ctx)
@@ -400,19 +420,28 @@ func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *
 		}
 	}
 	completion := newDeriveCompletion(len(rows) + len(deletes))
+	if len(rows) == 0 && len(deletes) == 0 {
+		completion = newDeriveCompletion(1)
+	}
 	s.viewMetrics().IncDeriveInFlight()
 	defer func() {
 		s.viewMetrics().DecDeriveInFlight()
 		s.viewMetrics().ObserveDerive("record", deriveResult(retErr))
 	}()
-	for i, row := range append(deletes, rows...) {
+	items := append(append([]*pb.RecordRow{}, deletes...), rows...)
+	for i, row := range items {
 		item := recordDeriveItem{
 			row:        row,
 			delete:     i < len(deletes),
+			shardID:    event.GetShardId(),
+			sequence:   event.GetSequence(),
+			spaceID:    event.GetSpaceId(),
+			datasetID:  event.GetDatasetId(),
+			checkpoint: i == len(items)-1,
 			completion: completion,
 		}
 		if err := batcher.add(addCtx, item); err != nil {
-			for range rows[i:] {
+			for range items[i:] {
 				completion.complete(err)
 			}
 			return completion.wait(ctx)
@@ -434,7 +463,8 @@ func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSe
 			}
 		}
 	}
-	err := s.processTimeSeriesRowsBatch(ctx, rows, deletes)
+	progress := progressFromTimeSeriesItems(items)
+	err := s.processTimeSeriesRowsBatch(ctx, rows, [][]*pb.TimeSeriesRow{deletes}, progress)
 	s.viewMetrics().ObserveBatch("duckdb", deriveResult(err), time.Since(started))
 	for _, item := range items {
 		item.completion.complete(err)
@@ -454,11 +484,38 @@ func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeri
 			}
 		}
 	}
-	err := s.processRecordRowsBatch(ctx, rows, deletes)
+	progress := progressFromRecordItems(items)
+	err := s.processRecordRowsBatch(ctx, rows, [][]*pb.RecordRow{deletes}, progress)
 	s.viewMetrics().ObserveBatch("bleve", deriveResult(err), time.Since(started))
 	for _, item := range items {
 		item.completion.complete(err)
 	}
+}
+
+type applyProgress struct {
+	shardID   string
+	sequence  uint64
+	expected  uint64
+	spaceID   string
+	datasetID string
+}
+
+func progressFromTimeSeriesItems(items []timeSeriesDeriveItem) applyProgress {
+	for _, item := range items {
+		if item.checkpoint && item.shardID != "" && item.sequence != 0 {
+			return applyProgress{shardID: item.shardID, sequence: item.sequence, spaceID: item.spaceID, datasetID: item.datasetID}
+		}
+	}
+	return applyProgress{}
+}
+
+func progressFromRecordItems(items []recordDeriveItem) applyProgress {
+	for _, item := range items {
+		if item.checkpoint && item.shardID != "" && item.sequence != 0 {
+			return applyProgress{shardID: item.shardID, sequence: item.sequence, spaceID: item.spaceID, datasetID: item.datasetID}
+		}
+	}
+	return applyProgress{}
 }
 
 func deriveResult(err error) string {

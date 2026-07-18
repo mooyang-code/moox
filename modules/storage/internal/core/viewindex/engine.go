@@ -14,14 +14,12 @@ import (
 type ViewIndexEngine interface {
 	Engine() string
 	Prepare(ctx context.Context, indexID string, schema ViewIndexSchema) error
-	Write(ctx context.Context, indexID string, batch ViewIndexBatch) error
 	Stat(ctx context.Context, indexID string) (ViewIndexStats, error)
 	Remove(ctx context.Context, indexID string) error
 }
 
-// ViewIndexApplier is the explicit row-operation contract. Engines may retain
-// their physical Write implementation, but all new builder writes go through
-// this operation-aware entry point when it is available.
+// ViewIndexApplier is the mandatory atomic row-operation contract for live
+// ViewBuilder writes. Engines must persist rows and progress together.
 type ViewIndexApplier interface {
 	Apply(context.Context, string, ViewIndexApplyBatch) error
 }
@@ -36,23 +34,27 @@ type ViewIndexSchema struct {
 }
 
 type ViewIndexBatch struct {
-	TimeSeriesRows []*pb.TimeSeriesRow
-	RecordRows     []*pb.RecordRow
-	Columns        []*pb.ViewColumn
-	ViewVersion    uint64
-	SchemaHash     string
+	TimeSeriesRows      []*pb.TimeSeriesRow
+	RecordRows          []*pb.RecordRow
+	Columns             []*pb.ViewColumn
+	RequiredColumnNames []string
+	ViewVersion         uint64
+	SchemaHash          string
 }
 
 type ViewIndexStats struct {
-	Exists        bool
-	ViewVersion   uint64
-	EntryCount    int64
-	MinVersion    string
-	MaxVersion    string
-	SchemaHash    string
-	PhysicalBytes uint64
-	UpdatedAt     string
-	FreeDiskBytes uint64
+	Exists           bool
+	ViewVersion      uint64
+	EntryCount       int64
+	MinVersion       string
+	MaxVersion       string
+	SchemaHash       string
+	PhysicalBytes    uint64
+	UpdatedAt        string
+	FreeDiskBytes    uint64
+	IndexedFrom      string
+	IndexedTo        string
+	ShardCheckpoints map[string]uint64
 }
 
 func ViewIndexID(spaceID string, viewID string, slot Slot) string {

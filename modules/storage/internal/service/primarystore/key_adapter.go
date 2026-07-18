@@ -1,4 +1,4 @@
-package access
+package primarystore
 
 import (
 	"encoding/json"
@@ -122,9 +122,11 @@ func timeSeriesRowToPrimaryStoreRow(row *pb.TimeSeriesRow) (*pb.PrimaryStoreRow,
 		attributes[timeSeriesDimensionsAttribute] = string(raw)
 	}
 	return &pb.PrimaryStoreRow{
-		Key:        key,
-		Columns:    cloneColumns(row.GetColumns()),
-		Attributes: attributes,
+		Key:                key,
+		Columns:            cloneColumns(row.GetColumns()),
+		Attributes:         attributes,
+		AttributesToDelete: append([]string(nil), row.GetAttributesToDelete()...),
+		RemovedColumnNames: append([]string(nil), row.GetRemovedColumnNames()...),
 	}, nil
 }
 
@@ -190,9 +192,11 @@ func primaryStoreRowToTimeSeriesRow(row *pb.PrimaryStoreRow, template *pb.TimeSe
 	}
 	key.DataTime = storeKey.GetVersion()
 	return &pb.TimeSeriesRow{
-		Key:        key,
-		Columns:    cloneColumns(row.GetColumns()),
-		Attributes: cloneTimeSeriesAttributes(row.GetAttributes()),
+		Key:                key,
+		Columns:            cloneColumns(row.GetColumns()),
+		Attributes:         cloneTimeSeriesAttributes(row.GetAttributes()),
+		AttributesToDelete: append([]string(nil), row.GetAttributesToDelete()...),
+		RemovedColumnNames: append([]string(nil), row.GetRemovedColumnNames()...),
 	}
 }
 
@@ -287,9 +291,11 @@ func recordRowToPrimaryStoreRow(row *pb.RecordRow) (*pb.PrimaryStoreRow, error) 
 		return nil, err
 	}
 	return &pb.PrimaryStoreRow{
-		Key:        key,
-		Columns:    cloneColumns(row.GetColumns()),
-		Attributes: cloneStringMap(row.GetAttributes()),
+		Key:                key,
+		Columns:            cloneColumns(row.GetColumns()),
+		Attributes:         cloneStringMap(row.GetAttributes()),
+		AttributesToDelete: append([]string(nil), row.GetAttributesToDelete()...),
+		RemovedColumnNames: append([]string(nil), row.GetRemovedColumnNames()...),
 	}, nil
 }
 
@@ -327,9 +333,11 @@ func primaryStoreRowToRecordRow(row *pb.PrimaryStoreRow, template *pb.RecordKey)
 	}
 	key.Version = publicRecordVersion(storeKey.GetVersion(), template)
 	return &pb.RecordRow{
-		Key:        key,
-		Columns:    cloneColumns(row.GetColumns()),
-		Attributes: cloneStringMap(row.GetAttributes()),
+		Key:                key,
+		Columns:            cloneColumns(row.GetColumns()),
+		Attributes:         cloneStringMap(row.GetAttributes()),
+		AttributesToDelete: append([]string(nil), row.GetAttributesToDelete()...),
+		RemovedColumnNames: append([]string(nil), row.GetRemovedColumnNames()...),
 	}
 }
 

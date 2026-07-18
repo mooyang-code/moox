@@ -112,8 +112,8 @@ func markdownReport(report benchmarkReport) string {
 	}
 	fmt.Fprintf(&b, "\n")
 	appendMetadataReadySection(&b, report.MetadataReady)
-	appendWriteSection(&b, "## 时序 K 线写入性能", "场景: `WriteTimeSeriesRows`，K 线数据按 `subject_id + freq + data_time` 写入", report.Write)
-	appendWriteSection(&b, "## 非时序记录写入性能", fmt.Sprintf("场景: `WriteRecordRows`，合成记录数据写入 `%s`，按 `record_id + version` 定位", recordDatasetID), report.RecordWrite)
+	appendWriteSection(&b, "## 时序 K 线写入性能", "场景: `MergeTimeSeriesRows`，K 线数据按 `subject_id + freq + data_time` 写入", report.Write)
+	appendWriteSection(&b, "## 非时序记录写入性能", fmt.Sprintf("场景: `MergeRecordRows`，合成记录数据写入 `%s`，按 `record_id + version` 定位", recordDatasetID), report.RecordWrite)
 	fmt.Fprintf(&b, "## Primary 主存读取性能\n\n- 场景: `ReadTimeSeriesRows` 首页读取，默认每次返回 `%d` 行\n- 请求数: `%d`\n- 并发数: `%d`\n- 返回行数: `%d`\n- 平均请求吞吐: `%.2f req/s`\n- 平均行吞吐: `%.2f rows/s`\n", report.PrimaryRead.PageSize, report.PrimaryRead.Requests, report.PrimaryRead.Concurrency, report.PrimaryRead.RowsReturned, report.PrimaryRead.RequestsPerSec, report.PrimaryRead.RowsPerSecond)
 	appendLatencyLines(&b, "读取", report.PrimaryRead.Latency)
 	fmt.Fprintf(&b, "\n")

@@ -22,8 +22,8 @@ type SystemConfig struct {
 	Environment           string            `json:"environment" yaml:"environment"`
 	Timezone              string            `json:"timezone" yaml:"timezone"`
 	StorageMetadataTarget string            `json:"storage_metadata_target" yaml:"storage_metadata_target"` // storage metadata tRPC target
-	StorageAccessTarget   string            `json:"storage_access_target" yaml:"storage_access_target"`     // storage access tRPC target
-	StorageURL            string            `json:"storage_url" yaml:"storage_url"`                         // Deprecated: use storage_access_target.
+	StoragePrimaryTarget  string            `json:"storage_primary_target" yaml:"storage_primary_target"`   // storage access tRPC target
+	StorageURL            string            `json:"storage_url" yaml:"storage_url"`                         // Deprecated: use storage_primary_target.
 	ServiceAuth           ServiceAuthConfig `json:"service_auth" yaml:"service_auth"`                       // 后台服务请求签名鉴权配置
 }
 
@@ -66,7 +66,7 @@ func DefaultConfig() *AppConfig {
 			Environment:           "development",
 			Timezone:              "UTC",
 			StorageMetadataTarget: "127.0.0.1:20100",
-			StorageAccessTarget:   "127.0.0.1:20102",
+			StoragePrimaryTarget:  "127.0.0.1:20102",
 			ServiceAuth: ServiceAuthConfig{
 				ExpireSec: 60,
 			},

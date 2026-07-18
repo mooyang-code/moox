@@ -171,11 +171,29 @@ func TestMergeRowRemovesExistingColumnWhenPatchIsNull(t *testing.T) {
 		Columns: []*pb.ColumnValue{{ColumnName: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}},
 	}
 	patch := &pb.PrimaryStoreRow{
-		Key:     testPrimaryTimeSeriesKey("2026-07-09T08:10:00.000000000Z"),
-		Columns: []*pb.ColumnValue{{ColumnName: "close"}},
+		Key: testPrimaryTimeSeriesKey("2026-07-09T08:10:00.000000000Z"),
+		Columns: []*pb.ColumnValue{{ColumnName: "close", Value: &pb.TypedValue{
+			Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE},
+		}}},
 	}
 	merged := mergeRow(base, patch)
-	require.Empty(t, merged.GetColumns())
+	require.Len(t, merged.GetColumns(), 1)
+	_, ok := merged.GetColumns()[0].GetValue().GetValue().(*pb.TypedValue_NullValue)
+	assert.True(t, ok)
+}
+
+func TestMergeRowRemovesRequestedAttribute(t *testing.T) {
+	base := &pb.PrimaryStoreRow{
+		Key:        testPrimaryTimeSeriesKey("2026-07-09T08:10:00.000000000Z"),
+		Attributes: map[string]string{"source": "feed", "keep": "yes"},
+	}
+	patch := &pb.PrimaryStoreRow{
+		Key:                testPrimaryTimeSeriesKey("2026-07-09T08:10:00.000000000Z"),
+		AttributesToDelete: []string{"source"},
+	}
+	merged := mergeRow(base, patch)
+	assert.NotContains(t, merged.GetAttributes(), "source")
+	assert.Equal(t, "yes", merged.GetAttributes()["keep"])
 }
 
 func TestReadExactRowsReturnsStoredVersions(t *testing.T) {

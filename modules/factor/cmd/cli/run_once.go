@@ -53,7 +53,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 
 	task := buildTask(cfg, factors)
-	storageClient := storageio.NewClient(appCfg.Storage.AccessTarget, auth)
+	storageClient := storageio.NewClient(appCfg.Storage.PrimaryTarget, auth)
 	frame, err := storageClient.ReadWindow(ctx, storageio.WindowKey{
 		SpaceID:       cfg.SpaceID,
 		SourceDataset: cfg.DatasetID,

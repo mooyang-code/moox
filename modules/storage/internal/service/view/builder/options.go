@@ -49,7 +49,18 @@ func viewIndexBatch(item *pb.View, columns []*pb.ViewColumn, timeRows []*pb.Time
 	return viewindex.ViewIndexBatch{
 		TimeSeriesRows: timeRows, RecordRows: recordRows, Columns: columns,
 		ViewVersion: version, SchemaHash: schemaHash,
+		RequiredColumnNames: viewColumnNames(columns),
 	}
+}
+
+func viewColumnNames(columns []*pb.ViewColumn) []string {
+	names := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column != nil && column.GetColumnName() != "" {
+			names = append(names, column.GetColumnName())
+		}
+	}
+	return names
 }
 
 func normalizeBatchOptions(opts BatchOptions) BatchOptions {

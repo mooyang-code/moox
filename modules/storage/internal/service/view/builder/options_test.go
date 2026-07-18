@@ -61,8 +61,8 @@ func TestServiceEnqueueRecordProcessesBatch(t *testing.T) {
 	assert.NotEmpty(t, writer.writes)
 }
 
-func TestMissingAccessReaderReturnsError(t *testing.T) {
-	reader := missingAccessReader{}
+func TestMissingPrimaryStoreReaderReturnsError(t *testing.T) {
+	reader := missingPrimaryStoreReader{}
 	_, err := reader.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{})
 	require.Error(t, err)
 	_, _, err = reader.ScanRecordRows(context.Background(), "crypto", "news", nil, nil, nil)

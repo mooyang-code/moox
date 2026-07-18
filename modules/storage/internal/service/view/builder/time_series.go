@@ -22,19 +22,26 @@ func (s *Service) processTimeSeriesBatch(ctx context.Context, keys []*pb.TimeSer
 	if err != nil {
 		return err
 	}
-	return s.processTimeSeriesRowsBatch(ctx, rows)
+	return s.processTimeSeriesRowsBatch(ctx, rows, nil)
 }
 
-func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.TimeSeriesRow, deleteBatches ...[]*pb.TimeSeriesRow) error {
-	if len(rows) == 0 {
-		return nil
-	}
+func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.TimeSeriesRow, deleteBatches [][]*pb.TimeSeriesRow, progressBatches ...applyProgress) error {
 	if s == nil || s.metadata == nil {
 		return errors.New("view builder time-series processor requires metadata client")
 	}
 	var deletes []*pb.TimeSeriesRow
 	if len(deleteBatches) > 0 {
 		deletes = deleteBatches[0]
+	}
+	var progress applyProgress
+	if len(progressBatches) > 0 {
+		progress = progressBatches[0]
+	}
+	if len(rows) == 0 && len(deletes) == 0 {
+		if progress.shardID == "" || progress.sequence == 0 || progress.spaceID == "" || progress.datasetID == "" {
+			return nil
+		}
+		return s.applyCheckpointOnly(ctx, progress, "duckdb")
 	}
 	grouped := make(map[projectionDatasetKey][]*pb.TimeSeriesRow)
 	for _, row := range rows {
@@ -82,29 +89,35 @@ func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.Tim
 				if len(activeColumns) == 0 {
 					return errors.New("view " + item.GetViewId() + " has an active index without an active schema")
 				}
-				mapped, ok, err := viewsvc.FilteredTimeSeriesRowsForView(ctx, item, activeColumns, datasetRows, s.readTimeSeriesProjectionRows)
+				datasetRows, ok, err := viewsvc.FilteredTimeSeriesSourceRowsForView(item, datasetRows)
 				if err != nil {
 					return err
 				}
 				if !ok {
 					return errors.New("view " + item.GetViewId() + " active schema is not projectable")
 				}
-				if len(mapped) > 0 || len(datasetDeletes) > 0 {
-					if err := applyViewIndexWithDeletes(ctx, engine, item.GetActiveIndexId(), viewIndexBatch(item, activeColumns, mapped, nil, false), datasetDeletes, nil); err != nil {
+				mapped := timeSeriesFragments(item, activeColumns, datasetRows)
+				partialDeletes, fullDeletes := splitTimeSeriesDeletes(item, activeColumns, datasetDeletes)
+				mapped = append(mapped, partialDeletes...)
+				if len(mapped) > 0 || len(datasetDeletes) > 0 || progress.sequence != 0 {
+					if err := s.applyTimeSeriesIndexWithRecovery(ctx, engine, item, item.GetActiveIndexId(), activeColumns, mapped, fullDeletes, false, progress); err != nil {
 						return fmt.Errorf("derive engine=duckdb view_id=%s rows=%d active write: %w", item.GetViewId(), len(mapped), err)
 					}
 				}
 			}
 			if writable[item.GetIndexBuild().GetIndexId()] && item.GetIndexBuild().GetIndexId() != item.GetActiveIndexId() {
-				mapped, ok, err := viewsvc.FilteredTimeSeriesRowsForView(ctx, item, columns, datasetRows, s.readTimeSeriesProjectionRows)
+				datasetRows, ok, err := viewsvc.FilteredTimeSeriesSourceRowsForView(item, datasetRows)
 				if err != nil {
 					return err
 				}
 				if !ok {
 					return errors.New("view " + item.GetViewId() + " build schema is not projectable")
 				}
-				if len(mapped) > 0 || len(datasetDeletes) > 0 {
-					if err := applyViewIndexWithDeletes(ctx, engine, item.GetIndexBuild().GetIndexId(), viewIndexBatch(item, columns, mapped, nil, true), datasetDeletes, nil); err != nil {
+				mapped := timeSeriesFragments(item, columns, datasetRows)
+				partialDeletes, fullDeletes := splitTimeSeriesDeletes(item, columns, datasetDeletes)
+				mapped = append(mapped, partialDeletes...)
+				if len(mapped) > 0 || len(datasetDeletes) > 0 || progress.sequence != 0 {
+					if err := s.applyTimeSeriesIndexWithRecovery(ctx, engine, item, item.GetIndexBuild().GetIndexId(), columns, mapped, fullDeletes, true, progress); err != nil {
 						return fmt.Errorf("derive engine=duckdb view_id=%s rows=%d build write: %w", item.GetViewId(), len(mapped), err)
 					}
 				}

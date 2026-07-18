@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -252,6 +253,62 @@ func TestDuckDBViewIndexReplayDoesNotIncreaseEntryCount(t *testing.T) {
 	stats, err := store.Stat(ctx, indexID)
 	if err != nil || stats.EntryCount != 1 {
 		t.Fatalf("stats=%+v err=%v, want one replay-safe row", stats, err)
+	}
+}
+
+func TestDuckDBApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "index.duckdb")})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	const indexID = "view_crypto_apply_a"
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "crypto", ViewID: "apply", Engine: "duckdb",
+		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := store.Prepare(ctx, indexID, schema); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	base := duckDBTestRow("BTC-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 1))
+	if err := store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RowWrites: []viewindex.RowWrite{{
+		Operation: viewindex.RowWriteOperationReplace,
+		Key:       viewindex.RowKey{TimeSeriesKey: base.GetKey()},
+		Columns:   base.GetColumns(),
+	}}}); err != nil {
+		t.Fatalf("initial Apply: %v", err)
+	}
+	missing := duckDBTestRow("ETH-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 2))
+	err = store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{
+		RowWrites: []viewindex.RowWrite{
+			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{TimeSeriesKey: base.GetKey()}, Columns: []*pb.ColumnValue{{ColumnName: "close", Value: duckDBTestValue("close", 3).GetValue()}}},
+			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{TimeSeriesKey: missing.GetKey()}, Columns: missing.GetColumns()},
+		},
+		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", ExpectedLastAppliedSequence: 0, LastAppliedSequence: 1}},
+	})
+	var missingErr *viewindex.MissingRowsError
+	if !errors.As(err, &missingErr) || len(missingErr.TimeSeriesKeys) != 1 {
+		t.Fatalf("Apply missing error = %v, want one missing key", err)
+	}
+	stats, err := store.Stat(ctx, indexID)
+	if err != nil {
+		t.Fatalf("Stat after failed Apply: %v", err)
+	}
+	if stats.EntryCount != 1 || len(stats.ShardCheckpoints) != 0 {
+		t.Fatalf("failed Apply changed state: %+v", stats)
+	}
+
+	if err := store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{
+		RowWrites:         []viewindex.RowWrite{{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{TimeSeriesKey: missing.GetKey()}, Columns: missing.GetColumns()}},
+		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", ExpectedLastAppliedSequence: 0, LastAppliedSequence: 1}},
+	}); err != nil {
+		t.Fatalf("recovery Apply: %v", err)
+	}
+	stats, err = store.Stat(ctx, indexID)
+	if err != nil || stats.EntryCount != 2 || stats.ShardCheckpoints["shard-1"] != 1 {
+		t.Fatalf("recovered stats=%+v err=%v", stats, err)
 	}
 }
 

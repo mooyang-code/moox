@@ -125,7 +125,7 @@ func runBackfill(ctx context.Context, cli cliConfig, cfg *config.Config, out io.
 		return err
 	}
 	defer store.Close()
-	access := storagepb.NewAccessClientProxy(client.WithTarget(backfill.NormalizeTarget(cfg.Archive.StorageRPC.AccessTarget, "20102")))
+	access := storagepb.NewPrimaryStoreClientProxy(client.WithTarget(backfill.NormalizeTarget(cfg.Archive.StorageRPC.AccessTarget, "20102")))
 	metadata := storagepb.NewMetadataClientProxy(client.WithTarget(backfill.NormalizeTarget(cfg.Archive.StorageRPC.MetadataTarget, "20100")))
 	count, err := backfill.New(access, metadata, store, w).Run(ctx, plan)
 	if err != nil {

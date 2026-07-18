@@ -1,7 +1,7 @@
 storage:
   root: ./var/storage
   roles:
-    - access
+    - primary
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:
@@ -17,7 +17,7 @@ storage:
     credential_file: ~/.config/moox/storage/eventbus.yaml
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
-    consumer_name: storage_access
+    consumer_name: storage_primary
     max_age_hours: 24
     max_msgs: 500000
     max_bytes: 268435456
@@ -27,8 +27,8 @@ storage:
     max_deliver: -1
   view:
     metadata_service_name: trpc.moox.storage.Metadata
-    access_service_name: trpc.moox.storage.Access
-    access_scan_service_name: trpc.moox.storage.AccessScan
+    primary_store_service_name: trpc.moox.storage.PrimaryStore
+    primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200

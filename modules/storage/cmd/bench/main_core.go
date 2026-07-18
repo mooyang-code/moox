@@ -117,7 +117,7 @@ func run(ctx context.Context) error {
 	defer func() { _ = env.Stop() }()
 
 	meta := pb.NewMetadataClientProxy(targetOpts(env.ports.metadata)...)
-	data := pb.NewAccessClientProxy(targetOpts(env.ports.data)...)
+	data := pb.NewPrimaryStoreClientProxy(targetOpts(env.ports.data)...)
 	query := pb.NewDataViewClientProxy(targetOpts(env.ports.query)...)
 
 	if err := seedMetadata(ctx, meta, files, opts); err != nil {
@@ -131,7 +131,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	recordWriteStats, err := writeRecords(ctx, data, opts)
+	recordWriteStats, err := mergeRecords(ctx, data, opts)
 	if err != nil {
 		return err
 	}
@@ -251,12 +251,12 @@ server:
     read_timeout: 5000
     write_timeout: 60000
   service:
-    - name: trpc.moox.storage.Access
+    - name: trpc.moox.storage.PrimaryStore
       ip: 127.0.0.1
       port: %d
       network: tcp
       protocol: trpc
-    - name: trpc.moox.storage.AccessScan.trpc
+    - name: trpc.moox.storage.PrimaryStoreScan.trpc
       ip: 127.0.0.1
       port: %d
       network: tcp

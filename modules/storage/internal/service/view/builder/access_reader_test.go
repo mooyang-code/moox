@@ -9,24 +9,24 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-func TestNewAccessReaderReturnsLocalWhenServiceNameEmpty(t *testing.T) {
+func TestNewPrimaryStoreReaderReturnsLocalWhenServiceNameEmpty(t *testing.T) {
 	local := &buildingGuardReader{}
-	got := NewAccessReader(local, "", "")
+	got := NewPrimaryStoreReader(local, "", "")
 	if got != local {
 		t.Fatal("expected local reader when service name is empty")
 	}
 }
 
-func TestNewAccessReaderReturnsMissingReaderWhenUnset(t *testing.T) {
-	got := NewAccessReader(nil, "", "")
-	if _, ok := got.(missingAccessReader); !ok {
-		t.Fatalf("reader type = %T, want missingAccessReader", got)
+func TestNewPrimaryStoreReaderReturnsMissingReaderWhenUnset(t *testing.T) {
+	got := NewPrimaryStoreReader(nil, "", "")
+	if _, ok := got.(missingPrimaryStoreReader); !ok {
+		t.Fatalf("reader type = %T, want missingPrimaryStoreReader", got)
 	}
 }
 
-func TestRemoteAccessReaderUsesCursorScanRPC(t *testing.T) {
+func TestRemotePrimaryStoreReaderUsesCursorScanRPC(t *testing.T) {
 	proxy := &scanAccessProxy{}
-	reader := &remoteAccessReader{proxy: proxy, scanProxy: proxy}
+	reader := &remotePrimaryStoreReader{proxy: proxy, scanProxy: proxy}
 
 	rows, page, err := reader.ScanTimeSeriesRows(context.Background(), "crypto", "kline", &pb.TimeRange{
 		StartTime: "2026-07-01T00:00:00Z",
@@ -53,7 +53,7 @@ type scanAccessProxy struct {
 	recordScan           *pb.ScanRecordRowsReq
 }
 
-func (p *scanAccessProxy) WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq, ...client.Option) (*pb.WriteTimeSeriesRowsRsp, error) {
+func (p *scanAccessProxy) MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq, ...client.Option) (*pb.MergeTimeSeriesRowsRsp, error) {
 	return nil, errors.New("not used")
 }
 
@@ -66,7 +66,7 @@ func (p *scanAccessProxy) DeleteTimeSeriesRows(context.Context, *pb.DeleteTimeSe
 	return nil, errors.New("not used")
 }
 
-func (p *scanAccessProxy) WriteRecordRows(context.Context, *pb.WriteRecordRowsReq, ...client.Option) (*pb.WriteRecordRowsRsp, error) {
+func (p *scanAccessProxy) MergeRecordRows(context.Context, *pb.MergeRecordRowsReq, ...client.Option) (*pb.MergeRecordRowsRsp, error) {
 	return nil, errors.New("not used")
 }
 
@@ -93,9 +93,9 @@ func (p *scanAccessProxy) ScanRecordRows(_ context.Context, req *pb.ScanRecordRo
 	}, nil
 }
 
-func TestRemoteAccessReaderScanRecordRowsUsesCursor(t *testing.T) {
+func TestRemotePrimaryStoreReaderScanRecordRowsUsesCursor(t *testing.T) {
 	proxy := &scanAccessProxy{}
-	reader := &remoteAccessReader{proxy: proxy, scanProxy: proxy}
+	reader := &remotePrimaryStoreReader{proxy: proxy, scanProxy: proxy}
 
 	rows, page, err := reader.ScanRecordRows(context.Background(), "crypto", "news", nil, []string{"title"}, &pb.Page{Cursor: "c1"})
 	if err != nil {

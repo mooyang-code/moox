@@ -1,12 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/access"
+	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -79,13 +80,12 @@ func storageOptionsFromConfig(storage storageconfig.StorageConfig) storagesvc.Op
 	}
 }
 
-func loadRuntimeConfig(configPath string) storageconfig.RuntimeConfig {
-	if cfg, ok := loadStorageConfig(configPath); ok {
-		return cfg
+func loadRuntimeConfig(configPath string) (storageconfig.RuntimeConfig, error) {
+	cfg, ok := loadStorageConfig(configPath)
+	if !ok {
+		return storageconfig.RuntimeConfig{}, fmt.Errorf("storage configuration is unavailable: %s", configPath)
 	}
-	var cfg storageconfig.RuntimeConfig
-	cfg.ApplyDefaults()
-	return cfg
+	return cfg, nil
 }
 
 func loadStorageConfig(configPath string) (storageconfig.RuntimeConfig, bool) {
@@ -95,10 +95,12 @@ func loadStorageConfig(configPath string) (storageconfig.RuntimeConfig, bool) {
 	}
 	dir := filepath.Dir(configPath)
 	file := filepath.Base(configPath)
-	if err := storageconfig.NewConfigLoader(dir).LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
+	loader := storageconfig.NewConfigLoader(dir)
+	if err := loader.LoadConfigStrict(file, &cfg); err != nil {
 		log.Warnf("加载 storage 配置失败，使用默认目录: %v", err)
 		return cfg, false
 	}
+	cfg.ApplyDefaults()
 	return cfg, true
 }
 

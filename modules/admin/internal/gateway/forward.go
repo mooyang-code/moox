@@ -1,16 +1,22 @@
 package gateway
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"
 
@@ -20,11 +26,76 @@ import (
 )
 
 const minGzipForwardResponseBytes = 1024
+const nodeGatewayServiceKeyID = "moox-gateway-service"
 
 // setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
 func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 	w.Header().Set("Content-Type", "application/json")
 	applyCORSHeaders(w, origin)
+}
+
+// forwardStorageToNodeGateway keeps the browser Storage facade behind the
+// node gateway when the deployment supplies its service-gateway credentials.
+// The direct deployment detail path remains available only for local tests and
+// non-storage admin APIs.
+func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, body []byte, headers map[string]string) (*http.Response, bool, error) {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_URL")), "/")
+	secret := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
+	nodeID := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NODE_ID"))
+	keyID := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
+	if keyID == "" {
+		keyID = nodeGatewayServiceKeyID
+	}
+	if base == "" || secret == "" || nodeID == "" {
+		return nil, true, fmt.Errorf("storage BFF requires Node Service Gateway configuration")
+	}
+	if keyID != nodeGatewayServiceKeyID {
+		return nil, true, fmt.Errorf("storage BFF key id %q does not match Node Service Gateway key id %q", keyID, nodeGatewayServiceKeyID)
+	}
+	endpoint, err := url.JoinPath(base, "api/service", serviceID, method)
+	if err != nil {
+		return nil, true, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, true, err
+	}
+	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Secret: secret}, gatewayauth.Request{
+		Method: req.Method, Path: req.URL.EscapedPath(), TargetNode: nodeID, Body: body,
+	}, time.Now())
+	if err != nil {
+		return nil, true, err
+	}
+	for name, values := range signed {
+		req.Header[name] = append([]string(nil), values...)
+	}
+	req.Header.Set("Content-Type", "application/json;charset=utf-8")
+	for key, name := range map[string]string{"trace_id": "X-Trace-Id", "space_id": "X-Space-Id", "user_id": "X-User-Id", "user_role": "X-User-Role"} {
+		if value := headers[key]; value != "" {
+			req.Header.Set(name, value)
+		}
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, true, err
+	}
+	return response, true, nil
+}
+
+func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, headers map[string]string) {
+	defer response.Body.Close()
+	setForwardCommonHeaders(w, headers["origin"])
+	for name, values := range response.Header {
+		if strings.EqualFold(name, "Content-Length") || strings.EqualFold(name, "Content-Encoding") {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
 }
 
 // forwardHTTP 把统一网关请求纯透传到目标服务的有协议 http 端口。

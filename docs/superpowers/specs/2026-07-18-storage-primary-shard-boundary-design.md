@@ -201,8 +201,8 @@ The rename is atomic and leaves no compatibility layer.
 | `DeletePrimaryRows` | `DeleteShardRows` |
 | `primary.service_name` | `shard.service_name` |
 | public `storage_access` | public `storage` facade |
-| `storage_access_trpc` | internal `storage_primary_trpc` |
-| old physical `storage_primary_trpc` | removed from public defaults |
+| `storage-primary` | internal Node Service Gateway target |
+| old split storage service rows | removed from public defaults |
 
 Generated protobuf files, CLI metadata seed types, schema column names, metrics,
 health identities, deployment scripts, and active documentation follow the new
