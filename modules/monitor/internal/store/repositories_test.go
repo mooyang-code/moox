@@ -17,7 +17,6 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	checks := repos.Checks
 	results := repos.Results
 	alerts := repos.Alerts
-	peers := repos.Peers
 
 	dueAt := time.Now().Add(-time.Minute)
 	check := &domain.Check{
@@ -129,13 +128,12 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 		t.Fatalf("all rules for check len=%d err=%v", len(allRulesForCheck), err)
 	}
 	if err := alerts.UpsertState(ctx, &domain.AlertState{
-		SpaceID:         "space-a",
-		RuleID:          "rule-a",
-		CheckID:         "check-a",
-		Status:          domain.AlertStatusFiring,
-		FailureCount:    3,
-		OwnerInstanceID: "monitor-a",
-		DedupeKey:       "rule-a:check-a",
+		SpaceID:      "space-a",
+		RuleID:       "rule-a",
+		CheckID:      "check-a",
+		Status:       domain.AlertStatusFiring,
+		FailureCount: 3,
+		DedupeKey:    "rule-a:check-a",
 	}); err != nil {
 		t.Fatalf("upsert state: %v", err)
 	}
@@ -173,35 +171,6 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	removedEvents, err := alerts.DeleteEventsOlderThan(ctx, now.Add(-24*time.Hour))
 	if err != nil || removedEvents != 1 {
 		t.Fatalf("removed events=%d err=%v", removedEvents, err)
-	}
-
-	seenAt := time.Now()
-	if err := peers.UpsertInstance(ctx, &domain.MonitorInstance{
-		InstanceID: "monitor-a",
-		BaseURL:    "http://127.0.0.1:11409",
-		Status:     domain.InstanceStatusActive,
-		LastSeenAt: &seenAt,
-		Snapshot:   "{}",
-		IsLocal:    true,
-	}); err != nil {
-		t.Fatalf("upsert instance: %v", err)
-	}
-	if err := peers.UpsertSnapshot(ctx, &domain.PeerSnapshot{
-		InstanceID: "monitor-b",
-		BaseURL:    "http://127.0.0.1:11419",
-		Status:     domain.InstanceStatusActive,
-		Snapshot:   "{}",
-		CheckedAt:  seenAt,
-	}); err != nil {
-		t.Fatalf("upsert snapshot: %v", err)
-	}
-	instances, err := peers.ListInstances(ctx)
-	if err != nil || len(instances) != 1 {
-		t.Fatalf("instances len=%d err=%v", len(instances), err)
-	}
-	snapshots, err := peers.ListSnapshots(ctx)
-	if err != nil || len(snapshots) != 1 {
-		t.Fatalf("snapshots len=%d err=%v", len(snapshots), err)
 	}
 
 	if err := checks.Delete(ctx, "space-a", "check-a"); err != nil {

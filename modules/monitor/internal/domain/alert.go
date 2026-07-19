@@ -61,7 +61,6 @@ type AlertState struct {
 	Status          string     `gorm:"column:c_status"`
 	FailureCount    int        `gorm:"column:c_failure_count"`
 	SuccessCount    int        `gorm:"column:c_success_count"`
-	OwnerInstanceID string     `gorm:"column:c_owner_instance_id"`
 	TriggeredAt     *time.Time `gorm:"column:c_triggered_at"`
 	ResolvedAt      *time.Time `gorm:"column:c_resolved_at"`
 	LastReminderAt  *time.Time `gorm:"column:c_last_reminder_at"`
@@ -82,7 +81,6 @@ type AlertEvent struct {
 	CheckID         string    `gorm:"column:c_check_id"`
 	EventType       string    `gorm:"column:c_event_type"`
 	Status          string    `gorm:"column:c_status"`
-	OwnerInstanceID string    `gorm:"column:c_owner_instance_id"`
 	Message         string    `gorm:"column:c_message"`
 	Payload         string    `gorm:"column:c_payload"`
 	CreatedAt       time.Time `gorm:"column:c_created_at"`

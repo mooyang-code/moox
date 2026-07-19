@@ -20,12 +20,8 @@ func TestRuleSchedulerEvaluateDueOnceWithEmptyRules(t *testing.T) {
 
 	fixed := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	sched := NewRuleScheduler(SchedulerOptions{
-		Evaluator:  &MetricEvaluator{},
-		Rules:      rules,
-		InstanceID: "monitor-a",
-		ActiveInstances: func(context.Context) ([]string, error) {
-			return []string{"monitor-a", "monitor-b"}, nil
-		},
+		Evaluator: &MetricEvaluator{},
+		Rules:     rules,
 		Now: func() time.Time { return fixed },
 	})
 	require.NoError(t, sched.EvaluateDueOnce(context.Background()))

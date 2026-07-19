@@ -9,7 +9,6 @@ type Repositories struct {
 	Checks  *CheckRepository
 	Results *ResultRepository
 	Alerts  *AlertRepository
-	Peers   *PeerRepository
 }
 
 func NewRepositories(db *gorm.DB) *Repositories {
@@ -17,6 +16,5 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Checks:  NewCheckRepository(db),
 		Results: NewResultRepository(db),
 		Alerts:  NewAlertRepository(db),
-		Peers:   NewPeerRepository(db),
 	}
 }

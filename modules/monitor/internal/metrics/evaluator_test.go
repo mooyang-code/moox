@@ -80,7 +80,7 @@ func TestMetricRuleStateTransitionsAndKeepState(t *testing.T) {
 	}
 	now := time.Unix(500, 0).UTC()
 	ruleStore := metricRuleStoreForTest(t, mgr)
-	eval := NewMetricEvaluator(EvaluatorOptions{RuleStore: ruleStore, InstanceID: "m1", Now: func() time.Time { return now }})
+	eval := NewMetricEvaluator(EvaluatorOptions{RuleStore: ruleStore, Now: func() time.Time { return now }})
 	rule := validRule()
 	ctx := context.Background()
 	if err := eval.applyState(ctx, rule, &RuleEvaluation{SpaceID: "space", RuleID: "rule", EvaluatedAt: now, Result: true}); err != nil {
@@ -129,7 +129,7 @@ func TestMetricNotificationFailureIsPersistedAndRetried(t *testing.T) {
 	now := time.Unix(900, 0).UTC()
 	rule := validRule()
 	rule.ConsecutiveTriggerCount = 1
-	eval := NewMetricEvaluator(EvaluatorOptions{RuleStore: metricRuleStoreForTest(t, mgr), InstanceID: "m1", Now: func() time.Time { return now }, Notifier: notifier, Webhook: func(context.Context, string, string) (*domain.WebhookChannel, error) {
+	eval := NewMetricEvaluator(EvaluatorOptions{RuleStore: metricRuleStoreForTest(t, mgr), Now: func() time.Time { return now }, Notifier: notifier, Webhook: func(context.Context, string, string) (*domain.WebhookChannel, error) {
 		return &domain.WebhookChannel{WebhookID: "ops", Enabled: true}, nil
 	}})
 	ctx := context.Background()

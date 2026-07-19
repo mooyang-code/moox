@@ -29,9 +29,10 @@ assert_contains "${RELEASE}" 'obsolete Gateway refresh_interval'
 assert_contains "${RELEASE}" 'copy_binary moox-gateway'
 assert_contains "${RELEASE}" 'copy_binary moox-gateway-cli'
 
-for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --monitor-instance-id --monitor-peer --no-admin; do
+for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --monitor-instance-id --no-admin; do
   assert_contains "${DEPLOY}" "${option}"
 done
+assert_absent "${DEPLOY}" '--monitor-peer'
 assert_contains "${DEPLOY}" 'MOOX_ADMIN_NODE_ID'
 assert_contains "${DEPLOY}" 'MOOX_GATEWAY_NODE_ID'
 assert_contains "${DEPLOY}" 'gateway-control.env'
@@ -225,15 +226,12 @@ kill -0 "${unrelated_pid}" 2>/dev/null || fail 'Gateway stop killed an unrelated
   --skip-build --no-start --no-admin --no-storage --no-archive \
   --no-cloudnode --no-collector --no-factor --no-strategy --local-ca skip --target-ca skip \
   --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
-  --monitor-instance-id monitor-local --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
+  --monitor-instance-id monitor-local \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
   --gateway-service-key-file "${TMP}/service.key" >/dev/null
 MONITOR_DEPLOY="${TMP}/deploy-monitor"
 [[ -x "${MONITOR_DEPLOY}/bin/moox-cli" ]] || fail 'no-admin Monitor package omitted moox-cli'
 grep -Fq 'instance_id: "monitor-local"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'stable Monitor instance ID was not rendered'
-grep -Fq '"instance_id":"monitor-peer"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor peer instance ID was not rendered'
-grep -Fq '"gateway_url":"https://peer.example.com"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor peer Gateway URL was not rendered safely'
-grep -Fq '"node_id":"gateway-peer"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor peer node ID was not rendered'
 mkdir -p "${TMP}/captures"
 cat >"${MONITOR_DEPLOY}/bin/moox-gateway" <<'SH'
 #!/usr/bin/env bash
@@ -283,17 +281,17 @@ grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" 
 ! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/eventbus.env" || fail 'Eventbus inherited the Gateway control key'
 
 # A Gateway + Monitor-only node must start without an EventBus or Storage
-# metadata endpoint; the Monitor remains responsible for peer health only.
+# metadata endpoint; availability checks remain usable without metric storage.
 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-peer-only" --stage "${TMP}/stage-peer-only" \
   --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor --no-strategy --local-ca skip --target-ca skip \
   --node-id gateway-peer-only --gateway-control-url 'http://[::1]:11000' \
-  --monitor-instance-id monitor-peer-only --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
+  --monitor-instance-id monitor-peer-only \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
   --gateway-service-key-file "${TMP}/service.key" >/dev/null
 PEER_ONLY_DEPLOY="${TMP}/deploy-peer-only"
 grep -A1 '^metrics:$' "${PEER_ONLY_DEPLOY}/monitor/config/app.yaml" | grep -Fq 'enabled: false' || \
-  fail 'peer-only Monitor package left metrics enabled'
+  fail 'Monitor-only package left metrics enabled'
 cat >"${PEER_ONLY_DEPLOY}/bin/moox-monitor" <<'SH'
 #!/usr/bin/env bash
 sleep 30
@@ -311,7 +309,6 @@ for mode in no-start missing-public-host; do
     --skip-build --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy \
     --local-ca skip --target-ca skip --node-id gateway-peer-only \
     --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
-    --monitor-peer 'monitor-peer,https://peer.example.com,gateway-peer' \
     --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
     --gateway-service-key-file "${TMP}/service.key" ${extra_args[@]+"${extra_args[@]}"} 2>&1); then
     fail "${mode} replaced an existing managed Caddy deployment"
@@ -334,9 +331,6 @@ expect_monitor_arg_rejected() {
 }
 expect_monitor_arg_rejected missing-instance
 expect_monitor_arg_rejected bad-instance --monitor-instance-id '../monitor'
-expect_monitor_arg_rejected malformed-peer --monitor-instance-id monitor-local --monitor-peer 'missing,fields'
-expect_monitor_arg_rejected unsafe-peer-url --monitor-instance-id monitor-local --monitor-peer 'monitor-peer,http://peer.example.com,gateway-peer'
-expect_monitor_arg_rejected self-peer --monitor-instance-id monitor-local --monitor-peer 'monitor-local,https://peer.example.com,gateway-peer'
 
 # Remote deployment archives use collision-free 0600 paths and the EXIT trap
 # removes both local and remote copies even when remote extraction fails.

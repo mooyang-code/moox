@@ -127,7 +127,7 @@ services:
     gateway_enabled: true
     scope: internal
     status: active
-    description: 独立服务监控模块，承载 HTTP/TCP 探测、告警和多实例协同
+    description: 独立服务监控模块，承载 HTTP/TCP 探测和告警
     extra_config:
       health_url: http://127.0.0.1:11409/readyz
       health_kind: readiness

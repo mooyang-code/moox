@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
@@ -152,8 +155,58 @@ func TestSyncKeepsExistingChecksWhenAdminFails(t *testing.T) {
 
 type failingSource struct{}
 
-func (failingSource) ActiveDeployments(context.Context) ([]*adminpb.ServiceDeployment, error) {
+func (failingSource) DesiredDeployments(context.Context) ([]*adminpb.ServiceDeployment, error) {
 	return nil, errAdminUnavailable
+}
+
+func TestClientSourceReadsAllDeploymentStatusesWithBoundedPagination(t *testing.T) {
+	t.Parallel()
+
+	client := &pagingDeploymentClient{total: 101}
+	source := &ClientSource{client: client}
+	deployments, err := source.DesiredDeployments(context.Background())
+	if err != nil {
+		t.Fatalf("DesiredDeployments: %v", err)
+	}
+	if len(deployments) != 101 || deployments[100].GetStatus() != "disabled" {
+		t.Fatalf("deployments = %d, last=%+v", len(deployments), deployments[len(deployments)-1])
+	}
+	if client.calls != 2 {
+		t.Fatalf("calls = %d, want 2", client.calls)
+	}
+
+	tooMany := &ClientSource{client: &pagingDeploymentClient{total: 501}}
+	if _, err := tooMany.DesiredDeployments(context.Background()); err == nil {
+		t.Fatal("more than 500 deployments accepted")
+	}
+}
+
+type pagingDeploymentClient struct {
+	total int
+	calls int
+}
+
+func (c *pagingDeploymentClient) ListServiceDeployments(_ context.Context, req *adminpb.ListServiceDeploymentsReq, _ ...client.Option) (*adminpb.ListServiceDeploymentsRsp, error) {
+	c.calls++
+	page := int(req.GetPage().GetPage())
+	start := (page - 1) * 100
+	end := start + 100
+	if end > c.total {
+		end = c.total
+	}
+	rows := make([]*adminpb.ServiceDeployment, 0, end-start)
+	for i := start; i < end; i++ {
+		status := "active"
+		if i == c.total-1 {
+			status = "disabled"
+		}
+		rows = append(rows, &adminpb.ServiceDeployment{ServiceName: fmt.Sprintf("service-%03d", i), Status: status})
+	}
+	return &adminpb.ListServiceDeploymentsRsp{
+		RetInfo:     &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+		Deployments: rows,
+		PageResult:  &commonpb.PageResult{Page: uint32(page), Size: 100, HasMore: end < c.total},
+	}, nil
 }
 
 func openSyncDB(t *testing.T) *store.Store {

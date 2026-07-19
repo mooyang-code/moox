@@ -12,15 +12,14 @@ import (
 )
 
 type Event struct {
-	EventID         string
-	EventType       string
-	Status          string
-	OwnerInstanceID string
-	Message         string
-	Check           domain.Check
-	Result          domain.CheckResult
-	Rule            domain.AlertRule
-	DedupeKey       string
+	EventID   string
+	EventType string
+	Status    string
+	Message   string
+	Check     domain.Check
+	Result    domain.CheckResult
+	Rule      domain.AlertRule
+	DedupeKey string
 }
 
 type Notifier interface {
@@ -28,23 +27,17 @@ type Notifier interface {
 }
 
 type Options struct {
-	InstanceID string
-	Notifier   Notifier
-	Now        func() time.Time
+	Notifier Notifier
+	Now      func() time.Time
 }
 
 type Evaluator struct {
 	alerts   *store.AlertRepository
-	instance string
 	notifier Notifier
 	now      func() time.Time
 }
 
 func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
-	instance := opts.InstanceID
-	if instance == "" {
-		instance = "monitor"
-	}
 	notifier := opts.Notifier
 	if notifier == nil {
 		notifier = WebhookNotifier{}
@@ -55,30 +48,25 @@ func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
 	}
 	return &Evaluator{
 		alerts:   alerts,
-		instance: instance,
 		notifier: notifier,
 		now:      now,
 	}
 }
 
-func (e *Evaluator) Evaluate(ctx context.Context, check domain.Check, result domain.CheckResult, activeInstanceIDs []string) error {
+func (e *Evaluator) Evaluate(ctx context.Context, check domain.Check, result domain.CheckResult) error {
 	rules, err := e.alerts.ListEnabledRulesForCheck(ctx, check.SpaceID, check.CheckID)
 	if err != nil {
 		return err
 	}
 	for _, rule := range rules {
-		if err := e.evaluateRule(ctx, check, result, rule, activeInstanceIDs); err != nil {
+		if err := e.evaluateRule(ctx, check, result, rule); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (e *Evaluator) evaluateRule(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, activeInstanceIDs []string) error {
-	owner := Owner(check.CheckID, rule.RuleID, activeInstanceIDs)
-	if owner != "" && owner != e.instance {
-		return nil
-	}
+func (e *Evaluator) evaluateRule(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule) error {
 	state, err := e.alerts.GetState(ctx, rule.SpaceID, rule.RuleID, rule.CheckID)
 	if err != nil {
 		if err != gorm.ErrRecordNotFound {
@@ -89,7 +77,6 @@ func (e *Evaluator) evaluateRule(ctx context.Context, check domain.Check, result
 			RuleID:          rule.RuleID,
 			CheckID:         rule.CheckID,
 			Status:          domain.AlertStatusOK,
-			OwnerInstanceID: e.instance,
 			DedupeKey:       dedupeKey(rule, check),
 		}
 	}
@@ -103,7 +90,6 @@ func (e *Evaluator) evaluateFailure(ctx context.Context, check domain.Check, res
 	now := e.now()
 	state.FailureCount++
 	state.SuccessCount = 0
-	state.OwnerInstanceID = e.instance
 	state.DedupeKey = dedupeKey(rule, check)
 
 	if state.Status != domain.AlertStatusFiring && state.FailureCount >= rule.FailureThreshold {
@@ -127,7 +113,6 @@ func (e *Evaluator) evaluateSuccess(ctx context.Context, check domain.Check, res
 	now := e.now()
 	state.SuccessCount++
 	state.FailureCount = 0
-	state.OwnerInstanceID = e.instance
 	state.DedupeKey = dedupeKey(rule, check)
 	if state.Status == domain.AlertStatusFiring && state.SuccessCount >= rule.SuccessThreshold {
 		state.Status = domain.AlertStatusResolved
@@ -145,15 +130,14 @@ func (e *Evaluator) evaluateSuccess(ctx context.Context, check domain.Check, res
 
 func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType string) error {
 	event := Event{
-		EventID:         newEventID(),
-		EventType:       eventType,
-		Status:          state.Status,
-		OwnerInstanceID: state.OwnerInstanceID,
-		Message:         eventMessage(eventType, check, result),
-		Check:           check,
-		Result:          result,
-		Rule:            rule,
-		DedupeKey:       state.DedupeKey,
+		EventID:   newEventID(),
+		EventType: eventType,
+		Status:    state.Status,
+		Message:   eventMessage(eventType, check, result),
+		Check:     check,
+		Result:    result,
+		Rule:      rule,
+		DedupeKey: state.DedupeKey,
 	}
 	if err := e.recordEventObject(ctx, event); err != nil {
 		return err
@@ -176,30 +160,28 @@ func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result 
 		message = eventMessage(eventType, check, result)
 	}
 	return e.recordEventObject(ctx, Event{
-		EventID:         newEventID(),
-		EventType:       eventType,
-		Status:          state.Status,
-		OwnerInstanceID: state.OwnerInstanceID,
-		Message:         message,
-		Check:           check,
-		Result:          result,
-		Rule:            rule,
-		DedupeKey:       state.DedupeKey,
+		EventID:   newEventID(),
+		EventType: eventType,
+		Status:    state.Status,
+		Message:   message,
+		Check:     check,
+		Result:    result,
+		Rule:      rule,
+		DedupeKey: state.DedupeKey,
 	})
 }
 
 func (e *Evaluator) recordEventObject(ctx context.Context, event Event) error {
 	return e.alerts.CreateEvent(ctx, &domain.AlertEvent{
-		EventID:         event.EventID,
-		SpaceID:         event.Rule.SpaceID,
-		RuleID:          event.Rule.RuleID,
-		CheckID:         event.Check.CheckID,
-		EventType:       event.EventType,
-		Status:          event.Status,
-		OwnerInstanceID: event.OwnerInstanceID,
-		Message:         event.Message,
-		Payload:         "{}",
-		CreatedAt:       e.now(),
+		EventID:   event.EventID,
+		SpaceID:   event.Rule.SpaceID,
+		RuleID:    event.Rule.RuleID,
+		CheckID:   event.Check.CheckID,
+		EventType: event.EventType,
+		Status:    event.Status,
+		Message:   event.Message,
+		Payload:   "{}",
+		CreatedAt: e.now(),
 	})
 }
 

@@ -48,7 +48,6 @@ GATEWAY_CA_BUNDLE=""
 GATEWAY_CONTROL_KEY_FILE=""
 GATEWAY_SERVICE_KEY_FILE=""
 MONITOR_INSTANCE_ID=""
-MONITOR_PEERS=()
 STAGE_DEPLOY_LOCK=""
 STAGE_DEPLOY_LOCK_TOKEN="$$.${RANDOM}.${RANDOM}"
 STAGE_DEPLOY_LOCK_HELD=0
@@ -105,7 +104,6 @@ Options:
   --gateway-control-key-file <p>  Local 0600 raw cluster control key file (required).
   --gateway-service-key-file <p>  Local 0600 raw cluster service key file (required).
   --monitor-instance-id <id>      Stable Monitor instance ID (required when Monitor is enabled).
-  --monitor-peer <id>,<url>,<node>  Repeatable remote Monitor/Gateway tuple.
   -h, --help                      Show this help.
 
 Examples:
@@ -476,7 +474,6 @@ while [[ $# -gt 0 ]]; do
     --gateway-control-key-file) GATEWAY_CONTROL_KEY_FILE="${2:-}"; shift 2 ;;
     --gateway-service-key-file) GATEWAY_SERVICE_KEY_FILE="${2:-}"; shift 2 ;;
     --monitor-instance-id) MONITOR_INSTANCE_ID="${2:-}"; shift 2 ;;
-    --monitor-peer) MONITOR_PEERS+=("${2:-}"); shift 2 ;;
     -h|--help)
       usage
       exit 0
@@ -508,26 +505,6 @@ validate_gateway_control_url "${GATEWAY_CONTROL_URL}" || fail "--gateway-control
 if [[ "${WITH_MONITOR}" -eq 1 ]]; then
   [[ "${MONITOR_INSTANCE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
     fail "--monitor-instance-id is required when Monitor is enabled and must be a stable identifier"
-  validated_monitor_peers=()
-  for monitor_peer in ${MONITOR_PEERS[@]+"${MONITOR_PEERS[@]}"}; do
-    IFS=',' read -r peer_instance_id peer_gateway_url peer_node_id peer_extra <<<"${monitor_peer}"
-    [[ -n "${peer_instance_id}" && -n "${peer_gateway_url}" && -n "${peer_node_id}" && -z "${peer_extra:-}" ]] || \
-      fail "--monitor-peer must be exactly <instance_id>,<gateway_url>,<node_id>"
-    [[ "${peer_instance_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
-      fail "--monitor-peer instance ID must be a stable identifier"
-    [[ "${peer_node_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
-      fail "--monitor-peer node ID must be a stable identifier"
-    [[ "${peer_instance_id}" != "${MONITOR_INSTANCE_ID}" ]] || fail "--monitor-peer cannot target the local Monitor instance"
-    [[ "${peer_node_id}" != "${NODE_ID}" ]] || fail "--monitor-peer cannot target the local Gateway node"
-    validate_gateway_control_url "${peer_gateway_url}" || \
-      fail "--monitor-peer Gateway URL must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
-    for existing_peer in ${validated_monitor_peers[@]+"${validated_monitor_peers[@]}"}; do
-      IFS=',' read -r existing_instance _ existing_node <<<"${existing_peer}"
-      [[ "${existing_instance}" != "${peer_instance_id}" ]] || fail "--monitor-peer instance IDs must be unique"
-      [[ "${existing_node}" != "${peer_node_id}" ]] || fail "--monitor-peer node IDs must be unique"
-    done
-    validated_monitor_peers+=("${monitor_peer}")
-  done
 fi
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 [[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
@@ -847,19 +824,7 @@ patch_configs() {
       perl -0pi -e 's#(metrics:\n  enabled:) true#$1 false#' \
         "${STAGE_DIR}/monitor/config/app.yaml"
     fi
-    local monitor_peers_json
-    monitor_peers_json=$(python3 - ${MONITOR_PEERS[@]+"${MONITOR_PEERS[@]}"} <<'PY'
-import json
-import sys
-
-peers = []
-for value in sys.argv[1:]:
-    instance_id, gateway_url, node_id = value.split(",")
-    peers.append({"instance_id": instance_id, "gateway_url": gateway_url, "node_id": node_id})
-print(json.dumps(peers, separators=(",", ":")))
-PY
-)
-    MONITOR_INSTANCE_ID_VALUE="${MONITOR_INSTANCE_ID}" MONITOR_PEERS_JSON="${monitor_peers_json}" python3 - "${STAGE_DIR}/monitor/config/app.yaml" <<'PY'
+    MONITOR_INSTANCE_ID_VALUE="${MONITOR_INSTANCE_ID}" python3 - "${STAGE_DIR}/monitor/config/app.yaml" <<'PY'
 import json
 import os
 import pathlib
@@ -868,10 +833,9 @@ import sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
 instance_line = "  instance_id: " + json.dumps(os.environ["MONITOR_INSTANCE_ID_VALUE"])
-if text.count('  instance_id: ""') != 1 or text.count("  peers: []") != 1:
-    raise SystemExit("Monitor config template does not have the expected instance/peer fields")
+if text.count('  instance_id: ""') != 1:
+    raise SystemExit("Monitor config template does not have the expected instance field")
 text = text.replace('  instance_id: ""', instance_line, 1)
-text = text.replace("  peers: []", "  peers: " + os.environ["MONITOR_PEERS_JSON"], 1)
 path.write_text(text)
 PY
   fi
@@ -1294,7 +1258,7 @@ apply_metrics_metadata() {
     return 0
   fi
   if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
-    echo "skip metrics metadata for peer-only Monitor deployment"
+    echo "skip metrics metadata for Monitor deployment without local metrics dependencies"
     return 0
   fi
   local route_seed="${METRICS_ROUTE_SEED}"
@@ -1322,7 +1286,7 @@ apply_host_metadata() {
     return 0
   fi
   if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
-    echo "skip host metadata for peer-only Monitor deployment"
+    echo "skip host metadata for Monitor deployment without local metrics dependencies"
     return 0
   fi
   local route_seed="${HOST_ROUTE_SEED}"

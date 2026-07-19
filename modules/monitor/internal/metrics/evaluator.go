@@ -169,7 +169,6 @@ type MetricEvaluator struct {
 	storage  *StorageAdapter
 	notifier MetricNotifier
 	webhooks func(context.Context, string, string) (*domain.WebhookChannel, error)
-	instance string
 	now      func() time.Time
 }
 type EvaluatorOptions struct {
@@ -178,7 +177,6 @@ type EvaluatorOptions struct {
 	Storage    *StorageAdapter
 	Notifier   MetricNotifier
 	Webhook    func(context.Context, string, string) (*domain.WebhookChannel, error)
-	InstanceID string
 	Now        func() time.Time
 }
 
@@ -187,7 +185,7 @@ func NewMetricEvaluator(opts EvaluatorOptions) *MetricEvaluator {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &MetricEvaluator{rules: opts.RuleStore, catalog: opts.Catalog, storage: opts.Storage, notifier: opts.Notifier, webhooks: opts.Webhook, instance: opts.InstanceID, now: now}
+	return &MetricEvaluator{rules: opts.RuleStore, catalog: opts.Catalog, storage: opts.Storage, notifier: opts.Notifier, webhooks: opts.Webhook, now: now}
 }
 
 func (e *MetricEvaluator) Evaluate(ctx context.Context, rule *monitorpb.MetricRule, preview bool) (*RuleEvaluation, error) {
@@ -409,7 +407,6 @@ func (e *MetricEvaluator) applyState(ctx context.Context, rule *monitorpb.Metric
 		evalJSON, _ := json.Marshal(evaluation)
 		return e.rules.InsertEvaluation(ctx, &MetricRuleEvaluationRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), EvaluatedAt: evaluation.EvaluatedAt, Status: state.Status, ResultJSON: string(evalJSON)})
 	}
-	state.OwnerInstanceID = e.instance
 	state.LastEvaluatedAt = &evaluation.EvaluatedAt
 	var transition string
 	if evaluation.Result {
@@ -493,7 +490,7 @@ func (e *MetricEvaluator) notify(ctx context.Context, rule *monitorpb.MetricRule
 		if wh == nil || !wh.Enabled {
 			continue
 		}
-		if err := e.notifier.SendMetric(ctx, *wh, MetricEvent{EventType: eventType, DedupeKey: dedupeKey, Rule: rule, Evaluation: evaluation, OwnerInstanceID: e.instance}); err != nil {
+		if err := e.notifier.SendMetric(ctx, *wh, MetricEvent{EventType: eventType, DedupeKey: dedupeKey, Rule: rule, Evaluation: evaluation}); err != nil {
 			return err
 		}
 	}

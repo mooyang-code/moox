@@ -11,17 +11,22 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/doctor"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 var errAdminUnavailable = errors.New("admin sysdeploy unavailable")
 
 type Source interface {
-	ActiveDeployments(context.Context) ([]*adminpb.ServiceDeployment, error)
+	DesiredDeployments(context.Context) ([]*adminpb.ServiceDeployment, error)
+}
+
+type deploymentClient interface {
+	ListServiceDeployments(context.Context, *adminpb.ListServiceDeploymentsReq, ...client.Option) (*adminpb.ListServiceDeploymentsRsp, error)
 }
 
 type ClientSource struct {
-	client adminpb.SysDeployClientProxy
+	client deploymentClient
 }
 
 func NewClientSource(target string) *ClientSource {
@@ -32,15 +37,27 @@ func NewClientSource(target string) *ClientSource {
 	)}
 }
 
-func (s *ClientSource) ActiveDeployments(ctx context.Context) ([]*adminpb.ServiceDeployment, error) {
-	rsp, err := s.client.ListActiveServiceDeployments(ctx, &adminpb.ListActiveServiceDeploymentsReq{})
-	if err != nil {
-		return nil, err
+func (s *ClientSource) DesiredDeployments(ctx context.Context) ([]*adminpb.ServiceDeployment, error) {
+	const pageSize = 100
+	const maxDeployments = 500
+	deployments := make([]*adminpb.ServiceDeployment, 0, pageSize)
+	for page := uint32(1); page <= maxDeployments/pageSize; page++ {
+		rsp, err := s.client.ListServiceDeployments(ctx, &adminpb.ListServiceDeploymentsReq{Page: &commonpb.Page{Page: page, Size: pageSize}})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+			return nil, fmt.Errorf("%w: %s", errAdminUnavailable, rsp.GetRetInfo().GetMsg())
+		}
+		if len(deployments)+len(rsp.GetDeployments()) > maxDeployments {
+			return nil, fmt.Errorf("sysdeploy returned more than %d deployments", maxDeployments)
+		}
+		deployments = append(deployments, rsp.GetDeployments()...)
+		if !rsp.GetPageResult().GetHasMore() {
+			return deployments, nil
+		}
 	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		return nil, fmt.Errorf("%w: %s", errAdminUnavailable, rsp.GetRetInfo().GetMsg())
-	}
-	return rsp.GetDeployments(), nil
+	return nil, fmt.Errorf("sysdeploy returned more than %d deployments", maxDeployments)
 }
 
 type Syncer struct {
@@ -56,7 +73,7 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if s.source == nil {
 		return 0, nil
 	}
-	deployments, err := s.source.ActiveDeployments(ctx)
+	deployments, err := s.source.DesiredDeployments(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -64,9 +81,20 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 }
 
 func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.ServiceDeployment) (int, error) {
+	manifest, err := doctor.LoadEmbeddedManifest()
+	if err != nil {
+		return 0, err
+	}
+	processes := make(map[string]bool, len(manifest.Components))
+	for _, component := range manifest.Components {
+		processes[component.ServiceName] = true
+	}
 	synced := 0
 	activeIDs := map[string]struct{}{}
 	for _, deployment := range deployments {
+		if deployment == nil || !processes[deployment.GetServiceName()] {
+			continue
+		}
 		check, ok := checkFromDeployment(deployment)
 		if !ok {
 			continue

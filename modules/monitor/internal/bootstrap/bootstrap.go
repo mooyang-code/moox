@@ -76,7 +76,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
-			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts, InstanceID: cfg.Instance.InstanceID,
+			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
 			Notifier: alerting.WebhookNotifier{},
 			Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, webhookID)
@@ -108,7 +108,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		metricRules = metricStores.Rules
 		metricEvaluator = monmetrics.NewMetricEvaluator(monmetrics.EvaluatorOptions{
-			RuleStore: metricRules, Catalog: metricsQuery.Catalog(), Storage: metricsStorage, InstanceID: cfg.Instance.InstanceID,
+			RuleStore: metricRules, Catalog: metricsQuery.Catalog(), Storage: metricsStorage,
 			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, id)
 			},
@@ -119,7 +119,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(cfg, runtime)
+	resultHook := monitorResultHook(runtime)
 	probeRunner := buildProbeRunner(cfg)
 	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	hostReady := func() bool { return false }

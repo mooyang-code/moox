@@ -16,7 +16,6 @@ health_auth:
 
 instance:
   instance_id: ""
-  base_url: "http://127.0.0.1:11409"
 
 scheduler:
   result_retention_days: 14
@@ -30,15 +29,6 @@ sysdeploy:
     secret_key: ""
     target_node: ""
     ca_file: ""
-
-peer:
-  enabled: true
-  timeout_seconds: 5
-  service_auth:
-    key_id: ""
-    secret_key: ""
-    ca_file: ""
-  peers: []
 
 alert:
   send_timeout_seconds: 10

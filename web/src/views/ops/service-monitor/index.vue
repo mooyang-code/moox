@@ -3,16 +3,12 @@
     <div class="page-head">
       <div v-if="!embedded">
         <h2>服务监控</h2>
-        <span>HTTP/TCP 可用性、告警与多实例协同状态。</span>
+        <span>HTTP/TCP 可用性与告警状态。</span>
       </div>
       <a-space wrap>
         <a-button @click="syncSystemChecks" :loading="syncing">
           <template #icon><icon-sync /></template>
           同步系统服务
-        </a-button>
-        <a-button @click="openPeerDrawer">
-          <template #icon><icon-apps /></template>
-          监控实例
         </a-button>
         <a-button @click="openWebhookDrawer">
           <template #icon><icon-settings /></template>
@@ -319,33 +315,7 @@
                     <a-tag size="small" :color="alertStatusColor(record.status)">{{ alertStatusText(record.status) }}</a-tag>
                   </template>
                 </a-table-column>
-                <a-table-column title="Owner" data-index="owner_instance_id" :width="150" />
                 <a-table-column title="消息" data-index="message" :width="360" :ellipsis="true" :tooltip="true" />
-              </template>
-            </a-table>
-          </a-tab-pane>
-          <a-tab-pane key="peers" title="实例">
-            <a-table
-              size="small"
-              row-key="instance_id"
-              :pagination="false"
-              :data="instances"
-              :scroll="{ x: 'max-content', y: detailTableHeight }"
-            >
-              <template #columns>
-                <a-table-column title="实例" data-index="instance_id" :width="180" />
-                <a-table-column title="Base URL" data-index="base_url" :width="260" />
-                <a-table-column title="状态" :width="110">
-                  <template #cell="{ record }">
-                    <a-tag size="small" :color="instanceColor(record.status)">{{ record.status || "-" }}</a-tag>
-                  </template>
-                </a-table-column>
-                <a-table-column title="最近心跳" :width="190">
-                  <template #cell="{ record }">{{ formatTime(record.last_seen_at) }}</template>
-                </a-table-column>
-                <a-table-column title="本机" :width="90">
-                  <template #cell="{ record }">{{ record.is_local ? "yes" : "-" }}</template>
-                </a-table-column>
               </template>
             </a-table>
           </a-tab-pane>
@@ -493,32 +463,6 @@
       </a-form>
     </a-drawer>
 
-    <a-drawer
-      v-model:visible="peerDrawerVisible"
-      width="860px"
-      title="监控实例"
-      :footer="false"
-      :body-style="{ padding: '18px var(--moox-space-6) var(--moox-space-5)' }"
-      unmount-on-close
-    >
-      <a-table size="small" row-key="instance_id" :pagination="false" :data="instances">
-        <template #columns>
-          <a-table-column title="实例" data-index="instance_id" :width="180" />
-          <a-table-column title="Base URL" data-index="base_url" :width="280" />
-          <a-table-column title="状态" :width="100">
-            <template #cell="{ record }">
-              <a-tag size="small" :color="instanceColor(record.status)">{{ record.status || "-" }}</a-tag>
-            </template>
-          </a-table-column>
-          <a-table-column title="最近心跳" :width="190">
-            <template #cell="{ record }">{{ formatTime(record.last_seen_at) }}</template>
-          </a-table-column>
-          <a-table-column title="本机" :width="80">
-            <template #cell="{ record }">{{ record.is_local ? "yes" : "-" }}</template>
-          </a-table-column>
-        </template>
-      </a-table>
-    </a-drawer>
   </div>
 </template>
 
@@ -534,7 +478,6 @@ import type {
   CheckStatus,
   GroupSummary,
   MonitorCheck,
-  MonitorInstance,
   MonitorOverview,
   WebhookChannel
 } from "@/api/monitor";
@@ -560,7 +503,6 @@ const checks = ref<MonitorCheck[]>([]);
 const latestResults = ref<Record<string, CheckResult>>({});
 const webhooks = ref<WebhookChannel[]>([]);
 const rules = ref<AlertRule[]>([]);
-const instances = ref<MonitorInstance[]>([]);
 const detailResults = ref<CheckResult[]>([]);
 const detailEvents = ref<AlertEvent[]>([]);
 const selectedCheck = ref<MonitorCheck | null>(null);
@@ -573,7 +515,6 @@ const webhookDrawerVisible = ref(false);
 const webhookFormVisible = ref(false);
 const ruleDrawerVisible = ref(false);
 const ruleFormVisible = ref(false);
-const peerDrawerVisible = ref(false);
 const editingCheck = ref(false);
 const editingWebhook = ref(false);
 const editingRule = ref(false);
@@ -651,7 +592,7 @@ const isTcpForm = computed(() => isTcpKind(checkForm.kind));
 const pollingPaused = computed(() => checkDrawerVisible.value || webhookFormVisible.value || ruleFormVisible.value);
 
 async function refreshAll() {
-  await Promise.all([loadOverview(), loadChecks(), loadInstances()]);
+  await Promise.all([loadOverview(), loadChecks()]);
 }
 
 async function loadOverview() {
@@ -708,17 +649,11 @@ async function loadRules(check: MonitorCheck | null = selectedCheck.value) {
   rules.value = rsp.rules || [];
 }
 
-async function loadInstances() {
-  const rsp = await monitorApi.listMonitorInstances();
-  instances.value = rsp.instances || [];
-}
-
 async function loadDetail(check: MonitorCheck) {
   selectedCheck.value = check;
   const [resultsRsp, eventsRsp] = await Promise.all([
     monitorApi.listResults({ space_id: check.space_id, check_id: check.check_id || "", limit: 30 }),
     monitorApi.listAlertEvents({ space_id: check.space_id, limit: 80 }),
-    loadInstances(),
     loadRules(check)
   ]);
   detailResults.value = resultsRsp.results || [];
@@ -1000,11 +935,6 @@ async function deleteRule(record: AlertRule) {
   await loadRules(selectedCheck.value);
 }
 
-async function openPeerDrawer() {
-  peerDrawerVisible.value = true;
-  await loadInstances();
-}
-
 function normalizeJson(value: string | undefined, fallback: string) {
   const raw = (value || fallback).trim() || fallback;
   try {
@@ -1137,12 +1067,6 @@ function eventTypeText(eventType?: string | number) {
   if (eventType === 2 || eventType === "ALERT_EVENT_TYPE_REMINDER" || eventType === "reminder") return "Reminder";
   if (eventType === 3 || eventType === "ALERT_EVENT_TYPE_RESOLVED" || eventType === "resolved") return "Resolved";
   return "-";
-}
-
-function instanceColor(status?: string) {
-  if (status === "active") return "green";
-  if (status === "down") return "red";
-  return "gray";
 }
 
 function webhookName(webhookID?: string) {

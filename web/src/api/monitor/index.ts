@@ -4,7 +4,6 @@ import type {
   AlertRule,
   CheckResult,
   MonitorCheck,
-  MonitorInstance,
   MonitorOverview,
   PageReq,
   PageResult,
@@ -64,9 +63,6 @@ export const monitorApi = {
   },
   listAlertEvents(req: { space_id?: string; limit?: number } = {}) {
     return callControl<typeof req, { events?: AlertEvent[] }>(service, "ListAlertEvents", req);
-  },
-  listMonitorInstances() {
-    return callControl<Record<string, never>, { instances?: MonitorInstance[] }>(service, "ListMonitorInstances", {});
   },
   syncSystemChecks() {
     return callControl<Record<string, never>, { synced?: number }>(service, "SyncSystemChecks", {});

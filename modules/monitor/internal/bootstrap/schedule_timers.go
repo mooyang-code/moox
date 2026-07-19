@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -20,22 +19,7 @@ import (
 const (
 	monitorCheckTimerService      = "trpc.moox.monitor.check_schedule.timer"
 	monitorMetricRuleTimerService = "trpc.moox.monitor.metric_rule.timer"
-	monitorPeerSyncTimerService   = "trpc.moox.monitor.peer_sync.timer"
 )
-
-type peerSyncer interface {
-	PullOnce(context.Context) error
-	MarkStale(context.Context, time.Time, time.Duration) error
-}
-
-func pullPeersOnce(ctx context.Context, syncer peerSyncer, now time.Time, timeout time.Duration) error {
-	if syncer == nil {
-		return nil
-	}
-	pullErr := syncer.PullOnce(ctx)
-	staleErr := syncer.MarkStale(ctx, now, timeout)
-	return errors.Join(pullErr, staleErr)
-}
 
 func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), evaluator *monmetrics.MetricEvaluator, rules *monmetrics.MetricRuleStore) error {
 	if s == nil || cfg == nil || runtime == nil || runtime.Repositories == nil {
@@ -61,10 +45,7 @@ func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime
 	var metricHandle func(context.Context) error = func(context.Context) error { return nil }
 	if evaluator != nil && rules != nil {
 		runtime.MetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{
-			Evaluator: evaluator, Rules: rules, InstanceID: cfg.Instance.InstanceID,
-			ActiveInstances: func(ctx context.Context) ([]string, error) {
-				return activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, runtime.Repositories.Peers, 3*time.Duration(cfg.Peer.TimeoutSeconds)*time.Second), nil
-			},
+			Evaluator: evaluator, Rules: rules,
 		})
 		metricHandle = runtime.MetricScheduler.EvaluateDueOnce
 	}
@@ -72,25 +53,7 @@ func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime
 	if err != nil {
 		return err
 	}
-	if err := registerMonitorTimerJob(s, monitorMetricRuleTimerService, metricJob); err != nil {
-		return err
-	}
-
-	var peerHandle func(context.Context) error = func(context.Context) error { return nil }
-	if cfg.Peer.Enabled && len(cfg.Peer.Peers) > 0 {
-		puller, err := buildPeerPuller(cfg, runtime)
-		if err != nil {
-			return err
-		}
-		peerHandle = func(ctx context.Context) error {
-			return pullPeersOnce(ctx, puller, time.Now().UTC(), time.Duration(cfg.Peer.TimeoutSeconds)*time.Second)
-		}
-	}
-	peerJob, err := timerjob.New("monitor_peer_sync", 10*time.Second, peerHandle)
-	if err != nil {
-		return err
-	}
-	return registerMonitorTimerJob(s, monitorPeerSyncTimerService, peerJob)
+	return registerMonitorTimerJob(s, monitorMetricRuleTimerService, metricJob)
 }
 
 func registerMonitorTimerJob(s *server.Server, name string, job *timerjob.Job) error {

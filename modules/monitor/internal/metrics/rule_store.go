@@ -292,7 +292,7 @@ func (r *MetricRuleStore) ListEnabled(ctx context.Context, spaceID string) ([]*m
 }
 
 func (r *MetricRuleStore) UpsertState(ctx context.Context, state *MetricRuleStateRow) error {
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_rule_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status", "c_trigger_count", "c_recovery_count", "c_owner_instance_id", "c_last_evaluated_at", "c_last_triggered_at", "c_last_recovered_at", "c_notification_event", "c_notification_key", "c_notification_status", "c_notification_error", "c_notification_attempts", "c_last_notification_at", "c_mtime"})}).Create(state).Error
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_rule_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status", "c_trigger_count", "c_recovery_count", "c_last_evaluated_at", "c_last_triggered_at", "c_last_recovered_at", "c_notification_event", "c_notification_key", "c_notification_status", "c_notification_error", "c_notification_attempts", "c_last_notification_at", "c_mtime"})}).Create(state).Error
 }
 func (r *MetricRuleStore) GetState(ctx context.Context, spaceID, ruleID string) (*MetricRuleStateRow, error) {
 	var row MetricRuleStateRow

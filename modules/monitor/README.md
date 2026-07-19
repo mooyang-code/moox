@@ -10,7 +10,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 
 ## 持久化边界
 
-`internal/store` 负责 Monitor 控制面数据（检查、结果、告警和实例）。
+`internal/store` 负责 Monitor 控制面数据（检查、结果和告警）。
 `internal/metrics` 是独立的指标持久化 bounded context，负责指标目录、去重、最新值和规则状态；两者共享同一个 SQLite 文件，但通过明确的 Store 类型隔离职责。
 
 ## 历史清理与容量
@@ -29,7 +29,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 
 ## 定时任务
 
-检查调度、指标规则和 peer 同步分别由 `check_schedule.timer`（30 秒）、`metric_rule.timer`（60 秒）和 `peer_sync.timer`（10 秒）执行，均在启动时立即运行。所有维护 Handler 都同步返回错误、带显式超时并跳过同进程重入；`DefaultScheduler` 不提供跨进程互斥。
+检查调度和指标规则分别由 `check_schedule.timer`（30 秒）和 `metric_rule.timer`（60 秒）执行，均在启动时立即运行。所有维护 Handler 都同步返回错误、带显式超时并跳过同进程重入。Monitor 是单实例服务，不做跨实例 Owner 选举。
 
 ## 配置
 
@@ -42,17 +42,6 @@ health:
   addr: ":11409"
 instance:
   instance_id: monitor-a
-  base_url: http://127.0.0.1:11409
-peer:
-  enabled: true
-  service_auth:
-    key_id: moox-service
-    secret_key: "从受限环境文件注入"
-    ca_file: ./certs/gateway-peers.pem
-  peers:
-    - instance_id: monitor-b
-      gateway_url: https://peer.example
-      node_id: gateway-peer-b
 ```
 
 ## 运行
@@ -63,9 +52,9 @@ peer:
 ./bin/moox-monitor -conf=config/trpc_go.yaml
 ```
 
-Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会周期性读取 SysDeploy active 部署，生成 `moox-system` 内置检查；探测时不依赖 Admin。
+Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会有界分页读取 SysDeploy 的 active/disabled 部署，并按 Doctor Manifest 中的独立进程过滤，生成 `moox-system` 内置检查；探测时不依赖 Admin。
 
-所有独立部署进程都通过 tRPC `http_no_protocol` 提供 `/healthz` 与 `/readyz`；Monitor 默认探测 `/readyz`。多实例之间通过目标节点 Gateway 的 `GetPeerSnapshot` RPC 同步，并使用统一的节点 HMAC 服务密钥。
+所有独立部署进程都通过 tRPC `http_no_protocol` 提供 `/healthz` 与 `/readyz`；Monitor 默认探测 `/readyz`。`moox_gateway` 使用自身 Reporter 和健康接口，不借用 Admin 的健康状态。
 
 ## 管理接口
 

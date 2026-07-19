@@ -35,47 +35,46 @@ func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 	now := time.Now()
 	notifier := &recordingNotifier{}
 	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
-		InstanceID: "monitor-a",
-		Notifier:   notifier,
-		Now:        func() time.Time { return now },
+		Notifier: notifier,
+		Now:      func() time.Time { return now },
 	})
 
 	for i := 0; i < 2; i++ {
-		if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+		if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
 			t.Fatalf("evaluate failure %d: %v", i, err)
 		}
 	}
 	if notifier.Count() != 0 {
 		t.Fatalf("notifier count = %d, want 0", notifier.Count())
 	}
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
 		t.Fatalf("third failure: %v", err)
 	}
 	if notifier.Count() != 1 || notifier.Events()[0] != domain.AlertEventTriggered {
 		t.Fatalf("events = %#v", notifier.Events())
 	}
 
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
 		t.Fatalf("early reminder: %v", err)
 	}
 	if notifier.Count() != 1 {
 		t.Fatalf("early reminder sent count = %d", notifier.Count())
 	}
 	now = now.Add(301 * time.Second)
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
 		t.Fatalf("late reminder: %v", err)
 	}
 	if notifier.Count() != 2 || notifier.Events()[1] != domain.AlertEventReminder {
 		t.Fatalf("events = %#v", notifier.Events())
 	}
 
-	if err := evaluator.Evaluate(ctx, check, okResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, okResult(check)); err != nil {
 		t.Fatalf("first success: %v", err)
 	}
 	if notifier.Count() != 2 {
 		t.Fatalf("first success sent count = %d", notifier.Count())
 	}
-	if err := evaluator.Evaluate(ctx, check, okResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, okResult(check)); err != nil {
 		t.Fatalf("second success: %v", err)
 	}
 	if notifier.Count() != 3 || notifier.Events()[2] != domain.AlertEventResolved {
@@ -101,10 +100,9 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 
 	notifier := &recordingNotifier{fail: true}
 	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
-		InstanceID: "monitor-a",
-		Notifier:   notifier,
+		Notifier: notifier,
 	})
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
 		t.Fatalf("trigger: %v", err)
 	}
 	events, err := alerts.ListEvents(ctx, "space-a", 10)
@@ -116,7 +114,7 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	}
 
 	notifier.fail = false
-	if err := evaluator.Evaluate(ctx, check, okResult(check), nil); err != nil {
+	if err := evaluator.Evaluate(ctx, check, okResult(check)); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if notifier.Count() != 1 {
@@ -141,8 +139,8 @@ func TestAlertEvaluatorRecordsLocalEventWithoutWebhook(t *testing.T) {
 	}
 
 	notifier := &recordingNotifier{}
-	evaluator := NewEvaluator(alerts, Options{InstanceID: "monitor-a", Notifier: notifier})
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
+	evaluator := NewEvaluator(alerts, Options{Notifier: notifier})
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
 		t.Fatalf("evaluate local alert: %v", err)
 	}
 	if notifier.Count() != 0 {
@@ -155,6 +153,26 @@ func TestAlertEvaluatorRecordsLocalEventWithoutWebhook(t *testing.T) {
 	state, err := alerts.GetState(ctx, "space-a", "local-rule", check.CheckID)
 	if err != nil || state.Status != domain.AlertStatusFiring {
 		t.Fatalf("local state = %+v, err=%v", state, err)
+	}
+}
+
+func TestAlertEvaluatorDoesNotDelegateToPeerOwner(t *testing.T) {
+	ctx := context.Background()
+	mgr := openAlertDB(t)
+	alerts := mgr.Repositories().Alerts
+	check := testCheck()
+	createAlertFixture(t, alerts, domain.AlertRule{
+		SpaceID: "space-a", RuleID: "single-instance", CheckID: check.CheckID,
+		WebhookID: "webhook-a", FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+	})
+
+	notifier := &recordingNotifier{}
+	evaluator := NewEvaluator(alerts, Options{Notifier: notifier})
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.Count() != 1 {
+		t.Fatalf("single-instance evaluator delegated alert to a peer; sends=%d", notifier.Count())
 	}
 }
 
