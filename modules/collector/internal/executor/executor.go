@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -59,6 +61,7 @@ func buildCollectHandler(
 			task.TaskID, task.DataSource, task.DataType, task.Symbol, task.Interval)
 
 		if err := c.Collect(ctx, params); err != nil {
+			_ = mooxreport.ObserveModuleRun("collector", "collect", "error", "collector-market-data", time.Now())
 			log.ErrorContextf(ctx, "采集失败: taskID=%s, interval=%s, error=%v",
 				task.TaskID, task.Interval, err)
 
@@ -81,6 +84,9 @@ func buildCollectHandler(
 		}
 
 		log.InfoContextf(ctx, "采集成功: taskID=%s, interval=%s", task.TaskID, task.Interval)
+		now := time.Now().UTC()
+		_ = mooxreport.ObserveModuleRun("collector", "collect", "success", "collector-market-data", now)
+		_ = mooxreport.ObserveModuleWatermark("collector", "collect", "collector-market-data", now)
 
 		// 定时任务场景：上报成功状态
 		if reportStatus != nil {

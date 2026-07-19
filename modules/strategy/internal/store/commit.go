@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -15,15 +16,32 @@ func (s *Store) Commit(ctx context.Context, task domain.Task, output domain.Outp
 	for attempt := 0; attempt < 4; attempt++ {
 		err = s.commitOnce(ctx, task, output, inputHash)
 		if !isRetryableLock(err) || attempt == 3 {
+			observeStrategyCommit(task, err)
 			return err
 		}
 		select {
 		case <-ctx.Done():
+			observeStrategyCommit(task, ctx.Err())
 			return ctx.Err()
 		case <-time.After(time.Duration(1<<attempt) * time.Millisecond):
 		}
 	}
+	observeStrategyCommit(task, err)
 	return err
+}
+
+func observeStrategyCommit(task domain.Task, err error) {
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	_ = report.ObserveModuleRun("strategy", "target_commit", result, "strategy-targets", time.Now())
+	if err == nil {
+		watermark, parseErr := time.Parse(time.RFC3339Nano, task.TriggerBarTime)
+		if parseErr == nil {
+			_ = report.ObserveModuleWatermark("strategy", "target_commit", "strategy-targets", watermark)
+		}
+	}
 }
 
 func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.Output, inputHash string) error {

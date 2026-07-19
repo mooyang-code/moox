@@ -10,6 +10,7 @@ import (
 	domain "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
+	"time"
 )
 
 type Market struct{ MarketType, BaseAsset, QuoteAsset, Price string }
@@ -78,6 +79,7 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 	}
 	if failed {
 		telemetry.Rebalances.WithLabelValues("failed").Inc()
+		telemetry.RecordModuleStage("rebalance", "error", time.Time{})
 		_ = s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpdateRebalanceRun(space, runID, "FAILED", "{}") })
 		return "FAILED", nil
 	}
@@ -117,6 +119,7 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 	if all {
 		status = "COMPLETED"
 		telemetry.Rebalances.WithLabelValues("completed").Inc()
+		telemetry.RecordModuleStage("rebalance", "success", time.Now())
 	}
 	_ = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		residual := "{}"

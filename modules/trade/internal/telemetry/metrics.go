@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -26,6 +27,13 @@ var (
 
 func init() {
 	prometheus.MustRegister(Commands, Submissions, Fills, UnknownOrders, ReconciliationDifferences, OutboxLag, PrivateStreamFreshness, Rebalances, OperationLatency)
+}
+
+func RecordModuleStage(stage, result string, watermark time.Time) {
+	_ = report.ObserveModuleRun("trade", stage, result, "trade-rebalance", time.Now())
+	if result == "success" && !watermark.IsZero() {
+		_ = report.ObserveModuleWatermark("trade", stage, "trade-rebalance", watermark)
+	}
 }
 
 func MarkPrivateEvent(exchange string, at time.Time) {
