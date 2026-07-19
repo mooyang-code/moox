@@ -110,11 +110,19 @@ func ProbeWritablePath(ctx context.Context, releaseRoot, relativePath string) (e
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(root, target)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve release root: %w", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return fmt.Errorf("resolve probe path: %w", err)
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("probe path escapes release root")
 	}
-	file, err := os.CreateTemp(target, probePrefix)
+	file, err := os.CreateTemp(resolvedTarget, probePrefix)
 	if err != nil {
 		return err
 	}

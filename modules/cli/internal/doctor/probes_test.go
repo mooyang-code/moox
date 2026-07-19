@@ -36,3 +36,14 @@ func TestProbeWritablePathAlwaysCleansUp(t *testing.T) {
 	require.Empty(t, matches)
 	require.Error(t, ProbeWritablePath(context.Background(), root, "../outside"))
 }
+
+func TestProbeWritablePathRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0o700))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "data", "escaped")))
+	require.ErrorContains(t, ProbeWritablePath(context.Background(), root, "data/escaped"), "escapes release root")
+	matches, err := filepath.Glob(filepath.Join(outside, probePrefix+"*"))
+	require.NoError(t, err)
+	require.Empty(t, matches)
+}

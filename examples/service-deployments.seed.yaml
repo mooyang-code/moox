@@ -230,7 +230,7 @@ services:
     gateway_service_id: hostagent
     gateway_enabled: true
     scope: internal
-    status: active
+    status: disabled
     description: 主机指标采集代理
     extra_config:
       health_url: http://127.0.0.1:11425/readyz
@@ -246,7 +246,7 @@ services:
     port: 11210
     gateway_enabled: false
     scope: internal
-    status: active
+    status: disabled
     description: 交易执行和账本服务
     extra_config:
       health_url: http://127.0.0.1:11210/readyz

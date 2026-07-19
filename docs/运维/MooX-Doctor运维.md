@@ -4,6 +4,8 @@
 
 Doctor V1 是 `moox-cli` 中由用户手工触发的只读诊断能力，不是后台服务。Monitor 只保存和聚合事实，CLI 负责执行检查 DAG 和生成结论。系统只有一个 Monitor 实例，不包含 Peer、Owner、Lease、DoctorMgr、自动恢复、Trade 模拟盘或 Full Canary。
 
+发布前运行 `bash scripts/test-doctor-e2e.sh`，复验部署清单、身份注入、Storage 零修改边界、上下文限制和故障注入用例。默认 seed 只把部署脚本实际编排的进程标为 active；Trade 和 HostAgent 保留在清单中，但在单独部署前为 disabled。
+
 Storage 正在独立重构。V1 仍检查其 SysDeploy inventory 和已有 `/healthz`、`/readyz`、Reporter 事实，但新增功能水位以及穿过 Storage 的 pipeline 一律输出 `SKIPPED(storage_observability_deferred)`，不得解释为通过。
 
 ## 命令

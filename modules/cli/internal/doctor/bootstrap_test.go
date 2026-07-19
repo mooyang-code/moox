@@ -41,3 +41,25 @@ func TestRunBootstrapRejectsRemoteNode(t *testing.T) {
 	_, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "remote", LocalNodeID: "local"})
 	require.ErrorContains(t, err, "only accepts the local node")
 }
+
+func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
+	pathCalls, processCalls := 0, 0
+	runner := &bootstrapRunner{
+		manifest:    manifest,
+		deployments: map[string]*adminpb.ServiceDeployment{"moox_factor": {ServiceName: "moox_factor", Status: "active"}},
+		options: BootstrapOptions{
+			NodeID:        "node-a",
+			ReleaseRoot:   t.TempDir(),
+			ProbeWritable: func(context.Context, string, string) error { pathCalls++; return nil },
+			ProcessAlive:  func(string) bool { processCalls++; return true },
+		},
+	}
+	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:moox_factor@node-a"}, nil)
+	processResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:moox_factor@node-a"}, nil)
+	require.Equal(t, core.StatusPass, pathResult.Status)
+	require.Equal(t, core.StatusPass, processResult.Status)
+	require.Positive(t, pathCalls)
+	require.Equal(t, 1, processCalls)
+}

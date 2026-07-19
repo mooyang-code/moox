@@ -179,7 +179,7 @@ components:
     config_paths: [trade/config/app.yaml, trade/config/trpc_go.yaml]
     writable_paths: [data/trade]
     recovery_action_ids: [restart_service_manually]
-    required_in_default_profile: true
+    required_in_default_profile: false
   - component_id: moox_archive
     service_name: moox_archive
     role: archive
@@ -209,4 +209,4 @@ components:
     config_paths: [hostagent/config/trpc_go.yaml]
     writable_paths: [data/hostagent]
     recovery_action_ids: [free_disk_space, restart_service_manually]
-    required_in_default_profile: true
+    required_in_default_profile: false

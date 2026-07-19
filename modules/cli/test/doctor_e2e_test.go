@@ -67,3 +67,18 @@ func TestDoctorDiagnoseFailsClosedOnIdentityConflict(t *testing.T) {
 	require.Equal(t, core.ConclusionUnhealthy, report.Conclusion)
 	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:moox_factor@node-a").Status)
 }
+
+func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("moox_module_runs_total 1\n"))
+	}))
+	defer server.Close()
+	snapshot := &monitorpb.GetDoctorContextRsp{
+		ManifestChecksum:    "sha256:test",
+		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor", ServiceName: "moox_factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"}},
+		MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor", Status: "FAIL", Stale: true, AgeSeconds: 121, IntervalSeconds: 30}},
+	}
+	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:moox_factor@node-a"}, Client: e2eContextClient{rsp: snapshot}, Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}}})
+	require.NoError(t, err)
+	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:moox_factor@node-a").Status)
+}

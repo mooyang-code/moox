@@ -29,6 +29,8 @@ type BootstrapOptions struct {
 	Client                                                   DeploymentClient
 	Prober                                                   HTTPProber
 	Now                                                      func() time.Time
+	ProbeWritable                                            func(context.Context, string, string) error
+	ProcessAlive                                             func(string) bool
 }
 
 type bootstrapRunner struct {
@@ -39,6 +41,7 @@ type bootstrapRunner struct {
 	seedNames   map[string]bool
 	seedErr     error
 	pipelineErr error
+	pipelines   report.PipelineConfig
 }
 
 func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, error) {
@@ -65,7 +68,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		}
 	}
 	runner.seedNames, runner.seedErr = loadSeedNames(options.SeedPath)
-	_, runner.pipelineErr = report.LoadPipelineAllowlist(options.PipelinePath)
+	runner.pipelines, runner.pipelineErr = report.LoadPipelineAllowlist(options.PipelinePath)
 	specs := bootstrapSpecs(manifest, options.NodeID)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
@@ -156,16 +159,17 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusFail, "service identity probe failed", err, "verify_service_identity")
 		}
 		var identity struct {
-			Service    string `json:"service"`
-			InstanceID string `json:"instance_id"`
-			NodeID     string `json:"node_id"`
-			BootID     string `json:"boot_id"`
+			Service            string `json:"service"`
+			InstanceID         string `json:"instance_id"`
+			NodeID             string `json:"node_id"`
+			BootID             string `json:"boot_id"`
+			PipelineConfigHash string `json:"pipeline_config_hash"`
 		}
 		if err := json.Unmarshal(probe.Body, &identity); err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service identity response is invalid", err, "verify_service_identity")
 		}
 		want := component.ServiceName + "@" + r.options.NodeID
-		if identity.Service != component.ServiceName || identity.InstanceID != want || identity.NodeID != r.options.NodeID || identity.BootID == "" {
+		if identity.Service != component.ServiceName || identity.InstanceID != want || identity.NodeID != r.options.NodeID || identity.BootID == "" || (r.pipelines.Checksum != "" && identity.PipelineConfigHash != r.pipelines.Checksum) {
 			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical service@node identity", nil, "verify_service_identity")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service identity matches the canonical contract", nil)
@@ -184,14 +188,22 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusSkipped, "component declares no writable paths", nil)
 		}
 		for _, path := range component.WritablePaths {
-			if err := ProbeWritablePath(ctx, r.options.ReleaseRoot, path); err != nil {
+			probeWritable := r.options.ProbeWritable
+			if probeWritable == nil {
+				probeWritable = ProbeWritablePath
+			}
+			if err := probeWritable(ctx, r.options.ReleaseRoot, path); err != nil {
 				return checkResult(spec.ID, core.StatusFail, "writable path probe failed", err, "repair_path_permissions")
 			}
 		}
 		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
 	case "service_autostart":
 		pidPath := filepath.Join(r.options.ReleaseRoot, "run", processPIDName(component.ServiceName)+".pid")
-		if processAlive(pidPath) {
+		isAlive := r.options.ProcessAlive
+		if isAlive == nil {
+			isAlive = processAlive
+		}
+		if isAlive(pidPath) {
 			return checkResult(spec.ID, core.StatusPass, "service process is running", nil)
 		}
 		return checkResult(spec.ID, core.StatusWarn, "service PID is not active; verify the configured service manager", nil, "restart_service_manually")

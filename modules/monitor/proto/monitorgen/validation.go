@@ -25,5 +25,25 @@ func (r *GetDoctorContextReq) Validate() error {
 	if len(r.PipelineIds) > MaxDoctorContextPipelines {
 		return fmt.Errorf("pipeline_ids exceeds limit %d", MaxDoctorContextPipelines)
 	}
+	if err := validateUniqueNonEmpty("component_ids", r.ComponentIds); err != nil {
+		return err
+	}
+	if err := validateUniqueNonEmpty("pipeline_ids", r.PipelineIds); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateUniqueNonEmpty(name string, values []string) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			return fmt.Errorf("%s contains an empty value", name)
+		}
+		if _, ok := seen[value]; ok {
+			return fmt.Errorf("%s contains duplicate %q", name, value)
+		}
+		seen[value] = struct{}{}
+	}
 	return nil
 }

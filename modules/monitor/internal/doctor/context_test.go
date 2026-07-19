@@ -28,7 +28,7 @@ func TestBuilderHealthUsesPerComponentFreshnessAndConsecutiveFailures(t *testing
 	repos := mgr.Repositories()
 	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "moox_monitor", IntervalSeconds: 30, Enabled: true}))
 	for i := 0; i < 3; i++ {
-		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "moox_monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"moox_monitor","instance_id":"moox_monitor@node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
+		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "moox_monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"moox_monitor","instance_id":"moox_monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
 	}
 	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{ServiceName: "moox_monitor", NodeId: "node-a", Status: "active"}}}, Checks: repos.Checks, Results: repos.Results, Pipelines: report.PipelineConfig{Version: 1}, Now: func() time.Time { return now }}
 	got, err := builder.Build(context.Background(), "node-a", []string{"moox_monitor"}, nil)

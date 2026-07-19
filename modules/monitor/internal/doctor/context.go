@@ -45,6 +45,7 @@ type Builder struct {
 type ExpectedComponent struct {
 	ComponentID, ServiceName, NodeID, DeploymentStatus, Transport, FunctionalObservability, HealthURL string
 	Expected                                                                                          bool
+	DeploymentCreatedAt                                                                               time.Time
 }
 
 type Observation struct {
@@ -112,6 +113,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, pipelin
 			ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: foundNode,
 			Expected: expected, DeploymentStatus: status, Transport: string(component.Transport),
 			FunctionalObservability: string(component.FunctionalObservability), HealthURL: healthURL,
+			DeploymentCreatedAt: parseTimestamp(deployment.GetCreatedAt()),
 		})
 	}
 	if deploymentErr != nil {
@@ -180,23 +182,30 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		interval := max(check.IntervalSeconds, 1)
 		age := observationAge(now, latest.CheckedAt)
 		status := strings.ToUpper(latest.Status)
+		if !latest.Success {
+			status = "DEGRADED"
+		}
 		if len(results) == 3 && !results[0].Success && !results[1].Success && !results[2].Success {
 			status = "DOWN"
 		}
 		observation := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: status, ObservedAt: latest.CheckedAt, Stale: age > int64(2*interval), AgeSeconds: age, IntervalSeconds: interval, Summary: healthSummary(latest)}
 		var identity struct {
-			Service    string `json:"service"`
-			InstanceID string `json:"instance_id"`
-			BootID     string `json:"boot_id"`
+			Service            string `json:"service"`
+			InstanceID         string `json:"instance_id"`
+			NodeID             string `json:"node_id"`
+			BootID             string `json:"boot_id"`
+			PipelineConfigHash string `json:"pipeline_config_hash"`
 		}
+		component := componentByService[expected.ServiceName]
 		if json.Unmarshal([]byte(latest.BodyExcerpt), &identity) == nil {
-			observation.InstanceID, observation.BootID = identity.InstanceID, identity.BootID
-			component := componentByService[expected.ServiceName]
+			observation.InstanceID, observation.NodeID, observation.BootID = identity.InstanceID, identity.NodeID, identity.BootID
 			wantInstance := expected.ServiceName + "@" + expected.NodeID
-			if component.FunctionalObservability != doctor.FunctionalObservabilityDeferred &&
-				((identity.Service != "" && identity.Service != expected.ServiceName) || (identity.InstanceID != "" && identity.InstanceID != wantInstance) || identity.BootID == "") {
+			if component.Transport == doctor.TransportReporter && component.FunctionalObservability != doctor.FunctionalObservabilityDeferred &&
+				(identity.Service != expected.ServiceName || identity.InstanceID != wantInstance || identity.NodeID != expected.NodeID || identity.BootID == "" || (b.Pipelines.Checksum != "" && identity.PipelineConfigHash != b.Pipelines.Checksum)) {
 				observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity does not match the deployment contract"
 			}
+		} else if component.Transport == doctor.TransportReporter && component.FunctionalObservability != doctor.FunctionalObservabilityDeferred {
+			observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity payload is missing or invalid"
 		}
 		out.HealthObservations = append(out.HealthObservations, observation)
 	}
@@ -252,7 +261,12 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		}
 		rows := active[expected.ServiceName]
 		if len(rows) == 0 {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "reporter", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "Reporter observation is missing"})
+			age := observationAge(now, expected.DeploymentCreatedAt)
+			status := "WARN"
+			if expected.DeploymentCreatedAt.IsZero() || age > 120 {
+				status = "FAIL"
+			}
+			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "reporter", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: status, Stale: true, AgeSeconds: age, IntervalSeconds: 30, Summary: "Reporter observation is missing"})
 			continue
 		}
 		if component.FunctionalObservability == doctor.FunctionalObservabilityDeferred {
@@ -386,6 +400,11 @@ func deploymentHealthURL(deployment *adminpb.ServiceDeployment) string {
 	}
 	_ = json.Unmarshal([]byte(deployment.GetExtraConfig()), &extra)
 	return extra.HealthURL
+}
+
+func parseTimestamp(value string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	return parsed
 }
 
 func healthSummary(result domain.CheckResult) string {

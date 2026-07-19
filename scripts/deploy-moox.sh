@@ -1092,6 +1092,7 @@ runtime_identity_env() {
     boot_id="boot-$(date +%s)-$$-${RANDOM}"
   fi
   RUNTIME_IDENTITY_ENV=(
+    "MOOX_SERVICE_NAME=${service_name}"
     "MOOX_INSTANCE_ID=${service_name}@${MOOX_GATEWAY_NODE_ID}"
     "MOOX_NODE_ID=${MOOX_GATEWAY_NODE_ID}"
     "MOOX_BOOT_ID=${boot_id}"

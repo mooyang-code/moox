@@ -26,7 +26,7 @@ components = {
 seed_processes = {
     item["name"]: item
     for item in seed["services"]
-    if item.get("deployment_mode") == "process"
+    if item.get("deployment_mode") == "process" and item.get("status") == "active"
 }
 default_names = set(re.findall(r'deployment\("([^"]+)"', defaults))
 

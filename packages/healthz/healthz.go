@@ -19,6 +19,7 @@ type Response struct {
 	Module             string         `json:"module"`
 	Service            string         `json:"service,omitempty"`
 	InstanceID         string         `json:"instance_id,omitempty"`
+	NodeID             string         `json:"node_id,omitempty"`
 	Ready              bool           `json:"ready"`
 	Status             string         `json:"status"`
 	Version            string         `json:"version,omitempty"`
@@ -96,6 +97,15 @@ func (s *State) enrich(rsp *Response) {
 	}
 	if rsp.BootID == "" {
 		rsp.BootID = s.BootID
+	}
+	if service := strings.TrimSpace(os.Getenv("MOOX_SERVICE_NAME")); service != "" {
+		rsp.Service = service
+	}
+	if instance := strings.TrimSpace(os.Getenv("MOOX_INSTANCE_ID")); instance != "" {
+		rsp.InstanceID = instance
+	}
+	if node := strings.TrimSpace(os.Getenv("MOOX_NODE_ID")); node != "" {
+		rsp.NodeID = node
 	}
 	if rsp.BuildTime == "" {
 		rsp.BuildTime = s.BuildTime
@@ -180,14 +190,22 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Base constructs a standard health payload with stable fields populated.
 func Base(module, instanceID, version, gitCommit string, start time.Time, ready bool) Response {
+	service := strings.TrimSpace(os.Getenv("MOOX_SERVICE_NAME"))
+	if service == "" {
+		service = module
+	}
+	if configured := strings.TrimSpace(os.Getenv("MOOX_INSTANCE_ID")); configured != "" {
+		instanceID = configured
+	}
 	status := "degraded"
 	if ready {
 		status = "ok"
 	}
 	return Response{
 		Module:             module,
-		Service:            module,
+		Service:            service,
 		InstanceID:         instanceID,
+		NodeID:             strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
 		Ready:              ready,
 		Status:             status,
 		Version:            version,

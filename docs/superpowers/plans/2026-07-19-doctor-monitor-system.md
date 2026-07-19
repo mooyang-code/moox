@@ -791,6 +791,7 @@ make -C modules/monitor/proto all
 bash scripts/test-monitor-coverage-contract.sh
 bash scripts/test-trpc-plugin-config.sh
 bash scripts/test-release-contract.sh
+bash scripts/test-doctor-e2e.sh
 make verify
 ```
 
