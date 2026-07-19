@@ -75,7 +75,12 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		}
 		rsp.Details["metrics_schema_ready"] = metricsReady
 		rsp.Details["metrics_schema_reason"] = metricsReason
-		ready = databaseReady && schedulerReady && metricsReady
+		ingestReady := !cfg.Metrics.Enabled || (runtime != nil && runtime.MetricsIngestReady.Load())
+		rsp.Details["metrics_ingest_ready"] = ingestReady
+		if runtime != nil && runtime.metricsIngestErrorMessage() != "" {
+			rsp.Details["metrics_ingest_error"] = runtime.metricsIngestErrorMessage()
+		}
+		ready = databaseReady && schedulerReady && metricsReady && ingestReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"

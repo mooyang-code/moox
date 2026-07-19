@@ -21,6 +21,11 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+    - name: trpc.moox.strategy.metrics.timer
+      port: 11432
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 10000
 
 plugins:
   auth:

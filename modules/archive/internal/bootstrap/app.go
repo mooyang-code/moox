@@ -83,6 +83,9 @@ func (a *App) Run(ctx context.Context) error {
 		if err := registerArchiveTimers(a.Server, materializer, cosSyncer); err != nil {
 			return err
 		}
+		if err := registerMetricsReporter(a.Server); err != nil {
+			return err
+		}
 	}
 	jsCfg := jetstream.ConfigFromEnv(a.Config.Archive.EventBus.URLs, "moox-archive")
 	natsClient, err := jetstream.Connect(ctx, jsCfg)

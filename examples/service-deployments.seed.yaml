@@ -334,6 +334,7 @@ services:
     extra_config:
       gateway_methods:
         - ListActiveServiceDeployments
+        - ListServiceDeployments
       gateway_callers: [admin-gateway, monitor, moox-cli]
   - name: trade_account
     kind: trade

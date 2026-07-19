@@ -28,8 +28,8 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "monitor-hostmetrics-consumer", "storage-eventbus", "cloudnode-eventbus", "factor-eventbus", "strategy-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "monitor-hostmetrics-consumer": "eventbus_monitor_consumer", "storage-eventbus": "eventbus_storage", "cloudnode-eventbus": "eventbus_cloudnode", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-hostmetrics-consumer", "monitor-metrics-consumer", "storage-eventbus", "cloudnode-eventbus", "factor-eventbus", "strategy-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-hostmetrics-consumer": "eventbus_monitor_consumer", "monitor-metrics-consumer": "eventbus_monitor_metrics_consumer", "storage-eventbus": "eventbus_storage", "cloudnode-eventbus": "eventbus_cloudnode", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy"}
 
 type eventbusBundle struct {
 	CA        string    `json:"ca"`
@@ -213,7 +213,9 @@ func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error
 	roleFiles := map[string]string{
 		"eventbus-internal-admin":      "internal-admin.yaml",
 		"hostagent-publisher":          "hostagent-publisher.yaml",
+		"metrics-publisher":            "metrics-publisher.yaml",
 		"monitor-hostmetrics-consumer": "monitor-eventbus.yaml",
+		"monitor-metrics-consumer":     "monitor-metrics-consumer.yaml",
 		"storage-eventbus":             "storage-eventbus.yaml",
 		"cloudnode-eventbus":           "cloudnode-eventbus.yaml",
 		"factor-eventbus":              "factor-eventbus.yaml",
@@ -224,7 +226,7 @@ func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error
 		if role == "hostagent-publisher" {
 			field = "eventbus_token"
 		}
-		if role == "monitor-hostmetrics-consumer" {
+		if role == "monitor-hostmetrics-consumer" || role == "monitor-metrics-consumer" {
 			field = "monitor_eventbus_token"
 		}
 		url := "tls://127.0.0.1:4222"
@@ -261,8 +263,18 @@ func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
 }
-func usersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; JetStream API permissions are not granted to publisher roles.
-	return fmt.Sprintf("users:\n  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\", \"$JS.ACK.>\"]}\n      subscribe: {allow: [\"$JS.API.>\", \"$JS.ACK.>\", \"_INBOX.>\"]}\n  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.metrics.host.reported.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n  - username: monitor-hostmetrics-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.dlq.message.rejected.v1\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_hostmetrics_ingest_v1.>\", \"_INBOX.>\"]}\n  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.storage.rows_committed.time_series.v1.>\", \"moox.storage.rows_committed.record.v1.>\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view_rows_committed_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_rows_committed_v1\", \"$JS.ACK.MOOX_STORAGE.storage_view_rows_committed_v1.>\", \"$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view_rows_committed_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_rows_committed_v1\", \"$JS.ACK.MOOX_STORAGE.storage_view_rows_committed_v1.>\", \"_INBOX.>\"]}\n  - username: cloudnode-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.cloudnode.exec.v1.>\"]}\n      subscribe: {allow: [\"$JS.API.>\", \"$JS.ACK.>\", \"_INBOX.>\"]}\n  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: []}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_calc\", \"$JS.ACK.MOOX_STORAGE.factor_calc.>\", \"_INBOX.>\"]}\n  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.strategy.signal.generated.v1\", \"moox.strategy.action.accepted.v1\", \"moox.strategy.run.completed.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n", tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["monitor-hostmetrics-consumer"], tokens["storage-eventbus"], tokens["cloudnode-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"])
+func usersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
+	return fmt.Sprintf("users:\n"+
+		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\", \"$JS.ACK.>\"]}\n      subscribe: {allow: [\"$JS.API.>\", \"$JS.ACK.>\", \"_INBOX.>\"]}\n"+
+		"  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.metrics.host.reported.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: metrics-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.metrics.snapshot.reported.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: monitor-hostmetrics-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.dlq.message.rejected.v1\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_hostmetrics_ingest_v1.>\", \"_INBOX.>\"]}\n"+
+		"  - username: monitor-metrics-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.dlq.message.rejected.v1\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_metrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_metrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_metrics_ingest_v1.>\", \"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_hostmetrics_ingest_v1.>\", \"_INBOX.>\"]}\n"+
+		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.storage.rows_committed.time_series.v1.>\", \"moox.storage.rows_committed.record.v1.>\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view_rows_committed_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_rows_committed_v1\", \"$JS.ACK.MOOX_STORAGE.storage_view_rows_committed_v1.>\", \"_INBOX.>\"]}\n"+
+		"  - username: cloudnode-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.cloudnode.exec.v1.>\"]}\n      subscribe: {allow: [\"$JS.API.>\", \"$JS.ACK.>\", \"_INBOX.>\"]}\n"+
+		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: []}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_calc\", \"$JS.ACK.MOOX_STORAGE.factor_calc.>\", \"_INBOX.>\"]}\n"+
+		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.strategy.signal.generated.v1\", \"moox.strategy.action.accepted.v1\", \"moox.strategy.run.completed.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
+		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-hostmetrics-consumer"], tokens["monitor-metrics-consumer"], tokens["storage-eventbus"], tokens["cloudnode-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"])
 }
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)

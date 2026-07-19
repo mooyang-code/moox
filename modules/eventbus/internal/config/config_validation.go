@@ -292,6 +292,9 @@ func validPayloadContentType(value string) bool {
 	if value == "application/json" {
 		return true
 	}
+	if value == "application/vnd.moox.metrics.snapshot+protobuf" {
+		return true
+	}
 	return strings.HasPrefix(value, "application/x-protobuf; message=") && len(strings.TrimPrefix(value, "application/x-protobuf; message=")) > 0
 }
 

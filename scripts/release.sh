@@ -186,6 +186,7 @@ cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage-primary/stop.sh"
 cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage-view/start.sh"
 cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage-view/stop.sh"
 cp -R "${ROOT}/examples/." "${RELEASE_ROOT}/examples/"
+cp "${ROOT}/examples/monitor-pipelines.yaml" "${RELEASE_ROOT}/config/monitor-pipelines.yaml"
 cp -R "${ROOT}/docs/." "${RELEASE_ROOT}/docs/" 2>/dev/null || true
 chmod +x "${RELEASE_ROOT}/storage-primary/start.sh" "${RELEASE_ROOT}/storage-primary/stop.sh" "${RELEASE_ROOT}/storage-view/start.sh" "${RELEASE_ROOT}/storage-view/stop.sh"
 cp "${ROOT}/README.md" "${RELEASE_ROOT}/README.md" 2>/dev/null || true

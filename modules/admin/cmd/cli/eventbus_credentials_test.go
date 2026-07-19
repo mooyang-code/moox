@@ -44,8 +44,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 9 {
-		t.Fatalf("eventbus records=%d, want 9", count)
+	if count != 11 {
+		t.Fatalf("eventbus records=%d, want 11", count)
 	}
 }
 
@@ -68,6 +68,8 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "ca.pem"))
 	assert.FileExists(t, filepath.Join(exportDir, "server.pem"))
 	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "monitor-metrics-consumer.yaml"))
 	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
 	assert.FileExists(t, strategyCredential)
 	info, err := os.Stat(strategyCredential)
@@ -77,14 +79,19 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	yaml := usersYAML(map[string]string{
 		"eventbus-internal-admin":      "a",
 		"hostagent-publisher":          "b",
-		"monitor-hostmetrics-consumer": "c",
-		"storage-eventbus":             "d",
-		"cloudnode-eventbus":           "e",
-		"factor-eventbus":              "f",
-		"strategy-eventbus":            "g",
+		"metrics-publisher":            "c",
+		"monitor-hostmetrics-consumer": "d",
+		"monitor-metrics-consumer":     "e",
+		"storage-eventbus":             "f",
+		"cloudnode-eventbus":           "g",
+		"factor-eventbus":              "h",
+		"strategy-eventbus":            "i",
 	})
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
+	assert.Contains(t, yaml, "moox.metrics.snapshot.reported.v1")
+	metricsPublisherACL := yaml[strings.Index(yaml, "username: metrics-publisher"):strings.Index(yaml, "username: monitor-hostmetrics-consumer")]
+	assert.NotContains(t, metricsPublisherACL, "$JS.API.>")
 	assert.Contains(t, yaml, "moox.strategy.signal.generated.v1")
 	assert.Contains(t, yaml, "moox.strategy.action.accepted.v1")
 	assert.Contains(t, yaml, "moox.strategy.run.completed.v1")
@@ -111,7 +118,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.GreaterOrEqual(t, count, int64(9))
+	assert.GreaterOrEqual(t, count, int64(11))
 }
 
 func TestEventBusCredentialsHelpers(t *testing.T) {

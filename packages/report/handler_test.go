@@ -20,6 +20,10 @@ type fakePublisher struct {
 	messages []*messagepb.MooxMessage
 }
 
+func validConfig(serviceName string) Config {
+	return Config{ServiceName: serviceName, InstanceID: serviceName + "@node-a", NodeID: "node-a", BootID: "boot-a"}
+}
+
 func (f *fakePublisher) Publish(_ context.Context, message *messagepb.MooxMessage, _ ...jetstream.PublishOption) (*jetstream.PublishAck, error) {
 	f.messages = append(f.messages, message)
 	return &jetstream.PublishAck{Stream: "MOOX_METRICS", Sequence: uint64(len(f.messages))}, nil
@@ -32,7 +36,9 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	gauge.WithLabelValues("unit").Set(42)
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", InstanceID: "i", GzipLevel: 1}, nil, registry)
+	cfg := validConfig("monitor")
+	cfg.GzipLevel = 1
+	h, err := NewHandlerWithPublisher(cfg, nil, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +74,10 @@ func TestBuildSnapshotFiltersAndRejectsOversize(t *testing.T) {
 		}
 		g.Set(1)
 	}
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", IncludeRegex: "^included_", MaxUncompressedBytes: 8}, nil, registry)
+	cfg := validConfig("monitor")
+	cfg.IncludeRegex = "^included_"
+	cfg.MaxUncompressedBytes = 8
+	h, err := NewHandlerWithPublisher(cfg, nil, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +93,7 @@ func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	hist.Observe(1.5)
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", InstanceID: "i"}, nil, registry)
+	h, err := NewHandlerWithPublisher(validConfig("monitor"), nil, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +120,9 @@ func TestHandlePublishesMooxMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher := &fakePublisher{}
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "moox-monitor", InstanceID: "instance-a"}, publisher, registry)
+	cfg := validConfig("moox-monitor")
+	cfg.InstanceID = "instance-a"
+	h, err := NewHandlerWithPublisher(cfg, publisher, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,22 +142,24 @@ func TestHandlePublishesMooxMessage(t *testing.T) {
 }
 
 func TestReportErrorIncrementsErrorCount(t *testing.T) {
-	h := &Handler{cfg: Config{ServiceName: "monitor"}}
+	h := &Handler{cfg: validConfig("monitor")}
 
 	err := h.reportError(context.Background(), errors.New("publish failed"))
 	require.Error(t, err)
 	assert.Equal(t, uint64(1), h.ErrorCount())
+	assert.Equal(t, "publish failed", h.LastError())
 
 	require.NoError(t, h.reportError(context.Background(), nil))
 	assert.Equal(t, uint64(1), h.ErrorCount())
 
 	var nilHandler *Handler
 	assert.Equal(t, uint64(0), nilHandler.ErrorCount())
+	assert.Empty(t, nilHandler.LastError())
 }
 
 func TestHandleReportsPublisherError(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", BootID: "boot"}, nil, registry)
+	h, err := NewHandlerWithPublisher(validConfig("monitor"), nil, registry)
 	require.NoError(t, err)
 	h.connector = func(context.Context, Config) (Publisher, error) {
 		return nil, errors.New("eventbus down")

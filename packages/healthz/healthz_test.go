@@ -199,6 +199,18 @@ func TestHealthzHandlerPreservesDetails(t *testing.T) {
 	}
 }
 
+func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
+	t.Setenv("MOOX_BOOT_ID", "boot-a")
+	t.Setenv("MOOX_BUILD_TIME", "2026-07-19T00:00:00Z")
+	t.Setenv("MOOX_CONFIG_HASH", "sha256:config")
+	t.Setenv("MOOX_PIPELINE_CONFIG_HASH", "sha256:pipelines")
+
+	rsp := Base("test", "test@node-a", "v1", "commit", time.Now(), true)
+	if rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.PipelineConfigHash != "sha256:pipelines" {
+		t.Fatalf("runtime identity fields = %+v", rsp)
+	}
+}
+
 func jsonContains(body []byte, field string) bool {
 	for i := 0; i+len(field) <= len(body); i++ {
 		if string(body[i:i+len(field)]) == field {

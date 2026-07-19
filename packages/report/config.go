@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -16,15 +17,16 @@ const (
 // Config controls one process-local metrics reporter. The timer schedule is
 // owned by tRPC; this config only controls gathering and publication.
 type Config struct {
-	ServiceName string
-	InstanceID  string
-	NodeID      string
-	BootID      string
-	Version     string
-	EventBusURL string
-	Topic       string
-	SpaceID     string
-	Interval    time.Duration
+	ServiceName    string
+	InstanceID     string
+	NodeID         string
+	BootID         string
+	Version        string
+	EventBusURL    string
+	CredentialFile string
+	Topic          string
+	SpaceID        string
+	Interval       time.Duration
 
 	MaxUncompressedBytes int
 	MaxCompressedBytes   int
@@ -41,11 +43,12 @@ type Config struct {
 func DefaultConfig(serviceName string) Config {
 	c := Config{
 		ServiceName:          serviceName,
-		InstanceID:           firstEnv("MOOX_INSTANCE_ID", "HOSTNAME"),
-		NodeID:               firstEnv("MOOX_NODE_ID", "HOSTNAME"),
+		InstanceID:           firstEnv("MOOX_INSTANCE_ID"),
+		NodeID:               firstEnv("MOOX_NODE_ID"),
 		BootID:               firstEnv("MOOX_BOOT_ID"),
 		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
 		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
+		CredentialFile:       firstEnv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"),
 		Topic:                DefaultTopic,
 		SpaceID:              DefaultSpace,
 		Interval:             30 * time.Second,
@@ -73,12 +76,6 @@ func DefaultConfig(serviceName string) Config {
 	}
 	if value := firstEnv("MOOX_METRICS_EXCLUDE_REGEX"); value != "" {
 		c.ExcludeRegex = value
-	}
-	if c.InstanceID == "" {
-		c.InstanceID = serviceName + "-local"
-	}
-	if c.NodeID == "" {
-		c.NodeID = c.InstanceID
 	}
 	if c.EventBusURL == "" {
 		c.EventBusURL = DefaultBusURL
@@ -111,6 +108,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.EventBusURL == "" {
 		c.EventBusURL = d.EventBusURL
+	}
+	if c.CredentialFile == "" {
+		c.CredentialFile = d.CredentialFile
 	}
 	if c.Topic == "" {
 		c.Topic = d.Topic
@@ -152,6 +152,19 @@ func (c Config) withDefaults() Config {
 		c.ExcludeRegex = d.ExcludeRegex
 	}
 	return c
+}
+
+func (c Config) validateIdentity() error {
+	for _, identity := range []struct{ name, value string }{
+		{name: "MOOX_INSTANCE_ID", value: c.InstanceID},
+		{name: "MOOX_NODE_ID", value: c.NodeID},
+		{name: "MOOX_BOOT_ID", value: c.BootID},
+	} {
+		if strings.TrimSpace(identity.value) == "" {
+			return fmt.Errorf("metrics reporter identity requires %s", identity.name)
+		}
+	}
+	return nil
 }
 
 func firstEnv(names ...string) string {

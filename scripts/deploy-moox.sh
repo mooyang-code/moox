@@ -848,7 +848,7 @@ PY
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
-    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
+    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
   else
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
@@ -1080,6 +1080,34 @@ start_service() {
     exit 1
   fi
   echo "${name} started pid=${pid}"
+}
+
+runtime_identity_env() {
+  local service_name="$1"
+  local config_file="${2:-}"
+  local boot_id
+  if command -v uuidgen >/dev/null 2>&1; then
+    boot_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  else
+    boot_id="boot-$(date +%s)-$$-${RANDOM}"
+  fi
+  RUNTIME_IDENTITY_ENV=(
+    "MOOX_INSTANCE_ID=${service_name}@${MOOX_GATEWAY_NODE_ID}"
+    "MOOX_NODE_ID=${MOOX_GATEWAY_NODE_ID}"
+    "MOOX_BOOT_ID=${boot_id}"
+  )
+  if [[ -n "${config_file}" && -f "${config_file}" ]]; then
+    RUNTIME_IDENTITY_ENV+=("MOOX_CONFIG_HASH=sha256:$(shasum -a 256 "${config_file}" | awk '{print $1}')")
+  fi
+  if [[ -f "${ROOT}/config/monitor-pipelines.yaml" ]]; then
+    RUNTIME_IDENTITY_ENV+=(
+      "MOOX_PIPELINE_CONFIG=${ROOT}/config/monitor-pipelines.yaml"
+      "MOOX_PIPELINE_CONFIG_HASH=sha256:$(shasum -a 256 "${ROOT}/config/monitor-pipelines.yaml" | awk '{print $1}')"
+    )
+  fi
+  if [[ -f "${HOME}/.config/moox/eventbus/metrics-publisher.yaml" ]]; then
+    RUNTIME_IDENTITY_ENV+=("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/metrics-publisher.yaml")
+  fi
 }
 
 STORAGE_SCHEMA_ENV=(
@@ -1383,8 +1411,9 @@ start_eventbus() {
     perl -0pi -e 's#credential_file:\s*""#credential_file: "'"${credential_dir}"'/internal-admin.yaml"#; s#tls_ca_file:\s*""#tls_ca_file: "'"${credential_dir}"'/ca.pem"#' \
       "${ROOT}/eventbus/config/app.yaml"
   fi
+  runtime_identity_env eventbus "${ROOT}/eventbus/config/app.yaml"
   start_service "eventbus" "${ROOT}/eventbus" \
-    "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
   wait_http http://127.0.0.1:11419/readyz "${MOOX_WAIT_EVENTBUS_SECONDS:-60}"
 }
 
@@ -1394,8 +1423,9 @@ start_archive() {
     exit 2
   fi
   gateway_service_env_for archive
+  runtime_identity_env moox_archive "${ROOT}/archive/config/app.yaml"
   start_service "archive" "${ROOT}/archive" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "${ROOT}/bin/moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
@@ -1477,8 +1507,9 @@ start_admin() {
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   gateway_service_env_for admin-gateway
+  runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
-    env "${ADMIN_SECRET_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=127.0.0.1:11003" "MOOX_NODE_GATEWAY_NODE_ID=${MOOX_ADMIN_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
@@ -1486,8 +1517,9 @@ start_admin() {
 
 start_gateway() {
   [[ "${WITH_GATEWAY}" == "1" ]] || { echo "gateway is disabled in this deployment package" >&2; exit 2; }
+	runtime_identity_env moox_gateway "${ROOT}/gateway/config/app.yaml"
 	start_service "gateway" "${ROOT}/gateway" \
-		env "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
+		env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
 			"${ROOT}/bin/moox-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
 
@@ -1497,8 +1529,9 @@ start_cloudnode() {
     exit 2
   fi
   init_cloudnode_schema
+  runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
-    env \
+    env "${RUNTIME_IDENTITY_ENV[@]}" \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
       "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
 }
@@ -1510,8 +1543,9 @@ start_collector() {
   fi
   init_collector_schema
   gateway_service_env_for collector
+  runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
   start_service "collector" "${ROOT}/collector" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
 start_factor() {
@@ -1522,8 +1556,9 @@ start_factor() {
   wait_factor_nats
   ensure_factor_python
   gateway_service_env_for factor
+  runtime_identity_env moox_factor "${ROOT}/factor/config/app.yaml"
   start_service "factor" "${ROOT}/factor" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
 }
 
 start_strategy() {
@@ -1534,8 +1569,9 @@ start_strategy() {
   wait_nats strategy "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_STRATEGY_NATS_SECONDS:-60}"
   ensure_strategy_python
   gateway_service_env_for strategy
+  runtime_identity_env moox_strategy "${ROOT}/strategy/config/app.yaml"
   start_service "strategy" "${ROOT}/strategy" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime" \
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
@@ -1549,8 +1585,9 @@ start_monitor() {
   apply_host_metadata
   init_monitor_schema
   gateway_service_env_for monitor
+  runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
   start_service "monitor" "${ROOT}/monitor" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
@@ -1562,8 +1599,9 @@ start_web_host() {
     echo "web-host binary missing; skip" >&2
     return 1
   fi
+  runtime_identity_env web_host
   start_service "web-host" "${ROOT}" \
-    env \
+    env "${RUNTIME_IDENTITY_ENV[@]}" \
       "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-127.0.0.1:9528}" \
       "MOOX_WEB_HOST_HEALTH_ADDR=${MOOX_WEB_HOST_HEALTH_ADDR:-127.0.0.1:19527}" \
       "${ROOT}/bin/moox-web-host"
@@ -2360,6 +2398,7 @@ EOF
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
   fi
   cp -R "${ROOT}/examples/." "${STAGE_DIR}/examples/"
+  cp "${ROOT}/examples/monitor-pipelines.yaml" "${STAGE_DIR}/config/monitor-pipelines.yaml"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp "${ROOT}/scripts/reset-storage-view-indexes.sh" "${STAGE_DIR}/reset-storage-view-indexes.sh"
   fi
