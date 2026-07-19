@@ -1,0 +1,65 @@
+storage:
+  root: ./var/storage
+  roles:
+    - primary
+  metadata:
+    path: ./var/storage/metadata/storage_metadata.db
+  devices:
+    pebble_path: ./var/storage/pebble
+  primary:
+    service_name: ""
+  eventbus:
+    type: jetstream
+    urls:
+      - nats://127.0.0.1:4222
+    nats_url: nats://127.0.0.1:4222
+    credential_file: ~/.config/moox/storage/eventbus.yaml
+    stream_name: MOOX_STORAGE
+    subject_prefix: moox.storage
+    consumer_name: storage_primary
+    max_age_hours: 24
+    max_msgs: 500000
+    max_bytes: 268435456
+    max_in_flight: 128
+    max_ack_pending: 128
+    ack_wait_ms: 120000
+    max_deliver: -1
+  view:
+    metadata_service_name: trpc.moox.storage.Metadata
+    primary_store_service_name: trpc.moox.storage.PrimaryStore
+    primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan
+    index_service_name: trpc.moox.storage.ViewIndex
+    batch_size: 500
+    batch_wait_ms: 200
+    max_workers: 2
+    maintenance:
+      enabled: true
+      owner_id: ""
+      lease_ttl: 90s
+      run_budget: 20s
+      page_size: 500
+      max_entries: 200000
+      target_entries: 150000
+      max_physical_bytes: 536870912
+      min_free_disk_bytes: 1073741824
+      min_ready_entries: 1000
+      overlap_window: 30m
+      allowed_lag: 2m
+      remove_grace: 60s
+      time_series:
+        default_retention_window: 7d
+        retention_by_freq:
+          1m: 24h
+          1h: 90d
+          1d: 730d
+      record:
+        retention_window: 30d
+  maintenance:
+    host_metrics_cleanup:
+      enabled: true
+      dataset_ids: [host_resource_v1, host_fs_v1, host_disk_v1, host_net_v1]
+      max_age: 48h
+      batch_size: 1000
+      max_batches_per_run: 10
+  health:
+    addr: ":20210"

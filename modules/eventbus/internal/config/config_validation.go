@@ -251,7 +251,7 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 	if _, ok := findStream(cfg, c.Stream); !ok {
 		return fmt.Errorf("consumer %q references unknown stream %q", c.Durable, c.Stream)
 	}
-	if err := validateSubject(c.FilterSubject, false); err != nil {
+	if err := validateSubject(c.FilterSubject, true); err != nil {
 		return fmt.Errorf("consumer %q filter: %w", c.Durable, err)
 	}
 	covered := false
@@ -262,7 +262,7 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 	}
 	if !covered {
 		for _, f := range cfg.TopicFamilies {
-			if f.Enabled && f.Pattern == c.FilterSubject && f.Stream == c.Stream {
+			if f.Enabled && f.Stream == c.Stream && patternCovers(c.FilterSubject, f.Pattern) {
 				covered = true
 			}
 		}
@@ -271,6 +271,20 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 		return fmt.Errorf("consumer %q filter %q is not registered", c.Durable, c.FilterSubject)
 	}
 	return nil
+}
+
+func patternCovers(cover, subjectPattern string) bool {
+	coverParts := strings.Split(cover, ".")
+	subjectParts := strings.Split(subjectPattern, ".")
+	for i, part := range coverParts {
+		if part == ">" {
+			return i < len(subjectParts)
+		}
+		if i >= len(subjectParts) || (part != "*" && part != subjectParts[i]) {
+			return false
+		}
+	}
+	return len(coverParts) == len(subjectParts)
 }
 
 func validPayloadContentType(value string) bool {

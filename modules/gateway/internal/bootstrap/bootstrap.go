@@ -20,6 +20,8 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
+	trpcserver "trpc.group/trpc-go/trpc-go/server"
 )
 
 type routeStore interface {
@@ -219,9 +221,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	credentialsSecret, err := config.ReadSecret(cfg.Auth.HMACKeyFile)
-	if err != nil {
-		return fmt.Errorf("read service authentication key: %w", err)
+	var credentialRegistry *gatewayauth.CredentialRegistry
+	var credentialsSecret string
+	if cfg.Auth.CredentialsFile != "" {
+		credentialRegistry, err = gatewayauth.LoadCredentialRegistry(cfg.Auth.CredentialsFile)
+		if err != nil {
+			return err
+		}
+	} else {
+		credentialsSecret, err = config.ReadSecret(cfg.Auth.HMACKeyFile)
+		if err != nil {
+			return fmt.Errorf("read service authentication key: %w", err)
+		}
 	}
 	nonces, err := store.OpenNonces(filepath.Join(cfg.Store.Path, "nonces"))
 	if err != nil {
@@ -245,10 +256,22 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return nonces.Check()
 	})
 
+	serviceCredentials := gatewayauth.Credentials{KeyID: "moox-gateway-service", Caller: cfg.Auth.Caller, Secret: credentialsSecret}
 	serviceHandler := router.New(router.Options{
-		NodeID: cfg.Node.ID, Credentials: gatewayauth.Credentials{KeyID: "moox-gateway-service", Secret: credentialsSecret},
+		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
 		MaxBodyBytes: cfg.Proxy.MaxBodyBytes, Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled, Metrics: state,
 	})
+	nativeDesc, nativeImpl := router.NativeServiceDesc(router.NativeOptions{
+		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
+		Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled,
+	})
+	nativeService := trpcserver.New(
+		trpcserver.WithAddress(cfg.Server.NativeAddr), trpcserver.WithNetwork("tcp"), trpcserver.WithProtocol("trpc"),
+		trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop), trpcserver.WithServiceName("trpc.moox.gateway.ServiceGateway"),
+	)
+	if err := nativeService.Register(nativeDesc, nativeImpl); err != nil {
+		return fmt.Errorf("register native gateway service: %w", err)
+	}
 	serviceListener, err := net.Listen("tcp", cfg.Server.ServiceAddr)
 	if err != nil {
 		return fmt.Errorf("listen service endpoint: %w", err)
@@ -262,9 +285,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	serviceServer := newServiceHTTPServer(serviceHandler)
 	healthServer := newHealthHTTPServer(state.Handler())
-	serverResults := make(chan serverResult, 3)
+	serverResults := make(chan serverResult, 4)
 	go serveHTTP("gateway service", serviceServer, serviceListener, serverResults)
 	go serveHTTP("gateway health", healthServer, healthListener, serverResults)
+	go func() { serverResults <- serverResult{name: "gateway native service", err: nativeService.Serve()} }()
 	go func() {
 		serverResults <- serverResult{name: "gateway timer", err: timerServer.Serve()}
 	}()
@@ -285,8 +309,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 	defer cancel()
 	shutdownErr := errors.Join(serviceServer.Shutdown(shutdownCtx), healthServer.Shutdown(shutdownCtx))
+	_ = nativeService.Close(make(chan struct{}, 1))
 	_ = timerServer.Close(nil)
-	for completed < 3 {
+	for completed < 4 {
 		<-serverResults
 		completed++
 	}

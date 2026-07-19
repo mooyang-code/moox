@@ -35,7 +35,7 @@ type benchmarkReport struct {
 	Extra             map[string]interface{} `json:"extra,omitempty"`
 }
 
-func benchmarkPrimaryReads(ctx context.Context, data pb.AccessClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
+func benchmarkPrimaryReads(ctx context.Context, data pb.PrimaryStoreClientProxy, files []bench.KlineFile, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.readRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		file := files[(worker+request)%len(files)]
 		rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
@@ -58,7 +58,7 @@ func benchmarkPrimaryReads(ctx context.Context, data pb.AccessClientProxy, files
 	}, opts.pageSize)
 }
 
-func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.AccessClientProxy, sample querySample, opts options) (operationReport, error) {
+func benchmarkPrimaryKlinePoint(ctx context.Context, data pb.PrimaryStoreClientProxy, sample querySample, opts options) (operationReport, error) {
 	return runConcurrentBenchmark(opts.klinePointRequests, opts.concurrency, func(worker int, request int) (int, error) {
 		rsp, err := data.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 			Keys: []*pb.TimeSeriesKey{{

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	accessServiceName   = "trpc.moox.storage.Access"
+	accessServiceName   = "trpc.moox.storage.PrimaryStore"
 	metadataServiceName = "trpc.moox.storage.Metadata"
 )
 

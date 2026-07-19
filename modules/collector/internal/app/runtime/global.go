@@ -12,11 +12,10 @@ import (
 
 // Config 全局配置结构
 type Config struct {
-	Server                ServerConfig
-	ServiceGatewayTarget  string
-	NodeInfo              NodeInfoConfig
-	StorageMetadataTarget string
-	StorageAccessTarget   string
+	Server                  ServerConfig
+	ServiceGatewayTarget    string
+	NodeInfo                NodeInfoConfig
+	StorageRPCGatewayTarget string
 	// 后续扩展其他配置项
 	// Database DatabaseConfig
 	// Cache CacheConfig
@@ -128,22 +127,19 @@ func parseServiceGatewayHostPort(target string) (string, int) {
 	return host, port
 }
 
-// UpdateStorageTargets updates direct tRPC targets for storage metadata/access.
-func UpdateStorageTargets(metadataTarget string, accessTarget string) {
+// UpdateStorageRPCGatewayTarget updates direct tRPC targets for storage metadata/access.
+func UpdateStorageRPCGatewayTarget(target string) {
 	configMu.Lock()
 	defer configMu.Unlock()
-	if IsStorageTRPCTarget(metadataTarget) {
-		GlobalConfig.StorageMetadataTarget = trimTarget(metadataTarget)
-	}
-	if IsStorageTRPCTarget(accessTarget) {
-		GlobalConfig.StorageAccessTarget = trimTarget(accessTarget)
+	if IsStorageTRPCTarget(target) {
+		GlobalConfig.StorageRPCGatewayTarget = trimTarget(target)
 	}
 }
 
 func getRuntimeStorageTargets() (string, string) {
 	configMu.RLock()
 	defer configMu.RUnlock()
-	return GlobalConfig.StorageMetadataTarget, GlobalConfig.StorageAccessTarget
+	return GlobalConfig.StorageRPCGatewayTarget, GlobalConfig.StorageRPCGatewayTarget
 }
 
 // UpdateNodeInfo 更新节点信息配置
@@ -207,14 +203,12 @@ func InitLocalAppConfig() {
 	})
 }
 
-// GetStorageMetadataTarget returns the metadata tRPC target.
-// SCF/远程采集器优先使用控制面 keepalive 下发的 storage_metadata_trpc 部署。
-func GetStorageMetadataTarget() string {
-	runtimeMetadata, _ := getRuntimeStorageTargets()
-	if runtimeMetadata != "" {
-		return runtimeMetadata
+func GetStorageRPCGatewayTarget() string {
+	runtimeTarget, _ := getRuntimeStorageTargets()
+	if runtimeTarget != "" {
+		return runtimeTarget
 	}
-	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_METADATA_TARGET")); IsStorageTRPCTarget(envTarget) {
+	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")); IsStorageTRPCTarget(envTarget) {
 		return trimTarget(envTarget)
 	}
 	if LocalAppConfig == nil {
@@ -224,34 +218,7 @@ func GetStorageMetadataTarget() string {
 	localAppConfigMu.RLock()
 	localTarget := ""
 	if LocalAppConfig != nil && LocalAppConfig.System != nil {
-		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageMetadataTarget)
-	}
-	localAppConfigMu.RUnlock()
-
-	if !IsStorageTRPCTarget(localTarget) {
-		return ""
-	}
-	return trimTarget(localTarget)
-}
-
-// GetStorageAccessTarget returns the access tRPC target.
-// Deprecated system.storage_url is intentionally not consumed by the storage tRPC proxy path.
-func GetStorageAccessTarget() string {
-	_, runtimeAccess := getRuntimeStorageTargets()
-	if runtimeAccess != "" {
-		return runtimeAccess
-	}
-	if envTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET")); IsStorageTRPCTarget(envTarget) {
-		return trimTarget(envTarget)
-	}
-	if LocalAppConfig == nil {
-		InitLocalAppConfig()
-	}
-
-	localAppConfigMu.RLock()
-	localTarget := ""
-	if LocalAppConfig != nil && LocalAppConfig.System != nil {
-		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageAccessTarget)
+		localTarget = strings.TrimSpace(LocalAppConfig.System.StorageRPC.GatewayTarget)
 	}
 	localAppConfigMu.RUnlock()
 

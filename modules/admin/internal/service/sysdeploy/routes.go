@@ -16,6 +16,15 @@ type routeExtraConfig struct {
 	TimeoutMS      *int64   `json:"timeout_ms"`
 	MaxBodyBytes   *int64   `json:"max_body_bytes"`
 	GatewayMethods []string `json:"gateway_methods"`
+	GatewayCallers []string `json:"gateway_callers"`
+	GatewayRoutes  []struct {
+		ServicePath    string   `json:"service_path"`
+		Port           int32    `json:"port"`
+		TimeoutMS      *int64   `json:"timeout_ms"`
+		MaxBodyBytes   *int64   `json:"max_body_bytes"`
+		GatewayMethods []string `json:"gateway_methods"`
+		GatewayCallers []string `json:"gateway_callers"`
+	} `json:"gateway_routes"`
 }
 
 type RouteConfigError struct{ Err error }
@@ -26,10 +35,6 @@ func (err *RouteConfigError) Error() string { return err.Err.Error() }
 func (err *RouteConfigError) Unwrap() error { return err.Err }
 func (err *RouteConfigError) Is(target error) bool {
 	return target == gatewayproxy.ErrInvalidGatewayRoute
-}
-
-func requiresMethodAllowlist(serviceID, servicePath string) bool {
-	return serviceID == "sysdeploy" || serviceID == "secret" || servicePath == "trpc.moox.ops.SysDeploy" || servicePath == "trpc.moox.ops.SecretMgr"
 }
 
 func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
@@ -64,17 +69,11 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 			if err != nil {
 				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("deployment %s/%s extra_config: %w", row.NodeID, row.ServiceName, err)}
 			}
-			if requiresMethodAllowlist(row.GatewayServiceID, row.GatewayPath) && len(extra.GatewayMethods) == 0 {
-				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("%s requires nonempty gateway_methods", row.GatewayServiceID)}
+			compiled, err := deploymentGatewayRoutes(row, extra)
+			if err != nil {
+				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
 			}
-			route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods}
-			if extra.TimeoutMS != nil {
-				route.TimeoutMS = *extra.TimeoutMS
-			}
-			if extra.MaxBodyBytes != nil {
-				route.MaxBodyBytes = *extra.MaxBodyBytes
-			}
-			routes = append(routes, route)
+			routes = append(routes, compiled...)
 		}
 	}
 	snapshot, err := gatewayproxy.NormalizeAndHashState(nodeID, node.Status == "disabled", routes)
@@ -85,6 +84,43 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 		return gatewayproxy.Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayproxy.Route, error) {
+	basePort := row.Port
+	switch row.GatewayServiceID {
+	case "storage-primary":
+		basePort = 20100
+	case "storage-view":
+		basePort = 20103
+	}
+	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
+	if extra.TimeoutMS != nil {
+		base.TimeoutMS = *extra.TimeoutMS
+	}
+	if extra.MaxBodyBytes != nil {
+		base.MaxBodyBytes = *extra.MaxBodyBytes
+	}
+	routes := []gatewayproxy.Route{base}
+	for _, item := range extra.GatewayRoutes {
+		if item.ServicePath == "" || item.Port < 1 {
+			return nil, fmt.Errorf("gateway_routes entries require service_path and positive port")
+		}
+		route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(item.Port))), ServicePath: item.ServicePath, AllowedMethods: item.GatewayMethods, AllowedCallers: item.GatewayCallers}
+		if item.TimeoutMS != nil {
+			route.TimeoutMS = *item.TimeoutMS
+		}
+		if item.MaxBodyBytes != nil {
+			route.MaxBodyBytes = *item.MaxBodyBytes
+		}
+		routes = append(routes, route)
+	}
+	for _, route := range routes {
+		if len(route.AllowedMethods) == 0 || len(route.AllowedCallers) == 0 {
+			return nil, fmt.Errorf("%s/%s requires explicit nonempty gateway_methods and gateway_callers", row.GatewayServiceID, route.ServicePath)
+		}
+	}
+	return routes, nil
 }
 
 func parseRouteExtraConfig(raw string) (routeExtraConfig, error) {
@@ -110,6 +146,16 @@ func parseRouteExtraConfig(raw string) (routeExtraConfig, error) {
 	if value, ok := object["gateway_methods"]; ok {
 		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayMethods) != nil {
 			return extra, fmt.Errorf("gateway_methods must be an array of strings")
+		}
+	}
+	if value, ok := object["gateway_callers"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayCallers) != nil {
+			return extra, fmt.Errorf("gateway_callers must be an array of strings")
+		}
+	}
+	if value, ok := object["gateway_routes"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayRoutes) != nil {
+			return extra, fmt.Errorf("gateway_routes must be an array of route objects")
 		}
 	}
 	return extra, nil

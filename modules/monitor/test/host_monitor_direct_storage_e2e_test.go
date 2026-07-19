@@ -16,7 +16,7 @@ import (
 
 type fakeStorage struct{ rows []*storagepb.TimeSeriesRow }
 
-func (f *fakeStorage) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
+func (f *fakeStorage) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
 	for _, incoming := range req.GetRows() {
 		replaced := false
 		for i, existing := range f.rows {
@@ -30,7 +30,7 @@ func (f *fakeStorage) WriteTimeSeriesRows(_ context.Context, req *storagepb.Writ
 			f.rows = append(f.rows, incoming)
 		}
 	}
-	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeStorage) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	dataset := req.GetKeys()[0].GetDatasetId()

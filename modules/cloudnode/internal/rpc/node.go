@@ -200,6 +200,9 @@ func (s *Service) heartbeatDirectives(ctx context.Context, spaceID string, nodeI
 }
 
 func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {
+	if strings.EqualFold(strings.TrimSpace(node.Region), "local") {
+		return s.ensureLocalPackage(ctx, node, item)
+	}
 	pkg, account, err := s.packageAndAccount(ctx, node.SpaceID, node.PackageID, node.CloudAccountID)
 	if err != nil {
 		return err
@@ -259,6 +262,43 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		return nil
 	}
 	mergeSCFFunctionMetadata(node, info)
+	return nil
+}
+
+// ensureLocalPackage makes the local E2E/runtime profile independent of Tencent
+// credentials and COS. Local nodes execute through the durable JobItem queue,
+// so they only need an available package descriptor, not a remote SCF function.
+func (s *Service) ensureLocalPackage(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {
+	pkg, err := s.catalog.GetPackage(ctx, node.SpaceID, node.PackageID)
+	if err != nil {
+		return err
+	}
+	if pkg == nil {
+		pkg = &store.FunctionPackage{
+			SpaceID:        node.SpaceID,
+			PackageID:      node.PackageID,
+			PackageName:    node.PackageID,
+			Version:        firstString(item.GetRuntime(), "local"),
+			Description:    "local runtime package",
+			Runtime:        firstString(item.GetRuntime(), "go1"),
+			PackageType:    "collector",
+			WorkloadType:   "collect.kline",
+			OriginalName:   node.PackageID,
+			FileSize:       1,
+			FileMD5:        "local",
+			CloudAccountID: node.CloudAccountID,
+			Status:         "available",
+		}
+	} else {
+		pkg.Status = "available"
+		if pkg.Version == "" {
+			pkg.Version = firstString(item.GetRuntime(), "local")
+		}
+	}
+	if err := s.catalog.UpsertPackage(ctx, *pkg); err != nil {
+		return err
+	}
+	node.PackageVersion = pkg.Version
 	return nil
 }
 

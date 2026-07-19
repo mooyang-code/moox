@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	"github.com/mooyang-code/moox/modules/storage/internal/core/metadata"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"gopkg.in/yaml.v2"
 )
@@ -215,6 +215,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
 			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
 			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
+			Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
 		}
@@ -234,7 +235,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.Devices {
 		if _, err := store.UpsertDevice(ctx, &pb.Device{
 			DeviceId: item.DeviceID, NodeId: item.NodeID, Name: item.Name, Engine: item.Engine,
-			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status,
+			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("device", item.DeviceID, err)
 		}
@@ -515,14 +516,15 @@ type seedView struct {
 
 // seedViewColumn 描述 View 中对外可查询的结果列。
 type seedViewColumn struct {
-	SpaceID    string `yaml:"space_id"`
-	ViewID     string `yaml:"view_id"`
-	ColumnName string `yaml:"column_name"`
-	OriginType string `yaml:"origin_type"`
-	OriginID   string `yaml:"origin_id"`
-	ValueType  string `yaml:"value_type"`
-	OnlineTime string `yaml:"online_time"`
-	SortOrder  uint32 `yaml:"sort_order"`
+	SpaceID    string            `yaml:"space_id"`
+	ViewID     string            `yaml:"view_id"`
+	ColumnName string            `yaml:"column_name"`
+	OriginType string            `yaml:"origin_type"`
+	OriginID   string            `yaml:"origin_id"`
+	ValueType  string            `yaml:"value_type"`
+	OnlineTime string            `yaml:"online_time"`
+	SortOrder  uint32            `yaml:"sort_order"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedPrimaryStoreNode 描述待初始化的主存节点。
@@ -537,13 +539,14 @@ type seedPrimaryStoreNode struct {
 
 // seedDevice 描述待初始化的物理存储设备。
 type seedDevice struct {
-	DeviceID   string `yaml:"device_id"`
-	NodeID     string `yaml:"node_id"`
-	Name       string `yaml:"name"`
-	Engine     string `yaml:"engine"`
-	Endpoint   string `yaml:"endpoint"`
-	ConfigJSON string `yaml:"config_json"`
-	Status     string `yaml:"status"`
+	DeviceID   string            `yaml:"device_id"`
+	NodeID     string            `yaml:"node_id"`
+	Name       string            `yaml:"name"`
+	Engine     string            `yaml:"engine"`
+	Endpoint   string            `yaml:"endpoint"`
+	ConfigJSON string            `yaml:"config_json"`
+	Status     string            `yaml:"status"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedPrimaryStoreRoute 描述待初始化的主存路由。

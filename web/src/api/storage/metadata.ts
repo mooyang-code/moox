@@ -1,4 +1,4 @@
-import { callMetadata } from "./http";
+import { callStorage as callMetadata } from "./http";
 import type {
   ArchiveFile,
   DataSource,

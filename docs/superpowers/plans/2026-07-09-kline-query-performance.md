@@ -9,10 +9,10 @@
 - Frontend route: `/#/collector/views?tab=browse`
 - Main frontend file: `web/src/views/data/view-browse/index.vue`
 - Storage module:
-  - `modules/storage/internal/infra/device/duckdb/view_store.go`
+  - `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
   - `modules/storage/internal/services/view`
   - `modules/storage/internal/services/access`
-  - `modules/storage/internal/infra/transport/nats/producer.go`
+  - `modules/storage/internal/service/transport/nats/producer.go`
   - `modules/storage/config/trpc_go.yaml`
 - Remote verification:
   - Web page: `http://106.53.107.122:9527/#/collector/views?tab=browse`
@@ -30,7 +30,7 @@
   - Single-column subject raw access was much faster than all-column reads, so column projection matters.
 - Storage pprof CPU showed most samples under `runtime.cgocall`, with DuckDB/sqlite/proto JSON on the hot path.
 - Storage RSS was around 1GB while Go heap in-use was much smaller, so the OOM pressure is likely native/DuckDB/NATS/buffer/logging related, not a simple Go heap leak.
-- Storage logs were dominated by per-message `消息已发布` debug logs from `modules/storage/internal/infra/transport/nats/producer.go` while storage config log level was `debug`.
+- Storage logs were dominated by per-message `消息已发布` debug logs from `modules/storage/internal/service/transport/nats/producer.go` while storage config log level was `debug`.
 
 ## Phase 0: Baseline and Safety
 
@@ -56,8 +56,8 @@
   ```bash
   cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
   rg -n "resetSortState|buildViewSorts|VIEW_BROWSE_PREVIEW_LIMIT|loadTimeSeriesViewRows|fetchKlineTableRows|buildKlineQuerySorts" web/src/views/data/view-browse/index.vue
-  rg -n "buildTimeSeriesQuery|resultSelectColumns|projectColumns|buildOrderBy|createResultIndexStatements" modules/storage/internal/infra/device/duckdb/view_store.go
-  rg -n "消息已发布|Debugf" modules/storage/internal/infra/transport/nats/producer.go
+  rg -n "buildTimeSeriesQuery|resultSelectColumns|projectColumns|buildOrderBy|createResultIndexStatements" modules/storage/internal/service/dataview/index/duckdb/view_store.go
+  rg -n "消息已发布|Debugf" modules/storage/internal/service/transport/nats/producer.go
   rg -n "level:" modules/storage/config/trpc_go.yaml
   ```
 
@@ -170,7 +170,7 @@
   Files:
 
   - `modules/storage/config/trpc_go.yaml`
-  - `modules/storage/internal/infra/transport/nats/producer.go`
+  - `modules/storage/internal/service/transport/nats/producer.go`
 
   Required implementation:
 
@@ -196,7 +196,7 @@
   ```bash
   cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
   rg -n "level: info" modules/storage/config/trpc_go.yaml
-  rg -n "消息已发布" modules/storage/internal/infra/transport/nats/producer.go
+  rg -n "消息已发布" modules/storage/internal/service/transport/nats/producer.go
   ```
 
   Expected output:
@@ -208,7 +208,7 @@
 
 - [ ] Push `column_names` down into DuckDB SQL selection for time-series view queries.
 
-  File: `modules/storage/internal/infra/device/duckdb/view_store.go`
+  File: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
 
   Current issue:
 
@@ -255,7 +255,7 @@
 
 - [ ] Add a DuckDB query-builder regression test.
 
-  File: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+  File: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
   Add a focused test near existing query-builder tests:
 
@@ -302,7 +302,7 @@
 
 - [ ] Add a standalone `data_time` index for result tables.
 
-  File: `modules/storage/internal/infra/device/duckdb/view_store.go`
+  File: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
 
   Current indexes include row-key and subject/freq/time patterns, but global latest browsing benefits from a direct time index or a dedicated latest model.
 
@@ -321,7 +321,7 @@
 
 - [ ] Ensure indexes are created for existing result tables, not only newly built tables.
 
-  File: `modules/storage/internal/infra/device/duckdb/view_store.go`
+  File: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
 
   Required implementation:
 
@@ -346,7 +346,7 @@
 
 - [ ] Add a latest-row read path for time-series views.
 
-  File: `modules/storage/internal/infra/device/duckdb/view_store.go`
+  File: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
 
   Required behavior:
 
@@ -388,7 +388,7 @@
 
 - [ ] Add query routing tests.
 
-  File: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+  File: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
   Required assertions:
 
@@ -442,7 +442,7 @@
 
   ```bash
   cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-  go test ./modules/storage/internal/infra/device/duckdb -run 'TestConcurrentWriterAndReadOnlyQuery|TestViewQueryRoleReadOnly' -count=1
+  go test ./modules/storage/internal/service/dataview/index/duckdb -run 'TestConcurrentWriterAndReadOnlyQuery|TestViewQueryRoleReadOnly' -count=1
   ```
 
   Expected output:
@@ -509,7 +509,7 @@
 
   ```bash
   cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-  CGO_ENABLED=1 go test ./modules/storage/internal/infra/device/duckdb -count=1
+  CGO_ENABLED=1 go test ./modules/storage/internal/service/dataview/index/duckdb -count=1
   go test ./modules/storage/internal/services/view ./modules/storage/internal/services/access ./modules/storage/internal/config -count=1
   ```
 

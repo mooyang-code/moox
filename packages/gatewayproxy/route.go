@@ -25,6 +25,47 @@ var (
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )
 
+var storageInternalMethods = map[string]struct{}{
+	"ClaimViewIndexBuild":  {},
+	"UpdateViewIndexBuild": {},
+	"ActivateViewIndex":    {},
+	"FailViewIndexBuild":   {},
+	"MergePrimaryRows":     {},
+	"ScanPrimaryRows":      {},
+	"DeletePrimaryRows":    {},
+	"DeleteTimeSeriesRows": {},
+	"PrepareViewIndex":     {},
+	"ApplyViewIndex":       {},
+	"StatViewIndex":        {},
+	"RemoveViewIndex":      {},
+	"ListViewIndexes":      {},
+	"QueryTimeSeriesIndex": {},
+	"SearchRecordIndex":    {},
+	"GetShardState":        {},
+}
+
+var storageViewMetadataMethods = map[string]struct{}{
+	"ClaimViewIndexBuild":  {},
+	"UpdateViewIndexBuild": {},
+	"ActivateViewIndex":    {},
+	"FailViewIndexBuild":   {},
+}
+
+var storagePrivilegedMethods = map[string]map[string]struct{}{
+	"trpc.moox.storage.PrimaryStoreScan": {
+		"ScanTimeSeriesRows": {},
+		"ScanRecordRows":     {},
+		"GetShardHeads":      {},
+	},
+	"trpc.moox.storage.DataShard": {
+		"MergeRows":     {},
+		"ReadRows":      {},
+		"ScanRows":      {},
+		"DeleteRows":    {},
+		"GetShardState": {},
+	},
+}
+
 type Route struct {
 	ServiceID      string   `json:"service_id,omitempty"`
 	Address        string   `json:"address,omitempty"`
@@ -32,14 +73,21 @@ type Route struct {
 	TimeoutMS      int64    `json:"timeout_ms,omitempty"`
 	MaxBodyBytes   int64    `json:"max_body_bytes,omitempty"`
 	AllowedMethods []string `json:"allowed_methods,omitempty"`
+	AllowedCallers []string `json:"allowed_callers,omitempty"`
 }
 
 func (route Route) AllowsMethod(method string) bool {
-	if len(route.AllowedMethods) == 0 {
-		return true
-	}
 	for _, allowed := range route.AllowedMethods {
-		if allowed == method {
+		if allowed == "*" || allowed == method {
+			return true
+		}
+	}
+	return false
+}
+
+func (route Route) AllowsCaller(caller string) bool {
+	for _, allowed := range route.AllowedCallers {
+		if allowed == "*" || allowed == caller {
 			return true
 		}
 	}
@@ -70,7 +118,93 @@ func ValidateRoute(route Route) error {
 	if route.MaxBodyBytes < 0 || route.MaxBodyBytes > maxMaxBodyBytes {
 		return fmt.Errorf("max_body_bytes must be between 1 and %d, or zero for the default", maxMaxBodyBytes)
 	}
+	if len(route.AllowedMethods) == 0 {
+		return fmt.Errorf("route requires a nonempty allowed_methods list")
+	}
+	if len(route.AllowedCallers) == 0 {
+		return fmt.Errorf("route requires a nonempty allowed_callers list")
+	}
+	isStoragePath := strings.HasPrefix(route.ServicePath, "trpc.moox.storage.")
+	if isStoragePath {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
+			}
+		}
+		for _, caller := range route.AllowedCallers {
+			if caller == "*" {
+				return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
+			}
+		}
+	}
+	if route.ServiceID == "storage" || route.ServiceID == "storage-primary" || route.ServiceID == "storage-view" {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
+			}
+			_, internal := storageInternalMethods[method]
+			_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
+			if internal && !dataShardPrivileged && !allowsStorageViewMetadataMethod(route, method) {
+				return fmt.Errorf("storage method %q is internal and cannot be routed", method)
+			}
+		}
+	}
+	if route.ServicePath == "trpc.moox.storage.DataShard" {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("DataShard routes cannot use wildcard allowed_methods")
+			}
+			if _, ok := storagePrivilegedMethods[route.ServicePath][method]; !ok {
+				return fmt.Errorf("DataShard method %q is not routable", method)
+			}
+		}
+		for _, caller := range route.AllowedCallers {
+			if caller != "storage-primary" {
+				return fmt.Errorf("DataShard routes only allow storage-primary caller")
+			}
+		}
+	}
+	if route.ServicePath == "trpc.moox.storage.PrimaryStoreScan" {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("PrimaryStoreScan routes cannot use wildcard allowed_methods")
+			}
+			if _, ok := storagePrivilegedMethods[route.ServicePath][method]; !ok {
+				return fmt.Errorf("PrimaryStoreScan method %q is not routable", method)
+			}
+		}
+		for _, caller := range route.AllowedCallers {
+			if caller == "*" || (caller != "storage-view" && caller != "archive") {
+				return fmt.Errorf("PrimaryStoreScan routes only allow storage-view or archive callers")
+			}
+		}
+	}
+	for _, method := range route.AllowedMethods {
+		_, internal := storageInternalMethods[method]
+		_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
+		if internal && !dataShardPrivileged && !allowsStorageViewMetadataMethod(route, method) {
+			return fmt.Errorf("storage method %q is internal and cannot be routed", method)
+		}
+	}
+	for _, caller := range route.AllowedCallers {
+		if isStoragePath && caller == "*" {
+			return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
+		}
+		if caller != "*" && !serviceIDPattern.MatchString(caller) {
+			return fmt.Errorf("allowed caller %q must be a lowercase URL-safe identifier", caller)
+		}
+	}
 	return nil
+}
+
+func allowsStorageViewMetadataMethod(route Route, method string) bool {
+	if route.ServiceID != "storage-primary" || route.ServicePath != "trpc.moox.storage.Metadata" {
+		return false
+	}
+	if _, ok := storageViewMetadataMethods[method]; !ok || len(route.AllowedCallers) != 1 {
+		return false
+	}
+	return route.AllowedCallers[0] == "storage-view"
 }
 
 func validateLoopbackAddress(address string) error {
@@ -107,10 +241,13 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 	normalized := append([]Route(nil), routes...)
 	for index := range normalized {
 		methods := append([]string(nil), normalized[index].AllowedMethods...)
+		if len(methods) == 0 {
+			return Snapshot{}, fmt.Errorf("route %d requires a nonempty allowed_methods list", index)
+		}
 		sort.Strings(methods)
 		deduplicated := methods[:0]
 		for _, method := range methods {
-			if !methodPattern.MatchString(method) {
+			if method != "*" && !methodPattern.MatchString(method) {
 				return Snapshot{}, fmt.Errorf("route %d: allowed method %q must be a safe method segment", index, method)
 			}
 			if len(deduplicated) == 0 || deduplicated[len(deduplicated)-1] != method {
@@ -118,17 +255,58 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 			}
 		}
 		normalized[index].AllowedMethods = deduplicated
+		callers := append([]string(nil), normalized[index].AllowedCallers...)
+		sort.Strings(callers)
+		deduplicatedCallers := callers[:0]
+		for _, caller := range callers {
+			if len(deduplicatedCallers) == 0 || deduplicatedCallers[len(deduplicatedCallers)-1] != caller {
+				deduplicatedCallers = append(deduplicatedCallers, caller)
+			}
+		}
+		normalized[index].AllowedCallers = deduplicatedCallers
+		if len(normalized[index].AllowedCallers) == 0 {
+			return Snapshot{}, fmt.Errorf("route %d requires a nonempty allowed_callers list", index)
+		}
 		normalizeRouteDefaults(&normalized[index])
 		if err := ValidateRoute(normalized[index]); err != nil {
 			return Snapshot{}, fmt.Errorf("route %d: %w", index, err)
 		}
 	}
 	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].ServiceID == normalized[j].ServiceID {
+			return normalized[i].ServicePath < normalized[j].ServicePath
+		}
 		return normalized[i].ServiceID < normalized[j].ServiceID
 	})
 	for index := 1; index < len(normalized); index++ {
 		if normalized[index-1].ServiceID == normalized[index].ServiceID {
-			return Snapshot{}, fmt.Errorf("duplicate service_id %q", normalized[index].ServiceID)
+			left, right := normalized[index-1], normalized[index]
+			for _, method := range left.AllowedMethods {
+				if right.AllowsMethod(method) {
+					return Snapshot{}, fmt.Errorf("duplicate service_id %q method %q", left.ServiceID, method)
+				}
+			}
+		}
+	}
+	seenRPC := make(map[string]string)
+	for _, route := range normalized {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				key := route.ServicePath + "/*"
+				if owner, exists := seenRPC[key]; exists {
+					return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", key, owner, route.ServiceID)
+				}
+				seenRPC[key] = route.ServiceID
+				continue
+			}
+			key := route.ServicePath + "/" + method
+			if owner, exists := seenRPC[route.ServicePath+"/*"]; exists {
+				return Snapshot{}, fmt.Errorf("native RPC route %q overlaps wildcard owner %q", key, owner)
+			}
+			if owner, exists := seenRPC[key]; exists {
+				return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", key, owner, route.ServiceID)
+			}
+			seenRPC[key] = route.ServiceID
 		}
 	}
 	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Disabled: disabled, Routes: normalized})

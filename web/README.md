@@ -47,7 +47,7 @@ pnpm dev
 请求路径：
 
 - 管理台请求：`http(s)://{当前hostname}:11000/api/admin/{service}/{method}`
-- Storage 管理请求：`/api/admin/storage_metadata|storage_access|storage_view/{method}`
+- Storage 管理请求：`/api/admin/storage/{method}`
 - Trade 管理请求：`/api/admin/trade_*/*`
 - SCF / collector 等后台服务请求：`/api/service/{service}/{method}`，前端不直接调用
 

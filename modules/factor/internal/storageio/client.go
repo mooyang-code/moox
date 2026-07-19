@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -17,7 +18,7 @@ import (
 // AccessClient is the Storage Access RPC subset used by factor.
 type AccessClient interface {
 	ReadTimeSeriesRows(ctx context.Context, req *storagepb.ReadTimeSeriesRowsReq, opts ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
-	WriteTimeSeriesRows(ctx context.Context, req *storagepb.WriteTimeSeriesRowsReq, opts ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error)
+	MergeTimeSeriesRows(ctx context.Context, req *storagepb.MergeTimeSeriesRowsReq, opts ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
 }
 
 // WindowKey identifies one source time-series scope.
@@ -36,8 +37,13 @@ type Client struct {
 
 // NewClient creates a StorageIO client from a target string.
 func NewClient(accessTarget string, auth *commonpb.AuthInfo) *Client {
+	return NewClientWithCredentials(accessTarget, gatewayauth.ServiceGatewayNodeID(), gatewayauth.CredentialsFromEnv(), auth)
+}
+
+func NewClientWithCredentials(accessTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
+	target := gatewayauth.ServiceGatewayTarget(NormalizeStorageTarget(accessTarget, "11003"))
 	return &Client{
-		access: storagepb.NewAccessClientProxy(client.WithTarget(NormalizeStorageTarget(accessTarget, "20102"))),
+		access: storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...),
 		auth:   auth,
 	}
 }

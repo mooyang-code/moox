@@ -18,7 +18,7 @@ import (
 func TestPullSignsRequestAndValidatesSnapshot(t *testing.T) {
 	const nodeID = "gateway-test"
 	const secret = "control-secret"
-	snapshot, _ := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr"}})
+	snapshot, _ := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/gateway-control/routes" || r.URL.Query().Get("node_id") != nodeID || r.URL.Query().Get("current_hash") != "old" {
 			t.Errorf("request URL = %s", r.URL.String())

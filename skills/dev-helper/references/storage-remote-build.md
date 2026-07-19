@@ -75,7 +75,7 @@ rm -rf /home/ubuntu/moox-build-remote && mkdir -p /home/ubuntu/moox-build-remote
 cd /home/ubuntu/moox-build-remote && unzip -q /tmp/moox-build.zip
 cd moox
 CGO_ENABLED=1 go build -ldflags "-s -w" \
-  -o /tmp/moox-storage-built ./modules/storage/cmd/moox-storage
+  -o /tmp/moox-storage-built ./modules/storage/cmd/server
 file /tmp/moox-storage-built
 '
 ```

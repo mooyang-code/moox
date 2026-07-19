@@ -7,13 +7,17 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// RowsChangedEvent creates a Storage rows_updated event for a set of subjects.
-func RowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.TimeSeriesRowsUpdated {
+// RowsChangedEvent creates a Storage rows_committed event for a set of subjects.
+func RowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.TimeSeriesRowsCommitted {
 	rows := make([]*storagepb.TimeSeriesRow, 0, len(subjects))
 	for _, subject := range subjects {
 		rows = append(rows, &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq, DataTime: barTime.UTC().Format(time.RFC3339)}})
 	}
-	return &storagepb.TimeSeriesRowsUpdated{SpaceId: spaceID, DatasetId: datasetID, Rows: rows}
+	writes := make([]*storagepb.TimeSeriesRowWrite, 0, len(rows))
+	for _, row := range rows {
+		writes = append(writes, &storagepb.TimeSeriesRowWrite{Operation: storagepb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: row})
+	}
+	return &storagepb.TimeSeriesRowsCommitted{ShardId: "shard-1", SpaceId: spaceID, DatasetId: datasetID, Writes: writes}
 }
 
 // Symbols returns deterministic synthetic symbols.

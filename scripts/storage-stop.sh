@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-moox-storage}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "$(basename "${SCRIPT_DIR}")" in
+storage-view) APP_NAME="${APP_NAME:-moox-storage-view}" ;;
+storage-shard) APP_NAME="${APP_NAME:-moox-storage-shard}" ;;
+*) APP_NAME="${APP_NAME:-moox-storage-primary}" ;;
+esac
 PID_FILE="${SCRIPT_DIR}/${APP_NAME}.pid"
 
 is_managed_pid() {
@@ -22,6 +26,10 @@ is_managed_pid() {
 stop_pid() {
   local pid="$1"
   if [[ -z "${pid}" ]] || ! ps -p "${pid}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! is_managed_pid "${pid}"; then
+    echo "refusing to stop unrelated pid=${pid} for ${APP_NAME}" >&2
     return 0
   fi
 

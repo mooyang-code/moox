@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -105,9 +106,13 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	cfg := config.Default()
 	cfg.Archive.RootDir = filepath.Join(dir, "archive")
 	cfg.Archive.StateDir = filepath.Join(dir, "state")
+	keyFile := filepath.Join(dir, "archive.key")
+	require.NoError(t, os.WriteFile(keyFile, []byte("archive-test-secret\n"), 0o600))
+	cfg.Archive.StorageRPC.KeyID = "archive"
+	cfg.Archive.StorageRPC.HMACKeyFile = keyFile
 	cfg.Archive.EventBus.URLs = []string{natsURL}
 	cfg.Archive.EventBus.Stream = fmt.Sprintf("MOOX_STORAGE_%d", time.Now().UnixNano())
-	cfg.Archive.EventBus.Subject = "moox.storage.time_series.rows_updated.v1"
+	cfg.Archive.EventBus.Subject = "moox.storage.rows_committed.time_series.v1.>"
 	cfg.Archive.EventBus.Durable = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second
 	cfg.Archive.COS.Enabled = false

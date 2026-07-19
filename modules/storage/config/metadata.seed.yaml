@@ -498,6 +498,8 @@ devices:
     engine: pebble
     endpoint: ./var/storage/pebble
     status: active
+    attributes:
+      shard_id: storage-shard-0
   - device_id: duckdb-local
     node_id: local
     name: local-duckdb-view
@@ -510,13 +512,6 @@ devices:
     engine: bleve
     endpoint: ./var/storage/view-indexes/bleve
     status: active
-  - device_id: parquet-local
-    node_id: local
-    name: market-parquet-archive
-    engine: parquet_archive
-    endpoint: ../data/archive
-    status: active
-
 primary_store_routes:
   - space_id: crypto
     route_id: route-binance-spot-kline

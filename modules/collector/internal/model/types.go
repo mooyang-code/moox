@@ -71,18 +71,16 @@ type LocalDNSReportItem struct {
 
 // CloudFunctionEvent 云函数事件
 type CloudFunctionEvent struct {
-	Action                EventAction                  `json:"action,omitempty"`
-	Data                  map[string]interface{}       `json:"data,omitempty"`
-	Timestamp             string                       `json:"timestamp"` // 使用时间格式字符串（支持时区）
-	RequestID             string                       `json:"request_id,omitempty"`
-	Source                string                       `json:"source,omitempty"`                  // 探测来源标识
-	ServiceGatewayTarget  string                       `json:"service_gateway_target,omitempty"`  // /api/service gateway target
-	ServerIP              string                       `json:"server_ip,omitempty"`               // Deprecated: use service_gateway_target.
-	ServerPort            int                          `json:"server_port,omitempty"`             // Deprecated: use service_gateway_target.
-	StorageMetadataTarget string                       `json:"storage_metadata_target,omitempty"` // storage metadata tRPC target
-	StorageAccessTarget   string                       `json:"storage_access_target,omitempty"`   // storage access tRPC target
-	StorageServerURL      string                       `json:"storage_server_url,omitempty"`      // Deprecated: storage access 直连 URL
-	ServiceDeployments    map[string]ServiceDeployment `json:"service_deployments,omitempty"`     // 控制面下发的 active 服务部署信息
+	Action                  EventAction                  `json:"action,omitempty"`
+	Data                    map[string]interface{}       `json:"data,omitempty"`
+	Timestamp               string                       `json:"timestamp"` // 使用时间格式字符串（支持时区）
+	RequestID               string                       `json:"request_id,omitempty"`
+	Source                  string                       `json:"source,omitempty"`                 // 探测来源标识
+	ServiceGatewayTarget    string                       `json:"service_gateway_target,omitempty"` // /api/service gateway target
+	ServerIP                string                       `json:"server_ip,omitempty"`              // Deprecated: use service_gateway_target.
+	ServerPort              int                          `json:"server_port,omitempty"`            // Deprecated: use service_gateway_target.
+	StorageRPCGatewayTarget string                       `json:"storage_rpc_gateway_target,omitempty"`
+	ServiceDeployments      map[string]ServiceDeployment `json:"service_deployments,omitempty"` // 控制面下发的 active 服务部署信息
 }
 
 // ServiceDeployment 是控制面 keepalive 下发给 SCF runtime 的服务部署信息。

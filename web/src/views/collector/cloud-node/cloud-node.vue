@@ -135,109 +135,111 @@
           </div>
         </a-alert>
 
-        <a-table
-          row-key="node_id"
-          size="small"
-          :data="cloudNodeList"
-          :bordered="{ cell: true }"
-          :loading="loading"
-          :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
-          :pagination="paginationConfig"
-          :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
-          :selected-keys="selectedKeys"
-          @select="select"
-          @select-all="selectAll"
-          @page-change="onPageChange"
-          @page-size-change="onPageSizeChange"
-        >
-          <template #columns>
-            <a-table-column title="节点ID" data-index="node_id" :width="120">
-              <template #cell="{ record }">
-                <a-link @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
-              </template>
-            </a-table-column>
-            <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
-            <a-table-column title="地区" data-index="region" :width="150">
-              <template #cell="{ record }">
-                {{ getRegionName(record.region) }}
-              </template>
-            </a-table-column>
-            <a-table-column title="最后心跳时间" data-index="last_heartbeat" :width="170">
-              <template #cell="{ record }">
-                {{ formatDateTime(record.last_heartbeat) }}
-              </template>
-            </a-table-column>
-            <a-table-column title="CLS 主题 ID" data-index="cls_topic_id" :width="180" :ellipsis="true" :tooltip="true">
-              <template #cell="{ record }">
-                {{ record.cls_topic_id || "-" }}
-              </template>
-            </a-table-column>
-            <a-table-column title="标签" data-index="tag" :width="80">
-              <template #cell="{ record }">
-                <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
-                  {{ record.tag }}
-                </a-tag>
-                <span v-else>-</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
-              <template #cell="{ record }">
-                <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" class="node-workloads">
-                  <a-tag
-                    v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
-                    :key="index"
-                    size="small"
-                    :color="getCollectorColor(workload)"
-                  >
-                    {{ getCollectorName(workload) }}
+        <CloudNodeTable :loading="loading" :selected-count="selectedKeys.length">
+          <a-table
+            row-key="node_id"
+            size="small"
+            :data="cloudNodeList"
+            :bordered="{ cell: true }"
+            :loading="loading"
+            :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
+            :pagination="paginationConfig"
+            :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
+            :selected-keys="selectedKeys"
+            @select="select"
+            @select-all="selectAll"
+            @page-change="onPageChange"
+            @page-size-change="onPageSizeChange"
+          >
+            <template #columns>
+              <a-table-column title="节点ID" data-index="node_id" :width="120">
+                <template #cell="{ record }">
+                  <a-link @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
+                </template>
+              </a-table-column>
+              <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
+              <a-table-column title="地区" data-index="region" :width="150">
+                <template #cell="{ record }">
+                  {{ getRegionName(record.region) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="最后心跳时间" data-index="last_heartbeat" :width="170">
+                <template #cell="{ record }">
+                  {{ formatDateTime(record.last_heartbeat) }}
+                </template>
+              </a-table-column>
+              <a-table-column title="CLS 主题 ID" data-index="cls_topic_id" :width="180" :ellipsis="true" :tooltip="true">
+                <template #cell="{ record }">
+                  {{ record.cls_topic_id || "-" }}
+                </template>
+              </a-table-column>
+              <a-table-column title="标签" data-index="tag" :width="80">
+                <template #cell="{ record }">
+                  <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
+                    {{ record.tag }}
                   </a-tag>
-                </div>
-                <span v-else>-</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="代码包版本" data-index="package_version" :width="150">
-              <template #cell="{ record }">
-                <a-link
-                  v-if="record.package_version && record.package_version !== '-'"
-                  @click="onShowPackageDetail(record)"
-                  style="cursor: pointer"
-                >
-                  {{ record.package_version }}
-                </a-link>
-                <span v-else>-</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="状态" :width="80" align="center">
-              <template #cell="{ record }">
-                <a-tag bordered size="small" :color="getStatusColor(record.status)">
-                  {{ getStatusText(record.status) }}
-                </a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="操作" :width="170" align="center" fixed="right">
-              <template #cell="{ record }">
-                <a-space>
-                  <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="batchChangeProcessing">
-                    <template #icon><icon-edit /></template>
-                    <span>编辑</span>
-                  </a-button>
-                  <a-popconfirm
-                    content="确定要删除该节点吗？删除后将无法恢复。"
-                    ok-text="确定"
-                    cancel-text="取消"
-                    @ok="() => onDelete(record)"
-                    position="tr"
+                  <span v-else>-</span>
+                </template>
+              </a-table-column>
+              <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
+                <template #cell="{ record }">
+                  <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" class="node-workloads">
+                    <a-tag
+                      v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
+                      :key="index"
+                      size="small"
+                      :color="getCollectorColor(workload)"
+                    >
+                      {{ getCollectorName(workload) }}
+                    </a-tag>
+                  </div>
+                  <span v-else>-</span>
+                </template>
+              </a-table-column>
+              <a-table-column title="代码包版本" data-index="package_version" :width="150">
+                <template #cell="{ record }">
+                  <a-link
+                    v-if="record.package_version && record.package_version !== '-'"
+                    @click="onShowPackageDetail(record)"
+                    style="cursor: pointer"
                   >
-                    <a-button type="primary" size="mini" status="danger" :disabled="batchChangeProcessing">
-                      <template #icon><icon-delete /></template>
-                      <span>删除</span>
+                    {{ record.package_version }}
+                  </a-link>
+                  <span v-else>-</span>
+                </template>
+              </a-table-column>
+              <a-table-column title="状态" :width="80" align="center">
+                <template #cell="{ record }">
+                  <a-tag bordered size="small" :color="getStatusColor(record.status)">
+                    {{ getStatusText(record.status) }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="操作" :width="170" align="center" fixed="right">
+                <template #cell="{ record }">
+                  <a-space>
+                    <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="batchChangeProcessing">
+                      <template #icon><icon-edit /></template>
+                      <span>编辑</span>
                     </a-button>
-                  </a-popconfirm>
-                </a-space>
-              </template>
-            </a-table-column>
-          </template>
-        </a-table>
+                    <a-popconfirm
+                      content="确定要删除该节点吗？删除后将无法恢复。"
+                      ok-text="确定"
+                      cancel-text="取消"
+                      @ok="() => onDelete(record)"
+                      position="tr"
+                    >
+                      <a-button type="primary" size="mini" status="danger" :disabled="batchChangeProcessing">
+                        <template #icon><icon-delete /></template>
+                        <span>删除</span>
+                      </a-button>
+                    </a-popconfirm>
+                  </a-space>
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </CloudNodeTable>
       </div>
     </a-spin>
 
@@ -772,6 +774,7 @@ import { BatchChangeStatus } from "@/utils/cloud-node-batch-change";
 import type { BatchChangeStatusResponse } from "@/utils/cloud-node-batch-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
+import CloudNodeTable from "./components/cloud-node-table.vue";
 import { makeCompletedBatchChangeStatus, submitCloudNodeBatchChange } from "./cloud-node-batch-service";
 import {
   computeAggregateStatus,

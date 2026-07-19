@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/infra/metadata/sqlite"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 )
 
 // SchemaOptions 保存元数据表初始化所需的路径与开关。

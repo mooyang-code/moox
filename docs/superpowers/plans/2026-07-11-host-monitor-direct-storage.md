@@ -51,7 +51,7 @@
 - Modify/Regenerate: `modules/storage/proto/access.proto`、`modules/storage/proto/gen/*`：增加受限 `DeleteTimeSeriesRows` maintenance RPC。
 - Modify: `modules/storage/internal/services/access/data.go`：校验删除范围、最大批量和 Dataset/Space 边界。
 - Modify: `modules/storage/internal/services/primary/client.go`、`local.go`、`service.go`：按版本范围分页删除的 PrimaryStore 接口。
-- Modify: `modules/storage/internal/infra/device/store.go`、`pebble/store.go`：Pebble 批量删除。
+- Modify: `modules/storage/internal/service/primary/device/store.go`、`pebble/store.go`：Pebble 批量删除。
 - Modify: `modules/storage/internal/services/view/maintenance.go`：raw time-series retention pass。
 - Modify: `modules/storage/internal/config/loader.go`、`modules/storage/config/storage.yaml`：四个 Host Dataset 使用 3d retention。
 - Create: `modules/storage/internal/services/access/delete_test.go`、`modules/storage/internal/services/primary/retention_test.go`。

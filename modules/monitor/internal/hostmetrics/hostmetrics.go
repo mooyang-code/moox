@@ -478,6 +478,7 @@ func rejectionMessage(delivery *jetstream.Delivery, reason string) *messagepb.Mo
 		OccurredAt:      now,
 		PublishedAt:     now,
 		ContentType:     "application/octet-stream",
+		MessageType:     "moox.monitor.rejected.v1",
 		Payload:         payload,
 		Attributes: map[string]string{
 			"rejection_reason":    reason,

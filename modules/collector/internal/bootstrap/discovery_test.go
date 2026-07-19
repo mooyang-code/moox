@@ -29,19 +29,19 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 					"scope":        "public",
 					"status":       "active",
 				},
-				"storage_metadata_trpc": map[string]any{
-					"service_name": "storage_metadata_trpc",
+				"service_gateway_internal": map[string]any{
+					"service_name": "service_gateway_internal",
+					"protocol":     "trpc",
+					"host":         "127.0.0.1",
+					"port":         11003,
+					"scope":        "internal",
+					"status":       "active",
+				},
+				"storage-primary": map[string]any{
+					"service_name": "storage-primary",
 					"protocol":     "trpc",
 					"host":         "storage.example.com",
 					"port":         20100,
-					"scope":        "public",
-					"status":       "active",
-				},
-				"storage_access_trpc": map[string]any{
-					"service_name": "storage_access_trpc",
-					"protocol":     "trpc",
-					"host":         "storage.example.com",
-					"port":         20102,
 					"scope":        "public",
 					"status":       "active",
 				},
@@ -55,8 +55,7 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
 	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
 	cfg.SysDeploy.ServiceAuth.TargetNode = "gateway-gz-122"
-	cfg.Storage.MetadataTarget = "127.0.0.1:20100"
-	cfg.Storage.AccessTarget = "127.0.0.1:20102"
+	cfg.Storage.GatewayTarget = "ip://127.0.0.1:11003"
 
 	deps, err := Resolve(context.Background(), cfg)
 	if err != nil {
@@ -65,11 +64,11 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if deps.ServiceGatewayTarget != "http://gw.example.com:11000" {
 		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
 	}
-	if deps.StorageMetadataTarget != "storage.example.com:20100" {
-		t.Fatalf("StorageMetadataTarget = %q, want storage.example.com:20100", deps.StorageMetadataTarget)
+	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
+		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
 	}
-	if deps.StorageAccessTarget != "storage.example.com:20102" {
-		t.Fatalf("StorageAccessTarget = %q, want storage.example.com:20102", deps.StorageAccessTarget)
+	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
+		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
 	}
 }
 

@@ -24,7 +24,7 @@
 | Manual rebuild RPCs | Delete `RebuildTimeSeriesView` / `RebuildRecordView` RPC handlers and proto methods. Operators rely on schema version bumps + `op=rotate`, or capacity rotation. No separate rebuild API. |
 | Zero read gap | Old `active_result` keeps serving reads until warming passes ready checks and `CompleteViewBuild` switches the pointer. Never clear `active_result` before the new index is ready. |
 | Interface name | Use `ViewIndexEngine`. |
-| Interface package | Put shared types in `modules/storage/internal/core/viewindex` so DuckDB/Bleve infra never imports `services/view`. |
+| Interface package | Put shared types in `modules/storage/internal/service/dataview/index` so DuckDB/Bleve infra never imports `services/view`. |
 | Physical index identifier | Use `indexID`, not `resultID`, `generation`, or `versionID`. |
 | Index naming | Use deterministic dual slots `a` / `b` only. Timestamp-suffixed names are obsolete derived junk and may be discarded. |
 | Legacy derived indexes | No compatibility migration and no copy from old indexes. On first rotate after this change, rebuild from PrimaryStore into an `a`/`b` slot; remove any non-slot or unreferenced physical indexes via `Remove`. |
@@ -73,7 +73,7 @@ This plan was revised after review. Keep these outcomes when implementing; do no
 
 ## Target Interface
 
-Create the common lifecycle interface in `modules/storage/internal/core/viewindex/engine.go`:
+Create the common lifecycle interface in `modules/storage/internal/service/dataview/index/engine.go`:
 
 ```go
 type ViewIndexEngine interface {
@@ -185,64 +185,64 @@ for each View:
 
 ### New files
 
-- `modules/storage/internal/core/viewindex/engine.go`  
+- `modules/storage/internal/service/dataview/index/engine.go`
   Defines `ViewIndexEngine`, `ViewIndexSchema`, `ViewIndexBatch`, `ViewIndexStats`, schema hash helpers, and index ID helpers.
-- `modules/storage/internal/core/viewindex/engine_test.go`  
+- `modules/storage/internal/service/dataview/index/engine_test.go`
   Tests schema hash stability, index ID naming, and active/building version guards.
-- `modules/storage/internal/services/view/rotation.go`  
+- `modules/storage/internal/services/view/rotation.go`
   Unified rotation manager for DuckDB and Bleve View indexes.
-- `modules/storage/internal/services/view/rotation_test.go`  
+- `modules/storage/internal/services/view/rotation_test.go`
   Tests schema-preemptive rebuild, capacity rotation, stale warming cleanup, switch readiness, and zero-gap active retention.
 
 ### Modified files
 
-- `modules/storage/internal/config/loader.go`  
+- `modules/storage/internal/config/loader.go`
   Add generic `StorageViewRotation` config and defaults.
-- `modules/storage/internal/config/loader_test.go`  
+- `modules/storage/internal/config/loader_test.go`
   Cover generic rotation defaults and YAML overrides.
-- `modules/storage/config/storage.yaml`  
+- `modules/storage/config/storage.yaml`
   Add `storage.view.rotation`.
-- `modules/storage/config/storage.view_builder.yaml`  
+- `modules/storage/config/storage.view_builder.yaml`
   Add the same defaults for independent view-builder deployment.
-- `modules/storage/config/trpc_go.yaml` / `trpc_go.view_builder.yaml`  
+- `modules/storage/config/trpc_go.yaml` / `trpc_go.view_builder.yaml`
   Replace pending/cleanup/retry_failed timers with a single `op=rotate` timer on view_builder.
-- `modules/storage/internal/infra/device/duckdb/view_store.go`  
+- `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
   Implement DuckDB index lifecycle primitives; fix `ListResultTables` naming; keep `__latest` for now.
-- `modules/storage/internal/infra/device/duckdb/view_store_nocgo.go`  
+- `modules/storage/internal/service/dataview/index/duckdb/view_store_nocgo.go`
   Keep no-cgo API parity.
-- `modules/storage/internal/infra/device/duckdb/view_store_test.go`  
+- `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
   Cover `Prepare`, `Write`, `Stat`, `Remove`, and list/remove of real `view_*` tables.
-- `modules/storage/internal/services/view/search/service.go`  
+- `modules/storage/internal/services/view/search/service.go`
   Implement Bleve index lifecycle primitives including `Remove`.
-- `modules/storage/internal/infra/device/bleve/index.go`  
+- `modules/storage/internal/service/dataview/index/bleve/index.go`
   Add document count/version stats and remove-index support.
-- `modules/storage/internal/services/view/search/service_test.go`  
+- `modules/storage/internal/services/view/search/service_test.go`
   Cover Bleve `Prepare`, `Write`, `Stat`, and `Remove`.
-- `modules/storage/internal/infra/metadata/sqlite/crud.go`  
+- `modules/storage/internal/service/metadata/sqlite/crud.go`
   Preserve `active_result` until Complete; clear obsolete `building_result` on View shape changes; make `BeginViewBuild` a conditional claim; keep compare-and-switch semantics.
-- `modules/storage/internal/infra/metadata/sqlite/crud_test.go`  
+- `modules/storage/internal/service/metadata/sqlite/crud_test.go`
   Cover ViewColumn changes bump version and clear building pointers; Begin claim races; Complete keeps previous active until switch.
-- `modules/storage/internal/services/view/view_builder.go`  
+- `modules/storage/internal/services/view/view_builder.go`
   Delete `RebuildPendingViews` / `RebuildFailedViews` / `CleanupInactiveResults` paths; reuse helpers only from rotation/backfill.
-- `modules/storage/internal/services/view/schedule.go`  
+- `modules/storage/internal/services/view/schedule.go`
   Keep only `op=rotate` (delete cleanup/retry_failed/pending branches).
-- `modules/storage/internal/services/view/builder/time_series.go`  
+- `modules/storage/internal/services/view/builder/time_series.go`
   Write active plus valid building index only (`build_status == building`).
-- `modules/storage/internal/services/view/builder/record.go`  
+- `modules/storage/internal/services/view/builder/record.go`
   Write active plus valid building index only.
-- `modules/storage/internal/services/view/service.go`  
+- `modules/storage/internal/services/view/service.go`
   Validate requested columns against active schema/version; delete Rebuild* RPC handlers.
-- `modules/storage/internal/services/access/query.go`  
+- `modules/storage/internal/services/access/query.go`
   Delete Rebuild* access wrappers if present.
-- `modules/storage/proto/view.proto`  
+- `modules/storage/proto/view.proto`
   Remove Rebuild* RPCs/messages; update query comments.
-- `modules/storage/cmd/server/main.go`  
+- `modules/storage/cmd/server/main.go`
   Wire rotation config and register the rotate timer only on view_builder.
-- `docs/存储目标架构与元数据.md`  
+- `docs/存储目标架构与元数据.md`
   Document unified View index semantics.
-- `docs/存储服务架构与部署.md`  
+- `docs/存储服务架构与部署.md`
   Document timer and config.
-- `modules/storage/README.md`  
+- `modules/storage/README.md`
   Update operational notes.
 
 ---
@@ -489,8 +489,8 @@ git commit -m "feat(storage): add view index rotation config"
 ### Task 2: Define ViewIndexEngine And Shared Naming
 
 **Files:**
-- Create: `modules/storage/internal/core/viewindex/engine.go`
-- Create: `modules/storage/internal/core/viewindex/engine_test.go`
+- Create: `modules/storage/internal/service/dataview/index/engine.go`
+- Create: `modules/storage/internal/service/dataview/index/engine_test.go`
 
 - [ ] **Step 1: Write failing interface helper tests**
 
@@ -677,7 +677,7 @@ Expected: pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add modules/storage/internal/core/viewindex/engine.go modules/storage/internal/core/viewindex/engine_test.go
+git add modules/storage/internal/service/dataview/index/engine.go modules/storage/internal/service/dataview/index/engine_test.go
 git commit -m "feat(storage): define view index engine abstraction"
 ```
 
@@ -686,8 +686,8 @@ git commit -m "feat(storage): define view index engine abstraction"
 ### Task 3: Make Schema Changes Preemptive And Obsolete Warming Safe
 
 **Files:**
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
 - Modify: `modules/storage/internal/services/view/builder/time_series.go`
 - Modify: `modules/storage/internal/services/view/builder/record.go`
 - Modify: `modules/storage/internal/services/view/builder/time_series_test.go`
@@ -798,7 +798,7 @@ Expected: pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add modules/storage/internal/infra/metadata/sqlite/crud.go modules/storage/internal/infra/metadata/sqlite/crud_test.go modules/storage/internal/services/view/builder/time_series.go modules/storage/internal/services/view/builder/record.go modules/storage/internal/services/view/builder/time_series_test.go modules/storage/internal/services/view/builder/record_test.go
+git add modules/storage/internal/service/metadata/sqlite/crud.go modules/storage/internal/service/metadata/sqlite/crud_test.go modules/storage/internal/services/view/builder/time_series.go modules/storage/internal/services/view/builder/record.go modules/storage/internal/services/view/builder/time_series_test.go modules/storage/internal/services/view/builder/record_test.go
 git commit -m "fix(storage): stop writing stale warming view indexes"
 ```
 
@@ -807,9 +807,9 @@ git commit -m "fix(storage): stop writing stale warming view indexes"
 ### Task 4: Implement DuckDB ViewIndexEngine
 
 **Files:**
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_nocgo.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_nocgo.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
 - [ ] **Step 1: Add failing DuckDB engine tests**
 
@@ -836,7 +836,7 @@ Expected: fail until lifecycle methods exist and list filter is fixed.
 
 - [ ] **Step 3: Implement lifecycle methods**
 
-Add methods to `ViewStore` using `modules/storage/internal/core/viewindex`:
+Add methods to `ViewStore` using `modules/storage/internal/service/dataview/index`:
 
 ```go
 func (s *ViewStore) Engine() string { return "duckdb" }
@@ -895,7 +895,7 @@ Expected: pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add modules/storage/internal/infra/device/duckdb/view_store.go modules/storage/internal/infra/device/duckdb/view_store_nocgo.go modules/storage/internal/infra/device/duckdb/view_store_test.go
+git add modules/storage/internal/service/dataview/index/duckdb/view_store.go modules/storage/internal/service/dataview/index/duckdb/view_store_nocgo.go modules/storage/internal/service/dataview/index/duckdb/view_store_test.go
 git commit -m "refactor(storage): implement duckdb view index engine"
 ```
 
@@ -906,8 +906,8 @@ git commit -m "refactor(storage): implement duckdb view index engine"
 **Files:**
 - Modify: `modules/storage/internal/services/view/search/service.go`
 - Modify: `modules/storage/internal/services/view/search/service_test.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index.go`
-- Modify: `modules/storage/internal/infra/device/bleve/index_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/bleve/index.go`
+- Modify: `modules/storage/internal/service/dataview/index/bleve/index_test.go`
 
 - [ ] **Step 1: Add failing Bleve engine tests**
 
@@ -994,7 +994,7 @@ Expected: pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add modules/storage/internal/services/view/search/service.go modules/storage/internal/services/view/search/service_test.go modules/storage/internal/infra/device/bleve/index.go modules/storage/internal/infra/device/bleve/index_test.go
+git add modules/storage/internal/services/view/search/service.go modules/storage/internal/services/view/search/service_test.go modules/storage/internal/service/dataview/index/bleve/index.go modules/storage/internal/service/dataview/index/bleve/index_test.go
 git commit -m "refactor(storage): implement bleve view index engine"
 ```
 
@@ -1386,7 +1386,7 @@ Expected: pass. If an unrelated pre-existing failure appears, record the exact p
 Run:
 
 ```bash
-gofmt -w modules/storage/internal/config modules/storage/internal/core/viewindex modules/storage/internal/infra/device/duckdb modules/storage/internal/infra/device/bleve modules/storage/internal/services/view
+gofmt -w modules/storage/internal/config modules/storage/internal/service/dataview/index modules/storage/internal/service/dataview/index/duckdb modules/storage/internal/service/dataview/index/bleve modules/storage/internal/services/view
 git diff --check
 ```
 

@@ -19,8 +19,8 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type cliConfig struct {
@@ -125,8 +125,14 @@ func runBackfill(ctx context.Context, cli cliConfig, cfg *config.Config, out io.
 		return err
 	}
 	defer store.Close()
-	access := storagepb.NewAccessClientProxy(client.WithTarget(backfill.NormalizeTarget(cfg.Archive.StorageRPC.AccessTarget, "20102")))
-	metadata := storagepb.NewMetadataClientProxy(client.WithTarget(backfill.NormalizeTarget(cfg.Archive.StorageRPC.MetadataTarget, "20100")))
+	target := gatewayauth.ServiceGatewayTarget(cfg.Archive.StorageRPC.GatewayTarget)
+	credentials, err := gatewayauth.ResolveCredentials(cfg.Archive.StorageRPC.KeyID, cfg.Archive.StorageRPC.HMACKeyFile)
+	if err != nil {
+		return err
+	}
+	options := gatewayauth.NewTRPCClientOptions(backfill.NormalizeTarget(target, "11003"), cfg.Archive.StorageRPC.GatewayNodeID, credentials)
+	access := storagepb.NewPrimaryStoreClientProxy(options...)
+	metadata := storagepb.NewMetadataClientProxy(options...)
 	count, err := backfill.New(access, metadata, store, w).Run(ctx, plan)
 	if err != nil {
 		return err

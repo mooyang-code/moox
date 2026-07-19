@@ -21,7 +21,7 @@ import (
 type ViewIndexService interface {
 	PrepareViewIndex(ctx context.Context, req *PrepareViewIndexReq) (*PrepareViewIndexRsp, error)
 
-	WriteViewIndex(ctx context.Context, req *WriteViewIndexReq) (*WriteViewIndexRsp, error)
+	ApplyViewIndex(ctx context.Context, req *ApplyViewIndexReq) (*ApplyViewIndexRsp, error)
 
 	StatViewIndex(ctx context.Context, req *StatViewIndexReq) (*StatViewIndexRsp, error)
 
@@ -52,14 +52,14 @@ func ViewIndexService_PrepareViewIndex_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func ViewIndexService_WriteViewIndex_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteViewIndexReq{}
+func ViewIndexService_ApplyViewIndex_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ApplyViewIndexReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ViewIndexService).WriteViewIndex(ctx, reqbody.(*WriteViewIndexReq))
+		return svr.(ViewIndexService).ApplyViewIndex(ctx, reqbody.(*ApplyViewIndexReq))
 	}
 
 	var rsp interface{}
@@ -170,8 +170,8 @@ var ViewIndexServer_ServiceDesc = server.ServiceDesc{
 			Func: ViewIndexService_PrepareViewIndex_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.ViewIndex/WriteViewIndex",
-			Func: ViewIndexService_WriteViewIndex_Handler,
+			Name: "/trpc.moox.storage.ViewIndex/ApplyViewIndex",
+			Func: ViewIndexService_ApplyViewIndex_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.ViewIndex/StatViewIndex",
@@ -210,8 +210,8 @@ type UnimplementedViewIndex struct{}
 func (s *UnimplementedViewIndex) PrepareViewIndex(ctx context.Context, req *PrepareViewIndexReq) (*PrepareViewIndexRsp, error) {
 	return nil, errors.New("rpc PrepareViewIndex of service ViewIndex is not implemented")
 }
-func (s *UnimplementedViewIndex) WriteViewIndex(ctx context.Context, req *WriteViewIndexReq) (*WriteViewIndexRsp, error) {
-	return nil, errors.New("rpc WriteViewIndex of service ViewIndex is not implemented")
+func (s *UnimplementedViewIndex) ApplyViewIndex(ctx context.Context, req *ApplyViewIndexReq) (*ApplyViewIndexRsp, error) {
+	return nil, errors.New("rpc ApplyViewIndex of service ViewIndex is not implemented")
 }
 func (s *UnimplementedViewIndex) StatViewIndex(ctx context.Context, req *StatViewIndexReq) (*StatViewIndexRsp, error) {
 	return nil, errors.New("rpc StatViewIndex of service ViewIndex is not implemented")
@@ -239,7 +239,7 @@ func (s *UnimplementedViewIndex) SearchRecordIndex(ctx context.Context, req *Sea
 type ViewIndexClientProxy interface {
 	PrepareViewIndex(ctx context.Context, req *PrepareViewIndexReq, opts ...client.Option) (rsp *PrepareViewIndexRsp, err error)
 
-	WriteViewIndex(ctx context.Context, req *WriteViewIndexReq, opts ...client.Option) (rsp *WriteViewIndexRsp, err error)
+	ApplyViewIndex(ctx context.Context, req *ApplyViewIndexReq, opts ...client.Option) (rsp *ApplyViewIndexRsp, err error)
 
 	StatViewIndex(ctx context.Context, req *StatViewIndexReq, opts ...client.Option) (rsp *StatViewIndexRsp, err error)
 
@@ -281,20 +281,20 @@ func (c *ViewIndexClientProxyImpl) PrepareViewIndex(ctx context.Context, req *Pr
 	return rsp, nil
 }
 
-func (c *ViewIndexClientProxyImpl) WriteViewIndex(ctx context.Context, req *WriteViewIndexReq, opts ...client.Option) (*WriteViewIndexRsp, error) {
+func (c *ViewIndexClientProxyImpl) ApplyViewIndex(ctx context.Context, req *ApplyViewIndexReq, opts ...client.Option) (*ApplyViewIndexRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.ViewIndex/WriteViewIndex")
+	msg.WithClientRPCName("/trpc.moox.storage.ViewIndex/ApplyViewIndex")
 	msg.WithCalleeServiceName(ViewIndexServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("ViewIndex")
-	msg.WithCalleeMethod("WriteViewIndex")
+	msg.WithCalleeMethod("ApplyViewIndex")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &WriteViewIndexRsp{}
+	rsp := &ApplyViewIndexRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

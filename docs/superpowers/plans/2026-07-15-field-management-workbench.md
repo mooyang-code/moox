@@ -56,12 +56,12 @@ git commit -m "feat(storage): extend field metadata contract"
 ### Task 2: Implement field queries, counts, batch updates, and deletion
 
 **Files:**
-- Modify: `modules/storage/internal/core/metadata/store.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_dataset.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_field_group.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
-- Modify: `modules/storage/internal/infra/metadata/cache/store.go`
-- Modify: `modules/storage/internal/infra/metadata/cache/store_test.go`
+- Modify: `modules/storage/internal/service/metadata/store.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_dataset.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_field_group.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/cache/store.go`
+- Modify: `modules/storage/internal/service/metadata/cache/store_test.go`
 - Modify: `modules/storage/internal/service/access/metadata_catalog.go`
 - Modify: `modules/storage/internal/service/access/metadata_space_view_test.go`
 
@@ -104,7 +104,7 @@ Expected: PASS.
 - [x] **Step 8: Commit backend behavior**
 
 ```bash
-git add modules/storage/internal/core/metadata modules/storage/internal/infra/metadata modules/storage/internal/service/access
+git add modules/storage/internal/service/metadata modules/storage/internal/service/metadata modules/storage/internal/service/access
 git commit -m "feat(storage): add field governance operations"
 ```
 

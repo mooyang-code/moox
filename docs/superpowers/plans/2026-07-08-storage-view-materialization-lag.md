@@ -56,9 +56,9 @@
   - Initialize metadata cache, normalize new options, start/stop catch-up goroutine, and expose an internal `catchUpOnce` method for tests.
 - `modules/storage/internal/services/view/builder/time_series.go`
   - Deduplicate keys before reading, batch `ReadTimeSeriesRows` calls, use cached metadata, and write fewer larger batches to DuckDB.
-- `modules/storage/internal/infra/device/duckdb/view_store.go`
+- `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
   - Add `MaxDataTime` and replace chunked delete/insert merge with staging-table delete plus insert.
-- `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
   - Extend behavior tests for staging upsert and max data time.
 - `modules/storage/internal/config/loader.go`
   - Add config fields and defaults for metadata cache, read batch size, and catch-up.
@@ -341,7 +341,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primary/device/factkey"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 	"google.golang.org/protobuf/proto"
 )
@@ -829,12 +829,12 @@ git commit -m "perf(storage): cache view metadata for incremental builds"
 ### Task 4: Shorten DuckDB Upsert Transactions
 
 **Files:**
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store.go`
-- Modify: `modules/storage/internal/infra/device/duckdb/view_store_test.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store.go`
+- Modify: `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`
 
 - [ ] **Step 1: Add failing DuckDB behavior tests**
 
-Append to `modules/storage/internal/infra/device/duckdb/view_store_test.go`:
+Append to `modules/storage/internal/service/dataview/index/duckdb/view_store_test.go`:
 
 ```go
 func TestMaxDataTimeReturnsLatestMaterializedTime(t *testing.T) {
@@ -918,7 +918,7 @@ Add `time` to the test imports.
 Run:
 
 ```bash
-go test ./modules/storage/internal/infra/device/duckdb -run 'TestMaxDataTime|TestInsertRowsLargeBatch' -count=1
+go test ./modules/storage/internal/service/dataview/index/duckdb -run 'TestMaxDataTime|TestInsertRowsLargeBatch' -count=1
 ```
 
 Expected: compile failure because `MaxDataTime` does not exist.
@@ -1048,7 +1048,7 @@ Keep this fallback inside the implementation, not as a manual deployment step.
 Run:
 
 ```bash
-go test ./modules/storage/internal/infra/device/duckdb -run 'TestInsertRows|TestMaxDataTime' -count=1
+go test ./modules/storage/internal/service/dataview/index/duckdb -run 'TestInsertRows|TestMaxDataTime' -count=1
 ```
 
 Expected: PASS.
@@ -1056,7 +1056,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add modules/storage/internal/infra/device/duckdb/view_store.go modules/storage/internal/infra/device/duckdb/view_store_test.go
+git add modules/storage/internal/service/dataview/index/duckdb/view_store.go modules/storage/internal/service/dataview/index/duckdb/view_store_test.go
 git commit -m "perf(storage): upsert duckdb view rows through staging"
 ```
 
@@ -1238,7 +1238,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/factkey"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/primary/device/factkey"
 	viewsvc "github.com/mooyang-code/moox/modules/storage/internal/services/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/gen"
 )
@@ -1508,7 +1508,7 @@ Expected: PASS.
 Run:
 
 ```bash
-go test ./modules/storage/internal/infra/device/duckdb -count=1
+go test ./modules/storage/internal/service/dataview/index/duckdb -count=1
 ```
 
 Expected: PASS. If this fails because local DuckDB CGO dependencies are missing, record the exact linker error and run the same package test on the remote Linux host after deploy.

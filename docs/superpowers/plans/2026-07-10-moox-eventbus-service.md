@@ -772,8 +772,8 @@ git commit -m "feat(eventbus): package and deploy eventbus service"
 - Modify: `modules/storage/proto/message.proto`
 - Modify: `modules/storage/proto/store.proto`
 - Regenerate: `modules/storage/proto/gen`
-- Modify: `modules/storage/internal/core/eventbus/bus.go`
-- Modify: `modules/storage/internal/infra/eventbus/producer_bus.go`
+- Modify: `modules/storage/internal/service/eventbus/bus.go`
+- Modify: `modules/storage/internal/service/eventbus/producer_bus.go`
 - Modify: `modules/storage/internal/bootstrap/eventbus/factory.go`
 - Modify: `modules/storage/internal/services/access/data.go`
 - Modify: `modules/storage/internal/services/primary/client.go`
@@ -820,7 +820,7 @@ Publish through Storage Access, bind both predeclared View Builder durables, ass
 - [ ] **Step 6: Run and commit**
 
 ```bash
-go test -count=1 ./modules/storage/internal/core/eventbus ./modules/storage/internal/infra/eventbus ./modules/storage/internal/services/access ./modules/storage/internal/services/primary
+go test -count=1 ./modules/storage/internal/service/eventbus ./modules/storage/internal/service/eventbus ./modules/storage/internal/services/access ./modules/storage/internal/services/primary
 git add modules/storage
 git commit -m "refactor(storage): publish storage updates through moox messages"
 ```
@@ -830,10 +830,10 @@ git commit -m "refactor(storage): publish storage updates through moox messages"
 ### Task 9: Add The PrimaryStore Durable Outbox And Relay
 
 **Files:**
-- Modify: `modules/storage/internal/infra/device/store.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store.go`
-- Create: `modules/storage/internal/infra/device/pebble/outbox.go`
-- Create: `modules/storage/internal/infra/device/pebble/outbox_test.go`
+- Modify: `modules/storage/internal/service/primary/device/store.go`
+- Modify: `modules/storage/internal/service/primary/device/pebble/store.go`
+- Create: `modules/storage/internal/service/primary/device/pebble/outbox.go`
+- Create: `modules/storage/internal/service/primary/device/pebble/outbox_test.go`
 - Create: `modules/storage/internal/services/primary/outbox_relay.go`
 - Create: `modules/storage/internal/services/primary/outbox_relay_test.go`
 - Modify: `modules/storage/internal/services/primary/service.go`
@@ -885,7 +885,7 @@ Stop EventBus, commit writes, restart the PrimaryStore process, start EventBus, 
 - [ ] **Step 7: Run and commit**
 
 ```bash
-go test -count=1 ./modules/storage/internal/infra/device/pebble ./modules/storage/internal/services/primary ./modules/storage/internal/services/access
+go test -count=1 ./modules/storage/internal/service/primary/device/pebble ./modules/storage/internal/services/primary ./modules/storage/internal/services/access
 git add modules/storage
 git commit -m "feat(storage): relay durable outbox to eventbus"
 ```
@@ -952,7 +952,7 @@ git commit -m "refactor(cloudnode): use central moox eventbus"
 - Modify: `modules/factor/config/app.yaml`
 - Modify: `modules/factor/go.mod`
 - Delete: `modules/storage/internal/bootstrap/eventbus/embedded_nats.go`
-- Delete: `modules/storage/internal/infra/transport/nats/producer.go`
+- Delete: `modules/storage/internal/service/transport/nats/producer.go`
 - Delete: private transport tests superseded by `packages/jetstream` tests
 - Modify: `modules/storage/go.mod`
 

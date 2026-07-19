@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
@@ -29,8 +30,8 @@ type DatasetSource struct {
 func NewDatasetSource(metadataTarget string) *DatasetSource {
 	return &DatasetSource{
 		metadata: storagepb.NewMetadataClientProxy(
-			client.WithTarget(normalizeTRPCTarget(metadataTarget, "20100")),
-			client.WithTransport(transport.DefaultClientTransport),
+			append(gatewayauth.NewTRPCClientOptions(normalizeTRPCTarget(metadataTarget, "11003"), gatewayauth.ServiceGatewayNodeID(), gatewayauth.CredentialsFromEnv()),
+				client.WithTransport(transport.DefaultClientTransport))...,
 		),
 	}
 }

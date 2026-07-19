@@ -1,4 +1,4 @@
-import { callView } from "./http";
+import { callStorage as callView } from "./http";
 import type {
   FilterExpr,
   Page,

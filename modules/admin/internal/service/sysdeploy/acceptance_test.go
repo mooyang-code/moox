@@ -25,7 +25,7 @@ func TestCompileGatewaySnapshot_ExcludesDisabledDeployment(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
 	for _, row := range []Deployment{
-		{NodeID: "node-a", ServiceName: "active", Protocol: "http", Host: "127.0.0.1", Port: 1001, GatewayPath: "trpc.test.Active", GatewayServiceID: "active", GatewayEnabled: true, Status: "active"},
+		{NodeID: "node-a", ServiceName: "active", Protocol: "http", Host: "127.0.0.1", Port: 1001, GatewayPath: "trpc.test.Active", GatewayServiceID: "active", GatewayEnabled: true, Status: "active", ExtraConfig: `{"gateway_methods":["*"],"gateway_callers":["*"]}`},
 		{NodeID: "node-a", ServiceName: "disabled", Protocol: "http", Host: "127.0.0.1", Port: 1002, GatewayPath: "trpc.test.Disabled", GatewayServiceID: "disabled", GatewayEnabled: true, Status: "disabled"},
 	} {
 		require.NoError(t, dao.Create(ctx, &row))
@@ -198,7 +198,7 @@ func TestSeedDefaultsRemovesSplitViewRowsAndMigratesUnifiedHealth(t *testing.T) 
 		require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "configured-node", ServiceName: name, Host: "127.0.0.1", Port: 1, Status: "active"}))
 	}
 	require.NoError(t, svc.dao.Create(ctx, &Deployment{
-		NodeID: "configured-node", ServiceName: "storage_view", Host: "127.0.0.1", Port: 20202, Status: "active",
+		NodeID: "configured-node", ServiceName: "storage-view", Host: "127.0.0.1", Port: 20202, Status: "active",
 		ExtraConfig: `{"health_url":"http://127.0.0.1:20212/readyz","health_kind":"readiness","monitor_enabled":true}`,
 	}))
 
@@ -206,7 +206,7 @@ func TestSeedDefaultsRemovesSplitViewRowsAndMigratesUnifiedHealth(t *testing.T) 
 	var count int64
 	require.NoError(t, db.Model(&Deployment{}).Where("c_service_name IN ?", []string{"storage_view_builder", "storage_view_query", "storage_view_index"}).Count(&count).Error)
 	assert.Zero(t, count)
-	view, err := svc.dao.Get(ctx, "configured-node", "storage_view")
+	view, err := svc.dao.Get(ctx, "configured-node", "storage-view")
 	require.NoError(t, err)
 	assert.Equal(t, "http://127.0.0.1:20211/readyz", healthURL(view.ExtraConfig))
 }
@@ -264,7 +264,7 @@ func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
 	svc := newTestService(setupEmptySysDeployTestDB(t), "node-a")
 	ctx := context.Background()
 	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
-	require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceID: "sysdeploy", GatewayEnabled: true, Status: "active"}))
+	require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceID: "sysdeploy", GatewayEnabled: true, Status: "active", ExtraConfig: `{"gateway_methods":["ListActiveServiceDeployments"],"gateway_callers":["*"]}`}))
 	require.NoError(t, svc.SeedDefaults(ctx))
 	snapshot, err := svc.CompileGatewaySnapshot(ctx, "node-a")
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func TestSensitiveGatewayDeploymentsRequireNonemptyMethodsOnCreateUpdateAndCompi
 		require.NoError(t, err)
 		assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 	}
-	created, err := svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{"gateway_methods":["ListActiveServiceDeployments"]}`)})
+	created, err := svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{"gateway_methods":["ListActiveServiceDeployments"],"gateway_callers":["*"]}`)})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
 	updated, err := svc.UpdateServiceDeployment(ctx, &pb.UpdateServiceDeploymentReq{NodeId: "node-a", ServiceName: "sysdeploy", Deployment: makePB(`{}`)})
@@ -386,7 +386,7 @@ func TestSensitiveGatewayPathsRequireMethodsEvenWithAliasServiceID(t *testing.T)
 			created, err := svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{}`)})
 			require.NoError(t, err)
 			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, created.GetRetInfo().GetCode())
-			created, err = svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{"gateway_methods":["` + tc.allowed + `"]}`)})
+			created, err = svc.CreateServiceDeployment(ctx, &pb.CreateServiceDeploymentReq{Deployment: makePB(`{"gateway_methods":["` + tc.allowed + `"],"gateway_callers":["*"]}`)})
 			require.NoError(t, err)
 			require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
 			updated, err := svc.UpdateServiceDeployment(ctx, &pb.UpdateServiceDeploymentReq{NodeId: "node-a", ServiceName: "aliased", Deployment: makePB(`{"gateway_methods":[]}`)})
@@ -403,7 +403,7 @@ func TestCompileGatewaySnapshotGatewayMethodsStrictAndNormalized(t *testing.T) {
 	dao := NewDAO(setupEmptySysDeployTestDB(t))
 	ctx := context.Background()
 	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
-	row := Deployment{NodeID: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceID: "sysdeploy", GatewayEnabled: true, Status: "active", ExtraConfig: `{"gateway_methods":["ListActiveServiceDeployments","ListActiveServiceDeployments"]}`}
+	row := Deployment{NodeID: "node-a", ServiceName: "sysdeploy", Protocol: "http", Host: "127.0.0.1", Port: 11109, GatewayPath: "trpc.moox.ops.SysDeploy", GatewayServiceID: "sysdeploy", GatewayEnabled: true, Status: "active", ExtraConfig: `{"gateway_methods":["ListActiveServiceDeployments","ListActiveServiceDeployments"],"gateway_callers":["*"]}`}
 	require.NoError(t, dao.Create(ctx, &row))
 	snapshot, err := dao.CompileGatewaySnapshot(ctx, "node-a")
 	require.NoError(t, err)

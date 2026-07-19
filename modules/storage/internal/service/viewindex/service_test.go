@@ -3,10 +3,8 @@ package viewindex
 import (
 	"context"
 	"errors"
-	"testing"
-
-	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"testing"
 )
 
 func TestServiceRoutesLifecycleByEngine(t *testing.T) {
@@ -17,12 +15,12 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 		TimeSeries: duck,
 		Records:    bleve,
 	})
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	rsp, err := service.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
 		IndexId: indexID,
 		Engine:  "duckdb",
 		Schema: &pb.ViewIndexSchema{
-			SpaceId: "crypto", ViewId: "spot", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1",
+			SpaceId: "crypto", ViewId: "spot", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1",
 		},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -31,14 +29,15 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 	if duck.prepared != indexID || bleve.prepared != "" {
 		t.Fatalf("prepared duck=%q bleve=%q", duck.prepared, bleve.prepared)
 	}
-	writeRsp, err := service.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
-		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexBatch{ViewVersion: 1, SchemaHash: "schema-1"},
+	rowWrite := &pb.ViewIndexRowWrite{Operation: pb.ViewIndexRowWriteOperation_VIEW_INDEX_ROW_WRITE_OPERATION_MERGE, Key: &pb.ViewIndexRowKey{Key: &pb.ViewIndexRowKey_TimeSeriesKey{TimeSeriesKey: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC", Freq: "1m", DataTime: "2026-01-01T00:00:00Z"}}}}
+	writeRsp, err := service.ApplyViewIndex(context.Background(), &pb.ApplyViewIndexReq{
+		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexApplyBatch{ViewVersion: 1, ViewSchemaHash: "schema-1", RowWrites: []*pb.ViewIndexRowWrite{rowWrite}},
 	})
 	if err != nil || writeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("fenced write rsp=%+v err=%v", writeRsp, err)
 	}
-	staleRsp, err := service.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
-		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexBatch{ViewVersion: 2, SchemaHash: "schema-1"},
+	staleRsp, err := service.ApplyViewIndex(context.Background(), &pb.ApplyViewIndexReq{
+		IndexId: indexID, Engine: "duckdb", Batch: &pb.ViewIndexApplyBatch{ViewVersion: 2, ViewSchemaHash: "schema-1", RowWrites: []*pb.ViewIndexRowWrite{rowWrite}},
 	})
 	if err != nil || staleRsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		t.Fatalf("stale write rsp=%+v err=%v", staleRsp, err)
@@ -56,13 +55,13 @@ func TestServiceRoutesLifecycleByEngine(t *testing.T) {
 
 func TestServiceRestartRejectsStaleViewVersionWithSameSchemaHash(t *testing.T) {
 	duck := &fakeManagedEngine{name: "duckdb"}
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	first := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
 	prepared, err := first.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
 		IndexId: indexID,
 		Engine:  "duckdb",
 		Schema: &pb.ViewIndexSchema{
-			SpaceId: "crypto", ViewId: "spot", ViewVersion: 2, Engine: "duckdb", SchemaHash: "unchanged-shape",
+			SpaceId: "crypto", ViewId: "spot", ViewVersion: 2, Engine: "duckdb", ViewSchemaHash: "unchanged-shape",
 		},
 	})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -70,13 +69,13 @@ func TestServiceRestartRejectsStaleViewVersionWithSameSchemaHash(t *testing.T) {
 	}
 
 	restarted := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}})
-	stale, err := restarted.WriteViewIndex(context.Background(), &pb.WriteViewIndexReq{
+	stale, err := restarted.ApplyViewIndex(context.Background(), &pb.ApplyViewIndexReq{
 		IndexId: indexID,
 		Engine:  "duckdb",
-		Batch:   &pb.ViewIndexBatch{ViewVersion: 1, SchemaHash: "unchanged-shape"},
+		Batch:   &pb.ViewIndexApplyBatch{ViewVersion: 1, ViewSchemaHash: "unchanged-shape"},
 	})
 	if err != nil {
-		t.Fatalf("WriteViewIndex transport error: %v", err)
+		t.Fatalf("ApplyViewIndex transport error: %v", err)
 	}
 	if stale.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		t.Fatalf("stale write accepted after owner restart: %+v", stale)
@@ -91,7 +90,7 @@ func TestServiceRoutesTypedQueries(t *testing.T) {
 		TimeSeries: duck,
 		Records:    bleve,
 	})
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	timeRsp, err := service.QueryTimeSeriesIndex(context.Background(), &pb.QueryTimeSeriesIndexReq{
 		IndexId: indexID,
 		Query:   &pb.QueryTimeSeriesRowsReq{SpaceId: "crypto", Page: &pb.Page{Page: 1, Size: 25}},
@@ -112,7 +111,7 @@ func TestServiceRoutesTypedQueries(t *testing.T) {
 func TestServiceMapsEngineErrorsToRetInfo(t *testing.T) {
 	duck := &fakeManagedEngine{name: "duckdb", err: errors.New("disk full")}
 	service := NewService(Options{Engines: map[string]ManagedEngine{"duckdb": duck}, TimeSeries: duck})
-	indexID := coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)
+	indexID := ViewIndexID("crypto", "spot", SlotA)
 	rsp, err := service.StatViewIndex(context.Background(), &pb.StatViewIndexReq{IndexId: indexID, Engine: "duckdb"})
 	if err != nil {
 		t.Fatalf("StatViewIndex transport error = %v", err)
@@ -152,26 +151,30 @@ type fakeManagedEngine struct {
 
 func (e *fakeManagedEngine) Engine() string { return e.name }
 
-func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, schema coreviewindex.ViewIndexSchema) error {
+func (e *fakeManagedEngine) Prepare(_ context.Context, indexID string, schema ViewIndexSchema) error {
 	e.prepared = indexID
 	e.viewVersion = schema.ViewVersion
 	e.schemaHash = schema.SchemaHash
 	return e.err
 }
 
-func (e *fakeManagedEngine) Write(context.Context, string, coreviewindex.ViewIndexBatch) error {
+func (e *fakeManagedEngine) Write(context.Context, string, BatchWrite) error {
 	return e.err
 }
 
-func (e *fakeManagedEngine) Stat(context.Context, string) (coreviewindex.ViewIndexStats, error) {
+func (e *fakeManagedEngine) Apply(context.Context, string, ViewIndexApplyBatch) error {
+	return e.err
+}
+
+func (e *fakeManagedEngine) Stat(context.Context, string) (ViewIndexStats, error) {
 	e.statCalls++
-	return coreviewindex.ViewIndexStats{Exists: e.err == nil, ViewVersion: e.viewVersion, EntryCount: 1, SchemaHash: e.schemaHash}, e.err
+	return ViewIndexStats{Exists: e.err == nil, ViewVersion: e.viewVersion, EntryCount: 1, SchemaHash: e.schemaHash}, e.err
 }
 
 func (e *fakeManagedEngine) Remove(context.Context, string) error { return e.err }
 
 func (e *fakeManagedEngine) List(context.Context) ([]string, error) {
-	return []string{coreviewindex.ViewIndexID("crypto", "spot", coreviewindex.SlotA)}, e.err
+	return []string{ViewIndexID("crypto", "spot", SlotA)}, e.err
 }
 
 func (e *fakeManagedEngine) QueryTimeSeriesRows(context.Context, string, *pb.QueryTimeSeriesRowsReq) ([]*pb.ResultColumn, []*pb.TimeSeriesRow, *pb.PageResult, error) {

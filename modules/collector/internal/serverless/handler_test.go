@@ -64,12 +64,12 @@ func TestDeploymentHelpers_ShouldResolveURLsAndTargets(t *testing.T) {
 		"service_gateway": {
 			ServiceName: "service_gateway", Protocol: "http", Host: "127.0.0.1", Port: 11000,
 		},
-		"storage_access": {
-			ServiceName: "storage_access", Protocol: "trpc", Host: "10.0.0.1", Port: 20102,
+		"storage_primary": {
+			ServiceName: "storage_primary", Protocol: "trpc", Host: "10.0.0.1", Port: 20102,
 		},
 	}
 	assert.Equal(t, "http://127.0.0.1:11000", deploymentBaseURL(deployments, "service_gateway"))
-	assert.Contains(t, deploymentTRPCTarget(deployments, "storage_access"), "10.0.0.1")
+	assert.Contains(t, deploymentTRPCTarget(deployments, "storage_primary"), "10.0.0.1")
 	assert.True(t, isHTTPProtocol("http"))
 	assert.False(t, isHTTPProtocol("trpc"))
 	assert.True(t, deploymentMatches(deployments["service_gateway"], "service_gateway"))
@@ -115,12 +115,8 @@ func TestApplyRuntimeConfig_UpdatesFromDeployments(t *testing.T) {
 				ServiceName: "service_gateway", Protocol: "http", Host: "127.0.0.1", Port: 11000,
 				BaseURL: "http://127.0.0.1:11000",
 			},
-			"storage_access_trpc": {
-				ServiceName: "storage_access_trpc", Protocol: "trpc", Host: "10.0.0.2", Port: 20102,
-				RPCAddress: "10.0.0.2:20102",
-			},
-			"storage_metadata_trpc": {
-				ServiceName: "storage_metadata_trpc", Protocol: "trpc", Host: "10.0.0.1", Port: 20100,
+			"storage-primary": {
+				ServiceName: "storage-primary", Protocol: "trpc", Host: "10.0.0.1", Port: 20100,
 				RPCAddress: "10.0.0.1:20100",
 			},
 		},
@@ -131,8 +127,8 @@ func TestApplyRuntimeConfig_UpdatesFromDeployments(t *testing.T) {
 	})
 	assert.Equal(t, "127.0.0.1", got.ServerIP)
 	assert.Equal(t, 11000, got.ServerPort)
-	assert.Equal(t, "10.0.0.1:20100", got.StorageMetadataTarget)
-	assert.Equal(t, "10.0.0.2:20102", got.StorageAccessTarget)
+	assert.Equal(t, "10.0.0.1:20100", got.StorageRPCGatewayTarget)
+	assert.Equal(t, "10.0.0.1:20100", got.StorageRPCGatewayTarget)
 	nodeID, _ := runtimeapp.GetNodeInfo()
 	assert.Equal(t, "node-scf-1", nodeID)
 }

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/core/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/infra/device/duckdb"
-	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/infra/eventbus"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/builder"
-	viewsearch "github.com/mooyang-code/moox/modules/storage/internal/service/view/search"
+	viewsearch "github.com/mooyang-code/moox/modules/storage/internal/service/dataview/search"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder"
+	infraeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -45,25 +45,20 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 	}
 	_, err = js.AddStream(&nats.StreamConfig{
 		Name: "MOOX_STORAGE", Subjects: []string{
-			infraeventbus.DefaultTimeSeriesRowsUpdatedSubject,
-			infraeventbus.DefaultRecordRowsUpdatedSubject,
+			infraeventbus.DefaultTimeSeriesRowsCommittedSubject,
+			infraeventbus.DefaultRecordRowsCommittedSubject,
 		}, Storage: nats.FileStorage,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	const ackWait = 3 * time.Second
-	for _, consumer := range []struct{ durable, subject string }{
-		{"storage_view_builder_time_series_rows_updated_v1", infraeventbus.DefaultTimeSeriesRowsUpdatedSubject},
-		{"storage_view_builder_record_rows_updated_v1", infraeventbus.DefaultRecordRowsUpdatedSubject},
-	} {
-		_, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{
-			Name: consumer.durable, Durable: consumer.durable, FilterSubject: consumer.subject,
-			AckPolicy: nats.AckExplicitPolicy, AckWait: ackWait, MaxDeliver: -1, MaxAckPending: 128,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+	const durable = "storage_view_rows_committed_v1"
+	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{
+		Name: durable, Durable: durable, FilterSubject: infraeventbus.RowsCommittedSubjectWildcard(infraeventbus.DefaultSubjectPrefix),
+		AckPolicy: nats.AckExplicitPolicy, AckWait: ackWait, MaxDeliver: -1, MaxAckPending: 128,
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	client, err := jetstream.Connect(context.Background(), jetstream.ConfigFromEnv([]string{ns.ClientURL()}, "storage-view-reliability-e2e"))
@@ -109,6 +104,12 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 			t.Fatalf("prepare %s: %v", prepared.name, err)
 		}
 	}
+	if err := bleve.Apply(context.Background(), bleveIndex, viewindex.ViewIndexApplyBatch{
+		ViewVersion:       1,
+		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", LastAppliedSequence: 1}},
+	}); err != nil {
+		t.Fatalf("seed bleve checkpoint: %v", err)
+	}
 
 	duckFailOnce := &failOnceEngine{ViewIndexEngine: duck}
 	bleveFailOnce := &failOnceEngine{ViewIndexEngine: bleve}
@@ -130,8 +131,8 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		Key:     &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "spot", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-17T00:00:00Z"},
 		Columns: []*pb.ColumnValue{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: doubleValue(1)}},
 	}
-	if err := bus.PublishTimeSeriesRowsUpdated(context.Background(), &pb.TimeSeriesRowsUpdated{
-		MessageId: "duck-retry-1", SpaceId: "crypto", DatasetId: "spot", Rows: []*pb.TimeSeriesRow{timeRow},
+	if err := bus.PublishTimeSeriesRowsCommitted(context.Background(), &pb.TimeSeriesRowsCommitted{
+		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "spot", Sequence: 1, Writes: []*pb.TimeSeriesRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: timeRow}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -139,8 +140,8 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		Key:     &pb.RecordKey{SpaceId: "crypto", DatasetId: "news", RecordId: "news-1", Version: "2026-07-17T00:00:00Z"},
 		Columns: []*pb.ColumnValue{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: doubleValue(2)}},
 	}
-	if err := bus.PublishRecordRowsUpdated(context.Background(), &pb.RecordRowsUpdated{
-		MessageId: "bleve-retry-1", SpaceId: "crypto", DatasetId: "news", Rows: []*pb.RecordRow{recordRow},
+	if err := bus.PublishRecordRowsCommitted(context.Background(), &pb.RecordRowsCommitted{
+		ShardId: "shard-1", SpaceId: "crypto", DatasetId: "news", Sequence: 2, Writes: []*pb.RecordRowWrite{{Operation: pb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: recordRow}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -151,15 +152,10 @@ func TestViewDerivationReliabilityRetriesDuckDBAndBleveBeforeAck(t *testing.T) {
 		return duckErr == nil && bleveErr == nil && duckStats.EntryCount == 1 && bleveStats.EntryCount == 1 &&
 			duckFailOnce.Attempts() >= 2 && bleveFailOnce.Attempts() >= 2
 	})
-	for _, durable := range []string{
-		"storage_view_builder_time_series_rows_updated_v1",
-		"storage_view_builder_record_rows_updated_v1",
-	} {
-		waitFor(t, 5*time.Second, func() bool {
-			info, infoErr := js.ConsumerInfo("MOOX_STORAGE", durable)
-			return infoErr == nil && info.NumAckPending == 0 && info.NumPending == 0
-		})
-	}
+	waitFor(t, 5*time.Second, func() bool {
+		info, infoErr := js.ConsumerInfo("MOOX_STORAGE", durable)
+		return infoErr == nil && info.NumAckPending == 0 && info.NumPending == 0
+	})
 
 	duckStats, _ := duck.Stat(context.Background(), duckIndex)
 	bleveStats, _ := bleve.Stat(context.Background(), bleveIndex)
@@ -174,18 +170,22 @@ type failOnceEngine struct {
 	attempts int
 }
 
-func (e *failOnceEngine) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexBatch) error {
+func (e *failOnceEngine) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	applier, ok := e.ViewIndexEngine.(viewindex.ViewIndexApplier)
+	if !ok {
+		return errors.New("test engine does not support atomic apply")
+	}
 	e.mu.Lock()
 	e.attempts++
 	attempt := e.attempts
 	e.mu.Unlock()
 	if attempt == 1 {
-		if err := e.ViewIndexEngine.Write(ctx, indexID, batch); err != nil {
+		if err := applier.Apply(ctx, indexID, batch); err != nil {
 			return err
 		}
 		return errors.New("injected post-write acknowledgement failure")
 	}
-	return e.ViewIndexEngine.Write(ctx, indexID, batch)
+	return applier.Apply(ctx, indexID, batch)
 }
 
 func (e *failOnceEngine) Attempts() int {
@@ -197,6 +197,18 @@ func (e *failOnceEngine) Attempts() int {
 type e2eViewMetadata struct {
 	views   []*pb.View
 	columns []*pb.ViewColumn
+}
+
+func (m *e2eViewMetadata) ListViews(_ context.Context, spaceID, datasetID, status string, _ *pb.Page) ([]*pb.View, *pb.PageResult, error) {
+	var out []*pb.View
+	for _, view := range m.views {
+		if (spaceID == "" || view.GetSpaceId() == spaceID) &&
+			(datasetID == "" || view.GetPrimaryDatasetId() == datasetID) &&
+			(status == "" || view.GetStatus() == status) {
+			out = append(out, proto.Clone(view).(*pb.View))
+		}
+	}
+	return out, &pb.PageResult{}, nil
 }
 
 func (m *e2eViewMetadata) ListViewsByDataset(_ context.Context, spaceID, datasetID string) ([]*pb.View, error) {

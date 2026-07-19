@@ -5,7 +5,8 @@ package trpc.moox.storage;
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storagegen;storagepb";
 
 import "moox_common.proto";
-import "access.proto";
+import "common.proto";
+import "rows.proto";
 import "metadata.proto";
 import "view.proto";
 
@@ -16,17 +17,53 @@ message ViewIndexSchema {
   uint64 view_version = 3;
   string engine = 4;
   repeated ViewColumn columns = 5;
-  string schema_hash = 6;
+  string view_schema_hash = 6;
 }
 
-// ViewIndexBatch 是写入一个派生索引的同构批次。
-message ViewIndexBatch {
-  repeated TimeSeriesRow time_series_rows = 1;
-  repeated RecordRow record_rows = 2;
-  repeated ViewColumn columns = 3;
-  // view_version and schema_hash fence stale event consumers after a schema switch.
-  uint64 view_version = 4;
-  string schema_hash = 5;
+enum ViewIndexRowWriteOperation {
+  VIEW_INDEX_ROW_WRITE_OPERATION_UNSPECIFIED = 0;
+  VIEW_INDEX_ROW_WRITE_OPERATION_MERGE = 1;
+  VIEW_INDEX_ROW_WRITE_OPERATION_REPLACE = 2;
+  VIEW_INDEX_ROW_WRITE_OPERATION_DELETE = 3;
+}
+
+message ViewIndexRowKey {
+  oneof key {
+    TimeSeriesKey time_series_key = 1;
+    RecordKey record_key = 2;
+  }
+}
+
+message ViewIndexRowWrite {
+  ViewIndexRowWriteOperation operation = 1;
+  ViewIndexRowKey key = 2;
+  repeated ColumnValue columns = 3;
+  map<string, string> attributes = 4;
+  repeated string attributes_to_delete = 5;
+  repeated string removed_column_names = 6;
+  string source_shard_id = 7;
+  uint64 source_sequence = 8;
+  repeated ColumnRemoval removed_columns = 9;
+}
+
+message ViewIndexShardCheckpointUpdate {
+  string shard_id = 1;
+  uint64 expected_last_applied_sequence = 2;
+  uint64 last_applied_sequence = 3;
+}
+
+message ViewIndexRangeUpdate {
+  optional string indexed_from = 1;
+  optional string indexed_to = 2;
+}
+
+message ViewIndexApplyBatch {
+  repeated ViewIndexRowWrite row_writes = 1;
+  repeated ViewIndexShardCheckpointUpdate checkpoint_updates = 2;
+  uint64 view_version = 3;
+  string view_schema_hash = 4;
+  ViewIndexRangeUpdate index_range_update = 5;
+  repeated string required_column_names = 6;
 }
 
 // ViewIndexStats 是无需扫描完整索引即可读取的持久化统计信息。
@@ -35,13 +72,16 @@ message ViewIndexStats {
   uint64 entry_count = 2;
   string min_version = 3;
   string max_version = 4;
-  string schema_hash = 5;
+  string view_schema_hash = 5;
   uint64 physical_bytes = 6;
   string updated_at = 7;
   // free_disk_bytes is the owner filesystem's currently available capacity.
   uint64 free_disk_bytes = 8;
   // view_version is persisted with the physical index and survives owner restarts.
   uint64 view_version = 9;
+  string indexed_from = 10;
+  string indexed_to = 11;
+  repeated ViewIndexShardCheckpointUpdate shard_checkpoints = 12;
 }
 
 message ViewIndexDescriptor {
@@ -61,14 +101,14 @@ message PrepareViewIndexRsp {
   common.RetInfo ret_info = 1;
 }
 
-message WriteViewIndexReq {
+message ApplyViewIndexReq {
   common.AuthInfo auth_info = 1;
   string index_id = 2;
   string engine = 3;
-  ViewIndexBatch batch = 4;
+  ViewIndexApplyBatch batch = 4;
 }
 
-message WriteViewIndexRsp {
+message ApplyViewIndexRsp {
   common.RetInfo ret_info = 1;
 }
 
@@ -138,7 +178,7 @@ message SearchRecordIndexRsp {
 // ViewIndex 是 DuckDB/Bleve 物理索引的唯一进程所有者。
 service ViewIndex {
   rpc PrepareViewIndex(PrepareViewIndexReq) returns (PrepareViewIndexRsp);
-  rpc WriteViewIndex(WriteViewIndexReq) returns (WriteViewIndexRsp);
+  rpc ApplyViewIndex(ApplyViewIndexReq) returns (ApplyViewIndexRsp);
   rpc StatViewIndex(StatViewIndexReq) returns (StatViewIndexRsp);
   rpc RemoveViewIndex(RemoveViewIndexReq) returns (RemoveViewIndexRsp);
   rpc ListViewIndexes(ListViewIndexesReq) returns (ListViewIndexesRsp);

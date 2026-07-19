@@ -17,14 +17,19 @@ type AppConfig struct {
 
 // SystemConfig 系统配置
 type SystemConfig struct {
-	Name                  string            `json:"name" yaml:"name"`
-	Version               string            `json:"version" yaml:"version"`
-	Environment           string            `json:"environment" yaml:"environment"`
-	Timezone              string            `json:"timezone" yaml:"timezone"`
-	StorageMetadataTarget string            `json:"storage_metadata_target" yaml:"storage_metadata_target"` // storage metadata tRPC target
-	StorageAccessTarget   string            `json:"storage_access_target" yaml:"storage_access_target"`     // storage access tRPC target
-	StorageURL            string            `json:"storage_url" yaml:"storage_url"`                         // Deprecated: use storage_access_target.
-	ServiceAuth           ServiceAuthConfig `json:"service_auth" yaml:"service_auth"`                       // 后台服务请求签名鉴权配置
+	Name        string            `json:"name" yaml:"name"`
+	Version     string            `json:"version" yaml:"version"`
+	Environment string            `json:"environment" yaml:"environment"`
+	Timezone    string            `json:"timezone" yaml:"timezone"`
+	StorageRPC  StorageRPCConfig  `json:"storage_rpc" yaml:"storage_rpc"`
+	ServiceAuth ServiceAuthConfig `json:"service_auth" yaml:"service_auth"` // 后台服务请求签名鉴权配置
+}
+
+type StorageRPCConfig struct {
+	GatewayTarget string `json:"gateway_target" yaml:"gateway_target"`
+	GatewayNodeID string `json:"gateway_node_id" yaml:"gateway_node_id"`
+	KeyID         string `json:"key_id" yaml:"key_id"`
+	HMACKeyFile   string `json:"hmac_key_file" yaml:"hmac_key_file"`
 }
 
 // ServiceAuthConfig 后台服务请求签名鉴权配置。
@@ -61,12 +66,11 @@ type SourceConfig struct {
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
 		System: &SystemConfig{
-			Name:                  "moox-collector",
-			Version:               "2.0.0",
-			Environment:           "development",
-			Timezone:              "UTC",
-			StorageMetadataTarget: "127.0.0.1:20100",
-			StorageAccessTarget:   "127.0.0.1:20102",
+			Name:        "moox-collector",
+			Version:     "2.0.0",
+			Environment: "development",
+			Timezone:    "UTC",
+			StorageRPC:  StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "collector"},
 			ServiceAuth: ServiceAuthConfig{
 				ExpireSec: 60,
 			},

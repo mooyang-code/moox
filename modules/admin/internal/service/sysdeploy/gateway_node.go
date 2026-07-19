@@ -105,7 +105,7 @@ func (s *ServiceImpl) GetGatewayNodeRoutes(ctx context.Context, req *pb.GetGatew
 	}
 	routes := make([]*pb.GatewayRoute, 0, len(snapshot.Routes))
 	for _, route := range snapshot.Routes {
-		routes = append(routes, &pb.GatewayRoute{ServiceId: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, TimeoutMs: int32(route.TimeoutMS), MaxBodyBytes: route.MaxBodyBytes, AllowedMethods: append([]string(nil), route.AllowedMethods...)})
+		routes = append(routes, &pb.GatewayRoute{ServiceId: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, TimeoutMs: int32(route.TimeoutMS), MaxBodyBytes: route.MaxBodyBytes, AllowedMethods: append([]string(nil), route.AllowedMethods...), AllowedCallers: append([]string(nil), route.AllowedCallers...)})
 	}
 	return &pb.GetGatewayNodeRoutesRsp{RetInfo: retOK(), NodeId: snapshot.NodeID, RouteHash: snapshot.RouteHash, GeneratedAt: snapshot.GeneratedAt.Format(time.RFC3339Nano), Disabled: snapshot.Disabled, Routes: routes}, nil
 }

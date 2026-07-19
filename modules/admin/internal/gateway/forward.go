@@ -1,16 +1,21 @@
 package gateway
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"
 
@@ -20,11 +25,81 @@ import (
 )
 
 const minGzipForwardResponseBytes = 1024
+const nodeGatewayServiceKeyID = "moox-gateway-service"
 
 // setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
 func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 	w.Header().Set("Content-Type", "application/json")
 	applyCORSHeaders(w, origin)
+}
+
+// forwardStorageToNodeGateway keeps the browser Storage facade behind the
+// node gateway when the deployment supplies its service-gateway credentials.
+// The direct deployment detail path remains available only for local tests and
+// non-storage admin APIs.
+func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, body []byte, headers map[string]string) (*http.Response, bool, error) {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_URL")), "/")
+	secret := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
+	nodeID := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NODE_ID"))
+	keyID := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
+	if keyID == "" {
+		keyID = nodeGatewayServiceKeyID
+	}
+	if base == "" || secret == "" || nodeID == "" {
+		return nil, true, fmt.Errorf("storage BFF requires Node Service Gateway configuration")
+	}
+	if keyID != nodeGatewayServiceKeyID {
+		return nil, true, fmt.Errorf("storage BFF key id %q does not match Node Service Gateway key id %q", keyID, nodeGatewayServiceKeyID)
+	}
+	if native := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NATIVE_URL")); native != "" {
+		base = native
+	}
+	target := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
+	servicePath := storageBFFServicePath(serviceID, method)
+	path := "/" + servicePath + "/" + method
+	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Secret: secret}, gatewayauth.Request{
+		Caller: "admin-gateway", Method: http.MethodPost, Path: path, TargetNode: nodeID, Callee: servicePath, Func: method, Body: body,
+	}, time.Now())
+	if err != nil {
+		return nil, true, err
+	}
+	metadata := make(codec.MetaData, len(signed))
+	for name, values := range signed {
+		if len(values) == 1 {
+			metadata[name] = []byte(values[0])
+		}
+	}
+	for key, name := range map[string]string{"trace_id": "X-Trace-Id", "space_id": "X-Space-Id", "user_id": "X-User-Id", "user_role": "X-User-Role"} {
+		if value := headers[key]; value != "" {
+			metadata[name] = []byte(value)
+		}
+	}
+	response := &codec.Body{}
+	codec.Message(ctx).WithClientRPCName(path)
+	invokeOptions := []client.Option{client.WithTarget("ip://" + target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeNoop), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(30 * time.Second)}
+	for name, value := range metadata {
+		invokeOptions = append(invokeOptions, client.WithMetaData(name, value))
+	}
+	invokeOptions = append(invokeOptions, client.WithSerializationType(codec.SerializationTypeJSON))
+	if err := client.New().Invoke(ctx, &codec.Body{Data: body}, response, invokeOptions...); err != nil {
+		return nil, true, err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(response.Data))}, true, nil
+}
+
+func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, headers map[string]string) {
+	defer response.Body.Close()
+	setForwardCommonHeaders(w, headers["origin"])
+	for name, values := range response.Header {
+		if strings.EqualFold(name, "Content-Length") || strings.EqualFold(name, "Content-Encoding") {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
 }
 
 // forwardHTTP 把统一网关请求纯透传到目标服务的有协议 http 端口。

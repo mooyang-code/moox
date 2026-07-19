@@ -49,7 +49,7 @@ assert_contains "${DEPLOY}" 'services+=(gateway)'
 assert_absent "${DEPLOY}" 'source "${ROOT}/secrets/gateway-control.env"'
 assert_absent "${DEPLOY}" 'source "${ROOT}/secrets/gateway-service.env"'
 assert_contains "${DEPLOY}" 'env "${ADMIN_SECRET_ENV[@]}"'
-assert_contains "${DEPLOY}" 'env "${GATEWAY_SERVICE_ENV[@]}" "${MONITOR_ENV[@]}"'
+assert_contains "${DEPLOY}" 'gateway_service_env_for monitor'
 assert_contains "${DEPLOY}" 'LOCAL_DEPLOY_ARCHIVE=$(mktemp'
 assert_contains "${DEPLOY}" 'REMOTE_DEPLOY_ARCHIVE'
 assert_contains "${DEPLOY}" 'cleanup_deploy_artifacts'
@@ -192,6 +192,8 @@ grep -Fq 'base_url: "https://admin.example.com:9527/"' "${DEPLOYED}/gateway/conf
 [[ ! -e "${DEPLOYED}/admin" && ! -e "${DEPLOYED}/bin/moox-admin" ]] || fail 'no-admin staged Admin artifacts'
 [[ ! -e "${DEPLOYED}/bin/moox-web-host" && ! -e "${DEPLOYED}/secrets/admin-jwt.env" ]] || fail 'no-admin staged browser or Admin credentials'
 [[ ! -e "${DEPLOYED}/secrets/service-auth.env" ]] || fail 'deployment generated obsolete service-auth credentials'
+[[ -f "${DEPLOYED}/secrets/gateway-credentials.json" ]] || fail 'Gateway credential registry was not staged'
+grep -Fq 'credentials_file: ../../secrets/gateway-credentials.json' "${DEPLOYED}/gateway/config/app.yaml" || fail 'Gateway credential registry was not configured'
 cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
 ! grep -Rqs -- 'PRIVATE KEY' "${DEPLOYED}/certs" || fail 'a private CA key was staged'
 for secret in gateway-control.env gateway-service.env gateway-control.key gateway-service.key; do
@@ -270,7 +272,8 @@ for _ in $(seq 1 50); do
   [[ -s "${TMP}/captures/gateway.env" && -s "${TMP}/captures/eventbus.env" && -s "${TMP}/captures/monitor.env" ]] && break
   sleep 0.1
 done
-grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=service-secret' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive the Gateway service key'
+grep -Fq 'MOOX_GATEWAY_SERVICE_KEY_ID=monitor' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive its Gateway key ID'
+if grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=service-secret' "${TMP}/captures/monitor.env"; then fail 'Monitor inherited the shared Gateway service key'; fi
 grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" || fail 'Monitor did not receive its stable instance ID'
 ! grep -Fq 'MOOX_GATEWAY_CONTROL_SECRET_KEY=' "${TMP}/captures/monitor.env" || fail 'Monitor inherited the Gateway control key'
 ! grep -Fq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=' "${TMP}/captures/gateway.env" || fail 'Gateway process inherited the service key instead of reading its raw key file'

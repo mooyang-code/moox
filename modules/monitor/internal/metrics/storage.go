@@ -13,12 +13,13 @@ import (
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type AccessClient interface {
-	WriteTimeSeriesRows(context.Context, *storagepb.WriteTimeSeriesRowsReq, ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error)
+	MergeTimeSeriesRows(context.Context, *storagepb.MergeTimeSeriesRowsReq, ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 type MetadataClient interface {
@@ -40,7 +41,17 @@ func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconf
 	return &StorageAdapter{access: access, metadata: metadata, cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return NewStorageAdapter(storagepb.NewAccessClientProxy(client.WithTarget(normalizeTarget(cfg.AccessTarget, "20102"))), storagepb.NewMetadataClientProxy(client.WithTarget(normalizeTarget(cfg.MetadataTarget, "20100"))), cfg)
+	target := gatewayauth.ServiceGatewayTarget(cfg.GatewayTarget)
+	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
+	if err != nil {
+		return NewStorageAdapter(nil, nil, cfg)
+	}
+	nodeID := cfg.GatewayNodeID
+	if strings.TrimSpace(nodeID) == "" {
+		nodeID = gatewayauth.ServiceGatewayNodeID()
+	}
+	options := gatewayauth.NewTRPCClientOptions(normalizeTarget(target, "11003"), nodeID, credentials)
+	return NewStorageAdapter(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), cfg)
 }
 
 func normalizeTarget(raw, port string) string {
@@ -245,7 +256,7 @@ func HistorySelectorForSeries(series MetricSeries) HistorySelector {
 
 func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) error {
 	if a == nil || a.access == nil {
-		return errors.New("metrics storage access client is not initialized")
+		return errors.New("metrics storage-primary client is not initialized")
 	}
 	batch := a.cfg.WriteBatchSize
 	if batch <= 0 {
@@ -263,7 +274,7 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 			}
 			rows = append(rows, sampleRow(a.cfg, sample))
 		}
-		rsp, err := a.access.WriteTimeSeriesRows(ctx, &storagepb.WriteTimeSeriesRowsReq{Rows: rows})
+		rsp, err := a.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{Rows: rows})
 		if err != nil {
 			return fmt.Errorf("write metrics history: %w", err)
 		}
@@ -300,7 +311,7 @@ func (a *StorageAdapter) QueryHistory(ctx context.Context, seriesIDs []string, s
 // method.
 func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []HistorySelector, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
 	if a == nil || a.access == nil {
-		return nil, errors.New("metrics storage access client is not initialized")
+		return nil, errors.New("metrics storage-primary client is not initialized")
 	}
 	if limit <= 0 {
 		limit = 500

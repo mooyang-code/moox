@@ -149,12 +149,12 @@ func TestWriteStorageImportSummary(t *testing.T) {
 
 func TestWriteStorageImportRowsImmediateSuccess(t *testing.T) {
 	writer := fakeStorageWriter{}
-	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.WriteTimeSeriesRowsReq{}, false))
+	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.MergeTimeSeriesRowsReq{}, false))
 }
 
 type retryOnceWriter struct{ calls int }
 
-func (w *retryOnceWriter) WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq) error {
+func (w *retryOnceWriter) MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error {
 	w.calls++
 	if w.calls == 1 {
 		return assertErr("subject not bound")
@@ -164,7 +164,7 @@ func (w *retryOnceWriter) WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeri
 
 func TestWriteStorageImportRowsRetriesRetryableError(t *testing.T) {
 	writer := &retryOnceWriter{}
-	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.WriteTimeSeriesRowsReq{}, true))
+	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.MergeTimeSeriesRowsReq{}, true))
 	assert.Equal(t, 2, writer.calls)
 }
 
@@ -213,7 +213,7 @@ func (f *fakeStorageImportMetaFull) BindDatasetSubject(context.Context, *pb.Data
 
 type trackingStorageWriter struct{ writes int }
 
-func (w *trackingStorageWriter) WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq) error {
+func (w *trackingStorageWriter) MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error {
 	w.writes++
 	return nil
 }

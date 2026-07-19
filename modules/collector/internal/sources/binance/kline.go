@@ -37,7 +37,7 @@ type KlineCollector struct {
 
 type klineStorage interface {
 	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error)
-	WriteTimeSeriesRows(context.Context, []*storagepb.TimeSeriesRow) error
+	MergeTimeSeriesRows(context.Context, []*storagepb.TimeSeriesRow) error
 }
 
 // init 自注册到采集器注册中心
@@ -102,7 +102,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	}
 	writer := c.storage
 	if writer == nil {
-		accessTarget := runtimeapp.GetStorageAccessTarget()
+		accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 		if accessTarget == "" {
 			return fmt.Errorf("未配置存储 access tRPC 地址")
 		}
@@ -139,7 +139,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 			if buildErr != nil {
 				return buildErr
 			}
-			if err := writer.WriteTimeSeriesRows(ctx, rows); err != nil {
+			if err := writer.MergeTimeSeriesRows(ctx, rows); err != nil {
 				return fmt.Errorf("K线写入存储失败: %w", err)
 			}
 			total += len(rows)
@@ -207,7 +207,7 @@ func (c *KlineCollector) reportKlines(ctx context.Context, params *sources.Colle
 		return nil
 	}
 
-	accessTarget := runtimeapp.GetStorageAccessTarget()
+	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 	if accessTarget == "" {
 		return fmt.Errorf("未配置存储 access tRPC 地址")
 	}
@@ -355,7 +355,7 @@ func (c *KlineCollector) sendTimeSeriesRowsWithRetry(ctx context.Context, access
 	return retry.Do(
 		func() error {
 			writer := newStorageWriter(accessTarget, "", storageAuthInfo(binding))
-			return writer.WriteTimeSeriesRows(ctx, rows)
+			return writer.MergeTimeSeriesRows(ctx, rows)
 		},
 		retry.Attempts(3),
 		retry.Delay(500*time.Millisecond),

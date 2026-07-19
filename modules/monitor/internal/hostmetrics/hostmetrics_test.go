@@ -32,7 +32,7 @@ func TestValidateHostMetricContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := timestamppb.Now()
-	msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", Topic: Topic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73", NodeId: "host", BootId: "boot"}, SpaceId: SpaceID, OccurredAt: now, PublishedAt: now, ContentType: ContentType, Payload: payload}
+	msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", Topic: Topic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73", NodeId: "host", BootId: "boot"}, SpaceId: SpaceID, OccurredAt: now, PublishedAt: now, ContentType: ContentType, MessageType: "moox.hostagent.host_metric.v1", Payload: payload}
 	if _, err := ValidateMessage(msg); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func validHostDelivery(t *testing.T) *jetstream.Delivery {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &jetstream.Delivery{Message: &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", Topic: Topic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73", NodeId: "host", BootId: "boot"}, SpaceId: SpaceID, OccurredAt: now, PublishedAt: now, ContentType: ContentType, Payload: payload}}
+	return &jetstream.Delivery{Message: &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", Topic: Topic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73", NodeId: "host", BootId: "boot"}, SpaceId: SpaceID, OccurredAt: now, PublishedAt: now, ContentType: ContentType, MessageType: "moox.hostagent.host_metric.v1", Payload: payload}}
 }
 
 func TestStorePersistsToStorageBeforeUpdatingLatest(t *testing.T) {

@@ -533,9 +533,9 @@ git commit -m "feat(cli): initialize built-in markets"
 - Modify: `modules/storage/proto/metadata.proto`
 - Regenerate: `modules/storage/proto/gen/metadata.pb.go`
 - Regenerate: `modules/storage/proto/gen/metadata.trpc.go`
-- Modify: `modules/storage/internal/core/metadata/store.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud.go`
-- Modify: `modules/storage/internal/infra/metadata/sqlite/crud_test.go`
+- Modify: `modules/storage/internal/service/metadata/store.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud.go`
+- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
 - Modify: `modules/storage/internal/services/access/metadata_catalog.go`
 - Modify: `modules/storage/internal/services/access/metadata_space_view.go`
 - Create: `modules/storage/internal/services/access/metadata_builtin.go`
@@ -567,13 +567,13 @@ Add `RegisterDataSubjects` to Metadata and keep the existing single-item RPC as 
 
 ```bash
 make -C modules/storage proto
-go test -count=1 ./modules/storage/internal/infra/metadata/sqlite ./modules/storage/internal/services/access -run 'Builtin|RegisterDataSubjects|SubjectSymbol' -v
+go test -count=1 ./modules/storage/internal/service/metadata/sqlite ./modules/storage/internal/services/access -run 'Builtin|RegisterDataSubjects|SubjectSymbol' -v
 ```
 
 - [ ] **Step 7: Commit generated and handwritten files together.**
 
 ```bash
-git add modules/storage/proto modules/storage/internal/core/metadata modules/storage/internal/infra/metadata/sqlite modules/storage/internal/services/access
+git add modules/storage/proto modules/storage/internal/service/metadata modules/storage/internal/service/metadata/sqlite modules/storage/internal/services/access
 git commit -m "feat(storage): protect built-in metadata and batch subjects"
 ```
 
@@ -584,18 +584,18 @@ git commit -m "feat(storage): protect built-in metadata and batch subjects"
 - Modify: `modules/storage/proto/access.proto`
 - Modify: `modules/storage/proto/store.proto`
 - Regenerate: `modules/storage/proto/gen/*`
-- Modify: `modules/storage/internal/core/schema/validator.go`
-- Modify: `modules/storage/internal/core/schema/validator_test.go`
+- Modify: `modules/storage/internal/service/primarystore/schema/validator.go`
+- Modify: `modules/storage/internal/service/primarystore/schema/validator_test.go`
 - Modify: `modules/storage/internal/services/access/data.go`
 - Create: `modules/storage/internal/services/access/write_mode_test.go`
 - Modify: `modules/storage/internal/services/primary/client.go`
 - Modify: `modules/storage/internal/services/primary/local.go`
 - Modify: `modules/storage/internal/services/primary/remote.go`
 - Modify: `modules/storage/internal/services/primary/service.go`
-- Modify: `modules/storage/internal/infra/device/store.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store.go`
-- Modify: `modules/storage/internal/infra/device/pebble/store_test.go`
-- Modify: `modules/storage/internal/infra/device/pebble/outbox.go`
+- Modify: `modules/storage/internal/service/primary/device/store.go`
+- Modify: `modules/storage/internal/service/primary/device/pebble/store.go`
+- Modify: `modules/storage/internal/service/primary/device/pebble/store_test.go`
+- Modify: `modules/storage/internal/service/primary/device/pebble/outbox.go`
 
 - [ ] **Step 1: Add TimeSeries and Record tests that demonstrate the stale-column problem.** For each row kind, MERGE `{open, amount}` followed by REPLACE `{open}` removes `amount`; duplicate TimeSeries keys or duplicate `(record_id, version)` keys in one REPLACE request fail deterministically.
 - [ ] **Step 2: Add the generic write mode without changing defaults.**
@@ -616,13 +616,13 @@ Add `write_mode` to Access and PrimaryStore write requests. `UNSPECIFIED` behave
 
 ```bash
 make -C modules/storage proto
-go test -count=1 ./modules/storage/internal/core/schema ./modules/storage/internal/services/access ./modules/storage/internal/services/primary ./modules/storage/internal/infra/device/pebble -run 'WriteMode|Replace|Merge' -v
+go test -count=1 ./modules/storage/internal/service/primarystore/schema ./modules/storage/internal/services/access ./modules/storage/internal/services/primary ./modules/storage/internal/service/primary/device/pebble -run 'WriteMode|Replace|Merge' -v
 ```
 
 - [ ] **Step 7: Commit.**
 
 ```bash
-git add modules/storage/proto modules/storage/internal/core/schema modules/storage/internal/services/access modules/storage/internal/services/primary modules/storage/internal/infra/device
+git add modules/storage/proto modules/storage/internal/service/primarystore/schema modules/storage/internal/services/access modules/storage/internal/services/primary modules/storage/internal/service/primary/device
 git commit -m "feat(storage): support atomic row replacement"
 ```
 

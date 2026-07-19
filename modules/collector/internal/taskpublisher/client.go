@@ -47,8 +47,7 @@ type Config struct {
 	ServiceGatewayTarget string
 	// EventServiceGatewayTarget is the gateway target passed to SCF wake events.
 	EventServiceGatewayTarget string
-	StorageMetadataTarget     string
-	StorageAccessTarget       string
+	StorageRPCGatewayTarget   string
 	Auth                      AuthConfig
 }
 
@@ -56,8 +55,7 @@ type Config struct {
 type Client struct {
 	serviceGatewayTarget      string
 	eventServiceGatewayTarget string
-	storageMetadataTarget     string
-	storageAccessTarget       string
+	storageRPCGatewayTarget   string
 	auth                      AuthConfig
 	httpClient                *http.Client
 	httpClientErr             error
@@ -87,8 +85,7 @@ func New(cfg Config) *Client {
 	return &Client{
 		serviceGatewayTarget:      normalizeGatewayTarget(controlTarget),
 		eventServiceGatewayTarget: normalizeGatewayTarget(eventTarget),
-		storageMetadataTarget:     strings.TrimSpace(cfg.StorageMetadataTarget),
-		storageAccessTarget:       strings.TrimSpace(cfg.StorageAccessTarget),
+		storageRPCGatewayTarget:   strings.TrimSpace(cfg.StorageRPCGatewayTarget),
 		auth:                      cfg.Auth,
 		httpClient:                httpClient,
 		httpClientErr:             httpClientErr,
@@ -337,12 +334,11 @@ func (c *Client) buildWakeEvent() (map[string]any, error) {
 		return nil, fmt.Errorf("event service gateway target is required")
 	}
 	return map[string]any{
-		"action":                  "keepalive",
-		"source":                  "collector_schedule",
-		"timestamp":               time.Now().UTC().Format(time.RFC3339),
-		"service_gateway_target":  c.eventServiceGatewayTarget,
-		"storage_metadata_target": c.storageMetadataTarget,
-		"storage_access_target":   c.storageAccessTarget,
+		"action":                     "keepalive",
+		"source":                     "collector_schedule",
+		"timestamp":                  time.Now().UTC().Format(time.RFC3339),
+		"service_gateway_target":     c.eventServiceGatewayTarget,
+		"storage_rpc_gateway_target": c.storageRPCGatewayTarget,
 		"data": map[string]any{
 			"wake_reason": "collector_job_items",
 		},

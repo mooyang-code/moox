@@ -36,237 +36,248 @@
             当前视图查询成功，但结果为空。
           </a-alert>
 
-          <section v-if="activeView" class="view-query-panel">
-            <div class="filter-grid">
-              <div v-if="mode === 'record'" class="filter-item record-keyword-filter">
-                <label>全文检索:</label>
-                <div class="filter-control">
-                  <a-input v-model="recordKeyword" allow-clear placeholder="关键词" @press-enter="onRecordSearch" />
-                  <span class="operator-static">⌕</span>
+          <QueryControls :loading="loading" :mode="mode">
+            <section v-if="activeView" class="view-query-panel">
+              <div class="filter-grid">
+                <div v-if="mode === 'record'" class="filter-item record-keyword-filter">
+                  <label>全文检索:</label>
+                  <div class="filter-control">
+                    <a-input v-model="recordKeyword" allow-clear placeholder="关键词" @press-enter="onRecordSearch" />
+                    <span class="operator-static">⌕</span>
+                  </div>
                 </div>
-              </div>
 
-              <div
-                v-for="filter in filters"
-                :key="filter.fieldName"
-                class="filter-item"
-                :class="{ 'range-filter-item': filter.operator === 'range' }"
-              >
-                <label :title="filterFieldLabel(filter.fieldName)">{{ filterFieldLabel(filter.fieldName) }}:</label>
                 <div
-                  class="filter-control"
-                  :class="{ 'empty-filter-control': filter.operator === 'empty' || filter.operator === 'not_empty' }"
+                  v-for="filter in filters"
+                  :key="filter.fieldName"
+                  class="filter-item"
+                  :class="{ 'range-filter-item': filter.operator === 'range' }"
                 >
-                  <template v-if="filter.operator === 'range'">
-                    <a-input v-model="filter.startValue" allow-clear placeholder="开始值" @press-enter="applyQueryControls" />
-                    <span class="range-separator">-</span>
-                    <a-input v-model="filter.endValue" allow-clear placeholder="结束值" @press-enter="applyQueryControls" />
-                  </template>
-                  <a-input
-                    v-else-if="filter.operator !== 'empty' && filter.operator !== 'not_empty'"
-                    v-model="filter.value"
-                    allow-clear
-                    placeholder="检索值"
-                    @press-enter="applyQueryControls"
-                  />
-                  <span v-else class="empty-filter-placeholder">{{ filter.operator === "empty" ? "为空" : "非空" }}</span>
-                  <a-dropdown trigger="click" @select="setFilterOperator(filter, $event)">
-                    <button class="operator-button" type="button" :title="filterOperatorTitle(filter.operator)">
-                      {{ filterOperatorSymbol(filter.operator) }}
-                    </button>
-                    <template #content>
-                      <a-doption v-for="option in filterOperatorOptions" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </a-doption>
+                  <label :title="filterFieldLabel(filter.fieldName)">{{ filterFieldLabel(filter.fieldName) }}:</label>
+                  <div
+                    class="filter-control"
+                    :class="{ 'empty-filter-control': filter.operator === 'empty' || filter.operator === 'not_empty' }"
+                  >
+                    <template v-if="filter.operator === 'range'">
+                      <a-input v-model="filter.startValue" allow-clear placeholder="开始值" @press-enter="applyQueryControls" />
+                      <span class="range-separator">-</span>
+                      <a-input v-model="filter.endValue" allow-clear placeholder="结束值" @press-enter="applyQueryControls" />
                     </template>
-                  </a-dropdown>
+                    <a-input
+                      v-else-if="filter.operator !== 'empty' && filter.operator !== 'not_empty'"
+                      v-model="filter.value"
+                      allow-clear
+                      placeholder="检索值"
+                      @press-enter="applyQueryControls"
+                    />
+                    <span v-else class="empty-filter-placeholder">{{ filter.operator === "empty" ? "为空" : "非空" }}</span>
+                    <a-dropdown trigger="click" @select="setFilterOperator(filter, $event)">
+                      <button class="operator-button" type="button" :title="filterOperatorTitle(filter.operator)">
+                        {{ filterOperatorSymbol(filter.operator) }}
+                      </button>
+                      <template #content>
+                        <a-doption v-for="option in filterOperatorOptions" :key="option.value" :value="option.value">
+                          {{ option.label }}
+                        </a-doption>
+                      </template>
+                    </a-dropdown>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div class="query-actions">
-              <a-button size="small" type="primary" :loading="loading" @click="applyQueryControls">查询</a-button>
-              <a-button v-if="mode === 'time_series'" size="small" type="outline" :loading="klineLoading" @click="openKlineModal">
-                <template #icon><icon-bar-chart /></template>
-                K线
-              </a-button>
-              <a-button size="small" @click="resetQueryControls">清空</a-button>
-            </div>
-          </section>
-
-          <section v-if="mode === 'time_series'" class="result-pane">
-            <a-table
-              row-key="id"
-              size="small"
-              :bordered="{ cell: true }"
-              :loading="loading || contextLoading"
-              :data="tableRows"
-              :pagination="timeSeriesTablePagination"
-              :scroll="{ x: 'max-content', y: 500 }"
-              @page-change="onPageChange"
-              @page-size-change="onPageSizeChange"
-            >
-              <template #columns>
-                <a-table-column title="序号" :width="72" align="center" fixed="left">
-                  <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
-                </a-table-column>
-                <a-table-column data-index="key" :width="180" fixed="left">
-                  <template #title
-                    ><span class="sortable-title"
-                      >数据ID<span class="sort-arrows"
-                        ><button :class="sortArrowClass('subject_id', 'asc')" @click.stop="setSort('subject_id', 'asc')">▲</button
-                        ><button :class="sortArrowClass('subject_id', 'desc')" @click.stop="setSort('subject_id', 'desc')">
-                          ▼
-                        </button></span
-                      ></span
-                    ></template
-                  >
-                </a-table-column>
-                <a-table-column data-index="freq" :width="96">
-                  <template #title
-                    ><span class="sortable-title"
-                      >频率<span class="sort-arrows"
-                        ><button :class="sortArrowClass('freq', 'asc')" @click.stop="setSort('freq', 'asc')">▲</button
-                        ><button :class="sortArrowClass('freq', 'desc')" @click.stop="setSort('freq', 'desc')">▼</button></span
-                      ></span
-                    ></template
-                  >
-                </a-table-column>
-                <a-table-column data-index="version" :width="230">
-                  <template #title
-                    ><span class="sortable-title"
-                      >时间<span class="sort-arrows"
-                        ><button :class="sortArrowClass('data_time', 'asc')" @click.stop="setSort('data_time', 'asc')">▲</button
-                        ><button :class="sortArrowClass('data_time', 'desc')" @click.stop="setSort('data_time', 'desc')">
-                          ▼
-                        </button></span
-                      ></span
-                    ></template
-                  >
-                </a-table-column>
-                <a-table-column
-                  v-for="column in tableColumnNames"
-                  :key="column"
-                  :width="dynamicColumnWidth(column)"
-                  :ellipsis="true"
-                  :tooltip="true"
+              <div class="query-actions">
+                <a-button size="small" type="primary" :loading="loading" @click="applyQueryControls">查询</a-button>
+                <a-button
+                  v-if="mode === 'time_series'"
+                  size="small"
+                  type="outline"
+                  :loading="klineLoading"
+                  @click="openKlineModal"
                 >
-                  <template #title>
-                    <span class="sortable-title">
-                      {{ columnTitle(column) }}
-                      <span class="sort-arrows">
-                        <button :class="sortArrowClass(column, 'asc')" @click.stop="setSort(column, 'asc')">▲</button>
-                        <button :class="sortArrowClass(column, 'desc')" @click.stop="setSort(column, 'desc')">▼</button>
-                      </span>
-                    </span>
-                  </template>
-                  <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
-                </a-table-column>
-                <a-table-column title="操作" :width="92" align="center" fixed="right">
-                  <template #cell="{ record }">
-                    <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
-                  </template>
-                </a-table-column>
-              </template>
-            </a-table>
-            <div v-if="timeSeriesUsesPreviewPager" class="preview-pager">
-              <span class="preview-pager__hint">{{ previewPagerText(VIEW_BROWSE_PREVIEW_LIMIT) }}</span>
-              <div class="preview-pager__actions">
-                <a-tooltip content="上一页">
-                  <a-button
-                    size="small"
-                    shape="circle"
-                    :disabled="pagination.current <= 1 || loading || contextLoading"
-                    aria-label="上一页"
-                    @click="onPreviewPrevPage"
-                  >
-                    <template #icon><icon-left /></template>
-                  </a-button>
-                </a-tooltip>
-                <span class="preview-pager__page">第 {{ pagination.current }} 页</span>
-                <a-tooltip content="下一页">
-                  <a-button
-                    size="small"
-                    shape="circle"
-                    :disabled="!previewHasMore || loading || contextLoading"
-                    aria-label="下一页"
-                    @click="onPreviewNextPage"
-                  >
-                    <template #icon><icon-right /></template>
-                  </a-button>
-                </a-tooltip>
+                  <template #icon><icon-bar-chart /></template>
+                  K线
+                </a-button>
+                <a-button size="small" @click="resetQueryControls">清空</a-button>
               </div>
-            </div>
-          </section>
+            </section>
+          </QueryControls>
 
-          <section v-else-if="mode === 'record'" class="result-pane">
-            <a-table
-              row-key="id"
-              size="small"
-              :bordered="{ cell: true }"
-              :loading="loading || contextLoading"
-              :data="tableRows"
-              :pagination="tablePagination"
-              :scroll="{ x: 'max-content', y: 460 }"
-              @page-change="onPageChange"
-              @page-size-change="onPageSizeChange"
-            >
-              <template #columns>
-                <a-table-column title="序号" :width="72" align="center" fixed="left">
-                  <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
-                </a-table-column>
-                <a-table-column data-index="key" :width="200" fixed="left">
-                  <template #title
-                    ><span class="sortable-title"
-                      >记录ID<span class="sort-arrows"
-                        ><button :class="sortArrowClass('record_id', 'asc')" @click.stop="setSort('record_id', 'asc')">▲</button
-                        ><button :class="sortArrowClass('record_id', 'desc')" @click.stop="setSort('record_id', 'desc')">
-                          ▼
-                        </button></span
-                      ></span
-                    ></template
+          <ResultTable :loading="loading || contextLoading" :rows="tableRows">
+            <section v-if="mode === 'time_series'" class="result-pane">
+              <a-table
+                row-key="id"
+                size="small"
+                :bordered="{ cell: true }"
+                :loading="loading || contextLoading"
+                :data="tableRows"
+                :pagination="timeSeriesTablePagination"
+                :scroll="{ x: 'max-content', y: 500 }"
+                @page-change="onPageChange"
+                @page-size-change="onPageSizeChange"
+              >
+                <template #columns>
+                  <a-table-column title="序号" :width="72" align="center" fixed="left">
+                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                  </a-table-column>
+                  <a-table-column data-index="key" :width="180" fixed="left">
+                    <template #title
+                      ><span class="sortable-title"
+                        >数据ID<span class="sort-arrows"
+                          ><button :class="sortArrowClass('subject_id', 'asc')" @click.stop="setSort('subject_id', 'asc')">
+                            ▲</button
+                          ><button :class="sortArrowClass('subject_id', 'desc')" @click.stop="setSort('subject_id', 'desc')">
+                            ▼
+                          </button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
+                  <a-table-column data-index="freq" :width="96">
+                    <template #title
+                      ><span class="sortable-title"
+                        >频率<span class="sort-arrows"
+                          ><button :class="sortArrowClass('freq', 'asc')" @click.stop="setSort('freq', 'asc')">▲</button
+                          ><button :class="sortArrowClass('freq', 'desc')" @click.stop="setSort('freq', 'desc')">▼</button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
+                  <a-table-column data-index="version" :width="230">
+                    <template #title
+                      ><span class="sortable-title"
+                        >时间<span class="sort-arrows"
+                          ><button :class="sortArrowClass('data_time', 'asc')" @click.stop="setSort('data_time', 'asc')">▲</button
+                          ><button :class="sortArrowClass('data_time', 'desc')" @click.stop="setSort('data_time', 'desc')">
+                            ▼
+                          </button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
+                  <a-table-column
+                    v-for="column in tableColumnNames"
+                    :key="column"
+                    :width="dynamicColumnWidth(column)"
+                    :ellipsis="true"
+                    :tooltip="true"
                   >
-                </a-table-column>
-                <a-table-column data-index="version" :width="230">
-                  <template #title
-                    ><span class="sortable-title"
-                      >版本<span class="sort-arrows"
-                        ><button :class="sortArrowClass('version', 'asc')" @click.stop="setSort('version', 'asc')">▲</button
-                        ><button :class="sortArrowClass('version', 'desc')" @click.stop="setSort('version', 'desc')">
-                          ▼
-                        </button></span
-                      ></span
-                    ></template
-                  >
-                </a-table-column>
-                <a-table-column
-                  v-for="column in tableColumnNames"
-                  :key="column"
-                  :width="dynamicColumnWidth(column)"
-                  :ellipsis="true"
-                  :tooltip="true"
-                >
-                  <template #title>
-                    <span class="sortable-title">
-                      {{ columnTitle(column) }}
-                      <span class="sort-arrows">
-                        <button :class="sortArrowClass(column, 'asc')" @click.stop="setSort(column, 'asc')">▲</button>
-                        <button :class="sortArrowClass(column, 'desc')" @click.stop="setSort(column, 'desc')">▼</button>
+                    <template #title>
+                      <span class="sortable-title">
+                        {{ columnTitle(column) }}
+                        <span class="sort-arrows">
+                          <button :class="sortArrowClass(column, 'asc')" @click.stop="setSort(column, 'asc')">▲</button>
+                          <button :class="sortArrowClass(column, 'desc')" @click.stop="setSort(column, 'desc')">▼</button>
+                        </span>
                       </span>
-                    </span>
-                  </template>
-                  <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
-                </a-table-column>
-                <a-table-column title="操作" :width="92" align="center" fixed="right">
-                  <template #cell="{ record }">
-                    <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
-                  </template>
-                </a-table-column>
-              </template>
-            </a-table>
-          </section>
+                    </template>
+                    <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
+                  </a-table-column>
+                  <a-table-column title="操作" :width="92" align="center" fixed="right">
+                    <template #cell="{ record }">
+                      <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
+                    </template>
+                  </a-table-column>
+                </template>
+              </a-table>
+              <div v-if="timeSeriesUsesPreviewPager" class="preview-pager">
+                <span class="preview-pager__hint">{{ previewPagerText(VIEW_BROWSE_PREVIEW_LIMIT) }}</span>
+                <div class="preview-pager__actions">
+                  <a-tooltip content="上一页">
+                    <a-button
+                      size="small"
+                      shape="circle"
+                      :disabled="pagination.current <= 1 || loading || contextLoading"
+                      aria-label="上一页"
+                      @click="onPreviewPrevPage"
+                    >
+                      <template #icon><icon-left /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <span class="preview-pager__page">第 {{ pagination.current }} 页</span>
+                  <a-tooltip content="下一页">
+                    <a-button
+                      size="small"
+                      shape="circle"
+                      :disabled="!previewHasMore || loading || contextLoading"
+                      aria-label="下一页"
+                      @click="onPreviewNextPage"
+                    >
+                      <template #icon><icon-right /></template>
+                    </a-button>
+                  </a-tooltip>
+                </div>
+              </div>
+            </section>
 
-          <a-empty v-else description="无法识别该视图的主数据集类型" />
+            <section v-else-if="mode === 'record'" class="result-pane">
+              <a-table
+                row-key="id"
+                size="small"
+                :bordered="{ cell: true }"
+                :loading="loading || contextLoading"
+                :data="tableRows"
+                :pagination="tablePagination"
+                :scroll="{ x: 'max-content', y: 460 }"
+                @page-change="onPageChange"
+                @page-size-change="onPageSizeChange"
+              >
+                <template #columns>
+                  <a-table-column title="序号" :width="72" align="center" fixed="left">
+                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                  </a-table-column>
+                  <a-table-column data-index="key" :width="200" fixed="left">
+                    <template #title
+                      ><span class="sortable-title"
+                        >记录ID<span class="sort-arrows"
+                          ><button :class="sortArrowClass('record_id', 'asc')" @click.stop="setSort('record_id', 'asc')">▲</button
+                          ><button :class="sortArrowClass('record_id', 'desc')" @click.stop="setSort('record_id', 'desc')">
+                            ▼
+                          </button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
+                  <a-table-column data-index="version" :width="230">
+                    <template #title
+                      ><span class="sortable-title"
+                        >版本<span class="sort-arrows"
+                          ><button :class="sortArrowClass('version', 'asc')" @click.stop="setSort('version', 'asc')">▲</button
+                          ><button :class="sortArrowClass('version', 'desc')" @click.stop="setSort('version', 'desc')">
+                            ▼
+                          </button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
+                  <a-table-column
+                    v-for="column in tableColumnNames"
+                    :key="column"
+                    :width="dynamicColumnWidth(column)"
+                    :ellipsis="true"
+                    :tooltip="true"
+                  >
+                    <template #title>
+                      <span class="sortable-title">
+                        {{ columnTitle(column) }}
+                        <span class="sort-arrows">
+                          <button :class="sortArrowClass(column, 'asc')" @click.stop="setSort(column, 'asc')">▲</button>
+                          <button :class="sortArrowClass(column, 'desc')" @click.stop="setSort(column, 'desc')">▼</button>
+                        </span>
+                      </span>
+                    </template>
+                    <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
+                  </a-table-column>
+                  <a-table-column title="操作" :width="92" align="center" fixed="right">
+                    <template #cell="{ record }">
+                      <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
+                    </template>
+                  </a-table-column>
+                </template>
+              </a-table>
+            </section>
+          </ResultTable>
+
+          <a-empty v-if="mode !== 'time_series' && mode !== 'record'" description="无法识别该视图的主数据集类型" />
         </template>
       </a-spin>
     </div>
@@ -351,6 +362,8 @@ import {
 } from "@/views/data/shared/module-attribution";
 import { viewBuildTimeLabel } from "./view-build-time";
 import KlineModal from "./kline-modal.vue";
+import QueryControls from "./components/query-controls.vue";
+import ResultTable from "./components/result-table.vue";
 
 defineOptions({ name: "DataViewBrowse" });
 

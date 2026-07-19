@@ -1,4 +1,4 @@
-import { callAccess } from "./http";
+import { callStorage } from "./http";
 import type {
   Page,
   PageResult,
@@ -29,20 +29,20 @@ export interface ReadRecordRowsReq {
 }
 
 export function writeTimeSeriesRows(rows: TimeSeriesRow[]) {
-  return callAccess<{ rows: TimeSeriesRow[] }, { ret_info: RetInfo }>("WriteTimeSeriesRows", { rows });
+  return callStorage<{ rows: TimeSeriesRow[] }, { ret_info: RetInfo }>("MergeTimeSeriesRows", { rows });
 }
 
 export function readTimeSeriesRows(req: ReadTimeSeriesRowsReq) {
-  return callAccess<ReadTimeSeriesRowsReq, { ret_info: RetInfo; rows: TimeSeriesRow[]; page_result: PageResult }>(
+  return callStorage<ReadTimeSeriesRowsReq, { ret_info: RetInfo; rows: TimeSeriesRow[]; page_result: PageResult }>(
     "ReadTimeSeriesRows",
     req
   );
 }
 
 export function writeRecordRows(rows: RecordRow[]) {
-  return callAccess<{ rows: RecordRow[] }, { ret_info: RetInfo; keys: RecordKey[] }>("WriteRecordRows", { rows });
+  return callStorage<{ rows: RecordRow[] }, { ret_info: RetInfo }>("MergeRecordRows", { rows });
 }
 
 export function readRecordRows(req: ReadRecordRowsReq) {
-  return callAccess<ReadRecordRowsReq, { ret_info: RetInfo; rows: RecordRow[]; page_result: PageResult }>("ReadRecordRows", req);
+  return callStorage<ReadRecordRowsReq, { ret_info: RetInfo; rows: RecordRow[]; page_result: PageResult }>("ReadRecordRows", req);
 }

@@ -66,7 +66,7 @@ func (s *fakeKlineStorage) LatestTimeSeriesTime(context.Context, *storagepb.Time
 	return s.latest, s.found, nil
 }
 
-func (s *fakeKlineStorage) WriteTimeSeriesRows(_ context.Context, rows []*storagepb.TimeSeriesRow) error {
+func (s *fakeKlineStorage) MergeTimeSeriesRows(_ context.Context, rows []*storagepb.TimeSeriesRow) error {
 	s.writes = append(s.writes, rows)
 	return nil
 }

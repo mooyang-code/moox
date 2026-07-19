@@ -52,8 +52,8 @@ Run each RED and GREEN command recorded in the child plan. Preserve the terminal
 - [ ] **Step 2: Run the focused Storage verification**
 
 ```bash
-env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./internal/service/view/builder ./internal/infra/eventbus ./internal/bootstrap/eventbus ./internal/config ./test
-env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./internal/service/view/builder ./internal/infra/eventbus
+env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -count=1 ./internal/service/dataviewbuilder ./internal/infra/eventbus ./internal/bootstrap/eventbus ./internal/config ./test
+env GOCACHE=/tmp/moox-gocache CGO_ENABLED=1 go test -race -count=1 ./internal/service/dataviewbuilder ./internal/infra/eventbus
 ```
 
 Run from `modules/storage`. Expected: PASS with no leaked goroutines, early ACK, or swallowed derived-write error.

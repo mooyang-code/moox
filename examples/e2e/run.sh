@@ -16,7 +16,15 @@ DATASET_ID="binance_spot_kline_1h"
 SYSDEPLOY_ONLY=0
 E2E_ADMIN_USERNAME="mooxe2eadmin"
 E2E_ADMIN_PASSWORD="MooxE2E#20260704!"
-ADMIN_PASSWORD_FILE=""
+E2E_NODE_ID="${MOOX_E2E_NODE_ID:-e2e-gateway}"
+E2E_MONITOR_INSTANCE_ID="${MOOX_E2E_MONITOR_INSTANCE_ID:-e2e-monitor}"
+E2E_GATEWAY_CONTROL_URL="${MOOX_E2E_GATEWAY_CONTROL_URL:-http://127.0.0.1:11000}"
+E2E_GATEWAY_INPUT_DIR=""
+
+cleanup_gateway_inputs() {
+  [[ -z "${E2E_GATEWAY_INPUT_DIR}" ]] || rm -rf "${E2E_GATEWAY_INPUT_DIR}"
+}
+trap cleanup_gateway_inputs EXIT
 
 export MOOX_ADMIN_JWT_SECRET_KEY="${MOOX_ADMIN_JWT_SECRET_KEY:-moox-e2e-jwt-secret-key-20260713-safe}"
 export MOOX_EVENTBUS_STREAM_MAX_BYTES="${MOOX_EVENTBUS_STREAM_MAX_BYTES:-104857600}"
@@ -82,6 +90,42 @@ infer_public_host() {
   PUBLIC_HOST="${PUBLIC_HOST%%:*}"
 }
 
+prepare_gateway_inputs() {
+  if ! is_local_target; then
+    return
+  fi
+  command -v openssl >/dev/null 2>&1 || fail "openssl is required for local Gateway E2E inputs"
+  E2E_GATEWAY_INPUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moox-e2e-gateway.XXXXXX")"
+  umask 077
+  openssl rand -hex 32 >"${E2E_GATEWAY_INPUT_DIR}/control.key"
+  openssl rand -hex 32 >"${E2E_GATEWAY_INPUT_DIR}/service.key"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=moox-e2e-peer-one \
+    -keyout /dev/null -out "${E2E_GATEWAY_INPUT_DIR}/peer-one.pem" >/dev/null 2>&1
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=moox-e2e-peer-two \
+    -keyout /dev/null -out "${E2E_GATEWAY_INPUT_DIR}/peer-two.pem" >/dev/null 2>&1
+  cat "${E2E_GATEWAY_INPUT_DIR}/peer-one.pem" "${E2E_GATEWAY_INPUT_DIR}/peer-two.pem" >"${E2E_GATEWAY_INPUT_DIR}/peers.pem"
+}
+
+append_gateway_deploy_args() {
+  deploy_args+=(--node-id "${E2E_NODE_ID}" --gateway-control-url "${E2E_GATEWAY_CONTROL_URL}" --monitor-instance-id "${E2E_MONITOR_INSTANCE_ID}")
+  if is_local_target; then
+    deploy_args+=(
+      --gateway-control-key-file "${E2E_GATEWAY_INPUT_DIR}/control.key"
+      --gateway-service-key-file "${E2E_GATEWAY_INPUT_DIR}/service.key"
+      --gateway-ca-bundle "${E2E_GATEWAY_INPUT_DIR}/peers.pem"
+    )
+  else
+    : "${MOOX_E2E_GATEWAY_CONTROL_KEY_FILE:?set MOOX_E2E_GATEWAY_CONTROL_KEY_FILE for remote E2E}"
+    : "${MOOX_E2E_GATEWAY_SERVICE_KEY_FILE:?set MOOX_E2E_GATEWAY_SERVICE_KEY_FILE for remote E2E}"
+    : "${MOOX_E2E_GATEWAY_CA_BUNDLE:?set MOOX_E2E_GATEWAY_CA_BUNDLE for remote E2E}"
+    deploy_args+=(
+      --gateway-control-key-file "${MOOX_E2E_GATEWAY_CONTROL_KEY_FILE}"
+      --gateway-service-key-file "${MOOX_E2E_GATEWAY_SERVICE_KEY_FILE}"
+      --gateway-ca-bundle "${MOOX_E2E_GATEWAY_CA_BUNDLE}"
+    )
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)
@@ -126,6 +170,7 @@ done
 [[ -n "${DEPLOY_DIR}" ]] || fail "--dir cannot be empty"
 [[ "${TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || fail "--timeout-seconds must be an integer"
 infer_public_host
+prepare_gateway_inputs
 if [[ "${SYSDEPLOY_ONLY}" -eq 1 ]] && ! is_local_target; then
   fail "--sysdeploy-only currently supports localhost targets only"
 fi
@@ -139,25 +184,50 @@ run_remote() {
 import_seed() {
   local seed="$1"
   local space="${2:-}"
-  local space_args=()
-  if [[ -n "${space}" ]]; then
-    space_args=(--spaces "${space}")
-  fi
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if is_local_target; then
+      local deploy_dir
+      deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
+      if [[ -n "${space}" ]]; then
+        if "${deploy_dir}/bin/moox-cli" metadata import \
+          --metadata-url "http://127.0.0.1:20200" \
+          --file "${deploy_dir}/examples/${seed}" \
+          --spaces "${space}" \
+          --if-not-exists; then
+          return 0
+        fi
+      elif "${deploy_dir}/bin/moox-cli" metadata import \
+        --metadata-url "http://127.0.0.1:20200" \
+        --file "${deploy_dir}/examples/${seed}" \
+        --if-not-exists; then
+        return 0
+      fi
+    else
+      local remote_space=""
+      if [[ -n "${space}" ]]; then
+        remote_space=" --spaces $(shell_quote "${space}")"
+      fi
+      if run_remote "./bin/moox-cli metadata import --metadata-url http://127.0.0.1:20200 --file ./examples/${seed}${remote_space} --if-not-exists"; then
+        return 0
+      fi
+    fi
+    [[ "${attempt}" -eq 5 ]] || sleep 1
+  done
+  return 1
+}
+
+ensure_admin_user() {
   if is_local_target; then
     local deploy_dir
     deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
-    "${deploy_dir}/bin/moox-cli" metadata import \
-      --metadata-url "http://127.0.0.1:20200" \
-      --file "${deploy_dir}/examples/${seed}" \
-      "${space_args[@]}" \
-      --if-not-exists
+    printf '%s\n' "${E2E_ADMIN_PASSWORD}" | "${deploy_dir}/bin/moox-admin-cli" user ensure \
+      --db-path "${deploy_dir}/data/admin.db" \
+      --username "${E2E_ADMIN_USERNAME}" \
+      --password-stdin
     return
   fi
-  local remote_space=""
-  if [[ -n "${space}" ]]; then
-    remote_space=" --spaces $(shell_quote "${space}")"
-  fi
-  run_remote "./bin/moox-cli metadata import --metadata-url http://127.0.0.1:20200 --file ./examples/${seed}${remote_space} --if-not-exists"
+  run_remote "printf '%s\\n' $(shell_quote "${E2E_ADMIN_PASSWORD}") | ./bin/moox-admin-cli user ensure --db-path ./data/admin.db --username $(shell_quote "${E2E_ADMIN_USERNAME}") --password-stdin"
 }
 
 run_scf_once() {
@@ -189,6 +259,7 @@ verify_phase() {
     --space "${SPACE_ID}" \
     --rule "${RULE_ID}" \
     --node "${NODE_ID}" \
+    --e2e-node "${E2E_NODE_ID}" \
     --package "${PACKAGE_ID}" \
     --dataset "${DATASET_ID}" \
     --timeout-seconds "${TIMEOUT_SECONDS}"
@@ -198,12 +269,9 @@ log "target=${TARGET} dir=${DEPLOY_DIR} public_host=${PUBLIC_HOST} reset_data=${
 
 if [[ "${DEPLOY}" -eq 1 ]]; then
   deploy_args=(--target "${TARGET}" --dir "${DEPLOY_DIR}")
+  append_gateway_deploy_args
   if [[ "${RESET_DATA}" -eq 1 ]]; then
-    ADMIN_PASSWORD_FILE="$(mktemp "${TMPDIR:-/tmp}/moox-e2e-admin-password.XXXXXX")"
-    chmod 600 "${ADMIN_PASSWORD_FILE}"
-    printf '%s\n' "${E2E_ADMIN_PASSWORD}" >"${ADMIN_PASSWORD_FILE}"
-    trap 'rm -f "${ADMIN_PASSWORD_FILE}"' EXIT
-    deploy_args+=(--reset-data --admin-username "${E2E_ADMIN_USERNAME}" --admin-password-file "${ADMIN_PASSWORD_FILE}")
+    deploy_args+=(--reset-data)
   fi
   "${ROOT}/scripts/deploy-moox.sh" "${deploy_args[@]}"
 else
@@ -220,6 +288,7 @@ import_seed "platform-local.seed.yaml"
 import_seed "metadata-quant-initial.seed.yaml" "${SPACE_ID}"
 
 log "prepare management/backend state"
+ensure_admin_user
 verify_phase "prepare"
 
 log "run collector SCF runtime once"

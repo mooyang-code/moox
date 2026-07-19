@@ -23,7 +23,7 @@ func routeForServer(t *testing.T, server *httptest.Server) Route {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Route{ServiceID: "admin", Address: u.Host, ServicePath: "trpc.moox.Admin", TimeoutMS: 1000, MaxBodyBytes: 1024}
+	return Route{ServiceID: "admin", Address: u.Host, ServicePath: "trpc.moox.Admin", TimeoutMS: 1000, MaxBodyBytes: 1024, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 }
 
 func TestForwardProxiesRequestAndPreservesAllowedResponse(t *testing.T) {
@@ -163,7 +163,7 @@ func TestForwardReturnsUpstreamTransportErrors(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	route := Route{ServiceID: "admin", Address: address, ServicePath: "trpc.moox.Admin", TimeoutMS: 100, MaxBodyBytes: 1024}
+	route := Route{ServiceID: "admin", Address: address, ServicePath: "trpc.moox.Admin", TimeoutMS: 100, MaxBodyBytes: 1024, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 	_, err = Forward(context.Background(), nil, route, "GetStatus", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "send upstream request") {
 		t.Fatalf("error = %v", err)

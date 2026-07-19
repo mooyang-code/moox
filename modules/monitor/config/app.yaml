@@ -56,8 +56,10 @@ metrics:
   max_ack_pending: 256
   no_data_intervals: 2
   storage:
-    access_target: ip://127.0.0.1:20102
-    metadata_target: ip://127.0.0.1:20100
+    gateway_target: ip://127.0.0.1:11003
+    gateway_node_id: ""
+    key_id: monitor
+    hmac_key_file: ""
     space_id: moox_system
     dataset_id: moox_service_metrics
     frequency: 30s
@@ -65,8 +67,10 @@ metrics:
     write_batch_size: 1000
   host_storage:
     enabled: true
-    access_target: ip://127.0.0.1:20102
-    metadata_target: ip://127.0.0.1:20100
+    gateway_target: ip://127.0.0.1:11003
+    gateway_node_id: ""
+    key_id: monitor
+    hmac_key_file: ""
     space_id: moox_system
     frequency: 1m
     write_timeout: 5s

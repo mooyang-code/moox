@@ -38,51 +38,55 @@ services:
       health_url: http://127.0.0.1:19527/readyz
       health_kind: readiness
       monitor_enabled: true
-  - name: storage_metadata
+  - name: storage-primary
     kind: storage
     deployment_mode: process
     protocol: http
     host: 127.0.0.1
     port: 20200
     gateway_path: trpc.moox.storage.Metadata
-    gateway_enabled: false
+    gateway_service_id: storage-primary
+    gateway_enabled: true
     scope: public
     status: active
-    description: moox-storage 元数据 HTTP 服务
+    description: moox-storage PrimaryStore + Metadata 服务
     extra_config:
       health_url: http://127.0.0.1:20210/readyz
       health_kind: readiness
       monitor_enabled: true
-  - name: storage_access
-    kind: storage
-    deployment_mode: process
-    protocol: http
-    host: 127.0.0.1
-    port: 20201
-    gateway_path: trpc.moox.storage.Access
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage 数据写入/读取 HTTP 服务，SCF 采集写入优先直连
-    extra_config:
-      health_url: http://127.0.0.1:20210/readyz
-      health_kind: readiness
-      monitor_enabled: true
-  - name: storage_view
+      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, GetView, ListViews, UpsertViewColumn, ListViewColumns, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, BindDatasetSubject, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, CreatePrimaryStoreNode, UpdatePrimaryStoreNode, GetPrimaryStoreNode, ListPrimaryStoreNodes, CreatePrimaryStoreRoute, UpdatePrimaryStoreRoute, GetPrimaryStoreRoute, ListPrimaryStoreRoutes, RegisterArchiveFile, ListArchiveFiles]
+      gateway_callers: [admin-gateway, collector, factor, monitor, archive, moox-cli, storage-view]
+      gateway_routes:
+        - service_path: trpc.moox.storage.Metadata
+          port: 20100
+          gateway_methods: [ClaimViewIndexBuild, UpdateViewIndexBuild, ActivateViewIndex, FailViewIndexBuild]
+          gateway_callers: [storage-view]
+        - service_path: trpc.moox.storage.PrimaryStore
+          port: 20102
+          gateway_methods: [MergeTimeSeriesRows, ReadTimeSeriesRows, MergeRecordRows, ReadRecordRows]
+          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
+        - service_path: trpc.moox.storage.PrimaryStoreScan
+          port: 20105
+          gateway_methods: [ScanTimeSeriesRows, ScanRecordRows, GetShardHeads]
+          gateway_callers: [storage-view, archive]
+  - name: storage-view
     kind: storage
     deployment_mode: process
     protocol: http
     host: 127.0.0.1
     port: 20202
     gateway_path: trpc.moox.storage.DataView
-    gateway_enabled: false
+    gateway_service_id: storage-view
+    gateway_enabled: true
     scope: public
     status: active
-    description: moox-storage 统一 View 服务，承载索引、物化和查询
+    description: moox-storage DataView + ViewBuilder 服务
     extra_config:
       health_url: http://127.0.0.1:20211/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
+      gateway_callers: [admin-gateway, collector, factor, monitor]
   - name: eventbus
     kind: eventbus
     deployment_mode: process
@@ -114,6 +118,8 @@ services:
       health_url: http://127.0.0.1:11409/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_collector
     kind: collector
     deployment_mode: process
@@ -130,6 +136,8 @@ services:
       health_url: http://127.0.0.1:11412/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_cloudnode
     kind: cloudnode
     deployment_mode: process
@@ -146,6 +154,8 @@ services:
       health_url: http://127.0.0.1:11411/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_factor
     kind: factor
     deployment_mode: process
@@ -162,6 +172,8 @@ services:
       health_url: http://127.0.0.1:11414/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_strategy
     kind: strategy
     deployment_mode: process
@@ -178,6 +190,8 @@ services:
       health_url: http://127.0.0.1:11431/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_archive
     kind: archive
     deployment_mode: process
@@ -208,6 +222,8 @@ services:
       health_url: http://127.0.0.1:11425/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_trade
     kind: trade
     deployment_mode: process
@@ -224,54 +240,6 @@ services:
       monitor_enabled: true
 
   # Logical RPC endpoints hosted by the Admin or Storage/Trade process.
-  - name: storage_metadata_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20100
-    gateway_path: trpc.moox.storage.Metadata
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage 元数据 tRPC 服务
-    extra_config: {}
-  - name: storage_primary_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20101
-    gateway_path: trpc.moox.storage.PrimaryStore
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage PrimaryStore tRPC 服务
-    extra_config: {}
-  - name: storage_access_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20102
-    gateway_path: trpc.moox.storage.Access
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage Access tRPC 服务
-    extra_config: {}
-  - name: storage_view_trpc
-    kind: storage_rpc
-    deployment_mode: endpoint
-    protocol: trpc
-    host: 127.0.0.1
-    port: 20103
-    gateway_path: trpc.moox.storage.DataView
-    gateway_enabled: false
-    scope: public
-    status: active
-    description: moox-storage DataView tRPC 服务
-    extra_config: {}
   - name: admin_auth
     kind: admin_rpc
     deployment_mode: endpoint
@@ -336,6 +304,7 @@ services:
       gateway_methods:
         - ListSecrets
         - RevealSecret
+      gateway_callers: [admin-gateway]
   - name: sysdeploy
     kind: admin_rpc
     deployment_mode: endpoint
@@ -351,6 +320,7 @@ services:
     extra_config:
       gateway_methods:
         - ListActiveServiceDeployments
+      gateway_callers: [admin-gateway, monitor, moox-cli]
   - name: trade_account
     kind: trade
     deployment_mode: endpoint

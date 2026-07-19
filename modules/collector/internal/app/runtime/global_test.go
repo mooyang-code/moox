@@ -4,29 +4,27 @@ import "testing"
 
 func TestStorageTargetsUseEnvironmentBeforeLocalConfig(t *testing.T) {
 	resetStorageTargetState(t)
-	t.Setenv("MOOX_STORAGE_METADATA_TARGET", "ip://metadata.example.com:20100/")
-	t.Setenv("MOOX_STORAGE_ACCESS_TARGET", "ip://access.example.com:20102/")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://gateway.example.com:11003/")
 
-	if got := GetStorageMetadataTarget(); got != "ip://metadata.example.com:20100" {
-		t.Fatalf("GetStorageMetadataTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
-	if got := GetStorageAccessTarget(); got != "ip://access.example.com:20102" {
-		t.Fatalf("GetStorageAccessTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
 }
 
 func TestStorageRuntimeTargetsOverrideEnvironment(t *testing.T) {
 	resetStorageTargetState(t)
-	t.Setenv("MOOX_STORAGE_METADATA_TARGET", "ip://metadata.example.com:20100")
-	t.Setenv("MOOX_STORAGE_ACCESS_TARGET", "ip://access.example.com:20102")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://gateway.example.com:11003")
 
-	UpdateStorageTargets("ip://runtime-metadata.example.com:20100/", "ip://runtime-access.example.com:20102/")
+	UpdateStorageRPCGatewayTarget("ip://runtime-gateway.example.com:11003/")
 
-	if got := GetStorageMetadataTarget(); got != "ip://runtime-metadata.example.com:20100" {
-		t.Fatalf("GetStorageMetadataTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://runtime-gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
-	if got := GetStorageAccessTarget(); got != "ip://runtime-access.example.com:20102" {
-		t.Fatalf("GetStorageAccessTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://runtime-gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
 }
 
@@ -55,8 +53,7 @@ func resetStorageTargetState(t *testing.T) {
 	localAppConfigMu.Lock()
 	oldLocal := LocalAppConfig
 	LocalAppConfig = &AppConfig{System: &SystemConfig{
-		StorageMetadataTarget: "127.0.0.1:20100",
-		StorageAccessTarget:   "127.0.0.1:20102",
+		StorageRPC: StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003"},
 	}}
 	localAppConfigMu.Unlock()
 

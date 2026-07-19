@@ -7,15 +7,37 @@ import (
 
 func TestValidateRouteAcceptsLiteralLoopbackAddresses(t *testing.T) {
 	for _, address := range []string{"127.0.0.1:8080", "[::1]:65535"} {
-		route := Route{ServiceID: "storage_api", Address: address, ServicePath: "trpc.moox.storage.Storage", TimeoutMS: 1, MaxBodyBytes: 1}
+		route := Route{ServiceID: "storage_api", Address: address, ServicePath: "trpc.test.Storage", TimeoutMS: 1, MaxBodyBytes: 1, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 		if err := ValidateRoute(route); err != nil {
 			t.Fatalf("ValidateRoute(%q): %v", address, err)
 		}
 	}
 }
 
+func TestValidateRouteRejectsStorageAliasWildcards(t *testing.T) {
+	for _, servicePath := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.DataView", "trpc.moox.storage.PrimaryStore"} {
+		route := Route{ServiceID: "alias", Address: "127.0.0.1:8080", ServicePath: servicePath, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
+		if err := ValidateRoute(route); err == nil {
+			t.Fatalf("ValidateRoute accepted wildcard storage alias %q", servicePath)
+		}
+	}
+}
+
+func TestValidateRouteAllowsStorageDataShardMethodsForPrimary(t *testing.T) {
+	route := Route{
+		ServiceID:      "storage-primary",
+		Address:        "127.0.0.1:20106",
+		ServicePath:    "trpc.moox.storage.DataShard",
+		AllowedMethods: []string{"MergeRows", "ReadRows", "ScanRows", "DeleteRows", "GetShardState"},
+		AllowedCallers: []string{"storage-primary"},
+	}
+	if err := ValidateRoute(route); err != nil {
+		t.Fatalf("ValidateRoute rejected DataShard route: %v", err)
+	}
+}
+
 func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
-	valid := Route{ServiceID: "storage-api", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.storage.Storage", TimeoutMS: 1, MaxBodyBytes: 1}
+	valid := Route{ServiceID: "storage-api", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.storage.Storage", TimeoutMS: 1, MaxBodyBytes: 1, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 	tests := []struct {
 		name string
 		edit func(*Route)
@@ -55,7 +77,7 @@ func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
 }
 
 func TestValidateRouteAcceptsCapsAndRejectsValuesAboveCaps(t *testing.T) {
-	base := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", TimeoutMS: maxTimeoutMS, MaxBodyBytes: maxMaxBodyBytes}
+	base := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", TimeoutMS: maxTimeoutMS, MaxBodyBytes: maxMaxBodyBytes, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 	if err := ValidateRoute(base); err != nil {
 		t.Fatalf("ValidateRoute at caps: %v", err)
 	}
@@ -78,8 +100,8 @@ func TestValidateRouteAcceptsCapsAndRejectsValuesAboveCaps(t *testing.T) {
 
 func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	routes := []Route{
-		{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.Storage"},
-		{ServiceID: "admin", Address: "[::1]:8001", ServicePath: "trpc.moox.Admin"},
+		{ServiceID: "storage_api", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.Storage", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}},
+		{ServiceID: "admin", Address: "[::1]:8001", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}},
 	}
 	first, err := NormalizeAndHash("node-1", routes)
 	if err != nil {
@@ -104,8 +126,53 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	}
 }
 
+func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testing.T) {
+	base := Route{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.storage.DataView"}
+	if err := ValidateRoute(base); err == nil {
+		t.Fatal("ValidateRoute accepted an unrestricted storage route")
+	}
+
+	for _, method := range []string{
+		"ClaimViewIndexBuild",
+		"MergePrimaryRows",
+		"DeletePrimaryRows",
+		"ApplyViewIndex",
+	} {
+		route := base
+		route.AllowedMethods = []string{method}
+		route.AllowedCallers = []string{"storage-view"}
+		if err := ValidateRoute(route); err == nil {
+			t.Fatalf("ValidateRoute accepted internal storage method %q", method)
+		}
+	}
+
+	public := base
+	public.AllowedMethods = []string{"SearchRecordRows"}
+	public.AllowedCallers = []string{"admin-gateway"}
+	if err := ValidateRoute(public); err != nil {
+		t.Fatalf("ValidateRoute rejected public storage method: %v", err)
+	}
+}
+
+func TestValidateStorageMetadataViewBuilderRoute(t *testing.T) {
+	route := Route{
+		ServiceID:      "storage-primary",
+		Address:        "127.0.0.1:20100",
+		ServicePath:    "trpc.moox.storage.Metadata",
+		AllowedMethods: []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild"},
+		AllowedCallers: []string{"storage-view"},
+	}
+	if err := ValidateRoute(route); err != nil {
+		t.Fatalf("ValidateRoute rejected the storage-view metadata route: %v", err)
+	}
+	route.AllowedCallers = []string{"admin-gateway", "storage-view"}
+	if err := ValidateRoute(route); err == nil {
+		t.Fatal("ValidateRoute accepted view-builder metadata methods for a broader caller set")
+	}
+}
+
 func TestCanonicalSnapshotHashExcludesGeneratedAt(t *testing.T) {
-	normalized, err := NormalizeAndHash("node-1", []Route{{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin"}})
+	normalized, err := NormalizeAndHash("node-1", []Route{{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +200,20 @@ func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndHashAllowsDisjointMethodsForOneServiceID(t *testing.T) {
+	routes := []Route{
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20201", ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"storage-view"}},
+	}
+	snapshot, err := NormalizeAndHash("node-1", routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Routes) != 2 {
+		t.Fatalf("routes = %+v", snapshot.Routes)
+	}
+}
+
 func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
 	enabled, err := NormalizeAndHashState("node-1", false, nil)
 	if err != nil {
@@ -151,7 +232,7 @@ func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
 }
 
 func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testing.T) {
-	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments", "GetGatewayNodeRoutes", "ListActiveServiceDeployments"}}
+	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments", "GetGatewayNodeRoutes", "ListActiveServiceDeployments"}, AllowedCallers: []string{"*"}}
 	snapshot, err := NormalizeAndHash("node-1", []Route{route})
 	if err != nil {
 		t.Fatal(err)
@@ -164,10 +245,10 @@ func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testin
 		t.Fatalf("unexpected authorization: %+v", got)
 	}
 	unrestricted := Route{}
-	if !unrestricted.AllowsMethod("Anything") {
-		t.Fatal("empty allowlist should allow ordinary routes")
+	if unrestricted.AllowsMethod("Anything") {
+		t.Fatal("empty allowlist should not authorize ordinary routes")
 	}
-	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath}})
+	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, AllowedMethods: []string{"ListActiveServiceDeployments"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,11 +10,8 @@ import (
 func TestDefaultFactorConfig(t *testing.T) {
 	cfg := Default()
 
-	if cfg.Storage.MetadataTarget != "127.0.0.1:20100" {
-		t.Fatalf("metadata target = %q", cfg.Storage.MetadataTarget)
-	}
-	if cfg.Storage.AccessTarget != "127.0.0.1:20102" {
-		t.Fatalf("access target = %q", cfg.Storage.AccessTarget)
+	if cfg.Storage.GatewayTarget != "ip://127.0.0.1:11003" {
+		t.Fatalf("gateway target = %q", cfg.Storage.GatewayTarget)
 	}
 	if cfg.NATS.Stream != "MOOX_STORAGE" {
 		t.Fatalf("nats stream = %q", cfg.NATS.Stream)
@@ -91,36 +88,14 @@ nats:
 	}
 }
 
-func TestLoadRejectsHTTPStorageTargets(t *testing.T) {
-	tests := []struct {
-		name string
-		yaml string
-	}{
-		{
-			name: "metadata",
-			yaml: `
-storage:
-  metadata_target: http://127.0.0.1:20100
-  access_target: 127.0.0.1:20102
-`,
-		},
-		{
-			name: "access",
-			yaml: `
+func TestLoadRejectsLegacyStorageTargets(t *testing.T) {
+	_, err := Load(writeConfig(t, `
 storage:
   metadata_target: 127.0.0.1:20100
-  access_target: https://127.0.0.1:20102
-`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := Load(writeConfig(t, tt.yaml))
-			if err == nil {
-				t.Fatal("Load() error = nil, want invalid storage target")
-			}
-		})
+  access_target: 127.0.0.1:20102
+`))
+	if err == nil {
+		t.Fatal("Load() error = nil, want unknown legacy storage fields")
 	}
 }
 

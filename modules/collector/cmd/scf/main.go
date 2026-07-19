@@ -21,11 +21,10 @@ import (
 var Version string
 
 type onceOptions struct {
-	ServiceGatewayTarget  string
-	NodeID                string
-	StorageMetadataTarget string
-	StorageAccessTarget   string
-	Timeout               time.Duration
+	ServiceGatewayTarget    string
+	NodeID                  string
+	StorageRPCGatewayTarget string
+	Timeout                 time.Duration
 }
 
 func main() {
@@ -33,8 +32,7 @@ func main() {
 	opts := onceOptionsFromEnv()
 	flag.StringVar(&opts.ServiceGatewayTarget, "service-gateway-target", opts.ServiceGatewayTarget, "service gateway target for CloudRuntime callbacks")
 	flag.StringVar(&opts.NodeID, "node-id", opts.NodeID, "runtime node id")
-	flag.StringVar(&opts.StorageMetadataTarget, "storage-metadata-target", opts.StorageMetadataTarget, "storage metadata tRPC target")
-	flag.StringVar(&opts.StorageAccessTarget, "storage-access-target", opts.StorageAccessTarget, "storage access tRPC target")
+	flag.StringVar(&opts.StorageRPCGatewayTarget, "storage-rpc-gateway-target", opts.StorageRPCGatewayTarget, "storage tRPC gateway target")
 	flag.DurationVar(&opts.Timeout, "timeout", opts.Timeout, "one-shot execution timeout")
 	flag.Parse()
 
@@ -88,11 +86,10 @@ func initializeServerlessRuntime(ctx context.Context, cfg *runtimeapp.AppConfig)
 
 func onceOptionsFromEnv() onceOptions {
 	opts := onceOptions{
-		ServiceGatewayTarget:  strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")),
-		NodeID:                strings.TrimSpace(os.Getenv("MOOX_RUNTIME_NODE_ID")),
-		StorageMetadataTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_METADATA_TARGET")),
-		StorageAccessTarget:   strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET")),
-		Timeout:               durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second),
+		ServiceGatewayTarget:    strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")),
+		NodeID:                  strings.TrimSpace(os.Getenv("MOOX_RUNTIME_NODE_ID")),
+		StorageRPCGatewayTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")),
+		Timeout:                 durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second),
 	}
 	if opts.ServiceGatewayTarget == "" {
 		serverIP := strings.TrimSpace(os.Getenv("MOOX_RUNTIME_SERVER_IP"))
@@ -138,6 +135,6 @@ func runOnce(ctx context.Context, opts onceOptions) error {
 	_, version := runtimeapp.GetNodeInfo()
 	runtimeapp.UpdateServiceGatewayTarget(opts.ServiceGatewayTarget)
 	runtimeapp.UpdateNodeInfo(opts.NodeID, version)
-	runtimeapp.UpdateStorageTargets(opts.StorageMetadataTarget, opts.StorageAccessTarget)
+	runtimeapp.UpdateStorageRPCGatewayTarget(opts.StorageRPCGatewayTarget)
 	return taskrunner.PollAndExecuteJobItems(ctx)
 }

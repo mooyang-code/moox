@@ -58,10 +58,14 @@ func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding) {
 }
 
 // Ingest adds one Storage rows_changed event into fixed-window buckets.
-func (d *EventBatcher) Ingest(event *storagepb.TimeSeriesRowsUpdated, now time.Time) {
+func (d *EventBatcher) Ingest(event *storagepb.TimeSeriesRowsCommitted, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, row := range event.GetRows() {
+	for _, write := range event.GetWrites() {
+		if write.GetOperation() == storagepb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
+			continue
+		}
+		row := write.GetRow()
 		if row == nil || row.GetKey() == nil {
 			continue
 		}

@@ -85,9 +85,12 @@ mkdir -p \
   "${RELEASE_ROOT}/trade/config" \
   "${RELEASE_ROOT}/monitor/bin" \
   "${RELEASE_ROOT}/monitor/config" \
-  "${RELEASE_ROOT}/storage/bin" \
-  "${RELEASE_ROOT}/storage/config" \
-  "${RELEASE_ROOT}/storage/schema" \
+  "${RELEASE_ROOT}/storage-primary/bin" \
+  "${RELEASE_ROOT}/storage-primary/config" \
+  "${RELEASE_ROOT}/storage-primary/schema" \
+  "${RELEASE_ROOT}/storage-view/bin" \
+  "${RELEASE_ROOT}/storage-view/config" \
+  "${RELEASE_ROOT}/storage-view/schema" \
   "${RELEASE_ROOT}/archive/bin" \
   "${RELEASE_ROOT}/archive/config" \
   "${RELEASE_ROOT}/examples" \
@@ -125,8 +128,17 @@ copy_binary moox-trade "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-trade-cli "${RELEASE_ROOT}/trade/bin"
 copy_binary moox-monitor "${RELEASE_ROOT}/monitor/bin"
 copy_binary moox-monitor-cli "${RELEASE_ROOT}/monitor/bin"
-copy_binary moox-storage "${RELEASE_ROOT}/storage/bin"
-copy_binary moox-storage-cli "${RELEASE_ROOT}/storage/bin"
+storage_binary_name() {
+  if [[ "${OS}" == "windows" ]]; then
+    printf '%s.exe' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+cp "${ROOT}/bin/$(storage_binary_name moox-storage-primary)" "${RELEASE_ROOT}/storage-primary/bin/$(storage_binary_name moox-storage-primary)"
+cp "${ROOT}/bin/$(storage_binary_name moox-storage-view)" "${RELEASE_ROOT}/storage-view/bin/$(storage_binary_name moox-storage-view)"
+cp "${ROOT}/bin/$(storage_binary_name moox-storage-cli)" "${RELEASE_ROOT}/storage-primary/bin/$(storage_binary_name moox-storage-primary-cli)"
 copy_binary moox-archive "${RELEASE_ROOT}/archive/bin"
 copy_binary moox-archive-cli "${RELEASE_ROOT}/archive/bin"
 if [[ -d "${RELEASE_ROOT}/hostagent" ]]; then
@@ -161,15 +173,21 @@ find "${RELEASE_ROOT}/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o 
 cp -R "${ROOT}/modules/trade/config/." "${RELEASE_ROOT}/trade/config/"
 cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/factor/pyworker"
 find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
-cp -R "${ROOT}/modules/storage/config/." "${RELEASE_ROOT}/storage/config/"
+cp "${ROOT}/modules/storage/config/trpc_go.primary.yaml" "${RELEASE_ROOT}/storage-primary/config/trpc_go.yaml"
+printf '\n' >> "${RELEASE_ROOT}/storage-primary/config/trpc_go.yaml"
+cat "${ROOT}/modules/storage/config/storage.primary.yaml" >> "${RELEASE_ROOT}/storage-primary/config/trpc_go.yaml"
+cp "${ROOT}/modules/storage/config/storage_view/trpc_go.yaml" "${RELEASE_ROOT}/storage-view/config/trpc_go.yaml"
 cp -R "${ROOT}/modules/monitor/config/." "${RELEASE_ROOT}/monitor/config/"
-cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage/schema/"
+cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage-primary/schema/"
+cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage-view/schema/"
 cp -R "${ROOT}/modules/archive/config/." "${RELEASE_ROOT}/archive/config/"
-cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage/start.sh"
-cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage/stop.sh"
+cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage-primary/start.sh"
+cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage-primary/stop.sh"
+cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage-view/start.sh"
+cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage-view/stop.sh"
 cp -R "${ROOT}/examples/." "${RELEASE_ROOT}/examples/"
 cp -R "${ROOT}/docs/." "${RELEASE_ROOT}/docs/" 2>/dev/null || true
-chmod +x "${RELEASE_ROOT}/storage/start.sh" "${RELEASE_ROOT}/storage/stop.sh"
+chmod +x "${RELEASE_ROOT}/storage-primary/start.sh" "${RELEASE_ROOT}/storage-primary/stop.sh" "${RELEASE_ROOT}/storage-view/start.sh" "${RELEASE_ROOT}/storage-view/stop.sh"
 cp "${ROOT}/README.md" "${RELEASE_ROOT}/README.md" 2>/dev/null || true
 cp "${ROOT}/scripts/lib/caddy-managed.sh" "${RELEASE_ROOT}/lib/caddy-managed.sh"
 cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${RELEASE_ROOT}/lib/caddy-v2.11.4-checksums.txt"

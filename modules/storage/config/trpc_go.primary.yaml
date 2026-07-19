@@ -1,0 +1,95 @@
+global:
+  namespace: Development
+  env_name: test
+
+server:
+  filter:
+    - recovery
+    - validation
+    - opentelemetry
+    - prometheus
+  timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 20000
+    read_timeout: 3000
+    write_timeout: 60000
+  service:
+    - name: trpc.moox.storage.Health
+      ip: 127.0.0.1
+      port: 20210
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.storage.PrimaryStore.trpc
+      ip: 127.0.0.1
+      port: 20102
+      network: tcp
+      protocol: trpc
+    - name: trpc.moox.storage.PrimaryStoreScan.trpc
+      ip: 127.0.0.1
+      port: 20105
+      network: tcp
+      protocol: trpc
+      timeout: 120000
+    - name: trpc.moox.storage.PrimaryStore
+      ip: 127.0.0.1
+      port: 20101
+      network: tcp
+      protocol: trpc
+    - name: trpc.moox.storage.DataShard
+      ip: 127.0.0.1
+      port: 20106
+      network: tcp
+      protocol: trpc
+    - name: trpc.moox.storage.Metadata.trpc
+      ip: 127.0.0.1
+      port: 20100
+      network: tcp
+      protocol: trpc
+      transport: go-net
+    - name: trpc.moox.storage.PrimaryStore.http
+      ip: 127.0.0.1
+      port: 20201
+      network: tcp
+      protocol: http
+    - name: trpc.moox.storage.Metadata.http
+      ip: 127.0.0.1
+      port: 20200
+      network: tcp
+      protocol: http
+    - name: trpc.moox.storage.primary.metrics.timer
+      port: 20303
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
+    - name: trpc.moox.storage.host_metrics_cleanup.timer
+      port: 20308
+      network: "0 0 * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 60000
+
+plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12960
+      path: /metrics
+      enablepush: false
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

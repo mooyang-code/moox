@@ -12,12 +12,12 @@ import (
 )
 
 type writerAccessFake struct {
-	requests []*storagepb.WriteTimeSeriesRowsReq
+	requests []*storagepb.MergeTimeSeriesRowsReq
 }
 
-func (f *writerAccessFake) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
+func (f *writerAccessFake) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
 	f.requests = append(f.requests, req)
-	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {

@@ -234,7 +234,7 @@ func (f fakeStorageImportMeta) BindDatasetSubject(context.Context, *pb.DatasetSu
 
 type fakeStorageWriter struct{}
 
-func (fakeStorageWriter) WriteTimeSeriesRows(context.Context, *pb.WriteTimeSeriesRowsReq) error {
+func (fakeStorageWriter) MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error {
 	return nil
 }
 

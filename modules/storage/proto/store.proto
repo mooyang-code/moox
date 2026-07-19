@@ -7,9 +7,9 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 
-// PrimaryStoreKey 是在线主存内部统一键模型，不作为用户侧 API 暴露。
+// ShardKey 是在线主存内部统一键模型，不作为用户侧 API 暴露。
 // 用户侧应使用 TimeSeriesKey 或 RecordKey。
-message PrimaryStoreKey {
+message ShardKey {
   // space_id 是使用空间 ID。
   string space_id = 1;
   // dataset_id 是事实数据集 ID。
@@ -22,18 +22,25 @@ message PrimaryStoreKey {
   string version = 5;
 }
 
-// PrimaryStoreRow 是在线主存内部统一行模型。
-message PrimaryStoreRow {
+// ShardRow 是在线主存内部统一行模型。
+message ShardRow {
   // key 是在线主存内部键。
-  PrimaryStoreKey key = 1;
+  ShardKey key = 1;
   // columns 是本次写入携带的列值。
   repeated ColumnValue columns = 2;
   // attributes 是附加属性，更新时按 key 覆盖。
   map<string, string> attributes = 3;
+  // attributes_to_delete explicitly removes attributes during a merge.
+  repeated string attributes_to_delete = 4;
+  // removed_column_names explicitly removes stored columns during a merge.
+  repeated string removed_column_names = 5;
+  string source_shard_id = 6;
+  uint64 source_sequence = 7;
+  repeated ColumnRemoval removed_columns = 8;
 }
 
-// PrimaryStoreTarget 是 Access 根据 PrimaryStoreRoute 解析后的主存执行目标。
-message PrimaryStoreTarget {
+// ShardTarget 是 PrimaryStore 根据路由解析后的 DataShard 执行目标。
+message ShardTarget {
   // space_id 是使用空间 ID。
   string space_id = 1;
   // node_id 是 PrimaryStore 服务节点 ID。
@@ -48,35 +55,38 @@ message PrimaryStoreTarget {
   string device_table = 6;
   // endpoint 是 PrimaryStore 服务节点访问地址；为空时使用默认 PrimaryStore 服务名。
   string endpoint = 7;
+  // shard_id 是 DataShard 的物理身份，与服务节点 node_id 独立。
+  string shard_id = 8;
+  // gateway_target 是独立 DataShard 的 Node Service Gateway 地址。
+  string gateway_target = 9;
+  // gateway_node_id 是 gateway_target 对应的 Node ID。
+  string gateway_node_id = 10;
 }
 
-// WritePrimaryRowsReq 表示写入在线主存行的内部请求。
-message WritePrimaryRowsReq {
+// MergeRowsReq 表示写入在线主存行的内部请求。
+message MergeRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
-  PrimaryStoreTarget target = 2;
+  ShardTarget target = 2;
   // rows 是已完成路由的数据行。
-  repeated PrimaryStoreRow rows = 3;
-  // outbox_message 是由 Access 构造的确定性 MooxMessage 二进制，
-  // PrimaryStore 将其与事实行在同一 Pebble batch 中持久化。
-  bytes outbox_message = 4;
+  repeated ShardRow rows = 3;
 }
 
-// WritePrimaryRowsRsp 表示在线主存行写入结果。
-message WritePrimaryRowsRsp {
+// MergeRowsRsp 表示在线主存行写入结果。
+message MergeRowsRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
 }
 
-// ReadPrimaryRowsReq 表示读取在线主存行的内部请求。
-message ReadPrimaryRowsReq {
+// ReadRowsReq 表示读取在线主存行的内部请求。
+message ReadRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
-  PrimaryStoreTarget target = 2;
+  ShardTarget target = 2;
   // keys 是内部数据 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
-  repeated PrimaryStoreKey keys = 3;
+  repeated ShardKey keys = 3;
   // version_range 是闭区间版本范围；精确读时 start_version=end_version。
   VersionRange version_range = 4;
   // order 表示按 version 返回的顺序，默认升序。
@@ -87,22 +97,22 @@ message ReadPrimaryRowsReq {
   common.Page page = 7;
 }
 
-// ReadPrimaryRowsRsp 表示在线主存行读取结果。
-message ReadPrimaryRowsRsp {
+// ReadRowsRsp 表示在线主存行读取结果。
+message ReadRowsRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
   // rows 是读取到的数据行。
-  repeated PrimaryStoreRow rows = 2;
+  repeated ShardRow rows = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
 }
 
-// ScanPrimaryRowsReq 表示按 PrimaryStore 目标和数据形态扫描在线主存行的内部请求。
-message ScanPrimaryRowsReq {
+// ScanRowsReq 表示按 PrimaryStore 目标和数据形态扫描在线主存行的内部请求。
+message ScanRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
   // target 是在线主存目标位置。
-  PrimaryStoreTarget target = 2;
+  ShardTarget target = 2;
   // data_kind 标识要扫描的物理键空间。
   DataKind data_kind = 3;
   // version_range 是闭区间版本范围；为空表示扫描全部版本。
@@ -117,34 +127,45 @@ message ScanPrimaryRowsReq {
   string key_prefix = 8;
 }
 
-// ScanPrimaryRowsRsp 表示在线主存扫描结果。
-message ScanPrimaryRowsRsp {
+// ScanRowsRsp 表示在线主存扫描结果。
+message ScanRowsRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
   // rows 是扫描到的数据行。
-  repeated PrimaryStoreRow rows = 2;
+  repeated ShardRow rows = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
 }
 
-message DeletePrimaryRowsReq {
+message DeleteRowsReq {
   common.AuthInfo auth_info = 1;
-  PrimaryStoreTarget target = 2;
-  repeated PrimaryStoreKey keys = 3;
+  ShardTarget target = 2;
+  repeated ShardKey keys = 3;
 }
 
-message DeletePrimaryRowsRsp {
+message DeleteRowsRsp {
   common.RetInfo ret_info = 1;
   uint32 deleted = 2;
 }
 
-// PrimaryStore 是 Access 调用在线事实主存的内部执行服务。
-service PrimaryStore {
-  // WritePrimaryRows 将已完成路由的数据行写入在线主存。
-  rpc WritePrimaryRows(WritePrimaryRowsReq) returns (WritePrimaryRowsRsp);
-  // ReadPrimaryRows 从在线主存读取数据行。
-  rpc ReadPrimaryRows(ReadPrimaryRowsReq) returns (ReadPrimaryRowsRsp);
-  // ScanPrimaryRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
-  rpc ScanPrimaryRows(ScanPrimaryRowsReq) returns (ScanPrimaryRowsRsp);
-  rpc DeletePrimaryRows(DeletePrimaryRowsReq) returns (DeletePrimaryRowsRsp);
+message GetShardStateReq {
+  string shard_id = 1;
+}
+
+message GetShardStateRsp {
+  common.RetInfo ret_info = 1;
+  string shard_id = 2;
+  uint64 head_sequence = 3;
+}
+
+// DataShard 是 PrimaryStore 调用的内部物理事实分片服务。
+service DataShard {
+  // MergeRows 将已完成路由的数据行写入在线主存。
+  rpc MergeRows(MergeRowsReq) returns (MergeRowsRsp);
+  // ReadRows 从在线主存读取数据行。
+  rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
+  // ScanRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
+  rpc ScanRows(ScanRowsReq) returns (ScanRowsRsp);
+  rpc DeleteRows(DeleteRowsReq) returns (DeleteRowsRsp);
+  rpc GetShardState(GetShardStateReq) returns (GetShardStateRsp);
 }

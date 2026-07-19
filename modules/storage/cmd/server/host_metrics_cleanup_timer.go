@@ -6,7 +6,7 @@ import (
 	"time"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/access"
+	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -20,7 +20,7 @@ type hostMetricsCleanupAccess interface {
 }
 
 func registerHostMetricsCleanupTimer(s *server.Server, access hostMetricsCleanupAccess, storage storageconfig.StorageConfig) error {
-	if !storage.HasRole("access") {
+	if !storage.HasRole("primary") {
 		return nil
 	}
 	if s == nil {

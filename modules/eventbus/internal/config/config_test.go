@@ -23,7 +23,7 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	cfg := Default()
 	for _, consumer := range cfg.Consumers {
 		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "moox_archive_kline_v1" {
-			if consumer.FilterSubject != "moox.storage.time_series.rows_updated.v1" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
+			if consumer.FilterSubject != "moox.storage.rows_committed.time_series.v1.>" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
 				t.Fatalf("archive consumer = %#v", consumer)
 			}
 			return
@@ -98,10 +98,10 @@ func TestValidateSubject(t *testing.T) {
 }
 
 func TestTopicVersion(t *testing.T) {
-	version, err := topicVersion("moox.storage.rows_updated.v1")
+	version, err := topicVersion("moox.storage.rows_committed.v1")
 	require.NoError(t, err)
 	assert.Equal(t, uint32(1), version)
-	_, err = topicVersion("moox.storage.rows_updated")
+	_, err = topicVersion("moox.storage.rows_committed")
 	require.Error(t, err)
 }
 

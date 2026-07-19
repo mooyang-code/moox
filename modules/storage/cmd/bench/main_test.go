@@ -3,13 +3,13 @@ package main
 import "testing"
 
 func TestBenchmarkIdentifiersFitMetadataLimits(t *testing.T) {
-	if len(recordDatasetID) > 20 {
-		t.Fatalf("record dataset ID %q has length %d; want <= 20", recordDatasetID, len(recordDatasetID))
+	if len(recordDatasetID) > 30 {
+		t.Fatalf("record dataset ID %q has length %d; want <= 30", recordDatasetID, len(recordDatasetID))
 	}
 	for _, market := range []string{"spot", "swap"} {
 		dataset := datasetID(market)
-		if len(dataset) > 20 {
-			t.Fatalf("dataset ID %q has length %d; want <= 20", dataset, len(dataset))
+		if len(dataset) > 30 {
+			t.Fatalf("dataset ID %q has length %d; want <= 30", dataset, len(dataset))
 		}
 		view := viewID(market)
 		if len(view) > 30 {

@@ -61,6 +61,7 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessa
 		OccurredAt:      timestamppb.New(occurredAt),
 		PublishedAt:     timestamppb.New(now),
 		ContentType:     "application/json",
+		MessageType:     "moox.strategy.event.v1",
 		Payload:         row.Payload,
 	})
 	return err

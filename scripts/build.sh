@@ -49,20 +49,34 @@ binary_name() {
 }
 
 build_storage() {
-  echo "==> build moox-storage"
-  (
-    cd "${ROOT}/modules/storage"
-    local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
-    if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then
-      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build -tags "${STORAGE_BUILD_TAGS}" \
-        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/$(binary_name moox-storage)" ./cmd/server
-    else
-      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
-        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/$(binary_name moox-storage)" ./cmd/server
-    fi
-  )
+	  echo "==> build storage processes"
+	  (
+	    cd "${ROOT}/modules/storage"
+	    local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
+	    local tags=()
+	    if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then tags=(-tags "${STORAGE_BUILD_TAGS}"); fi
+	    for role in primary view; do
+	      if ((${#tags[@]})); then
+	        GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build "${tags[@]}" \
+	          -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
+	      else
+	        GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
+	          -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
+	      fi
+	    done
+	  )
+}
+
+build_storage_shard() {
+	local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
+	(
+		cd "${ROOT}/modules/storage"
+		GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
+			-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+			-o "${BIN_DIR}/$(binary_name moox-storage-shard)" ./cmd/server
+	)
 }
 
 build_storage_cli() {
@@ -174,6 +188,9 @@ case "${TARGET_MODULE}" in
   storage)
     build_storage
     build_storage_cli
+    ;;
+  storage-shard)
+    build_storage_shard
     ;;
   storage-cli)
     build_storage_cli

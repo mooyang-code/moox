@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -87,6 +88,13 @@ func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 		router.HandleFunc("/api/gateway-control/status", hr.handleGatewayStatus).Methods(http.MethodPost)
 	}
 
+	// Storage is a fixed browser BFF surface. Keep it ahead of the generic
+	// route so the browser cannot choose the underlying service ID.
+	router.Handle(
+		"/api/admin/storage/{method}",
+		corsMiddleware(http.HandlerFunc(hr.handleStorageBFFRequest))).
+		Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+
 	// 注册新控制台 API 路由: /api/admin/{service}/{method}
 	router.Handle(
 		"/api/admin/{service}/{method}",
@@ -104,6 +112,12 @@ func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Reques
 	hr.handleGatewayRequest(w, r)
 }
 
+func (hr *HTTPRouter) handleStorageBFFRequest(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	r = mux.SetURLVars(r, map[string]string{"service": "storage", "method": vars["method"]})
+	hr.handleControlRequest(w, r)
+}
+
 func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	handler := hr.gateway.requestHandler
@@ -114,6 +128,15 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		log.ErrorContextf(ctx, "解析请求参数失败: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	storageFacade := serviceID == "storage"
+	if storageFacade {
+		mappedServiceID, ok := storageBFFServiceID(method)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		serviceID = mappedServiceID
 	}
 	if isMachineOnlyAdminMethod(serviceID, method) {
 		http.NotFound(w, r)
@@ -176,6 +199,19 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
 		writeRequestBodyError(w, err)
+		return
+	}
+	if storageFacade {
+		response, _, err := forwardStorageToNodeGateway(ctx, serviceID, method, body, headers)
+		if err != nil {
+			writeForwardError(ctx, w, err, headers)
+			return
+		}
+		if response != nil {
+			writeNodeGatewayResponse(w, response, headers)
+			return
+		}
+		writeForwardError(ctx, w, errors.New("Node Service Gateway returned no response"), headers)
 		return
 	}
 	detail, err := resolveAdminServiceDetail(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID)

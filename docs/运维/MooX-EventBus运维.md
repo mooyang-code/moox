@@ -7,7 +7,7 @@
 单机部署的顺序固定为：
 
 1. 启动 `moox-eventbus`，等待 `http://127.0.0.1:11419/readyz` 返回 200。
-2. 启动 Storage，等待 Access、Metadata 和 View 服务就绪。
+2. 启动 Storage，等待 PrimaryStore、Metadata 和 View 服务就绪。
 3. 在 Monitor 启动前，由 `start.sh` 等待 Metadata HTTP 端口，并执行 `moox-cli metadata apply`。这个步骤只创建或校验声明式元数据，不覆盖不兼容的已有定义。
 4. 启动 Monitor，随后启动 Collector、Factor、CloudNode 和 Web Host。
 

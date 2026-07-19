@@ -63,9 +63,9 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_view_version INTEGER NOT NULL DEFAULT 1,
     c_active_view_version INTEGER NOT NULL DEFAULT 0,
     c_active_columns_json TEXT NOT NULL DEFAULT '[]',
-    c_active_schema_hash TEXT NOT NULL DEFAULT '',
-    c_active_coverage_start TEXT NOT NULL DEFAULT '',
-    c_active_coverage_end TEXT NOT NULL DEFAULT '',
+    c_active_view_schema_hash TEXT NOT NULL DEFAULT '',
+    c_indexed_from TEXT NOT NULL DEFAULT '',
+    c_indexed_to TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -514,7 +514,7 @@ CREATE TABLE IF NOT EXISTS t_storage_devices (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_engine IN ('pebble', 'duckdb', 'bleve', 'parquet_archive')),
+    CHECK (c_engine IN ('pebble', 'duckdb', 'bleve')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_node_id) REFERENCES t_primary_store_nodes (c_node_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_device_id),
@@ -556,6 +556,20 @@ CREATE TABLE IF NOT EXISTS t_primary_store_routes (
 CREATE INDEX IF NOT EXISTS idx_t_primary_store_routes_lookup ON t_primary_store_routes (c_space_id, c_dataset_id, c_status, c_priority);
 CREATE INDEX IF NOT EXISTS idx_t_primary_store_routes_subject ON t_primary_store_routes (c_space_id, c_subject_id, c_status, c_priority);
 CREATE INDEX IF NOT EXISTS idx_t_primary_store_routes_node ON t_primary_store_routes (c_node_id, c_status);
+
+-- A dataset becomes placement-immutable at its first successful fact write.
+-- This table is intentionally separate from route rows so route edits cannot
+-- silently move existing keys by changing priority or node weight.
+CREATE TABLE IF NOT EXISTS t_dataset_topology_locks (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_locked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_dataset_id),
+    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_dataset_topology_locks_node
+ON t_dataset_topology_locks (c_space_id, c_dataset_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_primary_store_routes_mtime
 AFTER UPDATE ON t_primary_store_routes

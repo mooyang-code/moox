@@ -96,7 +96,7 @@ func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
 }
 
 type latestTimeSeriesProxy struct {
-	storagepb.AccessClientProxy
+	storagepb.PrimaryStoreClientProxy
 	req *storagepb.ReadTimeSeriesRowsReq
 	rsp *storagepb.ReadTimeSeriesRowsRsp
 }

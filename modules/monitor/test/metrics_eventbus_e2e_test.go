@@ -91,7 +91,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := timestamppb.New(observed)
-	message := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "monitor-metric-e2e-1", Topic: metrics.MetricTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "fixture-service", InstanceId: "fixture-1", BootId: "boot-1", NodeId: "node-1", Version: "test"}, SpaceId: metrics.InternalMetricSpaceID, OccurredAt: now, PublishedAt: now, ContentType: metrics.MetricContentType, Payload: payload}
+	message := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "monitor-metric-e2e-1", Topic: metrics.MetricTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "fixture-service", InstanceId: "fixture-1", BootId: "boot-1", NodeId: "node-1", Version: "test"}, SpaceId: metrics.InternalMetricSpaceID, OccurredAt: now, PublishedAt: now, ContentType: metrics.MetricContentType, MessageType: "moox.metrics.snapshot.reported.v1", Payload: payload}
 	if _, err := eventClient.Publish(ctx, message); err != nil {
 		t.Fatal(err)
 	}
@@ -125,9 +125,9 @@ type metricsE2EAccess struct {
 	rows []*storagepb.TimeSeriesRow
 }
 
-func (a *metricsE2EAccess) WriteTimeSeriesRows(_ context.Context, req *storagepb.WriteTimeSeriesRowsReq, _ ...client.Option) (*storagepb.WriteTimeSeriesRowsRsp, error) {
+func (a *metricsE2EAccess) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
 	a.rows = append(a.rows, req.GetRows()...)
-	return &storagepb.WriteTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {

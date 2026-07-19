@@ -10,7 +10,7 @@ archive:
   eventbus:
     urls: [nats://127.0.0.1:4222]
     stream: MOOX_STORAGE
-    subject: moox.storage.time_series.rows_updated.v1
+    subject: moox.storage.rows_committed.time_series.v1.>
     durable: moox_archive_kline_v1
     fetch_batch: 128
     fetch_max_wait: 1s
@@ -23,8 +23,10 @@ archive:
     row_group_rows: 65536
     shutdown_timeout: 2m
   storage_rpc:
-    access_target: ip://127.0.0.1:20102
-    metadata_target: ip://127.0.0.1:20100
+    gateway_target: ip://127.0.0.1:11003
+    gateway_node_id: ""
+    key_id: archive
+    hmac_key_file: ""
   cos:
     enabled: false
     region: ""

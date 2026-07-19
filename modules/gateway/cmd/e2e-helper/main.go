@@ -44,6 +44,7 @@ func run(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secret string) e
 	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{
 		ServiceID: "monitor", Address: parsed.Host, ServicePath: "trpc.moox.monitor.MonitorMgr",
 		AllowedMethods: []string{"GetPeerSnapshot"},
+		AllowedCallers: []string{"monitor"},
 	}})
 	if err != nil {
 		return err

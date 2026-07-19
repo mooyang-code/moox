@@ -12,15 +12,6 @@ const storageClient = axios.create({
   headers: { "Content-Type": "application/json" }
 });
 
-function storageServiceID(group: "metadata" | "access" | "view") {
-  const serviceIDs = {
-    metadata: "storage_metadata",
-    access: "storage_access",
-    view: "storage_view"
-  } as const;
-  return serviceIDs[group];
-}
-
 function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
     const error = new Error("Storage 响应缺少 ret_info");
@@ -34,12 +25,8 @@ function assertSuccess(retInfo?: RetInfo) {
   }
 }
 
-async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(
-  group: "metadata" | "access" | "view",
-  method: string,
-  req: TReq
-): Promise<TRsp> {
-  const rsp = await storageClient.post<TRsp>(`/api/admin/${storageServiceID(group)}/${method}`, {
+async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq): Promise<TRsp> {
+  const rsp = await storageClient.post<TRsp>(`/api/admin/storage/${method}`, {
     auth_info: getStorageAuthInfo(),
     ...req
   });
@@ -47,14 +34,7 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
   return rsp.data;
 }
 
-export const callMetadata = <TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq) =>
-  callStorage<TReq, TRsp>("metadata", method, req);
-
-export const callAccess = <TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq) =>
-  callStorage<TReq, TRsp>("access", method, req);
-
-export const callView = <TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq) =>
-  callStorage<TReq, TRsp>("view", method, req);
+export { callStorage };
 
 installSpaceAwareSignedClient(storageClient);
 

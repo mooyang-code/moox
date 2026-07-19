@@ -15,11 +15,10 @@ import (
 
 // Dependencies contains the service endpoints used by CollectMgr.
 type Dependencies struct {
-	AdminGatewayURL       string
-	ServiceGatewayTarget  string
-	ServiceAuth           ServiceAuthConfig
-	StorageMetadataTarget string
-	StorageAccessTarget   string
+	AdminGatewayURL         string
+	ServiceGatewayTarget    string
+	ServiceAuth             ServiceAuthConfig
+	StorageRPCGatewayTarget string
 }
 
 type retInfo struct {
@@ -52,11 +51,10 @@ type activeDeploymentsRsp struct {
 // deployment records from t_service_deployments override local defaults.
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
-		AdminGatewayURL:       defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceGatewayTarget:  defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceAuth:           cfg.SysDeploy.ServiceAuth,
-		StorageMetadataTarget: cfg.Storage.MetadataTarget,
-		StorageAccessTarget:   cfg.Storage.AccessTarget,
+		AdminGatewayURL:         defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceGatewayTarget:    defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceAuth:             cfg.SysDeploy.ServiceAuth,
+		StorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -68,17 +66,15 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	if v := endpointAddress(active, "moox_cloudnode", "cloudnode"); v != "" {
 		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
 	}
-	// Prefer the loopback service gateway for co-located processes. The public
-	// gateway may resolve to the host's external address, which is intentionally
-	// rejected by the service gateway transport to prevent SSRF-style routing.
-	if v := endpointGatewayTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
+	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
 		deps.ServiceGatewayTarget = v
 	}
-	if v := endpointTRPCTarget(active, "storage_metadata_trpc", "moox_storage_metadata_trpc", "moox-storage-metadata-trpc"); v != "" {
-		deps.StorageMetadataTarget = v
-	}
-	if v := endpointTRPCTarget(active, "storage_access_trpc", "moox_storage_access_trpc", "moox-storage-access-trpc"); v != "" {
-		deps.StorageAccessTarget = v
+	// Storage clients use the native tRPC listener, never the public HTTP
+	// gateway endpoint. A deployment without a native target leaves the local
+	// gateway configuration intact rather than silently falling back to a
+	// physical Storage listener.
+	if v := endpointTRPCTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
+		deps.StorageRPCGatewayTarget = v
 	}
 	return deps, nil
 }

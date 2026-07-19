@@ -241,7 +241,7 @@ scripts/deploy-moox.sh
 
 ```text
 modules/storage/internal/services/archive/
-modules/storage/internal/infra/device/parquet/
+modules/storage/internal/service/archive/parquet/
 modules/storage/cmd/server/main.go
 modules/storage/config/trpc_go.yaml
 modules/storage/internal/config/loader.go
@@ -1610,7 +1610,7 @@ git commit -m "build(archive): package and deploy archive service"
 - Delete: `modules/storage/internal/services/archive/events.go`
 - Delete: `modules/storage/internal/services/archive/remote_metadata.go`
 - Delete: `modules/storage/internal/services/archive/schedule.go`
-- Delete: `modules/storage/internal/infra/device/parquet/archive.go`
+- Delete: `modules/storage/internal/service/archive/parquet/archive.go`
 - Modify: `modules/storage/cmd/server/main.go`
 - Modify: `modules/storage/config/trpc_go.yaml`
 - Modify: `modules/storage/internal/config/loader.go`

@@ -19,14 +19,14 @@ func (r *SearchRecordRowsReq) Validate() error {
 	return nil
 }
 
-func (r *WriteTimeSeriesRowsReq) Validate() error {
+func (r *MergeTimeSeriesRowsReq) Validate() error {
 	if r == nil || len(r.Rows) == 0 {
 		return fmt.Errorf("rows are required")
 	}
 	return nil
 }
 
-func (r *WriteRecordRowsReq) Validate() error {
+func (r *MergeRecordRowsReq) Validate() error {
 	if r == nil || len(r.Rows) == 0 {
 		return fmt.Errorf("rows are required")
 	}

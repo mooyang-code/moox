@@ -41,13 +41,13 @@ type Packager interface {
 type ReadinessStage string
 
 const (
-	AdminReady         ReadinessStage = "admin_ready"
-	SetupReady         ReadinessStage = "setup_ready"
-	GatewayReady       ReadinessStage = "gateway_ready"
-	WebReady           ReadinessStage = "web_ready"
-	BrowserHTTPSReady  ReadinessStage = "browser_https_ready"
-	StorageAccessReady ReadinessStage = "storage_access_ready"
-	StorageViewReady   ReadinessStage = "storage_view_ready"
+	AdminReady          ReadinessStage = "admin_ready"
+	SetupReady          ReadinessStage = "setup_ready"
+	GatewayReady        ReadinessStage = "gateway_ready"
+	WebReady            ReadinessStage = "web_ready"
+	BrowserHTTPSReady   ReadinessStage = "browser_https_ready"
+	StoragePrimaryReady ReadinessStage = "storage_primary_ready"
+	StorageViewReady    ReadinessStage = "storage_view_ready"
 )
 
 type Probe interface {
@@ -105,7 +105,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript}, nil)
 		}
 	}()
-	for _, stage := range []ReadinessStage{StorageAccessReady, StorageViewReady} {
+	for _, stage := range []ReadinessStage{StoragePrimaryReady, StorageViewReady} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
 			return fmt.Errorf("storage_deploy_not_ready")
 		}
@@ -436,8 +436,8 @@ func probeCommand(stage ReadinessStage) string {
 		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
 	case BrowserHTTPSReady:
 		return `curl -fsS --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null`
-	case StorageAccessReady:
-		return `"$HOME/moox/storage/status.sh" storage-access >/dev/null`
+	case StoragePrimaryReady:
+		return `"$HOME/moox/storage/status.sh" storage-primary >/dev/null`
 	case StorageViewReady:
 		return `"$HOME/moox/storage/status.sh" storage-view >/dev/null`
 	default:

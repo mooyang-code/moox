@@ -8,7 +8,7 @@ import (
 	"time"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/access"
+	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
@@ -33,7 +33,7 @@ func TestHostMetricsCleanupTimerConfigs(t *testing.T) {
 		want bool
 	}{
 		{path: "../../config/trpc_go.yaml", want: true},
-		{path: "../../config/trpc_go.access.yaml", want: true},
+		{path: "../../config/trpc_go.primary.yaml", want: true},
 		{path: "../../config/storage_view/trpc_go.yaml"},
 	} {
 		t.Run(test.path, func(t *testing.T) {
@@ -95,9 +95,9 @@ func TestRegisterHostMetricsCleanupTimerRoleAndDependencyRules(t *testing.T) {
 	require.NoError(t, registerHostMetricsCleanupTimer(nil, nil, viewCfg))
 
 	disabled := false
-	accessCfg := storageconfig.StorageConfig{Roles: []string{"access"}, Maintenance: storageconfig.StorageMaintenance{HostMetricsCleanup: enabledHostMetricsCleanupConfig()}}
+	accessCfg := storageconfig.StorageConfig{Roles: []string{"primary"}, Maintenance: storageconfig.StorageMaintenance{HostMetricsCleanup: enabledHostMetricsCleanupConfig()}}
 	accessCfg.Maintenance.HostMetricsCleanup.Enabled = &disabled
-	cfg, err := trpc.LoadConfig("../../config/trpc_go.access.yaml")
+	cfg, err := trpc.LoadConfig("../../config/trpc_go.primary.yaml")
 	require.NoError(t, err)
 	server := trpc.NewServerWithConfig(cfg)
 	require.NoError(t, registerHostMetricsCleanupTimer(server, nil, accessCfg))

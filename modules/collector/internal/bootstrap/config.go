@@ -2,11 +2,13 @@
 package bootstrap
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,10 +39,10 @@ type CloudNodeConfig struct {
 
 // StorageConfig describes storage service addresses.
 type StorageConfig struct {
-	MetadataTarget string `yaml:"metadata_target"`
-	AccessTarget   string `yaml:"access_target"`
-	MetadataURL    string `yaml:"metadata_url"` // Deprecated: use metadata_target.
-	AccessURL      string `yaml:"access_url"`   // Deprecated: use access_target.
+	GatewayTarget string `yaml:"gateway_target"`
+	GatewayNodeID string `yaml:"gateway_node_id"`
+	KeyID         string `yaml:"key_id"`
+	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 // SysDeployConfig describes optional dependency discovery through admin SysDeploy.
@@ -71,7 +73,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyEnv()
@@ -103,11 +107,17 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_GATEWAY_CA_PEM_B64"); v != "" {
 		c.SysDeploy.ServiceAuth.CAPEMBase64 = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET"); v != "" {
-		c.Storage.MetadataTarget = v
+	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
+		c.Storage.GatewayTarget = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_ACCESS_TARGET"); v != "" {
-		c.Storage.AccessTarget = v
+	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
+		c.Storage.GatewayNodeID = v
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID"); v != "" {
+		c.Storage.KeyID = v
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
+		c.Storage.HMACKeyFile = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
@@ -115,11 +125,13 @@ func (c *Config) applyEnv() {
 }
 
 func (c *Config) validateStorageTargets() error {
-	if !isStorageTRPCTarget(c.Storage.MetadataTarget) {
-		return fmt.Errorf("storage.metadata_target must be a tRPC target, got %q", c.Storage.MetadataTarget)
+	if !isStorageTRPCTarget(c.Storage.GatewayTarget) {
+		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
 	}
-	if !isStorageTRPCTarget(c.Storage.AccessTarget) {
-		return fmt.Errorf("storage.access_target must be a tRPC target, got %q", c.Storage.AccessTarget)
+	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
+		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
+			return fmt.Errorf("storage hmac credentials: %w", err)
+		}
 	}
 	return nil
 }
@@ -144,10 +156,7 @@ func Default() *Config {
 			Address:     "127.0.0.1:11401",
 			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
 		},
-		Storage: StorageConfig{
-			MetadataTarget: "127.0.0.1:20100",
-			AccessTarget:   "127.0.0.1:20102",
-		},
+		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003"},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},
 		},

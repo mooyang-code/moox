@@ -326,11 +326,22 @@ func validateDeployment(item *Deployment) error {
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
 		}
-		if requiresMethodAllowlist(item.GatewayServiceID, item.GatewayPath) && len(extra.GatewayMethods) == 0 {
-			return fmt.Errorf("%w: %s requires nonempty gateway_methods", ErrInvalidGatewayRoute, item.GatewayServiceID)
+		routes, err := deploymentGatewayRoutes(*item, extra)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
 		}
-		route := gatewayproxy.Route{ServiceID: item.GatewayServiceID, Address: deploymentRPCAddress(item), ServicePath: item.GatewayPath, AllowedMethods: extra.GatewayMethods}
-		if _, err := gatewayproxy.NormalizeAndHash("validation", []gatewayproxy.Route{route}); err != nil {
+		for index := range routes {
+			routes[index].Address = deploymentRPCAddress(item)
+			if index > 0 {
+				for _, nested := range extra.GatewayRoutes {
+					if nested.ServicePath == routes[index].ServicePath {
+						routes[index].Address = net.JoinHostPort(item.Host, strconv.Itoa(int(nested.Port)))
+						break
+					}
+				}
+			}
+		}
+		if _, err := gatewayproxy.NormalizeAndHash("validation", routes); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
 		}
 	}

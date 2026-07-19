@@ -133,8 +133,8 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 		return err
 	}
 
-	metadataTarget := runtimeapp.GetStorageMetadataTarget()
-	accessTarget := runtimeapp.GetStorageAccessTarget()
+	metadataTarget := runtimeapp.GetStorageRPCGatewayTarget()
+	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 	if metadataTarget == "" || accessTarget == "" {
 		return fmt.Errorf("未配置存储服务 tRPC 地址")
 	}
@@ -219,7 +219,7 @@ func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, metadata
 	return retry.Do(
 		func() error {
 			writer := newStorageWriter(accessTarget, metadataTarget, storageAuthInfo(binding))
-			if err := writer.WriteRecordRows(ctx, rows); err != nil {
+			if err := writer.MergeRecordRows(ctx, rows); err != nil {
 				return err
 			}
 			for _, symbol := range symbols {

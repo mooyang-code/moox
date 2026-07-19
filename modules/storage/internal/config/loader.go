@@ -43,7 +43,6 @@ type StorageMetadata struct {
 type StorageDevices struct {
 	PebblePath    string `yaml:"pebble_path"`
 	ViewIndexRoot string `yaml:"view_index_root"`
-	ParquetPath   string `yaml:"parquet_path"`
 }
 
 // StorageEventBus 保存事件总线传输配置。
@@ -78,14 +77,22 @@ type StorageEmbeddedEventBus struct {
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName   string                 `yaml:"metadata_service_name"`
-	AccessServiceName     string                 `yaml:"access_service_name"`
-	AccessScanServiceName string                 `yaml:"access_scan_service_name"`
-	IndexServiceName      string                 `yaml:"index_service_name"`
-	BatchSize             int                    `yaml:"batch_size"`
-	BatchWaitMS           int                    `yaml:"batch_wait_ms"`
-	MaxWorkers            int                    `yaml:"max_workers"`
-	Maintenance           StorageViewMaintenance `yaml:"maintenance"`
+	MetadataServiceName         string                 `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName     string                 `yaml:"primary_store_service_name"`
+	PrimaryStoreScanServiceName string                 `yaml:"primary_store_scan_service_name"`
+	IndexServiceName            string                 `yaml:"index_service_name"`
+	BatchSize                   int                    `yaml:"batch_size"`
+	BatchWaitMS                 int                    `yaml:"batch_wait_ms"`
+	MaxWorkers                  int                    `yaml:"max_workers"`
+	Maintenance                 StorageViewMaintenance `yaml:"maintenance"`
+	StorageRPC                  StorageRPCConfig       `yaml:"storage_rpc"`
+}
+
+type StorageRPCConfig struct {
+	GatewayTarget string `yaml:"gateway_target"`
+	GatewayNodeID string `yaml:"gateway_node_id"`
+	KeyID         string `yaml:"key_id"`
+	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 type StorageViewMaintenance struct {
@@ -169,6 +176,7 @@ func (m StorageViewMaintenance) IsEnabled() bool {
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string        `yaml:"service_name"`
+	ShardID     string        `yaml:"shard_id"`
 	Outbox      StorageOutbox `yaml:"outbox"`
 }
 
@@ -197,7 +205,16 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Root = "./var/storage"
 	}
 	if len(c.Roles) == 0 {
-		c.Roles = []string{"access", "view"}
+		c.Roles = []string{"primary", "view"}
+	}
+	if c.Primary.ShardID == "" {
+		c.Primary.ShardID = "storage-shard-0"
+	}
+	if c.View.StorageRPC.GatewayTarget == "" {
+		c.View.StorageRPC.GatewayTarget = "ip://127.0.0.1:11003"
+	}
+	if c.View.StorageRPC.KeyID == "" {
+		c.View.StorageRPC.KeyID = "storage-view"
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
@@ -207,9 +224,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Devices.ViewIndexRoot == "" {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
-	}
-	if c.Devices.ParquetPath == "" {
-		c.Devices.ParquetPath = filepath.Join(c.Root, "archive")
 	}
 	cleanup := &c.Maintenance.HostMetricsCleanup
 	if cleanup.Enabled == nil {
@@ -310,11 +324,11 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.MetadataServiceName == "" {
 		c.View.MetadataServiceName = "trpc.moox.storage.Metadata"
 	}
-	if c.View.AccessServiceName == "" {
-		c.View.AccessServiceName = "trpc.moox.storage.Access"
+	if c.View.PrimaryStoreServiceName == "" {
+		c.View.PrimaryStoreServiceName = "trpc.moox.storage.PrimaryStore"
 	}
-	if c.View.AccessScanServiceName == "" {
-		c.View.AccessScanServiceName = "trpc.moox.storage.AccessScan"
+	if c.View.PrimaryStoreScanServiceName == "" {
+		c.View.PrimaryStoreScanServiceName = "trpc.moox.storage.PrimaryStoreScan"
 	}
 	if c.View.IndexServiceName == "" {
 		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"
@@ -326,7 +340,9 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.BatchWaitMS = 200
 	}
 	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 2
+		c.View.MaxWorkers = 1
+	} else if c.View.MaxWorkers > 1 {
+		c.View.MaxWorkers = 1
 	}
 	if c.View.Maintenance.Enabled == nil {
 		enabled := true
@@ -426,7 +442,6 @@ func (c *StorageConfig) ApplyHomeRoot(root string) {
 	c.Metadata.Path = rebaseStoragePath(c.Metadata.Path, oldRoot, root, filepath.Join("metadata", "storage_metadata.db"))
 	c.Devices.PebblePath = rebaseStoragePath(c.Devices.PebblePath, oldRoot, root, "pebble")
 	c.Devices.ViewIndexRoot = rebaseStoragePath(c.Devices.ViewIndexRoot, oldRoot, root, "view-indexes")
-	c.Devices.ParquetPath = rebaseStoragePath(c.Devices.ParquetPath, oldRoot, root, "archive")
 	if c.EventBus.Embedded.StoreDir != "" {
 		c.EventBus.Embedded.StoreDir = rebaseStoragePath(c.EventBus.Embedded.StoreDir, oldRoot, root, "nats")
 	}
@@ -474,7 +489,7 @@ func (c *StorageConfig) HasRole(role string) bool {
 	}
 	for _, candidate := range c.Roles {
 		candidate = strings.ToLower(strings.TrimSpace(candidate))
-		if candidate == "all" || candidate == normalized {
+		if candidate == normalized {
 			return true
 		}
 	}
@@ -504,6 +519,19 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
 	}
 
+	return nil
+}
+
+// LoadConfigStrict rejects unknown keys for business configuration files.
+func (c *ConfigLoader) LoadConfigStrict(filename string, config interface{}) error {
+	configPath := filepath.Join(c.baseDir, filename)
+	yamlFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("读取配置文件失败 %s: %w", configPath, err)
+	}
+	if err := yaml.UnmarshalStrict(yamlFile, config); err != nil {
+		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
+	}
 	return nil
 }
 

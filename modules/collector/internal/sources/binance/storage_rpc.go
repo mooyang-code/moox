@@ -4,33 +4,40 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type storageWriter struct {
-	access   storagepb.AccessClientProxy
+	access   storagepb.PrimaryStoreClientProxy
 	metadata storagepb.MetadataClientProxy
 	authInfo *storagepb.AuthInfo
 }
 
 func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo) *storageWriter {
+	target := gatewayauth.ServiceGatewayTarget(accessTarget)
+	if strings.TrimSpace(target) == "" {
+		target = metadataTarget
+	}
+	if strings.TrimSpace(target) == "" {
+		target = "ip://127.0.0.1:11003"
+	}
+	serviceOptions := gatewayauth.NewTRPCClientOptions(normalizeStorageTarget(target, "11003"), strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
-		access: storagepb.NewAccessClientProxy(client.WithTarget(normalizeStorageTarget(accessTarget, "20102"))),
-		metadata: storagepb.NewMetadataClientProxy(
-			client.WithTarget(normalizeStorageTarget(metadataTarget, "20100")),
-			client.WithTransport(transport.DefaultClientTransport),
-		),
+		access:   storagepb.NewPrimaryStoreClientProxy(serviceOptions...),
+		metadata: storagepb.NewMetadataClientProxy(append(serviceOptions, client.WithTransport(transport.DefaultClientTransport))...),
 		authInfo: authInfo,
 	}
 }
 
-func (w *storageWriter) WriteTimeSeriesRows(ctx context.Context, rows []*storagepb.TimeSeriesRow) error {
-	rsp, err := w.access.WriteTimeSeriesRows(ctx, &storagepb.WriteTimeSeriesRowsReq{
+func (w *storageWriter) MergeTimeSeriesRows(ctx context.Context, rows []*storagepb.TimeSeriesRow) error {
+	rsp, err := w.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{
 		AuthInfo: w.authInfo,
 		Rows:     rows,
 	})
@@ -67,8 +74,8 @@ func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, key *storagepb
 	return parsed.UTC(), true, nil
 }
 
-func (w *storageWriter) WriteRecordRows(ctx context.Context, rows []*storagepb.RecordRow) error {
-	rsp, err := w.access.WriteRecordRows(ctx, &storagepb.WriteRecordRowsReq{
+func (w *storageWriter) MergeRecordRows(ctx context.Context, rows []*storagepb.RecordRow) error {
+	rsp, err := w.access.MergeRecordRows(ctx, &storagepb.MergeRecordRowsReq{
 		AuthInfo: w.authInfo,
 		Rows:     rows,
 	})

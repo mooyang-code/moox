@@ -238,9 +238,6 @@ export interface View {
   view_version?: number | string;
   active_view_version?: number | string;
   active_columns?: ViewColumn[];
-  active_schema_hash?: string;
-  active_coverage_start?: string;
-  active_coverage_end?: string;
   index_build?: ViewIndexBuild;
 }
 

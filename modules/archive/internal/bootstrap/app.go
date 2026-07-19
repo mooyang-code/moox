@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	nats "github.com/nats-io/nats.go"
@@ -54,7 +55,11 @@ func (a *App) Run(ctx context.Context) error {
 	state.JournalReady.Store(true)
 	w := writer.New(store, a.Config.Archive.RootDir, a.Config.Archive.Materialize.RowGroupRows)
 	w.SetWorkers(a.Config.Archive.Materialize.Workers)
-	metadataRegistry := registry.NewClient(a.Config.Archive.StorageRPC.MetadataTarget)
+	storageCredentials, err := gatewayauth.ResolveCredentials(a.Config.Archive.StorageRPC.KeyID, a.Config.Archive.StorageRPC.HMACKeyFile)
+	if err != nil {
+		return err
+	}
+	metadataRegistry := registry.NewClientWithCredentials(a.Config.Archive.StorageRPC.GatewayTarget, a.Config.Archive.StorageRPC.GatewayNodeID, storageCredentials)
 	w.SetRegistry(registry.PartitionRegistry{Client: metadataRegistry, DeviceID: a.Config.Archive.DeviceID})
 	if err := w.Recover(ctx); err != nil {
 		return err

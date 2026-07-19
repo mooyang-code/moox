@@ -61,12 +61,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
-		AdminGatewayURL:              deps.AdminGatewayURL,
-		ServiceGatewayTarget:         deps.ServiceGatewayTarget,
-		ServiceAuth:                  taskpublisherAuth(deps.ServiceAuth),
-		StorageMetadataTarget:        deps.StorageMetadataTarget,
-		PlannerStorageMetadataTarget: cfg.Storage.MetadataTarget,
-		StorageAccessTarget:          deps.StorageAccessTarget,
+		AdminGatewayURL:                deps.AdminGatewayURL,
+		ServiceGatewayTarget:           deps.ServiceGatewayTarget,
+		ServiceAuth:                    taskpublisherAuth(deps.ServiceAuth),
+		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
+		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
@@ -125,10 +124,9 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 		state.SetReady(databaseReady)
 		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, databaseReady)
 		rsp.Details = map[string]any{
-			"database":                databaseReady,
-			"cloudnode_address":       cfg.CloudNode.Address,
-			"storage_metadata_target": cfg.Storage.MetadataTarget,
-			"storage_access_target":   cfg.Storage.AccessTarget,
+			"database":                   databaseReady,
+			"cloudnode_address":          cfg.CloudNode.Address,
+			"storage_rpc_gateway_target": cfg.Storage.GatewayTarget,
 		}
 		return rsp
 	}

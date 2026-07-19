@@ -22,14 +22,13 @@ import (
 
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
-	AdminGatewayURL       string
-	ServiceGatewayTarget  string
-	ServiceAuth           taskpublisher.AuthConfig
-	StorageMetadataTarget string
-	// PlannerStorageMetadataTarget is the control-plane's local metadata target.
-	// The public target remains in StorageMetadataTarget for SCF wake events.
-	PlannerStorageMetadataTarget string
-	StorageAccessTarget          string
+	AdminGatewayURL         string
+	ServiceGatewayTarget    string
+	ServiceAuth             taskpublisher.AuthConfig
+	StorageRPCGatewayTarget string
+	// PlannerStorageRPCGatewayTarget is the control-plane's local metadata target.
+	// The public target remains in StorageRPCGatewayTarget for SCF wake events.
+	PlannerStorageRPCGatewayTarget string
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -44,9 +43,9 @@ type Service struct {
 
 // New creates a collector management service.
 func New(persistence *store.Store, deps Dependencies) *Service {
-	plannerMetadataTarget := deps.PlannerStorageMetadataTarget
+	plannerMetadataTarget := deps.PlannerStorageRPCGatewayTarget
 	if strings.TrimSpace(plannerMetadataTarget) == "" {
-		plannerMetadataTarget = deps.StorageMetadataTarget
+		plannerMetadataTarget = deps.StorageRPCGatewayTarget
 	}
 	return &Service{
 		ruleRepo:     persistence.TaskRules(),
@@ -56,8 +55,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
 			ServiceGatewayTarget:      deps.AdminGatewayURL,
 			EventServiceGatewayTarget: deps.ServiceGatewayTarget,
-			StorageMetadataTarget:     deps.StorageMetadataTarget,
-			StorageAccessTarget:       deps.StorageAccessTarget,
+			StorageRPCGatewayTarget:   deps.StorageRPCGatewayTarget,
 			Auth:                      deps.ServiceAuth,
 		}),
 	}
