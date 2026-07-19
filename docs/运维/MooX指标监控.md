@@ -61,6 +61,10 @@ export MOOX_METRICS_STORAGE_ROUTE_SEED=/etc/moox/metadata/metrics-route-prod.yam
 
 服务可以通过 `MOOX_METRICS_*` 环境变量覆盖大小、family、sample、label、gzip、include/exclude 限制；timer 周期仍以配置文件的 30 秒为准。Reporter 失败会记录日志并增加本地错误计数，不维护业务 outbox。
 
+发布使用一个共享 `metrics-publisher` 发布角色和一个独立 `monitor-metrics-consumer` 消费角色。Publisher 只能发布 metrics snapshot；Monitor consumer 只订阅固定 metrics/host topic 和 durable。Monitor 为单实例，不能复用 Publisher 凭据消费，也不通过多实例抢占 durable。
+
+Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基数 `moox_module_*` 指标和 `config/monitor-pipelines.yaml` 白名单水位。穿过 Storage 的功能 pipeline 当前显式延期，不从相邻模块水位推断 Storage 已正确处理。
+
 ## 看板和规则
 
 看板从 Monitor catalog 选择已发现的 service、instance、metric 和 labels，查询 bounded history 后绘制趋势。不存在“新增监控目标”入口，服务发现来自 SysDeploy 注册表；未知 producer、缺失 schema、无 route 的消息会被拒绝。
@@ -92,5 +96,7 @@ go test -count=1 ./modules/monitor/... ./packages/metricspb
 ./scripts/test-deploy-moox-eventbus.sh
 cd web && node scripts/check-metric-monitor.mjs && pnpm build:prod
 ```
+
+初始部署后用 `moox-cli doctor bootstrap --format json` 验证 inventory、身份、路径和 Reporter 覆盖；故障定位用 `moox-cli doctor diagnose --format json`。操作边界和恢复动作见 [MooX Doctor 运维](MooX-Doctor运维.md)。
 
 发布和部署完成后，先确认 EventBus ready、Storage Metadata HTTP 可访问且两个 metrics seed apply 成功，再观察两个 timer 周期，最后检查看板 latest/history 和一条测试规则的 firing/resolved 状态。

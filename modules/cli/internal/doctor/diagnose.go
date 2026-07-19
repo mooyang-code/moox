@@ -40,6 +40,9 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 		contextErr = fmt.Errorf("Monitor client is unavailable")
 	} else {
 		snapshot, contextErr = options.Client.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, PipelineIds: pipelineIDs(options.Pipelines)})
+		if contextErr == nil && snapshot == nil {
+			contextErr = fmt.Errorf("Monitor returned an empty Doctor Context")
+		}
 	}
 	if contextErr != nil {
 		runner := core.RunnerFunc(func(_ context.Context, spec core.CheckSpec, _ []core.DependencyContext) core.CheckResult {

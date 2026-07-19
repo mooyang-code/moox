@@ -15,6 +15,7 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,6 +38,7 @@ type bootstrapRunner struct {
 	loadErr     error
 	seedNames   map[string]bool
 	seedErr     error
+	pipelineErr error
 }
 
 func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, error) {
@@ -63,6 +65,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		}
 	}
 	runner.seedNames, runner.seedErr = loadSeedNames(options.SeedPath)
+	_, runner.pipelineErr = report.LoadPipelineAllowlist(options.PipelinePath)
 	specs := bootstrapSpecs(manifest, options.NodeID)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
@@ -109,11 +112,12 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	result := core.CheckResult{ID: spec.ID}
 	switch spec.ID {
 	case "bootstrap.release_contract":
-		if r.seedErr != nil || r.options.PipelinePath == "" {
-			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", r.seedErr, "apply_service_deployments_seed")
-		}
-		if _, err := os.Stat(r.options.PipelinePath); err != nil {
-			return checkResult(spec.ID, core.StatusFail, "pipeline allowlist is missing", err, "apply_service_deployments_seed")
+		if r.seedErr != nil || r.pipelineErr != nil {
+			contractErr := r.seedErr
+			if contractErr == nil {
+				contractErr = r.pipelineErr
+			}
+			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "apply_service_deployments_seed")
 		}
 		return checkResult(spec.ID, core.StatusPass, "embedded Manifest, deployment seed, and pipeline allowlist are available", nil)
 	case "bootstrap.inventory":

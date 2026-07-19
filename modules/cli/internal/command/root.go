@@ -189,7 +189,7 @@ func Execute() {
 		if errors.As(err, &coded) {
 			os.Exit(coded.ExitCode())
 		}
-		os.Exit(3)
+		os.Exit(1)
 	}
 }
 

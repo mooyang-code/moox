@@ -60,7 +60,7 @@ Parquet 则不会被通用清理器静默删除。各类数据的默认保留时
 
 ## 服务监控
 
-`moox-monitor` 是独立 HTTP/TCP 可用性监控模块，和 Admin 内原有主机资源监控并存。它通过 SysDeploy 同步内置 `moox-system` 检查，也支持手动检查、webhook 告警和多 monitor 实例 peer 去重。所有独立部署进程的 `/healthz`、`/readyz` 和 `/metrics` 都是内部诊断面，需要独立 health HMAC；公开 Caddy 端口对诊断路由返回 `404`。
+`moox-monitor` 是单实例监控事实存储，通过 SysDeploy 同步内置 `moox-system` 检查，并提供有界 `GetDoctorContext`。初始部署后可手工运行 `moox-cli doctor bootstrap --format json`；日常定位运行 `moox-cli doctor diagnose --format json`。V1 没有 Monitor HA、Doctor 守护进程、自动修复、Trade 模拟盘或 Full Canary。Storage 正在独立重构，Doctor 只检查其 inventory 和现有 health/Reporter 事实，功能水位固定显示为延期。所有独立部署进程的 `/healthz`、`/readyz` 和 `/metrics` 都是内部诊断面，需要独立 health HMAC；公开 Caddy 端口对诊断路由返回 `404`。详见 [MooX Doctor 运维](docs/运维/MooX-Doctor运维.md)。
 
 `moox-host-agent` 是独立的 Linux amd64/arm64 用户进程，只读取 CPU、内存、文件系统、磁盘 I/O 和网络 ABI，通过私有 CA TLS 的 EventBus best-effort 上报到 Monitor；Agent 不持久化样本。发布和 rootless 部署入口位于 `skills/moox/scripts/hostagent-release.sh` 与 `hostagent-deploy.sh`，EventBus 凭据由 Admin `t_secrets` CLI 统一生成和轮换。
 

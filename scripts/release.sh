@@ -95,7 +95,7 @@ mkdir -p \
   "${RELEASE_ROOT}/archive/config" \
   "${RELEASE_ROOT}/examples" \
   "${RELEASE_ROOT}/docs"
-mkdir -p "${RELEASE_ROOT}/lib" "${RELEASE_ROOT}/config/caddy"
+mkdir -p "${RELEASE_ROOT}/lib" "${RELEASE_ROOT}/config/caddy" "${RELEASE_ROOT}/config/doctor"
 if [[ "${OS}" == "linux" && ( "${ARCH}" == "amd64" || "${ARCH}" == "arm64" ) ]]; then
   mkdir -p "${RELEASE_ROOT}/hostagent/bin" "${RELEASE_ROOT}/hostagent/config"
 fi
@@ -187,6 +187,9 @@ cp "${ROOT}/scripts/storage-start.sh" "${RELEASE_ROOT}/storage-view/start.sh"
 cp "${ROOT}/scripts/storage-stop.sh" "${RELEASE_ROOT}/storage-view/stop.sh"
 cp -R "${ROOT}/examples/." "${RELEASE_ROOT}/examples/"
 cp "${ROOT}/examples/monitor-pipelines.yaml" "${RELEASE_ROOT}/config/monitor-pipelines.yaml"
+cp "${ROOT}/modules/cli/config/cli.yaml" "${RELEASE_ROOT}/config/cli.yaml"
+cp "${ROOT}/packages/doctor/components.yaml" "${RELEASE_ROOT}/config/doctor/components.yaml"
+cp "${ROOT}/packages/doctor/report.schema.json" "${RELEASE_ROOT}/config/doctor/report.schema.json"
 cp -R "${ROOT}/docs/." "${RELEASE_ROOT}/docs/" 2>/dev/null || true
 chmod +x "${RELEASE_ROOT}/storage-primary/start.sh" "${RELEASE_ROOT}/storage-primary/stop.sh" "${RELEASE_ROOT}/storage-view/start.sh" "${RELEASE_ROOT}/storage-view/stop.sh"
 cp "${ROOT}/README.md" "${RELEASE_ROOT}/README.md" 2>/dev/null || true

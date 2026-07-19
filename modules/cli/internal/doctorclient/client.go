@@ -30,6 +30,9 @@ func (c *Client) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctorC
 	if err != nil {
 		return nil, err
 	}
+	if rsp == nil {
+		return nil, fmt.Errorf("Monitor GetDoctorContext returned an empty response")
+	}
 	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		return nil, fmt.Errorf("Monitor GetDoctorContext failed: %s", rsp.GetRetInfo().GetMsg())
 	}

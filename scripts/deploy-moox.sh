@@ -2340,6 +2340,9 @@ EOF
 
   cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
   cp "${ROOT}/modules/cli/config/cli.yaml" "${STAGE_DIR}/config/cli.yaml"
+  mkdir -p "${STAGE_DIR}/config/doctor"
+  cp "${ROOT}/packages/doctor/components.yaml" "${STAGE_DIR}/config/doctor/components.yaml"
+  cp "${ROOT}/packages/doctor/report.schema.json" "${STAGE_DIR}/config/doctor/report.schema.json"
   perl -0pi -e 's#hmac_key_file:\s*\./secrets/gateway-service\.key#credentials_file: ../../secrets/gateway-credentials.json#' "${STAGE_DIR}/gateway/config/app.yaml"
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"

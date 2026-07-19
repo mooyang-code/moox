@@ -5,6 +5,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 grep -q 'moox_gateway' "${ROOT}/examples/service-deployments.seed.yaml"
+for contract in \
+  'packages/doctor/components.yaml' \
+  'packages/doctor/report.schema.json' \
+  'modules/cli/config/cli.yaml' \
+  'examples/monitor-pipelines.yaml'; do
+  grep -q "${contract}" "${ROOT}/scripts/release.sh" || {
+    echo "missing Doctor release contract: ${contract}" >&2
+    exit 1
+  }
+  grep -q "${contract}" "${ROOT}/scripts/deploy-moox.sh" || {
+    echo "missing Doctor deploy contract: ${contract}" >&2
+    exit 1
+  }
+done
 
 unfrozen="--no-""frozen-lockfile"
 floating_statik="statik@""latest"

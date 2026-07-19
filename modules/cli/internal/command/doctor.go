@@ -152,7 +152,12 @@ func loadDoctorHealthAuth(releaseRoot string) (doctorcli.HealthAuth, error) {
 	if auth.SecretKey != "" {
 		return auth, nil
 	}
-	file, err := os.Open(filepath.Join(releaseRoot, "secrets", "health-auth.env"))
+	path := filepath.Join(releaseRoot, "secrets", "health-auth.env")
+	info, statErr := os.Lstat(path)
+	if statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0) {
+		return auth, fmt.Errorf("health auth file must be a regular 0600 file")
+	}
+	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return auth, nil
