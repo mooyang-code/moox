@@ -25,14 +25,15 @@ func TestTwoDataNodesHostIndependentDatasets(t *testing.T) {
 	row := func(dataset, field, value string) *pb.RowFieldUpsert {
 		return &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "quant", DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: field, Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}}}}
 	}
-	auth := &pb.AuthInfo{AppId: "storage-primary", AppKey: "e2e"}
-	if rsp, _ := nodeA.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: auth, NodeId: "node-a", Rows: []*pb.RowFieldUpsert{row("prices", "close", "100")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	authA := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey("node-a", "storage-primary")}
+	authB := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey("node-b", "storage-primary")}
+	if rsp, _ := nodeA.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: authA, NodeId: "node-a", Rows: []*pb.RowFieldUpsert{row("prices", "close", "100")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("node A write: %v", rsp.GetRetInfo())
 	}
-	if rsp, _ := nodeB.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: auth, NodeId: "node-b", Rows: []*pb.RowFieldUpsert{row("factors", "momentum", "1.2")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, _ := nodeB.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: authB, NodeId: "node-b", Rows: []*pb.RowFieldUpsert{row("factors", "momentum", "1.2")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("node B write: %v", rsp.GetRetInfo())
 	}
-	read, err := nodeA.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: auth, NodeId: "node-a", DatasetId: "prices", Keys: []*pb.RowKey{row("prices", "close", "100").GetKey()}, FieldIds: []string{"close"}})
+	read, err := nodeA.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: authA, NodeId: "node-a", DatasetId: "prices", Keys: []*pb.RowKey{row("prices", "close", "100").GetKey()}, FieldIds: []string{"close"}})
 	if err != nil || len(read.GetRows()) != 1 || len(read.GetRows()[0].GetFields()) != 1 {
 		t.Fatalf("read node A rows=%v err=%v", read, err)
 	}

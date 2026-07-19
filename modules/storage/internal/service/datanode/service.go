@@ -2,6 +2,9 @@ package datanode
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -12,17 +15,24 @@ import (
 )
 
 type Options struct {
-	NodeID      string
-	Store       *pebble.Store
-	Root        string
-	Pebble      pebble.Options
-	RequireAuth bool
+	NodeID     string
+	Store      *pebble.Store
+	Root       string
+	Pebble     pebble.Options
+	AuthSecret string
 }
 
 type Service struct {
 	nodeID      string
 	store       *pebble.Store
 	requireAuth bool
+	authSecret  string
+}
+
+func ServiceAuthKey(secret, appID string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(appID))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 var _ pb.DataNodeService = (*Service)(nil)
@@ -51,7 +61,11 @@ func NewService(opts Options) (*Service, error) {
 		_ = store.Close()
 		return nil, errors.New("node_id is required")
 	}
-	return &Service{nodeID: nodeID, store: store, requireAuth: true}, nil
+	secret := opts.AuthSecret
+	if secret == "" {
+		secret = nodeID
+	}
+	return &Service{nodeID: nodeID, store: store, requireAuth: true, authSecret: secret}, nil
 }
 
 func (s *Service) Close() error {
@@ -149,6 +163,10 @@ func (s *Service) validateAuth(auth *pb.AuthInfo) error {
 	}
 	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
 		return errors.New("service auth is required")
+	}
+	expected := ServiceAuthKey(s.authSecret, auth.GetAppId())
+	if !hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(expected)) {
+		return errors.New("invalid service HMAC")
 	}
 	return nil
 }
