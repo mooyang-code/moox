@@ -17,8 +17,10 @@ case "${deploy}" in
 esac
 
 gateway_env="${deploy}/secrets/gateway-service.env"
+collector_gateway_key="${deploy}/secrets/gateway-collector.key"
 ca_file="${deploy}/certs/gateway/peers.pem"
 [[ -r "${gateway_env}" ]] || fail "missing gateway-service.env"
+[[ -r "${collector_gateway_key}" ]] || fail "missing gateway-collector.key"
 [[ -r "${ca_file}" ]] || fail "missing Gateway CA bundle"
 [[ -x "${deploy}/bin/moox-collector-scf" ]] || fail "missing moox-collector-scf"
 
@@ -26,6 +28,10 @@ set -a
 # shellcheck disable=SC1090
 source "${gateway_env}"
 set +a
+MOOX_GATEWAY_SERVICE_KEY_ID=collector
+MOOX_GATEWAY_SERVICE_SECRET_KEY="$(tr -d '\r\n' <"${collector_gateway_key}")"
+MOOX_GATEWAY_TARGET_NODE="${MOOX_GATEWAY_NODE_ID:-}"
+export MOOX_GATEWAY_SERVICE_KEY_ID MOOX_GATEWAY_SERVICE_SECRET_KEY MOOX_GATEWAY_TARGET_NODE
 [[ -n "${MOOX_GATEWAY_NODE_ID:-}" ]] || fail "missing MOOX_GATEWAY_NODE_ID"
 [[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_KEY_ID"
 [[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_SECRET_KEY"
@@ -39,6 +45,5 @@ exec "${deploy}/bin/moox-collector-scf" \
   -once \
   -service-gateway-target http://127.0.0.1:11002 \
   -node-id "${collector_node_id}" \
-  -storage-metadata-target 127.0.0.1:20100 \
-  -storage-primary-target 127.0.0.1:20102 \
+  -storage-rpc-gateway-target 127.0.0.1:11003 \
   -timeout "${timeout}"

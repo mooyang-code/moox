@@ -107,17 +107,14 @@ func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event mod
 	metadataTarget := deploymentTRPCTarget(event.ServiceDeployments, "storage-primary")
 	accessTarget := metadataTarget
 	if metadataTarget != "" || accessTarget != "" {
-		runtimeapp.UpdateStorageTargets(metadataTarget, accessTarget)
+		runtimeapp.UpdateStorageRPCGatewayTarget(metadataTarget)
 		if metadataTarget != "" {
-			event.StorageMetadataTarget = metadataTarget
+			event.StorageRPCGatewayTarget = metadataTarget
 		}
-		if accessTarget != "" {
-			event.StoragePrimaryTarget = accessTarget
-		}
-		log.DebugContextf(ctx, "[CloudFunction] runtime storage targets updated from service_deployments: metadata=%s access=%s", metadataTarget, accessTarget)
-	} else if runtimeapp.IsStorageTRPCTarget(event.StorageMetadataTarget) || runtimeapp.IsStorageTRPCTarget(event.StoragePrimaryTarget) {
-		runtimeapp.UpdateStorageTargets(event.StorageMetadataTarget, event.StoragePrimaryTarget)
-		log.DebugContextf(ctx, "[CloudFunction] runtime storage targets updated from event: metadata=%s access=%s", event.StorageMetadataTarget, event.StoragePrimaryTarget)
+		log.DebugContextf(ctx, "[CloudFunction] runtime storage gateway target updated from service_deployments: %s", metadataTarget)
+	} else if runtimeapp.IsStorageTRPCTarget(event.StorageRPCGatewayTarget) {
+		runtimeapp.UpdateStorageRPCGatewayTarget(event.StorageRPCGatewayTarget)
+		log.DebugContextf(ctx, "[CloudFunction] runtime storage gateway target updated from event: %s", event.StorageRPCGatewayTarget)
 	}
 
 	nodeID := ""

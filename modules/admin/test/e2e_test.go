@@ -32,7 +32,7 @@ func TestAdminGatewayControlPlaneContract(t *testing.T) {
 	deployment := &sysdeploy.Deployment{
 		NodeID: nodeID, ServiceName: "monitor", ServiceKind: "trpc", Protocol: "http",
 		Host: "127.0.0.1", Port: 11410, GatewayPath: "trpc.moox.monitor.MonitorMgr",
-		GatewayServiceID: "monitor", GatewayEnabled: true, Status: "active", ExtraConfig: `{"timeout_ms":7500}`,
+		GatewayServiceID: "monitor", GatewayEnabled: true, Status: "active", ExtraConfig: `{"timeout_ms":7500,"gateway_methods":["*"],"gateway_callers":["*"]}`,
 	}
 	if err := manager.GetDB().Create(deployment).Error; err != nil {
 		t.Fatalf("create deployment: %v", err)

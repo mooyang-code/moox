@@ -203,6 +203,23 @@ func builderIndexID(viewID string, slot viewindex.Slot) string {
 	return viewindex.ViewIndexID("crypto", viewID, slot)
 }
 
+func (m *buildingGuardMetadata) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
+	items, err := m.ListViewsByDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if status != "" {
+		filtered := items[:0]
+		for _, item := range items {
+			if item.GetStatus() == status {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	return items, &pb.PageResult{Page: page.GetPage(), Size: page.GetSize(), Total: uint32(len(items))}, nil
+}
+
 func cloneViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {
 	out := make([]*pb.ViewColumn, 0, len(columns))
 	for _, column := range columns {

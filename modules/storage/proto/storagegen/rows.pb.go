@@ -1420,6 +1420,171 @@ func (x *ScanRecordRowsRsp) GetPageResult() *commonpb.PageResult {
 	return nil
 }
 
+type ShardHead struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ShardId  string `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	Sequence uint64 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+}
+
+func (x *ShardHead) Reset() {
+	*x = ShardHead{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[18]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ShardHead) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShardHead) ProtoMessage() {}
+
+func (x *ShardHead) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[18]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShardHead.ProtoReflect.Descriptor instead.
+func (*ShardHead) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ShardHead) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+func (x *ShardHead) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+type GetShardHeadsReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId   string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+}
+
+func (x *GetShardHeadsReq) Reset() {
+	*x = GetShardHeadsReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[19]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetShardHeadsReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetShardHeadsReq) ProtoMessage() {}
+
+func (x *GetShardHeadsReq) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[19]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetShardHeadsReq.ProtoReflect.Descriptor instead.
+func (*GetShardHeadsReq) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *GetShardHeadsReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *GetShardHeadsReq) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+type GetShardHeadsRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Heads   []*ShardHead      `protobuf:"bytes,2,rep,name=heads,proto3" json:"heads,omitempty"`
+}
+
+func (x *GetShardHeadsRsp) Reset() {
+	*x = GetShardHeadsRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[20]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetShardHeadsRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetShardHeadsRsp) ProtoMessage() {}
+
+func (x *GetShardHeadsRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[20]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetShardHeadsRsp.ProtoReflect.Descriptor instead.
+func (*GetShardHeadsRsp) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GetShardHeadsRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *GetShardHeadsRsp) GetHeads() []*ShardHead {
+	if x != nil {
+		return x.Heads
+	}
+	return nil
+}
+
 var File_rows_proto protoreflect.FileDescriptor
 
 var file_rows_proto_rawDesc = []byte{
@@ -1701,7 +1866,24 @@ var file_rows_proto_rawDesc = []byte{
 	0x3d, 0x0a, 0x0b, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x18, 0x03,
 	0x20, 0x01, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
 	0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x50, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75,
-	0x6c, 0x74, 0x52, 0x0a, 0x70, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x32, 0x94,
+	0x6c, 0x74, 0x52, 0x0a, 0x70, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x22, 0x42,
+	0x0a, 0x09, 0x53, 0x68, 0x61, 0x72, 0x64, 0x48, 0x65, 0x61, 0x64, 0x12, 0x19, 0x0a, 0x08, 0x73,
+	0x68, 0x61, 0x72, 0x64, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73,
+	0x68, 0x61, 0x72, 0x64, 0x49, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e,
+	0x63, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x04, 0x52, 0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e,
+	0x63, 0x65, 0x22, 0x4c, 0x0a, 0x10, 0x47, 0x65, 0x74, 0x53, 0x68, 0x61, 0x72, 0x64, 0x48, 0x65,
+	0x61, 0x64, 0x73, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f,
+	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49,
+	0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x49, 0x64,
+	0x22, 0x7c, 0x0a, 0x10, 0x47, 0x65, 0x74, 0x53, 0x68, 0x61, 0x72, 0x64, 0x48, 0x65, 0x61, 0x64,
+	0x73, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66,
+	0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x32, 0x0a, 0x05, 0x68, 0x65,
+	0x61, 0x64, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x53, 0x68,
+	0x61, 0x72, 0x64, 0x48, 0x65, 0x61, 0x64, 0x52, 0x05, 0x68, 0x65, 0x61, 0x64, 0x73, 0x32, 0x94,
 	0x04, 0x0a, 0x0c, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x12,
 	0x6b, 0x0a, 0x13, 0x4d, 0x65, 0x72, 0x67, 0x65, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69,
 	0x65, 0x73, 0x52, 0x6f, 0x77, 0x73, 0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
@@ -1735,7 +1917,7 @@ var file_rows_proto_rawDesc = []byte{
 	0x61, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x65, 0x71, 0x1a,
 	0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72,
 	0x61, 0x67, 0x65, 0x2e, 0x52, 0x65, 0x61, 0x64, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f,
-	0x77, 0x73, 0x52, 0x73, 0x70, 0x32, 0xda, 0x01, 0x0a, 0x10, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72,
+	0x77, 0x73, 0x52, 0x73, 0x70, 0x32, 0xb5, 0x02, 0x0a, 0x10, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72,
 	0x79, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x53, 0x63, 0x61, 0x6e, 0x12, 0x68, 0x0a, 0x12, 0x53, 0x63,
 	0x61, 0x6e, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x73,
 	0x12, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
@@ -1749,12 +1931,17 @@ var file_rows_proto_rawDesc = []byte{
 	0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x24, 0x2e, 0x74,
 	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
 	0x2e, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x6f, 0x77, 0x73, 0x52,
-	0x73, 0x70, 0x42, 0x49, 0x5a, 0x47, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d,
-	0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61,
-	0x67, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
-	0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70,
-	0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x73, 0x70, 0x12, 0x59, 0x0a, 0x0d, 0x47, 0x65, 0x74, 0x53, 0x68, 0x61, 0x72, 0x64, 0x48, 0x65,
+	0x61, 0x64, 0x73, 0x12, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x53, 0x68, 0x61, 0x72, 0x64,
+	0x48, 0x65, 0x61, 0x64, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
+	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x47, 0x65, 0x74,
+	0x53, 0x68, 0x61, 0x72, 0x64, 0x48, 0x65, 0x61, 0x64, 0x73, 0x52, 0x73, 0x70, 0x42, 0x49, 0x5a,
+	0x47, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79,
+	0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f,
+	0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x72,
+	0x6f, 0x74, 0x6f, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x67, 0x65, 0x6e, 0x3b, 0x73,
+	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1769,7 +1956,7 @@ func file_rows_proto_rawDescGZIP() []byte {
 	return file_rows_proto_rawDescData
 }
 
-var file_rows_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_rows_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_rows_proto_goTypes = []interface{}{
 	(*TimeSeriesKey)(nil),           // 0: trpc.moox.storage.TimeSeriesKey
 	(*TimeSeriesRow)(nil),           // 1: trpc.moox.storage.TimeSeriesRow
@@ -1789,88 +1976,95 @@ var file_rows_proto_goTypes = []interface{}{
 	(*ScanTimeSeriesRowsRsp)(nil),   // 15: trpc.moox.storage.ScanTimeSeriesRowsRsp
 	(*ScanRecordRowsReq)(nil),       // 16: trpc.moox.storage.ScanRecordRowsReq
 	(*ScanRecordRowsRsp)(nil),       // 17: trpc.moox.storage.ScanRecordRowsRsp
-	nil,                             // 18: trpc.moox.storage.TimeSeriesKey.DimensionsEntry
-	nil,                             // 19: trpc.moox.storage.TimeSeriesRow.AttributesEntry
-	nil,                             // 20: trpc.moox.storage.RecordRow.AttributesEntry
-	(*ColumnValue)(nil),             // 21: trpc.moox.storage.ColumnValue
-	(*ColumnRemoval)(nil),           // 22: trpc.moox.storage.ColumnRemoval
-	(*commonpb.AuthInfo)(nil),       // 23: trpc.moox.common.AuthInfo
-	(*commonpb.RetInfo)(nil),        // 24: trpc.moox.common.RetInfo
-	(*TimeRange)(nil),               // 25: trpc.moox.storage.TimeRange
-	(SortOrder)(0),                  // 26: trpc.moox.storage.SortOrder
-	(*commonpb.Page)(nil),           // 27: trpc.moox.common.Page
-	(*commonpb.PageResult)(nil),     // 28: trpc.moox.common.PageResult
-	(*VersionRange)(nil),            // 29: trpc.moox.storage.VersionRange
+	(*ShardHead)(nil),               // 18: trpc.moox.storage.ShardHead
+	(*GetShardHeadsReq)(nil),        // 19: trpc.moox.storage.GetShardHeadsReq
+	(*GetShardHeadsRsp)(nil),        // 20: trpc.moox.storage.GetShardHeadsRsp
+	nil,                             // 21: trpc.moox.storage.TimeSeriesKey.DimensionsEntry
+	nil,                             // 22: trpc.moox.storage.TimeSeriesRow.AttributesEntry
+	nil,                             // 23: trpc.moox.storage.RecordRow.AttributesEntry
+	(*ColumnValue)(nil),             // 24: trpc.moox.storage.ColumnValue
+	(*ColumnRemoval)(nil),           // 25: trpc.moox.storage.ColumnRemoval
+	(*commonpb.AuthInfo)(nil),       // 26: trpc.moox.common.AuthInfo
+	(*commonpb.RetInfo)(nil),        // 27: trpc.moox.common.RetInfo
+	(*TimeRange)(nil),               // 28: trpc.moox.storage.TimeRange
+	(SortOrder)(0),                  // 29: trpc.moox.storage.SortOrder
+	(*commonpb.Page)(nil),           // 30: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil),     // 31: trpc.moox.common.PageResult
+	(*VersionRange)(nil),            // 32: trpc.moox.storage.VersionRange
 }
 var file_rows_proto_depIdxs = []int32{
-	18, // 0: trpc.moox.storage.TimeSeriesKey.dimensions:type_name -> trpc.moox.storage.TimeSeriesKey.DimensionsEntry
+	21, // 0: trpc.moox.storage.TimeSeriesKey.dimensions:type_name -> trpc.moox.storage.TimeSeriesKey.DimensionsEntry
 	0,  // 1: trpc.moox.storage.TimeSeriesRow.key:type_name -> trpc.moox.storage.TimeSeriesKey
-	21, // 2: trpc.moox.storage.TimeSeriesRow.columns:type_name -> trpc.moox.storage.ColumnValue
-	19, // 3: trpc.moox.storage.TimeSeriesRow.attributes:type_name -> trpc.moox.storage.TimeSeriesRow.AttributesEntry
-	22, // 4: trpc.moox.storage.TimeSeriesRow.removed_columns:type_name -> trpc.moox.storage.ColumnRemoval
+	24, // 2: trpc.moox.storage.TimeSeriesRow.columns:type_name -> trpc.moox.storage.ColumnValue
+	22, // 3: trpc.moox.storage.TimeSeriesRow.attributes:type_name -> trpc.moox.storage.TimeSeriesRow.AttributesEntry
+	25, // 4: trpc.moox.storage.TimeSeriesRow.removed_columns:type_name -> trpc.moox.storage.ColumnRemoval
 	2,  // 5: trpc.moox.storage.RecordRow.key:type_name -> trpc.moox.storage.RecordKey
-	21, // 6: trpc.moox.storage.RecordRow.columns:type_name -> trpc.moox.storage.ColumnValue
-	20, // 7: trpc.moox.storage.RecordRow.attributes:type_name -> trpc.moox.storage.RecordRow.AttributesEntry
-	22, // 8: trpc.moox.storage.RecordRow.removed_columns:type_name -> trpc.moox.storage.ColumnRemoval
-	23, // 9: trpc.moox.storage.MergeTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	24, // 6: trpc.moox.storage.RecordRow.columns:type_name -> trpc.moox.storage.ColumnValue
+	23, // 7: trpc.moox.storage.RecordRow.attributes:type_name -> trpc.moox.storage.RecordRow.AttributesEntry
+	25, // 8: trpc.moox.storage.RecordRow.removed_columns:type_name -> trpc.moox.storage.ColumnRemoval
+	26, // 9: trpc.moox.storage.MergeTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	1,  // 10: trpc.moox.storage.MergeTimeSeriesRowsReq.rows:type_name -> trpc.moox.storage.TimeSeriesRow
-	24, // 11: trpc.moox.storage.MergeTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	23, // 12: trpc.moox.storage.ReadTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	27, // 11: trpc.moox.storage.MergeTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	26, // 12: trpc.moox.storage.ReadTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	0,  // 13: trpc.moox.storage.ReadTimeSeriesRowsReq.keys:type_name -> trpc.moox.storage.TimeSeriesKey
-	25, // 14: trpc.moox.storage.ReadTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	26, // 15: trpc.moox.storage.ReadTimeSeriesRowsReq.order:type_name -> trpc.moox.storage.SortOrder
-	27, // 16: trpc.moox.storage.ReadTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
-	24, // 17: trpc.moox.storage.ReadTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 14: trpc.moox.storage.ReadTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	29, // 15: trpc.moox.storage.ReadTimeSeriesRowsReq.order:type_name -> trpc.moox.storage.SortOrder
+	30, // 16: trpc.moox.storage.ReadTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
+	27, // 17: trpc.moox.storage.ReadTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,  // 18: trpc.moox.storage.ReadTimeSeriesRowsRsp.rows:type_name -> trpc.moox.storage.TimeSeriesRow
-	28, // 19: trpc.moox.storage.ReadTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	23, // 20: trpc.moox.storage.DeleteTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	25, // 21: trpc.moox.storage.DeleteTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	27, // 22: trpc.moox.storage.DeleteTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
-	24, // 23: trpc.moox.storage.DeleteTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	28, // 24: trpc.moox.storage.DeleteTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	23, // 25: trpc.moox.storage.MergeRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	31, // 19: trpc.moox.storage.ReadTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	26, // 20: trpc.moox.storage.DeleteTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	28, // 21: trpc.moox.storage.DeleteTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	30, // 22: trpc.moox.storage.DeleteTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
+	27, // 23: trpc.moox.storage.DeleteTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	31, // 24: trpc.moox.storage.DeleteTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	26, // 25: trpc.moox.storage.MergeRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	3,  // 26: trpc.moox.storage.MergeRecordRowsReq.rows:type_name -> trpc.moox.storage.RecordRow
-	24, // 27: trpc.moox.storage.MergeRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	27, // 27: trpc.moox.storage.MergeRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	2,  // 28: trpc.moox.storage.MergeRecordRowsRsp.keys:type_name -> trpc.moox.storage.RecordKey
-	23, // 29: trpc.moox.storage.ReadRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	26, // 29: trpc.moox.storage.ReadRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	2,  // 30: trpc.moox.storage.ReadRecordRowsReq.keys:type_name -> trpc.moox.storage.RecordKey
-	29, // 31: trpc.moox.storage.ReadRecordRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	26, // 32: trpc.moox.storage.ReadRecordRowsReq.order:type_name -> trpc.moox.storage.SortOrder
-	27, // 33: trpc.moox.storage.ReadRecordRowsReq.page:type_name -> trpc.moox.common.Page
-	24, // 34: trpc.moox.storage.ReadRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	32, // 31: trpc.moox.storage.ReadRecordRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	29, // 32: trpc.moox.storage.ReadRecordRowsReq.order:type_name -> trpc.moox.storage.SortOrder
+	30, // 33: trpc.moox.storage.ReadRecordRowsReq.page:type_name -> trpc.moox.common.Page
+	27, // 34: trpc.moox.storage.ReadRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	3,  // 35: trpc.moox.storage.ReadRecordRowsRsp.rows:type_name -> trpc.moox.storage.RecordRow
-	28, // 36: trpc.moox.storage.ReadRecordRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	23, // 37: trpc.moox.storage.ScanTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	25, // 38: trpc.moox.storage.ScanTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	27, // 39: trpc.moox.storage.ScanTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
-	24, // 40: trpc.moox.storage.ScanTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	31, // 36: trpc.moox.storage.ReadRecordRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	26, // 37: trpc.moox.storage.ScanTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	28, // 38: trpc.moox.storage.ScanTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	30, // 39: trpc.moox.storage.ScanTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
+	27, // 40: trpc.moox.storage.ScanTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,  // 41: trpc.moox.storage.ScanTimeSeriesRowsRsp.rows:type_name -> trpc.moox.storage.TimeSeriesRow
-	28, // 42: trpc.moox.storage.ScanTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	23, // 43: trpc.moox.storage.ScanRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	29, // 44: trpc.moox.storage.ScanRecordRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
-	27, // 45: trpc.moox.storage.ScanRecordRowsReq.page:type_name -> trpc.moox.common.Page
-	24, // 46: trpc.moox.storage.ScanRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	31, // 42: trpc.moox.storage.ScanTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	26, // 43: trpc.moox.storage.ScanRecordRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	32, // 44: trpc.moox.storage.ScanRecordRowsReq.version_range:type_name -> trpc.moox.storage.VersionRange
+	30, // 45: trpc.moox.storage.ScanRecordRowsReq.page:type_name -> trpc.moox.common.Page
+	27, // 46: trpc.moox.storage.ScanRecordRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	3,  // 47: trpc.moox.storage.ScanRecordRowsRsp.rows:type_name -> trpc.moox.storage.RecordRow
-	28, // 48: trpc.moox.storage.ScanRecordRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	4,  // 49: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:input_type -> trpc.moox.storage.MergeTimeSeriesRowsReq
-	6,  // 50: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:input_type -> trpc.moox.storage.ReadTimeSeriesRowsReq
-	8,  // 51: trpc.moox.storage.PrimaryStore.DeleteTimeSeriesRows:input_type -> trpc.moox.storage.DeleteTimeSeriesRowsReq
-	10, // 52: trpc.moox.storage.PrimaryStore.MergeRecordRows:input_type -> trpc.moox.storage.MergeRecordRowsReq
-	12, // 53: trpc.moox.storage.PrimaryStore.ReadRecordRows:input_type -> trpc.moox.storage.ReadRecordRowsReq
-	14, // 54: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:input_type -> trpc.moox.storage.ScanTimeSeriesRowsReq
-	16, // 55: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:input_type -> trpc.moox.storage.ScanRecordRowsReq
-	5,  // 56: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:output_type -> trpc.moox.storage.MergeTimeSeriesRowsRsp
-	7,  // 57: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:output_type -> trpc.moox.storage.ReadTimeSeriesRowsRsp
-	9,  // 58: trpc.moox.storage.PrimaryStore.DeleteTimeSeriesRows:output_type -> trpc.moox.storage.DeleteTimeSeriesRowsRsp
-	11, // 59: trpc.moox.storage.PrimaryStore.MergeRecordRows:output_type -> trpc.moox.storage.MergeRecordRowsRsp
-	13, // 60: trpc.moox.storage.PrimaryStore.ReadRecordRows:output_type -> trpc.moox.storage.ReadRecordRowsRsp
-	15, // 61: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:output_type -> trpc.moox.storage.ScanTimeSeriesRowsRsp
-	17, // 62: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:output_type -> trpc.moox.storage.ScanRecordRowsRsp
-	56, // [56:63] is the sub-list for method output_type
-	49, // [49:56] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	31, // 48: trpc.moox.storage.ScanRecordRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	27, // 49: trpc.moox.storage.GetShardHeadsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	18, // 50: trpc.moox.storage.GetShardHeadsRsp.heads:type_name -> trpc.moox.storage.ShardHead
+	4,  // 51: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:input_type -> trpc.moox.storage.MergeTimeSeriesRowsReq
+	6,  // 52: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:input_type -> trpc.moox.storage.ReadTimeSeriesRowsReq
+	8,  // 53: trpc.moox.storage.PrimaryStore.DeleteTimeSeriesRows:input_type -> trpc.moox.storage.DeleteTimeSeriesRowsReq
+	10, // 54: trpc.moox.storage.PrimaryStore.MergeRecordRows:input_type -> trpc.moox.storage.MergeRecordRowsReq
+	12, // 55: trpc.moox.storage.PrimaryStore.ReadRecordRows:input_type -> trpc.moox.storage.ReadRecordRowsReq
+	14, // 56: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:input_type -> trpc.moox.storage.ScanTimeSeriesRowsReq
+	16, // 57: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:input_type -> trpc.moox.storage.ScanRecordRowsReq
+	19, // 58: trpc.moox.storage.PrimaryStoreScan.GetShardHeads:input_type -> trpc.moox.storage.GetShardHeadsReq
+	5,  // 59: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:output_type -> trpc.moox.storage.MergeTimeSeriesRowsRsp
+	7,  // 60: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:output_type -> trpc.moox.storage.ReadTimeSeriesRowsRsp
+	9,  // 61: trpc.moox.storage.PrimaryStore.DeleteTimeSeriesRows:output_type -> trpc.moox.storage.DeleteTimeSeriesRowsRsp
+	11, // 62: trpc.moox.storage.PrimaryStore.MergeRecordRows:output_type -> trpc.moox.storage.MergeRecordRowsRsp
+	13, // 63: trpc.moox.storage.PrimaryStore.ReadRecordRows:output_type -> trpc.moox.storage.ReadRecordRowsRsp
+	15, // 64: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:output_type -> trpc.moox.storage.ScanTimeSeriesRowsRsp
+	17, // 65: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:output_type -> trpc.moox.storage.ScanRecordRowsRsp
+	20, // 66: trpc.moox.storage.PrimaryStoreScan.GetShardHeads:output_type -> trpc.moox.storage.GetShardHeadsRsp
+	59, // [59:67] is the sub-list for method output_type
+	51, // [51:59] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_rows_proto_init() }
@@ -2096,6 +2290,42 @@ func file_rows_proto_init() {
 				return nil
 			}
 		}
+		file_rows_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ShardHead); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetShardHeadsReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetShardHeadsRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2103,7 +2333,7 @@ func file_rows_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_rows_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -244,7 +244,7 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 			if _, ok := event["server_port"]; ok {
 				t.Fatalf("event should not include server_port: %#v", event)
 			}
-			if event["storage_metadata_target"] != "127.0.0.1:11003" || event["storage_primary_target"] != "127.0.0.1:11003" {
+			if event["storage_rpc_gateway_target"] != "127.0.0.1:11003" {
 				t.Fatalf("event storage targets = %#v", event)
 			}
 			data, ok := event["data"].(map[string]any)
@@ -261,9 +261,8 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 	}))
 	defer server.Close()
 	client := New(Config{
-		ServiceGatewayTarget:  server.URL,
-		StorageMetadataTarget: "127.0.0.1:11003",
-		StoragePrimaryTarget:  "127.0.0.1:11003",
+		ServiceGatewayTarget:    server.URL,
+		StorageRPCGatewayTarget: "127.0.0.1:11003",
 		Auth: AuthConfig{
 			AccessKey:  "ak",
 			SecretKey:  "sk",

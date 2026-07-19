@@ -76,6 +76,15 @@ func TestCleanupExpiredHostMetricsTreatsErrorResponseAsDatasetFailure(t *testing
 	assert.Contains(t, err.Error(), "host_net_v1")
 }
 
+func TestCleanupExpiredHostMetricsIgnoresMissingDataset(t *testing.T) {
+	svc := &Service{cleanupDeleteRows: func(context.Context, *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error) {
+		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_DATASET_NOT_FOUND}}, nil
+	}}
+	result, err := svc.CleanupExpiredHostMetrics(context.Background(), validCleanupOptions("host_resource_v1"))
+	require.NoError(t, err)
+	assert.Equal(t, HostMetricsCleanupResult{}, result)
+}
+
 func TestCleanupExpiredHostMetricsStopsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var calls int

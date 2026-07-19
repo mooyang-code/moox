@@ -162,6 +162,8 @@ type PrimaryStoreScanService interface {
 	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq) (*ScanTimeSeriesRowsRsp, error)
 	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error)
+
+	GetShardHeads(ctx context.Context, req *GetShardHeadsReq) (*GetShardHeadsRsp, error)
 }
 
 func PrimaryStoreScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -200,6 +202,24 @@ func PrimaryStoreScanService_ScanRecordRows_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
+func PrimaryStoreScanService_GetShardHeads_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetShardHeadsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreScanService).GetShardHeads(ctx, reqbody.(*GetShardHeadsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // PrimaryStoreScanServer_ServiceDesc descriptor for server.RegisterService.
 var PrimaryStoreScanServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.PrimaryStoreScan",
@@ -212,6 +232,10 @@ var PrimaryStoreScanServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.PrimaryStoreScan/ScanRecordRows",
 			Func: PrimaryStoreScanService_ScanRecordRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStoreScan/GetShardHeads",
+			Func: PrimaryStoreScanService_GetShardHeads_Handler,
 		},
 	},
 }
@@ -260,6 +284,9 @@ func (s *UnimplementedPrimaryStoreScan) ScanTimeSeriesRows(ctx context.Context, 
 // ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 func (s *UnimplementedPrimaryStoreScan) ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq) (*ScanRecordRowsRsp, error) {
 	return nil, errors.New("rpc ScanRecordRows of service PrimaryStoreScan is not implemented")
+}
+func (s *UnimplementedPrimaryStoreScan) GetShardHeads(ctx context.Context, req *GetShardHeadsReq) (*GetShardHeadsRsp, error) {
+	return nil, errors.New("rpc GetShardHeads of service PrimaryStoreScan is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -397,6 +424,8 @@ type PrimaryStoreScanClientProxy interface {
 	ScanTimeSeriesRows(ctx context.Context, req *ScanTimeSeriesRowsReq, opts ...client.Option) (rsp *ScanTimeSeriesRowsRsp, err error)
 	// ScanRecordRows ScanRecordRows 为 ViewBuilder 提供有界游标扫描。
 	ScanRecordRows(ctx context.Context, req *ScanRecordRowsReq, opts ...client.Option) (rsp *ScanRecordRowsRsp, err error)
+
+	GetShardHeads(ctx context.Context, req *GetShardHeadsReq, opts ...client.Option) (rsp *GetShardHeadsRsp, err error)
 }
 
 type PrimaryStoreScanClientProxyImpl struct {
@@ -442,6 +471,26 @@ func (c *PrimaryStoreScanClientProxyImpl) ScanRecordRows(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ScanRecordRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreScanClientProxyImpl) GetShardHeads(ctx context.Context, req *GetShardHeadsReq, opts ...client.Option) (*GetShardHeadsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStoreScan/GetShardHeads")
+	msg.WithCalleeServiceName(PrimaryStoreScanServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStoreScan")
+	msg.WithCalleeMethod("GetShardHeads")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetShardHeadsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

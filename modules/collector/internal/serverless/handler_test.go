@@ -127,8 +127,8 @@ func TestApplyRuntimeConfig_UpdatesFromDeployments(t *testing.T) {
 	})
 	assert.Equal(t, "127.0.0.1", got.ServerIP)
 	assert.Equal(t, 11000, got.ServerPort)
-	assert.Equal(t, "10.0.0.1:20100", got.StorageMetadataTarget)
-	assert.Equal(t, "10.0.0.1:20100", got.StoragePrimaryTarget)
+	assert.Equal(t, "10.0.0.1:20100", got.StorageRPCGatewayTarget)
+	assert.Equal(t, "10.0.0.1:20100", got.StorageRPCGatewayTarget)
 	nodeID, _ := runtimeapp.GetNodeInfo()
 	assert.Equal(t, "node-scf-1", nodeID)
 }

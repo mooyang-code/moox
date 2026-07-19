@@ -34,6 +34,25 @@ type LocalClient struct {
 	opened     sync.Map
 }
 
+// Ready performs the same lightweight store-open and shard-head probe used by
+// the service readiness endpoint. A directory existing on disk is not enough
+// to prove that Pebble is open and serving the configured shard.
+func (c *LocalClient) Ready(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	store, err := c.factStore()
+	if err != nil {
+		return false
+	}
+	headReader, ok := store.(contracts.ShardHeadReader)
+	if !ok {
+		return false
+	}
+	_, err = headReader.HeadSequence(ctx)
+	return err == nil
+}
+
 // sharedPebbleStore 保存进程内共享 Pebble Store 及其引用计数。
 type sharedPebbleStore struct {
 	store contracts.FactStore
@@ -93,7 +112,7 @@ func rejectOutboxBacklog(ctx context.Context, store contracts.FactStore, cfg Out
 	if err != nil {
 		return err
 	}
-	if len(entries) > cfg.MaxRows {
+	if len(entries) >= cfg.MaxRows {
 		return fmt.Errorf("storage outbox row limit exceeded: %d", cfg.MaxRows)
 	}
 	var bytes int
@@ -160,6 +179,21 @@ func (c *LocalClient) ListOutbox(ctx context.Context, after uint64, maxItems, ma
 		return nil, err
 	}
 	return store.ListOutbox(ctx, after, maxItems, maxBytes)
+}
+
+func (c *LocalClient) HeadSequence(ctx context.Context, target *pb.ShardTarget) (uint64, error) {
+	store, err := c.factStore()
+	if err != nil {
+		return 0, err
+	}
+	if err := validateTargetShard(target, store); err != nil {
+		return 0, err
+	}
+	headReader, ok := store.(contracts.ShardHeadReader)
+	if !ok {
+		return 0, fmt.Errorf("primary store does not expose shard head")
+	}
+	return headReader.HeadSequence(ctx)
 }
 
 func (c *LocalClient) ScanRows(ctx context.Context, target *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {

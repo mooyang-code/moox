@@ -75,7 +75,11 @@ func NewMemoryBus() *MemoryBus {
 }
 
 func (b *MemoryBus) SubscribeRowsCommitted(ctx context.Context, handler RowsCommittedHandler) (Subscription, error) {
-	_ = ctx
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	if handler == nil {
 		return noopSubscription{}, nil
 	}
@@ -129,6 +133,11 @@ func (b *MemoryBus) PublishMessage(ctx context.Context, data []byte) error {
 }
 
 func (b *MemoryBus) SubscribeTimeSeriesRowsCommitted(ctx context.Context, handler TimeSeriesRowsCommittedHandler) (Subscription, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil
@@ -150,6 +159,11 @@ func (b *MemoryBus) SubscribeTimeSeriesRowsCommitted(ctx context.Context, handle
 }
 
 func (b *MemoryBus) SubscribeRecordRowsCommitted(ctx context.Context, handler RecordRowsCommittedHandler) (Subscription, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	_ = ctx
 	if handler == nil {
 		return noopSubscription{}, nil

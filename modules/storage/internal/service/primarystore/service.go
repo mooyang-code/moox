@@ -142,6 +142,50 @@ func (s *Service) Close() error {
 	return firstErr
 }
 
+// Ready verifies that the metadata schema is queryable and the configured
+// primary client exists. Filesystem checks alone cannot establish that the
+// access service is able to route or serve requests.
+func (s *Service) Ready() bool {
+	if s == nil || s.metadata == nil || s.primary == nil {
+		return false
+	}
+	ctx := trpc.BackgroundContext()
+	if _, err := s.metadata.TableNames(ctx); err != nil {
+		return false
+	}
+	var routes []*pb.PrimaryStoreRoute
+	for pageNo := uint32(1); ; pageNo++ {
+		pageRoutes, page, err := s.metadata.ListPrimaryStoreRoutes(ctx, "", "", "", "", &pb.Page{Page: pageNo, Size: 1000})
+		if err != nil {
+			return false
+		}
+		routes = append(routes, pageRoutes...)
+		if page == nil || !page.GetHasMore() || len(pageRoutes) == 0 {
+			break
+		}
+	}
+	if len(routes) == 0 {
+		return true
+	}
+	headReader, ok := s.primary.(primary.HeadReader)
+	if !ok {
+		return false
+	}
+	for _, route := range routes {
+		if route == nil || (route.GetStatus() != "" && route.GetStatus() != "active") {
+			continue
+		}
+		target, err := s.router.Resolve(ctx, route.GetSpaceId(), route.GetDatasetId(), route.GetSubjectId())
+		if err != nil {
+			return false
+		}
+		if _, err := headReader.HeadSequence(ctx, target); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func openDefaultMetadataStores(ctx context.Context, root string, metadataPath string, initSchemaPath string) (metadata.Store, *metacache.Store, error) {
 	if metadataPath == "" {
 		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")

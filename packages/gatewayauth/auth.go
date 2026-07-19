@@ -22,6 +22,7 @@ const Version = "moox-gateway-auth-v1"
 
 const (
 	headerKeyID      = "X-Moox-Key-Id"
+	headerCaller     = "X-Moox-Caller"
 	headerTimestamp  = "X-Moox-Timestamp"
 	headerNonce      = "X-Moox-Nonce"
 	headerTargetNode = "X-Moox-Target-Node"
@@ -32,19 +33,20 @@ const (
 )
 
 type Credentials struct {
-	KeyID, Secret     string
-	Expire, ClockSkew time.Duration
+	KeyID, Caller, Secret string
+	Expire, ClockSkew     time.Duration
 }
 
 type Request struct {
 	Method, Path, TargetNode string
+	Caller, Callee, Func     string
 	Body                     []byte
 }
 
 type Claims struct {
-	KeyID, Nonce, TargetNode string
-	Timestamp                int64
-	TTL                      time.Duration
+	KeyID, Caller, Nonce, TargetNode string
+	Timestamp                        int64
+	TTL                              time.Duration
 }
 
 func Sign(c Credentials, req Request, now time.Time) (http.Header, error) {
@@ -61,9 +63,20 @@ func Sign(c Credentials, req Request, now time.Time) (http.Header, error) {
 		return nil, err
 	}
 	timestamp := now.Unix()
-	signature := sign(c.Secret, req.Method, path, req.Body, timestamp, nonce, req.TargetNode)
+	caller := strings.TrimSpace(req.Caller)
+	if c.Caller != "" && caller != "" && caller != c.Caller {
+		return nil, errors.New("gateway caller does not match credentials")
+	}
+	if caller == "" {
+		caller = effectiveCaller(c)
+	}
+	if !validIdentifier(caller) {
+		return nil, errors.New("gateway caller is invalid")
+	}
+	signature := sign(c.Secret, caller, req.Method, path, req.Callee, req.Func, req.Body, timestamp, nonce, req.TargetNode)
 	header := make(http.Header, 5)
 	header.Set(headerKeyID, c.KeyID)
+	header.Set(headerCaller, caller)
 	header.Set(headerTimestamp, strconv.FormatInt(timestamp, 10))
 	header.Set(headerNonce, nonce)
 	header.Set(headerTargetNode, req.TargetNode)
@@ -86,6 +99,18 @@ func Verify(c Credentials, req Request, header http.Header, now time.Time) (Clai
 	}
 	if keyID == "" || keyID != c.KeyID {
 		return Claims{}, errors.New("invalid gateway key ID")
+	}
+	caller := effectiveCaller(c)
+	if value, present, err := optionalHeader(header, headerCaller); err != nil {
+		return Claims{}, err
+	} else if present {
+		if !validIdentifier(value) {
+			return Claims{}, errors.New("invalid gateway caller")
+		}
+		if c.Caller != "" && value != c.Caller {
+			return Claims{}, errors.New("gateway caller does not match credentials")
+		}
+		caller = value
 	}
 	timestampValue, err := singleHeader(header, headerTimestamp)
 	if err != nil {
@@ -122,7 +147,7 @@ func Verify(c Credentials, req Request, header http.Header, now time.Time) (Clai
 	if now.Before(signedAt.Add(-skew)) || now.After(validUntil) {
 		return Claims{}, errors.New("gateway signature expired or timestamp is in the future")
 	}
-	expected := sign(c.Secret, req.Method, path, req.Body, timestamp, nonce, targetNode)
+	expected := sign(c.Secret, caller, req.Method, path, req.Callee, req.Func, req.Body, timestamp, nonce, targetNode)
 	if !hmac.Equal([]byte(expected), []byte(signature)) {
 		return Claims{}, errors.New("gateway signature does not match")
 	}
@@ -131,7 +156,7 @@ func Verify(c Credentials, req Request, header http.Header, now time.Time) (Clai
 		ttl = time.Nanosecond
 	}
 	return Claims{
-		KeyID: keyID, Nonce: nonce, TargetNode: targetNode, Timestamp: timestamp,
+		KeyID: keyID, Caller: caller, Nonce: nonce, TargetNode: targetNode, Timestamp: timestamp,
 		TTL: ttl,
 	}, nil
 }
@@ -142,6 +167,17 @@ func singleHeader(header http.Header, name string) (string, error) {
 		return "", fmt.Errorf("gateway header %s must appear exactly once", name)
 	}
 	return values[0], nil
+}
+
+func optionalHeader(header http.Header, name string) (string, bool, error) {
+	values := header.Values(name)
+	if len(values) > 1 {
+		return "", false, fmt.Errorf("gateway header %s must appear at most once", name)
+	}
+	if len(values) == 0 {
+		return "", false, nil
+	}
+	return values[0], true, nil
 }
 
 func validateCredentials(c Credentials) (time.Duration, time.Duration, error) {
@@ -188,11 +224,21 @@ func validIdentifier(value string) bool {
 		!strings.ContainsFunc(value, unicode.IsControl)
 }
 
-func sign(secret, method, path string, body []byte, timestamp int64, nonce, targetNode string) string {
+func effectiveCaller(c Credentials) string {
+	if c.Caller != "" {
+		return c.Caller
+	}
+	return c.KeyID
+}
+
+func sign(secret, caller, method, path, callee, function string, body []byte, timestamp int64, nonce, targetNode string) string {
 	material := strings.Join([]string{
 		Version,
+		caller,
 		strings.ToUpper(method),
 		path,
+		callee,
+		function,
 		mooxsecurity.SHA256Hex(body),
 		strconv.FormatInt(timestamp, 10),
 		nonce,

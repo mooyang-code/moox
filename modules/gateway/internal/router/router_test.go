@@ -14,11 +14,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/health"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 const (
@@ -50,9 +53,82 @@ func TestNativeServiceDescUsesWildcardMethod(t *testing.T) {
 	}
 }
 
+func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.storage.Metadata"), server.WithListener(listener))
+	storagepb.RegisterMetadataService(upstream, &nativeMetadataStub{})
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+		ServiceID: "storage-primary", Address: listener.Addr().String(), ServicePath: "trpc.moox.storage.Metadata",
+		AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}, MaxBodyBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	var table gatewayproxy.Table
+	require.NoError(t, table.Replace(snapshot))
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	require.NoError(t, err)
+	defer nonces.Close()
+	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, Table: &table, Nonces: nonces})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+	body, err := codec.Marshal(codec.SerializationTypePB, &storagepb.GetSpaceReq{SpaceId: "space-1"})
+	require.NoError(t, err)
+	headers, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
+		Method: "POST", Path: "/trpc.moox.storage.Metadata/GetSpace", TargetNode: testNode,
+		Caller: "admin-gateway", Callee: "trpc.moox.storage.Metadata", Func: "GetSpace", Body: body,
+	}, time.Now())
+	require.NoError(t, err)
+	ctx, message := codec.EnsureMessage(context.Background())
+	message.WithClientRPCName("/trpc.moox.storage.Metadata/GetSpace")
+	metadata := codec.MetaData{}
+	for key, values := range headers {
+		metadata[key] = []byte(values[0])
+	}
+	invokeOptions := []client.Option{
+		client.WithTarget("ip://" + gatewayListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
+	}
+	for key, value := range metadata {
+		invokeOptions = append(invokeOptions, client.WithMetaData(key, value))
+	}
+	storageProxy := storagepb.NewMetadataClientProxy(invokeOptions...)
+	decoded, err := storageProxy.GetSpace(ctx, &storagepb.GetSpaceReq{SpaceId: "space-1"})
+	require.NoError(t, err)
+	require.Equal(t, "space-1", decoded.GetSpace().GetSpaceId())
+	require.Equal(t, int32(0), int32(decoded.GetRetInfo().GetCode()))
+}
+
+type nativeMetadataStub struct {
+	storagepb.UnimplementedMetadata
+}
+
+func (*nativeMetadataStub) GetSpace(context.Context, *storagepb.GetSpaceReq) (*storagepb.GetSpaceRsp, error) {
+	return &storagepb.GetSpaceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Space: &storagepb.Space{SpaceId: "space-1"}}, nil
+}
+
 func TestNativeGatewayAuthenticatesReplaysAndEnforcesRouteBodyLimit(t *testing.T) {
 	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
-		ServiceID: "echo", Address: "127.0.0.1:1", ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, MaxBodyBytes: 1,
+		ServiceID: "echo", Address: "127.0.0.1:1", ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, AllowedCallers: []string{"*"}, MaxBodyBytes: 1,
 	}})
 	require.NoError(t, err)
 	var table gatewayproxy.Table
@@ -80,7 +156,7 @@ func TestNativeGatewayAuthenticatesReplaysAndEnforcesRouteBodyLimit(t *testing.T
 		return callErr
 	}
 	overSizedHeaders, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
-		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Body: []byte("too large"),
+		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Callee: "trpc.test.Echo", Func: "Echo", Body: []byte("too large"),
 	}, time.Now())
 	require.NoError(t, err)
 	if err := call([]byte("too large"), overSizedHeaders); err == nil || !strings.Contains(err.Error(), "body exceeds route limit") {
@@ -92,7 +168,7 @@ func TestNativeGatewayAuthenticatesReplaysAndEnforcesRouteBodyLimit(t *testing.T
 	// rejected by the persistent nonce store before dialing it again.
 	body := []byte("x")
 	signedHeaders, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
-		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Body: body,
+		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Callee: "trpc.test.Echo", Func: "Echo", Body: body,
 	}, time.Now())
 	require.NoError(t, err)
 	first := call(body, signedHeaders)
@@ -113,7 +189,7 @@ func TestServiceRouterAllowsAuthenticatedRevealSecret(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_value":"plain"}}`))
 	}))
 	defer upstream.Close()
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{ServiceID: "secret", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.ops.SecretMgr", MaxBodyBytes: 1024, AllowedMethods: []string{"RevealSecret"}}})
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{ServiceID: "secret", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.ops.SecretMgr", MaxBodyBytes: 1024, AllowedMethods: []string{"RevealSecret"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +360,7 @@ func newHandlerWithOptions(t *testing.T, upstream *httptest.Server, disabled boo
 	if upstream != nil {
 		address = upstream.Listener.Addr().String()
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, disabled, []gatewayproxy.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024, TimeoutMS: timeoutMS}})
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, disabled, []gatewayproxy.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024, TimeoutMS: timeoutMS, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

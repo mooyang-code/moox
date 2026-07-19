@@ -85,6 +85,24 @@ func TestResolverRequiresExplicitShardIdentity(t *testing.T) {
 	}
 }
 
+func TestResolverUsesPerNodeGatewayTarget(t *testing.T) {
+	metadata := &resolverMetadata{
+		routes: []*pb.PrimaryStoreRoute{{SpaceId: "crypto", DatasetId: "kline", RouteId: "route-a", SubjectPattern: "*", HashRule: "subject_id", NodeId: "node-a", Status: "active"}},
+		nodes: map[string]*pb.PrimaryStoreNode{"node-a": {
+			NodeId:     "node-a",
+			Status:     "active",
+			Attributes: map[string]string{"gateway_target": "gateway-a:11000", "gateway_node_id": "gateway-a"},
+		}},
+	}
+	target, err := NewResolver(metadata).Resolve(context.Background(), "crypto", "kline", "BTCUSDT")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if target.GetGatewayTarget() != "gateway-a:11000" || target.GetGatewayNodeId() != "gateway-a" {
+		t.Fatalf("gateway target = %q/%q, want gateway-a:11000/gateway-a", target.GetGatewayTarget(), target.GetGatewayNodeId())
+	}
+}
+
 type resolverMetadata struct {
 	routes             []*pb.PrimaryStoreRoute
 	nodes              map[string]*pb.PrimaryStoreNode

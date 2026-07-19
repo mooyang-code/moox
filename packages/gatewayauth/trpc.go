@@ -11,6 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 // NewTRPCClientFilter signs the serialized request body before it crosses the
@@ -33,7 +34,7 @@ func NewTRPCClientFilter(credentials Credentials, targetNode string, now func() 
 		if path == "" {
 			path = "/" + strings.TrimPrefix(msg.CalleeServiceName(), "/") + "/" + msg.CalleeMethod()
 		}
-		headers, err := Sign(credentials, Request{Method: http.MethodPost, Path: path, TargetNode: targetNode, Body: body}, now())
+		headers, err := Sign(credentials, Request{Method: http.MethodPost, Path: path, TargetNode: targetNode, Caller: credentials.Caller, Callee: msg.CalleeServiceName(), Func: msg.CalleeMethod(), Body: body}, now())
 		if err != nil {
 			return err
 		}
@@ -57,7 +58,9 @@ func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []
 	}
 	return []client.Option{
 		client.WithTarget(target),
+		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 		client.WithFilter(NewTRPCClientFilter(credentials, strings.TrimSpace(targetNode), nil)),
 	}
 }
@@ -65,7 +68,7 @@ func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []
 // CredentialsFromEnv reads the per-process service credential material used by
 // the native gateway. Missing credentials intentionally fail on the first RPC.
 func CredentialsFromEnv() Credentials {
-	return Credentials{KeyID: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")), Secret: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))}
+	return Credentials{KeyID: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")), Caller: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CALLER")), Secret: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))}
 }
 
 func ServiceGatewayTarget(raw string) string {

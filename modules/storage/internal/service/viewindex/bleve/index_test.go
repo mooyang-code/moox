@@ -82,7 +82,7 @@ func TestBleveApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
 	defer index.Close()
 
 	base := bleveTestRecordRow("news-1", "2026-07-09T01:00:00Z")
-	if err := index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{RowWrites: []viewindex.RowWrite{{
+	if err := index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{RequiredColumnNames: []string{"title"}, RowWrites: []viewindex.RowWrite{{
 		Operation: viewindex.RowWriteOperationReplace,
 		Key:       viewindex.RowKey{RecordKey: base.GetKey()},
 		Columns:   base.GetColumns(),
@@ -90,7 +90,7 @@ func TestBleveApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
 		t.Fatalf("initial Apply: %v", err)
 	}
 	missing := bleveTestRecordRow("news-2", "2026-07-09T01:01:00Z")
-	err = index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{
+	err = index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{RequiredColumnNames: []string{"title"},
 		RowWrites: []viewindex.RowWrite{
 			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{RecordKey: base.GetKey()}, Columns: base.GetColumns()},
 			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{RecordKey: missing.GetKey()}, Columns: missing.GetColumns()},
@@ -105,7 +105,7 @@ func TestBleveApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
 	if err != nil || stats.EntryCount != 1 || len(stats.ShardCheckpoints) != 0 {
 		t.Fatalf("failed Apply changed state: stats=%+v err=%v", stats, err)
 	}
-	if err := index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{
+	if err := index.ApplyRows(ctx, viewindex.ViewIndexApplyBatch{RequiredColumnNames: []string{"title"},
 		RowWrites:         []viewindex.RowWrite{{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{RecordKey: missing.GetKey()}, Columns: missing.GetColumns()}},
 		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", ExpectedLastAppliedSequence: 0, LastAppliedSequence: 1}},
 	}); err != nil {

@@ -123,6 +123,11 @@ func (s *Service) processRecordRowsBatch(ctx context.Context, rows []*pb.RecordR
 			}
 		}
 	}
+	if progress.sequence != 0 {
+		if err := s.applyCheckpointOnly(ctx, progress, "bleve"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

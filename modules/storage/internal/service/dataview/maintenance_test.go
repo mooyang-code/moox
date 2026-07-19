@@ -50,8 +50,8 @@ func TestMaintenanceBuildsAndActivatesMissingTimeSeriesIndex(t *testing.T) {
 	if item.GetActiveIndexId() != wantIndex || item.GetActiveViewVersion() != item.GetViewVersion() || item.GetIndexBuild() != nil {
 		t.Fatalf("activated view = %+v", item)
 	}
-	if len(item.GetActiveColumns()) != 1 || item.GetActiveSchemaHash() == "" {
-		t.Fatalf("active schema = %+v/%q", item.GetActiveColumns(), item.GetActiveSchemaHash())
+	if len(item.GetActiveColumns()) != 1 || item.GetActiveViewSchemaHash() == "" {
+		t.Fatalf("active schema = %+v/%q", item.GetActiveColumns(), item.GetActiveViewSchemaHash())
 	}
 	if len(facts.timeRanges) < 2 {
 		t.Fatalf("scan ranges = %d, want backfill and catch-up", len(facts.timeRanges))
@@ -170,7 +170,7 @@ func TestMaintenanceDoesNotLoopWhenActiveCoverageAlreadyMatchesRetention(t *test
 		t.Fatalf("GetView: %v", err)
 	}
 	engine := newMaintenanceEngine("duckdb")
-	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, EntryCount: 5000, PhysicalBytes: 1024, SchemaHash: item.GetActiveSchemaHash()}
+	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, EntryCount: 5000, PhysicalBytes: 1024, SchemaHash: item.GetActiveViewSchemaHash()}
 	cfg := maintenanceTestConfig()
 	cfg.MaxEntries = 1000
 	manager := NewMaintenanceManager(MaintenanceOptions{
@@ -198,7 +198,7 @@ func TestMaintenanceSwitchesCapacityWhenOldIndexCanShrinkToTarget(t *testing.T) 
 	}
 	engine := newMaintenanceEngine("duckdb")
 	engine.stats[activeID] = viewindex.ViewIndexStats{
-		Exists: true, ViewVersion: 1, EntryCount: 2000, PhysicalBytes: 1024, SchemaHash: item.GetActiveSchemaHash(),
+		Exists: true, ViewVersion: 1, EntryCount: 2000, PhysicalBytes: 1024, SchemaHash: item.GetActiveViewSchemaHash(),
 		MinVersion: now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
 		MaxVersion: now.Format(time.RFC3339Nano),
 	}
@@ -372,7 +372,7 @@ func TestMaintenanceRemovesUnreferencedIndexAfterGrace(t *testing.T) {
 		t.Fatalf("GetView: %v", err)
 	}
 	engine := newMaintenanceEngine("duckdb")
-	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: item.GetActiveSchemaHash()}
+	engine.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: item.GetActiveViewSchemaHash()}
 	engine.stats[orphanID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: "orphan"}
 	engine.keys[activeID] = map[string]bool{}
 	engine.keys[orphanID] = map[string]bool{}
@@ -409,7 +409,7 @@ func TestMaintenanceRemovesIndexFromAnOldEngine(t *testing.T) {
 		t.Fatalf("GetView: %v", err)
 	}
 	duck := newMaintenanceEngine("duckdb")
-	duck.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: item.GetActiveSchemaHash()}
+	duck.stats[activeID] = viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: item.GetActiveViewSchemaHash()}
 	duck.keys[activeID] = map[string]bool{}
 	bleve := newMaintenanceEngine("bleve")
 	bleve.stats[activeID] = viewindex.ViewIndexStats{Exists: true, SchemaHash: "old-engine"}
@@ -489,7 +489,7 @@ func seedMaintenanceNamedView(t *testing.T, ctx context.Context, store *metasqli
 		view.ActiveColumns = view.Columns
 		view.IndexedFrom = "2026-07-09T12:00:00Z"
 		view.IndexedTo = "2026-07-10T12:00:00Z"
-		view.ActiveSchemaHash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{
+		view.ActiveViewSchemaHash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{
 			SpaceID: "crypto", ViewID: viewID, Engine: engine, Columns: view.Columns,
 		})
 	}

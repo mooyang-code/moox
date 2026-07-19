@@ -102,7 +102,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	}
 	writer := c.storage
 	if writer == nil {
-		accessTarget := runtimeapp.GetStoragePrimaryTarget()
+		accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 		if accessTarget == "" {
 			return fmt.Errorf("未配置存储 access tRPC 地址")
 		}
@@ -207,7 +207,7 @@ func (c *KlineCollector) reportKlines(ctx context.Context, params *sources.Colle
 		return nil
 	}
 
-	accessTarget := runtimeapp.GetStoragePrimaryTarget()
+	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 	if accessTarget == "" {
 		return fmt.Errorf("未配置存储 access tRPC 地址")
 	}

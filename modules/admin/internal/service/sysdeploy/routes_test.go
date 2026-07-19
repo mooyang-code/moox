@@ -16,7 +16,7 @@ func TestCompileGatewaySnapshot_IsNodeLocalDeterministicAndUsesExtraConfig(t *te
 	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
 	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-b", Name: "B", PublicAddress: "https://b.example", Status: "enabled"}))
 	for _, row := range []Deployment{
-		{NodeID: "node-a", ServiceName: "monitor", Protocol: "http", Host: "127.0.0.1", Port: 11410, GatewayPath: "trpc.moox.monitor.MonitorMgr", GatewayServiceID: "monitor", GatewayEnabled: true, Status: "active", ExtraConfig: `{"timeout_ms":9000,"max_body_bytes":12345}`},
+		{NodeID: "node-a", ServiceName: "monitor", Protocol: "http", Host: "127.0.0.1", Port: 11410, GatewayPath: "trpc.moox.monitor.MonitorMgr", GatewayServiceID: "monitor", GatewayEnabled: true, Status: "active", ExtraConfig: `{"timeout_ms":9000,"max_body_bytes":12345,"gateway_methods":["*"],"gateway_callers":["*"]}`},
 		{NodeID: "node-b", ServiceName: "monitor", Protocol: "http", Host: "127.0.0.1", Port: 21410, GatewayPath: "trpc.moox.monitor.MonitorMgr", GatewayServiceID: "monitor", GatewayEnabled: true, Status: "active"},
 	} {
 		require.NoError(t, dao.Create(ctx, &row))
@@ -39,7 +39,7 @@ func TestCompileGatewaySnapshot_DefaultsInvalidExtraAndDisabledNode(t *testing.T
 	dao := NewDAO(setupSysDeployTestDB(t))
 	ctx := context.Background()
 	require.NoError(t, dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "node-a", Name: "A", PublicAddress: "https://a.example", Status: "enabled"}))
-	row := Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 1000, GatewayPath: "trpc.test.Service", GatewayServiceID: "svc", GatewayEnabled: true, Status: "active", ExtraConfig: `{}`}
+	row := Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 1000, GatewayPath: "trpc.test.Service", GatewayServiceID: "svc", GatewayEnabled: true, Status: "active", ExtraConfig: `{"gateway_methods":["*"],"gateway_callers":["*"]}`}
 	require.NoError(t, dao.Create(ctx, &row))
 	snapshot, err := dao.CompileGatewaySnapshot(ctx, "node-a")
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestReportGatewayStatus_UpdatesHeartbeat(t *testing.T) {
 }
 
 func TestValidateDeployment_GatewayRouteRules(t *testing.T) {
-	base := Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 1234, GatewayPath: "trpc.test.Service", GatewayServiceID: "svc", GatewayEnabled: true, Status: "active"}
+	base := Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "127.0.0.1", Port: 1234, GatewayPath: "trpc.test.Service", GatewayServiceID: "svc", GatewayEnabled: true, Status: "active", ExtraConfig: `{"gateway_methods":["*"],"gateway_callers":["*"]}`}
 	assert.NoError(t, validateDeployment(&base))
 	for _, mutate := range []func(*Deployment){
 		func(d *Deployment) { d.Host = "10.0.0.1" },

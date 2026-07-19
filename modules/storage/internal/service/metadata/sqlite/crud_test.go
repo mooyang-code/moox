@@ -696,7 +696,7 @@ func TestUpdateAndActivateViewIndexUseCAS(t *testing.T) {
 	if activated.GetActiveIndexId() != testIndexB || activated.GetActiveViewVersion() != 2 {
 		t.Fatalf("active after switch = %q/%d", activated.GetActiveIndexId(), activated.GetActiveViewVersion())
 	}
-	if activated.GetIndexBuild() != nil || activated.GetActiveSchemaHash() != "schema-2" {
+	if activated.GetIndexBuild() != nil || activated.GetActiveViewSchemaHash() != "schema-2" {
 		t.Fatalf("activated metadata = %+v", activated)
 	}
 	if len(activated.GetActiveColumns()) != 1 || activated.GetActiveColumns()[0].GetColumnName() != "close" {
@@ -780,7 +780,7 @@ func TestUpsertViewCannotOverwriteActiveIndexState(t *testing.T) {
 	}
 	view.ActiveIndexId = testIndexB
 	view.ActiveViewVersion = 99
-	view.ActiveSchemaHash = "forged"
+	view.ActiveViewSchemaHash = "forged"
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatalf("second UpsertView: %v", err)
 	}
@@ -788,7 +788,7 @@ func TestUpsertViewCannotOverwriteActiveIndexState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetView: %v", err)
 	}
-	if got.GetActiveIndexId() != testIndexA || got.GetActiveViewVersion() != 1 || got.GetActiveSchemaHash() != "" {
+	if got.GetActiveIndexId() != testIndexA || got.GetActiveViewVersion() != 1 || got.GetActiveViewSchemaHash() != "" {
 		t.Fatalf("active state overwritten by UpsertView: %+v", got)
 	}
 }

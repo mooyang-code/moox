@@ -221,9 +221,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	credentialsSecret, err := config.ReadSecret(cfg.Auth.HMACKeyFile)
-	if err != nil {
-		return fmt.Errorf("read service authentication key: %w", err)
+	var credentialRegistry *gatewayauth.CredentialRegistry
+	var credentialsSecret string
+	if cfg.Auth.CredentialsFile != "" {
+		credentialRegistry, err = gatewayauth.LoadCredentialRegistry(cfg.Auth.CredentialsFile)
+		if err != nil {
+			return err
+		}
+	} else {
+		credentialsSecret, err = config.ReadSecret(cfg.Auth.HMACKeyFile)
+		if err != nil {
+			return fmt.Errorf("read service authentication key: %w", err)
+		}
 	}
 	nonces, err := store.OpenNonces(filepath.Join(cfg.Store.Path, "nonces"))
 	if err != nil {
@@ -247,12 +256,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return nonces.Check()
 	})
 
+	serviceCredentials := gatewayauth.Credentials{KeyID: "moox-gateway-service", Caller: cfg.Auth.Caller, Secret: credentialsSecret}
 	serviceHandler := router.New(router.Options{
-		NodeID: cfg.Node.ID, Credentials: gatewayauth.Credentials{KeyID: "moox-gateway-service", Secret: credentialsSecret},
+		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
 		MaxBodyBytes: cfg.Proxy.MaxBodyBytes, Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled, Metrics: state,
 	})
 	nativeDesc, nativeImpl := router.NativeServiceDesc(router.NativeOptions{
-		NodeID: cfg.Node.ID, Credentials: gatewayauth.Credentials{KeyID: "moox-gateway-service", Secret: credentialsSecret},
+		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
 		Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled,
 	})
 	nativeService := trpcserver.New(

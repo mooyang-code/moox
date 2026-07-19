@@ -13,6 +13,10 @@ type Client interface {
 	ScanRows(ctx context.Context, device *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error)
 }
 
+type HeadReader interface {
+	HeadSequence(ctx context.Context, device *pb.ShardTarget) (uint64, error)
+}
+
 type Deleter interface {
 	DeleteRows(context.Context, *pb.ShardTarget, []*pb.ShardKey) error
 }

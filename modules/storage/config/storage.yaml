@@ -26,7 +26,7 @@ storage:
     max_deliver: -1
   primary:
     service_name: ""
-    shard_id: storage-primary-0
+    shard_id: storage-shard-0
     outbox:
       flush_batch_size: 100
       flush_max_bytes: 1048576

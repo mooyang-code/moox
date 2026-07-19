@@ -44,6 +44,10 @@ type ShardIdentity interface {
 	ShardID() string
 }
 
+type ShardHeadReader interface {
+	HeadSequence(context.Context) (uint64, error)
+}
+
 // FactDeleter is optional so read/write-only test stores remain valid. The
 // Pebble implementation provides it for Storage retention maintenance.
 type FactDeleter interface {

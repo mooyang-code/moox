@@ -29,10 +29,15 @@ import (
 )
 
 type viewRuntime struct {
-	service *view.Service
-	builder *viewbuilder.Service
-	duck    *deviceduckdb.IndexManager
-	search  *searchsvc.Service
+	service       *view.Service
+	builder       *viewbuilder.Service
+	duck          *deviceduckdb.IndexManager
+	search        *searchsvc.Service
+	metadataProbe interface{ Ready(context.Context) error }
+	metadata      view.Metadata
+	heads         view.ShardHeadReader
+	engines       map[string]view.ManagedViewIndex
+	minFreeBytes  uint64
 }
 
 type viewRuntimeReadiness struct {
@@ -40,8 +45,30 @@ type viewRuntimeReadiness struct {
 	storage storageconfig.StorageConfig
 }
 
+type multiViewShardHeadReader interface {
+	ShardHeadsForDatasets(context.Context, string, []string) (map[string]uint64, error)
+}
+
+func runtimeShardHeads(ctx context.Context, reader view.ShardHeadReader, item *pb.View) (map[string]uint64, error) {
+	datasetIDs := item.GetDatasetIds()
+	if len(datasetIDs) == 0 {
+		datasetIDs = []string{item.GetPrimaryDatasetId()}
+	}
+	if multi, ok := reader.(multiViewShardHeadReader); ok {
+		return multi.ShardHeadsForDatasets(ctx, item.GetSpaceId(), datasetIDs)
+	}
+	return reader.ShardHeads(ctx, item.GetSpaceId(), item.GetPrimaryDatasetId())
+}
+
 func (r viewRuntimeReadiness) Ready() bool {
+	return r.ReadyContext(trpc.BackgroundContext())
+}
+
+func (r viewRuntimeReadiness) ReadyContext(ctx context.Context) bool {
 	if r.runtime == nil {
+		return false
+	}
+	if r.runtime.metadataProbe != nil && r.runtime.metadataProbe.Ready(ctx) != nil {
 		return false
 	}
 	if shouldRegisterViewQueryRole(r.storage) && r.runtime.service == nil {
@@ -52,6 +79,69 @@ func (r viewRuntimeReadiness) Ready() bool {
 	}
 	if shouldStartViewIndexRole(r.storage) && (r.runtime.duck == nil || r.runtime.search == nil) {
 		return false
+	}
+	if shouldStartViewIndexRole(r.storage) {
+		if _, err := r.runtime.duck.List(ctx); err != nil {
+			return false
+		}
+		if _, err := r.runtime.search.List(ctx); err != nil {
+			return false
+		}
+		if !r.runtime.freshnessReady(ctx) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *viewRuntime) freshnessReady(ctx context.Context) bool {
+	if r == nil || r.metadata == nil || r.heads == nil {
+		return true
+	}
+	var views []*pb.View
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := r.metadata.ListViews(ctx, "", "", "active", &pb.Page{Page: pageNo, Size: 10000})
+		if err != nil {
+			return false
+		}
+		views = append(views, items...)
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			break
+		}
+	}
+	for _, item := range views {
+		if item == nil {
+			return false
+		}
+		if strings.TrimSpace(item.GetActiveIndexId()) == "" {
+			return false
+		}
+		engine := r.engines[strings.ToLower(strings.TrimSpace(item.GetEngine()))]
+		if engine == nil {
+			return false
+		}
+		stats, err := engine.Stat(ctx, item.GetActiveIndexId())
+		if err != nil || !stats.Exists {
+			return false
+		}
+		heads, err := runtimeShardHeads(ctx, r.heads, item)
+		if err != nil || len(heads) == 0 || len(heads) != len(stats.ShardCheckpoints) {
+			return false
+		}
+		for shardID, head := range heads {
+			checkpoint, ok := stats.ShardCheckpoints[shardID]
+			if !ok || checkpoint != head {
+				return false
+			}
+		}
+		for shardID := range stats.ShardCheckpoints {
+			if _, ok := heads[shardID]; !ok {
+				return false
+			}
+		}
+		if r.minFreeBytes > 0 && stats.FreeDiskBytes > 0 && stats.FreeDiskBytes < r.minFreeBytes {
+			return false
+		}
 	}
 	return true
 }
@@ -123,15 +213,32 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, eve
 
 	var viewMetadata view.Metadata
 	if shouldRegisterViewQueryRole(storage) || shouldStartViewBuilderRole(storage) {
-		viewMetadata = metadataForViewRuntime(storage, storageService)
+		var err error
+		viewMetadata, err = metadataForViewRuntime(storage, storageService)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if shouldRegisterViewQueryRole(storage) {
+		var shardHeads view.ShardHeadReader
+		if candidate, ok := sourceReader.(view.ShardHeadReader); ok {
+			shardHeads = candidate
+		}
 		viewService := view.NewService(view.ServiceOptions{
 			Metadata:          viewMetadata,
 			TimeSeriesIndexes: timeSeriesQuery,
 			RecordIndexes:     recordQuery,
+			Heads:             shardHeads,
+			RequireFreshness:  true,
 		})
 		runtime.service = viewService
+		runtime.metadata = viewMetadata
+		runtime.heads = shardHeads
+		runtime.engines = map[string]view.ManagedViewIndex{"duckdb": duckEngine, "bleve": bleveEngine}
+		runtime.minFreeBytes = uint64(max(storage.View.Maintenance.MinFreeDiskBytes, 0))
+		if probe, ok := viewMetadata.(interface{ Ready(context.Context) error }); ok {
+			runtime.metadataProbe = probe
+		}
 		pb.RegisterDataViewService(s, viewService)
 	}
 	if shouldStartViewBuilderRole(storage) {
@@ -139,12 +246,18 @@ func registerViewRole(s *server.Server, storage storageconfig.StorageConfig, eve
 			"duckdb": duckEngine,
 			"bleve":  bleveEngine,
 		}
+		var shardHeads view.ShardHeadReader
+		if candidate, ok := sourceReader.(view.ShardHeadReader); ok {
+			shardHeads = candidate
+		}
 		maintenance := view.NewMaintenanceManager(view.MaintenanceOptions{
-			Metadata: viewMetadata,
-			Engines:  engines,
-			Config:   maintenanceConfigFromStorage(storage.View.Maintenance, storage.View.MaxWorkers),
-			Facts:    sourceReader,
-			Records:  sourceReader,
+			Metadata:     viewMetadata,
+			Engines:      engines,
+			Config:       maintenanceConfigFromStorage(storage.View.Maintenance, storage.View.MaxWorkers),
+			Facts:        sourceReader,
+			Records:      sourceReader,
+			Heads:        shardHeads,
+			RequireHeads: true,
 		})
 		view.SetDefaultMaintenance(maintenance)
 		timer.RegisterScheduler("viewBuilderSchedule", &timer.DefaultScheduler{})
@@ -182,11 +295,21 @@ func startViewBuilderService(ctx context.Context, storage storageconfig.StorageC
 	return service, nil
 }
 
-func metadataForViewRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) view.Metadata {
+func metadataForViewRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) (view.Metadata, error) {
 	if storageService != nil {
-		return storageService.MetadataStore()
+		return storageService.MetadataStore(), nil
 	}
-	return view.NewRemoteMetadata(storage.View.MetadataServiceName)
+	credentials, err := gatewayauth.ResolveCredentials(storage.View.StorageRPC.KeyID, storage.View.StorageRPC.HMACKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	target := gatewayauth.ServiceGatewayTarget(storage.View.StorageRPC.GatewayTarget)
+	nodeID := gatewayauth.ServiceGatewayNodeID()
+	if nodeID == "" {
+		nodeID = storage.View.StorageRPC.GatewayNodeID
+	}
+	options := gatewayauth.NewTRPCClientOptions(target, nodeID, credentials)
+	return view.NewRemoteMetadata(storage.View.MetadataServiceName, options...), nil
 }
 
 func maintenanceConfigFromStorage(raw storageconfig.StorageViewMaintenance, maxViewsPerRun int) view.MaintenanceConfig {
@@ -335,23 +458,31 @@ func shouldCreateStorageService(storage storageconfig.StorageConfig) bool {
 }
 
 func shouldCreatePrimaryService(storage storageconfig.StorageConfig) bool {
-	return storage.HasRole("primary") || storage.HasRole("shard")
+	return storage.HasRole("shard") || (storage.HasRole("primary") && strings.TrimSpace(storage.Primary.ServiceName) == "")
 }
 
-func sourceReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) viewbuilder.PrimaryStoreReader {
+func sourceReaderForRuntime(storage storageconfig.StorageConfig, storageService *storagesvc.Service) (viewbuilder.PrimaryStoreReader, error) {
 	var local viewbuilder.PrimaryStoreReader
 	primaryStoreServiceName := storage.View.PrimaryStoreServiceName
 	scanServiceName := storage.View.PrimaryStoreScanServiceName
-	if storageService != nil && storage.HasRole("primary") {
+	if storageService != nil && storage.HasRole("primary") && strings.TrimSpace(storage.Primary.ServiceName) == "" {
 		local = storageService.FactReader()
 		primaryStoreServiceName = ""
 		scanServiceName = ""
 	}
+	if primaryStoreServiceName == "" && local != nil {
+		return local, nil
+	}
 	credentials, err := gatewayauth.ResolveCredentials(storage.View.StorageRPC.KeyID, storage.View.StorageRPC.HMACKeyFile)
 	if err != nil {
-		return viewbuilder.NewPrimaryStoreReader(nil, "", "")
+		return nil, err
 	}
-	return viewbuilder.NewPrimaryStoreReaderWithGateway(local, primaryStoreServiceName, scanServiceName, storage.View.StorageRPC.GatewayTarget, storage.View.StorageRPC.GatewayNodeID, credentials)
+	target := gatewayauth.ServiceGatewayTarget(storage.View.StorageRPC.GatewayTarget)
+	nodeID := gatewayauth.ServiceGatewayNodeID()
+	if nodeID == "" {
+		nodeID = storage.View.StorageRPC.GatewayNodeID
+	}
+	return viewbuilder.NewPrimaryStoreReaderWithGateway(local, primaryStoreServiceName, scanServiceName, target, nodeID, credentials), nil
 }
 
 func shouldUseLocalPrimaryStoreReader(storage storageconfig.StorageConfig) bool {

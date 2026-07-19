@@ -1,6 +1,6 @@
 //go:build integration && cgo
 
-package tests
+package test
 
 import (
 	"context"
@@ -73,9 +73,11 @@ func TestViewIndexDualDatabaseSwitch(t *testing.T) {
 		t.Fatalf("GetView(ts_view): %v", err)
 	}
 	oldTimeIndex := tsView.GetActiveIndexId()
-	if err := duck.Write(ctx, oldTimeIndex, viewindex.BatchWrite{TimeSeriesRows: []*pb.TimeSeriesRow{
-		integrationTimeRow(now.Add(-48*time.Hour), 90),
-	}}); err != nil {
+	staleRow := integrationTimeRow(now.Add(-48*time.Hour), 90)
+	if err := duck.Apply(ctx, oldTimeIndex, viewindex.ViewIndexApplyBatch{
+		RequiredColumnNames: []string{"close"},
+		RowWrites:           []viewindex.RowWrite{{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{TimeSeriesKey: staleRow.GetKey()}, Columns: staleRow.GetColumns()}},
+	}); err != nil {
 		t.Fatalf("write stale row into active slot: %v", err)
 	}
 
@@ -149,11 +151,15 @@ type callbackManagedIndex struct {
 	onWrite func()
 }
 
-func (e *callbackManagedIndex) Write(ctx context.Context, indexID string, batch viewindex.BatchWrite) error {
+func (e *callbackManagedIndex) Apply(ctx context.Context, indexID string, batch viewindex.ViewIndexApplyBatch) error {
 	if e.onWrite != nil {
 		e.onWrite()
 	}
-	return e.ManagedViewIndex.Write(ctx, indexID, batch)
+	applier, ok := e.ManagedViewIndex.(viewindex.ViewIndexApplier)
+	if !ok {
+		return errors.New("wrapped index does not support atomic apply")
+	}
+	return applier.Apply(ctx, indexID, batch)
 }
 
 type integrationFacts struct {

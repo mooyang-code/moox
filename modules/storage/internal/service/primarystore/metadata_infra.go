@@ -13,6 +13,8 @@ import (
 // 本文件聚合主存储节点、设备、路由及归档文件相关的元数据 CRUD 入口。
 
 func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrimaryStoreNodeReq) (*pb.CreatePrimaryStoreNodeRsp, error) {
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
 	item := req.GetNode()
 	if item == nil || (item.GetNodeId() == "" && item.GetName() == "") {
 		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id or name is required"))}, nil
@@ -34,6 +36,8 @@ func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrim
 }
 
 func (s *Service) UpdatePrimaryStoreNode(ctx context.Context, req *pb.UpdatePrimaryStoreNodeReq) (*pb.UpdatePrimaryStoreNodeRsp, error) {
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
 	updated, err := s.metadata.UpsertPrimaryStoreNode(ctx, req.GetNode())
 	if err != nil {
 		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -61,6 +65,8 @@ func (s *Service) ListPrimaryStoreNodes(ctx context.Context, req *pb.ListPrimary
 }
 
 func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*pb.CreateDeviceRsp, error) {
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
 	item := req.GetDevice()
 	if item == nil || (item.GetDeviceId() == "" && item.GetName() == "") {
 		return &pb.CreateDeviceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("device_id or name is required"))}, nil
@@ -82,6 +88,8 @@ func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*p
 }
 
 func (s *Service) UpdateDevice(ctx context.Context, req *pb.UpdateDeviceReq) (*pb.UpdateDeviceRsp, error) {
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
 	updated, err := s.metadata.UpsertDevice(ctx, req.GetDevice())
 	if err != nil {
 		return &pb.UpdateDeviceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil

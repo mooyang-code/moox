@@ -27,6 +27,8 @@ type DataShardService interface {
 	ScanRows(ctx context.Context, req *ScanRowsReq) (*ScanRowsRsp, error)
 
 	DeleteRows(ctx context.Context, req *DeleteRowsReq) (*DeleteRowsRsp, error)
+
+	GetShardState(ctx context.Context, req *GetShardStateReq) (*GetShardStateRsp, error)
 }
 
 func DataShardService_MergeRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -101,6 +103,24 @@ func DataShardService_DeleteRows_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
+func DataShardService_GetShardState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetShardStateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataShardService).GetShardState(ctx, reqbody.(*GetShardStateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // DataShardServer_ServiceDesc descriptor for server.RegisterService.
 var DataShardServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataShard",
@@ -121,6 +141,10 @@ var DataShardServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataShard/DeleteRows",
 			Func: DataShardService_DeleteRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataShard/GetShardState",
+			Func: DataShardService_GetShardState_Handler,
 		},
 	},
 }
@@ -153,6 +177,9 @@ func (s *UnimplementedDataShard) ScanRows(ctx context.Context, req *ScanRowsReq)
 func (s *UnimplementedDataShard) DeleteRows(ctx context.Context, req *DeleteRowsReq) (*DeleteRowsRsp, error) {
 	return nil, errors.New("rpc DeleteRows of service DataShard is not implemented")
 }
+func (s *UnimplementedDataShard) GetShardState(ctx context.Context, req *GetShardStateReq) (*GetShardStateRsp, error) {
+	return nil, errors.New("rpc GetShardState of service DataShard is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -170,6 +197,8 @@ type DataShardClientProxy interface {
 	ScanRows(ctx context.Context, req *ScanRowsReq, opts ...client.Option) (rsp *ScanRowsRsp, err error)
 
 	DeleteRows(ctx context.Context, req *DeleteRowsReq, opts ...client.Option) (rsp *DeleteRowsRsp, err error)
+
+	GetShardState(ctx context.Context, req *GetShardStateReq, opts ...client.Option) (rsp *GetShardStateRsp, err error)
 }
 
 type DataShardClientProxyImpl struct {
@@ -255,6 +284,26 @@ func (c *DataShardClientProxyImpl) DeleteRows(ctx context.Context, req *DeleteRo
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &DeleteRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataShardClientProxyImpl) GetShardState(ctx context.Context, req *GetShardStateReq, opts ...client.Option) (*GetShardStateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataShard/GetShardState")
+	msg.WithCalleeServiceName(DataShardServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataShard")
+	msg.WithCalleeMethod("GetShardState")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetShardStateRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

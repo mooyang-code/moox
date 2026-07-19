@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -232,7 +233,7 @@ func (r *Resolver) targetForRoute(ctx context.Context, spaceID string, datasetID
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ShardTarget{
+	target := &pb.ShardTarget{
 		SpaceId:     spaceID,
 		NodeId:      node.GetNodeId(),
 		ShardId:     shardID,
@@ -241,7 +242,19 @@ func (r *Resolver) targetForRoute(ctx context.Context, spaceID string, datasetID
 		DatasetId:   datasetID,
 		DeviceTable: path.Join(spaceID, datasetID),
 		Endpoint:    node.GetEndpoint(),
-	}, nil
+	}
+	attributes := node.GetAttributes()
+	if gatewayTarget := strings.TrimSpace(attributes["gateway_target"]); gatewayTarget != "" {
+		target.GatewayTarget = gatewayTarget
+		target.GatewayNodeId = strings.TrimSpace(attributes["gateway_node_id"])
+	} else if gatewayTarget := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")); gatewayTarget != "" {
+		// Keep the environment fallback for single-node deployments. Metadata
+		// attributes take precedence so a multi-node topology cannot route every
+		// shard through the process-wide Gateway target.
+		target.GatewayTarget = gatewayTarget
+		target.GatewayNodeId = strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
+	}
+	return target, nil
 }
 
 func shardIdentity(node *pb.PrimaryStoreNode, device *pb.Device) (string, error) {

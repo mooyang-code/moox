@@ -94,8 +94,8 @@ topics:
   - {topic: moox.strategy.execution.requested.v1, stream: MOOX_STRATEGY, kind: 1, payload_content_type: "application/json", payload_version: 1, enabled: true}
 
 topic_families:
-  - {pattern: moox.storage.rows_committed.time_series.v1.*, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted", payload_version: 1, enabled: true}
-  - {pattern: moox.storage.rows_committed.record.v1.*, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted", payload_version: 1, enabled: true}
+  - {pattern: moox.storage.rows_committed.time_series.v1.>, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted", payload_version: 1, enabled: true}
+  - {pattern: moox.storage.rows_committed.record.v1.>, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted", payload_version: 1, enabled: true}
   - pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
     stream: MOOX_CLOUDNODE_EXEC
     kind: 2
@@ -160,7 +160,7 @@ consumers:
     max_deliver: -1
   - stream: MOOX_STORAGE
     durable: factor_calc
-    filter_subject: moox.storage.rows_committed.time_series.v1.*
+    filter_subject: moox.storage.rows_committed.time_series.v1.>
     ack_policy: explicit
     deliver_policy: new
     replay_policy: instant
@@ -169,7 +169,7 @@ consumers:
     max_deliver: 5
   - stream: MOOX_STORAGE
     durable: moox_archive_kline_v1
-    filter_subject: moox.storage.rows_committed.time_series.v1.*
+    filter_subject: moox.storage.rows_committed.time_series.v1.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant

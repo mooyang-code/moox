@@ -8,6 +8,7 @@ import (
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
+	"gopkg.in/yaml.v2"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -96,8 +97,30 @@ func loadStorageConfig(configPath string) (storageconfig.RuntimeConfig, bool) {
 	file := filepath.Base(configPath)
 	loader := storageconfig.NewConfigLoader(dir)
 	if err := loader.LoadConfigStrict(file, &cfg); err != nil {
-		log.Warnf("加载 storage 配置失败，使用默认目录: %v", err)
-		return cfg, false
+		// Strict loading rejects framework keys in a combined tRPC config and
+		// may leave the destination partially populated. Reset it before
+		// decoding only the business `storage` document below.
+		cfg = storageconfig.RuntimeConfig{}
+		encoded, readErr := os.ReadFile(configPath)
+		if readErr != nil {
+			log.Warnf("加载 storage 配置失败: %v", err)
+			return cfg, false
+		}
+		var document map[interface{}]interface{}
+		if yamlErr := yaml.Unmarshal(encoded, &document); yamlErr != nil {
+			log.Warnf("解析 storage 配置失败: %v", err)
+			return cfg, false
+		}
+		storageDocument, ok := document["storage"]
+		if !ok {
+			log.Warnf("storage 配置缺少 storage 节点: %v", err)
+			return cfg, false
+		}
+		combined, marshalErr := yaml.Marshal(map[interface{}]interface{}{"storage": storageDocument})
+		if marshalErr != nil || yaml.UnmarshalStrict(combined, &cfg) != nil {
+			log.Warnf("加载 combined storage 配置失败: %v", err)
+			return cfg, false
+		}
 	}
 	cfg.ApplyDefaults()
 	return cfg, true

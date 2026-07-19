@@ -13,6 +13,7 @@ var storageBFFMethods = map[string]string{
 	"GetSubject":              "storage-primary",
 	"ListSubjects":            "storage-primary",
 	"ListSubjectSymbols":      "storage-primary",
+	"RegisterDataSubject":     "storage-primary",
 	"CreateDataset":           "storage-primary",
 	"UpdateDataset":           "storage-primary",
 	"GetDataset":              "storage-primary",
@@ -61,4 +62,16 @@ var storageBFFMethods = map[string]string{
 func storageBFFServiceID(method string) (string, bool) {
 	serviceID, ok := storageBFFMethods[method]
 	return serviceID, ok
+}
+
+func storageBFFServicePath(serviceID, method string) string {
+	if serviceID == "storage-view" {
+		return "trpc.moox.storage.DataView"
+	}
+	for _, candidate := range []string{"MergeTimeSeriesRows", "ReadTimeSeriesRows", "MergeRecordRows", "ReadRecordRows"} {
+		if method == candidate {
+			return "trpc.moox.storage.PrimaryStore"
+		}
+	}
+	return "trpc.moox.storage.Metadata"
 }

@@ -16,9 +16,14 @@ type readyState interface {
 	Ready() bool
 }
 
+type contextReadyState interface {
+	ReadyContext(context.Context) bool
+}
+
 type storageHealthDependencies struct {
 	eventbus readyState
 	view     readyState
+	primary  readyState
 }
 
 func registerStorageHealth(s *server.Server, storage storageconfig.StorageConfig, deps storageHealthDependencies) error {
@@ -43,8 +48,9 @@ func storageHealthSnapshot(storage storageconfig.StorageConfig, state *health.St
 		metadataReady := !metadataRequired || (storage.Metadata.Path != "" && pathExists(storage.Metadata.Path))
 		eventbusReady := !needsRowsCommittedBus(storage) || (deps.eventbus != nil && deps.eventbus.Ready())
 		viewRequired := shouldRegisterViewQueryRole(storage) || shouldStartViewBuilderRole(storage) || shouldStartViewIndexRole(storage)
-		viewRuntimeReady := !viewRequired || (deps.view != nil && deps.view.Ready())
-		ready := rootReady && metadataReady && eventbusReady && viewRuntimeReady
+		viewRuntimeReady := !viewRequired || readyWithContext(ctx, deps.view)
+		primaryReady := (!storage.HasRole("primary") && !storage.HasRole("shard")) || (deps.primary != nil && deps.primary.Ready())
+		ready := rootReady && metadataReady && eventbusReady && viewRuntimeReady && primaryReady
 		state.SetReady(ready)
 		rsp := healthz.Base("storage", serviceName, "", "", storageStartedAt, ready)
 		rsp.Service = serviceName
@@ -61,9 +67,20 @@ func storageHealthSnapshot(storage storageconfig.StorageConfig, state *health.St
 			"metadata_ready":     metadataReady,
 			"eventbus_ready":     eventbusReady,
 			"view_runtime_ready": viewRuntimeReady,
+			"primary_ready":      primaryReady,
 		}
 		return rsp
 	}
+}
+
+func readyWithContext(ctx context.Context, dependency readyState) bool {
+	if dependency == nil {
+		return false
+	}
+	if candidate, ok := dependency.(contextReadyState); ok {
+		return candidate.ReadyContext(ctx)
+	}
+	return dependency.Ready()
 }
 
 func pathExists(path string) bool {

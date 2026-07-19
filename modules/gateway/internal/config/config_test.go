@@ -144,5 +144,5 @@ func validYAML(control, service, store, override string) string {
 	if strings.HasPrefix(override, "health_addr:") {
 		healthAddr = strings.TrimSpace(strings.TrimPrefix(override, "health_addr:"))
 	}
-	return "node:\n  id: gateway-test\nserver:\n  service_addr: " + serviceAddr + "\n  health_addr: " + healthAddr + "\ncontrol_plane:\n  base_url: https://admin.example\n  hmac_key_file: " + control + "\nauth:\n  hmac_key_file: " + service + "\nstore:\n  path: " + store + "\nproxy:\n  max_body_bytes: 4194304\n"
+	return "node:\n  id: gateway-test\nserver:\n  service_addr: " + serviceAddr + "\n  health_addr: " + healthAddr + "\ncontrol_plane:\n  base_url: https://admin.example\n  hmac_key_file: " + control + "\nauth:\n  hmac_key_file: " + service + "\n  caller: service\nstore:\n  path: " + store + "\nproxy:\n  max_body_bytes: 4194304\n"
 }

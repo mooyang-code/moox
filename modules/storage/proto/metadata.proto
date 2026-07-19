@@ -101,8 +101,8 @@ message View {
   uint64 active_view_version = 18;
   // active_columns 是与 active_index_id 同时激活的不可变列快照。
   repeated ViewColumn active_columns = 19;
-  // active_schema_hash 是当前线上索引的列形态哈希。
-  string active_schema_hash = 20;
+  // active_view_schema_hash 是当前线上索引的列形态哈希。
+  string active_view_schema_hash = 20;
   // index_build 是当前持久化构建状态的只读投影。
   ViewIndexBuild index_build = 23;
   // indexed_from 是当前索引实际覆盖的最小业务时间或版本。
@@ -213,7 +213,7 @@ message SubjectSymbol {
 message Dataset {
   // space_id 是 Dataset 所属 Space。
   string space_id = 1;
-  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 20 字符。
+  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 30 字符。
   string dataset_id = 2;
   // data_source_id 是该 Dataset 绑定的数据来源 ID；一个 Dataset 只绑定一个 DataSource。
   string data_source_id = 3;

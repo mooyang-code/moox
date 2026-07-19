@@ -422,7 +422,12 @@ func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID 
 }
 
 func getProto[T proto.Message](s *Store, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
-	_ = ctx
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, err
+		}
+	}
 	item, ok := s.cache.Get(indexPrimary, kind, spaceID, id)
 	if !ok {
 		var zero T

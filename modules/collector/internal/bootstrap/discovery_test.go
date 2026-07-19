@@ -64,11 +64,11 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if deps.ServiceGatewayTarget != "http://gw.example.com:11000" {
 		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
 	}
-	if deps.StorageMetadataTarget != "127.0.0.1:11003" {
-		t.Fatalf("StorageMetadataTarget = %q, want native service gateway target", deps.StorageMetadataTarget)
+	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
+		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
 	}
-	if deps.StoragePrimaryTarget != "127.0.0.1:11003" {
-		t.Fatalf("StoragePrimaryTarget = %q, want native service gateway target", deps.StoragePrimaryTarget)
+	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
+		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
 	}
 }
 

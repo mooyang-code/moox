@@ -75,7 +75,7 @@ func (*deleteMetadata) GetPrimaryStoreNode(context.Context, string) (*pb.Primary
 	return &pb.PrimaryStoreNode{NodeId: "node-1", Status: "active"}, nil
 }
 func (*deleteMetadata) ListDevices(context.Context, string, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return []*pb.Device{{DeviceId: "device-1", NodeId: "node-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "storage-primary-0"}}}, &pb.PageResult{}, nil
+	return []*pb.Device{{DeviceId: "device-1", NodeId: "node-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "storage-shard-0"}}}, &pb.PageResult{}, nil
 }
 
 type deletePrimary struct {

@@ -56,8 +56,11 @@ func TestSignUsesCanonicalGatewayMaterial(t *testing.T) {
 	bodyHash := sha256.Sum256(request.Body)
 	material := strings.Join([]string{
 		Version,
+		credentials.KeyID,
 		"POST",
 		"/v1/a%2Fb",
+		"",
+		"",
 		hex.EncodeToString(bodyHash[:]),
 		strconv.FormatInt(now.Unix(), 10),
 		header.Get("X-Moox-Nonce"),

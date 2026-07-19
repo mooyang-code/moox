@@ -215,6 +215,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
 			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
 			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
+			Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
 		}
@@ -515,14 +516,15 @@ type seedView struct {
 
 // seedViewColumn 描述 View 中对外可查询的结果列。
 type seedViewColumn struct {
-	SpaceID    string `yaml:"space_id"`
-	ViewID     string `yaml:"view_id"`
-	ColumnName string `yaml:"column_name"`
-	OriginType string `yaml:"origin_type"`
-	OriginID   string `yaml:"origin_id"`
-	ValueType  string `yaml:"value_type"`
-	OnlineTime string `yaml:"online_time"`
-	SortOrder  uint32 `yaml:"sort_order"`
+	SpaceID    string            `yaml:"space_id"`
+	ViewID     string            `yaml:"view_id"`
+	ColumnName string            `yaml:"column_name"`
+	OriginType string            `yaml:"origin_type"`
+	OriginID   string            `yaml:"origin_id"`
+	ValueType  string            `yaml:"value_type"`
+	OnlineTime string            `yaml:"online_time"`
+	SortOrder  uint32            `yaml:"sort_order"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedPrimaryStoreNode 描述待初始化的主存节点。

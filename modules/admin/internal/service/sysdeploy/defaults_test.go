@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -94,6 +95,37 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if item := byName["storage-primary"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage.Metadata" {
 		t.Fatalf("storage-primary endpoint = %d/%s, want 20200/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
+	}
+	var storageExtra struct {
+		GatewayRoutes []struct {
+			ServicePath    string   `json:"service_path"`
+			Port           int32    `json:"port"`
+			GatewayMethods []string `json:"gateway_methods"`
+			GatewayCallers []string `json:"gateway_callers"`
+		} `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(byName["storage-primary"].ExtraConfig), &storageExtra); err != nil {
+		t.Fatalf("unmarshal storage-primary extra_config: %v", err)
+	}
+	var metadataRoute *struct {
+		ServicePath    string   `json:"service_path"`
+		Port           int32    `json:"port"`
+		GatewayMethods []string `json:"gateway_methods"`
+		GatewayCallers []string `json:"gateway_callers"`
+	}
+	for i := range storageExtra.GatewayRoutes {
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.Metadata" {
+			metadataRoute = &storageExtra.GatewayRoutes[i]
+			break
+		}
+	}
+	if metadataRoute == nil || metadataRoute.Port != 20100 || !reflect.DeepEqual(metadataRoute.GatewayMethods, []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild"}) || !reflect.DeepEqual(metadataRoute.GatewayCallers, []string{"storage-view"}) {
+		t.Fatalf("storage-view metadata gateway route = %+v", metadataRoute)
+	}
+	for i := range storageExtra.GatewayRoutes {
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.DataShard" {
+			t.Fatalf("storage-primary must not embed DataShard gateway route")
+		}
 	}
 	if healthURL(byName["storage-view"].ExtraConfig) != "http://127.0.0.1:20211/readyz" {
 		t.Fatalf("storage-view extra_config = %s", byName["storage-view"].ExtraConfig)

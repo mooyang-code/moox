@@ -114,6 +114,9 @@ func (s *Store) deleteRows(ctx context.Context, keys []*pb.ShardKey, entry *cont
 	if len(keys) == 0 {
 		return nil
 	}
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	for _, key := range keys {
 		if err := validateKey(key); err != nil {
 			return err
@@ -149,9 +152,11 @@ func (s *Store) deleteRows(ctx context.Context, keys []*pb.ShardKey, entry *cont
 }
 
 func (s *Store) writeRows(ctx context.Context, rows []*pb.ShardRow, entry *contracts.OutboxEntry) error {
-	_ = ctx
 	if len(rows) == 0 {
 		return nil
+	}
+	if err := requireContext(ctx); err != nil {
+		return err
 	}
 	if err := validateRowBatchIdentity(rows); err != nil {
 		return err
@@ -165,6 +170,9 @@ func (s *Store) writeRows(ctx context.Context, rows []*pb.ShardRow, entry *contr
 
 	pending := make(map[string]*pb.ShardRow, len(rows))
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		key := encodeRowKey(row)
 		base := pending[key]
 		if base == nil {
@@ -209,6 +217,9 @@ func (s *Store) writeRows(ctx context.Context, rows []*pb.ShardRow, entry *contr
 		}
 	}
 	for key, row := range pending {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		data, err := proto.Marshal(row)
 		if err != nil {
 			return err
@@ -475,24 +486,29 @@ func columnPositions(columns []*pb.ColumnValue) map[string]int {
 }
 
 func (s *Store) ReadRows(ctx context.Context, keys []*pb.ShardKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
-	_ = ctx
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	if len(keys) == 0 {
 		return nil, &pb.PageResult{Size: pageSize(page)}, nil
 	}
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if err := validateKey(key); err != nil {
 			return nil, nil, err
 		}
 	}
 	if canReadExact(keys, versionRange, page) {
-		return s.readExactRows(keys, order, columnNames, page)
+		return s.readExactRows(ctx, keys, order, columnNames, page)
 	}
-	if rows, result, ok, err := s.readRowsForSingleKeyPage(keys, versionRange, order, columnNames, page); ok {
+	if rows, result, ok, err := s.readRowsForSingleKeyPage(ctx, keys, versionRange, order, columnNames, page); ok {
 		return rows, result, err
 	}
 	var rows []*pb.ShardRow
 	for _, key := range keys {
-		readRows, err := s.readRowsForKey(key, versionRange, order, columnNames, page)
+		readRows, err := s.readRowsForKey(ctx, key, versionRange, order, columnNames, page)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -503,7 +519,7 @@ func (s *Store) ReadRows(ctx context.Context, keys []*pb.ShardKey, versionRange 
 	return paged, result, nil
 }
 
-func (s *Store) readRowsForSingleKeyPage(keys []*pb.ShardKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, bool, error) {
+func (s *Store) readRowsForSingleKeyPage(ctx context.Context, keys []*pb.ShardKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, bool, error) {
 	if len(keys) != 1 || order != pb.SortOrder_SORT_ORDER_DESC || page == nil || page.GetCursor() != "" {
 		return nil, nil, false, nil
 	}
@@ -511,11 +527,14 @@ func (s *Store) readRowsForSingleKeyPage(keys []*pb.ShardKey, versionRange *pb.V
 	if key.GetVersion() != "" {
 		return nil, nil, false, nil
 	}
-	rows, result, err := s.readRowsForKeyDescPage(key, versionRange, columnNames, page)
+	rows, result, err := s.readRowsForKeyDescPage(ctx, key, versionRange, columnNames, page)
 	return rows, result, true, err
 }
 
 func (s *Store) ScanRows(ctx context.Context, target *pb.ShardTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	if target == nil {
 		return nil, nil, errors.New("target is required")
 	}
@@ -539,6 +558,9 @@ func (s *Store) ScanRows(ctx context.Context, target *pb.ShardTarget, dataKind p
 }
 
 func (s *Store) ScanRowsWithPrefix(ctx context.Context, target *pb.ShardTarget, dataKind pb.DataKind, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page, keyPrefix string) ([]*pb.ShardRow, *pb.PageResult, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	if target == nil || target.GetSpaceId() == "" || target.GetDatasetId() == "" {
 		return nil, nil, errors.New("target space_id and dataset_id are required")
 	}
@@ -556,7 +578,9 @@ func (s *Store) ScanRowsWithPrefix(ctx context.Context, target *pb.ShardTarget, 
 }
 
 func (s *Store) scanRowsReverseCursor(ctx context.Context, prefix []byte, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
-	_ = ctx
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	upper := nextPrefix(prefix)
 	if cursor := page.GetCursor(); cursor != "" {
 		cursorBytes := []byte(cursor)
@@ -575,6 +599,9 @@ func (s *Store) scanRowsReverseCursor(ctx context.Context, prefix []byte, versio
 	nextCursor := ""
 	hasMore := false
 	for valid := iter.Last(); valid; valid = iter.Prev() {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		encoded := string(iter.Key())
 		if !versionRangeContains(encodedRowVersion(encoded), versionRange) {
 			continue
@@ -600,7 +627,9 @@ func (s *Store) scanRowsReverseCursor(ctx context.Context, prefix []byte, versio
 }
 
 func (s *Store) scanRowsForwardCursor(ctx context.Context, prefix []byte, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
-	_ = ctx
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	size := pageSize(page)
 	lower := prefix
 	upper := nextPrefix(prefix)
@@ -622,6 +651,9 @@ func (s *Store) scanRowsForwardCursor(ctx context.Context, prefix []byte, versio
 	nextCursor := ""
 	hasMore := false
 	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		encoded := string(iter.Key())
 		if !versionRangeContains(encodedRowVersion(encoded), versionRange) {
 			continue
@@ -650,6 +682,13 @@ func (s *Store) scanRowsForwardCursor(ctx context.Context, prefix []byte, versio
 	}, nil
 }
 
+func requireContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	return ctx.Err()
+}
+
 func canReadExact(keys []*pb.ShardKey, versionRange *pb.VersionRange, page *pb.Page) bool {
 	if page != nil && page.GetCursor() != "" {
 		return false
@@ -665,10 +704,16 @@ func canReadExact(keys []*pb.ShardKey, versionRange *pb.VersionRange, page *pb.P
 	return true
 }
 
-func (s *Store) readExactRows(keys []*pb.ShardKey, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
+func (s *Store) readExactRows(ctx context.Context, keys []*pb.ShardKey, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	rows := make([]*pb.ShardRow, 0, len(keys))
 	seen := make(map[string]bool, len(keys))
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		encoded := encodeShardKey(key)
 		if seen[encoded] {
 			continue
@@ -687,7 +732,10 @@ func (s *Store) readExactRows(keys []*pb.ShardKey, order pb.SortOrder, columnNam
 	return paged, result, nil
 }
 
-func (s *Store) readRowsForKey(key *pb.ShardKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, error) {
+func (s *Store) readRowsForKey(ctx context.Context, key *pb.ShardKey, versionRange *pb.VersionRange, order pb.SortOrder, columnNames []string, page *pb.Page) ([]*pb.ShardRow, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, err
+	}
 	if key.GetVersion() != "" && versionRange == nil {
 		row, err := s.getRow(encodeShardKey(key))
 		if err != nil || row == nil {
@@ -711,6 +759,9 @@ func (s *Store) readRowsForKey(key *pb.ShardKey, versionRange *pb.VersionRange, 
 	defer iter.Close()
 	var rows []*pb.ShardRow
 	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		row := &pb.ShardRow{}
 		if err := proto.Unmarshal(iter.Value(), row); err != nil {
 			return nil, err
@@ -723,7 +774,10 @@ func (s *Store) readRowsForKey(key *pb.ShardKey, versionRange *pb.VersionRange, 
 	return rows, nil
 }
 
-func (s *Store) readRowsForKeyDescPage(key *pb.ShardKey, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
+func (s *Store) readRowsForKeyDescPage(ctx context.Context, key *pb.ShardKey, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.ShardRow, *pb.PageResult, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, nil, err
+	}
 	lower, upper := keyBounds(key, versionRange)
 	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
@@ -740,6 +794,9 @@ func (s *Store) readRowsForKeyDescPage(key *pb.ShardKey, versionRange *pb.Versio
 	rows := make([]*pb.ShardRow, 0, size)
 	hasMore := false
 	for valid := iter.Last(); valid; valid = iter.Prev() {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if skip > 0 {
 			skip--
 			continue

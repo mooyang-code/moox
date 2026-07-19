@@ -31,6 +31,7 @@ func (table *Table) Resolve(serviceID string) (Route, bool) {
 	for _, route := range snapshot.Routes {
 		if route.ServiceID == serviceID {
 			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
+			route.AllowedCallers = append([]string(nil), route.AllowedCallers...)
 			return route, true
 		}
 	}
@@ -48,6 +49,7 @@ func (table *Table) ResolveMethod(serviceID, method string) (Route, bool) {
 	for _, route := range snapshot.Routes {
 		if route.ServiceID == serviceID && route.AllowsMethod(method) {
 			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
+			route.AllowedCallers = append([]string(nil), route.AllowedCallers...)
 			return route, true
 		}
 	}
@@ -68,6 +70,7 @@ func (table *Table) ResolveRPC(rpcName string) (Route, string, bool) {
 	for _, route := range snapshot.Routes {
 		if route.ServicePath == servicePath && route.AllowsMethod(method) {
 			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
+			route.AllowedCallers = append([]string(nil), route.AllowedCallers...)
 			return route, method, true
 		}
 	}

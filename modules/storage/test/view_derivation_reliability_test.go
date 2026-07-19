@@ -199,6 +199,18 @@ type e2eViewMetadata struct {
 	columns []*pb.ViewColumn
 }
 
+func (m *e2eViewMetadata) ListViews(_ context.Context, spaceID, datasetID, status string, _ *pb.Page) ([]*pb.View, *pb.PageResult, error) {
+	var out []*pb.View
+	for _, view := range m.views {
+		if (spaceID == "" || view.GetSpaceId() == spaceID) &&
+			(datasetID == "" || view.GetPrimaryDatasetId() == datasetID) &&
+			(status == "" || view.GetStatus() == status) {
+			out = append(out, proto.Clone(view).(*pb.View))
+		}
+	}
+	return out, &pb.PageResult{}, nil
+}
+
 func (m *e2eViewMetadata) ListViewsByDataset(_ context.Context, spaceID, datasetID string) ([]*pb.View, error) {
 	var out []*pb.View
 	for _, view := range m.views {

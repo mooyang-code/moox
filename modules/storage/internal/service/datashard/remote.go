@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -21,6 +22,9 @@ func NewRemoteClient(serviceName string) *RemoteClient {
 }
 
 func (c *RemoteClient) WriteRows(ctx context.Context, target *pb.ShardTarget, rows []*pb.ShardRow) error {
+	if err := validateRemoteTarget(target); err != nil {
+		return err
+	}
 	rsp, err := c.proxyFor(target).MergeRows(ctx, &pb.MergeRowsReq{
 		Target: target,
 		Rows:   rows,
@@ -32,6 +36,9 @@ func (c *RemoteClient) WriteRows(ctx context.Context, target *pb.ShardTarget, ro
 }
 
 func (c *RemoteClient) ReadRows(ctx context.Context, target *pb.ShardTarget, req *pb.ReadRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
+	if err := validateRemoteTarget(target); err != nil {
+		return nil, nil, err
+	}
 	if req == nil {
 		req = &pb.ReadRowsReq{}
 	}
@@ -54,6 +61,9 @@ func (c *RemoteClient) ReadRows(ctx context.Context, target *pb.ShardTarget, req
 }
 
 func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.ShardTarget, req *pb.ScanRowsReq) ([]*pb.ShardRow, *pb.PageResult, error) {
+	if err := validateRemoteTarget(target); err != nil {
+		return nil, nil, err
+	}
 	if req == nil {
 		req = &pb.ScanRowsReq{}
 	}
@@ -77,6 +87,9 @@ func (c *RemoteClient) ScanRows(ctx context.Context, target *pb.ShardTarget, req
 }
 
 func (c *RemoteClient) DeleteRows(ctx context.Context, target *pb.ShardTarget, keys []*pb.ShardKey) error {
+	if err := validateRemoteTarget(target); err != nil {
+		return err
+	}
 	rsp, err := c.proxyFor(target).DeleteRows(ctx, &pb.DeleteRowsReq{Target: target, Keys: keys})
 	if err != nil {
 		return err
@@ -84,36 +97,53 @@ func (c *RemoteClient) DeleteRows(ctx context.Context, target *pb.ShardTarget, k
 	return retInfoError(rsp.GetRetInfo())
 }
 
+func (c *RemoteClient) HeadSequence(ctx context.Context, target *pb.ShardTarget) (uint64, error) {
+	if err := validateRemoteTarget(target); err != nil {
+		return 0, err
+	}
+	rsp, err := c.proxyFor(target).GetShardState(ctx, &pb.GetShardStateReq{ShardId: target.GetShardId()})
+	if err != nil {
+		return 0, err
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return 0, err
+	}
+	return rsp.GetHeadSequence(), nil
+}
+
 func (c *RemoteClient) proxyFor(target *pb.ShardTarget) pb.DataShardClientProxy {
 	endpoint := ""
 	if target != nil {
-		endpoint = strings.TrimSpace(target.GetEndpoint())
+		endpoint = strings.TrimSpace(target.GetGatewayTarget()) + "|" + strings.TrimSpace(target.GetEndpoint())
 	}
 	key := c.serviceName + "|" + endpoint
 	if value, ok := c.proxies.Load(key); ok {
 		return value.(pb.DataShardClientProxy)
 	}
-	proxy := pb.NewDataShardClientProxy(remoteClientOptions(c.serviceName, endpoint)...)
+	proxy := pb.NewDataShardClientProxy(remoteClientOptions(c.serviceName, target)...)
 	actual, _ := c.proxies.LoadOrStore(key, proxy)
 	return actual.(pb.DataShardClientProxy)
 }
 
-func remoteClientOptions(serviceName string, endpoint string) []client.Option {
+func remoteClientOptions(serviceName string, target *pb.ShardTarget) []client.Option {
 	opts := make([]client.Option, 0, 2)
 	if strings.TrimSpace(serviceName) != "" {
 		opts = append(opts, client.WithServiceName(strings.TrimSpace(serviceName)))
 	}
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" || endpoint == "local" {
-		return opts
+	if target != nil && strings.TrimSpace(target.GetGatewayTarget()) != "" {
+		opts = append(opts, gatewayauth.NewTRPCClientOptions(target.GetGatewayTarget(), target.GetGatewayNodeId(), gatewayauth.CredentialsFromEnv())...)
 	}
-	if strings.Contains(endpoint, "://") {
-		return append(opts, client.WithTarget(endpoint))
+	return opts
+}
+
+func validateRemoteTarget(target *pb.ShardTarget) error {
+	if target == nil {
+		return fmt.Errorf("remote DataShard target is required")
 	}
-	if strings.Contains(endpoint, ":") {
-		return append(opts, client.WithTarget("ip://"+endpoint))
+	if strings.TrimSpace(target.GetGatewayTarget()) == "" {
+		return fmt.Errorf("remote DataShard target must include gateway_target")
 	}
-	return append(opts, client.WithServiceName(endpoint))
+	return nil
 }
 
 func retInfoError(ret *pb.RetInfo) error {

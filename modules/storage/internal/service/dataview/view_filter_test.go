@@ -37,6 +37,14 @@ func TestFilterRowsByViewJSONMatchesSubjectAndDimensions(t *testing.T) {
 	assert.Equal(t, "BTC", filtered[0].GetKey().GetSubjectId())
 }
 
+func TestFilterRowsByViewJSONMatchesFrequencyCaseInsensitively(t *testing.T) {
+	view := &pb.View{FilterJson: `{"freq":"1h"}`}
+	rows := []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "crypto", Freq: "1H"}}}
+	filtered, err := filterRowsByViewJSON(view, rows)
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+}
+
 func TestFilteredTimeSeriesRowsForViewAppliesFilterBeforeRowMapper(t *testing.T) {
 	view := &pb.View{
 		SpaceId: "crypto", ViewId: "combined", PrimaryDatasetId: "primary",

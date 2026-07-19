@@ -14,9 +14,16 @@ import (
 // Without this checkpoint-only command, a no-op event permanently advances
 // the in-memory lane while leaving the durable ViewIndex position behind.
 func (s *Service) applyCheckpointOnly(ctx context.Context, progress applyProgress, engineName string) error {
-	views, err := s.metadata.ListViewsByDataset(ctx, progress.spaceID, progress.datasetID)
-	if err != nil {
-		return err
+	var views []*pb.View
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := s.metadata.ListViews(ctx, progress.spaceID, "", "active", &pb.Page{Page: pageNo, Size: 1000})
+		if err != nil {
+			return err
+		}
+		views = append(views, items...)
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			break
+		}
 	}
 	engine, err := s.engine(engineName)
 	if err != nil {

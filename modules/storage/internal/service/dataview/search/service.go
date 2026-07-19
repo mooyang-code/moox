@@ -77,7 +77,7 @@ func (s *Service) Prepare(ctx context.Context, indexID string, schema viewindex.
 		return err
 	}
 	defer release()
-	return index.SetSchema(ctx, schema.ViewVersion, schema.SchemaHash)
+	return index.SetSchema(ctx, schema.ViewVersion, schema.SchemaHash, schema.Columns)
 }
 
 func (s *Service) Write(ctx context.Context, indexID string, batch viewindex.BatchWrite) error {

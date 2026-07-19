@@ -6,11 +6,11 @@ func TestStorageTargetsUseEnvironmentBeforeLocalConfig(t *testing.T) {
 	resetStorageTargetState(t)
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://gateway.example.com:11003/")
 
-	if got := GetStorageMetadataTarget(); got != "ip://gateway.example.com:11003" {
-		t.Fatalf("GetStorageMetadataTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
-	if got := GetStoragePrimaryTarget(); got != "ip://gateway.example.com:11003" {
-		t.Fatalf("GetStoragePrimaryTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
 }
 
@@ -18,13 +18,13 @@ func TestStorageRuntimeTargetsOverrideEnvironment(t *testing.T) {
 	resetStorageTargetState(t)
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://gateway.example.com:11003")
 
-	UpdateStorageTargets("ip://runtime-gateway.example.com:11003/", "ip://runtime-gateway.example.com:11003/")
+	UpdateStorageRPCGatewayTarget("ip://runtime-gateway.example.com:11003/")
 
-	if got := GetStorageMetadataTarget(); got != "ip://runtime-gateway.example.com:11003" {
-		t.Fatalf("GetStorageMetadataTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://runtime-gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
-	if got := GetStoragePrimaryTarget(); got != "ip://runtime-gateway.example.com:11003" {
-		t.Fatalf("GetStoragePrimaryTarget() = %q", got)
+	if got := GetStorageRPCGatewayTarget(); got != "ip://runtime-gateway.example.com:11003" {
+		t.Fatalf("GetStorageRPCGatewayTarget() = %q", got)
 	}
 }
 

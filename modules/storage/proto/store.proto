@@ -57,6 +57,10 @@ message ShardTarget {
   string endpoint = 7;
   // shard_id 是 DataShard 的物理身份，与服务节点 node_id 独立。
   string shard_id = 8;
+  // gateway_target 是独立 DataShard 的 Node Service Gateway 地址。
+  string gateway_target = 9;
+  // gateway_node_id 是 gateway_target 对应的 Node ID。
+  string gateway_node_id = 10;
 }
 
 // MergeRowsReq 表示写入在线主存行的内部请求。
@@ -144,6 +148,16 @@ message DeleteRowsRsp {
   uint32 deleted = 2;
 }
 
+message GetShardStateReq {
+  string shard_id = 1;
+}
+
+message GetShardStateRsp {
+  common.RetInfo ret_info = 1;
+  string shard_id = 2;
+  uint64 head_sequence = 3;
+}
+
 // DataShard 是 PrimaryStore 调用的内部物理事实分片服务。
 service DataShard {
   // MergeRows 将已完成路由的数据行写入在线主存。
@@ -153,4 +167,5 @@ service DataShard {
   // ScanRows 按目标数据集扫描在线主存，供内部 View rebuild 使用。
   rpc ScanRows(ScanRowsReq) returns (ScanRowsRsp);
   rpc DeleteRows(DeleteRowsReq) returns (DeleteRowsRsp);
+  rpc GetShardState(GetShardStateReq) returns (GetShardStateRsp);
 }

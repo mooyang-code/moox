@@ -22,7 +22,7 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 	if rsp.Module != "collector" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
 	}
-	if rsp.Details["storage_metadata_target"] != "ip://127.0.0.1:11003" {
-		t.Fatalf("storage_metadata_target = %v", rsp.Details["storage_metadata_target"])
+	if rsp.Details["storage_rpc_gateway_target"] != "ip://127.0.0.1:11003" {
+		t.Fatalf("storage_rpc_gateway_target = %v", rsp.Details["storage_rpc_gateway_target"])
 	}
 }

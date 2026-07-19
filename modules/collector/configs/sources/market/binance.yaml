@@ -19,10 +19,10 @@ storage:
       subject_type: "crypto_pair"
       subject_market: "spot"
       record_dataset_id: "binance_spot_symbols"
-      kline_dataset_id: "binance_spot_kline"
+      kline_dataset_id: "binance_spot_kline_1h"
       bind_dataset_ids:
         - "binance_spot_symbols"
-        - "binance_spot_kline"
+        - "binance_spot_kline_1h"
       auth_info:
         app_id: "moox-collector"
         app_key: "binance-spot-collector"

@@ -15,7 +15,7 @@ import (
 func TestBatchWriteUsesWarmingBuildSchema(t *testing.T) {
 	item := &pb.View{
 		SpaceId: "crypto", ViewId: "news_view", Engine: "bleve",
-		ActiveViewVersion: 1, ActiveSchemaHash: "active-hash",
+		ActiveViewVersion: 1, ActiveViewSchemaHash: "active-hash",
 		IndexBuild: &pb.ViewIndexBuild{TargetViewVersion: 2, SchemaHash: "build-hash"},
 	}
 	columns := []*pb.ViewColumn{{ColumnName: "title"}}

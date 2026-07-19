@@ -18,27 +18,25 @@ if [[ -x "${SCRIPT_DIR}/stop.sh" ]]; then
 fi
 
 case "${APP_NAME}" in
-  moox-storage-primary) STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"; STORAGE_BUSINESS_CONFIG="${SCRIPT_DIR}/config/storage.yaml" ;;
-  moox-storage-view) STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"; STORAGE_BUSINESS_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml" ;;
-  moox-storage-shard) STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"; STORAGE_BUSINESS_CONFIG="${SCRIPT_DIR}/config/storage.yaml" ;;
+  moox-storage-primary|moox-storage-view|moox-storage-shard) STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"; STORAGE_BUSINESS_CONFIG="" ;;
   *) echo "unsupported storage role binary: ${APP_NAME}" >&2; exit 1 ;;
 esac
 export STORAGE_CONFIG_PATH="${SCRIPT_DIR}/config"
 export STORAGE_DATABASE_PATH="${SCRIPT_DIR}/database"
-export MOOX_STORAGE_HOME="${MOOX_STORAGE_HOME:-${SCRIPT_DIR}/../data/storage}"
+if [[ "${APP_NAME}" == "moox-storage-shard" ]]; then
+  export MOOX_STORAGE_HOME="${MOOX_STORAGE_HOME:-${SCRIPT_DIR}/../data/storage-shard}"
+else
+  export MOOX_STORAGE_HOME="${MOOX_STORAGE_HOME:-${SCRIPT_DIR}/../data/storage}"
+fi
 mkdir -p "${MOOX_STORAGE_HOME}"
 
 echo "initializing metadata schema"
 if [[ "${APP_NAME}" == "moox-storage-primary" ]]; then
-  "./bin/${APP_NAME}-cli" init --storage-conf="${STORAGE_BUSINESS_CONFIG}" --schema-path=./schema/metadata.sql >> ./logs/${APP_NAME}.log 2>&1
+  "./bin/${APP_NAME}-cli" init --storage-conf="${STORAGE_FRAMEWORK_CONFIG}" --schema-path=./schema/metadata.sql >> ./logs/${APP_NAME}.log 2>&1
 fi
 
 echo "starting ${APP_NAME}"
-if [[ -n "${STORAGE_BUSINESS_CONFIG}" ]]; then
-  nohup "./bin/${APP_NAME}" -conf="${STORAGE_FRAMEWORK_CONFIG}" -storage-conf="${STORAGE_BUSINESS_CONFIG}" > ./logs/${APP_NAME}.log 2>&1 &
-else
-  nohup "./bin/${APP_NAME}" -conf="${STORAGE_FRAMEWORK_CONFIG}" > ./logs/${APP_NAME}.log 2>&1 &
-fi
+nohup "./bin/${APP_NAME}" -conf="${STORAGE_FRAMEWORK_CONFIG}" > ./logs/${APP_NAME}.log 2>&1 &
 echo $! > "${PID_FILE}"
 sleep "${STARTUP_WAIT_SECONDS}"
 

@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture release release-matrix deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-storage-boundary test-storage-consistency release release-matrix deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -13,6 +13,12 @@ check-module-boundaries:
 
 check-package-boundaries:
 	./scripts/check-package-boundaries.sh
+
+test-storage-boundary:
+	bash scripts/test-storage-boundary-contract.sh
+
+test-storage-consistency:
+	bash scripts/test-storage-consistency-contract.sh
 
 check-format:
 	./scripts/check-gofmt.sh
@@ -49,7 +55,7 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
+verify: check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 

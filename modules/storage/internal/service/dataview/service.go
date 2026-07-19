@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/typedvalue"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
@@ -26,6 +27,10 @@ type Service struct {
 	metadata          ViewMetadataReader
 	timeSeriesIndexes TimeSeriesIndexQuery
 	recordIndexes     RecordIndexQuery
+	heads             ShardHeadReader
+	timeSeriesStats   ViewIndexStatsReader
+	recordStats       ViewIndexStatsReader
+	requireFreshness  bool
 }
 
 type ViewMetadataReader interface {
@@ -42,16 +47,32 @@ type RecordIndexQuery interface {
 	QueryRecordRows(ctx context.Context, indexID string, datasetID string, req *pb.SearchRecordRowsReq) ([]*pb.ResultColumn, []*pb.RecordRow, *pb.PageResult, error)
 }
 
+// ViewIndexStatsReader lets the query owner verify the durable index checkpoint
+// against the current PrimaryStore head.
+type ViewIndexStatsReader interface {
+	Stat(ctx context.Context, indexID string) (viewindex.ViewIndexStats, error)
+}
+
 type ServiceOptions struct {
 	Metadata          ViewMetadataReader
 	TimeSeriesIndexes TimeSeriesIndexQuery
 	RecordIndexes     RecordIndexQuery
+	Heads             ShardHeadReader
+	RequireFreshness  bool
 }
 
 func NewService(opts ServiceOptions) *Service {
 	return &Service{
 		metadata: opts.Metadata, timeSeriesIndexes: opts.TimeSeriesIndexes, recordIndexes: opts.RecordIndexes,
+		heads:           opts.Heads,
+		timeSeriesStats: statsReader(opts.TimeSeriesIndexes), recordStats: statsReader(opts.RecordIndexes),
+		requireFreshness: opts.RequireFreshness,
 	}
+}
+
+func statsReader(candidate any) ViewIndexStatsReader {
+	reader, _ := candidate.(ViewIndexStatsReader)
+	return reader
 }
 
 func (s *Service) Close() error {
@@ -72,11 +93,12 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err := s.validateTimeSeriesView(ctx, viewMeta); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if err := s.validateTimeSeriesFreshness(ctx, req, viewMeta); err != nil {
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
-	}
 	if viewMeta.GetActiveIndexId() == "" {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("view active_index_id is empty"))}, nil
+	}
+	complete, err := s.validateTimeSeriesFreshness(ctx, req, viewMeta)
+	if err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
 	}
 	if err := s.validateTimeSeriesActiveSchema(ctx, viewMeta, requestedViewQueryFields(req.GetColumnNames(), req.GetFilters(), req.GetSorts())); err != nil {
 		if IsViewNotReadyError(err) {
@@ -91,7 +113,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Columns: columns, Rows: rows, PageResult: page, ServedIndexedFrom: viewMeta.GetIndexedFrom(), ServedIndexedTo: viewMeta.GetIndexedTo(), Complete: viewFreshnessConfirmed(viewMeta)}, nil
+	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Columns: columns, Rows: rows, PageResult: page, ServedIndexedFrom: viewMeta.GetIndexedFrom(), ServedIndexedTo: viewMeta.GetIndexedTo(), Complete: complete}, nil
 }
 
 func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
@@ -105,11 +127,12 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	if err := s.validateRecordView(ctx, viewMeta); err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if err := s.validateRecordFreshness(ctx, req, viewMeta); err != nil {
-		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
-	}
 	if viewMeta.GetActiveIndexId() == "" {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("view active_index_id is empty"))}, nil
+	}
+	complete, err := s.validateRecordFreshness(ctx, req, viewMeta)
+	if err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, err)}, nil
 	}
 	datasetID := strings.TrimSpace(viewMeta.GetPrimaryDatasetId())
 	if datasetID == "" {
@@ -142,7 +165,7 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		rows[idx] = projectRecordRowColumns(row, req.GetColumnNames())
 	}
 	return &pb.SearchRecordRowsRsp{
-		RetInfo: retinfo.Success("success"), Columns: projectResultColumns(viewMeta.GetActiveColumns(), req.GetColumnNames()), Rows: rows, PageResult: page, ServedIndexedFrom: viewMeta.GetIndexedFrom(), ServedIndexedTo: viewMeta.GetIndexedTo(), Complete: viewFreshnessConfirmed(viewMeta),
+		RetInfo: retinfo.Success("success"), Columns: projectResultColumns(viewMeta.GetActiveColumns(), req.GetColumnNames()), Rows: rows, PageResult: page, ServedIndexedFrom: viewMeta.GetIndexedFrom(), ServedIndexedTo: viewMeta.GetIndexedTo(), Complete: complete,
 	}, nil
 }
 
@@ -255,25 +278,25 @@ func (s *Service) validateTimeSeriesView(ctx context.Context, viewMeta *pb.View)
 	return nil
 }
 
-func (s *Service) validateTimeSeriesFreshness(ctx context.Context, req *pb.QueryTimeSeriesRowsReq, viewMeta *pb.View) error {
+func (s *Service) validateTimeSeriesFreshness(ctx context.Context, req *pb.QueryTimeSeriesRowsReq, viewMeta *pb.View) (bool, error) {
 	if status := strings.ToLower(strings.TrimSpace(viewMeta.GetStatus())); status != "" && status != "active" {
-		return errors.New("view is inactive")
+		return false, errors.New("view is inactive")
 	}
 	dataset, err := s.metadata.GetDataset(ctx, viewMeta.GetSpaceId(), viewMeta.GetPrimaryDatasetId())
 	if err != nil {
-		return err
+		return false, err
 	}
 	if status := strings.ToLower(strings.TrimSpace(dataset.GetStatus())); status != "" && status != "active" {
-		return errors.New("dataset is inactive")
+		return false, errors.New("dataset is inactive")
 	}
 	start, end := strings.TrimSpace(viewMeta.GetIndexedFrom()), strings.TrimSpace(viewMeta.GetIndexedTo())
 	if (start == "") != (end == "") {
-		return errors.New("view indexed range must provide both indexed_from and indexed_to")
+		return false, errors.New("view indexed range must provide both indexed_from and indexed_to")
 	}
 	for name, value := range map[string]string{"indexed_from": start, "indexed_to": end} {
 		if value != "" {
 			if _, ok := typedvalue.ParseTime(value); !ok {
-				return fmt.Errorf("%s is not canonical RFC3339 time", name)
+				return false, fmt.Errorf("%s is not canonical RFC3339 time", name)
 			}
 		}
 	}
@@ -283,55 +306,89 @@ func (s *Service) validateTimeSeriesFreshness(ctx context.Context, req *pb.Query
 			queryStart, queryEnd = req.GetTimeRange().GetStartTime(), req.GetTimeRange().GetEndTime()
 		}
 		if queryStart == "" || queryEnd == "" {
-			return errors.New("query time range is required for a bounded view")
+			return false, errors.New("query time range is required for a bounded view")
 		}
 		if queryStart != "" && start != "" && compareRFC3339(queryStart, start) < 0 {
-			return errors.New("query starts before indexed_from")
+			return false, errors.New("query starts before indexed_from")
 		}
 		if queryEnd != "" && end != "" && compareRFC3339(queryEnd, end) > 0 {
-			return errors.New("query ends after indexed_to")
+			return false, errors.New("query ends after indexed_to")
 		}
 	}
-	attrs := viewMeta.GetAttributes()
-	if attrs["checkpoint_sequence"] != "" && attrs["shard_head_sequence"] != "" && attrs["checkpoint_sequence"] != attrs["shard_head_sequence"] {
-		return errors.New("view checkpoint is behind shard head")
-	}
-	return nil
+	return s.validateIndexFreshness(ctx, viewMeta, s.timeSeriesStats)
 }
 
-func (s *Service) validateRecordFreshness(ctx context.Context, req *pb.SearchRecordRowsReq, viewMeta *pb.View) error {
+func (s *Service) validateRecordFreshness(ctx context.Context, req *pb.SearchRecordRowsReq, viewMeta *pb.View) (bool, error) {
 	if status := strings.ToLower(strings.TrimSpace(viewMeta.GetStatus())); status != "" && status != "active" {
-		return errors.New("view is inactive")
+		return false, errors.New("view is inactive")
 	}
 	dataset, err := s.metadata.GetDataset(ctx, viewMeta.GetSpaceId(), viewMeta.GetPrimaryDatasetId())
 	if err != nil {
-		return err
+		return false, err
 	}
 	if status := strings.ToLower(strings.TrimSpace(dataset.GetStatus())); status != "" && status != "active" {
-		return errors.New("dataset is inactive")
+		return false, errors.New("dataset is inactive")
 	}
 	start, end := strings.TrimSpace(viewMeta.GetIndexedFrom()), strings.TrimSpace(viewMeta.GetIndexedTo())
 	if (start == "") != (end == "") {
-		return errors.New("view indexed range must provide both indexed_from and indexed_to")
+		return false, errors.New("view indexed range must provide both indexed_from and indexed_to")
 	}
 	if versionRange := req.GetVersionRange(); versionRange != nil {
 		if (start != "" || end != "") && (versionRange.GetStartVersion() == "" || versionRange.GetEndVersion() == "") {
-			return errors.New("query version range is required for a bounded view")
+			return false, errors.New("query version range is required for a bounded view")
 		}
 		if versionRange.GetStartVersion() != "" && start != "" && strings.Compare(versionRange.GetStartVersion(), start) < 0 {
-			return errors.New("query starts before indexed_from")
+			return false, errors.New("query starts before indexed_from")
 		}
 		if versionRange.GetEndVersion() != "" && end != "" && strings.Compare(versionRange.GetEndVersion(), end) > 0 {
-			return errors.New("query ends after indexed_to")
+			return false, errors.New("query ends after indexed_to")
 		}
 	} else if start != "" || end != "" {
-		return errors.New("query version range is required for a bounded view")
+		return false, errors.New("query version range is required for a bounded view")
 	}
+	return s.validateIndexFreshness(ctx, viewMeta, s.recordStats)
+}
+
+func (s *Service) validateIndexFreshness(ctx context.Context, viewMeta *pb.View, statsReader ViewIndexStatsReader) (bool, error) {
 	attrs := viewMeta.GetAttributes()
-	if attrs["checkpoint_sequence"] != "" && attrs["shard_head_sequence"] != "" && attrs["checkpoint_sequence"] != attrs["shard_head_sequence"] {
-		return errors.New("view checkpoint is behind shard head")
+	if !s.requireFreshness && attrs["checkpoint_sequence"] != "" && attrs["shard_head_sequence"] != "" {
+		if attrs["checkpoint_sequence"] != attrs["shard_head_sequence"] {
+			return false, errors.New("view checkpoint is behind shard head")
+		}
+		return true, nil
 	}
-	return nil
+	if s.heads == nil || statsReader == nil {
+		if !s.requireFreshness {
+			return false, nil
+		}
+		return false, errors.New("view freshness cannot be verified")
+	}
+	stats, err := statsReader.Stat(ctx, viewMeta.GetActiveIndexId())
+	if err != nil {
+		return false, fmt.Errorf("read view index freshness: %w", err)
+	}
+	heads, err := shardHeadsForView(ctx, s.heads, viewMeta)
+	if err != nil {
+		return false, fmt.Errorf("read primary shard freshness: %w", err)
+	}
+	if len(heads) == 0 {
+		return false, errors.New("primary shard freshness is unavailable")
+	}
+	if len(stats.ShardCheckpoints) != len(heads) {
+		return false, errors.New("view shard checkpoint set does not match primary shard set")
+	}
+	for shardID, head := range heads {
+		checkpoint, ok := stats.ShardCheckpoints[shardID]
+		if !ok || checkpoint != head {
+			return false, errors.New("view checkpoint is behind shard head")
+		}
+	}
+	for shardID := range stats.ShardCheckpoints {
+		if _, ok := heads[shardID]; !ok {
+			return false, errors.New("view shard checkpoint set does not match primary shard set")
+		}
+	}
+	return true, nil
 }
 
 func compareRFC3339(left, right string) int {

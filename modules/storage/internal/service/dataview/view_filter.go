@@ -58,7 +58,7 @@ func fixedViewFilterMatchesRow(filter *fixedViewFilter, row *pb.TimeSeriesRow) b
 	if filter.SubjectID != "" && filter.SubjectID != key.GetSubjectId() {
 		return false
 	}
-	if filter.Freq != "" && filter.Freq != key.GetFreq() {
+	if filter.Freq != "" && !strings.EqualFold(filter.Freq, key.GetFreq()) {
 		return false
 	}
 	for name, value := range filter.Dimensions {

@@ -71,6 +71,9 @@ func (u ShardCheckpointUpdate) Validate() error {
 	if u.ShardID == "" {
 		return errors.New("ShardID is required")
 	}
+	if u.LastAppliedSequence == 0 && u.ExpectedLastAppliedSequence == 0 {
+		return nil
+	}
 	if u.LastAppliedSequence <= u.ExpectedLastAppliedSequence {
 		return fmt.Errorf("LastAppliedSequence %d must be greater than ExpectedLastAppliedSequence %d", u.LastAppliedSequence, u.ExpectedLastAppliedSequence)
 	}
@@ -164,6 +167,9 @@ func (b ViewIndexApplyBatch) Validate() error {
 				}
 			}
 		}
+		if write.Operation == RowWriteOperationReplace && len(b.RequiredColumnNames) == 0 {
+			return fmt.Errorf("row write %d REPLACE requires required view columns", i)
+		}
 	}
 
 	for i, update := range b.CheckpointUpdates {
@@ -216,11 +222,31 @@ func ValidateIndexRangeProgress(currentFrom, currentTo string, update *IndexRang
 			return errors.New("index range indexed_from must not be after indexed_to")
 		}
 	}
-	if currentFrom != "" && from != "" && from < currentFrom {
-		return fmt.Errorf("index range indexed_from regressed from %q to %q", currentFrom, from)
+	if currentFrom != "" && from != "" {
+		current, err := time.Parse(time.RFC3339Nano, currentFrom)
+		if err != nil {
+			return fmt.Errorf("current indexed_from is invalid: %w", err)
+		}
+		candidate, err := time.Parse(time.RFC3339Nano, from)
+		if err != nil {
+			return fmt.Errorf("indexed_from is invalid: %w", err)
+		}
+		if candidate.Before(current) {
+			return fmt.Errorf("index range indexed_from regressed from %q to %q", currentFrom, from)
+		}
 	}
-	if currentTo != "" && to != "" && to < currentTo {
-		return fmt.Errorf("index range indexed_to regressed from %q to %q", currentTo, to)
+	if currentTo != "" && to != "" {
+		current, err := time.Parse(time.RFC3339Nano, currentTo)
+		if err != nil {
+			return fmt.Errorf("current indexed_to is invalid: %w", err)
+		}
+		candidate, err := time.Parse(time.RFC3339Nano, to)
+		if err != nil {
+			return fmt.Errorf("indexed_to is invalid: %w", err)
+		}
+		if candidate.Before(current) {
+			return fmt.Errorf("index range indexed_to regressed from %q to %q", currentTo, to)
+		}
 	}
 	return nil
 }

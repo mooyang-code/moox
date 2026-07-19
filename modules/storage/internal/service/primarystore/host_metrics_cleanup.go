@@ -56,6 +56,11 @@ func (s *Service) CleanupExpiredHostMetrics(ctx context.Context, opts HostMetric
 				break
 			}
 			if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+				if rsp != nil && rsp.GetRetInfo() != nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_DATASET_NOT_FOUND {
+					// Host metric datasets are optional during bootstrap. Treat an
+					// absent dataset as an empty cleanup target until metadata is seeded.
+					break
+				}
 				message := "missing retinfo"
 				if rsp != nil && rsp.GetRetInfo() != nil && strings.TrimSpace(rsp.GetRetInfo().GetMsg()) != "" {
 					message = rsp.GetRetInfo().GetMsg()

@@ -102,24 +102,14 @@ func (r *serviceRun) runLane() {
 				request.result <- fmt.Errorf("view builder shard %q is blocked after a prior failure: %w", request.shardID, blocked)
 				continue
 			}
-			if request.sequence != 0 && request.shardID != "" {
-				last := r.sequenceByShard[request.shardID]
-				// A durable ViewIndex may already have a checkpoint when the
-				// builder starts. The first event establishes the in-memory
-				// lane; subsequent events must remain contiguous.
-				if last != 0 && request.sequence != last+1 {
-					err := fmt.Errorf("view builder shard %q sequence gap or reorder: got %d after %d", request.shardID, request.sequence, last)
-					r.blockedByShard[request.shardID] = err
-					request.result <- err
-					continue
-				}
-			}
 			err := request.fn(request.ctx)
 			if err != nil && request.sequence != 0 && request.shardID != "" {
 				r.blockedByShard[request.shardID] = err
 			}
 			if err == nil && request.sequence != 0 && request.shardID != "" {
-				r.sequenceByShard[request.shardID] = request.sequence
+				if request.sequence > r.sequenceByShard[request.shardID] {
+					r.sequenceByShard[request.shardID] = request.sequence
+				}
 			}
 			request.result <- err
 		}
@@ -466,19 +456,35 @@ func (s *Service) enqueueRecordRun(ctx context.Context, run *serviceRun, event *
 
 func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSeriesDeriveItem) {
 	started := time.Now()
-	rows := make([]*pb.TimeSeriesRow, 0, len(items))
-	deletes := make([]*pb.TimeSeriesRow, 0, len(items))
+	type batchKey struct{ spaceID, datasetID string }
+	rowsByDataset := make(map[batchKey][]*pb.TimeSeriesRow)
+	deletesByDataset := make(map[batchKey][]*pb.TimeSeriesRow)
+	progressByDataset := make(map[batchKey]applyProgress)
+	order := make([]batchKey, 0, len(items))
+	seen := make(map[batchKey]struct{})
 	for _, item := range items {
+		key := batchKey{spaceID: item.spaceID, datasetID: item.datasetID}
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			order = append(order, key)
+		}
 		if item.row != nil {
 			if item.delete {
-				deletes = append(deletes, item.row)
+				deletesByDataset[key] = append(deletesByDataset[key], item.row)
 			} else {
-				rows = append(rows, item.row)
+				rowsByDataset[key] = append(rowsByDataset[key], item.row)
 			}
 		}
+		if item.checkpoint && item.shardID != "" && item.sequence != 0 {
+			progressByDataset[key] = applyProgress{shardID: item.shardID, sequence: item.sequence, spaceID: item.spaceID, datasetID: item.datasetID}
+		}
 	}
-	progress := progressFromTimeSeriesItems(items)
-	err := s.processTimeSeriesRowsBatch(ctx, rows, [][]*pb.TimeSeriesRow{deletes}, progress)
+	var err error
+	for _, key := range order {
+		if err = s.processTimeSeriesRowsBatch(ctx, rowsByDataset[key], [][]*pb.TimeSeriesRow{deletesByDataset[key]}, progressByDataset[key]); err != nil {
+			break
+		}
+	}
 	s.viewMetrics().ObserveBatch("duckdb", deriveResult(err), time.Since(started))
 	for _, item := range items {
 		item.completion.complete(err)
@@ -487,19 +493,35 @@ func (s *Service) processTimeSeriesItemBatch(ctx context.Context, items []timeSe
 
 func (s *Service) processRecordItemBatch(ctx context.Context, items []recordDeriveItem) {
 	started := time.Now()
-	rows := make([]*pb.RecordRow, 0, len(items))
-	deletes := make([]*pb.RecordRow, 0, len(items))
+	type batchKey struct{ spaceID, datasetID string }
+	rowsByDataset := make(map[batchKey][]*pb.RecordRow)
+	deletesByDataset := make(map[batchKey][]*pb.RecordRow)
+	progressByDataset := make(map[batchKey]applyProgress)
+	order := make([]batchKey, 0, len(items))
+	seen := make(map[batchKey]struct{})
 	for _, item := range items {
+		key := batchKey{spaceID: item.spaceID, datasetID: item.datasetID}
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			order = append(order, key)
+		}
 		if item.row != nil {
 			if item.delete {
-				deletes = append(deletes, item.row)
+				deletesByDataset[key] = append(deletesByDataset[key], item.row)
 			} else {
-				rows = append(rows, item.row)
+				rowsByDataset[key] = append(rowsByDataset[key], item.row)
 			}
 		}
+		if item.checkpoint && item.shardID != "" && item.sequence != 0 {
+			progressByDataset[key] = applyProgress{shardID: item.shardID, sequence: item.sequence, spaceID: item.spaceID, datasetID: item.datasetID}
+		}
 	}
-	progress := progressFromRecordItems(items)
-	err := s.processRecordRowsBatch(ctx, rows, [][]*pb.RecordRow{deletes}, progress)
+	var err error
+	for _, key := range order {
+		if err = s.processRecordRowsBatch(ctx, rowsByDataset[key], [][]*pb.RecordRow{deletesByDataset[key]}, progressByDataset[key]); err != nil {
+			break
+		}
+	}
 	s.viewMetrics().ObserveBatch("bleve", deriveResult(err), time.Since(started))
 	for _, item := range items {
 		item.completion.complete(err)
@@ -512,6 +534,13 @@ type applyProgress struct {
 	expected  uint64
 	spaceID   string
 	datasetID string
+}
+
+// checkpointLaneID is the single durable source sequence lane for a ViewIndex.
+// Irrelevant dataset events are recorded as checkpoint-only writes so a later
+// event can still enforce a contiguous DataShard prefix after restart.
+func checkpointLaneID(progress applyProgress) string {
+	return progress.shardID
 }
 
 func progressFromTimeSeriesItems(items []timeSeriesDeriveItem) applyProgress {

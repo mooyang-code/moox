@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_view_version INTEGER NOT NULL DEFAULT 1,
     c_active_view_version INTEGER NOT NULL DEFAULT 0,
     c_active_columns_json TEXT NOT NULL DEFAULT '[]',
-    c_active_schema_hash TEXT NOT NULL DEFAULT '',
+    c_active_view_schema_hash TEXT NOT NULL DEFAULT '',
     c_indexed_from TEXT NOT NULL DEFAULT '',
     c_indexed_to TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',

@@ -55,10 +55,20 @@ services:
       health_kind: readiness
       monitor_enabled: true
       gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, GetView, ListViews, UpsertViewColumn, ListViewColumns, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, BindDatasetSubject, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, CreatePrimaryStoreNode, UpdatePrimaryStoreNode, GetPrimaryStoreNode, ListPrimaryStoreNodes, CreatePrimaryStoreRoute, UpdatePrimaryStoreRoute, GetPrimaryStoreRoute, ListPrimaryStoreRoutes, RegisterArchiveFile, ListArchiveFiles]
+      gateway_callers: [admin-gateway, collector, factor, monitor, archive, moox-cli, storage-view]
       gateway_routes:
+        - service_path: trpc.moox.storage.Metadata
+          port: 20100
+          gateway_methods: [ClaimViewIndexBuild, UpdateViewIndexBuild, ActivateViewIndex, FailViewIndexBuild]
+          gateway_callers: [storage-view]
         - service_path: trpc.moox.storage.PrimaryStore
-          port: 20201
+          port: 20102
           gateway_methods: [MergeTimeSeriesRows, ReadTimeSeriesRows, MergeRecordRows, ReadRecordRows]
+          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
+        - service_path: trpc.moox.storage.PrimaryStoreScan
+          port: 20105
+          gateway_methods: [ScanTimeSeriesRows, ScanRecordRows, GetShardHeads]
+          gateway_callers: [storage-view, archive]
   - name: storage-view
     kind: storage
     deployment_mode: process
@@ -76,6 +86,7 @@ services:
       health_kind: readiness
       monitor_enabled: true
       gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
+      gateway_callers: [admin-gateway, collector, factor, monitor]
   - name: eventbus
     kind: eventbus
     deployment_mode: process
@@ -107,6 +118,8 @@ services:
       health_url: http://127.0.0.1:11409/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_collector
     kind: collector
     deployment_mode: process
@@ -123,6 +136,8 @@ services:
       health_url: http://127.0.0.1:11412/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_cloudnode
     kind: cloudnode
     deployment_mode: process
@@ -139,6 +154,8 @@ services:
       health_url: http://127.0.0.1:11411/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_factor
     kind: factor
     deployment_mode: process
@@ -155,6 +172,8 @@ services:
       health_url: http://127.0.0.1:11414/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_strategy
     kind: strategy
     deployment_mode: process
@@ -171,6 +190,8 @@ services:
       health_url: http://127.0.0.1:11431/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_archive
     kind: archive
     deployment_mode: process
@@ -201,6 +222,8 @@ services:
       health_url: http://127.0.0.1:11425/readyz
       health_kind: readiness
       monitor_enabled: true
+      gateway_methods: ["*"]
+      gateway_callers: ["*"]
   - name: moox_trade
     kind: trade
     deployment_mode: process
@@ -281,6 +304,7 @@ services:
       gateway_methods:
         - ListSecrets
         - RevealSecret
+      gateway_callers: [admin-gateway]
   - name: sysdeploy
     kind: admin_rpc
     deployment_mode: endpoint
@@ -296,6 +320,7 @@ services:
     extra_config:
       gateway_methods:
         - ListActiveServiceDeployments
+      gateway_callers: [admin-gateway, monitor, moox-cli]
   - name: trade_account
     kind: trade
     deployment_mode: endpoint

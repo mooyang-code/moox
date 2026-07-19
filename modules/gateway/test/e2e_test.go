@@ -200,7 +200,7 @@ func snapshotFor(t *testing.T, nodeID, upstreamURL string, disabled bool) gatewa
 		t.Fatal(err)
 	}
 	snapshot, err := gatewayproxy.NormalizeAndHashState(nodeID, disabled, []gatewayproxy.Route{{
-		ServiceID: "echo", Address: parsed.Host, ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"},
+		ServiceID: "echo", Address: parsed.Host, ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, AllowedCallers: []string{"*"},
 	}})
 	if err != nil {
 		t.Fatal(err)

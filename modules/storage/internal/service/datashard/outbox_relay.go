@@ -121,8 +121,10 @@ func (r *OutboxRelay) loop(ctx context.Context) {
 		}
 		backoff = r.cfg.BackoffBase
 		if count == 0 {
+			r.failures.Store(0)
 			continue
 		}
+		r.failures.Store(0)
 	}
 }
 
@@ -156,6 +158,43 @@ func (r *OutboxRelay) flush(ctx context.Context) (int, error) {
 }
 
 func (r *OutboxRelay) FailureCount() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.failures.Load()
+}
+
+func (r *OutboxRelay) Ready() bool {
+	if r == nil {
+		return true
+	}
+	if r.Failures() != 0 || r.store == nil || r.publisher == nil {
+		return false
+	}
+	entries, err := r.store.ListOutbox(trpc.BackgroundContext(), 0, r.cfg.MaxRows+1, r.cfg.MaxBytes+1)
+	if err != nil {
+		return false
+	}
+	if len(entries) >= r.cfg.MaxRows {
+		return false
+	}
+	var totalBytes int
+	for _, entry := range entries {
+		if entry == nil {
+			return false
+		}
+		totalBytes += len(entry.Data)
+		if totalBytes >= r.cfg.MaxBytes {
+			return false
+		}
+		if r.cfg.MaxAge > 0 && !entry.CreatedAt.IsZero() && time.Since(entry.CreatedAt) > r.cfg.MaxAge {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *OutboxRelay) Failures() uint64 {
 	if r == nil {
 		return 0
 	}

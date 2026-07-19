@@ -13,6 +13,16 @@ type RemoteMetadata struct {
 	proxy pb.MetadataClientProxy
 }
 
+// Ready performs a real metadata RPC so an independent View process does not
+// advertise readiness merely because its local index directories exist.
+func (m *RemoteMetadata) Ready(ctx context.Context) error {
+	rsp, err := m.proxy.ListSpaces(ctx, &pb.ListSpacesReq{Page: &pb.Page{Size: 1}})
+	if err != nil {
+		return err
+	}
+	return metadataRetInfoError(rsp.GetRetInfo())
+}
+
 func NewRemoteMetadata(serviceName string, opts ...client.Option) *RemoteMetadata {
 	if serviceName != "" {
 		opts = append([]client.Option{client.WithServiceName(serviceName)}, opts...)

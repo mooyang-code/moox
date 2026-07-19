@@ -54,7 +54,16 @@ func NewPrimaryStoreReaderWithGateway(local PrimaryStoreReader, serviceName stri
 
 type remotePrimaryStoreReader struct {
 	proxy     pb.PrimaryStoreClientProxy
-	scanProxy pb.PrimaryStoreScanClientProxy
+	scanProxy primaryStoreScanProxy
+}
+
+type primaryStoreScanProxy interface {
+	ScanTimeSeriesRows(context.Context, *pb.ScanTimeSeriesRowsReq, ...client.Option) (*pb.ScanTimeSeriesRowsRsp, error)
+	ScanRecordRows(context.Context, *pb.ScanRecordRowsReq, ...client.Option) (*pb.ScanRecordRowsRsp, error)
+}
+
+type shardHeadsProxy interface {
+	GetShardHeads(context.Context, *pb.GetShardHeadsReq, ...client.Option) (*pb.GetShardHeadsRsp, error)
 }
 
 func (r *remotePrimaryStoreReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -105,6 +114,63 @@ func (r *remotePrimaryStoreReader) ScanRecordRows(ctx context.Context, spaceID s
 	return rsp.GetRows(), rsp.GetPageResult(), nil
 }
 
+func (r *remotePrimaryStoreReader) ShardHeads(ctx context.Context, spaceID string, datasetID string) (map[string]uint64, error) {
+	return r.shardHeads(ctx, spaceID, datasetID)
+}
+
+func (r *remotePrimaryStoreReader) ShardHeadsForDatasets(ctx context.Context, spaceID string, datasetIDs []string) (map[string]uint64, error) {
+	return mergeShardHeads(ctx, spaceID, datasetIDs, r.shardHeads)
+}
+
+func (r *remotePrimaryStoreReader) shardHeads(ctx context.Context, spaceID string, datasetID string) (map[string]uint64, error) {
+	proxy, ok := r.scanProxy.(shardHeadsProxy)
+	if !ok {
+		return nil, errors.New("PrimaryStoreScan does not expose shard heads")
+	}
+	rsp, err := proxy.GetShardHeads(ctx, &pb.GetShardHeadsReq{SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return nil, err
+	}
+	if rsp == nil {
+		return nil, errors.New("get shard heads returned nil retinfo")
+	}
+	if err := retInfoError(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	heads := make(map[string]uint64, len(rsp.GetHeads()))
+	for _, head := range rsp.GetHeads() {
+		if head != nil && strings.TrimSpace(head.GetShardId()) != "" {
+			heads[head.GetShardId()] = head.GetSequence()
+		}
+	}
+	return heads, nil
+}
+
+func mergeShardHeads(ctx context.Context, spaceID string, datasetIDs []string, read func(context.Context, string, string) (map[string]uint64, error)) (map[string]uint64, error) {
+	merged := make(map[string]uint64)
+	seen := make(map[string]struct{})
+	for _, datasetID := range datasetIDs {
+		datasetID = strings.TrimSpace(datasetID)
+		if datasetID == "" {
+			continue
+		}
+		heads, err := read(ctx, spaceID, datasetID)
+		if err != nil {
+			return nil, err
+		}
+		for shardID, sequence := range heads {
+			seen[shardID] = struct{}{}
+			if sequence > merged[shardID] {
+				merged[shardID] = sequence
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil, errors.New("primary shard freshness is unavailable")
+	}
+	return merged, nil
+}
+
 type missingPrimaryStoreReader struct{}
 
 func (missingPrimaryStoreReader) ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -121,6 +187,10 @@ func (missingPrimaryStoreReader) ScanTimeSeriesRows(context.Context, string, str
 
 func (missingPrimaryStoreReader) ScanRecordRows(context.Context, string, string, *pb.VersionRange, []string, *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error) {
 	return nil, nil, errMissingPrimaryStoreReader
+}
+
+func (missingPrimaryStoreReader) ShardHeads(context.Context, string, string) (map[string]uint64, error) {
+	return nil, errMissingPrimaryStoreReader
 }
 
 var errMissingPrimaryStoreReader = errors.New("view builder access reader requires local reader or access service name")

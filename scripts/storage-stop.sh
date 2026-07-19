@@ -28,6 +28,10 @@ stop_pid() {
   if [[ -z "${pid}" ]] || ! ps -p "${pid}" >/dev/null 2>&1; then
     return 0
   fi
+  if ! is_managed_pid "${pid}"; then
+    echo "refusing to stop unrelated pid=${pid} for ${APP_NAME}" >&2
+    return 0
+  fi
 
   echo "stopping ${APP_NAME} pid=${pid}"
   kill "${pid}" 2>/dev/null || true

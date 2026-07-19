@@ -12,6 +12,7 @@ import (
 
 // MetadataReader exposes the view definitions required by event projection.
 type MetadataReader interface {
+	ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error)
 	ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error)
 	ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error)
 }
@@ -36,7 +37,7 @@ type BatchOptions struct {
 
 func viewIndexBatch(item *pb.View, columns []*pb.ViewColumn, timeRows []*pb.TimeSeriesRow, recordRows []*pb.RecordRow, warming bool) viewindex.BatchWrite {
 	version := item.GetActiveViewVersion()
-	schemaHash := item.GetActiveSchemaHash()
+	schemaHash := item.GetActiveViewSchemaHash()
 	if warming && item.GetIndexBuild() != nil {
 		version = item.GetIndexBuild().GetTargetViewVersion()
 		schemaHash = item.GetIndexBuild().GetSchemaHash()

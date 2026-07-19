@@ -246,7 +246,11 @@ func (h *managedDuckDBIndex) close() error {
 }
 
 func (m *IndexManager) List(ctx context.Context) ([]string, error) {
-	_ = ctx
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	spaces, err := os.ReadDir(filepath.Join(m.root, "duckdb"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -256,6 +260,9 @@ func (m *IndexManager) List(ctx context.Context) ([]string, error) {
 	}
 	var out []string
 	for _, spaceDir := range spaces {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !spaceDir.IsDir() {
 			continue
 		}

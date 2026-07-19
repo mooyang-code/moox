@@ -65,7 +65,8 @@ func (s *ViewStore) Apply(ctx context.Context, tableName string, batch viewindex
 		return rollback(err)
 	}
 	if covered {
-		return tx.Commit()
+		batch.RowWrites = nil
+		batch.CheckpointUpdates = nil
 	}
 
 	upsertRows := make([]*pb.TimeSeriesRow, 0, len(batch.RowWrites))

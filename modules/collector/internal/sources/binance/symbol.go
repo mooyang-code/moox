@@ -133,8 +133,8 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 		return err
 	}
 
-	metadataTarget := runtimeapp.GetStorageMetadataTarget()
-	accessTarget := runtimeapp.GetStoragePrimaryTarget()
+	metadataTarget := runtimeapp.GetStorageRPCGatewayTarget()
+	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 	if metadataTarget == "" || accessTarget == "" {
 		return fmt.Errorf("未配置存储服务 tRPC 地址")
 	}

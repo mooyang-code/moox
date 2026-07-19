@@ -19,28 +19,33 @@ func TestRetInfoErrorReturnsErrorOnFailure(t *testing.T) {
 }
 
 func TestRemoteClientOptionsUsesServiceName(t *testing.T) {
-	opts := remoteClientOptions("moox-primary", "")
+	opts := remoteClientOptions("moox-primary", nil)
 	require.Len(t, opts, 1)
 }
 
-func TestRemoteClientOptionsUsesIPTarget(t *testing.T) {
-	opts := remoteClientOptions("moox-primary", "127.0.0.1:8080")
-	require.Len(t, opts, 2)
+func TestRemoteClientOptionsDoesNotUsePhysicalEndpoint(t *testing.T) {
+	opts := remoteClientOptions("moox-primary", &pb.ShardTarget{Endpoint: "127.0.0.1:8080"})
+	require.Len(t, opts, 1)
 }
 
-func TestRemoteClientOptionsUsesURLTarget(t *testing.T) {
-	opts := remoteClientOptions("moox-primary", "ip://127.0.0.1:8080")
-	require.Len(t, opts, 2)
+func TestRemoteClientOptionsUsesGatewayTarget(t *testing.T) {
+	opts := remoteClientOptions("moox-primary", &pb.ShardTarget{GatewayTarget: "ip://127.0.0.1:11003"})
+	require.Greater(t, len(opts), 1)
 }
 
 func TestRemoteClientProxyForCachesByEndpoint(t *testing.T) {
 	c := NewRemoteClient("moox-primary")
-	a := c.proxyFor(&pb.ShardTarget{Endpoint: "127.0.0.1:8080"})
-	b := c.proxyFor(&pb.ShardTarget{Endpoint: "127.0.0.1:8080"})
+	a := c.proxyFor(&pb.ShardTarget{GatewayTarget: "ip://127.0.0.1:11003", Endpoint: "127.0.0.1:8080"})
+	b := c.proxyFor(&pb.ShardTarget{GatewayTarget: "ip://127.0.0.1:11003", Endpoint: "127.0.0.1:8080"})
 	assert.Equal(t, a, b)
 }
 
 func TestRemoteClientOptionsLocalEndpointSkipsTarget(t *testing.T) {
-	opts := remoteClientOptions("moox-primary", "local")
+	opts := remoteClientOptions("moox-primary", &pb.ShardTarget{Endpoint: "local"})
 	assert.Len(t, opts, 1)
+}
+
+func TestRemoteClientRejectsPhysicalOnlyTarget(t *testing.T) {
+	err := NewRemoteClient("moox-primary").WriteRows(nil, &pb.ShardTarget{Endpoint: "127.0.0.1:20106"}, nil)
+	require.ErrorContains(t, err, "gateway_target")
 }

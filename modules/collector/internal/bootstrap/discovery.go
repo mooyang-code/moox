@@ -15,11 +15,10 @@ import (
 
 // Dependencies contains the service endpoints used by CollectMgr.
 type Dependencies struct {
-	AdminGatewayURL       string
-	ServiceGatewayTarget  string
-	ServiceAuth           ServiceAuthConfig
-	StorageMetadataTarget string
-	StoragePrimaryTarget  string
+	AdminGatewayURL         string
+	ServiceGatewayTarget    string
+	ServiceAuth             ServiceAuthConfig
+	StorageRPCGatewayTarget string
 }
 
 type retInfo struct {
@@ -52,11 +51,10 @@ type activeDeploymentsRsp struct {
 // deployment records from t_service_deployments override local defaults.
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
-		AdminGatewayURL:       defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceGatewayTarget:  defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceAuth:           cfg.SysDeploy.ServiceAuth,
-		StorageMetadataTarget: cfg.Storage.GatewayTarget,
-		StoragePrimaryTarget:  cfg.Storage.GatewayTarget,
+		AdminGatewayURL:         defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceGatewayTarget:    defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceAuth:             cfg.SysDeploy.ServiceAuth,
+		StorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -76,8 +74,7 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	// gateway configuration intact rather than silently falling back to a
 	// physical Storage listener.
 	if v := endpointTRPCTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
-		deps.StorageMetadataTarget = v
-		deps.StoragePrimaryTarget = v
+		deps.StorageRPCGatewayTarget = v
 	}
 	return deps, nil
 }

@@ -36,7 +36,9 @@ type Config struct {
 		CAFile      string `yaml:"ca_file"`
 	} `yaml:"control_plane"`
 	Auth struct {
-		HMACKeyFile string `yaml:"hmac_key_file"`
+		HMACKeyFile     string `yaml:"hmac_key_file"`
+		Caller          string `yaml:"caller"`
+		CredentialsFile string `yaml:"credentials_file"`
 	} `yaml:"auth"`
 	Store struct {
 		Path string `yaml:"path"`
@@ -61,7 +63,9 @@ type fileConfig struct {
 		CAFile      string `yaml:"ca_file"`
 	} `yaml:"control_plane"`
 	Auth struct {
-		HMACKeyFile string `yaml:"hmac_key_file"`
+		HMACKeyFile     string `yaml:"hmac_key_file"`
+		Caller          string `yaml:"caller"`
+		CredentialsFile string `yaml:"credentials_file"`
 	} `yaml:"auth"`
 	Store struct {
 		Path string `yaml:"path"`
@@ -101,6 +105,8 @@ func Load(path string) (Config, error) {
 	cfg.ControlPlane.HMACKeyFile = resolvePath(path, raw.ControlPlane.HMACKeyFile)
 	cfg.ControlPlane.CAFile = resolvePath(path, raw.ControlPlane.CAFile)
 	cfg.Auth.HMACKeyFile = resolvePath(path, raw.Auth.HMACKeyFile)
+	cfg.Auth.Caller = strings.TrimSpace(raw.Auth.Caller)
+	cfg.Auth.CredentialsFile = resolvePath(path, raw.Auth.CredentialsFile)
 	cfg.Store.Path = resolvePath(path, raw.Store.Path)
 	cfg.Proxy.MaxBodyBytes = raw.Proxy.MaxBodyBytes
 	if cfg.Proxy.MaxBodyBytes == 0 {
@@ -134,8 +140,14 @@ func Validate(cfg Config) error {
 	if err := ValidateKeyFile(cfg.ControlPlane.HMACKeyFile); err != nil {
 		return fmt.Errorf("control_plane.hmac_key_file: %w", err)
 	}
-	if err := ValidateKeyFile(cfg.Auth.HMACKeyFile); err != nil {
+	if cfg.Auth.CredentialsFile != "" {
+		if info, err := os.Lstat(cfg.Auth.CredentialsFile); err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			return errors.New("auth.credentials_file must be a regular 0600 file")
+		}
+	} else if err := ValidateKeyFile(cfg.Auth.HMACKeyFile); err != nil {
 		return fmt.Errorf("auth.hmac_key_file: %w", err)
+	} else if cfg.Auth.Caller == "" {
+		return errors.New("auth.caller is required when auth.credentials_file is not configured")
 	}
 	if cfg.ControlPlane.CAFile != "" {
 		if info, err := os.Stat(cfg.ControlPlane.CAFile); err != nil || !info.Mode().IsRegular() {

@@ -63,6 +63,8 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 	if s == nil || s.metadataReader == nil {
 		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata reader is unavailable"))}, nil
 	}
+	s.topologyMu.Lock()
+	defer s.topologyMu.Unlock()
 	dataset, err := s.metadataReader.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
 		return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
@@ -100,7 +102,7 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 	for _, target := range targets {
 		rows, _, scanErr := s.primary.ScanRows(ctx, target, &pb.ScanRowsReq{Target: target, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, VersionRange: rangeValue, Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: pageNo, Size: size}})
 		if scanErr != nil {
-			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, scanErr)}, nil
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(scanErr), scanErr)}, nil
 		}
 		keys := make([]*pb.ShardKey, 0, len(rows))
 		for _, row := range rows {
@@ -116,7 +118,7 @@ func (s *Service) DeleteTimeSeriesRows(ctx context.Context, req *pb.DeleteTimeSe
 			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("primary store deletion is unavailable"))}, nil
 		}
 		if err := deleter.DeleteRows(ctx, target, keys); err != nil {
-			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.DeleteTimeSeriesRowsRsp{RetInfo: retinfo.Error(primaryErrorCode(err), err)}, nil
 		}
 		deleted += uint32(len(keys))
 	}
@@ -543,6 +545,9 @@ func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, ta
 	if len(targets) == 0 {
 		return nil, &pb.PageResult{}, nil
 	}
+	if page == nil {
+		page = &pb.Page{}
+	}
 	size := page.GetSize()
 	if size == 0 || size > primaryDatasetScanPageSize {
 		size = primaryDatasetScanPageSize
@@ -550,6 +555,12 @@ func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, ta
 	targetIndex, innerCursor, err := decodePrimaryScanCursor(page.GetCursor())
 	if err != nil {
 		return nil, nil, err
+	}
+	if strings.TrimSpace(page.GetCursor()) == "" && page.GetPage() > 1 {
+		targetIndex, innerCursor, err = s.skipPrimaryScanPages(ctx, auth, targets, kind, versionRange, columnNames, uint64(page.GetPage()-1)*uint64(size))
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if targetIndex >= len(targets) {
 		return nil, &pb.PageResult{Page: page.GetPage(), Size: size}, nil
@@ -579,6 +590,48 @@ func (s *Service) scanPrimaryRowsPage(ctx context.Context, auth *pb.AuthInfo, ta
 		return out, &pb.PageResult{Page: page.GetPage(), Size: size, HasMore: true, NextCursor: encodePrimaryScanCursor(targetIndex, "")}, nil
 	}
 	return out, &pb.PageResult{Page: page.GetPage(), Size: size}, nil
+}
+
+func (s *Service) skipPrimaryScanPages(ctx context.Context, auth *pb.AuthInfo, targets []*pb.ShardTarget, kind pb.DataKind, versionRange *pb.VersionRange, columnNames []string, skip uint64) (int, string, error) {
+	targetIndex := 0
+	innerCursor := ""
+	for targetIndex < len(targets) && skip > 0 {
+		requestSize := uint32(minUint64(skip, uint64(primaryDatasetScanPageSize)))
+		rows, page, err := s.primary.ScanRows(ctx, targets[targetIndex], &pb.ScanRowsReq{
+			AuthInfo: auth, Target: targets[targetIndex], DataKind: kind, VersionRange: versionRange,
+			ColumnNames: columnNames, Page: &pb.Page{Size: requestSize, Cursor: innerCursor},
+		})
+		if err != nil {
+			return 0, "", err
+		}
+		if len(rows) > 0 {
+			if uint64(len(rows)) >= skip {
+				skip = 0
+				if page != nil && page.GetHasMore() && page.GetNextCursor() != "" {
+					innerCursor = page.GetNextCursor()
+				} else {
+					targetIndex++
+					innerCursor = ""
+				}
+				break
+			}
+			skip -= uint64(len(rows))
+		}
+		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" || len(rows) == 0 {
+			targetIndex++
+			innerCursor = ""
+			continue
+		}
+		innerCursor = page.GetNextCursor()
+	}
+	return targetIndex, innerCursor, nil
+}
+
+func minUint64(left, right uint64) uint64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func decodePrimaryScanCursor(raw string) (int, string, error) {
@@ -645,9 +698,6 @@ func (s *Service) groupTimeSeriesRowsByShardTarget(ctx context.Context, rows []*
 			return nil, err
 		}
 		key := row.GetKey()
-		if err := s.lockDatasetTopology(ctx, key.GetSpaceId(), key.GetDatasetId()); err != nil {
-			return nil, err
-		}
 		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetSubjectId()
 		target, ok := resolved[routeKey]
 		if !ok {
@@ -686,9 +736,6 @@ func (s *Service) groupRecordRowsByShardTarget(ctx context.Context, rows []*pb.R
 			return nil, err
 		}
 		key := row.GetKey()
-		if err := s.lockDatasetTopology(ctx, key.GetSpaceId(), key.GetDatasetId()); err != nil {
-			return nil, err
-		}
 		routeKey := key.GetSpaceId() + "|" + key.GetDatasetId() + "|" + key.GetRecordId()
 		target, ok := resolved[routeKey]
 		if !ok {
@@ -718,17 +765,18 @@ func (s *Service) groupRecordRowsByShardTarget(ctx context.Context, rows []*pb.R
 }
 
 func (s *Service) writeRoutedRows(ctx context.Context, group *routedRows) error {
-	if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
-		return err
-	}
 	if locker, ok := s.metadata.(interface {
 		LockDatasetTopology(context.Context, string, string) error
 	}); ok && group != nil && group.target != nil {
-		// Keep this idempotent fallback for internal maintenance callers that
-		// construct routedRows directly.
+		// Lock before the first durable write. A failed write may leave the
+		// dataset conservatively locked, but it can never leave committed rows
+		// under a topology that remains mutable.
 		if err := locker.LockDatasetTopology(ctx, group.target.GetSpaceId(), group.target.GetDatasetId()); err != nil {
 			return err
 		}
+	}
+	if err := s.primary.WriteRows(ctx, group.target, group.rows); err != nil {
+		return err
 	}
 	return nil
 }

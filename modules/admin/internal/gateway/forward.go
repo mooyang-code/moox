@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -52,35 +51,40 @@ func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, 
 	if keyID != nodeGatewayServiceKeyID {
 		return nil, true, fmt.Errorf("storage BFF key id %q does not match Node Service Gateway key id %q", keyID, nodeGatewayServiceKeyID)
 	}
-	endpoint, err := url.JoinPath(base, "api/service", serviceID, method)
-	if err != nil {
-		return nil, true, err
+	if native := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NATIVE_URL")); native != "" {
+		base = native
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, true, err
-	}
+	target := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
+	servicePath := storageBFFServicePath(serviceID, method)
+	path := "/" + servicePath + "/" + method
 	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Secret: secret}, gatewayauth.Request{
-		Method: req.Method, Path: req.URL.EscapedPath(), TargetNode: nodeID, Body: body,
+		Caller: "admin-gateway", Method: http.MethodPost, Path: path, TargetNode: nodeID, Callee: servicePath, Func: method, Body: body,
 	}, time.Now())
 	if err != nil {
 		return nil, true, err
 	}
+	metadata := make(codec.MetaData, len(signed))
 	for name, values := range signed {
-		req.Header[name] = append([]string(nil), values...)
-	}
-	req.Header.Set("Content-Type", "application/json;charset=utf-8")
-	for key, name := range map[string]string{"trace_id": "X-Trace-Id", "space_id": "X-Space-Id", "user_id": "X-User-Id", "user_role": "X-User-Role"} {
-		if value := headers[key]; value != "" {
-			req.Header.Set(name, value)
+		if len(values) == 1 {
+			metadata[name] = []byte(values[0])
 		}
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	response, err := client.Do(req)
-	if err != nil {
+	for key, name := range map[string]string{"trace_id": "X-Trace-Id", "space_id": "X-Space-Id", "user_id": "X-User-Id", "user_role": "X-User-Role"} {
+		if value := headers[key]; value != "" {
+			metadata[name] = []byte(value)
+		}
+	}
+	response := &codec.Body{}
+	codec.Message(ctx).WithClientRPCName(path)
+	invokeOptions := []client.Option{client.WithTarget("ip://" + target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeNoop), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(30 * time.Second)}
+	for name, value := range metadata {
+		invokeOptions = append(invokeOptions, client.WithMetaData(name, value))
+	}
+	invokeOptions = append(invokeOptions, client.WithSerializationType(codec.SerializationTypeJSON))
+	if err := client.New().Invoke(ctx, &codec.Body{Data: body}, response, invokeOptions...); err != nil {
 		return nil, true, err
 	}
-	return response, true, nil
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(response.Data))}, true, nil
 }
 
 func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, headers map[string]string) {

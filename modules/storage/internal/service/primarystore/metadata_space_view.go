@@ -137,7 +137,7 @@ func clearViewIndexRuntimeState(view *pb.View) {
 	view.ActiveIndexId = ""
 	view.ActiveViewVersion = 0
 	view.ActiveColumns = nil
-	view.ActiveSchemaHash = ""
+	view.ActiveViewSchemaHash = ""
 	view.IndexedFrom = ""
 	view.IndexedTo = ""
 	view.IndexBuild = nil

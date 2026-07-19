@@ -17,7 +17,7 @@ func TestCLICommandsAndFailureModes(t *testing.T) {
 		t.Fatalf("check-config exit = %d", code)
 	}
 
-	snapshot, _ := gatewayproxy.NormalizeAndHash("gateway-test", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:1234", ServicePath: "trpc.moox.monitor.Monitor"}})
+	snapshot, _ := gatewayproxy.NormalizeAndHash("gateway-test", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:1234", ServicePath: "trpc.moox.monitor.Monitor", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err := store.NewRoutes(storePath).Save(snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func cliConfig(t *testing.T) (string, string) {
 	}
 	storePath := filepath.Join(dir, "data")
 	path := filepath.Join(dir, "app.yaml")
-	contents := "node:\n  id: gateway-test\nserver:\n  service_addr: 127.0.0.1:11002\n  health_addr: 127.0.0.1:11012\ncontrol_plane:\n  base_url: https://admin.example.com\n  hmac_key_file: " + control + "\nauth:\n  hmac_key_file: " + service + "\nstore:\n  path: " + storePath + "\nproxy:\n  max_body_bytes: 4194304\n"
+	contents := "node:\n  id: gateway-test\nserver:\n  service_addr: 127.0.0.1:11002\n  health_addr: 127.0.0.1:11012\ncontrol_plane:\n  base_url: https://admin.example.com\n  hmac_key_file: " + control + "\nauth:\n  hmac_key_file: " + service + "\n  caller: service\nstore:\n  path: " + storePath + "\nproxy:\n  max_body_bytes: 4194304\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -136,8 +136,8 @@ storage_binary_name() {
   fi
 }
 
-cp "${ROOT}/bin/$(storage_binary_name moox-storage)" "${RELEASE_ROOT}/storage-primary/bin/$(storage_binary_name moox-storage-primary)"
-cp "${ROOT}/bin/$(storage_binary_name moox-storage)" "${RELEASE_ROOT}/storage-view/bin/$(storage_binary_name moox-storage-view)"
+cp "${ROOT}/bin/$(storage_binary_name moox-storage-primary)" "${RELEASE_ROOT}/storage-primary/bin/$(storage_binary_name moox-storage-primary)"
+cp "${ROOT}/bin/$(storage_binary_name moox-storage-view)" "${RELEASE_ROOT}/storage-view/bin/$(storage_binary_name moox-storage-view)"
 cp "${ROOT}/bin/$(storage_binary_name moox-storage-cli)" "${RELEASE_ROOT}/storage-primary/bin/$(storage_binary_name moox-storage-primary-cli)"
 copy_binary moox-archive "${RELEASE_ROOT}/archive/bin"
 copy_binary moox-archive-cli "${RELEASE_ROOT}/archive/bin"
@@ -174,7 +174,8 @@ cp -R "${ROOT}/modules/trade/config/." "${RELEASE_ROOT}/trade/config/"
 cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/factor/pyworker"
 find "${RELEASE_ROOT}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
 cp "${ROOT}/modules/storage/config/trpc_go.primary.yaml" "${RELEASE_ROOT}/storage-primary/config/trpc_go.yaml"
-cp "${ROOT}/modules/storage/config/storage.primary.yaml" "${RELEASE_ROOT}/storage-primary/config/storage.yaml"
+printf '\n' >> "${RELEASE_ROOT}/storage-primary/config/trpc_go.yaml"
+cat "${ROOT}/modules/storage/config/storage.primary.yaml" >> "${RELEASE_ROOT}/storage-primary/config/trpc_go.yaml"
 cp "${ROOT}/modules/storage/config/storage_view/trpc_go.yaml" "${RELEASE_ROOT}/storage-view/config/trpc_go.yaml"
 cp -R "${ROOT}/modules/monitor/config/." "${RELEASE_ROOT}/monitor/config/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/storage-primary/schema/"

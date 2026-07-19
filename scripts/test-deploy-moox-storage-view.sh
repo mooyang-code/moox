@@ -79,7 +79,8 @@ ensure_required_binary moox-archive
 ensure_required_binary moox-archive-cli
 ensure_required_binary moox-gateway
 ensure_required_binary moox-gateway-cli
-ensure_required_binary moox-storage
+ensure_required_binary moox-storage-primary
+ensure_required_binary moox-storage-view
 ensure_required_binary moox-storage-cli
 
 HEALTH_SECRET_CLI="${TMP_ROOT}/moox-admin-cli"
@@ -157,7 +158,7 @@ assert_grep '"\$\{ROOT\}/stop\.sh" "\$\{name\}"' "${DEPLOY_DIR}/healthcheck.sh"
 assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthcheck.sh"
 
 assert_grep 'start_storage_process "storage-primary" "moox-storage-primary"' "${DEPLOY_DIR}/start.sh"
-assert_grep 'storage\.primary\.yaml' "${DEPLOY_DIR}/start.sh"
+assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"
@@ -188,8 +189,8 @@ if grep -ERq 'duckdb_path:|bleve_path:|rotation:|op=rotate' "${DEPLOY_DIR}/stora
   exit 1
 fi
 
-assert_grep 'enabled: true' "${DEPLOY_DIR}/storage/config/storage.primary.yaml"
-assert_grep 'log_path: \.\./logs/storage-primary' "${DEPLOY_DIR}/storage/config/trpc_go.primary.yaml"
+assert_grep 'enabled: true' "${DEPLOY_DIR}/storage/config/trpc_go.yaml"
+assert_grep 'log_path: \.\./logs/storage-primary' "${DEPLOY_DIR}/storage/config/trpc_go.yaml"
 assert_grep 'log_path: \.\./logs/storage-view' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20104' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20202' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"

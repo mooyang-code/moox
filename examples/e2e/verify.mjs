@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const APP_INFO = {
@@ -45,6 +45,7 @@ function parseArgs(argv) {
     node: "e2e-scf-node",
     package: "moox-collector_dev",
     dataset: "binance_spot_kline_1h",
+    e2eNodeId: "e2e-gateway",
     username: "mooxe2eadmin",
     password: "MooxE2E#20260704!",
     timeoutSeconds: 180,
@@ -63,6 +64,7 @@ function parseArgs(argv) {
       case "--node":
       case "--package":
       case "--dataset":
+      case "--e2e-node":
       case "--username":
       case "--password":
         if (!value) throw new Error(`${key} requires a value`);
@@ -104,6 +106,7 @@ Options:
   --node <node_id>         Cloud runtime node ID. Default: e2e-scf-node
   --package <package_id>   Code package ID. Default: moox-collector_dev
   --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline_1h
+  --e2e-node <node_id>     Admin Gateway node used by SysDeploy checks.
   --timeout-seconds <n>    Poll timeout for assert phase. Default: 180`);
 }
 
@@ -221,7 +224,23 @@ async function assertAfterSCF(args) {
   });
 
   const sample = rows[0]?.key || {};
-  log(`assert ok: job_items=${jobItems.length}, instances=${instances.length}, storage_rows=${rows.length}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
+  const sampleTime = sample.data_time || new Date().toISOString();
+  const queryRows = await waitFor("storage view rows", timeoutMs, async () => {
+    const end = new Date(sampleTime);
+    if (Number.isNaN(end.getTime())) throw new Error(`invalid sample data_time: ${sampleTime}`);
+    const start = new Date(end.getTime() - 60 * 60 * 1000);
+    const rsp = await storagePost(args, token, "view", "QueryTimeSeriesRows", {
+      space_id: args.space,
+      view_id: "binance_spot_1h_view",
+      keys: [{ space_id: args.space, subject_id: sample.subject_id, freq: sample.freq }],
+      time_range: { start_time: start.toISOString(), end_time: end.toISOString() },
+      page: { page: 1, size: 20 },
+    });
+    if (rsp.complete !== true) throw new Error("storage view response is not complete");
+    if ((rsp.rows || []).length === 0) throw new Error("storage view has no rows for the sampled fact");
+    return rsp.rows;
+  });
+  log(`assert ok: job_items=${jobItems.length}, instances=${instances.length}, storage_rows=${rows.length}, view_rows=${queryRows.length}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
 }
 
 async function assertWebHost(webURL) {
@@ -277,7 +296,28 @@ async function login(args) {
   if (!loginRsp.access_token) {
     throw new Error("login response missing access_token");
   }
-  return loginRsp.access_token;
+  if (!loginRsp.request_signing_key || !loginRsp.session_id) {
+    throw new Error("login response missing request signing session");
+  }
+  return { accessToken: loginRsp.access_token, signingKey: loginRsp.request_signing_key };
+}
+
+function signRequest(signingKey, method, path, body, headers) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = randomBytes(32).toString("hex");
+  const signedValues = [
+    ["x-app-id", headers["X-App-Id"] || ""],
+    ["x-app-key", headers["X-App-Key"] || ""],
+    ["x-space-id", headers["X-Space-Id"] || ""],
+  ];
+  const hasSignedHeaders = signedValues.some(([, value]) => value !== "");
+  const canonical = ["moox-request-v1", method.toUpperCase(), path];
+  if (hasSignedHeaders) {
+    for (const [name, value] of signedValues) canonical.push(`${name}:${value}`);
+  }
+  canonical.push(createHash("sha256").update(body).digest("hex"), String(timestamp), nonce);
+  const signature = createHmac("sha256", signingKey).update(canonical.join("\n")).digest("hex");
+  return { timestamp: String(timestamp), nonce, signature };
 }
 
 function encryptPassword(password, salt, timestamp) {
@@ -299,6 +339,7 @@ async function updatePublicDeployments(args, token) {
     const next = deploymentInput({ ...item, host: args.host, status: "active" });
     await adminPost(args, token, "sysdeploy", "UpdateServiceDeployment", {
       service_name: item.service_name,
+      node_id: item.node_id,
       deployment: next,
     });
   }
@@ -307,12 +348,15 @@ async function updatePublicDeployments(args, token) {
 
 function deploymentInput(item) {
   return {
+    node_id: item.node_id,
     service_name: item.service_name,
     service_kind: item.service_kind,
     protocol: item.protocol,
     host: item.host,
     port: item.port,
     gateway_path: item.gateway_path || "",
+    gateway_service_id: item.gateway_service_id || "",
+    gateway_enabled: item.gateway_enabled === true,
     scope: item.scope,
     status: item.status,
     description: item.description || "",
@@ -323,6 +367,7 @@ function deploymentInput(item) {
 async function assertSysDeploySingleInstanceContract(args, token) {
   const serviceName = `e2e_sysdeploy_${randomBytes(8).toString("hex")}`;
   const first = {
+    node_id: args.e2eNodeId,
     service_name: serviceName,
     service_kind: "e2e",
     protocol: "http",
@@ -344,19 +389,20 @@ async function assertSysDeploySingleInstanceContract(args, token) {
       rpc_address: "127.0.0.1:19090",
     };
     await adminPost(args, token, "sysdeploy", "UpdateServiceDeployment", {
+      node_id: args.e2eNodeId,
       service_name: serviceName,
       deployment: update,
     });
-    const got = await adminPost(args, token, "sysdeploy", "GetServiceDeployment", { service_name: serviceName });
+    const got = await adminPost(args, token, "sysdeploy", "GetServiceDeployment", { node_id: args.e2eNodeId, service_name: serviceName });
     if (got.deployment?.base_url !== "http://127.0.0.2:19091" || got.deployment?.rpc_address !== "127.0.0.2:19091") {
       throw new Error(`sysdeploy returned stale derived address: ${JSON.stringify(got.deployment)}`);
     }
 
-    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { node_id: args.e2eNodeId, service_name: serviceName });
     await adminPost(args, token, "sysdeploy", "CreateServiceDeployment", { deployment: first });
-    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { node_id: args.e2eNodeId, service_name: serviceName });
 
-    const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", {});
+    const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", { node_id: args.e2eNodeId });
     if (active.deployment_map?.[serviceName]) {
       throw new Error("deleted SysDeploy E2E row remains active");
     }
@@ -373,11 +419,12 @@ async function assertSysDeploySingleInstanceContract(args, token) {
 
 async function deleteDeploymentIfPresent(args, token, serviceName) {
   const listed = await adminPost(args, token, "sysdeploy", "ListServiceDeployments", {
+    node_id: args.e2eNodeId,
     service_name: serviceName,
     page: { page: 1, size: 10 },
   });
   if ((listed.deployments || []).some((item) => item.service_name === serviceName)) {
-    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { service_name: serviceName });
+    await adminPost(args, token, "sysdeploy", "DeleteServiceDeployment", { node_id: args.e2eNodeId, service_name: serviceName });
   }
 }
 
@@ -434,7 +481,7 @@ async function assertManagementRequests(args, token) {
     throw new Error(`space ${args.space} not visible through admin gateway`);
   }
 
-  const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", {});
+  const active = await adminPost(args, token, "sysdeploy", "ListActiveServiceDeployments", { node_id: args.e2eNodeId });
   if (!active.deployment_map?.["storage-primary"] || !active.deployment_map?.["storage-view"]) {
     throw new Error("sysdeploy active deployment map missing storage endpoints");
   }
@@ -573,9 +620,10 @@ async function adminPost(args, token, service, method, body, options = {}) {
     "User-Agent": "moox-e2e",
     "X-Trace-Id": `e2e-${service}-${method}-${Date.now()}`,
   };
-  if (token) {
-    headers.Authorization = token;
-    headers["X-Access-Token"] = token;
+  const accessToken = typeof token === "string" ? token : token?.accessToken;
+  if (accessToken) {
+    headers.Authorization = accessToken;
+    headers["X-Access-Token"] = accessToken;
   }
   if (options.spaceId) {
     headers["X-Space-Id"] = options.spaceId;
@@ -583,10 +631,17 @@ async function adminPost(args, token, service, method, body, options = {}) {
   const url = args.phase === "sysdeploy" && service === "sysdeploy"
     ? `http://127.0.0.1:11109/trpc.moox.ops.SysDeploy/${method}`
     : `${args.gateway}/api/admin/${service === "storage" ? "storage" : service}/${method}`;
+  const payload = JSON.stringify(body || {});
+  if (token?.signingKey && !url.includes(":11109/")) {
+    const signed = signRequest(token.signingKey, "POST", new URL(url).pathname, Buffer.from(payload), headers);
+    headers["X-Moox-Timestamp"] = signed.timestamp;
+    headers["X-Moox-Nonce"] = signed.nonce;
+    headers["X-Moox-Signature"] = signed.signature;
+  }
   const rsp = await fetchJSON(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(body || {}),
+    body: payload,
   }, `${service}/${method}`);
   if (options.raw) return rsp.data;
   assertRet(rsp.data, `${service}/${method}`);

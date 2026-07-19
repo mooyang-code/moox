@@ -12,6 +12,7 @@ control_plane:
 
 auth:
   hmac_key_file: ./secrets/gateway-service.key
+  caller: service
 
 store:
   path: ./data/gateway

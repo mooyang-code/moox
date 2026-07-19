@@ -56,15 +56,16 @@ const (
 )
 
 type indexStatsDocument struct {
-	ViewVersion uint64            `json:"view_version"`
-	EntryCount  int64             `json:"entry_count"`
-	MinVersion  string            `json:"min_version"`
-	MaxVersion  string            `json:"max_version"`
-	SchemaHash  string            `json:"schema_hash"`
-	UpdatedAt   string            `json:"updated_at"`
-	IndexedFrom string            `json:"indexed_from,omitempty"`
-	IndexedTo   string            `json:"indexed_to,omitempty"`
-	Checkpoints map[string]uint64 `json:"checkpoints,omitempty"`
+	ViewVersion         uint64            `json:"view_version"`
+	EntryCount          int64             `json:"entry_count"`
+	MinVersion          string            `json:"min_version"`
+	MaxVersion          string            `json:"max_version"`
+	SchemaHash          string            `json:"schema_hash"`
+	UpdatedAt           string            `json:"updated_at"`
+	IndexedFrom         string            `json:"indexed_from,omitempty"`
+	IndexedTo           string            `json:"indexed_to,omitempty"`
+	Checkpoints         map[string]uint64 `json:"checkpoints,omitempty"`
+	RequiredColumnNames []string          `json:"required_column_names,omitempty"`
 }
 
 func Open(opts Options) (*Index, error) {
@@ -133,8 +134,10 @@ func buildIndexMapping() mapping.IndexMapping {
 	return mapping
 }
 
-func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash string) error {
-	_ = ctx
+func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash string, columns []*pb.ViewColumn) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	i.writeMu.Lock()
 	defer i.writeMu.Unlock()
 	stats, err := i.readStats()
@@ -143,6 +146,7 @@ func (i *Index) SetSchema(ctx context.Context, viewVersion uint64, schemaHash st
 	}
 	stats.ViewVersion = viewVersion
 	stats.SchemaHash = schemaHash
+	stats.RequiredColumnNames = viewColumnNames(columns)
 	stats.IndexedFrom, stats.IndexedTo = "", ""
 	stats.Checkpoints = make(map[string]uint64)
 	stats.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -157,7 +161,9 @@ func (i *Index) Close() error {
 }
 
 func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexedColumns map[string]bool) error {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(rows) == 0 {
 		return nil
 	}
@@ -170,6 +176,9 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 	batch := i.index.NewBatch()
 	seenDocs := make(map[string]bool, len(rows))
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if row == nil || row.GetKey() == nil {
 			continue
 		}
@@ -240,7 +249,9 @@ func (i *Index) IndexRows(ctx context.Context, rows []*pb.RecordRow, textIndexed
 }
 
 func (i *Index) DeleteRows(ctx context.Context, rows []*pb.RecordRow) error {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(rows) == 0 {
 		return nil
 	}
@@ -253,6 +264,9 @@ func (i *Index) DeleteRows(ctx context.Context, rows []*pb.RecordRow) error {
 	batch := i.index.NewBatch()
 	seen := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if row == nil || row.GetKey() == nil {
 			continue
 		}
@@ -279,7 +293,9 @@ func (i *Index) DeleteRows(ctx context.Context, rows []*pb.RecordRow) error {
 
 // ApplyRows applies MERGE, REPLACE and DELETE operations in one Bleve batch.
 func (i *Index) ApplyRows(ctx context.Context, apply viewindex.ViewIndexApplyBatch) error {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := apply.Validate(); err != nil {
 		return err
 	}
@@ -312,11 +328,15 @@ func (i *Index) ApplyRows(ctx context.Context, apply viewindex.ViewIndexApplyBat
 		return err
 	}
 	if covered {
-		return nil
+		apply.RowWrites = nil
+		apply.CheckpointUpdates = nil
 	}
 	textIndexedColumns := make(map[string]bool)
 	var missing []*pb.RecordKey
 	for _, write := range apply.RowWrites {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for _, column := range write.Columns {
 			if column != nil && column.GetColumnName() != "" {
 				textIndexedColumns[column.GetColumnName()] = true
@@ -324,8 +344,16 @@ func (i *Index) ApplyRows(ctx context.Context, apply viewindex.ViewIndexApplyBat
 		}
 	}
 	for _, write := range apply.RowWrites {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if write.Key.RecordKey == nil {
 			return errors.New("bleve apply requires record row keys")
+		}
+		if write.Operation == viewindex.RowWriteOperationReplace {
+			if err := validateCompleteReplace(write.Columns, write.RemovedColumnNames, stats.RequiredColumnNames); err != nil {
+				return err
+			}
 		}
 		if write.Operation == viewindex.RowWriteOperationMerge {
 			existing, err := i.existingRecordRow(documentID(&pb.RecordRow{Key: write.Key.RecordKey}))
@@ -349,6 +377,9 @@ func (i *Index) ApplyRows(ctx context.Context, apply viewindex.ViewIndexApplyBat
 	batch := i.index.NewBatch()
 	seen := make(map[string]struct{}, len(apply.RowWrites))
 	for _, write := range apply.RowWrites {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row := &pb.RecordRow{Key: write.Key.RecordKey, Columns: write.Columns, Attributes: write.Attributes, AttributesToDelete: write.AttributesToDelete, RemovedColumnNames: write.RemovedColumnNames, RemovedColumns: write.RemovedColumns, SourceShardId: write.SourceShardID, SourceSequence: write.SourceSequence}
 		docID := documentID(row)
 		if _, ok := seen[docID]; ok {
@@ -411,6 +442,38 @@ func (i *Index) ApplyRows(ctx context.Context, apply viewindex.ViewIndexApplyBat
 		return err
 	}
 	return i.index.Batch(batch)
+}
+
+func viewColumnNames(columns []*pb.ViewColumn) []string {
+	names := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column != nil && strings.TrimSpace(column.GetColumnName()) != "" {
+			names = append(names, column.GetColumnName())
+		}
+	}
+	return names
+}
+
+func validateCompleteReplace(columns []*pb.ColumnValue, removed []string, required []string) error {
+	present := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		if column != nil && strings.TrimSpace(column.GetColumnName()) != "" {
+			present[column.GetColumnName()] = struct{}{}
+		}
+	}
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, name := range removed {
+		removedSet[name] = struct{}{}
+	}
+	for _, name := range required {
+		if _, ok := present[name]; !ok {
+			if _, removed := removedSet[name]; removed {
+				continue
+			}
+			return fmt.Errorf("REPLACE row is missing view column %q", name)
+		}
+	}
+	return nil
 }
 
 func validateBleveProgress(current map[string]uint64, updates []viewindex.ShardCheckpointUpdate) (bool, error) {
@@ -638,7 +701,9 @@ func removeRecordColumnTombstone(values []*pb.ColumnRemoval, name string) []*pb.
 }
 
 func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
 	stats, err := i.readStats()
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
@@ -658,7 +723,9 @@ func (i *Index) Stat(ctx context.Context) (viewindex.ViewIndexStats, error) {
 }
 
 func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.RecordRow, *pb.PageResult, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	query, err := buildBooleanQuery(req)
 	if err != nil {
 		return nil, nil, err
@@ -674,6 +741,9 @@ func (i *Index) SearchRecordRows(ctx context.Context, req SearchRequest) ([]*pb.
 	}
 	rows := make([]*pb.RecordRow, 0, len(result.Hits))
 	for _, hit := range result.Hits {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		raw, ok := hit.Fields["_row_json"].(string)
 		if !ok {
 			continue

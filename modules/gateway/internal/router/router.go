@@ -20,6 +20,10 @@ type nonceConsumer interface {
 	Consume(context.Context, string, string, time.Duration) (bool, error)
 }
 
+type credentialVerifier interface {
+	Verify(gatewayauth.Request, http.Header, time.Time) (gatewayauth.Claims, error)
+}
+
 type routeTable interface {
 	Resolve(string) (gatewayproxy.Route, bool)
 	ResolveMethod(string, string) (gatewayproxy.Route, bool)
@@ -33,14 +37,15 @@ type Metrics interface {
 }
 
 type Options struct {
-	NodeID       string
-	Credentials  gatewayauth.Credentials
-	MaxBodyBytes int64
-	Table        routeTable
-	Nonces       nonceConsumer
-	Disabled     func() bool
-	Now          func() time.Time
-	Metrics      Metrics
+	NodeID             string
+	Credentials        gatewayauth.Credentials
+	CredentialRegistry credentialVerifier
+	MaxBodyBytes       int64
+	Table              routeTable
+	Nonces             nonceConsumer
+	Disabled           func() bool
+	Now                func() time.Time
+	Metrics            Metrics
 }
 
 type Handler struct {
@@ -78,9 +83,9 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusRequestEntityTooLarge)
 		return
 	}
-	claims, err := gatewayauth.Verify(handler.options.Credentials, gatewayauth.Request{
+	claims, err := handler.verify(gatewayauth.Request{
 		Method: request.Method, Path: request.URL.EscapedPath(), TargetNode: handler.options.NodeID, Body: body,
-	}, request.Header, handler.options.Now())
+	}, request.Header)
 	if err != nil {
 		status = http.StatusUnauthorized
 		if handler.options.Metrics != nil {
@@ -116,6 +121,11 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		return
 	}
 	serviceID = route.ServiceID
+	if len(route.AllowedCallers) > 0 && !route.AllowsCaller(claims.Caller) {
+		status = http.StatusForbidden
+		writeError(response, http.StatusForbidden)
+		return
+	}
 	if int64(len(body)) > route.MaxBodyBytes && route.MaxBodyBytes > 0 {
 		status = http.StatusRequestEntityTooLarge
 		writeError(response, http.StatusRequestEntityTooLarge)
@@ -147,6 +157,13 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 	}
 	response.WriteHeader(upstream.StatusCode)
 	_, _ = response.Write(upstream.Body)
+}
+
+func (handler *Handler) verify(request gatewayauth.Request, header http.Header) (gatewayauth.Claims, error) {
+	if handler.options.CredentialRegistry != nil {
+		return handler.options.CredentialRegistry.Verify(request, header, handler.options.Now())
+	}
+	return gatewayauth.Verify(handler.options.Credentials, request, header, handler.options.Now())
 }
 
 func (handler *Handler) recordUpstreamFailure(err error) {

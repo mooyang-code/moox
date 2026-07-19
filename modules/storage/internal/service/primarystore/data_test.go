@@ -484,7 +484,7 @@ func (fakeRouteReader) GetPrimaryStoreNode(context.Context, string) (*pb.Primary
 }
 
 func (fakeRouteReader) ListDevices(context.Context, string, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return []*pb.Device{{DeviceId: "dev-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "storage-primary-0"}}}, &pb.PageResult{}, nil
+	return []*pb.Device{{DeviceId: "dev-1", Engine: "pebble", Status: "active", Attributes: map[string]string{"shard_id": "storage-shard-0"}}}, &pb.PageResult{}, nil
 }
 
 func containsAll(value string, parts ...string) bool {

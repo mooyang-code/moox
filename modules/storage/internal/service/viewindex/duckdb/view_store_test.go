@@ -273,7 +273,7 @@ func TestDuckDBApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	base := duckDBTestRow("BTC-USDT", "2026-07-07T04:50:00Z", duckDBTestValue("close", 1))
-	if err := store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RowWrites: []viewindex.RowWrite{{
+	if err := store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RequiredColumnNames: []string{"close"}, RowWrites: []viewindex.RowWrite{{
 		Operation: viewindex.RowWriteOperationReplace,
 		Key:       viewindex.RowKey{TimeSeriesKey: base.GetKey()},
 		Columns:   base.GetColumns(),
@@ -281,7 +281,7 @@ func TestDuckDBApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
 		t.Fatalf("initial Apply: %v", err)
 	}
 	missing := duckDBTestRow("ETH-USDT", "2026-07-07T04:51:00Z", duckDBTestValue("close", 2))
-	err = store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{
+	err = store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RequiredColumnNames: []string{"close"},
 		RowWrites: []viewindex.RowWrite{
 			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{TimeSeriesKey: base.GetKey()}, Columns: []*pb.ColumnValue{{ColumnName: "close", Value: duckDBTestValue("close", 3).GetValue()}}},
 			{Operation: viewindex.RowWriteOperationMerge, Key: viewindex.RowKey{TimeSeriesKey: missing.GetKey()}, Columns: missing.GetColumns()},
@@ -300,7 +300,7 @@ func TestDuckDBApplyIsAtomicAndPersistsCheckpoint(t *testing.T) {
 		t.Fatalf("failed Apply changed state: %+v", stats)
 	}
 
-	if err := store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{
+	if err := store.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RequiredColumnNames: []string{"close"},
 		RowWrites:         []viewindex.RowWrite{{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{TimeSeriesKey: missing.GetKey()}, Columns: missing.GetColumns()}},
 		CheckpointUpdates: []viewindex.ShardCheckpointUpdate{{ShardID: "shard-1", ExpectedLastAppliedSequence: 0, LastAppliedSequence: 1}},
 	}); err != nil {

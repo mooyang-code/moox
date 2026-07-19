@@ -23,7 +23,7 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	cfg := Default()
 	for _, consumer := range cfg.Consumers {
 		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "moox_archive_kline_v1" {
-			if consumer.FilterSubject != "moox.storage.rows_committed.time_series.v1.*" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
+			if consumer.FilterSubject != "moox.storage.rows_committed.time_series.v1.>" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
 				t.Fatalf("archive consumer = %#v", consumer)
 			}
 			return

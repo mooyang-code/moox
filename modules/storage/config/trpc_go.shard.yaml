@@ -23,7 +23,7 @@ server:
       timeout: 3000
     - name: trpc.moox.storage.DataShard
       ip: 127.0.0.1
-      port: 20106
+      port: 20107
       network: tcp
       protocol: trpc
 

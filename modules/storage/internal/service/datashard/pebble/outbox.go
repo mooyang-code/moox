@@ -158,10 +158,29 @@ func (s *Store) nextOutboxSequence() (uint64, error) {
 	return seq + 1, nil
 }
 
+func (s *Store) HeadSequence(ctx context.Context) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s == nil || s.db == nil {
+		return 0, errors.New("pebble store is closed")
+	}
+	sequence, err := s.nextOutboxSequence()
+	if err != nil {
+		return 0, err
+	}
+	if sequence == 0 {
+		return 0, nil
+	}
+	return sequence - 1, nil
+}
+
 func outboxKey(seq uint64) string { return fmt.Sprintf("%s%020d", outboxPrefix, seq) }
 
 func (s *Store) ListOutbox(ctx context.Context, after uint64, maxItems int, maxBytes int) ([]*contracts.OutboxEntry, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if maxItems <= 0 {
 		maxItems = 100
 	}
@@ -176,14 +195,14 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, maxItems int, maxB
 	out := make([]*contracts.OutboxEntry, 0, maxItems)
 	bytesRead := 0
 	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		seq, err := strconv.ParseUint(strings.TrimPrefix(string(iter.Key()), outboxPrefix), 10, 64)
 		if err != nil || seq <= after {
 			continue
 		}
 		data := append([]byte(nil), iter.Value()...)
-		if len(out) > 0 && bytesRead+len(data) > maxBytes {
-			break
-		}
 		msg := &messagepb.MooxMessage{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return nil, fmt.Errorf("decode outbox message %d: %w", seq, err)
@@ -194,6 +213,9 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, maxItems int, maxB
 		}
 		out = append(out, &contracts.OutboxEntry{Sequence: seq, MessageID: msg.GetMessageId(), Topic: msg.GetTopic(), Data: data, CreatedAt: created})
 		bytesRead += len(data)
+		if bytesRead > maxBytes {
+			break
+		}
 		if len(out) >= maxItems {
 			break
 		}
@@ -205,13 +227,18 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, maxItems int, maxB
 }
 
 func (s *Store) DeleteOutbox(ctx context.Context, sequences []uint64) error {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(sequences) == 0 {
 		return nil
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	for _, seq := range sequences {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if seq == 0 {
 			continue
 		}

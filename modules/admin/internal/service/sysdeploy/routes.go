@@ -16,12 +16,14 @@ type routeExtraConfig struct {
 	TimeoutMS      *int64   `json:"timeout_ms"`
 	MaxBodyBytes   *int64   `json:"max_body_bytes"`
 	GatewayMethods []string `json:"gateway_methods"`
+	GatewayCallers []string `json:"gateway_callers"`
 	GatewayRoutes  []struct {
 		ServicePath    string   `json:"service_path"`
 		Port           int32    `json:"port"`
 		TimeoutMS      *int64   `json:"timeout_ms"`
 		MaxBodyBytes   *int64   `json:"max_body_bytes"`
 		GatewayMethods []string `json:"gateway_methods"`
+		GatewayCallers []string `json:"gateway_callers"`
 	} `json:"gateway_routes"`
 }
 
@@ -33,10 +35,6 @@ func (err *RouteConfigError) Error() string { return err.Err.Error() }
 func (err *RouteConfigError) Unwrap() error { return err.Err }
 func (err *RouteConfigError) Is(target error) bool {
 	return target == gatewayproxy.ErrInvalidGatewayRoute
-}
-
-func requiresMethodAllowlist(serviceID, servicePath string) bool {
-	return serviceID == "sysdeploy" || serviceID == "secret" || serviceID == "storage-primary" || serviceID == "storage-view" || servicePath == "trpc.moox.ops.SysDeploy" || servicePath == "trpc.moox.ops.SecretMgr"
 }
 
 func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
@@ -89,7 +87,14 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 }
 
 func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayproxy.Route, error) {
-	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods}
+	basePort := row.Port
+	switch row.GatewayServiceID {
+	case "storage-primary":
+		basePort = 20100
+	case "storage-view":
+		basePort = 20103
+	}
+	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
 		base.TimeoutMS = *extra.TimeoutMS
 	}
@@ -101,7 +106,7 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		if item.ServicePath == "" || item.Port < 1 {
 			return nil, fmt.Errorf("gateway_routes entries require service_path and positive port")
 		}
-		route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(item.Port))), ServicePath: item.ServicePath, AllowedMethods: item.GatewayMethods}
+		route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(item.Port))), ServicePath: item.ServicePath, AllowedMethods: item.GatewayMethods, AllowedCallers: item.GatewayCallers}
 		if item.TimeoutMS != nil {
 			route.TimeoutMS = *item.TimeoutMS
 		}
@@ -111,8 +116,8 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		routes = append(routes, route)
 	}
 	for _, route := range routes {
-		if requiresMethodAllowlist(row.GatewayServiceID, route.ServicePath) && len(route.AllowedMethods) == 0 {
-			return nil, fmt.Errorf("%s requires nonempty gateway_methods", row.GatewayServiceID)
+		if len(route.AllowedMethods) == 0 || len(route.AllowedCallers) == 0 {
+			return nil, fmt.Errorf("%s/%s requires explicit nonempty gateway_methods and gateway_callers", row.GatewayServiceID, route.ServicePath)
 		}
 	}
 	return routes, nil
@@ -141,6 +146,11 @@ func parseRouteExtraConfig(raw string) (routeExtraConfig, error) {
 	if value, ok := object["gateway_methods"]; ok {
 		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayMethods) != nil {
 			return extra, fmt.Errorf("gateway_methods must be an array of strings")
+		}
+	}
+	if value, ok := object["gateway_callers"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayCallers) != nil {
+			return extra, fmt.Errorf("gateway_callers must be an array of strings")
 		}
 	}
 	if value, ok := object["gateway_routes"]; ok {

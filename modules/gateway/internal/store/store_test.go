@@ -18,7 +18,7 @@ func TestRoutesSaveLoadAndRejectInvalidSnapshotWithoutReplacingFile(t *testing.T
 		t.Fatal(err)
 	}
 	routes := NewRoutes(dir)
-	valid, err := gatewayproxy.NormalizeAndHash("node-a", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr"}})
+	valid, err := gatewayproxy.NormalizeAndHash("node-a", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

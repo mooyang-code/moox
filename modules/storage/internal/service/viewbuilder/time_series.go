@@ -124,6 +124,11 @@ func (s *Service) processTimeSeriesRowsBatch(ctx context.Context, rows []*pb.Tim
 			}
 		}
 	}
+	if progress.sequence != 0 {
+		if err := s.applyCheckpointOnly(ctx, progress, "duckdb"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

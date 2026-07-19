@@ -27,6 +27,28 @@ type RecordFactReader interface {
 	ScanRecordRows(ctx context.Context, spaceID string, datasetID string, versionRange *pb.VersionRange, columnNames []string, page *pb.Page) ([]*pb.RecordRow, *pb.PageResult, error)
 }
 
+type ShardHeadReader interface {
+	ShardHeads(ctx context.Context, spaceID string, datasetID string) (map[string]uint64, error)
+}
+
+type multiShardHeadReader interface {
+	ShardHeadsForDatasets(ctx context.Context, spaceID string, datasetIDs []string) (map[string]uint64, error)
+}
+
+func shardHeadsForView(ctx context.Context, reader ShardHeadReader, item *pb.View) (map[string]uint64, error) {
+	if reader == nil || item == nil {
+		return nil, errors.New("view shard head reader is required")
+	}
+	datasetIDs := item.GetDatasetIds()
+	if len(datasetIDs) == 0 {
+		datasetIDs = []string{item.GetPrimaryDatasetId()}
+	}
+	if multi, ok := reader.(multiShardHeadReader); ok {
+		return multi.ShardHeadsForDatasets(ctx, item.GetSpaceId(), datasetIDs)
+	}
+	return reader.ShardHeads(ctx, item.GetSpaceId(), item.GetPrimaryDatasetId())
+}
+
 type ManagedViewIndex interface {
 	viewindex.ViewIndexEngine
 	List(ctx context.Context) ([]string, error)
@@ -54,21 +76,25 @@ type MaintenanceConfig struct {
 }
 
 type MaintenanceOptions struct {
-	Metadata Metadata
-	Engines  map[string]ManagedViewIndex
-	Facts    FactReader
-	Records  RecordFactReader
-	Config   MaintenanceConfig
-	Now      func() time.Time
+	Metadata     Metadata
+	Engines      map[string]ManagedViewIndex
+	Facts        FactReader
+	Records      RecordFactReader
+	Heads        ShardHeadReader
+	RequireHeads bool
+	Config       MaintenanceConfig
+	Now          func() time.Time
 }
 
 type MaintenanceManager struct {
-	metadata Metadata
-	engines  map[string]ManagedViewIndex
-	facts    FactReader
-	records  RecordFactReader
-	cfg      MaintenanceConfig
-	now      func() time.Time
+	metadata     Metadata
+	engines      map[string]ManagedViewIndex
+	facts        FactReader
+	records      RecordFactReader
+	heads        ShardHeadReader
+	requireHeads bool
+	cfg          MaintenanceConfig
+	now          func() time.Time
 
 	runMu       sync.Mutex
 	mu          sync.Mutex
@@ -107,7 +133,7 @@ func NewMaintenanceManager(opts MaintenanceOptions) *MaintenanceManager {
 		cfg.OverlapWindow = 30 * time.Minute
 	}
 	return &MaintenanceManager{
-		metadata: opts.Metadata, engines: opts.Engines, facts: opts.Facts, records: opts.Records,
+		metadata: opts.Metadata, engines: opts.Engines, facts: opts.Facts, records: opts.Records, heads: opts.Heads, requireHeads: opts.RequireHeads,
 		cfg: cfg, now: now, orphanSince: make(map[string]time.Time),
 	}
 }
@@ -275,7 +301,7 @@ func (m *MaintenanceManager) needsBuild(ctx context.Context, item *pb.View, engi
 	}
 	schema := viewindex.ViewIndexSchema{SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), Engine: item.GetEngine(), Columns: columns}
 	wantHash := viewindex.HashViewIndexSchema(schema)
-	if item.GetActiveSchemaHash() != wantHash {
+	if item.GetActiveViewSchemaHash() != wantHash {
 		return true, nil
 	}
 	stats, err := engine.Stat(ctx, item.GetActiveIndexId())
@@ -533,22 +559,38 @@ func (m *MaintenanceManager) processTimeSeriesPage(ctx context.Context, item *pb
 	if err != nil {
 		return 0, nil, err
 	}
-	projected, ok, err := FilteredTimeSeriesRowsForView(ctx, item, build.GetColumns(), rows, m.readTimeSeriesRowMapperRows)
+	allSourceRows := append([]*pb.TimeSeriesRow(nil), rows...)
+	readRows := func(readCtx context.Context, keys []*pb.TimeSeriesKey) ([]*pb.TimeSeriesRow, error) {
+		read, readErr := m.readTimeSeriesRowMapperRows(readCtx, keys)
+		allSourceRows = append(allSourceRows, read...)
+		return read, readErr
+	}
+	projected, ok, err := FilteredTimeSeriesRowsForView(ctx, item, build.GetColumns(), rows, readRows)
 	if err != nil {
 		return 0, nil, err
 	}
 	if !ok {
 		return 0, nil, errors.New("time series View contains unsupported projection columns")
 	}
-	if len(projected) > 0 {
-		indexedFrom, indexedTo := start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)
-		if err := applyMaintenanceRows(ctx, engine, build.GetIndexId(), viewindex.ViewIndexApplyBatch{
-			ViewVersion: build.GetTargetViewVersion(), ViewSchemaHash: build.GetSchemaHash(),
-			RowWrites: timeSeriesReplaceWrites(projected), CheckpointUpdates: checkpointUpdates(projected),
-			IndexRangeUpdate: &viewindex.IndexRangeUpdate{IndexedFrom: &indexedFrom, IndexedTo: &indexedTo},
-		}); err != nil {
-			return 0, nil, err
-		}
+	indexedFrom, indexedTo := start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)
+	checkpoints := checkpointUpdates(allSourceRows)
+	var rangeUpdate *viewindex.IndexRangeUpdate
+	if page != nil && page.GetHasMore() {
+		// Persist each page's durable progress. The range remains unset until
+		// the final page passes the live-head fence.
+	} else {
+		rangeUpdate = &viewindex.IndexRangeUpdate{IndexedFrom: &indexedFrom, IndexedTo: &indexedTo}
+	}
+	checkpoints, rangeUpdate, err = m.finalizeMaintenanceProgress(ctx, item, engine, build.GetIndexId(), checkpoints, rangeUpdate)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := applyMaintenanceRows(ctx, engine, build.GetIndexId(), viewindex.ViewIndexApplyBatch{
+		ViewVersion: build.GetTargetViewVersion(), ViewSchemaHash: build.GetSchemaHash(),
+		RowWrites: timeSeriesReplaceWrites(projected), CheckpointUpdates: checkpoints, RequiredColumnNames: viewColumnNames(build.GetColumns()),
+		IndexRangeUpdate: rangeUpdate,
+	}); err != nil {
+		return 0, nil, err
 	}
 	return len(projected), page, nil
 }
@@ -569,27 +611,103 @@ func (m *MaintenanceManager) processRecordPage(ctx context.Context, item *pb.Vie
 			return 0, nil, fmt.Errorf("Record View %s/%s requires RFC3339 versions; got %q", item.GetSpaceId(), item.GetViewId(), row.GetKey().GetVersion())
 		}
 	}
-	projected, ok, err := RecordRowsForView(ctx, item, build.GetColumns(), rows, m.readRecordRowMapperRows)
+	allSourceRows := append([]*pb.RecordRow(nil), rows...)
+	readRows := func(readCtx context.Context, keys []*pb.RecordKey) ([]*pb.RecordRow, error) {
+		read, readErr := m.readRecordRowMapperRows(readCtx, keys)
+		allSourceRows = append(allSourceRows, read...)
+		return read, readErr
+	}
+	projected, ok, err := RecordRowsForView(ctx, item, build.GetColumns(), rows, readRows)
 	if err != nil {
 		return 0, nil, err
 	}
 	if !ok {
 		return 0, nil, errors.New("Record View contains unsupported projection columns")
 	}
-	if len(projected) > 0 {
-		indexedFrom, indexedTo := start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)
-		if err := applyMaintenanceRows(ctx, engine, build.GetIndexId(), viewindex.ViewIndexApplyBatch{
-			ViewVersion: build.GetTargetViewVersion(), ViewSchemaHash: build.GetSchemaHash(),
-			RowWrites: recordReplaceWrites(projected), CheckpointUpdates: checkpointUpdates(projected),
-			IndexRangeUpdate: &viewindex.IndexRangeUpdate{IndexedFrom: &indexedFrom, IndexedTo: &indexedTo},
-		}); err != nil {
-			return 0, nil, err
-		}
+	indexedFrom, indexedTo := start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)
+	checkpoints := checkpointUpdates(allSourceRows)
+	var rangeUpdate *viewindex.IndexRangeUpdate
+	if page != nil && page.GetHasMore() {
+	} else {
+		rangeUpdate = &viewindex.IndexRangeUpdate{IndexedFrom: &indexedFrom, IndexedTo: &indexedTo}
+	}
+	checkpoints, rangeUpdate, err = m.finalizeMaintenanceProgress(ctx, item, engine, build.GetIndexId(), checkpoints, rangeUpdate)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := applyMaintenanceRows(ctx, engine, build.GetIndexId(), viewindex.ViewIndexApplyBatch{
+		ViewVersion: build.GetTargetViewVersion(), ViewSchemaHash: build.GetSchemaHash(),
+		RowWrites: recordReplaceWrites(projected), CheckpointUpdates: checkpoints, RequiredColumnNames: viewColumnNames(build.GetColumns()),
+		IndexRangeUpdate: rangeUpdate,
+	}); err != nil {
+		return 0, nil, err
 	}
 	return len(projected), page, nil
 }
 
+func (m *MaintenanceManager) finalizeMaintenanceProgress(ctx context.Context, item *pb.View, engine ManagedViewIndex, indexID string, checkpoints []viewindex.ShardCheckpointUpdate, rangeUpdate *viewindex.IndexRangeUpdate) ([]viewindex.ShardCheckpointUpdate, *viewindex.IndexRangeUpdate, error) {
+	if rangeUpdate == nil {
+		return checkpoints, rangeUpdate, nil
+	}
+	if m.heads == nil {
+		if m.requireHeads {
+			return nil, nil, errors.New("View maintenance requires shard heads before advancing index range")
+		}
+		return checkpoints, rangeUpdate, nil
+	}
+	heads, err := shardHeadsForView(ctx, m.heads, item)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(heads) == 0 && m.requireHeads {
+		return nil, nil, errors.New("View maintenance requires a nonempty shard head set before advancing index range")
+	}
+	stats, err := engine.Stat(ctx, indexID)
+	if err != nil {
+		return nil, nil, err
+	}
+	prospective := make(map[string]uint64, len(stats.ShardCheckpoints))
+	for shardID, sequence := range stats.ShardCheckpoints {
+		prospective[shardID] = sequence
+	}
+	for _, update := range checkpoints {
+		if update.LastAppliedSequence > prospective[update.ShardID] {
+			prospective[update.ShardID] = update.LastAppliedSequence
+		}
+	}
+	for shardID, head := range heads {
+		sequence, ok := prospective[shardID]
+		if !ok {
+			// A completed full rebuild may have no row from a source shard. It
+			// still needs an explicit zero/head checkpoint for exact freshness.
+			prospective[shardID] = head
+			continue
+		}
+		if sequence < head {
+			// Keep the page checkpoint. The range remains unset, and a later
+			// maintenance pass can catch up from the newly durable progress.
+			return checkpoints, nil, nil
+		}
+	}
+	if len(prospective) != len(heads) {
+		return checkpoints, nil, nil
+	}
+	for shardID := range prospective {
+		if _, ok := heads[shardID]; !ok {
+			return checkpoints, nil, nil
+		}
+	}
+	checkpoints = make([]viewindex.ShardCheckpointUpdate, 0, len(heads))
+	for shardID, head := range heads {
+		checkpoints = append(checkpoints, viewindex.ShardCheckpointUpdate{ShardID: shardID, LastAppliedSequence: head})
+	}
+	return checkpoints, rangeUpdate, nil
+}
+
 func applyMaintenanceRows(ctx context.Context, engine ManagedViewIndex, indexID string, batch viewindex.ViewIndexApplyBatch) error {
+	if len(batch.RowWrites) == 0 && len(batch.CheckpointUpdates) == 0 && batch.IndexRangeUpdate == nil {
+		return nil
+	}
 	applier, ok := engine.(viewindex.ViewIndexApplier)
 	if !ok {
 		return errors.New("view maintenance engine does not support atomic apply")
@@ -599,9 +717,19 @@ func applyMaintenanceRows(ctx context.Context, engine ManagedViewIndex, indexID 
 		if err != nil {
 			return err
 		}
-		for index := range batch.CheckpointUpdates {
-			batch.CheckpointUpdates[index].ExpectedLastAppliedSequence = stats.ShardCheckpoints[batch.CheckpointUpdates[index].ShardID]
+		updates := batch.CheckpointUpdates[:0]
+		for _, update := range batch.CheckpointUpdates {
+			current := stats.ShardCheckpoints[update.ShardID]
+			if update.LastAppliedSequence < current || (update.LastAppliedSequence == current && current != 0) {
+				continue
+			}
+			update.ExpectedLastAppliedSequence = current
+			updates = append(updates, update)
 		}
+		batch.CheckpointUpdates = updates
+	}
+	if len(batch.RowWrites) == 0 && len(batch.CheckpointUpdates) == 0 && batch.IndexRangeUpdate == nil {
+		return nil
 	}
 	return applier.Apply(ctx, indexID, batch)
 }
@@ -610,7 +738,7 @@ func timeSeriesReplaceWrites(rows []*pb.TimeSeriesRow) []viewindex.RowWrite {
 	writes := make([]viewindex.RowWrite, 0, len(rows))
 	for _, row := range rows {
 		if row != nil && row.GetKey() != nil {
-			writes = append(writes, viewindex.RowWrite{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{TimeSeriesKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes(), SourceShardID: row.GetSourceShardId(), SourceSequence: row.GetSourceSequence()})
+			writes = append(writes, viewindex.RowWrite{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{TimeSeriesKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes(), AttributesToDelete: row.GetAttributesToDelete(), RemovedColumnNames: row.GetRemovedColumnNames(), RemovedColumns: row.GetRemovedColumns(), SourceShardID: row.GetSourceShardId(), SourceSequence: row.GetSourceSequence()})
 		}
 	}
 	return writes
@@ -620,10 +748,27 @@ func recordReplaceWrites(rows []*pb.RecordRow) []viewindex.RowWrite {
 	writes := make([]viewindex.RowWrite, 0, len(rows))
 	for _, row := range rows {
 		if row != nil && row.GetKey() != nil {
-			writes = append(writes, viewindex.RowWrite{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{RecordKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes(), SourceShardID: row.GetSourceShardId(), SourceSequence: row.GetSourceSequence()})
+			writes = append(writes, viewindex.RowWrite{Operation: viewindex.RowWriteOperationReplace, Key: viewindex.RowKey{RecordKey: row.GetKey()}, Columns: row.GetColumns(), Attributes: row.GetAttributes(), AttributesToDelete: row.GetAttributesToDelete(), RemovedColumnNames: row.GetRemovedColumnNames(), RemovedColumns: row.GetRemovedColumns(), SourceShardID: row.GetSourceShardId(), SourceSequence: row.GetSourceSequence()})
 		}
 	}
 	return writes
+}
+
+func viewColumnNames(columns []*pb.ViewColumn) []string {
+	names := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		name := strings.TrimSpace(column.GetColumnName())
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 func checkpointUpdates(rows any) []viewindex.ShardCheckpointUpdate {
@@ -659,6 +804,31 @@ func checkpointUpdates(rows any) []viewindex.ShardCheckpointUpdate {
 func (m *MaintenanceManager) buildReady(ctx context.Context, item *pb.View, build *pb.ViewIndexBuild, engine ManagedViewIndex, stats viewindex.ViewIndexStats) (bool, error) {
 	if !stats.Exists || stats.ViewVersion != build.GetTargetViewVersion() || stats.SchemaHash != build.GetSchemaHash() {
 		return false, nil
+	}
+	if m.requireHeads && m.heads == nil {
+		return false, errors.New("View maintenance requires shard heads before activation")
+	}
+	if m.heads != nil {
+		heads, err := shardHeadsForView(ctx, m.heads, item)
+		if err != nil {
+			return false, err
+		}
+		if len(heads) == 0 && m.requireHeads {
+			return false, errors.New("View maintenance requires a nonempty shard head set before activation")
+		}
+		for shardID, head := range heads {
+			if stats.ShardCheckpoints[shardID] != head {
+				return false, nil
+			}
+		}
+		if len(stats.ShardCheckpoints) != len(heads) {
+			return false, nil
+		}
+		for shardID := range stats.ShardCheckpoints {
+			if _, ok := heads[shardID]; !ok {
+				return false, nil
+			}
+		}
 	}
 	coverageEnd, coverageOK := parseIndexTime(build.GetCoverageEnd())
 	indexedTo, indexedOK := parseIndexTime(stats.IndexedTo)

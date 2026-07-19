@@ -20,11 +20,12 @@ func applyViewIndexWithDeletes(ctx context.Context, engine viewindex.ViewIndexEn
 func applyViewIndexWithMode(ctx context.Context, engine viewindex.ViewIndexEngine, indexID string, batch viewindex.BatchWrite, timeSeriesDeletes []*pb.TimeSeriesRow, recordDeletes []*pb.RecordRow, progress applyProgress, replace bool) error {
 	if applier, ok := engine.(viewindex.ViewIndexApplier); ok {
 		if progress.shardID != "" && progress.sequence != 0 {
+			checkpointID := checkpointLaneID(progress)
 			stats, err := engine.Stat(ctx, indexID)
 			if err != nil {
 				return err
 			}
-			progress.expected = stats.ShardCheckpoints[progress.shardID]
+			progress.expected = stats.ShardCheckpoints[checkpointID]
 			if progress.expected >= progress.sequence {
 				return nil
 			}
@@ -41,7 +42,7 @@ func applyViewIndexWithMode(ctx context.Context, engine viewindex.ViewIndexEngin
 func operationBatch(batch viewindex.BatchWrite, timeSeriesDeletes []*pb.TimeSeriesRow, recordDeletes []*pb.RecordRow, progress applyProgress, replace bool) viewindex.ViewIndexApplyBatch {
 	result := viewindex.ViewIndexApplyBatch{ViewVersion: batch.ViewVersion, ViewSchemaHash: batch.SchemaHash, RequiredColumnNames: batch.RequiredColumnNames}
 	if progress.shardID != "" && progress.sequence != 0 {
-		result.CheckpointUpdates = append(result.CheckpointUpdates, viewindex.ShardCheckpointUpdate{ShardID: progress.shardID, ExpectedLastAppliedSequence: progress.expected, LastAppliedSequence: progress.sequence})
+		result.CheckpointUpdates = append(result.CheckpointUpdates, viewindex.ShardCheckpointUpdate{ShardID: checkpointLaneID(progress), ExpectedLastAppliedSequence: progress.expected, LastAppliedSequence: progress.sequence})
 	}
 	for _, row := range timeSeriesDeletes {
 		if row != nil && row.GetKey() != nil {
@@ -99,6 +100,9 @@ func deduplicateRowWrites(writes []viewindex.RowWrite) []viewindex.RowWrite {
 }
 
 func mergeDuplicateRowWrite(left, right viewindex.RowWrite) viewindex.RowWrite {
+	if left.SourceShardID == right.SourceShardID && left.SourceSequence > 0 && right.SourceSequence > 0 && right.SourceSequence < left.SourceSequence {
+		return left
+	}
 	if right.Operation == viewindex.RowWriteOperationDelete {
 		return viewindex.RowWrite{Operation: right.Operation, Key: left.Key, SourceShardID: right.SourceShardID, SourceSequence: right.SourceSequence}
 	}

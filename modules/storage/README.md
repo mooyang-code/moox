@@ -55,14 +55,14 @@ View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有�
 
 TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真实物理列。`QueryTimeSeriesRows` 将 key、时间范围、结构化过滤、排序、`limit` 和分页下推到 DuckDB。Bleve 同样在引擎内完成版本范围、排序和 `size+1` 分页，查询端不会先加载完整命中集。
 
-创建或更新 View 时，主数据集决定 View 的引擎和粒度：时序主数据集对应 DuckDB View，记录主数据集对应 Bleve View。包含数据集只要求已在同一空间注册，不能与主数据集重复；实际物化时是否能对齐取决于 View 字段能否按主数据集粒度聚合。`dataset_id` 必须是 lower_snake_case 且最长 20 字符，`view_id` 必须是 lower_snake_case 且最长 30 字符。
+创建或更新 View 时，主数据集决定 View 的引擎和粒度：时序主数据集对应 DuckDB View，记录主数据集对应 Bleve View。包含数据集只要求已在同一空间注册，不能与主数据集重复；实际物化时是否能对齐取决于 View 字段能否按主数据集粒度聚合。`dataset_id` 必须是 lower_snake_case 且最长 30 字符，`view_id` 必须是 lower_snake_case 且最长 30 字符。
 
 | 字段 | 含义 |
 | --- | --- |
 | `view_version` | 当前 View 定义版本，新增列或构建形态变化时递增 |
 | `active_view_version` | 当前线上读取的 View 版本 |
 | `active_index_id` | 当前线上读取的 a/b 槽位标识 |
-| `active_columns` / `active_schema_hash` | 与读取指针同时激活的字段快照，即使索引为空也可校验查询字段 |
+| `active_columns` / `active_view_schema_hash` | 与读取指针同时激活的字段快照，即使索引为空也可校验查询字段 |
 | `indexed_from` / `indexed_to` | 当前索引的保留范围 |
 | `index_build` | 当前构建租约，含 `build_id`、目标版本、状态、owner、游标、范围、计数和错误 |
 

@@ -1,6 +1,9 @@
 package sysdeploy
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // defaultPublicHost records the current bootstrap deployment host only.
 // New deployments should update public rows through SysDeploy/UI after the admin plane is reachable.
@@ -9,6 +12,11 @@ const defaultPublicHost = "106.53.107.122"
 const storageMetadataGatewayMethods = "[\"CreateSpace\",\"UpdateSpace\",\"GetSpace\",\"ListSpaces\",\"CreateView\",\"UpdateView\",\"GetView\",\"ListViews\",\"UpsertViewColumn\",\"ListViewColumns\",\"CreateDataSource\",\"UpdateDataSource\",\"GetDataSource\",\"ListDataSources\",\"UpsertSubject\",\"UpsertSubjectSymbol\",\"RegisterDataSubject\",\"GetSubject\",\"ListSubjects\",\"ListSubjectSymbols\",\"CreateDataset\",\"UpdateDataset\",\"GetDataset\",\"ListDatasets\",\"BindDatasetSubject\",\"ListDatasetSubjects\",\"CreateFieldGroup\",\"UpdateFieldGroup\",\"GetFieldGroup\",\"ListFieldGroups\",\"CreateField\",\"UpdateField\",\"GetField\",\"ListFields\",\"BatchUpdateFields\",\"DeleteFieldGroup\",\"CreateFactor\",\"UpdateFactor\",\"GetFactor\",\"ListFactors\",\"UpsertDatasetColumn\",\"ListDatasetColumns\",\"CreatePrimaryStoreNode\",\"UpdatePrimaryStoreNode\",\"GetPrimaryStoreNode\",\"ListPrimaryStoreNodes\",\"CreatePrimaryStoreRoute\",\"UpdatePrimaryStoreRoute\",\"GetPrimaryStoreRoute\",\"ListPrimaryStoreRoutes\",\"RegisterArchiveFile\",\"ListArchiveFiles\"]"
 const storagePrimaryGatewayMethods = "[\"MergeTimeSeriesRows\",\"ReadTimeSeriesRows\",\"MergeRecordRows\",\"ReadRecordRows\"]"
 const storageViewGatewayMethods = "[\"QueryTimeSeriesRows\",\"SearchRecordRows\"]"
+const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"moox-cli\",\"storage-view\"]"
+const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
+const storagePrimaryScanGatewayMethods = "[\"ScanTimeSeriesRows\",\"ScanRecordRows\",\"GetShardHeads\"]"
+const storagePrimaryScanGatewayCallers = "[\"storage-view\",\"archive\"]"
+const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
@@ -60,10 +68,13 @@ func DefaultDeployments(nodeID string) []Deployment {
 			rows[i].GatewayServiceID, rows[i].GatewayEnabled = serviceID, true
 		}
 		if rows[i].ServiceName == "sysdeploy" {
-			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments"]}`
+			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments"],"gateway_callers":["admin-gateway","monitor","moox-cli"]}`
 		}
 		if rows[i].ServiceName == "secret" {
-			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"]}`
+			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"],"gateway_callers":["admin-gateway"]}`
+		}
+		if rows[i].GatewayEnabled && !strings.Contains(rows[i].ExtraConfig, `"gateway_methods"`) {
+			rows[i].ExtraConfig = strings.TrimSuffix(rows[i].ExtraConfig, "}") + `,"gateway_methods":["*"],"gateway_callers":["*"]}`
 		}
 	}
 	return rows
@@ -76,11 +87,11 @@ func withExtra(item Deployment, extra string) Deployment {
 }
 
 func storagePrimaryExtraConfig() string {
-	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20201,"gateway_methods":%s}]}`, storageMetadataGatewayMethods, storagePrimaryGatewayMethods)
+	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["ClaimViewIndexBuild","UpdateViewIndexBuild","ActivateViewIndex","FailViewIndexBuild"],"gateway_callers":["storage-view"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":%s,"gateway_callers":%s},{"service_path":"trpc.moox.storage.PrimaryStoreScan","port":20105,"gateway_methods":%s,"gateway_callers":%s}]}`, storageMetadataGatewayMethods, storageMetadataGatewayCallers, storagePrimaryGatewayMethods, storagePrimaryGatewayCallers, storagePrimaryScanGatewayMethods, storagePrimaryScanGatewayCallers)
 }
 
 func storageViewExtraConfig() string {
-	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20211/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s}`, storageViewGatewayMethods)
+	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20211/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s}`, storageViewGatewayMethods, storageViewGatewayCallers)
 }
 
 func deployment(name, kind, protocol, host string, port int32, gatewayPath, scope, description string) Deployment {

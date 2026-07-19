@@ -5,12 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	bootstrapeventbus "github.com/mooyang-code/moox/modules/storage/internal/bootstrap/eventbus"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	primarysvc "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
 	storagesvc "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
+	viewbuilder "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder"
 	coreeventbus "github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
@@ -86,7 +88,13 @@ func main() {
 			}
 		}()
 	}
-	sourceReader := sourceReaderForRuntime(cfg.Storage, storageService)
+	var sourceReader viewbuilder.PrimaryStoreReader
+	if shouldRegisterViewQueryRole(cfg.Storage) || shouldStartViewBuilderRole(cfg.Storage) || shouldStartViewIndexRole(cfg.Storage) {
+		sourceReader, err = sourceReaderForRuntime(cfg.Storage, storageService)
+		if err != nil {
+			exitWithStartupError("initialize storage gateway credentials", err)
+		}
+	}
 
 	if cfg.Storage.HasRole("primary") {
 		if storageService == nil {
@@ -117,12 +125,13 @@ func main() {
 		registerNoopViewTimers(s)
 	}
 
+	var primaryService *primarysvc.Service
 	if shouldCreatePrimaryService(cfg.Storage) {
 		var messagePublisher primarysvc.MessagePublisher
 		if candidate, ok := rowsCommittedBus.(primarysvc.MessagePublisher); ok {
 			messagePublisher = candidate
 		}
-		primaryService := primarysvc.NewService(primarysvc.Options{
+		primaryService = primarysvc.NewService(primarysvc.Options{
 			Root:       opts.Root,
 			PebblePath: opts.PebblePath,
 			ShardID:    opts.ShardID,
@@ -143,15 +152,22 @@ func main() {
 				log.Errorf("关闭 primary service 失败: %v", err)
 			}
 		}()
-		dataShardService := s.Service("trpc.moox.storage.DataShard")
-		if dataShardService == nil {
-			exitWithStartupError("DataShard service listener is not configured", nil)
+		if cfg.Storage.HasRole("shard") || strings.TrimSpace(cfg.Storage.Primary.ServiceName) == "" {
+			dataShardService := s.Service("trpc.moox.storage.DataShard")
+			if dataShardService == nil {
+				exitWithStartupError("DataShard service listener is not configured", nil)
+			}
+			pb.RegisterDataShardService(dataShardService, primaryService)
 		}
-		pb.RegisterDataShardService(dataShardService, primaryService)
+	}
+	primaryReady := readyState(primaryService)
+	if primaryReady == nil && storageService != nil {
+		primaryReady = storageService
 	}
 	if err := registerStorageHealth(s, cfg.Storage, storageHealthDependencies{
 		eventbus: rowsCommittedBus,
 		view:     viewRuntimeReadiness{runtime: runtimeView, storage: cfg.Storage},
+		primary:  primaryReady,
 	}); err != nil {
 		exitWithStartupError("register storage health service", err)
 	}

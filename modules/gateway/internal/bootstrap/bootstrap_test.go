@@ -187,7 +187,7 @@ func TestContinuousSyncFailureWarnsAfterThresholdAndResetsOnRecovery(t *testing.
 
 func testSnapshot(t *testing.T, nodeID, serviceID string) gatewayproxy.Snapshot {
 	t.Helper()
-	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: serviceID, Address: "127.0.0.1:1234", ServicePath: "trpc.moox.test.Service"}})
+	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: serviceID, Address: "127.0.0.1:1234", ServicePath: "trpc.moox.test.Service", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

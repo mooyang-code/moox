@@ -208,7 +208,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Roles = []string{"primary", "view"}
 	}
 	if c.Primary.ShardID == "" {
-		c.Primary.ShardID = "storage-primary-0"
+		c.Primary.ShardID = "storage-shard-0"
 	}
 	if c.View.StorageRPC.GatewayTarget == "" {
 		c.View.StorageRPC.GatewayTarget = "ip://127.0.0.1:11003"

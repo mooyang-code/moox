@@ -25,7 +25,7 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 	item.ActiveIndexId = existing.GetActiveIndexId()
 	item.ActiveViewVersion = existing.GetActiveViewVersion()
 	item.ActiveColumns = cloneViewColumns(existing.GetActiveColumns())
-	item.ActiveSchemaHash = existing.GetActiveSchemaHash()
+	item.ActiveViewSchemaHash = existing.GetActiveViewSchemaHash()
 	item.IndexedFrom = existing.GetIndexedFrom()
 	item.IndexedTo = existing.GetIndexedTo()
 	item.ViewVersion = existing.GetViewVersion()
@@ -220,7 +220,7 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	view.ActiveIndexId = build.GetIndexId()
 	view.ActiveViewVersion = build.GetTargetViewVersion()
 	view.ActiveColumns = cloneViewColumns(build.GetColumns())
-	view.ActiveSchemaHash = build.GetSchemaHash()
+	view.ActiveViewSchemaHash = build.GetSchemaHash()
 	view.IndexedFrom = build.GetCoverageStart()
 	view.IndexedTo = build.GetCoverageEnd()
 	view.Columns = nil
@@ -235,10 +235,10 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE t_views SET c_active_index_id = ?, c_active_view_version = ?,
-			c_active_columns_json = ?, c_active_schema_hash = ?,
+			c_active_columns_json = ?, c_active_view_schema_hash = ?,
 		c_indexed_from = ?, c_indexed_to = ?, c_attrs_json = ?
 		WHERE c_space_id = ? AND c_view_id = ? AND c_view_version = ?
-	`, view.GetActiveIndexId(), view.GetActiveViewVersion(), activeColumns, view.GetActiveSchemaHash(),
+	`, view.GetActiveIndexId(), view.GetActiveViewVersion(), activeColumns, view.GetActiveViewSchemaHash(),
 		view.GetIndexedFrom(), view.GetIndexedTo(), raw, view.GetSpaceId(), view.GetViewId(), build.GetTargetViewVersion())
 	if err != nil {
 		return nil, err

@@ -88,7 +88,7 @@ func TestStorageHealthSnapshot(t *testing.T) {
 		t.Fatalf("create metadata file: %v", err)
 	}
 	state := health.New("storage", "storage", "", "")
-	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{eventbus: fakeReadyState(true), view: fakeReadyState(true)})(context.Background())
+	rsp := storageHealthSnapshot(cfg, state, storageHealthDependencies{eventbus: fakeReadyState(true), view: fakeReadyState(true), primary: fakeReadyState(true)})(context.Background())
 
 	if rsp.Module != "storage" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health retinfo = %+v", rsp)
