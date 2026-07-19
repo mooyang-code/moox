@@ -18,8 +18,11 @@ import (
 const (
 	RefreshDisabled time.Duration = -1
 
-	indexKind    = "kind"
-	indexPrimary = "primary"
+	indexKind               = "kind"
+	indexPrimary            = "primary"
+	indexDataset            = "dataset"
+	indexNode               = "node"
+	indexViewPrimaryDataset = "view_primary_dataset"
 )
 
 const (
@@ -76,6 +79,8 @@ type entry struct {
 	DatasetIDs     []string `json:"dataset_ids,omitempty"`
 	DataKind       int32    `json:"data_kind,omitempty"`
 	Freqs          []string `json:"freqs,omitempty"`
+	KeepDuration   string   `json:"keep_duration,omitempty"`
+	DataNodeID     string   `json:"data_node_id,omitempty"`
 	ViewID         string   `json:"view_id,omitempty"`
 	ValueType      int32    `json:"value_type,omitempty"`
 	Algorithm      string   `json:"algorithm,omitempty"`
@@ -102,6 +107,24 @@ func New(ctx context.Context, base metadata.Reader, opts Options) (*Store, error
 			}},
 			{Name: indexPrimary, Unique: true, Key: func(item entry) []string {
 				return []string{item.Kind, item.SpaceID, item.ID}
+			}},
+			{Name: indexDataset, Key: func(item entry) []string {
+				if item.DatasetID == "" {
+					return nil
+				}
+				return []string{item.Kind, item.SpaceID, item.DatasetID}
+			}},
+			{Name: indexNode, Key: func(item entry) []string {
+				if item.NodeID == "" {
+					return nil
+				}
+				return []string{item.Kind, item.NodeID}
+			}},
+			{Name: indexViewPrimaryDataset, Key: func(item entry) []string {
+				if item.Kind != kindView || item.DatasetID == "" {
+					return nil
+				}
+				return []string{item.Kind, item.SpaceID, item.DatasetID}
 			}},
 		},
 		Startup: snapshotcache.StartupOptions{
@@ -259,6 +282,23 @@ func (s *Store) ListSubjectSymbols(ctx context.Context, spaceID string, subjectI
 
 func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
 	return getProto(s, ctx, kindDataset, spaceID, datasetID, func() *pb.Dataset { return &pb.Dataset{} })
+}
+
+// GetDatasetColumn returns one immutable Dataset column from the current snapshot.
+// The column key is scoped by Dataset, so callers cannot accidentally cross spaces.
+func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
+	return getProto(s, ctx, kindDatasetColumn, spaceID, datasetID+"."+columnName, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+}
+
+// GetDataNode is the concise DataNode name used by the new storage write path.
+// The underlying metadata wire type remains PrimaryStoreNode for the control plane.
+func (s *Store) GetDataNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
+	return s.GetPrimaryStoreNode(ctx, nodeID)
+}
+
+// ListDataNodes is the concise alias used by routing code.
+func (s *Store) ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
+	return s.ListPrimaryStoreNodes(ctx, page)
 }
 
 func (s *Store) ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
@@ -568,7 +608,7 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error)
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

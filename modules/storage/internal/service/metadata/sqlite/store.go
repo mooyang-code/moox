@@ -90,13 +90,7 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	return err
 }
 
-const metadataSchemaVersion = "3"
-
-func metadataSchemaVersionCompatible(version string) bool {
-	// Versions 2 and 3 share the additive metadata contract. The schema script
-	// only creates missing objects without downgrading an existing database.
-	return version == metadataSchemaVersion || version == "2"
-}
+const metadataSchemaVersion = "4"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -121,7 +115,7 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	}
 	var version string
 	err := s.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !metadataSchemaVersionCompatible(version)) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && version != metadataSchemaVersion) {
 		return errors.New("incompatible storage metadata schema; reset metadata database")
 	}
 	return err

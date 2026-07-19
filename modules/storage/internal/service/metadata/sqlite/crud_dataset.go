@@ -21,6 +21,21 @@ func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return nil, errors.New("data_kind must be record or time_series")
 	}
+	keepDuration, err := normalizeKeepDuration(item.GetKeepDuration(), item.GetDataKind())
+	if err != nil {
+		return nil, err
+	}
+	item.KeepDuration = keepDuration
+	if existing, getErr := s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); getErr == nil {
+		if existing.GetDataNodeId() != "" && item.GetDataNodeId() != "" && existing.GetDataNodeId() != item.GetDataNodeId() {
+			return nil, errors.New("dataset data_node_id is immutable")
+		}
+		if item.GetDataNodeId() == "" {
+			item.DataNodeId = existing.GetDataNodeId()
+		}
+	} else if !errors.Is(getErr, sql.ErrNoRows) {
+		return nil, getErr
+	}
 	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)
 	if err != nil {
@@ -31,25 +46,49 @@ func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_name, c_description, c_data_kind, c_freqs_json, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_description, c_data_kind, c_freqs_json, c_keep_duration, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id) DO UPDATE SET
 			c_data_source_id = excluded.c_data_source_id,
+			c_data_node_id = CASE WHEN excluded.c_data_node_id <> '' THEN excluded.c_data_node_id ELSE t_datasets.c_data_node_id END,
 			c_name = excluded.c_name,
 			c_description = excluded.c_description,
 			c_data_kind = excluded.c_data_kind,
 			c_freqs_json = excluded.c_freqs_json,
+			c_keep_duration = excluded.c_keep_duration,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetDataSourceId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetDataSourceId(), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
 	return s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
 }
 
+func normalizeKeepDuration(value string, kind pb.DataKind) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "0"
+	}
+	if value == "0" {
+		return value, nil
+	}
+	if kind == pb.DataKind_DATA_KIND_RECORD {
+		return "", errors.New("record dataset keep_duration must be 0")
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
+	}
+	return duration.String(), nil
+}
+
 func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
 	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, []any{spaceID, datasetID}, func() *pb.Dataset { return &pb.Dataset{} })
+}
+
+func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
+	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }
 
 func (s *Store) ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
@@ -80,6 +119,16 @@ func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	if err != nil {
 		return nil, err
 	}
+	newField := false
+	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr == nil {
+		if existing.GetValueType() != item.GetValueType() {
+			return nil, errors.New("field value_type is immutable")
+		}
+	} else if !errors.Is(getErr, sql.ErrNoRows) {
+		return nil, getErr
+	} else {
+		newField = true
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_unit, c_validation_rule_json, c_write_example, c_sort_order, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -97,6 +146,11 @@ func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetUnit(), defaultJSON(item.GetValidationRuleJson()), item.GetWriteExample(), item.GetSortOrder(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
+	}
+	if newField {
+		if err := s.bumpViewsForField(ctx, item.GetSpaceId(), item.GetFieldId()); err != nil {
+			return nil, err
+		}
 	}
 	return s.GetField(ctx, item.GetSpaceId(), item.GetFieldId())
 }
@@ -120,6 +174,11 @@ func (s *Store) UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	raw, err := s.prepareField(ctx, item)
 	if err != nil {
 		return nil, err
+	}
+	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr != nil {
+		return nil, getErr
+	} else if existing.GetValueType() != item.GetValueType() {
+		return nil, errors.New("field value_type is immutable")
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE t_fields SET c_group_id = ?, c_name = ?, c_description = ?, c_value_type = ?, c_unit = ?,
@@ -268,6 +327,16 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		return nil, errors.New("space_id, dataset_id and column_name are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
+	newColumn := false
+	if existing, getErr := s.GetDatasetColumn(ctx, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()); getErr == nil {
+		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
+			return nil, errors.New("dataset column identity and value_type are immutable")
+		}
+	} else if !errors.Is(getErr, sql.ErrNoRows) {
+		return nil, getErr
+	} else {
+		newColumn = true
+	}
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
@@ -277,22 +346,57 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_required, c_is_unique, c_aliases_json, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_is_unique, c_aliases_json, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_column_name) DO UPDATE SET
 			c_origin_type = excluded.c_origin_type,
 			c_origin_id = excluded.c_origin_id,
 			c_value_type = excluded.c_value_type,
-			c_required = excluded.c_required,
 			c_is_unique = excluded.c_is_unique,
 			c_aliases_json = excluded.c_aliases_json,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), boolInt(item.GetRequired()), boolInt(item.GetIsUnique()), aliases, item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), boolInt(item.GetIsUnique()), aliases, item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
+	if newColumn {
+		if err := s.bumpViewsForDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
+			return nil, err
+		}
+	}
 	return item, nil
+}
+
+func (s *Store) bumpViewsForDataset(ctx context.Context, spaceID, datasetID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE t_views
+		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
+		WHERE c_space_id = ? AND (
+			c_primary_dataset_id = ? OR EXISTS (
+				SELECT 1 FROM json_each(t_views.c_dataset_ids_json) ref WHERE ref.value = ?
+			)
+		)`, spaceID, datasetID, datasetID)
+	return err
+}
+
+func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE t_views
+		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
+		WHERE c_space_id = ? AND EXISTS (
+			SELECT 1
+			FROM t_dataset_columns column_ref
+			WHERE column_ref.c_space_id = t_views.c_space_id
+			  AND column_ref.c_origin_type = 'field'
+			  AND column_ref.c_origin_id = ?
+			  AND (
+				column_ref.c_dataset_id = t_views.c_primary_dataset_id OR EXISTS (
+					SELECT 1 FROM json_each(t_views.c_dataset_ids_json) ref WHERE ref.value = column_ref.c_dataset_id
+				)
+			  )
+		)`, spaceID, fieldID)
+	return err
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
