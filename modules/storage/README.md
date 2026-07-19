@@ -225,6 +225,8 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 写入任何事实数据之前，必须先把元数据登记好。元数据是控制面，描述"数据长什么样、归谁、放哪、怎么查"。各概念及依赖关系如下（父在前、子在后）：
 
+Dataset Schema 遵循 Append-only 业务约束：已有字段不删除，`field_id` 不修改或复用，`value_type` 和 Required 属性不修改；后续只允许追加 Optional 字段，Required 字段只在 Dataset 创建时定义。Storage 不实现字段迁移或新旧 Schema 兼容。Schema 变化后，受影响 Dataset 暂停写入，由用户重新部署相关进程；View 通过非活跃 Index 后台重建并原子切换，重建期间旧 Active Index 继续提供查询。
+
 | 概念 | 含义 | 归属 |
 | --- | --- | --- |
 | **Space** | 业务命名空间 / 工作区，是一切元数据的根 | — |
