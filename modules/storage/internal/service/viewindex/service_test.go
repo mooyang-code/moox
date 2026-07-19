@@ -1,3 +1,5 @@
+//go:build legacy_viewindex
+
 package viewindex
 
 import (

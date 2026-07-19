@@ -1,4 +1,4 @@
-//go:build cgo
+//go:build cgo && legacy_viewindex
 
 package duckdb
 
