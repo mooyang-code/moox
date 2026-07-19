@@ -14,9 +14,9 @@ type RuleScheduler struct {
 	now       func() time.Time
 }
 type SchedulerOptions struct {
-	Evaluator       *MetricEvaluator
-	Rules           *MetricRuleStore
-	Now             func() time.Time
+	Evaluator *MetricEvaluator
+	Rules     *MetricRuleStore
+	Now       func() time.Time
 }
 
 func NewRuleScheduler(opts SchedulerOptions) *RuleScheduler {

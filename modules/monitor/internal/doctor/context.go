@@ -5,6 +5,7 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
+	"gorm.io/gorm"
 )
 
 const (
@@ -31,6 +33,7 @@ type DeploymentSource interface {
 
 type Builder struct {
 	Deployments DeploymentSource
+	Checks      *store.CheckRepository
 	Results     *store.ResultRepository
 	Alerts      *store.AlertRepository
 	Metrics     *monmetrics.QueryService
@@ -48,6 +51,9 @@ type Observation struct {
 	Kind, ComponentID, ServiceName, InstanceID, NodeID, BootID, Status, Summary, DetailsJSON string
 	ObservedAt                                                                               time.Time
 	Stale, Conflict                                                                          bool
+	Value                                                                                    float64
+	AgeSeconds                                                                               int64
+	IntervalSeconds                                                                          int
 }
 
 type Watermark struct {
@@ -111,10 +117,10 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, pipelin
 	if deploymentErr != nil {
 		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "sysdeploy", Status: "UNKNOWN", Summary: "SysDeploy facts unavailable"})
 	}
-	if err := b.addHealth(ctx, components, &out); err != nil {
+	if err := b.addHealth(ctx, components, now, &out); err != nil {
 		return Context{}, err
 	}
-	if err := b.addMetrics(ctx, components, nodeID, pipelineIDs, &out); err != nil {
+	if err := b.addMetrics(ctx, components, nodeID, pipelineIDs, now, &out); err != nil {
 		return Context{}, err
 	}
 	if err := b.addHosts(ctx, nodeID, now, &out); err != nil {
@@ -145,30 +151,67 @@ func (b Builder) loadDeployments(ctx context.Context) ([]*adminpb.ServiceDeploym
 	return b.Deployments.DesiredDeployments(ctx)
 }
 
-func (b Builder) addHealth(ctx context.Context, components []doctor.Component, out *Context) error {
-	if b.Results == nil {
+func (b Builder) addHealth(ctx context.Context, components []doctor.Component, now time.Time, out *Context) error {
+	if b.Results == nil || b.Checks == nil {
 		return nil
 	}
-	results, err := b.Results.Latest(ctx, MaxObservations+1)
-	if err != nil {
-		return err
-	}
 	componentByService := componentMap(components)
-	for _, result := range results {
-		component, ok := componentByService[result.CheckID]
-		if !ok {
+	for _, expected := range out.ExpectedComponents {
+		if !expected.Expected {
 			continue
 		}
-		out.HealthObservations = append(out.HealthObservations, Observation{Kind: "health", ComponentID: component.ComponentID, ServiceName: component.ServiceName, Status: strings.ToUpper(string(result.Status)), ObservedAt: result.CheckedAt, Summary: healthSummary(result)})
+		check, err := b.Checks.Get(ctx, "", expected.ServiceName)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		results, err := b.Results.Recent(ctx, "", expected.ServiceName, 3)
+		if err != nil {
+			return err
+		}
+		if len(results) == 0 {
+			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health observation is missing"})
+			continue
+		}
+		latest := results[0]
+		interval := max(check.IntervalSeconds, 1)
+		age := observationAge(now, latest.CheckedAt)
+		status := strings.ToUpper(latest.Status)
+		if len(results) == 3 && !results[0].Success && !results[1].Success && !results[2].Success {
+			status = "DOWN"
+		}
+		observation := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: status, ObservedAt: latest.CheckedAt, Stale: age > int64(2*interval), AgeSeconds: age, IntervalSeconds: interval, Summary: healthSummary(latest)}
+		var identity struct {
+			Service    string `json:"service"`
+			InstanceID string `json:"instance_id"`
+			BootID     string `json:"boot_id"`
+		}
+		if json.Unmarshal([]byte(latest.BodyExcerpt), &identity) == nil {
+			observation.InstanceID, observation.BootID = identity.InstanceID, identity.BootID
+			component := componentByService[expected.ServiceName]
+			wantInstance := expected.ServiceName + "@" + expected.NodeID
+			if component.FunctionalObservability != doctor.FunctionalObservabilityDeferred &&
+				((identity.Service != "" && identity.Service != expected.ServiceName) || (identity.InstanceID != "" && identity.InstanceID != wantInstance) || identity.BootID == "") {
+				observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity does not match the deployment contract"
+			}
+		}
+		out.HealthObservations = append(out.HealthObservations, observation)
 	}
 	return nil
 }
 
-func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, pipelineIDs []string, out *Context) error {
+func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, pipelineIDs []string, now time.Time, out *Context) error {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil
 	}
-	services, _, err := b.Metrics.Catalog().ListServices(ctx, "moox_system", 0, MaxObservations+1)
+	serviceNames := make([]string, 0, len(components))
+	for _, component := range components {
+		serviceNames = append(serviceNames, component.ServiceName)
+	}
+	services, err := b.Metrics.Catalog().ListServicesFor(ctx, serviceNames, nodeID, MaxObservations)
 	if err != nil {
 		return err
 	}
@@ -180,17 +223,25 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 			continue
 		}
 		active[service.ServiceName] = append(active[service.ServiceName], service)
-		out.ReporterObservations = append(out.ReporterObservations, Observation{Kind: "reporter", ComponentID: component.ComponentID, ServiceName: service.ServiceName, InstanceID: service.InstanceID, NodeID: service.NodeID, BootID: service.BootID, Status: map[bool]string{true: "STALE", false: "FRESH"}[service.IsStale], ObservedAt: service.LastSeenAt, Stale: service.IsStale, Summary: "latest Reporter snapshot"})
+		age := observationAge(now, service.LastSeenAt)
+		status := "FRESH"
+		if service.LastSeenAt.IsZero() || age > 120 {
+			status = "FAIL"
+		} else if age > 60 {
+			status = "WARN"
+		}
+		out.ReporterObservations = append(out.ReporterObservations, Observation{Kind: "reporter", ComponentID: component.ComponentID, ServiceName: service.ServiceName, InstanceID: service.InstanceID, NodeID: service.NodeID, BootID: service.BootID, Status: status, ObservedAt: service.LastSeenAt, Stale: status != "FRESH", AgeSeconds: age, IntervalSeconds: 30, Summary: "latest Reporter snapshot"})
 	}
 	for serviceName, rows := range active {
 		fresh := 0
 		for _, row := range rows {
-			if !row.IsStale {
+			if observationAge(now, row.LastSeenAt) <= 60 {
 				fresh++
 			}
 		}
 		if fresh > 1 {
 			component := componentByService[serviceName]
+			markReporterConflict(out, component.ComponentID)
 			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "identity", ComponentID: component.ComponentID, ServiceName: serviceName, NodeID: nodeID, Status: "CONFLICT", Conflict: true, Summary: "multiple fresh Reporter identities"})
 		}
 	}
@@ -210,6 +261,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		for _, row := range rows {
 			wantInstance := row.ServiceName + "@" + row.NodeID
 			if row.NodeID == "" || row.BootID == "" || row.InstanceID != wantInstance {
+				markReporterConflict(out, component.ComponentID)
 				out.MissingObservations = append(out.MissingObservations, Observation{Kind: "identity", ComponentID: component.ComponentID, ServiceName: row.ServiceName, InstanceID: row.InstanceID, NodeID: row.NodeID, BootID: row.BootID, Status: "CONFLICT", Conflict: true, Summary: "Reporter identity does not match the canonical service@node contract"})
 			}
 		}
@@ -242,7 +294,8 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 			if err != nil {
 				continue
 			}
-			observation := Observation{Kind: "module", ComponentID: component.ComponentID, ServiceName: component.ServiceName, InstanceID: latest.InstanceID, Status: map[bool]string{true: "STALE", false: "FRESH"}[item.IsStale], ObservedAt: latest.ObservedAt, Stale: item.IsStale, Summary: item.MetricName, DetailsJSON: item.LabelsJSON}
+			age := observationAge(now, latest.ObservedAt)
+			observation := Observation{Kind: "module", ComponentID: component.ComponentID, ServiceName: component.ServiceName, InstanceID: latest.InstanceID, Status: map[bool]string{true: "STALE", false: "FRESH"}[item.IsStale], ObservedAt: latest.ObservedAt, Stale: item.IsStale, Value: latest.Value, AgeSeconds: age, IntervalSeconds: latest.IntervalSeconds, Summary: item.MetricName, DetailsJSON: item.LabelsJSON}
 			out.ModuleObservations = append(out.ModuleObservations, observation)
 			if item.MetricName == "moox_module_watermark_timestamp_seconds" {
 				out.Watermarks = append(out.Watermarks, Watermark{Module: labels["module"], Stage: labels["stage"], Pipeline: pipeline, Value: latest.Value, ObservedAt: latest.ObservedAt, Status: observation.Status})
@@ -343,6 +396,27 @@ func healthSummary(result domain.CheckResult) string {
 		return result.ErrorMessage
 	}
 	return "service health check failed"
+}
+
+func observationAge(now, observedAt time.Time) int64 {
+	if observedAt.IsZero() {
+		return 1<<63 - 1
+	}
+	if observedAt.After(now) {
+		return 0
+	}
+	return int64(now.Sub(observedAt) / time.Second)
+}
+
+func markReporterConflict(out *Context, componentID string) {
+	for i := range out.ReporterObservations {
+		observation := &out.ReporterObservations[i]
+		if observation.ComponentID == componentID {
+			observation.Status = "CONFLICT"
+			observation.Conflict = true
+			observation.Summary = "Reporter identity conflict"
+		}
+	}
 }
 
 func enforceBounds(context Context) error {

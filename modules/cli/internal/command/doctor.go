@@ -42,6 +42,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
+		Short:        map[string]string{"bootstrap": "Check a new local deployment", "diagnose": "Interpret bounded Monitor facts"}[mode],
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, _ []string) error {

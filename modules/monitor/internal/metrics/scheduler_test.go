@@ -22,7 +22,7 @@ func TestRuleSchedulerEvaluateDueOnceWithEmptyRules(t *testing.T) {
 	sched := NewRuleScheduler(SchedulerOptions{
 		Evaluator: &MetricEvaluator{},
 		Rules:     rules,
-		Now: func() time.Time { return fixed },
+		Now:       func() time.Time { return fixed },
 	})
 	require.NoError(t, sched.EvaluateDueOnce(context.Background()))
 	require.NoError(t, (*RuleScheduler)(nil).EvaluateDueOnce(context.Background()))

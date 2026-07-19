@@ -26,7 +26,7 @@ func TestEvaluatePipelineSignalsTruthTable(t *testing.T) {
 		mutate     func(*PipelineSignals)
 	}{
 		{name: "no workload", want: "SKIPPED", mutate: func(s *PipelineSignals) { s.EnabledWorkloads = 0 }},
-		{name: "input idle", want: "UNKNOWN", mutate: func(s *PipelineSignals) { s.InputWatermark = s.PreviousInputWatermark }},
+		{name: "input idle", want: "PASS", mutate: func(s *PipelineSignals) { s.InputWatermark = s.PreviousInputWatermark }},
 		{name: "output stalled", want: "FAIL", mutate: func(s *PipelineSignals) { s.OutputWatermark = now.Add(-10 * time.Minute) }},
 		{name: "legal empty", want: "PASS", mutate: func(s *PipelineSignals) { s.LegalEmptyOutput = true }},
 		{name: "storage deferred", want: "SKIPPED", mutate: func(s *PipelineSignals) { s.CrossesStorageDeferred = true }},

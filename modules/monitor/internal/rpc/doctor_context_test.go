@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -9,6 +10,7 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type doctorDeploymentSource struct{ rows []*adminpb.ServiceDeployment }
@@ -33,4 +35,15 @@ func TestGetDoctorContextRejectsTooManyComponents(t *testing.T) {
 	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{ComponentIds: ids})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestDoctorContextRejectsOversizedResponse(t *testing.T) {
+	rsp := &monitorpb.GetDoctorContextRsp{MissingObservations: []*monitorpb.DoctorObservation{{DetailsJson: string(make([]byte, monitorpb.MaxDoctorContextBytes+1))}}}
+	require.Error(t, validateDoctorResponseSize(rsp))
+}
+
+func TestDoctorContextRejectsOversizedJSONEncoding(t *testing.T) {
+	rsp := &monitorpb.GetDoctorContextRsp{MissingObservations: []*monitorpb.DoctorObservation{{DetailsJson: strings.Repeat(`\`, monitorpb.MaxDoctorContextBytes/2+1)}}}
+	require.Less(t, proto.Size(rsp), monitorpb.MaxDoctorContextBytes)
+	require.Error(t, validateDoctorResponseSize(rsp))
 }

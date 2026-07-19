@@ -135,7 +135,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, pipelineErr
 	}
 	doctorContext := &monitordoctor.Builder{
-		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Results: runtime.Repositories.Results,
+		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)

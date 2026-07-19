@@ -155,6 +155,11 @@ func (m *Mux) HandlePrefix(path string, handler http.Handler) {
 func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if m != nil {
 		if handler, ok := m.routes[r.URL.Path]; ok {
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
 			handler.ServeHTTP(w, r)
 			return
 		}

@@ -1,11 +1,40 @@
 package report
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+func TestModuleMetricsRejectsTwoHundredFiftySeventhSeries(t *testing.T) {
+	pipelines := make([]string, 32)
+	for i := range pipelines {
+		pipelines[i] = fmt.Sprintf("pipeline-%d", i)
+	}
+	m, err := NewModuleMetrics(prometheus.NewRegistry(), "monitor", pipelines)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := 0
+	for _, stage := range []string{"ingest", "publish", "dispatch", "calculate", "evaluate", "materialize", "reconcile", "rebalance", "collect"} {
+		for _, pipeline := range pipelines {
+			err := m.SetBacklog(stage, pipeline, 0)
+			if created < MaxModuleMetricSeries && err != nil {
+				t.Fatalf("series %d rejected early: %v", created+1, err)
+			}
+			created++
+			if created == MaxModuleMetricSeries+1 {
+				if err == nil {
+					t.Fatal("257th series was accepted")
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("test did not create 257 series")
+}
 
 func TestModuleMetricsRejectsUnknownLabelsAndWatermarkRegression(t *testing.T) {
 	m, err := NewModuleMetrics(prometheus.NewRegistry(), "collector", []string{"market-data"})

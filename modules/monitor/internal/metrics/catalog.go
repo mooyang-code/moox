@@ -53,6 +53,37 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 	return rows, total, nil
 }
 
+// ListServicesFor resolves only the finite Doctor selection. It must not page
+// through unrelated catalog rows and silently turn truncation into "missing".
+func (c *MetricCatalog) ListServicesFor(ctx context.Context, serviceNames []string, nodeID string, limit int) ([]MetricService, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if len(serviceNames) == 0 {
+		return []MetricService{}, nil
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("service limit must be positive")
+	}
+	q := c.messageStore.db.WithContext(ctx).Model(&MetricService{}).Where("c_service_name IN ?", serviceNames)
+	if nodeID != "" {
+		q = q.Where("c_node_id = ?", nodeID)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	if total > int64(limit) {
+		return nil, fmt.Errorf("selected metric services exceed limit %d", limit)
+	}
+	var rows []MetricService
+	if err := q.Order("c_service_name ASC, c_instance_id ASC, c_boot_id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	c.markServicesStale(rows)
+	return rows, nil
+}
+
 func (c *MetricCatalog) markServicesStale(rows []MetricService) {
 	cutoff := time.Now().UTC().Add(-c.noDataAfter)
 	for i := range rows {

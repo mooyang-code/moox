@@ -7,6 +7,7 @@ import (
 
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -22,10 +23,24 @@ func (s *Service) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctor
 		return &monitorpb.GetDoctorContextRsp{RetInfo: invalid(err)}, nil
 	}
 	rsp := contextToPB(value)
-	if proto.Size(rsp) > monitorpb.MaxDoctorContextBytes {
+	if err := validateDoctorResponseSize(rsp); err != nil {
 		return &monitorpb.GetDoctorContextRsp{RetInfo: inner(errors.New("doctor context exceeds 2 MiB response limit"))}, nil
 	}
 	return rsp, nil
+}
+
+func validateDoctorResponseSize(rsp *monitorpb.GetDoctorContextRsp) error {
+	if proto.Size(rsp) > monitorpb.MaxDoctorContextBytes {
+		return errors.New("doctor context exceeds 2 MiB response limit")
+	}
+	encoded, err := protojson.Marshal(rsp)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > monitorpb.MaxDoctorContextBytes {
+		return errors.New("doctor context exceeds 2 MiB JSON response limit")
+	}
+	return nil
 }
 
 func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
@@ -61,7 +76,7 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 }
 
 func observationToPB(item monitordoctor.Observation) *monitorpb.DoctorObservation {
-	return &monitorpb.DoctorObservation{Kind: item.Kind, ComponentId: item.ComponentID, ServiceName: item.ServiceName, InstanceId: item.InstanceID, NodeId: item.NodeID, BootId: item.BootID, Status: item.Status, ObservedAt: formatDoctorTime(item.ObservedAt), Summary: item.Summary, DetailsJson: item.DetailsJSON, Stale: item.Stale, Conflict: item.Conflict}
+	return &monitorpb.DoctorObservation{Kind: item.Kind, ComponentId: item.ComponentID, ServiceName: item.ServiceName, InstanceId: item.InstanceID, NodeId: item.NodeID, BootId: item.BootID, Status: item.Status, ObservedAt: formatDoctorTime(item.ObservedAt), Summary: item.Summary, DetailsJson: item.DetailsJSON, Stale: item.Stale, Conflict: item.Conflict, Value: item.Value, AgeSeconds: item.AgeSeconds, IntervalSeconds: int32(item.IntervalSeconds)}
 }
 
 func formatDoctorTime(value time.Time) string {

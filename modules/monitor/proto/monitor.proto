@@ -418,6 +418,9 @@ message DoctorObservation {
   string details_json = 10;
   bool stale = 11;
   bool conflict = 12;
+  double value = 13;
+  int64 age_seconds = 14;
+  int32 interval_seconds = 15;
 }
 message DoctorWatermark {
   string module = 1;

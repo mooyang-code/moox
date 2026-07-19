@@ -132,6 +132,17 @@ func TestStandardMuxSeparatesLivenessAndReadiness(t *testing.T) {
 	}
 }
 
+func TestStandardMuxRejectsNonGETHealthRequests(t *testing.T) {
+	handler := StandardMux(func(context.Context) Response { return Response{Ready: true} }, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, path, nil))
+		if rr.Code != http.StatusMethodNotAllowed || rr.Header().Get("Allow") != http.MethodGet {
+			t.Fatalf("%s response = %d Allow=%q", path, rr.Code, rr.Header().Get("Allow"))
+		}
+	}
+}
+
 func TestRegisterNoProtocolServiceMuxRejectsMissingInputs(t *testing.T) {
 	if err := RegisterNoProtocolServiceMux(nil, NewMux()); err == nil {
 		t.Fatal("nil service should be rejected")

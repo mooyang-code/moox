@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -122,11 +123,16 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 			return checkResult(spec.ID, core.StatusSkipped, "component is disabled or not expected", nil)
 		}
 		observation := findObservation(r.context.GetHealthObservations(), component.GetComponentId())
+		if observation != nil && observation.GetConflict() {
+			return checkResult(spec.ID, core.StatusFail, "health identity conflict fails closed", nil, "verify_service_identity")
+		}
 		if observation != nil && !observation.GetStale() && !observation.GetConflict() {
 			if observation.GetStatus() == "OK" {
 				return checkResult(spec.ID, core.StatusPass, "Monitor health observation is current", nil)
 			}
-			return checkResult(spec.ID, core.StatusFail, "Monitor reports an unhealthy service", nil, "restart_service_manually")
+			if observation.GetStatus() == "DOWN" {
+				return checkResult(spec.ID, core.StatusFail, "Monitor reports three consecutive health failures", nil, "restart_service_manually")
+			}
 		}
 		if component.GetHealthUrl() == "" {
 			return checkResult(spec.ID, core.StatusUnknown, "health observation is missing and no fixed endpoint is available", nil, "run_bootstrap")
@@ -165,13 +171,20 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		}
 		observation := findObservation(r.context.GetReporterObservations(), component.GetComponentId())
 		if observation == nil {
-			return r.directMetrics(ctx, spec.ID, component)
+			return r.directMetrics(ctx, spec.ID, component, core.StatusWarn)
 		}
 		if observation.GetConflict() {
 			return checkResult(spec.ID, core.StatusFail, "Reporter identity conflict fails closed", nil, "verify_service_identity")
 		}
+		if hasObservationConflict(r.context.GetMissingObservations(), component.GetComponentId()) {
+			return checkResult(spec.ID, core.StatusFail, "Reporter identity conflict fails closed", nil, "verify_service_identity")
+		}
 		if observation.GetStale() {
-			return r.directMetrics(ctx, spec.ID, component)
+			severity := core.StatusWarn
+			if observation.GetStatus() == "FAIL" || (observation.GetIntervalSeconds() > 0 && observation.GetAgeSeconds() > int64(4*observation.GetIntervalSeconds())) {
+				severity = core.StatusFail
+			}
+			return r.directMetrics(ctx, spec.ID, component, severity)
 		}
 		return checkResult(spec.ID, core.StatusPass, "Reporter observation is current", nil)
 	}
@@ -200,15 +213,27 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if pipeline.CrossesStorageDeferred {
 			return checkResult(spec.ID, core.StatusSkipped, "storage_observability_deferred", nil)
 		}
-		for _, watermark := range r.context.GetWatermarks() {
-			if watermark.GetPipeline() == pipeline.ID && watermark.GetModule() == pipeline.Module {
-				if watermark.GetStatus() == "STALE" {
-					return checkResult(spec.ID, core.StatusFail, "pipeline output watermark is stale", nil, "inspect_pipeline_input")
-				}
-				return checkResult(spec.ID, core.StatusPass, "pipeline output watermark is available", nil)
+		var input time.Time
+		for _, observation := range r.context.GetModuleObservations() {
+			if observation.GetSummary() != "moox_module_last_success_timestamp_seconds" {
+				continue
+			}
+			labels := map[string]string{}
+			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) == nil && labels["pipeline"] == pipeline.ID && labels["module"] == pipeline.Module {
+				input = time.Unix(int64(observation.GetValue()), 0).UTC()
+				break
 			}
 		}
-		return checkResult(spec.ID, core.StatusPass, "pipeline has no advancing input fact; treated as IDLE", nil)
+		var output time.Time
+		for _, watermark := range r.context.GetWatermarks() {
+			if watermark.GetPipeline() == pipeline.ID && watermark.GetModule() == pipeline.Module {
+				output = time.Unix(int64(watermark.GetValue()), 0).UTC()
+				break
+			}
+		}
+		previousInput := output
+		verdict := report.EvaluatePipelineSignals(report.PipelineSignals{EnabledWorkloads: 1, InputWatermark: input, OutputWatermark: output, PreviousInputWatermark: previousInput, LagTolerance: pipeline.LagTolerance, CrossesStorageDeferred: pipeline.CrossesStorageDeferred}, r.now())
+		return checkResult(spec.ID, coreStatus(verdict.Status), verdict.Reason, nil, "inspect_pipeline_input")
 	}
 	if strings.HasPrefix(spec.ID, "host.disk_forecast:") {
 		if len(r.context.GetDiskForecasts()) == 0 {
@@ -234,7 +259,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 	return checkResult(spec.ID, core.StatusFail, "unknown diagnose check", nil)
 }
 
-func (r *diagnoseRunner) directMetrics(ctx context.Context, id string, component *monitorpb.DoctorExpectedComponent) core.CheckResult {
+func (r *diagnoseRunner) directMetrics(ctx context.Context, id string, component *monitorpb.DoctorExpectedComponent, severity core.CheckStatus) core.CheckResult {
 	if component.GetHealthUrl() == "" {
 		return checkResult(id, core.StatusFail, "Reporter observation is missing and no fixed metrics endpoint is available", nil, "verify_eventbus_credentials")
 	}
@@ -243,9 +268,40 @@ func (r *diagnoseRunner) directMetrics(ctx context.Context, id string, component
 	if err != nil {
 		return checkResult(id, core.StatusFail, "Reporter observation is missing and direct metrics read failed", err, "verify_eventbus_credentials")
 	}
-	result := checkResult(id, core.StatusWarn, "Reporter delivery is stale or missing while the business metrics endpoint remains healthy", nil, "verify_eventbus_credentials")
+	result := checkResult(id, severity, "Reporter delivery is stale or missing while the business metrics endpoint remains healthy", nil, "verify_eventbus_credentials")
 	result.Observations = []core.Observation{{Source: "direct_metrics", ObservedAt: probe.ObservedAt, Summary: "signed direct metrics response", Digest: probe.Digest}}
 	return result
+}
+
+func (r *diagnoseRunner) now() time.Time {
+	if r.options.Now != nil {
+		return r.options.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func hasObservationConflict(items []*monitorpb.DoctorObservation, componentID string) bool {
+	for _, item := range items {
+		if item.GetComponentId() == componentID && item.GetConflict() {
+			return true
+		}
+	}
+	return false
+}
+
+func coreStatus(status string) core.CheckStatus {
+	switch status {
+	case "PASS":
+		return core.StatusPass
+	case "WARN":
+		return core.StatusWarn
+	case "FAIL":
+		return core.StatusFail
+	case "SKIPPED":
+		return core.StatusSkipped
+	default:
+		return core.StatusUnknown
+	}
 }
 
 func (r *diagnoseRunner) expectedFromID(id string) *monitorpb.DoctorExpectedComponent {

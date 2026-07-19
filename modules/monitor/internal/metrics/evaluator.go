@@ -172,12 +172,12 @@ type MetricEvaluator struct {
 	now      func() time.Time
 }
 type EvaluatorOptions struct {
-	RuleStore  *MetricRuleStore
-	Catalog    *MetricCatalog
-	Storage    *StorageAdapter
-	Notifier   MetricNotifier
-	Webhook    func(context.Context, string, string) (*domain.WebhookChannel, error)
-	Now        func() time.Time
+	RuleStore *MetricRuleStore
+	Catalog   *MetricCatalog
+	Storage   *StorageAdapter
+	Notifier  MetricNotifier
+	Webhook   func(context.Context, string, string) (*domain.WebhookChannel, error)
+	Now       func() time.Time
 }
 
 func NewMetricEvaluator(opts EvaluatorOptions) *MetricEvaluator {

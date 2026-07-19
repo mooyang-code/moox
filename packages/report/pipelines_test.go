@@ -1,10 +1,22 @@
 package report
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestPipelineAllowlistRejectsThirtyThreePipelines(t *testing.T) {
+	cfg := PipelineConfig{Version: 1}
+	for i := 0; i < MaxPipelines+1; i++ {
+		cfg.Pipelines = append(cfg.Pipelines, Pipeline{ID: fmt.Sprintf("pipeline-%d", i), Module: "factor", SpaceID: "s", InputDataset: "i", OutputDataset: "o", LagTolerance: time.Second})
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("33 pipelines were accepted")
+	}
+}
 
 func TestLoadPipelineAllowlistValidatesAndHashes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pipelines.yaml")

@@ -45,7 +45,7 @@ func TestSingleMonitorSchedulesEveryCheckAndOwnsEveryAlert(t *testing.T) {
 	evaluator := alerting.NewEvaluator(repos.Alerts, alerting.Options{})
 	sched := scheduler.New(repos, scheduler.Options{
 		InstanceID: "monitor-local",
-		Runner: failingRunner{},
+		Runner:     failingRunner{},
 		OnResult: func(ctx context.Context, check domain.Check, result domain.CheckResult) {
 			if err := evaluator.Evaluate(ctx, check, result); err != nil {
 				t.Errorf("evaluate %s: %v", check.CheckID, err)

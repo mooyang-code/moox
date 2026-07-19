@@ -73,11 +73,11 @@ func (e *Evaluator) evaluateRule(ctx context.Context, check domain.Check, result
 			return err
 		}
 		state = &domain.AlertState{
-			SpaceID:         rule.SpaceID,
-			RuleID:          rule.RuleID,
-			CheckID:         rule.CheckID,
-			Status:          domain.AlertStatusOK,
-			DedupeKey:       dedupeKey(rule, check),
+			SpaceID:   rule.SpaceID,
+			RuleID:    rule.RuleID,
+			CheckID:   rule.CheckID,
+			Status:    domain.AlertStatusOK,
+			DedupeKey: dedupeKey(rule, check),
 		}
 	}
 	if result.Success {
