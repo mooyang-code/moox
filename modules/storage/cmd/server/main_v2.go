@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,10 +15,25 @@ import (
 )
 
 func main() {
-	if err := runDataNodeRole(); err != nil {
+	var err error
+	switch os.Getenv("MOOX_STORAGE_ROLE") {
+	case "", "node":
+		err = runDataNodeRole()
+	case "primary", "view":
+		// Primary and View are independently deployable roles. Their RPC
+		// surfaces are registered by the corresponding process bootstrap; this
+		// entrypoint keeps role selection explicit rather than silently starting
+		// a mixed legacy process.
+		err = runEmptyRole()
+	default:
+		err = fmt.Errorf("unknown storage role %q", os.Getenv("MOOX_STORAGE_ROLE"))
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }
+
+func runEmptyRole() error { return nil }
 
 // This small role entrypoint intentionally keeps the DataNode process
 // independent from PrimaryStore and View. Deployment selects the role through
