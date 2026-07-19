@@ -499,7 +499,7 @@ devices:
     endpoint: ./var/storage/pebble
     status: active
     attributes:
-      shard_id: storage-shard-0
+      node_id: storage-node-0
   - device_id: duckdb-local
     node_id: local
     name: local-duckdb-view

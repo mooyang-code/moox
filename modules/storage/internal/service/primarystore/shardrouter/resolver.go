@@ -1,3 +1,5 @@
+//go:build legacy_storage
+
 // Package router 解析在线事实主存的水平切分路由。
 //
 // 注意：PrimaryStoreRoute / PrimaryStoreNode 只负责在线主存切分，

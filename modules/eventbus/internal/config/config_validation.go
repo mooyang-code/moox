@@ -66,6 +66,9 @@ func (c *Config) Validate() error {
 		if s.Storage != "file" && s.Storage != "memory" {
 			return fmt.Errorf("stream %q storage %q is invalid", s.Name, s.Storage)
 		}
+		if s.Discard != "" && s.Discard != "old" && s.Discard != "new" {
+			return fmt.Errorf("stream %q discard %q is invalid", s.Name, s.Discard)
+		}
 		if s.Replicas < 1 {
 			return fmt.Errorf("stream %q replicas must be positive", s.Name)
 		}

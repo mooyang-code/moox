@@ -1,3 +1,5 @@
+//go:build legacy_storage
+
 package eventbus
 
 import (

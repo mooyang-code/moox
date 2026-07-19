@@ -16,27 +16,24 @@ func Default() *Config {
 		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
 		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 		Streams: []StreamConfig{
-			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 2147483648},
+			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.fields_changed.v1.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 2147483648},
 			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, MaxBytes: 536870912},
 			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.exec.v1.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 536870912},
 			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, MaxBytes: 268435456},
 		},
 		Topics: []TopicConfig{
-			{Topic: "moox.storage.time_series.rows_committed.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.storage.record.rows_committed.v1", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted", PayloadVersion: 1, Enabled: true},
 			{Topic: "moox.metrics.host.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", PayloadVersion: 1, Enabled: true},
 			{Topic: "moox.dlq.message.rejected.v1", Stream: "MOOX_DLQ", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", PayloadVersion: 1, Enabled: true},
 		},
 		TopicFamilies: []TopicFamilyConfig{
-			{Pattern: "moox.storage.rows_committed.time_series.v1.>", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted", PayloadVersion: 1, Enabled: true},
-			{Pattern: "moox.storage.rows_committed.record.v1.>", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted", PayloadVersion: 1, Enabled: true},
+			{Pattern: "moox.storage.fields_changed.v1.>", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", PayloadVersion: 1, Enabled: true},
 			{Pattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", Stream: "MOOX_CLOUDNODE_EXEC", Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, PayloadContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", PayloadVersion: 1, Enabled: true},
 		},
 		Consumers: []ConsumerConfig{
 			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_STORAGE", Durable: "storage_view_rows_committed_v1", FilterSubject: "moox.storage.rows_committed.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 128, MaxDeliver: -1},
-			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.rows_committed.time_series.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
-			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.rows_committed.time_series.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 1, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
+			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
 		},
 		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
 		KV:                []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
@@ -114,6 +111,9 @@ func normalizeStream(s *StreamConfig) {
 	}
 	if s.Storage == "" {
 		s.Storage = "file"
+	}
+	if s.Discard == "" {
+		s.Discard = "old"
 	}
 	if s.Replicas == 0 {
 		s.Replicas = 1

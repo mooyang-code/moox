@@ -1,0 +1,53 @@
+global:
+  namespace: Development
+  env_name: test
+
+server:
+  filter:
+    - recovery
+    - validation
+    - opentelemetry
+    - prometheus
+  timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 20002
+    read_timeout: 3000
+    write_timeout: 60000
+  service:
+    - name: trpc.moox.storage.Health
+      ip: 127.0.0.1
+      port: 20212
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.storage.DataNode
+      ip: 127.0.0.1
+      port: 20107
+      network: tcp
+      protocol: trpc
+
+plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12962
+      path: /metrics
+      enablepush: false
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false
