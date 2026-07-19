@@ -11,15 +11,17 @@ import (
 )
 
 type Validator interface {
-	ValidateRow(*pb.RowFieldUpsert) error
+	ValidateRow(context.Context, *pb.RowFieldUpsert) error
 }
-type NodeResolver func(context.Context, string) (pb.DataNodeService, error)
+type NodeResolver func(context.Context, string, string) (pb.DataNodeService, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
+type Authorizer func(*pb.AuthInfo) error
 
 type Service struct {
-	resolve  NodeResolver
-	validate Validator
-	sign     AuthSigner
+	resolve   NodeResolver
+	validate  Validator
+	sign      AuthSigner
+	authorize Authorizer
 }
 
 type Options struct {
@@ -27,33 +29,37 @@ type Options struct {
 	Resolver   NodeResolver
 	Validator  Validator
 	AuthSigner AuthSigner
+	Authorizer Authorizer
 }
 
 func New(opts Options) (*Service, error) {
 	resolve := opts.Resolver
 	if resolve == nil && opts.Node != nil {
-		resolve = func(context.Context, string) (pb.DataNodeService, error) { return opts.Node, nil }
+		resolve = func(context.Context, string, string) (pb.DataNodeService, error) { return opts.Node, nil }
 	}
 	if resolve == nil {
 		return nil, errors.New("primary store node resolver is required")
 	}
-	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner}, nil
+	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer}, nil
 }
 
 func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq) (*pb.PrimaryWriteFieldsRsp, error) {
 	if req == nil || len(req.GetRows()) == 0 {
 		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
 	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	groups := map[string][]*pb.RowFieldUpsert{}
 	for _, row := range req.GetRows() {
-		if err := validateRow(row, s.validate); err != nil {
+		if err := validateRow(ctx, row, s.validate); err != nil {
 			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		groups[row.GetKey().GetDatasetId()] = append(groups[row.GetKey().GetDatasetId()], row)
 	}
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 	for datasetID, rows := range groups {
-		node, err := s.resolve(ctx, datasetID)
+		node, err := s.resolve(ctx, rows[0].GetKey().GetSpaceId(), datasetID)
 		if err != nil {
 			return nil, err
 		}
@@ -77,6 +83,9 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 	if req == nil || len(req.GetKeys()) == 0 {
 		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
 	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	groups := map[string][]*pb.RowKey{}
 	for _, key := range req.GetKeys() {
 		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
@@ -86,7 +95,7 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 	}
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for datasetID, keys := range groups {
-		node, err := s.resolve(ctx, datasetID)
+		node, err := s.resolve(ctx, keys[0].GetSpaceId(), datasetID)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +115,17 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
 }
 
-func validateRow(row *pb.RowFieldUpsert, validator Validator) error {
+func (s *Service) authorizeRequest(auth *pb.AuthInfo) error {
+	if auth == nil {
+		return errors.New("auth_info is required")
+	}
+	if s.authorize != nil {
+		return s.authorize(auth)
+	}
+	return nil
+}
+
+func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validator) error {
 	if row == nil || row.GetKey() == nil {
 		return errors.New("row key is required")
 	}
@@ -131,7 +150,7 @@ func validateRow(row *pb.RowFieldUpsert, validator Validator) error {
 		}
 	}
 	if validator != nil {
-		return validator.ValidateRow(row)
+		return validator.ValidateRow(ctx, row)
 	}
 	return nil
 }

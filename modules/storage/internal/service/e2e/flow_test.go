@@ -30,7 +30,7 @@ func TestPrimaryDataNodeViewFlow(t *testing.T) {
 	defer nodeB.Close()
 	nodes := map[string]pb.DataNodeService{"prices": nodeA, "factors": nodeB}
 	primary, err := primarystorev2.New(primarystorev2.Options{
-		Resolver: func(_ context.Context, dataset string) (pb.DataNodeService, error) { return nodes[dataset], nil },
+		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeService, error) { return nodes[dataset], nil },
 		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
 			clone := *in
 			clone.AppKey = datanode.ServiceAuthKey(secret, clone.AppId)

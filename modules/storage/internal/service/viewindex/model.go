@@ -3,6 +3,7 @@ package viewindex
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 type Slot string
@@ -165,8 +167,15 @@ type memoryIndex struct {
 	rows   map[string]*pb.RowFieldValues
 }
 
+type persistedIndex struct {
+	Schema ViewIndexSchema   `json:"schema"`
+	Rows   map[string]string `json:"rows"`
+}
+
 func NewMemoryEngine(name, root string) *MemoryEngine {
-	return &MemoryEngine{name: name, root: root, indexes: make(map[string]*memoryIndex)}
+	e := &MemoryEngine{name: name, root: root, indexes: make(map[string]*memoryIndex)}
+	e.load()
+	return e
 }
 func (e *MemoryEngine) Engine() string { return e.name }
 func (e *MemoryEngine) Prepare(_ context.Context, id string, schema ViewIndexSchema) error {
@@ -192,7 +201,7 @@ func (e *MemoryEngine) Prepare(_ context.Context, id string, schema ViewIndexSch
 			return err
 		}
 	}
-	return nil
+	return e.persistLocked(id)
 }
 func (e *MemoryEngine) Apply(_ context.Context, id string, batch ViewIndexApplyBatch) error {
 	if err := batch.Validate(); err != nil {
@@ -221,7 +230,7 @@ func (e *MemoryEngine) Apply(_ context.Context, id string, batch ViewIndexApplyB
 	}
 	idx.schema.ViewVersion = batch.ViewRevision
 	idx.schema.SchemaHash = batch.ViewSchemaHash
-	return nil
+	return e.persistLocked(id)
 }
 func (e *MemoryEngine) Stat(_ context.Context, id string) (ViewIndexStats, error) {
 	e.mu.RLock()
@@ -244,8 +253,84 @@ func (e *MemoryEngine) Remove(_ context.Context, id string) error {
 		} else {
 			_ = os.RemoveAll(path)
 		}
+		_ = os.Remove(e.statePath(id))
 	}
 	return nil
+}
+
+func (e *MemoryEngine) statePath(id string) string {
+	return filepath.Join(e.root, id+".state.json")
+}
+
+// persistLocked stores a compact protobuf snapshot beside the physical index.
+// The engine remains deliberately small, but a View restart must not turn a
+// successful build into an empty index. The snapshot is replaced atomically;
+// DuckDB/Bleve owners can later swap this file-backed core for their native
+// storage without changing the RPC contract.
+func (e *MemoryEngine) persistLocked(id string) error {
+	if e.root == "" {
+		return nil
+	}
+	idx := e.indexes[id]
+	if idx == nil {
+		return nil
+	}
+	rows := make(map[string]string, len(idx.rows))
+	for key, row := range idx.rows {
+		data, err := proto.Marshal(row)
+		if err != nil {
+			return err
+		}
+		rows[key] = base64.RawStdEncoding.EncodeToString(data)
+	}
+	data, err := json.Marshal(persistedIndex{Schema: idx.schema, Rows: rows})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(e.root, 0o755); err != nil {
+		return err
+	}
+	tmp := e.statePath(id) + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, e.statePath(id))
+}
+
+func (e *MemoryEngine) load() {
+	if e.root == "" {
+		return
+	}
+	entries, err := os.ReadDir(e.root)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".state.json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(e.root, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var saved persistedIndex
+		if json.Unmarshal(data, &saved) != nil {
+			continue
+		}
+		rows := make(map[string]*pb.RowFieldValues, len(saved.Rows))
+		for key, encoded := range saved.Rows {
+			rowData, err := base64.RawStdEncoding.DecodeString(encoded)
+			if err != nil {
+				continue
+			}
+			row := &pb.RowFieldValues{}
+			if proto.Unmarshal(rowData, row) == nil {
+				rows[key] = row
+			}
+		}
+		id := strings.TrimSuffix(entry.Name(), ".state.json")
+		e.indexes[id] = &memoryIndex{schema: saved.Schema, rows: rows}
+	}
 }
 func (e *MemoryEngine) List(_ context.Context) ([]string, error) {
 	e.mu.RLock()

@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	viewv2 "github.com/mooyang-code/moox/modules/storage/internal/service/viewv2"
@@ -38,16 +40,66 @@ func main() {
 }
 
 func runPrimaryRole() error {
-	target := os.Getenv("MOOX_STORAGE_NODE_TARGET")
-	if target == "" {
-		return errors.New("MOOX_STORAGE_NODE_TARGET is required for primary role")
+	root := os.Getenv("MOOX_STORAGE_HOME")
+	if root == "" {
+		root = "./var/storage"
+	}
+	metadataPath := os.Getenv("MOOX_STORAGE_METADATA_PATH")
+	if metadataPath == "" {
+		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
+	}
+	meta, err := metasqlite.Open(trpc.BackgroundContext(), metasqlite.Options{Path: metadataPath})
+	if err != nil {
+		return err
+	}
+	defer meta.Close()
+	if err := meta.ValidateSchemaVersion(trpc.BackgroundContext()); err != nil {
+		return fmt.Errorf("metadata schema validation failed: %w", err)
 	}
 	secret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
 	if secret == "" {
 		return errors.New("MOOX_STORAGE_NODE_AUTH_SECRET is required for primary role")
 	}
-	proxy := pb.NewDataNodeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
-	svc, err := primarystorev2.New(primarystorev2.Options{Node: &dataNodeProxyAdapter{proxy: proxy}, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
+	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	if primarySecret == "" {
+		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
+	}
+	targets := parseNodeTargets(os.Getenv("MOOX_STORAGE_NODE_TARGETS"))
+	if len(targets) == 0 {
+		if target := os.Getenv("MOOX_STORAGE_NODE_TARGET"); target != "" {
+			nodeID := os.Getenv("MOOX_STORAGE_NODE_ID")
+			if nodeID == "" {
+				nodeID = "storage-node-0"
+			}
+			targets[nodeID] = target
+		}
+	}
+	proxies := make(map[string]pb.DataNodeService, len(targets))
+	resolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
+		dataset, err := meta.GetDataset(ctx, spaceID, datasetID)
+		if err != nil {
+			return nil, err
+		}
+		if dataset == nil || dataset.GetDataNodeId() == "" {
+			return nil, fmt.Errorf("dataset %s/%s has no data_node_id", spaceID, datasetID)
+		}
+		nodeID := dataset.GetDataNodeId()
+		target := targets[nodeID]
+		if target == "" {
+			return nil, fmt.Errorf("data node %q has no configured target", nodeID)
+		}
+		if proxies[nodeID] == nil {
+			proxy := pb.NewDataNodeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
+			proxies[nodeID] = &dataNodeProxyAdapter{proxy: proxy}
+		}
+		return proxies[nodeID], nil
+	}
+	svc, err := primarystorev2.New(primarystorev2.Options{Resolver: resolver, Validator: primarystorev2.NewMetadataValidator(meta), Authorizer: func(auth *pb.AuthInfo) error {
+		if auth == nil || auth.GetAppId() == "" || auth.GetAppKey() != datanode.ServiceAuthKey(primarySecret, auth.GetAppId()) {
+			return errors.New("invalid primary auth")
+		}
+		return nil
+	}, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
 		if auth == nil {
 			return nil, errors.New("auth_info is required")
 		}
@@ -67,12 +119,40 @@ func runPrimaryRole() error {
 	return s.Serve()
 }
 
+func parseNodeTargets(raw string) map[string]string {
+	result := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			result[parts[0]] = parts[1]
+		}
+	}
+	return result
+}
+
 func runViewRole() error {
 	root := os.Getenv("MOOX_STORAGE_HOME")
 	if root == "" {
 		root = "./var/storage"
 	}
 	svc := viewv2.New(filepath.Join(root, "view-indexes"))
+	var stopConsumer func()
+	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
+	if rawURL == "" {
+		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
+	}
+	{
+		client, err := jetstream.Connect(trpc.BackgroundContext(), jetstream.ConfigFromEnv([]string{rawURL}, "storage-view"))
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		stopConsumer, err = svc.StartEventConsumer(trpc.BackgroundContext(), client)
+		if err != nil {
+			return err
+		}
+		defer stopConsumer()
+	}
 	s := trpc.NewServer()
 	indexListener := s.Service("trpc.moox.storage.ViewIndex")
 	if indexListener == nil {
@@ -114,7 +194,8 @@ func runDataNodeRole() error {
 	if nodeID == "" {
 		nodeID = "storage-node-0"
 	}
-	svc, err := datanode.NewService(datanode.Options{NodeID: nodeID, Pebble: pebble.Options{NodeID: nodeID, Path: filepath.Join(root, "pebble", nodeID)}})
+	authSecret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
+	svc, err := datanode.NewService(datanode.Options{NodeID: nodeID, AuthSecret: authSecret, Pebble: pebble.Options{NodeID: nodeID, Path: filepath.Join(root, "pebble", nodeID)}})
 	if err != nil {
 		return err
 	}
@@ -137,7 +218,7 @@ func runDataNodeRole() error {
 	s := trpc.NewServer()
 	listener := s.Service("trpc.moox.storage.DataNode")
 	if listener == nil {
-		return nil
+		return errors.New("DataNode listener is not configured")
 	}
 	pb.RegisterDataNodeService(listener, svc)
 	return s.Serve()

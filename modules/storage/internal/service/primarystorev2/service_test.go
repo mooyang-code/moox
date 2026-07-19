@@ -28,7 +28,7 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
 	bad, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}})
-	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("bad rsp=%v err=%v", bad, err)
 	}
 }

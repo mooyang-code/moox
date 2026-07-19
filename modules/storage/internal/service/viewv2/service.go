@@ -5,15 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"google.golang.org/protobuf/proto"
 )
 
-type Service struct{ engine *viewindex.MemoryEngine }
+type Service struct {
+	engine *viewindex.MemoryEngine
+	mu     sync.RWMutex
+	byData map[string]map[string]struct{}
+}
 
-func New(root string) *Service { return &Service{engine: viewindex.NewMemoryEngine("duckdb", root)} }
+func New(root string) *Service {
+	return &Service{engine: viewindex.NewMemoryEngine("duckdb", root), byData: make(map[string]map[string]struct{})}
+}
 
 var _ pb.ViewIndexService = (*Service)(nil)
 var _ pb.DataViewService = (*Service)(nil)
@@ -27,6 +39,17 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	if err != nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
+	s.mu.Lock()
+	for _, column := range sch.GetColumns() {
+		dataset := viewColumnDataset(column)
+		if dataset != "" {
+			if s.byData[dataset] == nil {
+				s.byData[dataset] = make(map[string]struct{})
+			}
+			s.byData[dataset][req.GetIndexId()] = struct{}{}
+		}
+	}
+	s.mu.Unlock()
 	return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
@@ -184,4 +207,100 @@ func (s *Service) query(ctx context.Context, id string, keys []*pb.RowKey, field
 		return nil, fmt.Errorf("query view index: %w", err)
 	}
 	return rows, nil
+}
+
+// StartEventConsumer binds the single storage_view durable and applies field
+// events to prepared indexes. It deliberately uses one Fetch(1) loop; the
+// same Dataset remains ordered while unrelated Dataset Subjects may interleave.
+func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client) (func(), error) {
+	if client == nil {
+		return nil, errors.New("eventbus client is required")
+	}
+	consumer, err := client.EnsurePullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: eventconsumer.DatasetFieldsChangedSubjectPrefix + ".>", AckWait: 30 * time.Second, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: time.Second})
+	if err != nil {
+		return nil, err
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer consumer.Close()
+		for loopCtx.Err() == nil {
+			deliveries, fetchErr := consumer.Fetch(loopCtx, 1)
+			if fetchErr != nil {
+				if loopCtx.Err() != nil {
+					return
+				}
+				continue
+			}
+			for _, delivery := range deliveries {
+				for loopCtx.Err() == nil {
+					if err := s.applyDelivery(loopCtx, delivery); err == nil {
+						_ = delivery.Ack(loopCtx)
+						break
+					}
+					// Keep the delivery pending while retrying. NAK would release
+					// MaxAckPending and allow a later event to overtake it.
+					_ = delivery.InProgress(loopCtx)
+					timer := time.NewTimer(time.Second)
+					select {
+					case <-timer.C:
+					case <-loopCtx.Done():
+						if !timer.Stop() {
+							<-timer.C
+						}
+					}
+				}
+			}
+		}
+	}()
+	return func() { cancel(); <-done }, nil
+}
+
+func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	if delivery == nil || delivery.Message == nil {
+		return errors.New("storage event delivery is empty")
+	}
+	spaceID, datasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
+	if err != nil {
+		return err
+	}
+	event := &pb.DatasetFieldsChanged{}
+	if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
+		return err
+	}
+	if event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
+		return errors.New("dataset event subject and payload mismatch")
+	}
+	s.mu.RLock()
+	ids := make([]string, 0, len(s.byData[datasetID]))
+	for id := range s.byData[datasetID] {
+		ids = append(ids, id)
+	}
+	s.mu.RUnlock()
+	for _, id := range ids {
+		stat, err := s.engine.Stat(ctx, id)
+		if err != nil {
+			return err
+		}
+		writes := make([]viewindex.RowWrite, 0, len(event.GetRows()))
+		for _, row := range event.GetRows() {
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: row.GetKey()}, Fields: row.GetFields(), Attributes: row.GetAttributes()})
+		}
+		if err := s.engine.Apply(ctx, id, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: stat.ViewVersion, ViewSchemaHash: stat.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func viewColumnDataset(column *pb.ViewColumn) string {
+	if column == nil {
+		return ""
+	}
+	origin := column.GetOriginId()
+	if idx := strings.IndexByte(origin, '.'); idx > 0 {
+		return origin[:idx]
+	}
+	return ""
 }
