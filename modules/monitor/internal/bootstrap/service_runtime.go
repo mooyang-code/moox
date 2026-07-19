@@ -5,6 +5,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -17,7 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator, doctorContext *monitordoctor.Builder) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
@@ -27,6 +28,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		InstanceID: cfg.Instance.InstanceID, Runner: runner, OnResult: hook,
 		SyncSystem: syncSystem, MetricsQuery: metricsQuery, MetricRules: metricRules, MetricEvaluator: metricEvaluator,
 		HostStore: hostStore, HostReader: hostReader, HostStorageReady: hostReady,
+		DoctorContext: doctorContext,
 	}))
 }
 

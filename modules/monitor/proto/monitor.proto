@@ -393,6 +393,70 @@ message HostMetricHistoryPoint {
 message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
 message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool storage_available = 3; bool data_gap = 4; }
 
+// Doctor context is a bounded fact snapshot. It intentionally contains no
+// diagnosis or recovery execution; moox-cli owns that interpretation.
+message DoctorExpectedComponent {
+  string component_id = 1;
+  string service_name = 2;
+  string node_id = 3;
+  bool expected = 4;
+  string deployment_status = 5;
+  string transport = 6;
+  string functional_observability = 7;
+  string health_url = 8;
+}
+message DoctorObservation {
+  string kind = 1;
+  string component_id = 2;
+  string service_name = 3;
+  string instance_id = 4;
+  string node_id = 5;
+  string boot_id = 6;
+  string status = 7;
+  string observed_at = 8;
+  string summary = 9;
+  string details_json = 10;
+  bool stale = 11;
+  bool conflict = 12;
+}
+message DoctorWatermark {
+  string module = 1;
+  string stage = 2;
+  string pipeline = 3;
+  string observed_at = 4;
+  double value = 5;
+  string status = 6;
+}
+message DoctorDiskForecast {
+  string node_id = 1;
+  string agent_id = 2;
+  string mountpoint = 3;
+  string status = 4;
+  double growth_bytes_per_day = 5;
+  double remaining_days = 6;
+  uint32 valid_intervals = 7;
+  string summary = 8;
+}
+message GetDoctorContextReq {
+  string node_id = 1;
+  repeated string component_ids = 2;
+  repeated string pipeline_ids = 3;
+}
+message GetDoctorContextRsp {
+  common.RetInfo ret_info = 1;
+  string generated_at = 2;
+  string manifest_checksum = 3;
+  repeated DoctorExpectedComponent expected_components = 4;
+  repeated DoctorObservation health_observations = 5;
+  repeated DoctorObservation reporter_observations = 6;
+  repeated DoctorObservation module_observations = 7;
+  repeated DoctorWatermark watermarks = 8;
+  repeated HostAgentInfo host_resources = 9;
+  repeated DoctorDiskForecast disk_forecasts = 10;
+  repeated AlertEvent active_alerts = 11;
+  repeated DoctorObservation missing_observations = 12;
+}
+
 service MonitorMgr {
   rpc ListChecks(ListChecksReq) returns (ListChecksRsp);
   rpc GetCheck(GetCheckReq) returns (GetCheckRsp);
@@ -414,6 +478,7 @@ service MonitorMgr {
   rpc SyncSystemChecks(SyncSystemChecksReq) returns (SyncSystemChecksRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
+  rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
   rpc ListMetricServices(ListMetricServicesReq) returns (ListMetricServicesRsp);
   rpc ListMetricNames(ListMetricNamesReq) returns (ListMetricNamesRsp);
   rpc ListMetricSeries(ListMetricSeriesReq) returns (ListMetricSeriesRsp);

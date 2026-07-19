@@ -59,6 +59,8 @@ type MonitorMgrService interface {
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error)
 
+	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
+
 	ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error)
 
 	ListMetricNames(ctx context.Context, req *ListMetricNamesReq) (*ListMetricNamesRsp, error)
@@ -446,6 +448,24 @@ func MonitorMgrService_QueryHostMetricHistory_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
+func MonitorMgrService_GetDoctorContext_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDoctorContextReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetDoctorContext(ctx, reqbody.(*GetDoctorContextReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MonitorMgrService_ListMetricServices_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListMetricServicesReq{}
 	filters, err := f(req)
@@ -766,6 +786,10 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_QueryHostMetricHistory_Handler,
 		},
 		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetDoctorContext",
+			Func: MonitorMgrService_GetDoctorContext_Handler,
+		},
+		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricServices",
 			Func: MonitorMgrService_ListMetricServices_Handler,
 		},
@@ -891,6 +915,9 @@ func (s *UnimplementedMonitorMgr) ListHostAgents(ctx context.Context, req *ListH
 func (s *UnimplementedMonitorMgr) QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error) {
 	return nil, errors.New("rpc QueryHostMetricHistory of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error) {
+	return nil, errors.New("rpc GetDoctorContext of service MonitorMgr is not implemented")
+}
 func (s *UnimplementedMonitorMgr) ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error) {
 	return nil, errors.New("rpc ListMetricServices of service MonitorMgr is not implemented")
 }
@@ -978,6 +1005,8 @@ type MonitorMgrClientProxy interface {
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq, opts ...client.Option) (rsp *ListHostAgentsRsp, err error)
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq, opts ...client.Option) (rsp *QueryHostMetricHistoryRsp, err error)
+
+	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (rsp *GetDoctorContextRsp, err error)
 
 	ListMetricServices(ctx context.Context, req *ListMetricServicesReq, opts ...client.Option) (rsp *ListMetricServicesRsp, err error)
 
@@ -1409,6 +1438,26 @@ func (c *MonitorMgrClientProxyImpl) QueryHostMetricHistory(ctx context.Context, 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &QueryHostMetricHistoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (*GetDoctorContextRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetDoctorContext")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetDoctorContext")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetDoctorContextRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

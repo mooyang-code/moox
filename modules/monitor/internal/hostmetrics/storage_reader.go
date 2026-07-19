@@ -48,7 +48,7 @@ func (r *StorageReader) History(ctx context.Context, agentID string, start, end 
 	}
 	requestedStart, requestedEnd := start, end
 	now := time.Now().UTC()
-	windowStart := now.Add(-72 * time.Hour)
+	windowStart := now.Add(-7 * 24 * time.Hour)
 	if end.After(now) {
 		end = now
 	}
@@ -58,8 +58,8 @@ func (r *StorageReader) History(ctx context.Context, agentID string, start, end 
 	if end.Before(start) {
 		return []HistoryPoint{}, nil
 	}
-	if requestedEnd.Sub(requestedStart) > 72*time.Hour {
-		start = end.Add(-72 * time.Hour)
+	if requestedEnd.Sub(requestedStart) > 7*24*time.Hour {
+		start = end.Add(-7 * 24 * time.Hour)
 		if start.Before(windowStart) {
 			start = windowStart
 		}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -30,6 +31,7 @@ type Options struct {
 	HostStore        *hostmetrics.Store
 	HostReader       *hostmetrics.StorageReader
 	HostStorageReady func() bool
+	DoctorContext    *monitordoctor.Builder
 }
 
 type Service struct {
@@ -45,6 +47,7 @@ type Service struct {
 	hostStore        *hostmetrics.Store
 	hostReader       *hostmetrics.StorageReader
 	hostStorageReady func() bool
+	doctorContext    *monitordoctor.Builder
 	instance         string
 }
 
@@ -73,6 +76,7 @@ func New(repos *store.Repositories, opts Options) *Service {
 		hostStore:        opts.HostStore,
 		hostReader:       opts.HostReader,
 		hostStorageReady: opts.HostStorageReady,
+		doctorContext:    opts.DoctorContext,
 		instance:         instance,
 	}
 }
