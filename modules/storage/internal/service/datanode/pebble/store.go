@@ -153,6 +153,10 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 				return nil, err
 			}
 			id := nextID
+			payload, err = BindOutboxID(payload, s.nodeID, id)
+			if err != nil {
+				return nil, err
+			}
 			if err := batch.Set([]byte(outboxKey(id)), payload, s.writeOptions); err != nil {
 				return nil, err
 			}
