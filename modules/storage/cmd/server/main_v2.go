@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -8,10 +10,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
+	viewv2 "github.com/mooyang-code/moox/modules/storage/internal/service/viewv2"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func main() {
@@ -19,8 +25,10 @@ func main() {
 	switch os.Getenv("MOOX_STORAGE_ROLE") {
 	case "", "node":
 		err = runDataNodeRole()
-	case "primary", "view":
-		err = runControlRole(os.Getenv("MOOX_STORAGE_ROLE"))
+	case "primary":
+		err = runPrimaryRole()
+	case "view":
+		err = runViewRole()
 	default:
 		err = fmt.Errorf("unknown storage role %q", os.Getenv("MOOX_STORAGE_ROLE"))
 	}
@@ -29,14 +37,69 @@ func main() {
 	}
 }
 
-func runControlRole(role string) error {
-	// Keep control-plane roles as independent processes. Their concrete RPC
-	// registrations are supplied by the deployment's tRPC config; unlike the
-	// old mixed binary this path stays alive and exposes the configured health
-	// listener instead of silently exiting.
+func runPrimaryRole() error {
+	target := os.Getenv("MOOX_STORAGE_NODE_TARGET")
+	if target == "" {
+		return errors.New("MOOX_STORAGE_NODE_TARGET is required for primary role")
+	}
+	secret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
+	if secret == "" {
+		return errors.New("MOOX_STORAGE_NODE_AUTH_SECRET is required for primary role")
+	}
+	proxy := pb.NewDataNodeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
+	svc, err := primarystorev2.New(primarystorev2.Options{Node: &dataNodeProxyAdapter{proxy: proxy}, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
+		if auth == nil {
+			return nil, errors.New("auth_info is required")
+		}
+		clone := proto.Clone(auth).(*pb.AuthInfo)
+		clone.AppKey = datanode.ServiceAuthKey(secret, clone.GetAppId())
+		return clone, nil
+	}})
+	if err != nil {
+		return err
+	}
 	s := trpc.NewServer()
-	_ = role
+	listener := s.Service("trpc.moox.storage.PrimaryStore")
+	if listener == nil {
+		return errors.New("PrimaryStore listener is not configured")
+	}
+	pb.RegisterPrimaryStoreService(listener, svc)
 	return s.Serve()
+}
+
+func runViewRole() error {
+	root := os.Getenv("MOOX_STORAGE_HOME")
+	if root == "" {
+		root = "./var/storage"
+	}
+	svc := viewv2.New(filepath.Join(root, "view-indexes"))
+	s := trpc.NewServer()
+	indexListener := s.Service("trpc.moox.storage.ViewIndex")
+	if indexListener == nil {
+		return errors.New("ViewIndex listener is not configured")
+	}
+	viewListener := s.Service("trpc.moox.storage.DataView")
+	if viewListener == nil {
+		return errors.New("DataView listener is not configured")
+	}
+	pb.RegisterViewIndexService(indexListener, svc)
+	pb.RegisterDataViewService(viewListener, svc)
+	return s.Serve()
+}
+
+type dataNodeProxyAdapter struct{ proxy pb.DataNodeClientProxy }
+
+func (a *dataNodeProxyAdapter) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+	return a.proxy.WriteFields(ctx, req)
+}
+func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+	return a.proxy.ReadFields(ctx, req)
+}
+func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
+	return a.proxy.GetNodeState(ctx, req)
+}
+func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
+	return a.proxy.CleanupExpiredBuckets(ctx, req)
 }
 
 // This small role entrypoint intentionally keeps the DataNode process
