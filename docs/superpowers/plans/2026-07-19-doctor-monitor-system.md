@@ -15,6 +15,8 @@
 - V1 不实现 Trade 模拟盘和 `full`；它们必须进入独立 V2 计划并单独验收。
 - 不部署 Prometheus Server、Pushgateway、Tracing 后端或新的日志平台。
 - 不持续抓取服务 `/metrics`；Monitor 继续消费 Reporter 上报，CLI 只在 bootstrap 或 Monitor 事实缺失、过期、冲突时做有界直读。
+- **Storage 冻结边界：Storage 正在大规模重构，V1 不修改 `modules/storage/**`，不新增或调整 Storage proto、配置、Schema、Reporter、指标埋点、内部 RPC 或测试，也不依赖重构中的内部接口和最终进程拓扑。**
+- V1 只读 Storage 已有的 SysDeploy、health 和 Reporter/metrics 事实；Storage 功能水位和跨 Storage pipeline 检查统一标记为 `SKIPPED(storage_observability_deferred)`，不得伪造 `PASS`，也不进入本计划完成门禁。
 - 不允许任意 Shell、SQL、PromQL、脚本插件或动态检查 DSL；本地检查必须映射到代码中的固定 Runner ID。
 - 所有 API、CLI、Go 模型和 JSON 字段统一使用 `Observation`，面向用户显示“诊断依据”，Doctor 范围不使用 `Evidence`。
 - 默认部署目标是 MooX 当前 Linux 单节点发布形态；bootstrap 必须在目标节点运行，远程用户通过现有 SSH 工具执行整条 CLI 命令。macOS/Windows 仍可构建 CLI，但 V1 不为它们实现远程服务管理、磁盘身份或重启复验 Runner。
@@ -41,9 +43,9 @@ moox-cli doctor diagnose --format json
 
 - 删除 Monitor 多实例和告警 Owner 仲裁，只保留单实例调度、采集、存储、查询和告警。
 - 建立“发布包期望清单、SysDeploy 期望部署、运行时 Observation”三层事实，能够发现应部署但未登记、应运行但未就绪、已就绪但 Reporter 未上报的不同故障。
-- 统一独立进程的 `service_name`、`instance_id`、`node_id`、`boot_id` 和部署身份。
-- 补齐关键进程 Reporter 和 EventBus metrics 认证链路。
-- 为 Collector、CloudNode、Storage、Factor、Strategy、Trade、Archive 和 Monitor 增加最小功能指标与配置白名单水位。
+- 统一非 Storage 独立进程的 `service_name`、`instance_id`、`node_id`、`boot_id` 和部署身份；Storage 只映射当前已有身份，不重命名。
+- 补齐非 Storage 关键进程 Reporter 和 EventBus metrics 认证链路。
+- 为 Collector、CloudNode、Factor、Strategy、Trade、Archive 和 Monitor 增加最小功能指标与配置白名单水位；Storage 仅展示已有事实和明确的延期状态。
 - Monitor 提供有界 `GetDoctorContext`，聚合预期进程、health、Reporter freshness、功能指标、水位、HostAgent 资源和磁盘剩余天数。
 - CLI 提供 `bootstrap` 和 `diagnose`，输出稳定 JSON、可选 text/Markdown，以及明确的诊断依据、缺失事实、阻断项和人工恢复动作 ID。
 - 完成全新部署 E2E、服务停止、Reporter 中断、配置缺失、磁盘样本不足等故障注入。
@@ -57,6 +59,18 @@ moox-cli doctor diagnose --format json
 - 不实现 `full`、`moox_doctor` Canary、Synthetic Collector Source、Trade SimulatedVenue 或 Strategy -> Trade Dispatcher 改造。
 - 不实现 `bootstrap --record-baseline`、主机重启验证或跨平台服务管理 Runner。
 - 不增加 SLO、错误预算、健康分数、置信度评分、覆盖率表或 Doctor 事件表。
+- 不为 Doctor 修改 `modules/storage/**`，也不要求 Collector、Factor 或其他模块适配仍在变化的 Storage 接口；Storage 重构完成后另立接入计划。
+
+### Storage 冻结边界
+
+| V1 允许 | V1 禁止 |
+| --- | --- |
+| 从中央 Manifest/SysDeploy 判断 Storage 进程是否应部署 | 修改 `modules/storage/**` 的代码、配置、Proto、Schema 或测试 |
+| 读取 Storage 当前已有 `/healthz`、`/readyz` 和 Reporter/metrics 事实 | 统一、重命名或新增 Storage Reporter 身份和 timer |
+| 对真实 health 失败生成 `FAIL`，对已有事实缺失或冲突如实展示 | 设计或埋点 `Primary commit -> View visible` 最终水位契约 |
+| 把 Storage 功能诊断和跨 Storage pipeline 显式标为延期 | 为 Doctor 修改 Collector/Factor 等调用方以适配重构中的 Storage API |
+
+Storage 的进程存活检查仍属于 V1，但功能状态不属于 V1。`service.health:<storage-scope>` 按现有接口正常判定；`monitor.reporter_coverage`、`module.freshness` 和 `module.pipeline_lag` 中需要新增 Storage 契约的部分返回 `SKIPPED`，Observation 使用固定原因 `storage_observability_deferred`。`SKIPPED` 不影响 V1 范围内的总体结论，但报告不得宣称已覆盖 Storage 功能正确性。
 
 ## V1 架构
 
@@ -121,6 +135,7 @@ inputs[]
 outputs[]
 dependencies[]
 transport                 # reporter | host_snapshot | health_only
+functional_observability  # active | deferred | not_applicable
 health_path               # /readyz
 config_paths[]
 writable_paths[]
@@ -131,6 +146,7 @@ required_in_default_profile
 约束：
 
 - `service_name` 必须对应独立部署进程，不得填写 Trade RPC endpoint、Storage 内部 RPC endpoint 或 timer service。
+- Storage 条目在重构完成前固定为 `functional_observability: deferred`；V1 功能指标已接入的组件使用 `active`，只做进程检查的组件使用 `not_applicable`。
 - `service_name` 和 `component_id` 全局唯一，依赖必须引用已有 `component_id`。
 - Manifest 最多 64 个独立进程条目；超过上限在构建测试和运行加载时都失败。
 - `config_paths` 和 `writable_paths` 只能是发布目录中的相对路径模板，不允许 `..`、glob、Shell 或环境变量展开。
@@ -153,8 +169,8 @@ required_in_default_profile
 - bootstrap 中，安装包 seed 的 process 条目未登记到目标节点 SysDeploy：`FAIL`，恢复动作 `apply_service_deployments_seed`。
 - SysDeploy 条目为 `disabled`：不期待运行，Check 为 `SKIPPED`。
 - SysDeploy active 但 health 缺失：`FAIL`。
-- health 正常但 Reporter 超过 2 个周期未出现：`WARN`；超过 4 个周期仍缺失：`FAIL`。
-- Manifest、SysDeploy、health 和 Reporter 的 service/instance/node 身份冲突：`FAIL`，不能选择其中一份继续判定。
+- 对 `functional_observability: active` 组件，health 正常但 Reporter 超过 2 个周期未出现：`WARN`；超过 4 个周期仍缺失：`FAIL`。Storage 不应用此新增门禁。
+- Manifest、SysDeploy 和 health 的 service/instance/node 身份冲突：`FAIL`，不能选择其中一份继续判定；active 组件的 Reporter 身份也参与此判断，Storage Reporter 冲突只进入延期 Observation。
 - web-host 使用 `health_only`，HostAgent 使用 `host_snapshot`，其余默认进程使用 `reporter`。
 
 Monitor 的 SysDeploy Source 必须读取全量部署记录，而不是只调用 `ListActiveServiceDeployments`。是否期待运行由 `status` 决定，是否属于独立进程由中央 Manifest 决定，不依赖当前未持久化的 `deployment_mode` 字段。
@@ -177,10 +193,10 @@ host_boot_id            # 仅 HostAgent 提供
 ```
 
 - Reporter `boot_id` 表示进程启动，不得使用 OS host boot ID，也不得跨重启复用。
-- 部署时注入稳定 `MOOX_NODE_ID`、`MOOX_INSTANCE_ID`；启动 wrapper 在每次 exec 前生成新的 `MOOX_BOOT_ID`，不得把 boot ID 固化进持久 env 文件。
+- 非 Storage 部署注入稳定 `MOOX_NODE_ID`、`MOOX_INSTANCE_ID`；启动 wrapper 在每次 exec 前生成新的 `MOOX_BOOT_ID`，不得把 boot ID 固化进持久 env 文件。Storage 当前 env/wrapper 不在 V1 修改。
 - Local Dev 允许 `<service>@local`，但 `node_id` 必须显式为 `local`。
-- health 响应在现有 `Response` 中补充 `boot_id/build_time/config_hash/pipeline_config_hash`，不新增 diagnostics 路由。
-- Reporter 未配置 EventBus 时继续 best effort 降级，但 health details 必须显示 reporter disabled/error，不能静默成功。
+- 非 Storage health 响应在现有 `Response` 中补充 `boot_id/build_time/config_hash/pipeline_config_hash`，不新增 diagnostics 路由；Storage 继续读取当前响应，不要求采用新字段。
+- 非 Storage Reporter 未配置 EventBus 时继续 best effort 降级，但 health details 必须显示 reporter disabled/error，不能静默成功。
 
 ### Check、依赖和结论
 
@@ -259,9 +275,9 @@ moox_business_watermark_timestamp_seconds{module,stage,pipeline}
 
 | 模块 | 输入水位 | 输出水位 |
 | --- | --- | --- |
-| Collector | source closed window | Storage commit |
+| Collector | source closed window | collection task committed |
 | CloudNode | job dispatch | job result |
-| Storage | Primary commit | View visible |
+| Storage | 延期：只读已有事实 | 延期：不在 V1 新增水位 |
 | Factor | factor input | factor result |
 | Strategy | factor/view input | strategy evaluation |
 | Trade | execution accepted | order reconciliation |
@@ -274,6 +290,7 @@ moox_business_watermark_timestamp_seconds{module,stage,pipeline}
 - 输入水位持续前进但输出超过容忍时间未前进：`FAIL`。
 - enabled workload 从未运行且关键输入事实缺失：`UNKNOWN`。
 - 合法空策略目标、0 权重和无交易需求不是失败。
+- pipeline 任一必需阶段依赖延期的 Storage 功能契约时，对应 lag Check 为 `SKIPPED(storage_observability_deferred)`，不能用相邻模块水位推断 Storage 已正确处理。
 
 默认阈值：Reporter 超过 2 个周期为 `WARN`、4 个周期为 `FAIL`；health 连续 3 次失败为 `FAIL`；输出 Lag 超过 pipeline 配置容忍值为 `FAIL`；磁盘预计剩余天数 `<=14` 为 `WARN`、`<=7` 为 `FAIL`。
 
@@ -313,6 +330,7 @@ API 约束：
 - 使用现有 SysDeploy、check result、metric latest/catalog、Host Storage 和 alert repository，不新增 Context 表。
 - 不抓 `/metrics`、不运行 CLI Runner、不执行根因分析。
 - 过期阈值来自 Reporter interval 和 pipeline 配置；缺失、过期和身份冲突必须显式返回。
+- Storage 返回已有 health/Reporter Observation；其 Manifest 条目携带 `functional_observability: deferred`，Context 不增加另一套覆盖模型，也不合成 Storage 成功状态。
 - 超过限制返回参数或资源耗尽错误，不截断。
 
 ### CLI 报告和命令
@@ -348,19 +366,20 @@ moox-cli doctor diagnose  [--node <id>] [--check <id>] [--format json|text|markd
 | `diagnose.context` | diagnose | 无 | 无 |
 | `service.health:<scope>` | bootstrap/diagnose | bootstrap 时依赖 `bootstrap.inventory` | diagnose 时可选依赖 `diagnose.context`，允许固定直读补证 |
 | `monitor.metrics_delivery:<node_id>` | bootstrap/diagnose | EventBus 与 Monitor 的 `service.health:<scope>` | 无 |
-| `monitor.reporter_coverage:<scope>` | bootstrap/diagnose | 对应 `monitor.metrics_delivery:<node_id>` | 对应 `service.health:<scope>` |
-| `module.freshness:<scope>` | diagnose | 对应 `monitor.reporter_coverage:<scope>` | 对应 `service.health:<scope>` |
-| `module.pipeline_lag:<module>:<pipeline>` | diagnose | 上下游 `module.freshness:<scope>` | 无 |
+| `monitor.reporter_coverage:<scope>` | bootstrap/diagnose | 对应 `monitor.metrics_delivery:<node_id>` | 对应 `service.health:<scope>`；Storage 新契约延期时为 `SKIPPED` |
+| `module.freshness:<scope>` | diagnose | 对应 `monitor.reporter_coverage:<scope>` | 对应 `service.health:<scope>`；Storage 为 `SKIPPED` |
+| `module.pipeline_lag:<module>:<pipeline>` | diagnose | 上下游 `module.freshness:<scope>` | 依赖 Storage 延期能力时为 `SKIPPED` |
 | `host.disk_forecast:<node_id>` | diagnose | 无 | HostAgent 的 `service.health:<scope>` |
 
-恢复动作只生成建议，不执行。V1 固定 ID：`apply_service_deployments_seed`、`verify_service_identity`、`repair_path_permissions`、`verify_eventbus_credentials`、`restart_service_manually`、`inspect_pipeline_input`、`rebuild_view_index_manually`、`replay_factor_window_manually`、`free_disk_space`、`run_bootstrap`。
+恢复动作只生成建议，不执行。V1 固定 ID：`apply_service_deployments_seed`、`verify_service_identity`、`repair_path_permissions`、`verify_eventbus_credentials`、`restart_service_manually`、`inspect_pipeline_input`、`replay_factor_window_manually`、`free_disk_space`、`run_bootstrap`。`storage_observability_deferred` 是延期原因而非可执行恢复动作。
 
-## V2 边界，不属于本计划验收
+## 后续边界，不属于本计划验收
 
-V2 至少拆成两个独立计划：
+后续至少拆成三个独立计划，按以下顺序推进：
 
-1. Trade 模拟盘与 Strategy 持久 Dispatcher：作为交易产品能力单独设计、实现、审查和 E2E，不依赖 Doctor 才能使用。
-2. Full Canary：在 Trade Sim 稳定后，用固定 `moox_doctor` 资源串联 Collector、CloudNode、Storage、Factor、Strategy 和 Trade Sim。
+1. Storage 重构后可观测性接入：仅在 Storage 接口和进程拓扑冻结后，重新确认 canonical identity、Reporter 覆盖、权威持久水位、`Primary commit -> View visible` 语义、pipeline 映射和独立 E2E；不得从本计划直接开始实施。
+2. Trade 模拟盘与 Strategy 持久 Dispatcher：作为交易产品能力单独设计、实现、审查和 E2E，不依赖 Doctor 才能使用。
+3. Full Canary：在 Storage 可观测性接入和 Trade Sim 都稳定后，用固定 `moox_doctor` 资源串联 Collector、CloudNode、Storage、Factor、Strategy 和 Trade Sim。
 
 V2 设计前必须先提供逐模块副作用矩阵，至少覆盖 Monitor report、Collector Task、CloudNode JobItem/KV、Storage 数据、Strategy Run/Request、Trade Order/Fill/Ledger 和 EventBus message。所有业务数据必须位于 `moox_doctor`，所有运行事实必须携带可追溯 `doctor_run_id` 或通过不可变关联定位到该 ID。
 
@@ -372,12 +391,13 @@ Monitor 启动时不得自动跨服务清理 Canary。遗留运行只标记为 `
 | --- | --- | --- |
 | Monitor HA | 存在 peer、Peer 表/API、peer timer、Owner 仲裁 | 删除，收敛为单实例 |
 | SysDeploy Source | 只读取 active deployments | 改为读取全量记录，使用 Manifest 识别独立进程，status 决定是否期待运行 |
-| Reporter 身份 | Storage/Trade 名称与部署进程名不一致，boot ID 依赖部署注入 | 统一 canonical identity，部署生成 boot ID |
-| Reporter 覆盖 | Archive、Strategy、Gateway 缺 reporter；Storage shard 缺 timer | 补齐并加入覆盖门禁 |
+| Reporter 身份 | Storage/Trade 名称与部署进程名不一致，boot ID 依赖部署注入 | 统一非 Storage canonical identity，部署生成 boot ID；Storage 当前身份只读并标记延期 |
+| Reporter 覆盖 | Archive、Strategy、Gateway 缺 reporter；Storage shard 缺 timer | 补齐 Archive、Strategy、Gateway 并加入覆盖门禁；Storage shard 不在 V1 修改或门禁中 |
 | EventBus metrics 凭证 | Topic/Durable/ACL 与 Monitor credential 不完整 | 一个共享 metrics publisher 角色和一个 Monitor consumer 凭证 |
-| 功能指标 | 多数模块只有 RPC/进程指标 | 增加固定低基数指标和白名单 pipeline 水位 |
+| 功能指标 | 多数模块只有 RPC/进程指标 | 为非 Storage 模块增加固定低基数指标和白名单 pipeline 水位；跨 Storage 能力明确延期 |
+| Storage 重构 | 内部接口、进程拓扑和最终指标契约正在变化 | V1 只读现有事实，禁止修改 `modules/storage/**`，重构完成后另立接入计划 |
 | Doctor | `modules/doctor/` 为空，没有可执行能力 | 不创建 daemon；共享 Core 放 `packages/doctor`，编排放 CLI |
-| health | 已有 HMAC `/healthz`、`/readyz`、`/metrics` | 只补运行身份字段，不增加 deep diagnostics |
+| health | 已有 HMAC `/healthz`、`/readyz`、`/metrics` | 非 Storage 服务补运行身份字段，不增加 deep diagnostics；Storage 当前响应只读 |
 | Trade Sim / Full | 尚未实现 | 移出 V1，另立计划 |
 
 ## 阶段门禁
@@ -385,7 +405,7 @@ Monitor 启动时不得自动跨服务清理 Canary。遗留运行只标记为 `
 | 阶段 | 任务 | 进入下一阶段前必须满足 |
 | --- | --- | --- |
 | A. 契约与单实例 | Task 1-2 | Manifest、状态真值表、期望部署和单 Monitor 契约通过 |
-| B. 事实可信 | Task 3-4 | 身份、Reporter、EventBus、功能指标和水位契约通过 |
+| B. 事实可信 | Task 3-4 | 非 Storage 身份、Reporter、EventBus、功能指标和水位契约通过；Storage 延期状态可见 |
 | C. 手工 Doctor | Task 5-6 | Context、bootstrap、diagnose 和报告 Schema 通过 |
 | D. 交付 | Task 7 | 发布、文档、两轮审查、全量 Verify 和部署 E2E 通过 |
 
@@ -418,10 +438,11 @@ Monitor 启动时不得自动跨服务清理 Canary。遗留运行只标记为 `
 - Produces: `doctor.Engine.Run(ctx, specs, runner)`，只处理依赖、超时、状态传播和报告，不导入任何 `modules/*`。
 
 - [ ] 先写 RED 表测试，锁定两种 Mode、六种 Check 状态、四种结论、依赖真值表、`root_cause_check_ids`、`blocking_check_ids`、取消和总超时传播。
-- [ ] 固定报告字段：`schema_version/run_id/mode/started_at/finished_at/conclusion/checks/root_cause_check_ids/blocking_check_ids/missing_observations/manifest_checksum`。
+- [ ] 固定报告字段：`schema_version/run_id/mode/started_at/finished_at/conclusion/checks/root_cause_check_ids/blocking_check_ids/missing_observations/manifest_checksum`；Storage 延期直接复用 `checks[].status=SKIPPED` 和 Observation，不增加第二套覆盖字段。
 - [ ] 报告序列化稳定并通过 JSON Schema 和 golden test；Observation、256 Check、64 个显式选择和 2 MiB 总大小在执行/序列化前校验。
-- [ ] Manifest 校验最多 64 个条目、component/service 唯一、依赖存在、transport 枚举、路径模板安全、恢复动作 ID 非空且属于固定集合。
+- [ ] Manifest 校验最多 64 个条目、component/service 唯一、依赖存在、transport 与 functional observability 枚举、路径模板安全、恢复动作 ID 非空且属于固定集合。
 - [ ] 中央 Manifest 只登记独立进程；用测试拒绝 `trade_account`、`trade_order`、Storage 内部 endpoint 和 timer service。
+- [ ] 用契约测试锁定所有 Storage 进程条目为 `functional_observability: deferred`，并拒绝为其注册 V1 Storage 功能 Check 或 watermark stage。
 - [ ] 在 Manifest 和默认 seed 中补齐独立节点进程 `moox_gateway`；不能把 public `admin_gateway`、Caddy 或业务 RPC endpoint 当成它的替代品。
 - [ ] 发布契约交叉验证所有 `required_in_default_profile` 组件都存在于 seed 的 process 条目，且 process 条目都能映射到 Manifest。
 - [ ] Engine 不导入 tRPC、SQLite、Prometheus 或业务客户端。
@@ -525,8 +546,6 @@ bash scripts/test-trpc-plugin-config.sh
 - Modify: `packages/report/handler_test.go`
 - Modify: `packages/healthz/healthz.go`
 - Modify: `packages/healthz/healthz_test.go`
-- Modify: `modules/storage/cmd/server/main.go`
-- Modify: `modules/storage/cmd/server/main_test.go`
 - Modify: `modules/trade/internal/bootstrap/bootstrap.go`
 - Modify: `modules/trade/internal/bootstrap/bootstrap_test.go`
 - Modify: `modules/archive/internal/bootstrap/app.go`
@@ -540,7 +559,6 @@ bash scripts/test-trpc-plugin-config.sh
 - Modify: `modules/strategy/config/trpc_go.yaml`
 - Modify: `modules/strategy/go.mod`
 - Modify: `modules/strategy/go.sum`
-- Modify: `modules/storage/config/trpc_go.shard.yaml`
 - Modify: `modules/gateway/internal/bootstrap/bootstrap.go`
 - Modify: `modules/gateway/internal/bootstrap/bootstrap_test.go`
 - Modify: `modules/gateway/internal/health/state.go`
@@ -563,13 +581,14 @@ bash scripts/test-trpc-plugin-config.sh
 
 **Interfaces:**
 - Produces: health `Response.BootID/BuildTime/ConfigHash/PipelineConfigHash`。
-- Produces: Reporter identity 与 Manifest/SysDeploy 相同的 canonical `service_name`。
+- Produces: 非 Storage Reporter identity 与 Manifest/SysDeploy 相同的 canonical `service_name`。
 - Produces: metrics publisher credential 和 Monitor consumer credential。
 
 - [ ] `packages/report.NewHandler` 缺 `MOOX_INSTANCE_ID/MOOX_NODE_ID/MOOX_BOOT_ID` 时失败关闭；Local Dev 也必须显式设置 `MOOX_NODE_ID=local` 和 local identity，不再隐式猜测运行模式。
-- [ ] 部署脚本固定 `instance_id=<service>@<node>`；生成的 start wrapper 在每次 start/restart 前创建新 boot ID 且不回写 env 文件；移除 HOSTNAME 作为长期 instance 默认值。
-- [ ] Storage 使用 `storage-primary/storage-view/storage-shard`，Trade 使用 `moox_trade`，其他名称与中央 Manifest/SysDeploy 一致。
-- [ ] 为 Archive、Strategy、Gateway 增加 Reporter 和 30 秒 Timer，为 Storage shard 启用已有 Reporter Timer。
+- [ ] `packages/healthz` 新身份字段保持向后兼容；本任务不修改 Storage 调用点，也不把 Storage 未返回新字段判为 V1 实施失败。
+- [ ] 部署脚本为非 Storage 服务固定 `instance_id=<service>@<node>`；生成的 start wrapper 在每次 start/restart 前创建新 boot ID 且不回写 env 文件；移除 HOSTNAME 作为长期 instance 默认值。不得改写 Storage 的 env、wrapper 或启动参数。
+- [ ] Trade 使用 `moox_trade`，其他非 Storage 名称与中央 Manifest/SysDeploy 一致；Storage 当前名称只读，不在本任务统一或重命名。
+- [ ] 为 Archive、Strategy、Gateway 增加 Reporter 和 30 秒 Timer；不得为 Storage shard 启用或修改 Reporter Timer。
 - [ ] HostAgent 不重复发送通用 Reporter，web-host 不伪造 metrics transport。
 - [ ] Gateway/EventBus 文本指标注册到 `prometheus.DefaultRegisterer`，health `/metrics` 和 Reporter 使用同一 Gatherer。
 - [ ] EventBus 创建 metrics Topic/Stream/Durable/ACL；所有 Reporter 共享一个只发布 metrics 的角色，Monitor 使用独立只消费凭证。
@@ -584,14 +603,13 @@ bash scripts/test-trpc-plugin-config.sh
 (cd modules/strategy && go test -count=1 ./internal/bootstrap ./internal/health)
 (cd modules/gateway && go test -count=1 ./internal/bootstrap ./internal/health)
 (cd modules/eventbus && go test -count=1 ./internal/config ./internal/registry ./internal/health ./internal/bootstrap)
-(cd modules/storage && go test -count=1 ./cmd/server)
 (cd modules/trade && go test -count=1 ./internal/bootstrap)
 (cd modules/monitor && go test -count=1 ./internal/bootstrap ./internal/metrics/... ./test -run MetricsEventBus)
 bash scripts/test-deploy-moox-eventbus.sh
 bash scripts/test-monitor-coverage-contract.sh
 ```
 
-### Task 4: 增加关键模块功能指标和白名单水位
+### Task 4: 为非 Storage 关键模块增加功能指标和白名单水位
 
 **Files:**
 - Create: `packages/report/module_metrics.go`
@@ -601,13 +619,8 @@ bash scripts/test-monitor-coverage-contract.sh
 - Create: `examples/monitor-pipelines.yaml`
 - Modify: `modules/collector/internal/executor/executor.go`
 - Modify: `modules/collector/internal/executor/executor_test.go`
-- Modify: `modules/collector/internal/sources/binance/storage_rpc.go`
 - Modify: `modules/cloudnode/internal/rpc/job_item.go`
 - Modify: `modules/cloudnode/internal/rpc/job_item_test.go`
-- Modify: `modules/storage/internal/service/primarystore/data.go`
-- Modify: `modules/storage/internal/service/primarystore/data_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/service.go`
-- Modify: `modules/storage/internal/service/viewbuilder/service_test.go`
 - Modify: `modules/factor/internal/scheduler/service.go`
 - Modify: `modules/factor/internal/scheduler/service_test.go`
 - Modify: `modules/strategy/internal/scheduler/service.go`
@@ -633,22 +646,23 @@ bash scripts/test-monitor-coverage-contract.sh
 - Modify: `scripts/release.sh`
 
 **Interfaces:**
-- Produces: `report.ModuleMetrics`，只暴露固定 module/stage/result/pipeline API。
+- Produces: `report.ModuleMetrics`，只暴露固定的非 Storage module/stage/result/pipeline API。
 - Produces: `report.LoadPipelineAllowlist(path)` 和共享 `config/monitor-pipelines.yaml`，最多 32 条，保存业务映射和 lag tolerance。
 
-- [ ] `ModuleMetrics` 拒绝未知 module/stage/result/pipeline、回退水位、高基数字符串和超过 256 series 的注册。
-- [ ] pipeline 配置拒绝重复 ID、空 space/dataset、超过 32 条和非正数 lag tolerance；所有服务与 Monitor 从同一路径和 checksum 加载，checksum 不一致时 Context 返回冲突。
+- [ ] `ModuleMetrics` 拒绝未知 module/stage/result/pipeline、回退水位、高基数字符串和超过 256 series 的注册；V1 枚举不包含新增 Storage stage。
+- [ ] pipeline 配置拒绝重复 ID、空 space/dataset、超过 32 条和非正数 lag tolerance；参与 V1 功能指标的非 Storage 服务与 Monitor 从同一路径和 checksum 加载，checksum 不一致时 Context 返回冲突。
 - [ ] 在真实成功提交点更新 last success/error、runs、backlog 和 watermark，不在请求入口提前标成功。
+- [ ] Collector 只在自身 task terminal success 更新输出水位，不修改 `storage_rpc.go`，也不把 RPC 接收等同于 Storage 持久提交。
 - [ ] 水位启动时从模块权威持久状态恢复；测试进程重启不会发布 0、当前时间或较旧水位。
 - [ ] Monitor 自身记录 ingest 成功/拒绝/延迟、最后成功时间、consumer pending 和 DLQ。
 - [ ] 覆盖四类判断测试：无 enabled workload、输入不动、输入前进输出停滞、合法空策略目标；只有第三类失败。
+- [ ] pipeline 经过 Storage 延期阶段时不计算端到端 lag，固定生成 `SKIPPED(storage_observability_deferred)`；单元测试证明不会误报 `PASS` 或 `FAIL`。
 - [ ] 运行：
 
 ```bash
 (cd packages/report && go test -count=1 ./...)
-(cd modules/collector && go test -count=1 ./internal/executor ./internal/sources/binance)
+(cd modules/collector && go test -count=1 ./internal/executor)
 (cd modules/cloudnode && go test -count=1 ./internal/rpc)
-(cd modules/storage && go test -count=1 ./internal/service/primarystore ./internal/service/viewbuilder)
 (cd modules/factor && go test -count=1 ./internal/scheduler)
 (cd modules/strategy && go test -count=1 ./internal/scheduler ./internal/store)
 (cd modules/archive && go test -count=1 ./internal/writer)
@@ -677,12 +691,13 @@ bash scripts/test-monitor-coverage-contract.sh
 - Modify: `examples/service-deployments.seed.yaml`
 
 **Interfaces:**
-- Consumes: Task 2 desired deployment set、Task 3 Reporter identity、Task 4 module metrics。
+- Consumes: Task 2 desired deployment set、Task 3 非 Storage Reporter identity、Task 4 非 Storage module metrics，以及 Storage 已有只读事实。
 - Produces: `MonitorMgr.GetDoctorContext(GetDoctorContextReq) GetDoctorContextRsp`，供 Task 6 CLI 使用。
 
 - [ ] Proto validation 固定 component 64、pipeline 32、响应 2 MiB；未知 ID 返回参数错误。
 - [ ] Context 合并 Manifest、SysDeploy、check result、metric latest/catalog、Host Storage 和 alerts，不新增表。
 - [ ] 对每个 active process 返回 health、Reporter/transport、identity、freshness 和 missing/conflict Observation。
+- [ ] 对 Storage 只返回现有 health/Reporter Observation 和 Manifest 延期状态；不查询 Storage 内部 RPC，不合成成功水位，CLI 据此生成固定 `SKIPPED` Check。
 - [ ] disabled process 明确返回 `expected=false`，不制造缺失告警；默认必需但 SysDeploy 缺失只由 bootstrap release/inventory check 判断。
 - [ ] 磁盘 forecast 使用固定 7 天中位数算法，覆盖样本不足、负增长、安全余量、多挂载点和 14/7 天阈值。
 - [ ] Context 不抓 metrics、不运行本地 Runner、不运行 Doctor Engine、不生成结论。
@@ -725,6 +740,7 @@ make -C modules/monitor/proto all
 
 - [ ] 命令层在网络调用前校验 mode、node、check、format、output 组合，并拒绝 bootstrap 的非本机 node；V1 不注册 `full/get/list/cancel/rerun`。
 - [ ] bootstrap 对比 embedded Manifest、安装包 seed 和 SysDeploy 全量记录，再执行固定 health/network/path/autostart/Reporter 检查。
+- [ ] Storage 仍执行 inventory 和现有 health 检查；新增 Reporter coverage、freshness、水位及跨 Storage pipeline Check 固定为 `SKIPPED(storage_observability_deferred)`，且报告明确当前结论只覆盖 V1 范围。
 - [ ] path probe 只在 Manifest writable path 中创建固定前缀临时文件，并验证失败路径也执行删除。
 - [ ] diagnose 先调用 Context；仅对 missing/stale/conflict component 直读现有 health/metrics，且直读结果不写 Monitor 历史。
 - [ ] Monitor 不可用时 diagnose 生成 `INCONCLUSIVE` 报告和 `run_bootstrap` 建议，不静默切换模式。
@@ -761,7 +777,7 @@ make -C modules/monitor/proto all
 - Produces: 包含中央 Manifest、报告 Schema 和 Doctor CLI 的发布包，以及可重复的部署 E2E。
 
 - [ ] 发布包包含 embedded Manifest checksum、报告 Schema、service deployment seed 和 CLI；不包含 Full fixture、Trade Sim 或 Doctor daemon。
-- [ ] 文档明确单 Monitor、无 HA、无自动修复、无 DoctorMgr、V1 只有 bootstrap/diagnose，以及 web-host/HostAgent transport 例外。
+- [ ] 文档明确单 Monitor、无 HA、无自动修复、无 DoctorMgr、V1 只有 bootstrap/diagnose、Storage 冻结边界，以及 web-host/HostAgent transport 例外。
 - [ ] 为每个 recovery action ID 编写原因、只读确认步骤、人工恢复命令和重新接入检查；CLI 只引用 ID。
 - [ ] 第一轮独立审查重点检查：期望清单、单实例删减、状态真值表、Observation freshness、API 有界性和认证边界。
 - [ ] 修复第一轮所有 Critical/Important 后重新运行受影响测试。
@@ -778,10 +794,13 @@ bash scripts/test-release-contract.sh
 make verify
 ```
 
+- [ ] 在每个 Task 和最终提交前运行 `git diff --name-only -- modules/storage`，输出必须为空；同时审查共享部署/发布脚本不得出现新的 Storage 专用 env、wrapper、配置或探针逻辑。任一条件不满足都立即停止，不得把 Storage 相关变更并入本计划。
+
 - [ ] 在全新临时目录启动默认单节点服务，等待两个 Reporter 周期；bootstrap 和 diagnose 报告必须通过 JSON Schema。
 - [ ] 删除一个 required process 的 SysDeploy 记录，bootstrap 必须在 inventory 产生根 FAIL；恢复 seed 后通过。
 - [ ] 停止一个业务服务，证明一个根 FAIL 和下游 BLOCKED；恢复后重新运行 diagnose 通过。
 - [ ] 保持业务 API 正常但中断 Reporter，证明报告区分“业务健康、监控链路异常”。
+- [ ] 证明 Storage inventory/health 仍可检查，而 Storage 功能水位和跨 Storage pipeline 显式为 `SKIPPED(storage_observability_deferred)`，不影响非 Storage V1 门禁，也不显示为 `PASS`。
 - [ ] 禁用一个 SysDeploy process，证明它为 SKIPPED 而不是缺失 FAIL。
 - [ ] 制造 identity/boot ID 冲突，证明失败关闭且不选择任一事实继续判断。
 - [ ] 构造 33 个 pipeline、257 条 Doctor series、超大 metrics 响应和超大 Context，全部必须在限制处明确失败。
@@ -793,8 +812,8 @@ make verify
 2. `diagnose` 能区分业务服务故障、监控上报故障、事实过期和事实不足，并给出根 FAIL、根 UNKNOWN、受影响下游及人工恢复动作 ID。
 3. Monitor 只有一个实例，没有 Peer、Owner、Lease、独立 Doctor 服务、Doctor Run 表或后台工作流。
 4. 中央 Manifest 只有一份；服务继续使用现有 health/metrics，不增加 deep diagnostics。
-5. Collector、CloudNode、Storage、Factor、Strategy、Trade、Archive 可通过成功时间、错误时间、Backlog 和白名单水位判断功能状态，且空闲不会被误判。
+5. Collector、CloudNode、Factor、Strategy、Trade、Archive 可通过成功时间、错误时间、Backlog 和白名单水位判断功能状态，且空闲不会被误判；Storage 仅检查 inventory、现有 health 和已有只读事实，功能诊断明确延期且不伪造通过。
 6. API、报告和指标都有明确数量、字节、基数和超时上限；超过限制失败关闭。
 7. V1 Doctor 除临时权限探针和显式报告文件外不写业务事实，也不执行恢复动作。
-8. Trade Sim 和 Full Canary 没有混入 V1 代码或完成门禁，并已有明确的 V2 独立计划入口条件。
+8. Storage 新增可观测性、Trade Sim 和 Full Canary 没有混入 V1 代码或完成门禁，并已有明确的后续独立计划入口条件。
 9. 两轮独立审查、`make verify`、全新部署 E2E、故障注入和 Reporter 中断复验全部通过后，才可标记 V1 完成。
