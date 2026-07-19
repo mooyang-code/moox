@@ -350,6 +350,8 @@ moox.storage.fields_changed.v1.<space-token>.<dataset-token>
 
 同一 Dataset 只由其唯一 DataNode 发布，因此该 Subject 内的发布顺序就是 Dataset 写入顺序。不同 Dataset 和不同 DataNode 之间不定义顺序。Archive、Factor 可以订阅明确 Dataset Subject；View 订阅通配符。
 
+这里的“有序”只在单 Dataset Subject 内成立：DataNode 在同一提交中先落 Field/Attribute，再落 Outbox，Relay 按 Outbox ID 发布；由于 Dataset 不迁移且只有一个 DataNode 发布者，不需要额外的全局 `node_sequence` 或跨 Dataset Sequence Lane。多个 DataNode 并发发布不同 Dataset 不会互相阻塞，也不需要比较它们的序号。虽然多个 Subject 共用一个 Stream，Stream 的交错顺序不作为业务依据；单 `storage_view` Consumer 的 `MaxAckPending=1` 只控制当前消息的处理/ACK 生命周期。
+
 View 只创建一个固定 Durable Consumer：
 
 ```text

@@ -527,6 +527,13 @@ topic_families:
 
 `StreamConfig` 新增 `Discard string`，Registry 只接受 `new` 并映射为 `nats.DiscardNew`。删除 TimeSeries/Record RowsCommitted 和按 Shard/Node Token 的旧 Topic。Publisher 在发布前构造 Subject；Consumer 解码 Subject 并拒绝 Payload `space_id/dataset_id` 不一致。
 
+Subject 的顺序边界明确如下：
+
+- 一个 Dataset 只有一个不可变 `data_node_id`，因此该 Dataset 的所有 Outbox 事件只由一个 DataNode 发布到同一个 Subject；DataNode 在同一提交中先写 Field/Attribute，再写 Outbox，Relay 按 Outbox ID 顺序发布，保证该 Dataset 的提交顺序不被打乱。
+- 不同 Dataset 使用不同 Subject；不同 DataNode 之间也不比较顺序。K 线 Dataset 和因子 Dataset 可以分机部署并行发布，不需要全局 `node_sequence`、跨 Dataset Lane 或 Sequence Fence。
+- JetStream Stream 可以承载多个 Subject，但 Stream 的存储顺序不是业务顺序依据；View 只要求“同一 Dataset Subject 内有序”，跨 Subject 的交错消费是合法的。
+- `storage_view` 使用一个通配符 Consumer 只是为了减少 Consumer 数量，不是为了建立跨 Dataset 的全局顺序；`MaxAckPending=1`/`Fetch(1)` 仅保证当前 Delivery 完成后再处理下一条。
+
 - [ ] **步骤 3：配置唯一 View Consumer**
 
 ```yaml
