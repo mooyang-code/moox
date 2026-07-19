@@ -20,6 +20,62 @@ type Config struct {
 	} `yaml:"storage"`
 
 	MooX *MooxConfig `yaml:"moox"` // moox服务配置
+
+	Doctor DoctorConfig `yaml:"doctor"`
+}
+
+type DoctorConfig struct {
+	MonitorTarget   string `yaml:"monitor_target"`
+	SysDeployTarget string `yaml:"sysdeploy_target"`
+	NodeID          string `yaml:"node_id"`
+	ReleaseRoot     string `yaml:"release_root"`
+	SeedPath        string `yaml:"seed_path"`
+	PipelinePath    string `yaml:"pipeline_path"`
+}
+
+func (c *Config) EffectiveDoctor() DoctorConfig {
+	value := DoctorConfig{MonitorTarget: "ip://127.0.0.1:11410", SysDeployTarget: "ip://127.0.0.1:11109", ReleaseRoot: ".", SeedPath: "examples/service-deployments.seed.yaml", PipelinePath: "config/monitor-pipelines.yaml"}
+	if c != nil {
+		mergeDoctor(&value, c.Doctor)
+	}
+	overrideDoctorFromEnv(&value)
+	if value.NodeID == "" {
+		value.NodeID, _ = os.Hostname()
+	}
+	return value
+}
+
+func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
+	if source.MonitorTarget != "" {
+		target.MonitorTarget = source.MonitorTarget
+	}
+	if source.SysDeployTarget != "" {
+		target.SysDeployTarget = source.SysDeployTarget
+	}
+	if source.NodeID != "" {
+		target.NodeID = source.NodeID
+	}
+	if source.ReleaseRoot != "" {
+		target.ReleaseRoot = source.ReleaseRoot
+	}
+	if source.SeedPath != "" {
+		target.SeedPath = source.SeedPath
+	}
+	if source.PipelinePath != "" {
+		target.PipelinePath = source.PipelinePath
+	}
+}
+
+func overrideDoctorFromEnv(value *DoctorConfig) {
+	for name, target := range map[string]*string{
+		"MOOX_DOCTOR_MONITOR_TARGET": &value.MonitorTarget, "MOOX_DOCTOR_SYSDEPLOY_TARGET": &value.SysDeployTarget,
+		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
+		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath, "MOOX_PIPELINE_CONFIG": &value.PipelinePath,
+	} {
+		if raw := os.Getenv(name); raw != "" {
+			*target = raw
+		}
+	}
 }
 
 // getConfigPaths 获取可能的配置文件路径列表

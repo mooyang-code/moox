@@ -4,6 +4,7 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package command
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -184,7 +185,11 @@ func Execute() {
 	// 先执行命令解析，这样可以检查是否使用了--version标志
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			os.Exit(coded.ExitCode())
+		}
+		os.Exit(3)
 	}
 }
 

@@ -2339,6 +2339,7 @@ EOF
   copy_optional_web_host
 
   cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
+  cp "${ROOT}/modules/cli/config/cli.yaml" "${STAGE_DIR}/config/cli.yaml"
   perl -0pi -e 's#hmac_key_file:\s*\./secrets/gateway-service\.key#credentials_file: ../../secrets/gateway-credentials.json#' "${STAGE_DIR}/gateway/config/app.yaml"
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
