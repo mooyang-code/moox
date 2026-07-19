@@ -45,6 +45,8 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             web/pnpm-lock.yaml
+      - name: Install verification tools
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - run: make verify
 
   verify-trusted:
