@@ -9,6 +9,27 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
+func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	old := "2026-07-18T00:00:00Z"
+	newer := "2026-07-19T00:00:00Z"
+	rows := []*pb.RowFieldUpsert{
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: newer}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{}}}},
+	}
+	if err := s.WriteFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := s.CleanupExpiredBuckets(context.Background(), "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	}
+}
+
 func TestWriteFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", BucketDuration: time.Hour})
 	if err != nil {

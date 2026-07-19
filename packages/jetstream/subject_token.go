@@ -6,44 +6,51 @@ import (
 	"unicode/utf8"
 )
 
-var shardTokenEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+var subjectTokenEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
-// EncodeShardToken encodes a UTF-8 shard ID as one lowercase NATS subject token.
-func EncodeShardToken(shardID string) (string, error) {
-	if shardID == "" {
-		return "", fmt.Errorf("shard_id is required")
+// EncodeSubjectToken encodes a UTF-8 identifier as one lowercase NATS subject token.
+func EncodeSubjectToken(value string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("subject token value is required")
 	}
-	if !utf8.ValidString(shardID) {
-		return "", fmt.Errorf("shard_id must be valid UTF-8")
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("subject token value must be valid UTF-8")
 	}
-	return shardTokenEncoding.EncodeToString([]byte(shardID)), nil
+	return subjectTokenEncoding.EncodeToString([]byte(value)), nil
 }
 
-// DecodeShardToken decodes and validates a lowercase, unpadded shard token.
-func DecodeShardToken(token string) (string, error) {
+// DecodeSubjectToken decodes and validates a lowercase, unpadded subject token.
+func DecodeSubjectToken(token string) (string, error) {
 	if token == "" {
-		return "", fmt.Errorf("shard token is required")
+		return "", fmt.Errorf("subject token is required")
 	}
 	for i := 0; i < len(token); i++ {
-		if !isShardTokenByte(token[i]) {
-			return "", fmt.Errorf("invalid shard token %q", token)
+		if !isSubjectTokenByte(token[i]) {
+			return "", fmt.Errorf("invalid subject token %q", token)
 		}
 	}
-	raw, err := shardTokenEncoding.DecodeString(token)
+	raw, err := subjectTokenEncoding.DecodeString(token)
 	if err != nil {
-		return "", fmt.Errorf("invalid shard token %q: %w", token, err)
+		return "", fmt.Errorf("invalid subject token %q: %w", token, err)
 	}
 	if !utf8.Valid(raw) || len(raw) == 0 {
-		return "", fmt.Errorf("shard token %q does not decode to a non-empty UTF-8 shard_id", token)
+		return "", fmt.Errorf("subject token %q does not decode to non-empty UTF-8", token)
 	}
-	shardID := string(raw)
-	canonical, err := EncodeShardToken(shardID)
+	value := string(raw)
+	canonical, err := EncodeSubjectToken(value)
 	if err != nil || canonical != token {
-		return "", fmt.Errorf("invalid non-canonical shard token %q", token)
+		return "", fmt.Errorf("invalid non-canonical subject token %q", token)
 	}
-	return shardID, nil
+	return value, nil
 }
 
-func isShardTokenByte(b byte) bool {
+// Deprecated: use EncodeSubjectToken. Kept temporarily for non-storage legacy
+// clients while they migrate to generic subject tokens.
+func EncodeShardToken(value string) (string, error) { return EncodeSubjectToken(value) }
+
+// Deprecated: use DecodeSubjectToken.
+func DecodeShardToken(token string) (string, error) { return DecodeSubjectToken(token) }
+
+func isSubjectTokenByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '2' && b <= '7'
 }

@@ -263,7 +263,7 @@ func (s *Store) RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (
 			c_columns_json = excluded.c_columns_json,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetArchiveFileId(), item.GetDatasetId(), item.GetDeviceId(), item.GetPartitionKey(), item.GetFileUri(), item.GetFileFormat(), item.GetMinTime(), item.GetMaxTime(), item.GetRowCount(), item.GetContentHash(), columns, item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetArchiveFileId(), item.GetDatasetId(), item.GetDeviceId(), item.GetPartitionKey(), item.GetFileUri(), item.GetFileFormat(), item.GetMinTime(), item.GetMaxTime(), item.GetRowCount(), "", columns, item.GetStatus(), raw)
 	return item, err
 }
 

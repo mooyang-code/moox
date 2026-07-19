@@ -413,16 +413,5 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	const pageSize = uint32(1000)
-	var out []*pb.View
-	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := s.ListViews(ctx, spaceID, datasetID, "active", &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, items...)
-		if page == nil || !page.GetHasMore() || len(items) == 0 {
-			return out, nil
-		}
-	}
+	return queryMessages(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_primary_dataset_id = ? OR EXISTS (SELECT 1 FROM json_each(c_dataset_ids_json) ref WHERE ref.value = ?)) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
 }

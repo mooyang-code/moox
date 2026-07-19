@@ -1,9 +1,9 @@
 storage:
   root: ./var/storage
   roles:
-    - shard
+    - node
   primary:
-    shard_id: storage-shard-0
+    node_id: storage-node-0
     outbox:
       flush_batch_size: 100
       flush_max_bytes: 1048576
@@ -20,13 +20,13 @@ storage:
     nats_url: nats://127.0.0.1:4222
     credential_file: ~/.config/moox/storage/eventbus.yaml
     stream_name: MOOX_STORAGE
-    subject_prefix: moox.storage
-    consumer_name: storage_shard
+    subject_prefix: moox.storage.fields_changed.v1
+    consumer_name: storage_node
     max_age_hours: 24
     max_msgs: 500000
     max_bytes: 268435456
     max_in_flight: 1
-    max_ack_pending: 128
+    max_ack_pending: 1
     ack_wait_ms: 120000
     max_deliver: -1
   health:

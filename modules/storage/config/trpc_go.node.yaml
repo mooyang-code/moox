@@ -21,7 +21,7 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.storage.DataShard
+    - name: trpc.moox.storage.DataNode
       ip: 127.0.0.1
       port: 20107
       network: tcp
