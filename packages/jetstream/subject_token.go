@@ -44,13 +44,6 @@ func DecodeSubjectToken(token string) (string, error) {
 	return value, nil
 }
 
-// Deprecated: use EncodeSubjectToken. Kept temporarily for non-storage legacy
-// clients while they migrate to generic subject tokens.
-func EncodeShardToken(value string) (string, error) { return EncodeSubjectToken(value) }
-
-// Deprecated: use DecodeSubjectToken.
-func DecodeShardToken(token string) (string, error) { return DecodeSubjectToken(token) }
-
 func isSubjectTokenByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '2' && b <= '7'
 }

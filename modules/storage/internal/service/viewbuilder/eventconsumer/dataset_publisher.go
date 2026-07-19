@@ -19,6 +19,21 @@ type DatasetPublisher struct {
 	producer *messagepb.Producer
 }
 
+func (p *DatasetPublisher) PublishMessage(ctx context.Context, data []byte) error {
+	if p == nil || p.client == nil {
+		return errors.New("storage eventbus client is nil")
+	}
+	msg := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return err
+	}
+	if msg.GetTopic() == "" || msg.GetMessageId() == "" {
+		return errors.New("dataset event envelope is incomplete")
+	}
+	_, err := p.client.Publish(ctx, msg)
+	return err
+}
+
 func NewDatasetPublisher(client *jetstream.Client, producerID string) *DatasetPublisher {
 	return &DatasetPublisher{client: client, producer: &messagepb.Producer{ServiceName: "moox-storage", InstanceId: producerID}}
 }

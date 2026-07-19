@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS t_views (
 
 CREATE INDEX IF NOT EXISTS idx_t_views_space ON t_views (c_space_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_primary_dataset ON t_views (c_space_id, c_primary_dataset_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_views_version_pending ON t_views (c_space_id, c_status, c_view_version, c_active_view_version);
+CREATE INDEX IF NOT EXISTS idx_t_views_revision_pending ON t_views (c_space_id, c_status, c_desired_view_revision, c_active_view_revision);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_views_mtime
 AFTER UPDATE ON t_views

@@ -12,15 +12,17 @@ import (
 )
 
 type Options struct {
-	NodeID string
-	Store  *pebble.Store
-	Root   string
-	Pebble pebble.Options
+	NodeID      string
+	Store       *pebble.Store
+	Root        string
+	Pebble      pebble.Options
+	RequireAuth bool
 }
 
 type Service struct {
-	nodeID string
-	store  *pebble.Store
+	nodeID      string
+	store       *pebble.Store
+	requireAuth bool
 }
 
 var _ pb.DataNodeService = (*Service)(nil)
@@ -49,7 +51,7 @@ func NewService(opts Options) (*Service, error) {
 		_ = store.Close()
 		return nil, errors.New("node_id is required")
 	}
-	return &Service{nodeID: nodeID, store: store}, nil
+	return &Service{nodeID: nodeID, store: store, requireAuth: true}, nil
 }
 
 func (s *Service) Close() error {
@@ -65,6 +67,9 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
 		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	entries, err := s.store.WriteFieldsEvent(ctx, req.GetRows(), func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return pebble.BuildDatasetFieldsChangedMessage(s.nodeID, spaceID, datasetID, rows)
@@ -86,6 +91,9 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.Re
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
 		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	if req.GetDatasetId() != "" {
 		for _, key := range req.GetKeys() {
@@ -121,6 +129,9 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	before, err := time.Parse(time.RFC3339Nano, req.GetBeforeBucketStart())
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -130,6 +141,16 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Success("success"), DeletedBuckets: deleted}, nil
+}
+
+func (s *Service) validateAuth(auth *pb.AuthInfo) error {
+	if !s.requireAuth {
+		return nil
+	}
+	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
+		return errors.New("service auth is required")
+	}
+	return nil
 }
 
 func errorCode(err error) pb.ErrorCode {
@@ -145,4 +166,11 @@ func errorCode(err error) pb.ErrorCode {
 
 func (s *Service) Ready() bool {
 	return s != nil && s.store != nil
+}
+
+func (s *Service) Store() *pebble.Store {
+	if s == nil {
+		return nil
+	}
+	return s.store
 }
