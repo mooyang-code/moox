@@ -57,6 +57,15 @@ while IFS= read -r match; do
 	violations+=("${file}:${line}: official tRPC timer network does not support params, disable, or location options")
 done < <(rg -n 'network:.*[?&](params|disable|location)=' modules --glob '*.yaml' || true)
 
+if [[ -d packages/doctor ]]; then
+	while IFS= read -r match; do
+		file="${match%%:*}"
+		rest="${match#*:}"
+		line="${rest%%:*}"
+		violations+=("${file}:${line}: packages/doctor must remain a pure check and report package")
+	done < <(rg -n '"(github.com/mooyang-code/moox/modules/|trpc.group/|gorm.io/|github.com/prometheus/)' packages/doctor --glob '*.go' || true)
+fi
+
 required_timer_services=(
 	"modules/admin/config/trpc_go.yaml:trpc.dnsproxy.timer"
 	"modules/admin/config/trpc_go.yaml:trpc.dnsprobe.timer"

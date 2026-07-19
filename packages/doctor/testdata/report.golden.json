@@ -1,0 +1,21 @@
+{
+  "schema_version": "doctor.moox.dev/v1",
+  "run_id": "run-1",
+  "mode": "diagnose",
+  "started_at": "2026-07-19T12:00:00Z",
+  "finished_at": "2026-07-19T12:00:01Z",
+  "conclusion": "HEALTHY",
+  "checks": [
+    {
+      "id": "service.health:monitor@local",
+      "status": "PASS",
+      "summary": "ready",
+      "started_at": "0001-01-01T00:00:00Z",
+      "finished_at": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "root_cause_check_ids": [],
+  "blocking_check_ids": [],
+  "missing_observations": [],
+  "manifest_checksum": "sha256:manifest"
+}

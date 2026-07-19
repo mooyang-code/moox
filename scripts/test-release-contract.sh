@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+(cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
+grep -q 'moox_gateway' "${ROOT}/examples/service-deployments.seed.yaml"
+
 unfrozen="--no-""frozen-lockfile"
 floating_statik="statik@""latest"
 if rg -n "pnpm install .*${unfrozen}|${floating_statik}" "${ROOT}/scripts" "${ROOT}/web-host/Makefile"; then

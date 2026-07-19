@@ -102,6 +102,20 @@ services:
       health_url: http://127.0.0.1:11419/readyz
       health_kind: readiness
       monitor_enabled: true
+  - name: moox_gateway
+    kind: gateway
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11002
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 节点服务网关，承载服务路由与路由表刷新
+    extra_config:
+      health_url: http://127.0.0.1:11012/readyz
+      health_kind: readiness
+      monitor_enabled: true
   - name: moox_monitor
     kind: monitor
     deployment_mode: process

@@ -27,6 +27,7 @@ use (
 	./packages/cloudprovider
 	./packages/cloudruntime
 	./packages/commonpb
+	./packages/doctor
 	./packages/security
 	./packages/gatewayauth
 	./packages/gatewayproxy
