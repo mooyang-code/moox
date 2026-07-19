@@ -18,6 +18,7 @@ cleanup() {
     "${DEPLOY_DIR}/stop.sh" >/dev/null 2>&1 || true
   fi
   [[ -z "${CONTROL_PID}" ]] || kill "${CONTROL_PID}" >/dev/null 2>&1 || true
+  chmod -R u+w "${TMP_ROOT}" 2>/dev/null || true
   rm -rf "${TMP_ROOT}"
   return "${status}"
 }
