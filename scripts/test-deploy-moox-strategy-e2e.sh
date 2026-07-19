@@ -5,7 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-e2e.XXXXXX")"
 DEPLOY_DIR="${TMP_ROOT}/deploy"
 STAGE_DIR="${TMP_ROOT}/stage"
+GO_MODULE_CACHE="$(go env GOMODCACHE)"
+GO_BUILD_CACHE="$(go env GOCACHE)"
 export HOME="${TMP_ROOT}/home"
+export GOMODCACHE="${GO_MODULE_CACHE}"
+export GOCACHE="${GO_BUILD_CACHE}"
 CONTROL_PID=""
 
 cleanup() {
@@ -18,7 +22,6 @@ cleanup() {
     "${DEPLOY_DIR}/stop.sh" >/dev/null 2>&1 || true
   fi
   [[ -z "${CONTROL_PID}" ]] || kill "${CONTROL_PID}" >/dev/null 2>&1 || true
-  chmod -R u+w "${TMP_ROOT}" 2>/dev/null || true
   rm -rf "${TMP_ROOT}"
   return "${status}"
 }
