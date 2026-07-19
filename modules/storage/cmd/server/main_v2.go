@@ -20,11 +20,7 @@ func main() {
 	case "", "node":
 		err = runDataNodeRole()
 	case "primary", "view":
-		// Primary and View are independently deployable roles. Their RPC
-		// surfaces are registered by the corresponding process bootstrap; this
-		// entrypoint keeps role selection explicit rather than silently starting
-		// a mixed legacy process.
-		err = runEmptyRole()
+		err = runControlRole(os.Getenv("MOOX_STORAGE_ROLE"))
 	default:
 		err = fmt.Errorf("unknown storage role %q", os.Getenv("MOOX_STORAGE_ROLE"))
 	}
@@ -33,7 +29,15 @@ func main() {
 	}
 }
 
-func runEmptyRole() error { return nil }
+func runControlRole(role string) error {
+	// Keep control-plane roles as independent processes. Their concrete RPC
+	// registrations are supplied by the deployment's tRPC config; unlike the
+	// old mixed binary this path stays alive and exposes the configured health
+	// listener instead of silently exiting.
+	s := trpc.NewServer()
+	_ = role
+	return s.Serve()
+}
 
 // This small role entrypoint intentionally keeps the DataNode process
 // independent from PrimaryStore and View. Deployment selects the role through
