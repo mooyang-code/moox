@@ -57,6 +57,9 @@ func DefaultDeployments(nodeID string) []Deployment {
 	}
 	for i := range rows {
 		rows[i].NodeID = nodeID
+		if rows[i].ServiceName == "moox_hostagent" || rows[i].ServiceName == "moox_trade" {
+			rows[i].Status = "disabled"
+		}
 		switch rows[i].ServiceName {
 		case "storage-primary", "storage-view":
 			// Storage BFF traffic enters the node gateway; keep both independently
