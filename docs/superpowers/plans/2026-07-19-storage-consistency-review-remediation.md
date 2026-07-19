@@ -1,132 +1,113 @@
-# Storage Dataset 单归属与在线 View 重建 Implementation Plan
+# Storage 字段级存储与单 Consumer View 重建实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 Storage 重构为单 PrimaryStore、多个单归属 DataNode、单 storage-view 的多进程系统，支持 Dataset 按机器部署、字段运行时追加、JetStream 可靠派生，以及查询无感的 View A/B 重建与切换。
+**Goal:** 将 Storage 重构为单 PrimaryStore、多个单归属 DataNode、字段级 Pebble Key 和单 View Consumer 的多进程系统，并用 ActiveView/NewView A/B 数据库在不影响实时查询和写入的前提下完成低优先级 View 重建。
 
-**Architecture:** `storage-primary` 持有 Schema v4 Metadata SQLite、不可热变的 Dataset 路由和可原子追加的 DatasetSchema；每个 Dataset 只属于一个 DataNode，DataNode 在一个 Pebble Batch 中提交事实、Node Sequence、Dataset Progress 和 Outbox。`storage-view` 使用固定 `storage_view_active` 与 `storage_view_rebuild` 两个 Durable Consumer，通过 DataNode Snapshot、Source Checkpoint、Catch-up 和最多 2 秒的有界切换维护跨 DataNode View。
+**Architecture:** `storage-primary` 持有 Schema v4 Metadata、不可变 Dataset 路由和动态追加的 Runtime Schema；DataNode 通过 `WriteFields` 创建不可变事实版本，把每个 Field/Attribute 保存成独立 Pebble Key，并原子提交 Sequence、Dataset Progress 和 Outbox。`storage-view` 只有一个 `storage_view` Durable Consumer，重建期间实时事件同时写 ActiveView/NewView，历史 Backfill 只在实时队列空闲时从旧 ActiveView Key 集合补入 NewView。
 
-**Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、SQLite、Pebble、NATS JetStream、DuckDB、Bleve、Vue 3、TypeScript、Shell。
+**Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、SQLite、Pebble v1.1.5、NATS JetStream、DuckDB、Bleve、Vue 3、TypeScript、Shell。
 
 ## Global Constraints
 
-- 本计划的设计事实源是 `docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md`；本文件取代 2026-07-18 Shard 计划和本文件旧版本的冲突内容。
-- 这是全新项目：不迁移旧数据库、Pebble、Proto、RPC、配置或 Seed；不保留 Alias、Deprecated 字段、双读、双写和兼容分支。
-- Metadata Schema 版本固定为 `4`；启动遇到非 v4 数据库必须报错，由用户清理数据并重新部署。
-- 每个 Dataset 直接保存一个 `data_node_id`；一个 DataNode 可承载多个 Dataset，同一个 Dataset 不继续分片。
-- Dataset 产生过事实后永久禁止修改 `data_node_id`；系统不提供 Dataset 迁移、复制、校验、切换或回滚工具。
-- 已有字段不删除，`field_id` 不修改或复用，`value_type` 不修改；所有字段均可缺失，不存在 Required 字段或 Required 校验。
-- 只有字段列表可以运行时追加；DataNode、`service_target`、Dataset 和 `data_node_id` 的变化要求重启 `storage-primary`。
-- PrimaryStore 是字段归属和值类型的唯一业务 Schema 校验入口；DataNode 不保存 Schema Manifest、Schema Revision 或 Schema Fence。
-- `storage-primary`、`storage-view` 各只运行一个实例；每个 `node_id` 只运行一个写 Owner，不实现 Leader Election、Replica、Quorum 或自动 Failover。
-- Storage 内部 RPC 使用直接 tRPC 和 Service HMAC，不经过 Node Service Gateway；DataNode 写 RPC 只允许 `storage-primary` 身份。
-- `MOOX_STORAGE` 使用 `InterestPolicy + DiscardNew`；Outbox 只允许 inspect 和 retry，不允许 force-skip。
-- View 全系统同时只运行一个 Build，只创建 `storage_view_active` 和 `storage_view_rebuild` 两个固定 Durable Consumer。
-- View 切换最多暂停 Active Consumer 2 秒；DataView 查询不能暂停，超时必须恢复旧 Active 更新。
-- E2E 可以读取仓库根 `custom.toml`，但不得打印、提交或写入快照任何账号、密码、Token、私钥或展开后的 SSH 命令。
-- 实施必须在独立 Worktree 完成，至少经过两轮相互独立的代码审查，并完成两服务器 E2E 后才能宣告完成。
+- 设计事实源是 `docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md`；本计划取代 2026-07-18 Shard 计划和本文件旧版本的冲突内容。
+- 这是全新项目：不迁移旧 SQLite、Pebble、DuckDB、Bleve、Proto、配置或 Seed，不保留 Alias、Deprecated 字段、双读或双写兼容代码。
+- Metadata 只接受 Schema v4；删除 `metadataSchemaVersionCompatible`，版本不等于 `metadataSchemaVersion` 时启动失败。
+- Dataset 创建时必须指定 `data_node_id`，创建后不可修改；系统不提供 Dataset 迁移。
+- Schema 只允许追加 Field；已有 `field_id`、`value_type` 和语义不可修改，所有 Field 均可缺失，不存在 Required。
+- 完整 FactKey 对应的事实版本不可修改；相同内容是幂等重试，不同内容返回 `FACT_VERSION_IMMUTABLE`。
+- 不支持字段删除、Attribute 删除、DeleteRows、历史事实修正或为旧版本追加缺失 Field。
+- TimeSeries 不存在 Dimensions；身份只有 `space_id + dataset_id + subject_id + freq + data_time`。
+- Record 写入 Version 必填；读取 Version 为空时返回字符顺序最大的 Version。
+- DataNode 普通读取必须携带明确 Field ID；不提供完整行读取、普通范围扫描或 Snapshot RPC。
+- TimeSeries Dataset 和 TimeSeries View 分别使用自己的 `keep_days`；两者互不比较、互不触发。Record 的 `keep_days` 必须为 `0`。
+- View 只有一个固定 Durable Consumer `storage_view`；不创建 Active/Rebuild 双 Consumer 或每 Build Consumer。
+- NewView 实时写或 Backfill 失败时终止整次重建，ActiveView 已成功的事件正常 ACK，等待用户手动重建。
+- Backfill 只有在实时 View 队列为空且没有实时 Apply 时才能提交新 Batch；每批最多 100 行或 50ms。
+- TimeSeries 和 Record View 都必须在来源 Dataset 开始写入前创建；重建继承旧 ActiveView Key，不能发现或修复旧 View 缺失的 Key。
+- 实施必须在独立 Worktree 完成，经过两轮相互独立的代码审查，并完成两服务器 E2E 后才能宣告完成。
 
 ---
 
-## File Map
+## 文件职责图
 
-### Protocol and Metadata
+### 协议与 Metadata
 
-- Rename `modules/storage/proto/store.proto` to `modules/storage/proto/data_node.proto`: DataNode facts, progress and snapshot RPC.
-- Rename `modules/storage/proto/view.proto` to `modules/storage/proto/data_view.proto`: public DataView query RPC.
-- Modify `modules/storage/proto/common.proto`: `source_node_id` and typed errors.
-- Modify `modules/storage/proto/metadata.proto`: DataNode, Dataset placement, append-only fields, desired/active View revisions and simplified Build state.
-- Modify `modules/storage/proto/rows.proto`: public facts, Dataset Progress API and final naming.
-- Modify `modules/storage/proto/rows_committed.proto`: `node_id + dataset_id + sequence`, without Schema Revision.
-- Modify `modules/storage/proto/view_index.proto`: Source Checkpoint and revision-only atomic Apply.
-- Modify `modules/storage/schema/metadata.sql`: fresh Schema v4 only.
-- Regenerate `modules/storage/proto/storagegen/*`.
+- `modules/storage/proto/data_node.proto`：DataNode `WriteFields`、`ReadFields`、Progress、状态和时间桶清理 RPC。
+- `modules/storage/proto/rows.proto`：无 Dimensions、无删除字段、无行级来源信息的 FactKey/FieldValue 公共模型。
+- `modules/storage/proto/dataset_fields_changed.proto`：不可变事实版本首次提交事件。
+- `modules/storage/proto/view_index.proto`：单 Sequence Source Progress、实时写和 Backfill 写协议。
+- `modules/storage/proto/metadata.proto`：DataNode、Dataset/View `keep_days`、A/B Slot 和简化 ViewBuild。
+- `modules/storage/schema/metadata.sql`：全新 Schema v4。
 
-### Runtime Boundaries
+### DataNode
 
-- Create `modules/storage/internal/catalog/runtime.go`: immutable routing plus atomic per-Dataset Schema pointers.
-- Create `modules/storage/internal/catalog/runtime_test.go`: load, append, concurrency and immutability tests.
-- Rename `modules/storage/internal/service/datashard` to `modules/storage/internal/service/datanode`.
-- Delete `modules/storage/internal/service/primarystore/shardrouter`.
-- Create `modules/storage/internal/service/primarystore/datanodes.go`: direct tRPC client pool keyed by `node_id`.
-- Create `modules/storage/internal/service/datanode/snapshot.go`: bounded in-process Pebble Snapshot registry.
-- Create `modules/storage/internal/service/viewbuilder/build.go`: single rebuild orchestration.
-- Create `modules/storage/internal/service/dataview/active_handle.go`: atomic active Index/Revision/Columns/Checkpoint handle.
+- `modules/storage/internal/service/datanode/pebble/key.go`：有序 Tuple Key、TimeSeries 日桶和 Field/Attribute 命名空间。
+- `modules/storage/internal/service/datanode/pebble/store.go`：RowMarker Hash 幂等、字段级原子写和精确读取。
+- `modules/storage/internal/service/datanode/pebble/event.go`：`DatasetFieldsChanged` 确定性编码。
+- `modules/storage/internal/service/datanode/pebble/cleanup.go`：TimeSeries 过期桶 DeleteRange/Compact。
+- `modules/storage/internal/service/datanode/outbox_relay.go`：按 Node Sequence 发布 Outbox。
 
-### Cross-Module Integration
+### View
 
-- Modify `modules/eventbus/internal/config/*`, `modules/eventbus/config/app.yaml` and `modules/eventbus/internal/registry/registry.go`: Interest/Discard configuration and two fixed View consumers.
-- Modify `modules/admin/cmd/cli/eventbus_credentials.go`: least-privilege ACL for both View consumers.
-- Modify `modules/cli/internal/command/metadata_implementation.go`: v4 DataNode/Dataset seed import.
-- Modify `modules/monitor/internal/metrics/storage.go`: remove Required and PrimaryStoreRoute assumptions.
-- Modify `modules/archive` and `modules/factor`: consume Node-named RowsCommitted and call Storage directly.
-- Modify `web/src/api/storage/*` and `web/src/views/data/datasets/components/dataset-column-panel.vue`: append-only field UI with no Required/edit mode.
-- Modify Storage deploy/release scripts, configs, examples, metrics and current architecture docs in the same rename sweep.
+- `modules/storage/internal/service/viewindex/slots.go`：每个 View 的 slot-a/slot-b 路径和角色。
+- `modules/storage/internal/service/viewindex/backfill.go`：`LIVE_WRITE` 与只填缺失值的 `BACKFILL`。
+- `modules/storage/internal/service/viewbuilder/write_targets.go`：原子 Active/New 写目标。
+- `modules/storage/internal/service/viewbuilder/backfill.go`：实时优先的空闲 Backfill。
+- `modules/storage/internal/service/viewbuilder/build.go`：Build 状态、失败终止、切换和 OldView 清理。
+- `modules/storage/internal/service/dataview/active_handle.go`：只含 Index、Revision、Columns 的不可变查询 Handle。
 
-## Superseded CR Decisions
+## 正确性不变量
 
-| Previous finding | Final disposition |
-| --- | --- |
-| Worker error was dropped after enqueue ACK | Retained: Active/Rebuild handlers ACK only after durable ViewIndex success or checkpoint no-op |
-| A failed Shard lane became permanently poisoned | Retained, renamed: retry of the same Node Sequence can recover its Node lane |
-| DataShard accepted a larger payload than JetStream | Retained: DataNode validates the final `MooxMessage` with the publisher's exact Max Payload before Pebble commit |
-| Required-after-merge and Schema Fence were proposed | Removed: all fields are optional; PrimaryStore validates incoming field attributes, DataNode is Schema-agnostic |
-| Per-Build Durable Consumer and resumable lease/cursor were proposed | Removed: one fixed Rebuild Consumer, one global Build, crash means FAILED and rebuild from a fresh Snapshot |
-| Cross-Target pagination needed K-way merge | Removed: one Dataset has one DataNode; PrimaryStore delegates one bounded cursor scan |
-| Force-skip plus DeliveryGap was proposed | Removed: Outbox exposes inspect/retry only and remains backpressured until repaired |
-| Node Service Gateway was retained | Removed for Storage internals: use direct tRPC with Service HMAC |
+1. RowMarker Hash 不存在时才能创建新事实版本；Hash 相同是无事件幂等成功，Hash 不同是不可变冲突。
+2. RowMarker、Field、Attribute、Node Sequence、Dataset Progress 和 Outbox 在一个 Pebble Batch 中提交。
+3. Field 物理命名空间是 `0x01`，Attribute 是 `0x02`，同名永不冲突。
+4. DataNode 在 Pebble Commit 前使用 Publisher 的实际 Max Payload 校验最终 `MooxMessage`。
+5. Outbox 只删除连续发布成功前缀，不允许 force-skip。
+6. ViewIndex 行变更与 `{node_id,dataset_id,sequence}` Progress 在一个事务中提交。
+7. `sequence <= current` 是幂等成功；协议不携带 Expected Sequence。
+8. 无重建时，ActiveView 成功才 ACK；重建时，ActiveView/NewView 都成功才 ACK。
+9. ActiveView 成功、NewView 失败时必须先原子移除 NewView 并标记 Build FAILED，再 ACK 当前事件。
+10. Backfill 不能覆盖 NewView 中实时写已经提交的非空值。
+11. View 重建基线来自同一 ActiveView 只读事务中的行和 Source Progress。
+12. 安装 `ViewWriteTargets{Active,New}` 与读取基线 Progress 受同一 View Apply 锁保护。
+13. Backfill 完成且 Active/New Progress 相同时才允许切换。
+14. DataView 每个请求始终使用同一个不可变 ActiveHandle。
+15. Pebble Cleanup 与 View A/B 重建分别调度；任何一方都不调用或修改另一方配置。
 
-## Correctness Invariants
+## 实施顺序
 
-1. A public write request contains rows for exactly one Dataset and resolves to exactly one DataNode.
-2. PrimaryStore rejects unknown fields, duplicate Field IDs, value-type mismatches, invalid TypedValue payloads and public batch-limit violations before DataNode RPC.
-3. DataNode atomically commits complete post-Merge facts, `node_sequence`, `DatasetProgress.last_committed_sequence` and RowsCommitted Outbox.
-4. DataNode rejects the whole batch before commit when the final deterministic `MooxMessage` exceeds the configured JetStream Max Payload.
-5. Outbox publishes in Node Sequence order and only deletes a contiguous successful prefix.
-6. `RowsCommitted` never contains Schema Revision and always identifies `{node_id, dataset_id, sequence}`.
-7. Each physical ViewIndex owns an independent `{node_id, dataset_id}` Source Checkpoint.
-8. `sequence <= last_applied_sequence` is a successful per-ViewIndex no-op; the event is ACKed only after every affected ViewIndex applied or skipped it.
-9. MERGE writes only columns owned by the changed Dataset; a missing row fails the whole Apply without advancing Checkpoint, then retries a full-source REPLACE.
-10. Primary-Dataset DELETE removes the View row; secondary-Dataset DELETE removes only that Dataset's owned columns.
-11. Rebuild Snapshot rows and each source's baseline Checkpoint come from the same Pebble Snapshot.
-12. Rebuild Consumer ignores events at or below the source Snapshot barrier and applies later events until it reaches the Dataset Progress Vector.
-13. Active Index activation switches Index, Revision, Columns and Source Checkpoints as one logical handle; old events cannot regress the new Index.
-14. Add Dataset Field returns success only after SQLite commit and atomic Runtime Schema replacement.
-15. A View rebuild never changes the public query schema before activation and never makes a half-built Index queryable.
-
-## Implementation Order
-
-| Phase | Tasks | Exit condition |
+| 阶段 | 任务 | 阶段退出条件 |
 | --- | --- | --- |
-| A. Final contracts | 1-4 | v4 schema, final names, runtime catalog and direct process boundaries compile |
-| B. Authoritative facts | 5-7 | single-node routing, strict Primary validation, atomic DataNode commit and Snapshot pass |
-| C. Event and View consistency | 8-12 | two fixed consumers, Source Checkpoints, rebuild and 2-second activation pass |
-| D. Integration and proof | 13-14 | repository rename sweep, two reviews, local gates and two-server E2E pass |
+| A. 最终契约 | 1-4 | v4、最终 Proto、Runtime Catalog、三进程和直接 HMAC 编译通过 |
+| B. 字段事实存储 | 5-7 | 字段 Key、不可变版本、精确读和独立桶清理通过 |
+| C. 单 Consumer View | 8-12 | 单 Consumer、A/B Slot、实时双写、空闲 Backfill 和切换通过 |
+| D. 集成与证明 | 13-14 | 全仓命名收敛、两轮审查和两服务器 E2E 通过 |
 
-### Task 1: Create the Isolated Worktree and Freeze the Baseline
+### 任务 1：创建独立 Worktree 并记录基线
 
-**Files:**
-- Read: `docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md`
-- Read: `docs/superpowers/plans/2026-07-19-storage-consistency-review-remediation.md`
-- Read: `scripts/test-storage-boundary-contract.sh`
-- Read: `scripts/test-storage-consistency-contract.sh`
+**文件：**
+- 读取：`docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md`
+- 读取：`docs/superpowers/plans/2026-07-19-storage-consistency-review-remediation.md`
+- 读取：`scripts/test-storage-boundary-contract.sh`
+- 读取：`scripts/test-storage-consistency-contract.sh`
 
-**Interfaces:**
-- Consumes: approved design and current `origin/main`.
-- Produces: clean `codex/storage-dataset-node` Worktree and baseline evidence.
+**接口：**
+- 输入：当前 `origin/main` 和本设计规范。
+- 输出：干净的 `codex/storage-field-keys` Worktree 与基线结果。
 
-- [ ] **Step 1: Create a clean Worktree from current main**
+- [ ] **步骤 1：创建独立 Worktree**
 
 ```bash
 git fetch origin
-git worktree add ../moox-storage-dataset-node -b codex/storage-dataset-node origin/main
-cd ../moox-storage-dataset-node
+git worktree add ../moox-storage-field-keys -b codex/storage-field-keys origin/main
+cd ../moox-storage-field-keys
 git status --short --branch
 ```
 
-Expected: clean branch at current `origin/main`. Do not implement this refactor in the documentation branch.
+预期：工作区为空，分支基于当前 `origin/main`。
 
-- [ ] **Step 2: Run the pre-change baseline**
+- [ ] **步骤 2：运行改动前基线**
 
 ```bash
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
@@ -135,320 +116,305 @@ bash scripts/test-storage-consistency-contract.sh
 make verify
 ```
 
-Expected: record every existing failure before editing. A baseline failure must be understood and either repaired in its owning Task or documented as unrelated before proceeding.
+预期：记录每个既有失败及原因；不得把既有失败归因于后续改动。
 
-- [ ] **Step 3: Record the implementation base without editing generated artifacts**
+- [ ] **步骤 3：记录起点**
 
 ```bash
 git rev-parse HEAD
 git status --porcelain=v1
 ```
 
-Expected: a recorded base SHA and empty status.
+预期：保存起点 SHA，状态为空。
 
-### Task 2: Replace the Protocol and Metadata Schema with the Final v4 Model
+### 任务 2：定义最终 Proto 与 Schema v4
 
-**Files:**
-- Rename: `modules/storage/proto/store.proto` -> `modules/storage/proto/data_node.proto`
-- Rename: `modules/storage/proto/view.proto` -> `modules/storage/proto/data_view.proto`
-- Modify: `modules/storage/proto/common.proto`
-- Modify: `modules/storage/proto/metadata.proto`
-- Modify: `modules/storage/proto/rows.proto`
-- Modify: `modules/storage/proto/rows_committed.proto`
-- Modify: `modules/storage/proto/view_index.proto`
-- Modify: `modules/storage/proto/Makefile`
-- Modify: `modules/storage/schema/metadata.sql`
-- Modify: `modules/storage/internal/bootstrap/metadata/schema_test.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/store.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/store_test.go`
-- Regenerate: `modules/storage/proto/storagegen/*`
-- Modify: `scripts/test-storage-boundary-contract.sh`
+**文件：**
+- 重命名：`modules/storage/proto/store.proto` -> `modules/storage/proto/data_node.proto`
+- 重命名：`modules/storage/proto/view.proto` -> `modules/storage/proto/data_view.proto`
+- 重命名：`modules/storage/proto/rows_committed.proto` -> `modules/storage/proto/dataset_fields_changed.proto`
+- 修改：`modules/storage/proto/common.proto`
+- 修改：`modules/storage/proto/rows.proto`
+- 修改：`modules/storage/proto/metadata.proto`
+- 修改：`modules/storage/proto/view_index.proto`
+- 修改：`modules/storage/proto/Makefile`
+- 修改：`modules/storage/schema/metadata.sql`
+- 修改：`modules/storage/internal/bootstrap/metadata/schema_test.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/store.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/store_test.go`
+- 重新生成：`modules/storage/proto/storagegen/*`
+- 修改：`scripts/test-storage-boundary-contract.sh`
 
-**Interfaces:**
-- Consumes: none.
-- Produces: `DataNode`, `DatasetProgress`, `ViewIndexSourceCheckpointUpdate`, `AddDatasetField`, desired/active revisions and Schema v4.
+**接口：**
+- 输入：无历史兼容要求的全新 Schema v4。
+- 输出：`DataNode.WriteFields/ReadFields`、`DatasetFieldsChanged`、`ViewIndexSourceProgress` 和 A/B View Metadata。
 
-- [ ] **Step 1: Make the boundary test reject every superseded contract**
+- [ ] **步骤 1：先让边界测试拒绝全部旧契约**
 
-Add exact scans that reject active references outside historical `docs/superpowers/**`:
+在 `scripts/test-storage-boundary-contract.sh` 增加精确扫描，活动代码中以下符号必须为零：
 
 ```text
 DataShard, datashard, data_shard, ShardKey, ShardRow, ShardTarget
-shard_id, source_shard_id, GetShardState, GetShardHeads, ShardCheckpoint
-schema_revision, DatasetSchemaFence, required_column_names
-DatasetColumn.required, c_required, PrimaryStoreRoute, t_primary_store_routes
-role: shard, storage-shard, storage_shard_
+shard_id, source_shard_id, source_sequence
+MergeRows, WriteRows, ReadRows, ScanRows, DeleteRows
+BeginNodeSnapshot, ScanNodeSnapshot, EndNodeSnapshot
+attributes_to_delete, removed_column_names, removed_columns
+dimensions, dimension_hash, reservedDimensionsAttribute
+expected_last_applied_sequence
+storage_view_active, storage_view_rebuild
+DatasetColumn.required, c_required, schema_revision
+metadataSchemaVersionCompatible
 ```
 
-Run:
+运行：
 
 ```bash
 bash scripts/test-storage-boundary-contract.sh
 ```
 
-Expected: FAIL on current active code, not on the migration table inside the approved spec.
+预期：旧代码稳定失败；`docs/superpowers/**` 历史文字不参与扫描。
 
-- [ ] **Step 2: Define the final DataNode wire contract**
+- [ ] **步骤 2：写出最终 Fact 与 DataNode 协议**
 
-Use the following contract shape in `data_node.proto`; request messages carry logical identity, never endpoint, device, weight or hash rules:
+`rows.proto` 使用无 Dimensions 的 Key：
 
 ```proto
-message FactKey {
+message TimeSeriesKey {
   string space_id = 1;
   string dataset_id = 2;
-  DataKind data_kind = 3;
-  string key = 4;
-  string version = 5;
+  string subject_id = 3;
+  string freq = 4;
+  string data_time = 5;
 }
 
-message FactRow {
-  FactKey key = 1;
-  repeated ColumnValue columns = 2;
-  map<string, string> attributes = 3;
-  repeated string attributes_to_delete = 4;
-  repeated string removed_column_names = 5;
-  string source_node_id = 6;
-  uint64 source_sequence = 7;
-  repeated ColumnRemoval removed_columns = 8;
-}
-
-message DatasetProgress {
-  string node_id = 1;
+message RecordKey {
+  string space_id = 1;
   string dataset_id = 2;
-  uint64 last_committed_sequence = 3;
+  string record_id = 3;
+  string version = 4;
 }
 
-service DataNode {
-  rpc MergeRows(MergeRowsReq) returns (MergeRowsRsp);
-  rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
-  rpc ScanRows(ScanRowsReq) returns (ScanRowsRsp);
-  rpc DeleteRows(DeleteRowsReq) returns (DeleteRowsRsp);
-  rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
-  rpc GetDatasetProgress(GetDatasetProgressReq) returns (GetDatasetProgressRsp);
-  rpc BeginNodeSnapshot(BeginNodeSnapshotReq) returns (BeginNodeSnapshotRsp);
-  rpc ScanNodeSnapshot(ScanNodeSnapshotReq) returns (ScanNodeSnapshotRsp);
-  rpc EndNodeSnapshot(EndNodeSnapshotReq) returns (EndNodeSnapshotRsp);
+message FactKey {
+  oneof key {
+    TimeSeriesKey time_series = 1;
+    RecordKey record = 2;
+  }
+}
+
+message FieldValue {
+  string field_id = 1;
+  TypedValue value = 2;
 }
 ```
 
-All DataNode requests include `node_id`; row requests also include one `dataset_id`. Delete every physical target field and generated old service.
-
-- [ ] **Step 3: Define the final Metadata and View contracts**
-
-Apply these exact semantics:
+`data_node.proto` 只保留精确 Field 操作和维护状态：
 
 ```proto
-message DataNode {
-  string node_id = 1;
-  string service_target = 2;
-  string status = 3;
+service DataNode {
+  rpc WriteFields(WriteFieldsReq) returns (WriteFieldsRsp);
+  rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
+  rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
+  rpc GetDatasetProgress(GetDatasetProgressReq) returns (GetDatasetProgressRsp);
+  rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
 }
 
-message Dataset {
-  // existing business fields retain their v4 numbers
-  string data_node_id = 12;
-}
-
-message AddDatasetFieldReq {
+message ReadFieldsReq {
   common.AuthInfo auth_info = 1;
-  string space_id = 2;
+  string node_id = 2;
   string dataset_id = 3;
-  Field field = 4;
-  DatasetColumn column = 5;
+  repeated FactKey keys = 4;
+  repeated string field_ids = 5;
+  repeated string attribute_keys = 6;
 }
+```
 
-message ViewIndexSourceCheckpointUpdate {
+在 `WriteFields` 注释中明确：同一 FactKey 只允许完全相同内容的幂等重试，修改必须使用新 Version。
+
+`GetDatasetProgress` 只供 PrimaryStore 状态查询、监控和故障诊断使用；它不参与 View 重建基线、双写或切换判定。
+
+- [ ] **步骤 3：定义事件和 ViewIndex Progress**
+
+```proto
+message DatasetFieldsChanged {
   string node_id = 1;
   string dataset_id = 2;
-  uint64 expected_last_applied_sequence = 3;
-  uint64 last_applied_sequence = 4;
+  uint64 sequence = 3;
+  repeated FactVersion facts = 4;
+}
+
+message ViewIndexSourceProgress {
+  string node_id = 1;
+  string dataset_id = 2;
+  uint64 sequence = 3;
 }
 ```
 
-`DatasetColumn` has no `required`. Rename `view_version` to `desired_view_revision`, `active_view_version` to `active_view_revision`; delete View Schema Hash. `ViewIndexBuild` retains only identity, target revision, `BUILDING/CATCHING_UP/FAILED/ACTIVE`, columns, coverage, counts, timestamps and safe error text; delete PREPARING, READY, owner, lease, cursor and snapshot-end persistence.
+`ViewIndexApplyBatch` 只包含 Row Writes、Source Progress、View Revision 和范围更新。删除 Schema Hash、Required、Expected Sequence、删除字段和行级来源信息。
 
-- [ ] **Step 4: Replace Metadata SQL with fresh Schema v4**
+- [ ] **步骤 4：定义 Metadata v4**
 
-`metadata.sql` must store `schema_version=4`, add `t_data_nodes`, add non-empty `t_datasets.c_data_node_id`, remove `t_primary_store_nodes`, `t_primary_store_routes`, topology locks and `t_dataset_columns.c_required`, and simplify View/Build columns to match Proto.
-
-`metadataSchemaVersionCompatible` becomes strict:
-
-```go
-const metadataSchemaVersion = "4"
-
-func metadataSchemaVersionCompatible(version string) bool {
-    return version == metadataSchemaVersion
-}
-```
-
-Tests must prove v2/v3/v5 fail and v4 passes. Do not add ALTER statements or migration code.
-
-- [ ] **Step 5: Regenerate and verify the protocol**
-
-```bash
-make -C modules/storage/proto clean all
-(cd modules/storage/proto/storagegen && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/bootstrap/metadata ./internal/service/metadata/sqlite)
-git diff --check
-```
-
-Expected: generated code compiles; Schema v4 tests pass; old contract scan still fails only because later runtime Tasks are not complete.
-
-- [ ] **Step 6: Commit the contract atomically**
-
-```bash
-git add modules/storage/proto modules/storage/schema modules/storage/internal/bootstrap/metadata modules/storage/internal/service/metadata/sqlite scripts/test-storage-boundary-contract.sh
-git commit -m "refactor(storage): define dataset node v4 contracts"
-```
-
-### Task 3: Implement Direct SQLite Metadata and the Dynamic Runtime Catalog
-
-**Files:**
-- Create: `modules/storage/internal/catalog/runtime.go`
-- Create: `modules/storage/internal/catalog/runtime_test.go`
-- Modify: `modules/storage/internal/service/metadata/store.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_dataset.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_store.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
-- Delete: `modules/storage/internal/service/metadata/cache/*`
-- Modify: `modules/storage/internal/service/primarystore/service.go`
-- Modify: `modules/storage/internal/service/primarystore/metadata_catalog.go`
-- Modify: `modules/storage/internal/service/primarystore/metadata_catalog_test.go`
-
-**Interfaces:**
-- Consumes: v4 `DataNode`, `Dataset`, `Field`, `DatasetColumn`, `View`.
-- Produces: `catalog.Runtime`, `catalog.DatasetSchema`, transactional `AddDatasetField`, direct SQL pagination.
-
-- [ ] **Step 1: Write failing Runtime Catalog tests**
-
-Cover these cases:
-
-```go
-func TestRuntimeCatalogRoutingIsImmutable(t *testing.T)
-func TestRuntimeCatalogAppendFieldSwapsSchemaAtomically(t *testing.T)
-func TestRuntimeCatalogInFlightReaderKeepsOldSchema(t *testing.T)
-func TestRuntimeCatalogConcurrentAppendIsSerializedPerDataset(t *testing.T)
-func TestRuntimeCatalogRejectsUnknownDatasetAppend(t *testing.T)
-```
-
-Run:
-
-```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/catalog)
-```
-
-Expected: FAIL because the package does not exist.
-
-- [ ] **Step 2: Implement immutable entries with atomic Schema pointers**
-
-Use focused types:
-
-```go
-type DatasetKey struct { SpaceID, DatasetID string }
-type DatasetRoute struct { DataNodeID, ServiceTarget string }
-type DatasetSchema struct {
-    DataKind storagepb.DataKind
-    Columns map[string]ColumnSchema
-}
-type DatasetEntry struct {
-    Route DatasetRoute
-    schema atomic.Pointer[DatasetSchema]
-    updateMu sync.Mutex
-}
-type Runtime struct {
-    datasets map[DatasetKey]*DatasetEntry
-    nodes map[string]DataNodeRoute
-}
-```
-
-Maps and routes are built once at startup and never mutated. `AppendDatasetField` clones the old Schema and stores a new pointer; it never mutates maps held by in-flight requests.
-
-- [ ] **Step 3: Replace generic Metadata Cache with direct SQL**
-
-Delete Cache construction and refresh calls. Every List method must execute deterministic SQL with `ORDER BY`, `LIMIT` and `OFFSET`; no List may load the full table and page in Go. Add a query-count test with more than two pages and assert the returned order and `has_more`.
-
-- [ ] **Step 4: Implement transactional, idempotent Add Dataset Field**
-
-Inside one per-Dataset update lock:
-
-1. Read current Field, DatasetColumn and Runtime Schema.
-2. Validate stable Field ID/type and DatasetColumn identity.
-3. Build the next immutable Schema before beginning the transaction.
-4. In one SQLite transaction, insert the Field when absent and insert the DatasetColumn.
-5. Commit SQLite.
-6. Store the new Schema pointer.
-7. Return success only after pointer replacement.
-
-Same Dataset/Field/Type is success; conflicting type, origin or semantics returns `FIELD_IMMUTABLE`. Update/Delete of a bound column returns `FIELD_IMMUTABLE`. A test must simulate failure after SQLite commit but before response, reopen the service, retry, and obtain the same field without duplication.
-
-- [ ] **Step 5: Enforce placement immutability through an injected progress reader**
-
-Define:
-
-```go
-type DatasetProgressReader interface {
-    GetDatasetProgress(context.Context, string, string) (*storagepb.DatasetProgress, error)
-}
-```
-
-`UpdateDataset` may change `data_node_id` only when the current Owner responds with `last_committed_sequence == 0`. Owner unavailable, unknown progress or positive progress returns a typed immutable-placement error. Deleting rows never resets progress.
-
-- [ ] **Step 6: Run tests and commit**
-
-```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/catalog ./internal/service/metadata/sqlite ./internal/service/primarystore)
-git add modules/storage/internal/catalog modules/storage/internal/service/metadata modules/storage/internal/service/primarystore
-git commit -m "refactor(storage): add dynamic runtime catalog"
-```
-
-### Task 4: Establish the Three Process Roles and Direct HMAC RPC
-
-**Files:**
-- Modify: `packages/gatewayauth/trpc.go`
-- Modify: `packages/gatewayauth/trpc_test.go`
-- Rename: `modules/storage/config/storage.shard.yaml` -> `modules/storage/config/storage.node.yaml`
-- Rename: `modules/storage/config/trpc_go.shard.yaml` -> `modules/storage/config/trpc_go.node.yaml`
-- Modify: `modules/storage/config/storage.primary.yaml`
-- Modify: `modules/storage/config/storage_view/trpc_go.yaml`
-- Modify: `modules/storage/internal/config/loader.go`
-- Modify: `modules/storage/internal/config/loader_test.go`
-- Modify: `modules/storage/cmd/server/main.go`
-- Modify: `modules/storage/cmd/server/view_runtime.go`
-- Create: `modules/storage/internal/service/primarystore/datanodes.go`
-- Create: `modules/storage/internal/service/primarystore/datanodes_test.go`
-
-**Interfaces:**
-- Consumes: Runtime Catalog routes and generated DataNode client.
-- Produces: `primary`, `node`, `view` roles and direct authenticated RPC clients.
-
-- [ ] **Step 1: Write failing deployment-boundary tests**
-
-Tests must assert:
+Schema v4 必须包含：
 
 ```text
-roles accepts only primary, node, view
-primary cannot embed DataNode
-node requires node_id and a Pebble path
-view cannot open Metadata SQLite or Pebble facts
-DataNode has no HTTP listener or Admin Gateway route
-Storage internal clients do not call ServiceGatewayTarget
+t_data_nodes
+t_datasets.c_data_node_id
+t_datasets.c_keep_days
+t_views.c_keep_days
+t_views.c_active_slot
+t_views.c_desired_view_revision
+t_views.c_active_view_revision
+t_view_builds.c_new_slot
+t_view_builds.c_base_progress_json
+t_view_builds.c_backfilled_rows
+t_view_builds.c_safe_error
 ```
 
-- [ ] **Step 2: Add direct tRPC signing without a Gateway hop**
+删除 Routes、Devices、Topology Lock、Required、Build Lease、Build Cursor、Snapshot 和 Consumer 字段。`metadataSchemaVersionCompatible` 改为直接严格比较：
 
-Reuse the existing canonical HMAC envelope, but add a direct option constructor that does not resolve `MOOX_SERVICE_GATEWAY_TARGET`:
+```go
+if version != metadataSchemaVersion {
+    return errIncompatibleMetadataSchema
+}
+```
+
+- [ ] **步骤 5：运行生成、测试并提交**
+
+```bash
+make generate
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/bootstrap/metadata ./internal/service/metadata/sqlite)
+bash scripts/test-storage-boundary-contract.sh
+git add modules/storage/proto modules/storage/schema modules/storage/internal/bootstrap/metadata modules/storage/internal/service/metadata/sqlite scripts/test-storage-boundary-contract.sh
+git commit -m "refactor(storage): define field storage v4 contracts"
+```
+
+预期：生成代码中不存在旧 RPC 和旧字段，Schema v2/v3/v5 启动测试失败，v4 通过。
+
+### 任务 3：实现动态 Runtime Catalog 与 Metadata 规则
+
+**文件：**
+- 新建：`modules/storage/internal/catalog/runtime.go`
+- 新建：`modules/storage/internal/catalog/runtime_test.go`
+- 修改：`modules/storage/internal/service/metadata/store.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_dataset.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_store.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_view.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_test.go`
+- 删除：`modules/storage/internal/service/metadata/cache/store.go`
+- 删除：`modules/storage/internal/service/metadata/cache/store_test.go`
+- 修改：`modules/storage/internal/service/primarystore/metadata_catalog.go`
+- 修改：`modules/storage/internal/service/primarystore/metadata_catalog_test.go`
+
+**接口：**
+- 输入：Schema v4 DataNode、Dataset、Field、DatasetColumn、View。
+- 输出：不可变 Route、原子 DatasetSchema、幂等 Add Field 和 `keep_days` 校验。
+
+- [ ] **步骤 1：先写 Runtime Catalog 失败测试**
+
+覆盖以下测试：
+
+```go
+func TestRuntimeRoutesNeverChangeAfterLoad(t *testing.T)
+func TestAppendFieldPublishesImmutableSchema(t *testing.T)
+func TestInFlightRequestKeepsOldSchema(t *testing.T)
+func TestDatasetDataNodeCannotChangeAfterCreate(t *testing.T)
+func TestRecordKeepDaysMustBeZero(t *testing.T)
+func TestRecordViewKeepDaysMustBeZero(t *testing.T)
+```
+
+运行：
+
+```bash
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/catalog ./internal/service/metadata/sqlite)
+```
+
+预期：Runtime 包不存在或规则尚未实现而失败。
+
+- [ ] **步骤 2：实现最终 Runtime 类型**
+
+```go
+type DatasetKey struct{ SpaceID, DatasetID string }
+
+type DatasetRoute struct {
+    DataNodeID   string
+    ServiceTarget string
+}
+
+type DatasetSchema struct {
+    DataKind storagepb.DataKind
+    Fields   map[string]FieldSchema
+    Subjects map[string]struct{}
+    Freqs    map[string]struct{}
+    KeepDays uint32
+}
+
+type DatasetEntry struct {
+    Route    DatasetRoute
+    schema   atomic.Pointer[DatasetSchema]
+    updateMu sync.Mutex
+}
+```
+
+Route Map 启动后不变。Add Field 在同一 Dataset 锁内完成 SQLite Commit 和新 Schema Pointer Store，成功响应必须晚于两者。
+
+- [ ] **步骤 3：实现不可变 Dataset 与保存天数规则**
+
+`UpdateDataset` 永远拒绝修改 `data_node_id`。TimeSeries 允许 `keep_days >= 0`；Record 只允许 `0`。View 根据 Primary Dataset DataKind 使用同一规则。系统不比较 Dataset/View 的 `keep_days`。
+
+- [ ] **步骤 4：删除通用 Cache，改成 SQL 分页**
+
+所有 List 使用稳定 `ORDER BY`、`LIMIT`、`OFFSET`；测试插入三页数据并断言顺序、`has_more` 和 SQL 查询次数。禁止先加载全表再在 Go 中分页。
+
+- [ ] **步骤 5：运行测试并提交**
+
+```bash
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/catalog ./internal/service/metadata/... ./internal/service/primarystore)
+git add modules/storage/internal/catalog modules/storage/internal/service/metadata modules/storage/internal/service/primarystore
+git commit -m "refactor(storage): add immutable runtime catalog"
+```
+
+### 任务 4：建立三进程与直接 HMAC 调用边界
+
+**文件：**
+- 修改：`packages/gatewayauth/trpc.go`
+- 修改：`packages/gatewayauth/trpc_test.go`
+- 重命名：`modules/storage/config/storage.shard.yaml` -> `modules/storage/config/storage.node.yaml`
+- 重命名：`modules/storage/config/trpc_go.shard.yaml` -> `modules/storage/config/trpc_go.node.yaml`
+- 修改：`modules/storage/config/storage.primary.yaml`
+- 修改：`modules/storage/config/storage_view/trpc_go.yaml`
+- 修改：`modules/storage/internal/config/loader.go`
+- 修改：`modules/storage/internal/config/loader_test.go`
+- 修改：`modules/storage/cmd/server/main.go`
+- 修改：`modules/storage/cmd/server/view_runtime.go`
+- 新建：`modules/storage/internal/service/primarystore/datanodes.go`
+- 新建：`modules/storage/internal/service/primarystore/datanodes_test.go`
+
+**接口：**
+- 输入：Runtime Catalog Route 和生成的 DataNode Client。
+- 输出：`primary/node/view` 三角色、直接签名 RPC 和按 Node 复用的 Client Pool。
+
+- [ ] **步骤 1：先写进程边界测试**
+
+测试必须证明：
+
+```text
+role 只接受 primary、node、view
+primary 不嵌入 DataNode
+node 必须配置 node_id 和 Pebble Path
+view 不打开 Metadata SQLite 或 Pebble
+DataNode 不进入 Admin Gateway
+Storage 内部 Client 不读取 MOOX_SERVICE_GATEWAY_TARGET
+```
+
+- [ ] **步骤 2：实现直接 HMAC Client**
 
 ```go
 func NewDirectTRPCClientOptions(target string, credentials Credentials) []client.Option
 ```
 
-Add a server filter that verifies serialized request body, caller, callee and method against a configured key resolver. DataNode write methods allow only `storage-primary`; Snapshot methods allow only `storage-view`; PrimaryStoreScan allows `storage-view` and `archive`.
+签名覆盖调用方、被调用方、方法和确定性序列化请求体。DataNode `WriteFields/ReadFields` 只接受 `storage-primary`；`CleanupExpiredBuckets` 只接受 `storage-primary` 维护身份。
 
-- [ ] **Step 3: Replace the single Primary client with a DataNode client pool**
-
-Implement:
+- [ ] **步骤 3：实现 DataNode Client Pool**
 
 ```go
 type DataNodeClientPool interface {
@@ -456,496 +422,561 @@ type DataNodeClientPool interface {
 }
 ```
 
-The pool is built from immutable Runtime Catalog nodes, lazily creates direct tRPC proxies by `service_target`, and never accepts an endpoint from a request. Unit tests must prove two Dataset IDs resolve to different clients and the same `node_id` reuses one proxy.
+Pool 只从 Runtime Catalog 读取 `service_target`，请求不得携带 Endpoint。相同 Node 复用 Proxy，不同 Dataset 可路由到不同 Node。
 
-- [ ] **Step 4: Register only role-owned services**
-
-`primary` registers Metadata, PrimaryStore and PrimaryStoreScan; `node` registers DataNode; `view` registers DataView and ViewIndex and starts both View consumers. Remove embedded DataNode creation from PrimaryStore. Single-machine development still launches three processes against loopback targets.
-
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 4：运行测试并提交**
 
 ```bash
 env GOCACHE=/tmp/moox-gocache go test -count=1 ./packages/gatewayauth
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/config ./cmd/server ./internal/service/primarystore)
 git add packages/gatewayauth modules/storage/config modules/storage/internal/config modules/storage/cmd/server modules/storage/internal/service/primarystore
-git commit -m "refactor(storage): split primary node and view roles"
+git commit -m "refactor(storage): separate storage process roles"
 ```
 
-### Task 5: Make PrimaryStore the Sole Business Schema Boundary
+### 任务 5：实现字段级 Pebble Key 与不可变事实版本
 
-**Files:**
-- Modify: `modules/storage/internal/service/primarystore/schema/validator.go`
-- Modify: `modules/storage/internal/service/primarystore/schema/validator_test.go`
-- Modify: `modules/storage/internal/service/primarystore/data.go`
-- Modify: `modules/storage/internal/service/primarystore/data_test.go`
-- Modify: `modules/storage/internal/service/primarystore/factreader.go`
-- Modify: `modules/storage/internal/service/primarystore/factreader_test.go`
-- Modify: `modules/storage/internal/service/primarystore/errors.go`
-- Modify: `modules/storage/internal/retinfo/retinfo.go`
-- Modify: `modules/storage/internal/retinfo/retinfo_test.go`
-- Delete: `modules/storage/internal/service/primarystore/shardrouter/*`
+**文件：**
+- 重命名：`modules/storage/internal/service/datashard` -> `modules/storage/internal/service/datanode`
+- 修改：`modules/storage/internal/service/datanode/contracts/store.go`
+- 修改：`modules/storage/internal/service/datanode/contracts/store_test.go`
+- 修改：`modules/storage/internal/service/datanode/pebble/key.go`
+- 修改：`modules/storage/internal/service/datanode/pebble/store.go`
+- 修改：`modules/storage/internal/service/datanode/pebble/store_test.go`
+- 重命名：`modules/storage/internal/service/datanode/pebble/committed.go` -> `modules/storage/internal/service/datanode/pebble/event.go`
+- 修改：`modules/storage/internal/service/datanode/pebble/outbox.go`
+- 修改：`modules/storage/internal/service/datanode/pebble/outbox_test.go`
+- 修改：`modules/storage/internal/service/datanode/service.go`
+- 修改：`modules/storage/internal/service/datanode/service_test.go`
 
-**Interfaces:**
-- Consumes: `catalog.Runtime.Dataset(spaceID,datasetID)` and `DataNodeClientPool.Client(nodeID)`.
-- Produces: one-Dataset reads/writes with typed validation errors.
+**接口：**
+- 输入：PrimaryStore 已校验的 `WriteFieldsReq`。
+- 输出：字段级 Key、RowMarker Hash、不可变幂等和原子 `DatasetFieldsChanged` Outbox。
 
-- [ ] **Step 1: Add the complete failing validation matrix**
+- [ ] **步骤 1：先写物理 Key 契约测试**
 
-Tests must cover empty batch, more than 1,000 rows, more than 4 MiB public request, more than 1 MiB per row, nil key, mixed Dataset, duplicate row key, duplicate Field ID, unknown field, wrong `value_type`, wrong TypedValue oneof, invalid TIME, invalid JSON and NaN/Inf. A row omitting every Dataset field must pass because all fields are optional.
+测试固定字节顺序：
 
-- [ ] **Step 2: Validate only through the Runtime DatasetSchema**
+```text
+TimeSeries 同一 UTC 日桶连续
+跨日进入不同 Bucket Prefix
+Field Tag 固定为 0x01
+Attribute Tag 固定为 0x02
+同名 Field/Attribute Key 不同
+Record 按 record_id/version 字符顺序排列
+Prefix 边界不受 |、%、NUL 和 UTF-8 影响
+```
 
-Implement exact entry points:
+Tuple Codec 使用长度前缀编码；测试不能只比较可读字符串。
+
+- [ ] **步骤 2：先写不可变版本测试**
+
+覆盖：
+
+```text
+首次 WriteFields 创建 Marker/Fields/Attributes
+相同完整内容重试不增加 Sequence 和 Outbox
+同 Key 改一个值返回 FACT_VERSION_IMMUTABLE
+同 Key 增加原来缺失的 Field 也返回 FACT_VERSION_IMMUTABLE
+Field 和 Attribute 同名可同时存在
+失败的 Payload 校验提交零 Key
+```
+
+- [ ] **步骤 3：实现 Marker Hash 与字段 Batch**
 
 ```go
-func (v *Validator) ValidateTimeSeriesBatch(rows []*storagepb.TimeSeriesRow, schema *catalog.DatasetSchema) error
-func (v *Validator) ValidateRecordBatch(rows []*storagepb.RecordRow, schema *catalog.DatasetSchema) error
+type RowMarker struct {
+    Key         *storagepb.FactKey
+    ContentHash [32]byte
+}
 ```
 
-Do not query SQLite per row. Do not perform Required-after-Merge checks. Validation stops before DataNode RPC.
+Hash 输入必须是确定性编码后的完整 Key、排序 Field 和排序 Attribute。DataNode 在 Row Lock 下只读取 Marker；不存在时把 Marker 和所有独立值加入 Batch，存在时只比较 Hash。
 
-- [ ] **Step 3: Delete multi-target routing and aggregation**
+- [ ] **步骤 4：原子提交 Sequence、Progress 和事件**
 
-Each public request resolves one Dataset entry, obtains one DataNode client and sends one RPC. Dataset scans delegate one bounded cursor to one DataNode. Remove target grouping, weighted routing, Hash/Pattern matching, 10,000-row cross-target aggregation and partial `written_keys` caused by multi-target writes.
-
-- [ ] **Step 4: Return stable safe errors**
-
-Use typed errors for `DATA_NODE_UNAVAILABLE`, `DATASET_NOT_ASSIGNED`, `FIELD_IMMUTABLE`, `FIELD_NOT_FOUND`, `FIELD_TYPE_MISMATCH`, `BATCH_TOO_LARGE` and `OUTBOX_BACKPRESSURE`. `RetInfo.Msg` contains a stable safe message; the wrapped cause is logged with Node/Dataset identifiers and is never copied to the client. No classification may use `strings.Contains(err.Error())`.
-
-- [ ] **Step 5: Run tests and commit**
-
-```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/primarystore/... ./internal/retinfo)
-git add modules/storage/internal/service/primarystore modules/storage/internal/retinfo
-git commit -m "refactor(storage): centralize dataset field validation"
-```
-
-### Task 6: Implement Atomic DataNode Facts, Progress and Outbox
-
-**Files:**
-- Rename: `modules/storage/internal/service/datashard` -> `modules/storage/internal/service/datanode`
-- Modify: `modules/storage/internal/service/datanode/contracts/store.go`
-- Modify: `modules/storage/internal/service/datanode/pebble/key.go`
-- Modify: `modules/storage/internal/service/datanode/pebble/store.go`
-- Modify: `modules/storage/internal/service/datanode/pebble/committed.go`
-- Modify: `modules/storage/internal/service/datanode/pebble/outbox.go`
-- Modify: `modules/storage/internal/service/datanode/service.go`
-- Rename: `modules/storage/internal/service/datashard/contracts/store_test.go` -> `modules/storage/internal/service/datanode/contracts/store_test.go`
-- Rename: `modules/storage/internal/service/datashard/pebble/store_test.go` -> `modules/storage/internal/service/datanode/pebble/store_test.go`
-- Rename: `modules/storage/internal/service/datashard/pebble/outbox_test.go` -> `modules/storage/internal/service/datanode/pebble/outbox_test.go`
-- Rename: `modules/storage/internal/service/datashard/service_test.go` -> `modules/storage/internal/service/datanode/service_test.go`
-- Rename: `modules/storage/internal/service/datashard/outbox_relay_test.go` -> `modules/storage/internal/service/datanode/outbox_relay_test.go`
-- Rename: `modules/storage/internal/service/datashard/local_test.go` -> `modules/storage/internal/service/datanode/local_test.go`
-- Rename: `modules/storage/internal/service/datashard/remote_test.go` -> `modules/storage/internal/service/datanode/remote_test.go`
-- Modify: `modules/storage/internal/config/loader.go`
-- Modify: `modules/storage/internal/observability/view_metrics.go`
-
-**Interfaces:**
-- Consumes: schema-validated `MergeRowsReq`, configured `node_id`, JetStream `max_payload_bytes`.
-- Produces: `DatasetProgress.last_committed_sequence`, ordered RowsCommitted Outbox and backpressure errors.
-
-- [ ] **Step 1: Write the atomicity and Schema-ignorance tests**
-
-Prove in Pebble tests:
+使用 `commitMu` 包住 Sequence 分配、最终事件编码、Payload 校验和 Batch Commit。一个成功 Batch 同时包含：
 
 ```text
-fact + node_sequence + dataset progress + outbox commit together
-failed deterministic message encoding commits none of them
-oversized final MooxMessage commits none of them
-two Datasets share one increasing node_sequence but keep separate progress
-delete updates sequence, progress and outbox atomically
-DataNode accepts a structurally valid field without loading Field metadata
-```
-
-- [ ] **Step 2: Use final Pebble keys**
-
-```text
-__meta/node_id
+RowMarker + Field + Attribute
 __meta/node_sequence
-__meta/dataset_progress/<escaped-dataset-id>
-__outbox/<big-endian-node-sequence>
+__meta/dataset_progress/<dataset-id>
+__outbox/<big-endian-sequence>
 ```
 
-The Dataset Progress key remains after all rows are deleted. Opening a directory with a different `node_id` fails.
+事件只在首次创建版本时产生；没有 Delete Operation。
 
-- [ ] **Step 3: Validate only generic structure at DataNode**
-
-DataNode checks request `node_id`, one Dataset per batch, key identity, supported DataKind, duplicate Field IDs, valid TypedValue wire structure, batch size and final payload. It does not read Metadata, compare value types, enforce Required, or store a Schema revision.
-
-- [ ] **Step 4: Encode the final event before committing**
-
-Merge old and incoming rows, assign the new Node Sequence to the complete facts and event, deterministically marshal `RowsCommitted` and `MooxMessage`, call `jetstream.ValidateMessage(msg, maxPayloadBytes)`, then stage facts, progress and Outbox in one Pebble Batch.
-
-- [ ] **Step 5: Keep Outbox recovery strict**
-
-The relay retries the head with bounded exponential backoff and deletes only the contiguous published prefix. When Entries, Bytes or Oldest Age reaches its configured bound, new fact writes return `OUTBOX_BACKPRESSURE`. Provide read-only stats and retry-now; do not add skip/delete operations.
-
-- [ ] **Step 6: Run tests and commit**
+- [ ] **步骤 5：运行测试和基准并提交**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/datanode/...)
-git add modules/storage/internal/service/datanode modules/storage/internal/config modules/storage/internal/observability
-git commit -m "refactor(storage): make datanode commits atomic"
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/datanode/...)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -run '^$' -bench 'Benchmark(FieldKey|ImmutableWrite)' -benchmem ./internal/service/datanode/pebble)
+git add modules/storage/internal/service/datanode
+git commit -m "refactor(storage): store immutable fields in pebble"
 ```
 
-### Task 7: Add Bounded DataNode Snapshots
+基准必须至少覆盖 8 Field 完整 K 线、100 Field 因子版本、同内容幂等和 1/3 Field 精确读取；记录结果但不保留双布局生产开关。
 
-**Files:**
-- Create: `modules/storage/internal/service/datanode/snapshot.go`
-- Create: `modules/storage/internal/service/datanode/snapshot_test.go`
-- Modify: `modules/storage/internal/service/datanode/service.go`
-- Modify: `modules/storage/internal/service/datanode/client.go`
-- Modify: `modules/storage/internal/service/primarystore/factreader.go`
-- Modify: `modules/storage/internal/service/primarystore/factreader_test.go`
+### 任务 6：实现必须指定 Field 的精确读取
 
-**Interfaces:**
-- Consumes: Pebble facts and Dataset Progress.
-- Produces: `BeginNodeSnapshot`, `ScanNodeSnapshot`, `EndNodeSnapshot` with TTL and bounded registry.
+**文件：**
+- 修改：`modules/storage/internal/service/datanode/pebble/store.go`
+- 修改：`modules/storage/internal/service/datanode/pebble/store_test.go`
+- 修改：`modules/storage/internal/service/datanode/service.go`
+- 修改：`modules/storage/internal/service/datanode/service_test.go`
+- 修改：`modules/storage/internal/service/primarystore/factreader.go`
+- 修改：`modules/storage/internal/service/primarystore/factreader_test.go`
+- 修改：`modules/storage/internal/service/primarystore/data.go`
+- 修改：`modules/storage/internal/service/primarystore/data_test.go`
+- 修改：`modules/storage/internal/service/primarystore/key_adapter.go`
 
-- [ ] **Step 1: Write snapshot consistency tests**
+**接口：**
+- 输入：FactKey、非空 Field ID、可选 Attribute Key。
+- 输出：精确 Field 结果、`row_exists` 和 Record 最新字符 Version。
 
-Create a Snapshot at progress 10, commit progress 11 afterward, then prove Snapshot Scan returns only state through 10 and reports progress 10. Also cover unknown ID, expired ID, wrong Node, wrong Dataset, maximum open snapshots and idempotent End.
+- [ ] **步骤 1：先写读取边界测试**
 
-- [ ] **Step 2: Implement an in-process Snapshot registry**
+覆盖：
 
-```go
-type SnapshotRegistry struct {
-    mu sync.Mutex
-    items map[string]*snapshotEntry
-    ttl time.Duration
-    maxOpen int
-}
+```text
+field_ids 为空被拒绝
+只返回请求 Field，不读取其他 Field
+缺失 Field 不等于行不存在
+同名 Field/Attribute 分别返回
+Record 指定 Version 精确读取
+Record Version 为空返回字符顺序最大版本
+Version 1、2、10 的最大值是 2
+不存在的 record_id 返回 row_exists=false
 ```
 
-Default `snapshot_ttl=10m`, `max_open_snapshots=4`. Begin creates one Pebble Snapshot per DataNode request and reads requested Dataset Progress from that same Snapshot. Cursor is opaque and valid only for that live `snapshot_id`; it is never stored in Metadata.
+- [ ] **步骤 2：实现 DataNode ReadFields**
 
-- [ ] **Step 3: Expose Snapshot only to storage-view identity**
+精确 Version 对每个请求 Field 生成 Point Key 并批量读取；使用 Marker 判断 `row_exists`。Record Version 为空时在 `record_id` Prefix 内 `SeekLT(nextPrefix(prefix))`，跳过 Field/Attribute Suffix 后得到最大 Version，再读取明确 Field。
 
-Apply the Service HMAC allowlist from Task 4. Normal callers and `storage-primary` write identity cannot open Snapshot RPC unless explicitly granted the maintenance method set.
+- [ ] **步骤 3：让 PrimaryStore 组装业务响应**
 
-- [ ] **Step 4: Run tests and commit**
+PrimaryStore 从 Runtime Catalog 取得调用方需要的字段：显式字段列表直接校验；“当前全部生效字段”由 PrimaryStore 展开成明确 Field ID 后调用 DataNode。TimeSeries 时间范围按 Metadata Frequency 生成有限 FactKey，超过 Key/跨度上限返回 `BATCH_TOO_LARGE`。Record 不提供任意范围读取。
+
+- [ ] **步骤 4：删除普通扫描和完整行内部接口**
+
+删除 `ReadRows`、`ScanRows`、`FactPrefixScanner`、Snapshot Reader 和所有调用方。Archive/Factor 需要时序范围时必须通过 PrimaryStore 的有限 Key 展开，不得直连 DataNode Scan。
+
+- [ ] **步骤 5：运行测试并提交**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/datanode ./internal/service/primarystore)
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/datanode/... ./internal/service/primarystore/...)
 git add modules/storage/internal/service/datanode modules/storage/internal/service/primarystore
-git commit -m "feat(storage): add bounded datanode snapshots"
+git commit -m "refactor(storage): require exact field reads"
 ```
 
-### Task 8: Configure Interest JetStream and Two Fixed View Consumers
+### 任务 7：实现独立的 TimeSeries 时间桶清理
 
-**Files:**
-- Modify: `modules/eventbus/internal/config/config_types.go`
-- Modify: `modules/eventbus/internal/config/config_validation.go`
-- Modify: `modules/eventbus/internal/config/config_defaults.go`
-- Modify: `modules/eventbus/internal/config/config_test.go`
-- Modify: `modules/eventbus/internal/registry/registry.go`
-- Modify: `modules/eventbus/internal/registry/registry_test.go`
-- Modify: `modules/eventbus/config/app.yaml`
-- Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
-- Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/bus.go`
-- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus.go`
-- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/bus_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus_test.go`
-- Modify: `modules/storage/internal/bootstrap/eventbus/factory.go`
-- Modify: `modules/storage/internal/bootstrap/eventbus/factory_test.go`
+**文件：**
+- 新建：`modules/storage/internal/service/datanode/pebble/cleanup.go`
+- 新建：`modules/storage/internal/service/datanode/pebble/cleanup_test.go`
+- 修改：`modules/storage/internal/service/datanode/service.go`
+- 修改：`modules/storage/internal/service/datanode/service_test.go`
+- 新建：`modules/storage/internal/service/primarystore/cleanup.go`
+- 新建：`modules/storage/internal/service/primarystore/cleanup_test.go`
+- 修改：`modules/storage/internal/config/loader.go`
+- 修改：`modules/storage/internal/config/loader_test.go`
+- 修改：`modules/storage/internal/observability/view_metrics.go`
+- 修改：`modules/storage/internal/observability/view_metrics_test.go`
 
-**Interfaces:**
-- Consumes: `MOOX_STORAGE`, RowsCommitted subjects.
-- Produces: controllable `storage_view_active` and `storage_view_rebuild` subscriptions.
+**接口：**
+- 输入：TimeSeries Dataset `keep_days`、当前 UTC 日和内部维护身份。
+- 输出：按完整 UTC 日桶清理的 Pebble 范围和独立清理指标。
 
-- [ ] **Step 1: Add failing EventBus registry tests**
+- [ ] **步骤 1：先写清理测试**
 
-Assert `MOOX_STORAGE` reconciles to FileStorage, one replica, `InterestPolicy`, `DiscardNew`, `moox.storage.>` and both fixed Durable Consumers with explicit ACK, DeliverAll, MaxDeliver `-1`. Existing stream with LimitsPolicy or DiscardOld must fail startup with a safe instruction to recreate the stream; do not mutate retention in place.
+固定当前时间 `2026-07-19T12:00:00Z`，覆盖：
 
-- [ ] **Step 2: Extend Stream config explicitly**
-
-`StreamConfig` accepts `retention: interest` and `discard: new`; registry maps them to `nats.InterestPolicy` and `nats.DiscardNew`. Other streams retain their declared policies.
-
-- [ ] **Step 3: Make Durable identity an explicit subscriber option**
-
-Replace the hard-coded consumer with:
-
-```go
-type SubscriptionControl interface {
-    Pause(context.Context) error
-    Resume(context.Context) error
-    Drain(context.Context) error
-    Close() error
-}
+```text
+keep_days=0 不清理
+keep_days=30 只清理 2026-06-19 之前完整日桶
+边界日桶完整保留
+Record 调用被拒绝
+清理不改变 Node Sequence/Dataset Progress/Outbox
+Field/Attribute/Marker 同时不可见
 ```
 
-Create one SubscriberBus bound to `storage_view_active` and another to `storage_view_rebuild`. Pause stops new Fetch calls, Drain waits for handlers already delivered, and Resume restarts pulling from the same Durable state.
+- [ ] **步骤 2：实现 CleanupExpiredBuckets**
 
-- [ ] **Step 4: Keep Rebuild Consumer caught up while idle**
+PrimaryStore 只传明确 Dataset 和 `expire_before_day`；DataNode 验证请求为 UTC 日期，对每个完整 Bucket Prefix 执行 `DeleteRange`，提交后异步 `Compact(start,end,true)`。RPC 不允许浏览器、Collector 或普通服务调用。
 
-When no Build exists, Rebuild handler ACKs valid RowsCommitted without applying it. Build start pauses and drains this consumer before opening Snapshots, preventing an idle Durable from pinning all InterestPolicy messages forever.
+- [ ] **步骤 3：证明与 View.keep_days 无耦合**
 
-- [ ] **Step 5: Update EventBus credentials**
+测试中设置 Dataset `keep_days=7`、View `keep_days=30`，运行 Pebble Cleanup 后断言 Metadata 不修改 View 配置、不启动 View Build；反向触发 View Build 也不得调用 Cleanup RPC。
 
-Grant `storage-view` only Consumer INFO/NEXT/ACK subjects for `storage_view_active` and `storage_view_rebuild`. DataNode publisher credentials publish RowsCommitted but cannot fetch either consumer. Tests must inspect generated YAML without printing generated secrets.
+- [ ] **步骤 4：运行测试并提交**
 
-- [ ] **Step 6: Run tests and commit**
+```bash
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/datanode/... ./internal/service/primarystore/... ./internal/observability)
+git add modules/storage/internal/service/datanode modules/storage/internal/service/primarystore modules/storage/internal/config modules/storage/internal/observability
+git commit -m "feat(storage): clean expired timeseries buckets"
+```
+
+### 任务 8：把 JetStream 收敛为一个 View Consumer
+
+**文件：**
+- 修改：`modules/eventbus/internal/config/config_types.go`
+- 修改：`modules/eventbus/internal/config/config_validation.go`
+- 修改：`modules/eventbus/internal/config/config_defaults.go`
+- 修改：`modules/eventbus/internal/config/config_test.go`
+- 修改：`modules/eventbus/internal/registry/registry.go`
+- 修改：`modules/eventbus/internal/registry/registry_test.go`
+- 修改：`modules/eventbus/config/app.yaml`
+- 修改：`modules/admin/cmd/cli/eventbus_credentials.go`
+- 修改：`modules/admin/cmd/cli/eventbus_credentials_test.go`
+- 修改：`modules/storage/internal/bootstrap/eventbus/factory.go`
+- 修改：`modules/storage/internal/bootstrap/eventbus/factory_test.go`
+- 修改：`modules/storage/internal/service/viewbuilder/eventconsumer/bus.go`
+- 修改：`modules/storage/internal/service/viewbuilder/eventconsumer/bus_test.go`
+- 修改：`modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus.go`
+- 修改：`modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus_test.go`
+
+**接口：**
+- 输入：`MOOX_STORAGE` 和 `DatasetFieldsChanged` Subject。
+- 输出：唯一 Durable `storage_view` 和真实 ACK/NAK 生命周期。
+
+- [ ] **步骤 1：先写 Stream/Consumer 契约测试**
+
+断言：
+
+```text
+MOOX_STORAGE = FileStorage + 1 Replica + InterestPolicy + DiscardNew
+只存在 storage_view 一个 View Durable
+AckExplicit + DeliverAll + MaxDeliver=-1
+配置中出现 storage_view_active/storage_view_rebuild 时失败
+```
+
+- [ ] **步骤 2：更新最小权限凭证**
+
+`storage-view` 只获得 `storage_view` 的 INFO/NEXT/ACK 权限。DataNode Publisher 只能发布 Storage Subject，不能 Fetch View Consumer。测试读取生成 YAML，但不得输出 Token 或 Password。
+
+- [ ] **步骤 3：修复 ACK 真实完成语义**
+
+Event Handler 必须等待 ViewBuilder 返回最终持久化结果；入队成功不等于 ACK。Active Apply 错误返回 NAK，相同 Node Sequence 重投后 Lane 可以恢复。
+
+- [ ] **步骤 4：运行测试并提交**
 
 ```bash
 (cd modules/eventbus && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/config ./internal/registry)
 (cd modules/admin && env GOCACHE=/tmp/moox-gocache go test -count=1 ./cmd/cli)
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/bootstrap/eventbus ./internal/service/viewbuilder/eventconsumer)
 git add modules/eventbus modules/admin/cmd/cli/eventbus_credentials.go modules/admin/cmd/cli/eventbus_credentials_test.go modules/storage/internal/bootstrap/eventbus modules/storage/internal/service/viewbuilder/eventconsumer
-git commit -m "feat(storage): add fixed view consumers"
+git commit -m "refactor(storage): use one view consumer"
 ```
 
-### Task 9: Make ViewIndex Source Checkpoints and Revisions Atomic
+### 任务 9：实现 ViewIndex Source Progress 与 A/B 物理槽位
 
-**Files:**
-- Modify: `modules/storage/internal/service/viewindex/engine.go`
-- Modify: `modules/storage/internal/service/viewindex/client.go`
-- Modify: `modules/storage/internal/service/viewindex/batch_write.go`
-- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_apply.go`
-- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_schema.go`
-- Modify: `modules/storage/internal/service/viewindex/bleve/index.go`
-- Modify: `modules/storage/internal/service/viewindex/engine_test.go`
-- Modify: `modules/storage/internal/service/viewindex/client_test.go`
-- Modify: `modules/storage/internal/service/viewindex/batch_write_test.go`
-- Modify: `modules/storage/internal/service/viewindex/duckdb/view_store_test.go`
-- Modify: `modules/storage/internal/service/viewindex/bleve/index_test.go`
-- Modify: `modules/storage/test/view_index_switch_test.go`
+**文件：**
+- 修改：`modules/storage/internal/service/viewindex/engine.go`
+- 修改：`modules/storage/internal/service/viewindex/engine_test.go`
+- 修改：`modules/storage/internal/service/viewindex/batch_write.go`
+- 修改：`modules/storage/internal/service/viewindex/batch_write_test.go`
+- 修改：`modules/storage/internal/service/viewindex/client.go`
+- 修改：`modules/storage/internal/service/viewindex/client_test.go`
+- 新建：`modules/storage/internal/service/viewindex/slots.go`
+- 新建：`modules/storage/internal/service/viewindex/slots_test.go`
+- 新建：`modules/storage/internal/service/viewindex/backfill.go`
+- 新建：`modules/storage/internal/service/viewindex/backfill_test.go`
+- 修改：`modules/storage/internal/service/viewindex/duckdb/index_manager.go`
+- 修改：`modules/storage/internal/service/viewindex/duckdb/index_manager_test.go`
+- 修改：`modules/storage/internal/service/viewindex/duckdb/view_store_apply.go`
+- 修改：`modules/storage/internal/service/viewindex/duckdb/view_store_test.go`
+- 修改：`modules/storage/internal/service/viewindex/bleve/index.go`
+- 修改：`modules/storage/internal/service/viewindex/bleve/index_test.go`
 
-**Interfaces:**
-- Consumes: `ViewIndexApplyBatch` with `view_revision` and Source Checkpoint updates.
-- Produces: atomic row/checkpoint/range Apply and idempotent stale-event behavior.
+**接口：**
+- 输入：`ViewIndexApplyBatch`、View ID、Slot A/B 和写入模式。
+- 输出：独立 Source Progress、`LIVE_WRITE/BACKFILL` 和可删除的物理 DB Slot。
 
-- [ ] **Step 1: Add the cross-engine checkpoint contract tests**
+- [ ] **步骤 1：先写跨引擎 Progress 契约测试**
 
-Run the same table against DuckDB and Bleve:
+DuckDB/Bleve 共用测试表：
 
 ```text
-Apply row + checkpoint commits together
-wrong expected checkpoint commits neither
-same sequence returns success without row mutation
-lower sequence returns success without row mutation
-Node sequence gaps caused by other Datasets are accepted
-wrong View revision is rejected
-MERGE missing row commits neither row nor checkpoint
-REPLACE creates the complete row and advances checkpoint
-DELETE and checkpoint commit together
+行与 Progress 原子提交
+sequence <= current 幂等成功且不改行
+sequence > current 允许跨其他 Dataset Sequence
+错误 View Revision 提交零数据
+协议没有 Expected Sequence
 ```
 
-- [ ] **Step 2: Use Dataset-aware Source Checkpoint keys**
-
-Checkpoint identity is `node_id + NUL + dataset_id`. CAS requires `expected == stored` and `last > expected`; it does not require `last == expected + 1`. A stale message bypasses CAS and returns success without touching rows or range.
-
-- [ ] **Step 3: Remove Schema Hash and Required columns from Apply**
-
-Physical Index metadata stores View Revision and Columns. `ViewIndexApplyBatch` carries row writes, checkpoint updates, revision and optional range update only. DuckDB and Bleve must have identical semantics.
-
-- [ ] **Step 4: Run tests and commit**
-
-```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/viewindex/... ./test -run 'TestViewIndex')
-git add modules/storage/internal/service/viewindex modules/storage/test/view_index_switch_test.go
-git commit -m "refactor(storage): checkpoint views by dataset source"
-```
-
-### Task 10: Rebuild the Active View Consumer with Recoverable Node Lanes
-
-**Files:**
-- Modify: `modules/storage/internal/service/viewbuilder/service.go`
-- Modify: `modules/storage/internal/service/viewbuilder/options.go`
-- Modify: `modules/storage/internal/service/viewbuilder/apply.go`
-- Modify: `modules/storage/internal/service/viewbuilder/checkpoint.go`
-- Modify: `modules/storage/internal/service/viewbuilder/recovery.go`
-- Modify: `modules/storage/internal/service/viewbuilder/deletes.go`
-- Modify: `modules/storage/internal/service/viewbuilder/time_series.go`
-- Modify: `modules/storage/internal/service/viewbuilder/record.go`
-- Modify: `modules/storage/internal/service/viewbuilder/service_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/options_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/apply_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/completion_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/source_reader_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/time_series_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/record_test.go`
-- Modify: `modules/storage/test/view_derivation_reliability_test.go`
-
-**Interfaces:**
-- Consumes: Active Consumer, Metadata active handles, PrimaryStore full-source reads, ViewIndex Apply.
-- Produces: bounded per-Node active lanes that ACK only durable outcomes.
-
-- [ ] **Step 1: Reproduce the old silent-loss and permanent-poison failures**
-
-Add tests where ViewIndex first returns a transient error after delivery, then succeeds on redelivery of the same Node Sequence. Assert the first delivery NAKs, later Node events do not pass it, the same Sequence retry succeeds, the lane unblocks, and a failure on Node B does not block Node A.
-
-- [ ] **Step 2: Replace permanent `blockedByShard` with bounded Node lanes**
-
-Each Node lane owns a bounded queue and one in-order worker. It records the failed Sequence only until that same Sequence succeeds. Queue count and worker count are bounded by configuration; no goroutine is created per event.
-
-- [ ] **Step 3: Apply only Active Indexes**
-
-For each event, load the current immutable Active Handle set. For every View depending on its Dataset:
-
-1. If event Sequence is at/below that Index checkpoint, mark this View skipped.
-2. Map only the changed Dataset's owned columns and MERGE.
-3. If MERGE reports missing row, read every source Dataset for the ViewRowKey and retry a complete REPLACE without advancing checkpoint on the failed attempt.
-4. Apply Primary/secondary DELETE semantics.
-5. Return success only after all affected Views applied or skipped.
-
-The Active path never discovers or writes BUILDING/CATCHING_UP Indexes.
-
-- [ ] **Step 4: Verify ACK lifecycle end to end**
-
-The event handler returns the real completion error to `processDelivery`; enqueue success alone is not ACK success. Correct the Reliability test so the first Apply genuinely persists before any injected post-persist error scenario.
-
-- [ ] **Step 5: Run tests and commit**
-
-```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/viewbuilder ./test -run 'TestViewDerivation')
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/viewbuilder)
-git add modules/storage/internal/service/viewbuilder modules/storage/test/view_derivation_reliability_test.go
-git commit -m "fix(storage): make active view lanes recoverable"
-```
-
-### Task 11: Replace Lease/Cursor Maintenance with One Snapshot Rebuild
-
-**Files:**
-- Create: `modules/storage/internal/service/viewbuilder/build.go`
-- Create: `modules/storage/internal/service/viewbuilder/build_test.go`
-- Modify: `modules/storage/internal/service/dataview/maintenance.go`
-- Modify: `modules/storage/internal/service/dataview/maintenance_test.go`
-- Delete: `modules/storage/internal/service/dataview/build_cursor.go`
-- Delete: `modules/storage/internal/service/dataview/build_cursor_test.go`
-- Modify: `modules/storage/internal/service/dataview/schedule.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
-
-**Interfaces:**
-- Consumes: Rebuild Consumer control, DataNode Snapshot clients, ViewIndex, Metadata Build state.
-- Produces: one global non-resumable `BUILDING -> CATCHING_UP -> ACTIVE/FAILED` workflow.
-
-- [ ] **Step 1: Write the rebuild state-machine tests**
-
-Cover one global Build, idle Rebuild ACK, pause/drain before Snapshot, multi-Node Snapshot vector, full REPLACE backfill, baseline checkpoint initialization, discard through Snapshot barrier, catch-up beyond barrier, Snapshot expiry, process restart and build failure cleanup.
-
-- [ ] **Step 2: Simplify persistent Build state**
-
-Metadata stores no owner, lease, cursor or resumable Snapshot ID. On `storage-view` startup, any BUILDING/CATCHING_UP row becomes FAILED, its inactive Index is removed, and a later scheduler run starts a new Build. ACTIVE retains the last successful Build summary until the next Build replaces it.
-
-- [ ] **Step 3: Implement the exact Snapshot flow**
+- [ ] **步骤 2：先写 Backfill 不覆盖测试**
 
 ```text
-lock global build mutex
-pause and drain storage_view_rebuild
-open one Snapshot per source DataNode
-read each Dataset's last_committed_sequence from that Snapshot
-REPLACE all retained source rows into the inactive Index
-set each physical Index Source Checkpoint to its Snapshot sequence
-resume storage_view_rebuild
-ACK and ignore source events <= Snapshot sequence
-apply later MERGE/DELETE until caught up
-always End every Snapshot
+LIVE_WRITE 先写 close=101，BACKFILL close=100 后仍为 101
+BACKFILL 先写 volume=20，LIVE_WRITE close=101 后两列都存在
+BACKFILL 可以填充 NULL/缺失列
+BACKFILL 不推进 Source Progress
 ```
 
-Do not persist the scan cursor. A crash, lost Snapshot or TTL expiration marks FAILED and deletes the inactive Index.
-
-- [ ] **Step 4: Keep Build selection deterministic**
-
-Select the first active View where `desired_view_revision > active_view_revision`, ordered by `(space_id, view_id)`. One scheduler tick advances only the global current Build; it never starts a second Build.
-
-- [ ] **Step 5: Run tests and commit**
-
-```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/dataview ./internal/service/viewbuilder ./internal/service/metadata/sqlite)
-git add modules/storage/internal/service/dataview modules/storage/internal/service/viewbuilder modules/storage/internal/service/metadata/sqlite
-git commit -m "refactor(storage): rebuild views from datanode snapshots"
-```
-
-### Task 12: Implement the Two-Second Query-Safe Activation
-
-**Files:**
-- Create: `modules/storage/internal/service/dataview/active_handle.go`
-- Create: `modules/storage/internal/service/dataview/active_handle_test.go`
-- Modify: `modules/storage/internal/service/dataview/service.go`
-- Modify: `modules/storage/internal/service/dataview/service_test.go`
-- Modify: `modules/storage/internal/service/viewbuilder/build.go`
-- Modify: `modules/storage/internal/service/viewbuilder/build_test.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
-- Modify: `modules/storage/internal/service/metadata/sqlite/crud_test.go`
-- Modify: `modules/storage/test/view_index_switch_test.go`
-
-**Interfaces:**
-- Consumes: ready inactive Index, Active/Rebuild Consumer controls, latest Dataset Progress Vector.
-- Produces: idempotent Metadata CAS and atomic in-memory Active Handle.
-
-- [ ] **Step 1: Write activation race tests before implementation**
-
-Prove continuous old-schema queries have zero errors during rebuild; new field is invisible before switch and visible after switch; an old in-flight query completes on the old handle; post-switch queries use the new handle; delayed old Active messages are no-op ACKs; and a catch-up delay beyond 2 seconds restores Active Consumer without changing Metadata.
-
-- [ ] **Step 2: Make Active Handle one atomic value**
+- [ ] **步骤 3：实现 Slot 路径和角色**
 
 ```go
-type ActiveHandle struct {
-    IndexID string
-    Revision uint64
-    Columns []*storagepb.ViewColumn
-    SourceCheckpoints map[SourceKey]uint64
+type Slot string
+
+const (
+    SlotA Slot = "a"
+    SlotB Slot = "b"
+)
+
+func InactiveSlot(active Slot) Slot
+func DuckDBPath(root, viewID string, slot Slot) string
+func BlevePath(root, viewID string, slot Slot) string
+```
+
+每个 View 独占 `slot-a.duckdb/slot-b.duckdb` 或对应目录，不把多个 View 混在同一个 A/B 文件中。
+
+- [ ] **步骤 4：实现两种写入模式**
+
+```go
+type WriteMode uint8
+
+const (
+    WriteModeLive WriteMode = iota + 1
+    WriteModeBackfill
+)
+```
+
+DuckDB Backfill 使用“仅当目标列为 NULL 时写入”的单事务 UPSERT；Bleve 在一个串行 Writer 内读取当前 Document 后只补缺失字段。实时写优先级由上层调度保证。
+
+- [ ] **步骤 5：运行测试并提交**
+
+```bash
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/viewindex/...)
+git add modules/storage/internal/service/viewindex
+git commit -m "feat(storage): add view slots and source progress"
+```
+
+### 任务 10：实现单 Consumer 的 ActiveView/NewView 实时写
+
+**文件：**
+- 新建：`modules/storage/internal/service/viewbuilder/write_targets.go`
+- 新建：`modules/storage/internal/service/viewbuilder/write_targets_test.go`
+- 修改：`modules/storage/internal/service/viewbuilder/service.go`
+- 修改：`modules/storage/internal/service/viewbuilder/service_test.go`
+- 修改：`modules/storage/internal/service/viewbuilder/apply.go`
+- 修改：`modules/storage/internal/service/viewbuilder/apply_test.go`
+- 修改：`modules/storage/internal/service/viewbuilder/checkpoint.go`
+- 修改：`modules/storage/internal/service/viewbuilder/options.go`
+- 修改：`modules/storage/internal/service/viewbuilder/options_test.go`
+- 删除：`modules/storage/internal/service/viewbuilder/deletes.go`
+- 修改：`modules/storage/test/view_derivation_reliability_test.go`
+
+**接口：**
+- 输入：单 `storage_view` Consumer、原子 ViewWriteTargets 和 `DatasetFieldsChanged`。
+- 输出：实时双写、Active ACK 保证和失败 Build 隔离。
+
+- [ ] **步骤 1：先写实时写目标状态测试**
+
+```go
+type ViewWriteTargets struct {
+    Active *ViewHandle
+    New    *ViewHandle
 }
 ```
 
-DataView obtains one pointer at request start and uses it for the full query. The pointer is never mutated after publication. Old handle/index deletion waits for reference count zero plus configured Grace Period.
+覆盖：没有 Build 时只写 Active；有 Build 时 Active/New 都写；同一 View Apply 锁下读取 Active Progress 并发布 New；切换后 New 成为 Active、原 Active 成为 Old。
 
-`SourceCheckpoints` is the immutable activation baseline published with that handle; the physical ViewIndex checkpoint remains authoritative as Active events advance. Event application reads and CASes the physical checkpoint and never treats the activation-baseline map as current progress.
+- [ ] **步骤 2：先写 ACK/失败测试**
 
-- [ ] **Step 3: Implement the bounded activation protocol**
+覆盖：
 
 ```text
-pause and drain storage_view_active
-read latest Dataset Progress Vector
-let rebuild consumer catch the candidate Index to that vector
-before the 2-second deadline, call idempotent Metadata CAS with expected old revision/index
-atomically publish the new ActiveHandle
-resume storage_view_active
+所有受影响 Active 成功 -> ACK
+任一受影响 Active 失败 -> NAK
+所有受影响 Active/New 都成功 -> ACK
+所有受影响 Active 成功、New 失败 -> Build FAILED、移除 New、当前事件 ACK
+New 失败后的下一事件只写 Active
+失败 Build 不自动创建新 NewView
 ```
 
-If the deadline expires before entering CAS, resume the old Active path and keep the candidate for retry. After Metadata confirms the candidate Active, always finish the local handle swap; if the RPC result is unknown, read Metadata to decide. Restart rebuilds the handle from Metadata.
+- [ ] **步骤 3：实现有界 Node Lane 与实时优先入口**
 
-- [ ] **Step 4: Run race and switch tests**
+每个 Node 一个有界顺序队列和一个 Worker；失败 Sequence 成功重投后 Lane 解锁。View 事件进入实时优先队列，不能创建每事件 Goroutine。
+
+- [ ] **步骤 4：实现 Build 失败终止顺序**
+
+Active 成功、New 失败时必须按顺序执行：
+
+```text
+Metadata/ViewBuild 标记 FAILED
+原子发布 ViewWriteTargets{Active: old, New: nil}
+关闭 New Writer
+安排删除 New DB
+向事件层返回成功以 ACK
+```
+
+错误日志包含 View ID、New Slot、Node/Dataset/Sequence 和底层 Cause；RPC/Metadata 只保存安全错误。
+
+- [ ] **步骤 5：运行测试并提交**
 
 ```bash
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/dataview ./internal/service/viewbuilder ./test -run 'TestViewIndexSwitch')
-(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/dataview ./internal/service/viewbuilder ./internal/service/viewindex/...)
-git add modules/storage/internal/service/dataview modules/storage/internal/service/viewbuilder modules/storage/internal/service/metadata/sqlite modules/storage/test/view_index_switch_test.go
-git commit -m "feat(storage): switch rebuilt views without query downtime"
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/viewbuilder ./test -run 'TestViewDerivation')
+git add modules/storage/internal/service/viewbuilder modules/storage/test/view_derivation_reliability_test.go
+git commit -m "feat(storage): dual write active and new views"
 ```
 
-### Task 13: Complete the Repository-Wide Rename and Caller Integration
+### 任务 11：实现实时优先的空闲 Backfill
 
-**Files:**
-- Modify: `modules/storage/config/*`, `modules/storage/README.md`
-- Modify: `modules/storage/internal/bootstrap/metadata/seed.go` and tests
-- Modify: `modules/storage/config/metadata.seed.yaml`
-- Modify: `modules/cli/internal/command/metadata_implementation.go` and tests
-- Modify: `modules/cli/config/fields.yaml`
-- Modify: `modules/monitor/internal/metrics/storage.go` and tests
-- Modify: `modules/archive`, `modules/factor` and their tests/configs/docs
-- Modify: `web/src/api/storage/metadata.ts`, `web/src/api/storage/types.ts`
-- Modify: `web/src/views/data/datasets/components/dataset-column-panel.vue`
-- Modify: `scripts/storage-start.sh`, `scripts/storage-stop.sh`, `scripts/deploy-moox.sh`
-- Modify: `scripts/test-storage-boundary-contract.sh`, `scripts/test-storage-consistency-contract.sh`
-- Modify: `examples/*.yaml`, `examples/e2e/*`
-- Modify: `docs/存储层架构.md`, `docs/存储目标架构与元数据.md`, `docs/存储引擎架构.md`, `docs/架构总览.md`, `docs/协议设计.md`
-- Modify: `docs/行情数据归档模块设计.md`, `docs/因子计算模块设计.md`, `docs/策略模块架构设计.md`
-- Rename: `packages/jetstream/subject_token.go` -> `packages/jetstream/node_subject_token.go`
-- Rename: `packages/jetstream/subject_token_test.go` -> `packages/jetstream/node_subject_token_test.go`
-- Modify: `modules/storage/internal/service/datanode/pebble/committed.go`
-- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus.go`
-- Modify: `modules/storage/internal/service/viewbuilder/eventconsumer/producer_bus_test.go`
+**文件：**
+- 新建：`modules/storage/internal/service/viewbuilder/backfill.go`
+- 新建：`modules/storage/internal/service/viewbuilder/backfill_test.go`
+- 新建：`modules/storage/internal/service/viewbuilder/build.go`
+- 新建：`modules/storage/internal/service/viewbuilder/build_test.go`
+- 修改：`modules/storage/internal/service/dataview/maintenance.go`
+- 修改：`modules/storage/internal/service/dataview/maintenance_test.go`
+- 删除：`modules/storage/internal/service/dataview/build_cursor.go`
+- 删除：`modules/storage/internal/service/dataview/build_cursor_test.go`
+- 修改：`modules/storage/internal/service/dataview/schedule.go`
+- 修改：`modules/storage/internal/service/dataview/schedule_test.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_test.go`
 
-**Interfaces:**
-- Consumes: all final APIs from Tasks 2-12.
-- Produces: one compiling repository with no active DataShard or Required-field surface.
+**接口：**
+- 输入：ActiveView 一致性只读事务、NewView、当前 Metadata 字段和实时队列状态。
+- 输出：`base_progress`、历史 Key/旧列复制、新字段精确补全和可人工重试的 Build。
 
-- [ ] **Step 1: Update seeds and CLI import**
+- [ ] **步骤 1：先写 Build 启动原子性测试**
 
-Replace `primary_store_nodes + devices + primary_store_routes` fact routing with:
+测试在 Active Progress 10 与 11 的边界注入事件，证明获取 View Apply 锁后：只读事务中的行和 `base_progress=10` 一致；NewView 先初始化到 Progress 10；发布 New 后 Sequence 11 同时写两个目标；不存在未写 New 却已 ACK 的事件。另测启动后没有实时事件时，Backfill 完成后 Active/New Progress 仍相等并可切换。
+
+- [ ] **步骤 2：先写空闲调度测试**
+
+使用可控时钟覆盖：
+
+```text
+实时队列非空时 Backfill 不开始 Batch
+实时 Apply 进行中时 Backfill 等待
+空闲时最多提交 100 行
+单 Batch 到 50ms 后主动让出
+实时事件在当前 Batch 完成后优先执行
+连续实时流量下 Build 保持 BUILDING 而不阻塞 Active
+```
+
+- [ ] **步骤 3：实现旧 ActiveView 基线读取**
+
+在安装 NewView 时开启 ActiveView 一致性只读事务，保存其中的 Source Progress 为 `base_progress`，并在发布双写目标前用它初始化 NewView Source Progress。Backfill 从该事务分页读取 Key 和旧列：TimeSeries 按 `started_at - keep_days` 过滤，Record 全部保留。
+
+- [ ] **步骤 4：只读取新增 View 字段**
+
+比较 Active Revision Columns 与 Desired Revision Columns，得到新增列及其来源 Field ID。按 Dataset 分组旧 FactKey，经 PrimaryStore 分批调用 DataNode `ReadFields`。已经被 Pebble 清理的历史 Fact 返回缺失时，新列保持 NULL，旧列仍从 ActiveView 复制。
+
+- [ ] **步骤 5：实现失败后人工重建**
+
+Backfill 任一步失败时调用与实时 New 写失败相同的 `FailBuild`：标记 FAILED、移除 New、清理 DB、不自动重调度。只有显式 `RebuildView` 命令可以从 FAILED 创建下一次 Build。
+
+- [ ] **步骤 6：运行测试并提交**
+
+```bash
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/viewbuilder ./internal/service/dataview ./internal/service/metadata/sqlite)
+git add modules/storage/internal/service/viewbuilder modules/storage/internal/service/dataview modules/storage/internal/service/metadata/sqlite
+git commit -m "feat(storage): backfill views only while idle"
+```
+
+### 任务 12：实现原子切换与 OldView 整库删除
+
+**文件：**
+- 新建：`modules/storage/internal/service/dataview/active_handle.go`
+- 新建：`modules/storage/internal/service/dataview/active_handle_test.go`
+- 修改：`modules/storage/internal/service/dataview/service.go`
+- 修改：`modules/storage/internal/service/dataview/service_test.go`
+- 修改：`modules/storage/internal/service/viewbuilder/build.go`
+- 修改：`modules/storage/internal/service/viewbuilder/build_test.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_view_index.go`
+- 修改：`modules/storage/internal/service/metadata/sqlite/crud_test.go`
+- 修改：`modules/storage/test/view_index_switch_test.go`
+
+**接口：**
+- 输入：Backfill 完成、Active/New Progress 相同和 Metadata Expected Old Slot/Revision。
+- 输出：最多 2 秒的 Active Slot CAS、不可变 ActiveHandle 和延迟删除 OldView。
+
+- [ ] **步骤 1：先写查询与切换竞态测试**
+
+覆盖：旧查询跨切换继续使用旧 Handle；新查询使用新 Slot；新字段切换前不可见、切换后一次可见；切换期间查询零错误；OldView 在引用归零前不删除。
+
+- [ ] **步骤 2：实现最小 ActiveHandle**
+
+```go
+type ActiveHandle struct {
+    IndexID  string
+    Slot     viewindex.Slot
+    Revision uint64
+    Columns  []*storagepb.ViewColumn
+}
+```
+
+Handle 不保存 Source Progress。请求开始时 Acquire，结束时 Release；发布后内容不可修改。
+
+- [ ] **步骤 3：实现 2 秒切换协议**
+
+```text
+获取 View Apply 锁
+确认 Backfill Completed
+确认 Active/New Progress 相同
+Metadata CAS(expected active slot/revision -> new slot/revision)
+原子发布 New ActiveHandle
+发布 ViewWriteTargets{Active: new, New: nil}
+释放 Apply 锁
+```
+
+进入 CAS 前超过 2 秒则返回 `VIEW_SWITCH_TIMEOUT`，Active/New 双写保持不变，等待用户再次触发切换。CAS 已成功但响应不确定时读取 Metadata，若 New 已 Active 必须完成本地 Handle 发布。
+
+- [ ] **步骤 4：删除 OldView DB**
+
+旧 Handle 引用归零并经过 Grace Period 后，关闭旧 DuckDB/Bleve Handle，删除整个旧 Slot 文件或目录。删除失败只上报清理错误，不回退已经成功的 Active 切换。
+
+- [ ] **步骤 5：运行测试并提交**
+
+```bash
+(cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./internal/service/dataview ./internal/service/viewbuilder ./internal/service/viewindex/... ./test -run 'TestViewIndexSwitch')
+git add modules/storage/internal/service/dataview modules/storage/internal/service/viewbuilder modules/storage/internal/service/viewindex modules/storage/internal/service/metadata/sqlite modules/storage/test/view_index_switch_test.go
+git commit -m "feat(storage): switch view database slots atomically"
+```
+
+### 任务 13：完成全仓命名、调用方和 UI 集成
+
+**文件：**
+- 修改：`modules/storage/config/metadata.seed.yaml`
+- 修改：`modules/storage/internal/bootstrap/metadata/seed.go`
+- 修改：`modules/storage/internal/bootstrap/metadata/seed_test.go`
+- 修改：`modules/cli/internal/command/metadata_implementation.go`
+- 修改：`modules/cli/internal/command/metadata_quant_seed_test.go`
+- 修改：`modules/cli/config/fields.yaml`
+- 修改：`modules/monitor/internal/metrics/storage.go`
+- 修改：`modules/monitor/internal/metrics/storage_test.go`
+- 修改：`modules/archive/internal/consumer/decode.go`
+- 修改：`modules/archive/internal/consumer/decode_test.go`
+- 修改：`modules/factor/internal/storageio/client.go`
+- 修改：`modules/factor/internal/storageio/client_test.go`
+- 修改：`web/src/api/storage/metadata.ts`
+- 修改：`web/src/api/storage/types.ts`
+- 修改：`web/src/views/data/datasets/components/dataset-column-panel.vue`
+- 修改：`scripts/storage-start.sh`
+- 修改：`scripts/storage-stop.sh`
+- 修改：`scripts/deploy-moox.sh`
+- 修改：`scripts/test-storage-boundary-contract.sh`
+- 修改：`scripts/test-storage-consistency-contract.sh`
+- 修改：`docs/存储层架构.md`
+- 修改：`docs/存储目标架构与元数据.md`
+- 修改：`docs/存储引擎架构.md`
+- 修改：`docs/架构总览.md`
+- 修改：`docs/协议设计.md`
+- 修改：`docs/行情数据归档模块设计.md`
+- 修改：`docs/因子计算模块设计.md`
+- 修改：`docs/策略模块架构设计.md`
+- 重命名：`packages/jetstream/subject_token.go` -> `packages/jetstream/node_subject_token.go`
+- 重命名：`packages/jetstream/subject_token_test.go` -> `packages/jetstream/node_subject_token_test.go`
+
+**接口：**
+- 输入：任务 2-12 的最终 API。
+- 输出：没有旧 Shard、Merge/Delete/Scan/Snapshot/Dimensions/Required/双 Consumer 残留的完整仓库。
+
+- [ ] **步骤 1：更新 Seed、CLI 和 UI**
+
+Seed 使用：
 
 ```yaml
 data_nodes:
@@ -957,51 +988,28 @@ datasets:
   - space_id: crypto
     dataset_id: binance_spot_kline
     data_node_id: data-node-market
+    keep_days: 180
 ```
 
-Remove every DatasetColumn `required` key. Import rejects an unknown `data_node_id` and does not create default routes or devices.
+删除 Required、Dimensions、Route、Device 和可修改 Dataset Node 的 UI。Dataset/View 页面显示“保存天数”；Record 保存天数固定为 0。Field 页面只允许“新增字段”。
 
-- [ ] **Step 2: Update Admin/Monitor/Archive/Factor callers**
+- [ ] **步骤 2：更新调用方语义**
 
-Monitor validates that its Dataset has a DataNode and required column *names* for its own business use, but it does not read `DatasetColumn.required`. Archive and Factor decode `node_id/source_node_id`, use direct PrimaryStore RPC, and preserve their own Durable semantics.
+Collector/Factor 写入必须提供完整不可变 Version 内容；冲突旧 Version 不得自动覆盖。Archive/Factor 范围读取通过 PrimaryStore 的有限 Key 生成接口；不再调用 Scan。Record 用户文档明确 Version 字符排序规则。
 
-- [ ] **Step 3: Make the Dataset Field UI append-only**
-
-Remove the Required column, Required checkbox and edit action. The command is “新增字段” and calls `AddDatasetField`; immutable conflicts display the stable server message. Existing fields remain readable but cannot be deleted, disabled, renamed or type-edited from the Dataset panel.
-
-- [ ] **Step 4: Rename deployment and metrics atomically**
-
-Apply the final map everywhere:
-
-```text
-DataShard -> DataNode
-datashard -> datanode
-storage-shard -> storage-node
-role shard -> node
-shard_id -> node_id
-source_shard_id -> source_node_id
-ShardCheckpoint -> ViewSourceCheckpoint
-storage_shard_* -> storage_node_*
-```
-
-Rename packages, config files, release archive names, service deployment seeds, process names, CLI flags and Prometheus metrics in one commit. Do not keep old environment-variable fallbacks.
-
-- [ ] **Step 5: Remove Storage internal Gateway routes**
-
-Delete storage-view-to-primary and primary-to-node Node Service Gateway route declarations and special allowlist logic. Keep Admin Gateway's public Metadata/PrimaryStore/DataView methods; DataNode, ViewIndex, Snapshot and Build methods remain unreachable from the browser.
-
-- [ ] **Step 6: Run exact residue scans**
+- [ ] **步骤 3：执行零残留扫描**
 
 ```bash
-rg -n 'DataShard|datashard|data_shard|storage-shard|storage_shard_|shard_id|source_shard_id|GetShardState|GetShardHeads|ShardCheckpoint' modules packages web scripts examples docs --glob '!docs/superpowers/**'
-rg -n 'required:' modules/storage modules/cli/config examples --glob '*.{yaml,yml}'
+rg -n 'DataShard|datashard|data_shard|storage-shard|storage_shard_|shard_id|source_shard_id|source_sequence' modules packages web scripts examples docs --glob '!docs/superpowers/**'
+rg -n 'MergeRows|WriteRows|ReadRows|ScanRows|DeleteRows|BeginNodeSnapshot|ScanNodeSnapshot|EndNodeSnapshot' modules packages web scripts examples --glob '!**/storagegen/**'
+rg -n 'attributes_to_delete|removed_column_names|removed_columns|dimensions|dimension_hash|reservedDimensionsAttribute' modules/storage modules/cli/config web/src/api/storage web/src/views/data scripts examples --glob '!**/storagegen/**'
+rg -n 'storage_view_active|storage_view_rebuild|expected_last_applied_sequence|metadataSchemaVersionCompatible' modules packages web scripts examples --glob '!**/storagegen/**'
 rg -n 'record\.required|form\.required|DatasetColumn.*Required|GetRequired\(\)|c_required|required_column_names' modules web scripts examples --glob '!**/storagegen/**'
-rg -n 'PrimaryStoreRoute|primary_store_routes|ShardTarget|hash_rule|subject_pattern' modules/storage modules/monitor modules/cli web scripts examples --glob '!**/storagegen/**'
 ```
 
-Expected: zero active matches. Generic English “is required” input errors and HTML form-required markers are not Dataset Required-field concepts and may remain.
+预期：活动代码零匹配。普通英文输入提示中的 “required” 和非 TimeSeries 业务中的通用 “dimension” 必须逐条确认，不得用宽泛排除掩盖 Storage 残留。
 
-- [ ] **Step 7: Run integration builds and commit**
+- [ ] **步骤 4：运行集成测试并提交**
 
 ```bash
 make generate
@@ -1014,36 +1022,56 @@ CI=true pnpm -C web vue-tsc --noEmit
 pnpm -C web test
 pnpm docs:build
 git add modules packages web scripts examples docs
-git commit -m "refactor(storage): finish datanode integration"
+git commit -m "refactor(storage): finish field storage integration"
 ```
 
-### Task 14: Prove the System with Reviews, Local Gates and Two-Server E2E
+### 任务 14：完成两服务器 E2E、两轮审查和最终交付
 
-**Files:**
-- Create: `modules/cli/internal/command/storage_e2e.go`
-- Create: `modules/cli/internal/command/storage_e2e_test.go`
-- Create: `modules/storage/test/dataset_node_e2e_test.go`
-- Create: `scripts/test-storage-two-node-e2e.sh`
-- Modify: `modules/cli/internal/command/setup.go`
-- Modify: `modules/cli/README.md`
-- Modify: `docs/运维/MooX-EventBus运维.md`
-- Modify: `docs/运维/数据保留与磁盘空间.md`
+**文件：**
+- 新建：`modules/cli/internal/command/storage_e2e.go`
+- 新建：`modules/cli/internal/command/storage_e2e_test.go`
+- 新建：`modules/storage/test/field_storage_e2e_test.go`
+- 新建：`scripts/test-storage-two-node-e2e.sh`
+- 修改：`modules/cli/internal/command/setup.go`
+- 修改：`modules/cli/internal/command/setup_test.go`
+- 修改：`modules/cli/README.md`
+- 修改：`docs/运维/MooX-EventBus运维.md`
+- 修改：`docs/运维/数据保留与磁盘空间.md`
 
-**Interfaces:**
-- Consumes: repository-root ignored `custom.toml`, two configured SSH hosts, release artifacts.
-- Produces: sanitized E2E report, two independent review reports and final merge-ready evidence.
+**接口：**
+- 输入：仓库根被忽略的 `custom.toml`、两个 SSH 节点和最终发布包。
+- 输出：无凭证泄漏的 E2E 报告、两轮独立审查和已推送分支。
 
-- [ ] **Step 1: Build a credential-safe E2E command**
-
-Add:
+- [ ] **步骤 1：实现凭证安全的 E2E 命令**
 
 ```text
 moox-cli setup storage-e2e --file ./custom.toml --primary-host-index 0 --factor-host-index 1
 ```
 
-It reuses the existing secure config loader and SSH client, selects two distinct enabled hosts by stable sorted name, and prints only run ID, logical host names, phase, duration and pass/fail. It creates random remote directories under `/tmp/moox-storage-e2e-<run-id>` and random ports, never interpolates credentials into command output, and always cleans its own processes/directories.
+命令按稳定名称选择两个不同启用节点，只输出 Run ID、逻辑主机名、阶段、耗时和结果。远端目录固定为随机 `/tmp/moox-storage-e2e-<run-id>`；不得打印密码、Token、私钥或展开后的 SSH 命令；退出时清理自身进程和目录。
 
-- [ ] **Step 2: Run the complete local verification matrix**
+- [ ] **步骤 2：执行两服务器场景**
+
+Server A 启动 EventBus、storage-primary、market DataNode 和 storage-view；Server B 启动 factor DataNode。E2E 必须证明：
+
+```text
+两个 Dataset 分属不同 DataNode
+Field/Attribute 同名不冲突
+相同 Fact 幂等且冲突 Version 被拒绝
+Record 空 Version 返回字符最大版本
+只有 storage_view 一个 Durable Consumer
+重建期间 ActiveView/NewView 实时双写
+持续写入时 Backfill 不增长，停止写入后继续
+NewView 写失败后 Build FAILED、当前事件 ACK、ActiveView 继续
+Backfill 失败后等待人工重建
+TimeSeries View.keep_days 只影响新 DB
+Dataset.keep_days 清理 Pebble 时不触发 View Build
+View Build 时不触发 Pebble Cleanup
+切换查询零错误并删除 OldView DB
+DataNode 不暴露 Scan/Snapshot/Delete RPC
+```
+
+- [ ] **步骤 3：运行完整本地门禁**
 
 ```bash
 make generate
@@ -1058,90 +1086,66 @@ pnpm docs:build
 git diff --check
 ```
 
-Expected: all pass. Record command summaries and failure counts, not secrets or complete environment dumps.
+预期：全部通过，只记录命令摘要和失败数量，不记录完整环境变量。
 
-- [ ] **Step 3: Execute the two-server topology**
-
-The E2E command starts a dedicated EventBus, `storage-primary`, market DataNode and `storage-view` on Host 0, plus factor DataNode on Host 1. It imports fresh Schema v4 metadata with K-line and factor Datasets assigned to different DataNodes, then proves:
-
-1. continuous writes and reads on both Datasets;
-2. one cross-DataNode K-line + factor View;
-3. dynamic Add Dataset Field while writes continue, with no process restart;
-4. old-field queries report zero errors during non-active Index rebuild;
-5. new field becomes visible only after activation and matches authoritative facts;
-6. Active backlog older than the new Source Checkpoint cannot regress the new Index;
-7. after polling the Build into activation-ready state, `SIGSTOP` of the dedicated storage-primary before activation CAS for more than 2 seconds causes timeout and old Active recovery;
-8. stopping the factor DataNode does not break market Dataset reads/writes;
-9. stopping the dedicated E2E EventBus retains Outbox, and restart publishes the ordered backlog;
-10. no E2E process or directory remains afterward.
-
-Run:
+- [ ] **步骤 4：提交 E2E Harness**
 
 ```bash
-./bin/moox-cli setup storage-e2e --file ./custom.toml --primary-host-index 0 --factor-host-index 1
+git add modules/cli/internal/command/storage_e2e.go modules/cli/internal/command/storage_e2e_test.go modules/cli/internal/command/setup.go modules/cli/internal/command/setup_test.go modules/storage/test/field_storage_e2e_test.go scripts/test-storage-two-node-e2e.sh modules/cli/README.md docs/运维/MooX-EventBus运维.md docs/运维/数据保留与磁盘空间.md
+git commit -m "test(storage): add field storage e2e"
 ```
 
-Expected: sanitized JSON with `status=ok`, all ten phases passed and `cleanup=ok`.
+- [ ] **步骤 5：执行第一轮独立代码审查**
 
-- [ ] **Step 4: Commit the E2E harness before review**
-
-```bash
-git add modules/cli/internal/command/storage_e2e.go modules/cli/internal/command/storage_e2e_test.go modules/cli/internal/command/setup.go modules/storage/test/dataset_node_e2e_test.go scripts/test-storage-two-node-e2e.sh modules/cli/README.md docs/运维/MooX-EventBus运维.md docs/运维/数据保留与磁盘空间.md
-git commit -m "test(storage): add two-node rebuild e2e"
-```
-
-- [ ] **Step 5: Request independent review round one**
-
-Use `superpowers:requesting-code-review` with the approved spec and full branch diff. Reviewer one focuses on protocol, Metadata v4, Catalog concurrency, PrimaryStore/DataNode authority, atomic Pebble commit, Outbox and direct RPC security. Fix every P1/P2 finding, add regression tests, rerun affected packages, and commit:
+使用 `superpowers:requesting-code-review`，审查完整分支 Diff。第一位 Reviewer 专注 Proto、Schema v4、Runtime Catalog、Field/Attribute Key、不可变 Hash、Sequence/Progress/Outbox 原子性、精确读取和清理边界。修复全部 P1/P2，增加回归测试后提交：
 
 ```bash
 git add -A
-git commit -m "fix(storage): address consistency review"
+git commit -m "fix(storage): address field storage review"
 ```
 
-- [ ] **Step 6: Request independent review round two**
+- [ ] **步骤 6：执行第二轮独立代码审查**
 
-Use a fresh reviewer context. Reviewer two focuses on JetStream ACK lifecycle, fixed consumers, Snapshot barriers, per-ViewIndex stale-event handling, 2-second activation, DataView races, configuration/deploy residue and E2E cleanup. It must not reuse reviewer one's conclusion. Fix every P1/P2 finding, add regression tests, rerun affected packages, and commit:
+使用全新 Reviewer 上下文，不复用第一轮结论。第二位 Reviewer 专注单 Consumer ACK、Active/New 失败语义、实时优先 Backfill、A/B Slot、查询 Handle、2 秒切换、配置独立性和 E2E 清理。修复全部 P1/P2 后提交：
 
 ```bash
 git add -A
-git commit -m "fix(storage): address rebuild review"
+git commit -m "fix(storage): address view rebuild review"
 ```
 
-- [ ] **Step 7: Re-run final proof after the last review fix**
+- [ ] **步骤 7：从最终 HEAD 重新执行全部证明**
 
-Repeat Step 2 and Step 3 from the final HEAD. Previous green results do not count after review changes.
+重复步骤 2 和步骤 3。审查修复前的绿色结果不得作为最终证据。
 
-- [ ] **Step 8: Push the verified branch**
+- [ ] **步骤 8：推送已验证分支**
 
 ```bash
 git status --short
-git push -u origin codex/storage-dataset-node
+git push -u origin codex/storage-field-keys
 git status --short --branch
 git rev-parse HEAD
 git rev-parse '@{upstream}'
 ```
 
-Expected: working tree clean, HEAD equals upstream, all Tasks checked, two independent reviews closed and fresh two-server E2E green.
+预期：工作区干净，HEAD 等于 Upstream，全部任务勾选，两轮独立审查关闭，两服务器 E2E 从最终 HEAD 通过。
 
-## Final Acceptance Checklist
+## 最终验收清单
 
-- [ ] Schema v4 is the only accepted Metadata schema; no migration or compatibility path exists.
-- [ ] Dataset routes directly by `data_node_id`; no Hash, weight, PrimaryStoreRoute or caller-supplied physical target remains.
-- [ ] K-line and factor Datasets run on different DataNodes and form one correct View.
-- [ ] No active DataShard/datashard/shard_id/storage-shard/storage_shard symbol remains.
-- [ ] No Dataset Required field exists in Proto, SQL, Go, Seed, UI or validation.
-- [ ] Add Dataset Field is idempotent and hot-swaps Runtime Schema before success response.
-- [ ] PrimaryStore alone validates field identity/type; DataNode contains no Schema Revision, Manifest or Fence.
-- [ ] Facts, Node Sequence, Dataset Progress and Outbox commit in one Pebble Batch.
-- [ ] Final event payload is validated before fact commit and Outbox cannot force-skip.
-- [ ] `MOOX_STORAGE` is InterestPolicy/DiscardNew with only the two fixed View consumers.
-- [ ] Active event failure NAKs and can recover the same Node lane without blocking other Nodes.
-- [ ] ViewIndex stores `{node_id,dataset_id}` checkpoints and stale delivery is a per-Index no-op.
-- [ ] Snapshot rebuild uses full REPLACE, then catches up MERGE/DELETE from the barrier.
-- [ ] Only one Build runs; crash restarts from a fresh Snapshot with no lease/cursor recovery.
-- [ ] View queries continue during rebuild and switch; new fields appear atomically.
-- [ ] Switch timeout is at most 2 seconds and restores old Active updates before CAS.
-- [ ] Dataset placement change after any committed fact is rejected; no migration tool exists.
-- [ ] Storage internal RPC bypasses Node Service Gateway and enforces direct Service HMAC.
-- [ ] Local full gates, two independent reviews and fresh two-server E2E all pass from final HEAD.
+- [ ] Metadata 只接受 v4，`metadataSchemaVersionCompatible` 已删除。
+- [ ] Dataset 直接保存不可修改的 `data_node_id`，没有 Placement、Route、Hash 或迁移工具。
+- [ ] 所有 Field 可缺失且只增不减，没有 Required。
+- [ ] TimeSeries 没有 Dimensions，Record Version 规则已写入用户文档。
+- [ ] Field/Attribute 分别使用 `0x01/0x02`，每个值独立 Pebble Key。
+- [ ] `WriteFields` 实现完整内容 Hash、严格不可变和无事件幂等。
+- [ ] DataNode 只提供指定 Field 的精确读取，没有完整行、Scan、Snapshot 或 Delete RPC。
+- [ ] 首次事实提交原子包含 Marker、Field、Attribute、Sequence、Progress 和 Outbox。
+- [ ] TimeSeries 使用 UTC 日桶，Record 不自动清理。
+- [ ] Dataset/View `keep_days` 分别生效且互不调用。
+- [ ] JetStream 只有一个 `storage_view` Durable Consumer。
+- [ ] ViewIndex Progress 只有 `{node_id,dataset_id,sequence}`，没有 Expected Sequence。
+- [ ] 每个 View 使用独立 slot-a/slot-b DB，角色按 ActiveView/NewView/OldView 转换。
+- [ ] 实时事件优先；Backfill 每批最多 100 行或 50ms，且只补缺失值。
+- [ ] NewView/Backfill 失败只终止 Build，ActiveView 继续并等待人工重建。
+- [ ] 重建 Key 只来自旧 ActiveView；首次创建约束和历史不可恢复限制已写入用户文档。
+- [ ] 切换持锁不超过 2 秒，查询不中断，OldView 在引用归零后整库删除。
+- [ ] 本地完整门禁、两轮独立审查和最终两服务器 E2E 全部通过。

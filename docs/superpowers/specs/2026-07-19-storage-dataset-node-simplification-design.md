@@ -1,69 +1,98 @@
-# Storage Dataset 单归属与多进程简化设计
+# Storage Dataset 单归属与字段级存储简化设计
 
 ## 状态与优先级
 
-本设计已于 2026-07-19 完成讨论确认。它保留 Storage 的事实原子提交、JetStream、跨 Dataset View、字段动态追加和 A/B Index 能力，但以个人量化交易系统的长期可维护性为第一原则，删除 Dataset 内分片、高可用、Dataset 迁移和通用 Schema 演进。
+本设计已于 2026-07-19 完成讨论确认。它是 Storage 当前实现的目标事实源，取代此前关于 DataShard、多 Consumer、Pebble 行级 Merge、字段级删除、Snapshot Scan、Dataset 迁移和通用 Schema 演进的设计。
 
-本设计取代 `2026-07-18-storage-primary-shard-boundary-design.md` 中关于多 Shard 路由、Node Service Gateway、Schema Fence、Metadata Cache 和 View Build Consumer 的目标设计。现有 `2026-07-19-storage-consistency-review-remediation.md` 执行计划必须按本设计重写后才能实施。
-
-## 背景
-
-MooX 是个人量化交易系统。它需要把行情、因子、账户等 Dataset 分别部署到不同服务器，以隔离磁盘、计算和故障；它不需要把同一个 Dataset 按 RowKey、Subject 或时间范围分片，也不需要副本、自动故障转移或在线再平衡。
-
-典型部署如下：
-
-```text
-kline_1m      -> data-node-market
-trade_tick    -> data-node-market
-factor_value  -> data-node-factor
-account       -> data-node-private
-```
-
-View 仍需组合不同 DataNode 上的 Dataset。例如一个策略 View 可以同时包含 `kline_1m` 和 `factor_value`。因此事实存储按 Dataset 分机，ViewBuilder 集中消费所有事实事件并物化跨节点 View。
+MooX 是个人量化交易系统。本设计优先保证数据正确、边界清楚和长期可维护，不建设高可用、在线迁移和通用分布式存储平台。
 
 ## 设计原则
 
-1. 数据正确性优先，但不以高可用为目标。
-2. 一个职责只保留一个事实源和一条写路径。
-3. 用重新计算替代复杂的恢复状态机；字段追加通过内存快照原子生效。
-4. 默认多进程，同一套进程既可部署在一台机器，也可分布到多台机器。
-5. 不为未来可能出现的 Dataset 内分片预留抽象。
-6. 所有错误显式返回；系统不静默降级、不跳过事件。
+1. 一个 Dataset 只属于一个 DataNode，一个 DataNode 可以承载多个 Dataset。
+2. 默认多进程；同一套进程可以部署在一台或多台机器。
+3. 事实版本不可修改，只能追加新版本。
+4. 每个 Field 和 Attribute 独立保存为 Pebble Key。
+5. DataNode 只提供精确 Key、精确 Field 读写，不提供普通扫描和删除接口。
+6. View 重建只使用旧 ActiveView 的 Key 集合，不扫描 DataNode。
+7. View 只有一个 JetStream Consumer；重建期间同一事件同时写 ActiveView 和 NewView。
+8. 低频 Backfill 不影响实时事件；有实时事件时暂停提交新的 Backfill Batch。
+9. Pebble 与 View 数据保存天数由用户分别配置，互不联动。
+10. 所有错误显式返回；不静默丢事件，不自动重试失败的整次 View 重建。
 
 ## 业务不变量
 
 ### Dataset 单归属
 
-1. 每个 Dataset 在任一时刻只属于一个 DataNode。
-2. 一个 DataNode 可以承载多个 Dataset。
-3. Dataset 不按 Subject、RowKey、时间或权重继续分片。
-4. Dataset 的公开读写请求只包含一个 `dataset_id`，不提供跨 Dataset 原子批次。
-5. Dataset 创建后，Metadata API 永久拒绝修改 `data_node_id`。MooX 不提供 Dataset 迁移能力；用户自行处理的停机和数据复制属于系统外操作。
+- Dataset 创建时必须指定 `data_node_id`。
+- `data_node_id` 创建后永久不可修改。
+- Dataset 不按 Subject、RowKey、时间范围或权重继续分片。
+- 系统不提供 Dataset 迁移、复制、切换、回滚或 Rebalance。
+- 用户的停机复制和重新部署属于系统外人工操作。
+
+### Metadata 预注册
+
+以下信息必须先在 Metadata 注册，才能进行业务读写：
+
+- Space、Dataset、DataNode；
+- Field、DatasetColumn；
+- TimeSeries Subject 和 Frequency；
+- View、ViewColumn 和 View Grain。
+
+Record 的 `record_id` 和 `version` 不在 Metadata 枚举。Record View 的 Key 集合由已有 ActiveView 保存。
 
 ### Append-only Schema
 
-MooX 的业务只追加字段，不改变已有字段定义：
+- 已有 Field 永不删除。
+- `field_id` 永不修改、复用或迁移。
+- `value_type` 永不修改。
+- 所有 Field 都允许缺失，不存在 Required 字段。
+- Schema 变更只允许为 Dataset 追加 Field。
+- Add Field 在 SQLite Commit 和 Runtime Schema 指针替换后才返回成功。
+- 新增 Field 不要求重启进程，但只适用于以后创建的新事实版本。
 
-1. 已有字段永不删除。
-2. 已有字段的 `field_id` 永不修改，也不会被其他字段复用。
-3. 已有字段的 `value_type` 永不修改。
-4. 所有字段都允许缺失；系统不定义 Required 字段。
-5. Schema 变更只允许追加字段。
-6. 新字段在 Add Field 成功返回后动态生效，不需要重启或重新部署。
-7. 系统不实现字段删除、Field ID 迁移、类型迁移、双读或双写兼容。
-8. 事实 Merge 只新增或覆盖字段值和 Attribute；已经写入的单个字段值或 Attribute 不能单独清除。
-9. `DeleteRows` 保留，用于删除完整事实行；它不是字段级删除接口。
+### 不可变事实版本
 
-显示名称、描述等非 Schema 展示信息可以修改，但不能改变 `field_id`、类型或数据语义。
+TimeSeries 的完整事实身份是：
 
-### 单实例协调
+```text
+space_id + dataset_id + subject_id + freq + data_time
+```
 
-1. `storage-primary` 只运行一个实例。
-2. `storage-view` 只运行一个实例。
-3. 每个 `data_node_id` 只运行一个写入 Owner。
-4. 系统不实现 Leader Election、Quorum、Replica 或自动 Failover。
+Record 的完整事实身份是：
 
-## 目标进程架构
+```text
+space_id + dataset_id + record_id + version
+```
+
+完整 FactKey 一旦创建，Field 和 Attribute 永久不变：
+
+- 相同 FactKey、相同完整内容是幂等成功，不产生新 Sequence 和事件；
+- 相同 FactKey、不同内容返回 `FACT_VERSION_IMMUTABLE`；
+- 不能为旧版本补写一个原本缺失的 Field；
+- 业务修正必须写入新的 `data_time` 或 `version`；
+- 不提供字段级删除、Attribute 单项删除或整行 DeleteRows。
+
+DataNode 的写 RPC 保持名为 `WriteFields`。接口注释必须明确告诉用户：它创建不可变事实版本，不是修改旧版本。
+
+### Record Version
+
+- Record 写入时 `version` 必填，服务端不生成默认 Version。
+- 读取指定 Version 时返回该版本。
+- 读取未指定 Version 时，返回同一 `record_id` 下按 UTF-8 字节顺序最大的 Version。
+- 系统不解析数字、SemVer 或业务时间。
+- 用户应使用 ISO 时间、定长补零数字或其他字符顺序与业务顺序一致的格式。
+
+例如 `00000000000000000042` 可正确排序；`1, 2, 10` 不可得到数字顺序。
+
+### TimeSeries 无 Dimensions
+
+TimeSeries 不定义 Dimensions。身份只由 `subject_id + freq + data_time` 决定：
+
+- 参与 Schema 的数据放普通 Field；
+- 不参与 Schema 的附加信息放 Attribute；
+- Attribute 不参与 RowKey、View Grain 或时间桶计算。
+
+## 进程架构
 
 ```text
 Browser
@@ -72,35 +101,33 @@ Browser
        `-> storage-view
 
 storage-primary
-  Metadata SQLite
+  Metadata SQLite v4
+  Runtime Catalog
   PrimaryStore
-       | direct tRPC
+       | direct tRPC + Service HMAC
        |-> storage-node-market -> Pebble + Outbox
-       |-> storage-node-factor -> Pebble + Outbox
-       `-> storage-node-private -> Pebble + Outbox
+       `-> storage-node-factor -> Pebble + Outbox
 
 storage-node-*
   -> JetStream MOOX_STORAGE
-       |-> storage_view_active
-       |-> storage_view_rebuild
+       |-> storage_view
        |-> Archive
        `-> Factor
 
 storage-view
+  Single View Consumer
   ViewBuilder
   DataView
-  ViewIndex
-       |-> DuckDB
-       `-> Bleve
+  ViewIndex A/B
 ```
 
-浏览器继续通过 Admin Gateway。Storage 内部进程不经过 Node Service Gateway；它们使用带 Service HMAC 的直接 tRPC。DataNode 不进入 Admin Gateway 方法表，也不暴露给浏览器。
+`storage-primary` 和 `storage-view` 各运行一个实例；每个 `node_id` 只有一个写 Owner。不实现 Leader Election、Replica、Quorum 或自动 Failover。
 
-同一个 Storage Binary 可以通过 Role 启动 `primary`、`node` 或 `view`，但生产默认使用独立进程。开发环境可以在同一台机器上启动全部进程，不需要修改数据和协议模型。
+Storage 内部 RPC 直接访问 `service_target`，不经过 Node Service Gateway。DataNode 写接口只允许 `storage-primary` 身份，ViewIndex 内部接口不进入 Admin Gateway。
 
-### DataNode 最终命名
+## 最终命名
 
-Storage 不再保留 Shard 概念。实施时一次性替换所有活动符号：
+Storage 不保留 Shard 概念：
 
 | 旧名 | 最终名 |
 | --- | --- |
@@ -110,410 +137,407 @@ Storage 不再保留 Shard 概念。实施时一次性替换所有活动符号�
 | `storage-shard` | `storage-node` |
 | `role: shard` | `role: node` |
 | `shard_id` | `node_id` |
-| `GetShardState` | `GetNodeState` |
-| `BeginShardSnapshot` | `BeginNodeSnapshot` |
-| `EndShardSnapshot` | `EndNodeSnapshot` |
-| `ShardCheckpoint` | `ViewSourceCheckpoint` |
-| `storage_shard_*` metrics | `storage_node_*` metrics |
+| `source_shard_id` | 删除 |
+| `source_sequence` 行字段 | 删除 |
+| `storage_shard_*` | `storage_node_*` |
 
-代码、Proto、配置、Seed、CLI、指标、测试和现行文档必须原子更新，不保留 Alias、兼容 RPC 或旧 YAML 字段。历史计划文件可以保留原文，但不作为活动命名来源。
+代码、Proto、配置、Seed、CLI、指标、测试和现行文档必须一次性更新，不保留 Alias、Deprecated RPC 或旧 YAML 字段。
 
-## Metadata 模型
+## Metadata 与 Runtime Catalog
 
-### DataNode
+Metadata 只接受 Schema v4。版本检查直接执行：
+
+```go
+if version != metadataSchemaVersion {
+    return errIncompatibleMetadataSchema
+}
+```
+
+删除 `metadataSchemaVersionCompatible` 和所有兼容版本分支。版本错误时启动失败，由用户清理数据库并重新部署。
+
+核心模型：
 
 ```text
 DataNode
   node_id
   service_target
   status
-```
 
-`service_target` 是 PrimaryStore 的直接 tRPC 目标。系统不再定义 `ShardNode`、`ShardRoute`、`ShardTarget`、Hash Pool、权重或 Rendezvous Hash。
-
-### Dataset
-
-Dataset 直接保存归属节点，不单独建立 `DatasetPlacement`：
-
-```text
-Dataset 新增
+Dataset
   data_node_id
+  keep_days
+
+View
+  keep_days
+  desired_view_revision
+  active_view_revision
+  active_slot
 ```
 
-字段字典和列约束继续由现有 Field、DatasetColumn 模型表达，不把它们重复嵌入 Dataset。PrimaryStore 读取 Dataset 时组装 Schema，并同时获得目标节点。`data_node_id` 从 Dataset 创建成功开始永久不可修改，不以是否写入过事实为条件。
+`keep_days` 的统一语义：
 
-Metadata 只接受 Schema v4。版本检查直接比较 `version == metadataSchemaVersion`；删除 `metadataSchemaVersionCompatible` 及所有兼容版本分支。版本不匹配时启动失败，由用户清理数据库并重新部署。
+- `Dataset.keep_days` 只用于 TimeSeries Pebble 数据；`0` 表示永久保存；
+- Record 不自动清理，Record Dataset 的 `keep_days` 必须为 `0`；
+- `View.keep_days` 只用于 TimeSeries View；`0` 表示永久保存；
+- Record View 的 `keep_days` 必须为 `0`；
+- Dataset 与 View 的 `keep_days` 独立配置，系统不比较、不调整、不联动。
 
-### Runtime Catalog
-
-`storage-primary` 启动时从 SQLite 加载写路径需要的 Catalog：
+`storage-primary` 启动时加载：
 
 ```text
 RuntimeCatalog
-  routing.datasets[dataset_id] -> data_node_id
-  routing.data_nodes[node_id]   -> service_target, status
-  schemas[dataset_id]           -> atomic DatasetSchema pointer
+  datasets[dataset_id] -> data_node_id, data_kind, subjects, freqs
+  data_nodes[node_id]   -> service_target, status
+  schemas[dataset_id]   -> atomic DatasetSchema pointer
 ```
 
-Routing 在进程运行期间不变，不使用 TTL、后台 Refresh 或通用 Metadata Cache。字段列表允许动态追加：Metadata 事务提交后，PrimaryStore Clone 对应 DatasetSchema、加入新字段，再原子替换指针。已经取得旧指针的在途请求继续完成；因为新 Schema 只是旧 Schema 的字段超集，旧请求仍然合法。
+Routing 在运行期间不变。Field 追加时 Clone DatasetSchema 并原子替换指针；在途请求继续使用旧的不可变指针。低频 Metadata List 直接使用 SQLite `ORDER BY + LIMIT + OFFSET`，不保留通用全量 Cache。
 
-DataNode 和 `service_target` 的变化不热加载。Metadata API 始终拒绝修改已创建 Dataset 的 `data_node_id`。
+## Pebble 字段级存储
 
-其他低频 Metadata CRUD 和 List 直接访问 SQLite。List 使用 SQL `ORDER BY + LIMIT + OFFSET`，禁止先全表加载再在内存分页。ArchiveFile、Build History 和审计记录不进入全量 Cache。
+### 物理 Key
 
-## 字段生命周期
-
-### Metadata 更新
-
-Field 是 Space 级稳定字典，DatasetColumn 是 Dataset 对 Field 的引用。字段接口只接受向 Dataset 追加 DatasetColumn；可引用已有的同类型 Field，也可在同一事务中创建新 Field 后引用。它逐项比较旧 Schema：
-
-- 旧 Field ID 必须仍然存在。
-- 旧字段的 Type 必须完全相同。
-- 同一 Dataset 内不能重复绑定 Field ID。
-- Space 中已有 Field ID 只能按原 Type 和原语义被其他 Dataset 引用，不能作为另一种字段复用。
-- Update/Delete Dataset Field API 对活动 Schema 返回 `FIELD_IMMUTABLE`。
-
-Add Field 是幂等操作：相同 Dataset、Field ID 和 Type 已存在时返回当前字段并重新确认 Runtime Schema；相同 Field ID 但 Type 或数据语义不同则返回 `FIELD_IMMUTABLE`。
-
-新增字段在一个 SQLite 事务中提交。Add Field 在同一 Dataset 的更新锁内完成 SQLite Commit 和 DatasetSchema 指针替换，只有两步都完成后才返回成功；因此调用方收到成功响应后即可写入新字段，不暂停 Dataset，也不要求重新部署。若进程在 SQLite Commit 后、指针替换前退出，本次调用不会返回成功；重启时从 SQLite 加载完整字段集合，调用方可安全重试幂等 Add Field。
-
-### PrimaryStore 与 DataNode 的 Schema 边界
-
-PrimaryStore 是唯一业务 Schema 校验入口：
+每个 Field 和 Attribute 独立保存。`value_kind` 使用固定单字节命名空间：
 
 ```text
-字段是否属于 Dataset
-Field ID 是否重复
-TypedValue 是否匹配字段 value_type
-行数、字段数和公共请求大小限制
+0x00 = RowMarker
+0x01 = Dataset Field
+0x02 = Attribute
 ```
 
-DataNode 不保存 Dataset Manifest，不理解 Field 类型，也不比较 Schema Revision。它只校验 Node/Dataset/RowKey、TypedValue Protobuf 结构、重复 Field ID、Batch 大小和最终 JetStream Payload，并负责原子 Merge。
+Field 和同名 Attribute 因命名空间不同而不会冲突。
 
-DataNode 写 RPC 只允许唯一 PrimaryStore 的 Service HMAC 身份调用。普通服务和浏览器不能绕过 PrimaryStore 写入。`schema_revision` 不进入 DataNode 写协议、Pebble 事实或 RowsCommitted 事件。
-
-## 事实写入与 DataNode
-
-### 写入流程
+TimeSeries 使用 UTC 日桶：
 
 ```text
-Caller
-  -> PrimaryStore
-       1. 从 Runtime Catalog 获取 Dataset 和 DataNode
-       2. 校验批次、字段和值类型
-       3. direct tRPC MergeRows
-  -> DataNode
-       4. 校验 node_id、dataset_id、RowKey 和通用 TypedValue 结构
-       5. 在 Pebble 中读取旧行并 Merge
-       6. 编码完整 RowsCommitted
-       7. 校验最终 JetStream Payload 大小
-       8. 原子提交事实、Sequence、Dataset Progress 和 Outbox
+time_series
+| space_id
+| dataset_id
+| YYYY-MM-DD
+| subject_id
+| freq
+| data_time
+| value_kind
+| field_or_attribute_id
 ```
 
-PrimaryStore 是 Field ID 和业务类型的唯一正确性边界。DataNode 是 Merge 原子性、通用数据结构和最终 Payload 的正确性边界。
-
-事实协议不混合“当前状态”和“删除指令”：
+Record 不做自动清理，不使用时间桶：
 
 ```text
-FactRow
-  key
-  columns
-  attributes
+record
+| space_id
+| dataset_id
+| record_id
+| version
+| value_kind
+| field_or_attribute_id
 ```
 
-协议删除 `attributes_to_delete`、`removed_column_names` 和 `removed_columns`。Merge 中没有出现的字段和 Attribute 保持原值；调用方不能把某个既有值单独恢复为缺失。需要删除时只能使用 `DeleteRows` 删除完整事实行。
+实际实现使用保持字节排序的长度前缀二进制 Tuple Codec，不继续使用字符串分隔和手工 `%` 转义。
 
-事实行、ViewIndex 行和字段 Tombstone 都不保存 `source_node_id` 或 `source_sequence`。事件来源只由 `RowsCommitted` 顶层的 `{node_id, dataset_id, sequence}` 表达；消费顺序和防旧事件回写由物理 ViewIndex 的 Source Checkpoint 负责。
+RowMarker 保存完整 FactKey 和确定性 `content_hash`。Hash 输入是按 Field ID、Attribute Key 排序后的完整事实内容，不包含请求时间、调用方或 Sequence。
 
-### Sequence
-
-每个 DataNode 维护一个全局连续 `node_sequence`，所有本节点 Dataset 共用。每个 Dataset 同时保存一个 `DatasetProgress.last_committed_sequence`，表示该 Dataset 最近一次成功提交所使用的 Node Sequence。
+### WriteFields
 
 ```text
-sequence 100 -> kline_1m
-sequence 101 -> trade_tick
-sequence 102 -> kline_1m
-sequence 103 -> factor_value
+PrimaryStore
+  1. 从 Runtime Catalog 获取 DatasetSchema 和 DataNode
+  2. 校验 Field 归属、重复 Field、TypedValue 和请求上限
+  3. direct tRPC 调用 DataNode.WriteFields
 
-kline_1m last_committed_sequence     = 102
-trade_tick last_committed_sequence   = 101
-factor_value last_committed_sequence = 103
+DataNode
+  4. 计算确定性 content_hash
+  5. 读取小型 RowMarker
+  6. Marker 不存在时准备 Field/Attribute Set
+  7. Marker Hash 相同则幂等成功
+  8. Marker Hash 不同则返回 FACT_VERSION_IMMUTABLE
+  9. 编码 DatasetFieldsChanged 和 MooxMessage
+ 10. 校验最终 JetStream Payload
+ 11. 原子提交 Marker、Field、Attribute、Sequence、Progress 和 Outbox
 ```
 
-`node_sequence` 用于 Outbox 和同 DataNode 消费顺序。`last_committed_sequence` 用于 View Snapshot Barrier 和新鲜度判断。由于中间可能包含其他 Dataset 的事件，`last_committed_sequence` 与 View Checkpoint 的数值差不能解释为事件条数。
+DataNode 不读取 Metadata，不理解 Field 类型，也不组装完整业务行。
 
-### 原子提交
+### ReadFields
 
-以下内容必须在同一个 Pebble Batch 中提交：
+DataNode 不提供“读取完整行”的 RPC。每次读取必须指定 Field：
+
+```proto
+message ReadFieldsReq {
+  string node_id = 1;
+  string dataset_id = 2;
+  repeated FactKey keys = 3;
+  repeated string field_ids = 4;
+  repeated string attribute_keys = 5;
+}
+```
+
+`field_ids` 必须非空。Response 对每个 FactKey 返回 `row_exists` 和请求字段中实际存在的值。
+
+上层需要当前 Dataset 的全部生效字段时，由 PrimaryStore 从 Runtime Catalog 取得 Field ID 集合，再分批调用 DataNode。DataNode 不提供普通 `ReadRows`、`ScanRows`、`ScanNodeSnapshot` 或 `DeleteRows`。
+
+Record 未指定 Version 时，DataNode 在已知 `record_id` 的 Prefix 内使用反向 Seek 返回字符顺序最大的 Version；这不是对外范围扫描。
+
+`GetDatasetProgress` 只供 PrimaryStore 状态查询、监控和故障诊断使用；View 重建不调用它，也不使用它决定双写或切换。
+
+### 原子提交与事件
+
+每个 DataNode 维护全局连续 `node_sequence`，每个 Dataset 保存最近一次提交使用的 `DatasetProgress.last_committed_sequence`。首次成功创建事实版本时，在一个 Pebble Batch 中提交：
 
 ```text
-事实行
+RowMarker
+Field Keys
+Attribute Keys
 node_sequence
 DatasetProgress.last_committed_sequence
-RowsCommitted Outbox
+DatasetFieldsChanged Outbox
 ```
 
-DataNode 先编码最终 `MooxMessage`，再使用与 JetStream Publisher 相同的 Max Payload 做提交前检查。超限时整批零提交。
+完全相同的幂等重试不推进 Sequence、不更新 Progress、不创建事件。DataNode 使用一个简单 `commitMu` 保证 Sequence、Pebble Commit 和 Outbox 顺序一致。
 
-## JetStream 与 Outbox
-
-`MOOX_STORAGE` 保持持久 JetStream：
-
-```text
-retention: interest
-discard: new
-```
-
-消息只有在所有匹配 Durable Consumer ACK 后才能释放。达到 Max Bytes、Max Messages 或其他容量限制时，JetStream 拒绝新 Publish；DataNode 保留 Outbox 队首并按退避重试。Outbox 达到本地 Entries、Bytes 或 Oldest Age 上限后，DataNode 拒绝新的事实写入。
-
-Outbox 只提供 inspect 和 retry，不提供 force-skip。无法处理的消息必须修复代码、配置或数据后重新部署；系统不通过跳过事件恢复绿色状态。
-
-`RowsCommitted` 保留 TimeSeries 和 Record 两种明确 Payload，但通过一个逻辑 Storage Subject 集合消费。每条消息携带：
+`DatasetFieldsChanged` 顶层携带：
 
 ```text
 node_id
 dataset_id
 sequence
-完整 Merge 后事实行或 Delete Key
+新建事实版本及其完整 Field/Attribute
 ```
 
-RowsCommitted 的行对象不重复携带 Node 或 Sequence。
+事实行和 Field 不保存 `source_node_id` 或 `source_sequence`。
 
-## 活动 View 物化
+## 数据保存与磁盘清理
 
-`storage_view_active` 是固定 Durable Consumer。ViewBuilder 按 `node_id` 维护有界顺序 Lane：
+### Pebble
 
-- 同一 DataNode 的 Sequence 串行。
-- 一个 DataNode 失败不阻塞其他 DataNode。
-- 失败 Sequence 重投成功后 Lane 自动恢复。
-- Handler 在 ViewIndex 持久化成功后才 ACK。
+`storage-primary` 根据 TimeSeries Dataset 的 `keep_days` 计算已经完整过期的 UTC 日桶，调用 DataNode 内部 `CleanupExpiredBuckets`。DataNode 对整个桶执行 `DeleteRange`，并在后台对删除范围 Compact。
 
-View 可以组合不同 DataNode 的 Dataset。正常 Merge 事件只把发生变化的 Dataset 映射成它拥有的 View 列，并用 `MERGE` 更新当前 Active Index。目标 View 行缺失时，Builder 通过 PrimaryStore 分别读取所有来源 Dataset，生成完整行后用 `REPLACE` 恢复。
+清理是物理维护，不属于业务事实变更：
 
-DeleteRows 事件不生成字段删除列表。ViewBuilder 收到来源事实行删除后重新读取该 View 行的全部来源：Primary Dataset 已不存在时删除整条 View 行；Primary Dataset 仍存在时按 Metadata 中当前生效的 View 字段生成完整行并执行 `REPLACE`。Secondary Dataset 缺失的列自然不会进入完整行，因此不需要字段 Tombstone 或字段级删除协议。
+- 不生成 DatasetFieldsChanged；
+- 不推进 Node Sequence 或 Dataset Progress；
+- 不提供给普通外部调用方；
+- Record 永不自动清理。
 
-每个物理 ViewIndex 独立保存 Source Checkpoint：
+### ViewIndex
+
+每个 View 使用两个独立物理槽位：
 
 ```text
-{node_id, dataset_id, sequence}
+<view-id>/slot-a.duckdb
+<view-id>/slot-b.duckdb
 ```
 
-Checkpoint 只为 View 实际依赖的 Dataset 更新。Source Sequence 可以跨过同 DataNode 其他 Dataset 的 Sequence。`ViewIndexSourceProgress` 只携带 `{node_id, dataset_id, sequence}`；ViewIndex 在事务内读取当前值，`sequence <= current` 时幂等成功且不修改数据，`sequence > current` 时原子提交行变更并把 Checkpoint 推进到该 Sequence。协议不再携带 `expected_last_applied_sequence`。
+Bleve 使用对应的 `slot-a/` 和 `slot-b/` 目录。Metadata 的 `active_slot` 决定当前角色。DuckDB/View 清理不调用 Pebble 清理；它只在 A/B 重建时按 `View.keep_days` 过滤旧 ActiveView Key，切换成功后删除整个 OldView DB。
 
-Consumer 对消息涉及的每个 ViewIndex 分别判断 Checkpoint：事件 Sequence 不大于当前值时，该 ViewIndex 将它视为已经持久化的重复或旧投递，不再修改 Index；其他尚未应用的 ViewIndex 仍正常处理。只有所有受影响 ViewIndex 都成功应用或幂等跳过后才 ACK 消息。该规则既处理普通 JetStream 重投，也保证 View 切换后 Active Consumer 可以安全跳过已经包含在新 Index 中的积压事件。
+增加 `keep_days` 不会恢复已经从 ActiveView 删除的 Key。需要恢复历史时由用户重新写入事实。
 
-## View Schema 与在线重建
+## JetStream 与单 Consumer
 
-### 版本可见性
-
-View 保存期望版本和当前在线版本：
+`MOOX_STORAGE` 使用 JetStream 原生策略：
 
 ```text
-desired_view_revision
-active_view_revision
-active_index_id
+InterestPolicy
+DiscardNew
 ```
 
-新增 View 字段只修改 Desired Revision。新 Index 激活前，公开查询继续使用旧 Active Revision、旧列集合和旧 Index。新字段不能提前出现在查询 Schema 中。
-
-### 固定 Consumer 和单 Build
-
-`storage-view` 只使用两个固定 Consumer：
+View 只创建一个固定 Durable Consumer：
 
 ```text
-storage_view_active
-storage_view_rebuild
+storage_view
 ```
 
-全系统同时只允许一个 View Build。没有 Build 时，Rebuild Consumer 直接 ACK。Build 开始前暂停 Rebuild Consumer，使随后到达的事件在 JetStream 中等待。
+不创建 `storage_view_active`、`storage_view_rebuild` 或每 Build Consumer。Outbox 只允许 inspect 和 retry，不允许 force-skip。
 
-系统不创建每 Build Durable Consumer，不使用 Build Owner Lease，也不并行调度多个 Build。
+事件按 DataNode 进入有界顺序 Lane。同一 Node 的 Sequence 串行；一个 Node 失败不阻塞其他 Node。ActiveView 持久化成功后才允许 ACK。
 
-### Snapshot 与 Catch-up
+## ViewIndex Progress
 
-DataNode 保留批量 `GetDatasetProgress`，只供 View 重建和切换读取同一节点上多个 Dataset 的最新提交位置：
+每个物理 ViewIndex 独立保存：
 
 ```proto
-message GetDatasetProgressReq {
+message ViewIndexSourceProgress {
   string node_id = 1;
-  repeated string dataset_ids = 2;
+  string dataset_id = 2;
+  uint64 sequence = 3;
 }
 ```
 
-该接口不参与 Dataset 归属修改，也不承担迁移判断。
+协议不携带 `expected_last_applied_sequence`。ViewIndex 在事务内读取当前 Progress：
+
+- `sequence <= current`：幂等成功，不修改行；
+- `sequence > current`：原子提交行变更和新 Progress。
+
+Progress 可以跨过同 Node 上其他 Dataset 的 Sequence。`ActiveHandle` 只保存 `index_id`、`revision` 和列集合，不复制 Source Progress。
+
+## View A/B 重建
+
+### 角色生命周期
+
+角色不是固定文件名：
 
 ```text
-1. 获取全局 Rebuild Lock
-2. 暂停 Rebuild Consumer 并等待在途处理结束
-3. 对每个来源 DataNode 创建 Pebble Snapshot
-4. 从 Snapshot 读取各来源 `last_committed_sequence`
-5. 使用 Snapshot 全量 REPLACE 新 Index；每个来源完成后把 Source Checkpoint 初始化为对应的 snapshot_last_committed_sequence
-6. 恢复 Rebuild Consumer
-7. 对每个来源丢弃 sequence <= snapshot_last_committed_sequence 的事件
-8. 应用 snapshot_last_committed_sequence 之后的 MERGE/DELETE
-9. 追平当前 Dataset Progress Vector
+重建前：slot-a = ActiveView，slot-b = 空
+重建中：slot-a = ActiveView，slot-b = NewView
+切换后：slot-b = ActiveView，slot-a = OldView
+清理后：slot-b = ActiveView，slot-a = 空
 ```
 
-Snapshot 只在 DataNode 进程内存在，具有 TTL 和并发数量上限。Build 进程崩溃或 Snapshot 丢失后，本次 Build 直接 FAILED；系统删除未激活 Index，并从新 Snapshot 开始完整重建，不恢复旧 Cursor。
+下一次重建反向复用空槽位。
 
-持久 Build 状态只保留：
+### 首次创建约束
+
+TimeSeries 和 Record View 都必须在来源 Dataset 开始写入前创建。首次创建空 ActiveView，后续 Key 由实时事件持续加入。
+
+系统不支持从一个已经存在事实、但从未创建过 View 的 Dataset 自动发现历史 Key。A/B 重建继承旧 ActiveView 的 Key 集合，不能修复旧 ActiveView 已经缺失的 Key。
+
+### 开始双写
+
+ViewBuild 保存：
 
 ```text
-BUILDING
-CATCHING_UP
-FAILED
-ACTIVE
+started_at
+base_progress[{node_id, dataset_id}] -> sequence
+new_slot
+status
+backfilled_rows
+safe_error
 ```
 
-### 无感切换
-
-新 Index 基本追平后，系统执行有界切换：
+启动步骤：
 
 ```text
-1. 暂停 Active Consumer，等待在途 Apply 完成
-2. 读取最新 Dataset Progress Vector
-3. Rebuild Consumer 追平该 Vector
-4. 使用 Expected Old Revision 做幂等 CAS，在一个 Metadata 事务中切换 active_index_id 和 active_view_revision
-5. storage-view 原子替换包含 Index、Revision 和 Columns 的 Active Handle
-6. 恢复 Active Consumer
+1. 创建并清空 NewView
+2. 获取该 View 的 Apply 锁
+3. 在 ActiveView 开启一致性只读事务
+4. 从同一事务读取 ActiveView Source Progress，保存为 base_progress
+5. 用 base_progress 初始化 NewView Source Progress
+6. 原子发布 ViewWriteTargets{Active, New}
+7. 释放 Apply 锁
+8. 启动 Backfill 协程
 ```
 
-`max_switch_pause` 固定为 2 秒。2 秒内不能追平并进入 Metadata CAS 时，系统取消本次切换、恢复 Active Consumer，旧 Index 继续更新，新 Index 保留并稍后重试。一旦 CAS 已确认目标 Index 激活，系统必须完成本地 Handle 替换，不能再回退；若 RPC 结果不确定则读取 Metadata 判定目标是否已激活。`storage-view` 崩溃后按 Metadata 中的 Active Index 重建 Handle。
+只有一个 Consumer，因此不需要 Rebuild Consumer、Pebble Snapshot、Build Barrier 或等待 ActiveView 追平 DataNode。安装双写目标之前的事件已经包含在 ActiveView 基线中；安装后的事件由同一个 Handler 同时写两个目标。
 
-暂停的是增量 Consumer，不是 DataView 查询。重建和切换期间：
+### 实时写与 ACK
 
-- 旧 Active Index 持续服务现有字段查询。
-- 事实写入持续进入 DataNode 和 JetStream。
-- 新字段只在原子切换后一次性可见。
-- 已在旧 Index 上执行的查询继续完成。
-- 新请求在切换后使用新 Index。
-- Active Consumer 恢复后，对不大于新 Source Checkpoint 的积压消息直接 ACK，不回写旧状态。
-- 旧 Index 等待在途查询归零并经过 Grace Period 后删除。
-
-`ActiveHandle` 不保存 Source Checkpoints。物理 ViewIndex 是 Source Checkpoint 的唯一事实源；把进度复制到不可变查询 Handle 会形成很快过期的第二份状态。DataView 查询只从 Handle 获取 `index_id`、`revision` 和列集合，ViewBuilder 直接读取物理 ViewIndex Checkpoint。
-
-因此调用方不会看到半成品 Index，也不会因重建收到暂停或错误。切换期间其他 View 最多产生不超过 2 秒的增量延迟，查询本身不中断。
-
-## 内部 RPC 与安全
-
-Storage 内部进程直接通过 tRPC 调用：
+没有重建时：
 
 ```text
-storage-primary -> storage-node
-storage-view    -> storage-primary
-archive         -> storage-primary
+写所有受影响 ActiveView -> 全部成功后 ACK
 ```
 
-每个调用方使用独立 Service HMAC 身份。DataNode 只接受 PrimaryStore 和受控维护身份；PrimaryStoreScan 只接受 ViewBuilder、Archive 和受控维护身份。浏览器只能通过 Admin Gateway 访问公开 Metadata、PrimaryStore 和 DataView 方法。
+重建时：
 
-系统不为 Storage 内部 RPC 增加 Node Service Gateway Hop、方法路由表或回退直连逻辑。
+```text
+写所有受影响 ActiveView -> 写正在重建 View 的 NewView -> 全部成功后 ACK
+```
 
-## Dataset 节点变更
+任一 ActiveView 写失败时 NAK。所有 ActiveView 成功但 NewView 失败时：立即停止本次重建、标记 FAILED、移除 NewView、清理失败 DB，并正常 ACK 当前事件；ActiveView 继续服务。系统保存安全错误并等待用户手动重新触发，不自动重建。
 
-MooX 不实现 Dataset 迁移。Dataset 创建后，Metadata API 永久拒绝修改 `data_node_id`。系统不提供复制、校验、切换、回滚、双写或迁移命令。
+### 空闲 Backfill
 
-用户直接停机、复制文件或修改 SQLite 属于系统外人工操作。MooX 不校验该操作，也不承诺操作期间和操作后的可用性、一致性或可恢复性。
+Backfill 使用启动时 ActiveView 的一致性只读事务：
+
+1. 分页读取旧 ViewRowKey 和已有列；
+2. TimeSeries 按 `started_at` 和 `View.keep_days` 过滤；Record 不过滤；
+3. 把已有列写入 NewView；
+4. 从 Metadata 获取当前 Revision 新增的列；
+5. 使用旧 Key 和明确 Field ID 调用 DataNode.ReadFields；
+6. 只填充 NewView 当前缺失的值。
+
+实时事件优先。只要实时 View 事件排队或正在写入，Backfill 就不提交新 Batch。每个 Backfill Batch 最多 100 行或 50ms，完成后重新检查实时队列。已经开始的 DuckDB 事务不被强制中断；实时事件最多等待当前小 Batch 完成。
+
+NewView 只有一个串行 Writer。实时写使用 `LIVE_WRITE`，Backfill 使用 `BACKFILL`；`BACKFILL` 只能填充缺失值，不能覆盖实时写已经提交的非空值。
+
+Backfill 失败时停止本次重建、标记 FAILED、移除并清理 NewView；ActiveView 不受影响，用户手动重建。
+
+### 原子切换
+
+Backfill 完成后：
+
+```text
+1. 获取 View Apply 锁
+2. 确认 ActiveView 与 NewView Source Progress 相同
+3. Metadata CAS 切换 active_slot 和 active_view_revision
+4. 原子发布新的 ActiveHandle
+5. 从 ViewWriteTargets 移除旧 ActiveView
+6. 释放 Apply 锁
+7. 等旧查询引用归零并经过 Grace Period
+8. 删除 OldView DB
+```
+
+切换持锁时间最多 2 秒；超时前未进入 Metadata CAS 时恢复原状态并保留 NewView，等待用户再次触发切换。DataView 查询从请求开始到结束持有同一个不可变 ActiveHandle，因此不会看到半成品或跨 Slot 结果。
 
 ## 故障语义
 
 | 故障 | 行为 |
 | --- | --- |
-| 单个 DataNode 离线 | 只影响归属于该节点的 Dataset；其他节点继续服务 |
-| storage-primary 离线 | 事实读写和 Metadata 管理暂停；已打开的 View 查询可继续 |
+| DataNode 离线 | 只影响该节点 Dataset；其他节点继续服务 |
+| storage-primary 离线 | 事实读写和 Metadata 管理暂停；已打开 View 查询继续 |
 | storage-view 离线 | View 查询暂停；事实写入继续，JetStream 保留事件 |
-| JetStream 离线或满 | Outbox 重试；达到本地背压上限后事实写入明确失败 |
-| Active Apply 瞬时失败 | JetStream NAK；相同 Sequence 成功重投后 Lane 恢复 |
-| View Build 失败 | 旧 Active Index 继续服务；新 Index 标记 FAILED |
-| View 切换超过 2 秒 | 取消切换并恢复 Active Consumer，稍后重试 |
-| Active 切换后收到旧事件 | 不修改新 Index；按 Source Checkpoint 幂等 ACK |
-| 追加字段 | Add Field 在 SQLite Commit 和 DatasetSchema 指针替换后才返回成功；在途旧请求继续 |
-| 修改或删除已有字段定义 | Metadata 返回 `FIELD_IMMUTABLE`，运行时 Schema 不变 |
-| 单独删除事实字段值或 Attribute | 协议不支持；调用方只能 Merge 新值或 DeleteRows 删除完整事实行 |
-| Outbox 永久错误 | 保持失败和背压，等待用户修复；不跳过消息 |
-
-## 错误码
-
-至少提供以下稳定类型化错误：
-
-```text
-DATA_NODE_UNAVAILABLE
-DATASET_NOT_ASSIGNED
-FIELD_IMMUTABLE
-FIELD_NOT_FOUND
-FIELD_TYPE_MISMATCH
-BATCH_TOO_LARGE
-OUTBOX_BACKPRESSURE
-SNAPSHOT_NOT_FOUND
-VIEW_BUILD_IN_PROGRESS
-VIEW_SWITCH_TIMEOUT
-```
-
-RPC 只返回稳定安全消息。日志记录底层 Cause、Node ID、Dataset ID、Sequence 和 Build ID；代码不通过 `strings.Contains(err.Error())` 分类错误。
+| JetStream 离线或满 | Outbox 重试；达到本地上限后写入明确失败 |
+| ActiveView Apply 失败 | NAK，相同 Sequence 重投 |
+| NewView 实时写失败 | 当前重建 FAILED，Active 成功的事件 ACK，等待人工重建 |
+| Backfill 失败 | 当前重建 FAILED，ActiveView 继续服务，等待人工重建 |
+| Backfill 长期没有空闲时间 | 保持 BUILDING，不影响实时事件 |
+| 切换超过 2 秒 | 不切换 Active，返回明确错误 |
+| Schema 非 v4 | 启动失败，用户清理数据库后重新部署 |
+| 旧 FactKey 内容冲突 | 返回 FACT_VERSION_IMMUTABLE |
 
 ## 两服务器 E2E
 
-仓库本地 `custom.toml` 已配置两台测试服务器的连接信息。E2E 只读取该文件，不把账号、密码、Token 或展开后的连接命令写入 Git、日志、测试快照和错误消息。
+E2E 从仓库根被忽略的 `custom.toml` 读取两个服务器节点，不打印或提交凭证。
 
 推荐拓扑：
 
 ```text
-Server A
-  EventBus
-  storage-primary
-  storage-node-market
-  storage-view
-
-Server B
-  storage-node-factor
+Server A: EventBus, storage-primary, storage-node-market, storage-view
+Server B: storage-node-factor
 ```
 
-E2E 使用独立测试目录、端口和 Dataset ID：
+必须验证：
 
-1. 把 K 线 Dataset 部署到 Server A。
-2. 把因子 Dataset 部署到 Server B。
-3. 持续向两个 Dataset 写入数据。
-4. 创建跨节点 K 线 + 因子 View。
-5. 在旧 Active Index 上持续发起查询并记录错误率。
-6. 在持续写入期间为 Dataset 动态追加字段，不重启任何进程。
-7. 更新 View Desired Revision 并触发后台重建。
-8. 验证重建期间旧字段查询零错误、零半成品响应。
-9. 验证切换后新字段原子可见且数据与事实源一致。
-10. 注入超过 2 秒的切换延迟，验证自动回退。
-11. 切换后恢复 Active Consumer 的旧事件积压，验证不会回写新 Index。
-12. 停止 Server B DataNode，验证 Server A Dataset 继续读写。
-13. 停止 JetStream，验证 Outbox 保留、恢复后按序补发。
-
-E2E 不修改两台服务器的现有业务目录和服务。测试完成后删除独立测试进程、目录和临时 Metadata；清理命令不得包含从 `custom.toml` 展开的敏感信息。
+1. K 线和因子 Dataset 分属两个 DataNode；
+2. Field 和 Attribute 使用独立物理命名空间；
+3. 相同事实幂等，冲突旧版本被拒绝；
+4. Record 空 Version 读取字符顺序最大版本；
+5. 单 Consumer 正常更新 ActiveView；
+6. 重建开始后实时事件同时写 ActiveView/NewView；
+7. 持续实时写入时 Backfill 暂停，空闲后继续；
+8. NewView 或 Backfill 故障只终止 Build，ActiveView 继续并 ACK；
+9. TimeSeries View 按自身 `keep_days` 生成新 DB；
+10. Pebble 时间桶清理与 DuckDB 重建分别触发、互不联动；
+11. 切换期间查询零错误，新字段原子可见；
+12. 切换后删除 OldView DB；
+13. 无 DataNode Scan、Snapshot 或 DeleteRows RPC。
 
 ## 验收标准
 
-1. K 线和因子 Dataset 可以部署在不同 DataNode，且每个 Dataset 只有一个 Owner。
-2. PrimaryStore 只按 `Dataset.data_node_id` 路由，不存在 Hash、权重或跨 Target 聚合。
-3. 所有字段均可缺失，不存在 Required 字段属性和校验分支。
-4. 已有字段删除、Field ID 变化和类型变化全部被拒绝。
-5. 新增字段在 Add Field 成功返回后动态生效，不暂停写入、不重新部署。
-6. DataNode 原子提交事实、Node Sequence、Dataset Progress 和 Outbox。
-7. 跨 DataNode View 的稳态 MERGE、缺行 REPLACE 和整行 DELETE 正确；协议不存在字段级删除。
-8. 活动消费按 DataNode 保序，单节点失败不阻塞其他节点。
-9. 全系统同时只运行一个 View Build，并只使用两个固定 View Consumer。
-10. View 重建期间旧 Active Index 持续提供无错误查询。
-11. 新字段只在 Active Index 和 Active Revision 原子切换后可见。
-12. 最终切换暂停不超过 2 秒；超时自动恢复旧 Active 更新。
-13. Source Checkpoint 只保存在物理 ViewIndex；Active Consumer 的旧积压只产生幂等 ACK。
-14. Build 崩溃后从头重建，不恢复旧 Snapshot、Lease 或 Cursor。
-15. Runtime Catalog 的 Routing 启动后不变，DatasetSchema 支持原子热追加。
-16. Storage 内部服务使用直接 tRPC，不经过 Node Service Gateway。
-17. 两服务器 E2E 覆盖跨节点事实、动态字段、View 重建、切换回退、旧事件重投、节点故障和 Outbox 恢复。
+- Metadata 只接受 Schema v4，代码中不存在 `metadataSchemaVersionCompatible`。
+- Dataset 创建后不可修改 DataNode；不存在 DatasetPlacement 和迁移工具。
+- 不存在 Required、Dimensions、字段删除、DeleteRows、ReadRows、ScanRows 或 Snapshot RPC。
+- TimeSeries 使用 UTC 日桶；Record 不自动清理。
+- Field 使用 `0x01`，Attribute 使用 `0x02`，同名不冲突。
+- DataNode `WriteFields` 实现不可变版本和内容 Hash 幂等。
+- DataNode `ReadFields` 必须指定 Field；Record 空 Version 返回字符最大版本。
+- 首次事实提交原子包含字段、Sequence、Progress 和 Outbox。
+- JetStream 只有一个 `storage_view` Durable Consumer。
+- ViewIndex Progress 只有 `{node_id,dataset_id,sequence}`。
+- 每个 View 使用独立 A/B DB；ActiveView/NewView/OldView 生命周期明确。
+- Backfill 只在实时队列空闲时小批运行，不能覆盖实时值。
+- NewView 或 Backfill 失败不阻塞 ActiveView，整次重建等待人工重试。
+- TimeSeries/Record View 都从旧 ActiveView Key 重建，不扫描 DataNode。
+- 本地门禁、两轮独立代码审查和两服务器 E2E 全部通过。
 
 ## 明确不实现
 
-- Dataset 内分片、Hash Pool、权重和 Rendezvous Hash。
-- DataNode 副本、Leader Election、自动 Failover 和 Quorum。
-- Dataset 迁移、复制、校验、双写、自动回滚和 Rebalance。
-- 多 PrimaryStore、多 storage-view 和多 Build 并行。
-- Required 字段、Schema Fence、Schema Revision、字段迁移和兼容读写。
-- 单字段事实值删除、Attribute 单项删除、字段 Tombstone 和行级来源 Sequence。
-- 每 Build JetStream Consumer、Build Lease 和可恢复 Snapshot Cursor。
-- Metadata 通用 Cache、全量 Snapshot Refresh 和无界对象缓存。
-- Storage 内部 Node Service Gateway Hop。
-- Outbox force-skip 和静默事件丢弃。
+- Dataset 内分片、Replica、Leader Election、Quorum 和自动 Failover。
+- Dataset 迁移、复制、双写、回滚和 Rebalance。
+- Required、Dimensions、Schema Fence、Schema Revision 和旧协议兼容。
+- 字段级删除、Attribute 删除、DeleteRows 和历史事实修正。
+- DataNode 普通范围扫描、Snapshot Scan 和完整行读取。
+- Record 自动过期清理。
+- 第二个 View Consumer、每 Build Consumer、Build Lease 和 Event Catch-up 状态机。
+- 从 DataNode 枚举历史 FactKey，或修复旧 ActiveView 缺失的 Key。
+- 自动重试失败的整次 View 重建。
