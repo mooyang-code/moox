@@ -2,7 +2,7 @@
 
 ## 状态与优先级
 
-本设计已于 2026-07-19 完成讨论确认。它是 Storage 当前实现的目标事实源，取代此前关于 DataShard、多 Consumer、Pebble 行级 Merge、字段级删除、Snapshot Scan、Dataset 迁移和通用 Schema 演进的设计。
+本设计已于 2026-07-19 完成讨论确认。它是 Storage 当前实现的目标事实源，取代此前关于 DataShard、多 Consumer、Pebble 行级 Merge、不可变整行、字段级删除、Snapshot Scan、Sequence Progress、Dataset 迁移和通用 Schema 演进的设计。
 
 MooX 是个人量化交易系统。本设计优先保证数据正确、边界清楚和长期可维护，不建设高可用、在线迁移和通用分布式存储平台。
 
@@ -10,14 +10,14 @@ MooX 是个人量化交易系统。本设计优先保证数据正确、边界清
 
 1. 一个 Dataset 只属于一个 DataNode，一个 DataNode 可以承载多个 Dataset。
 2. 默认多进程；同一套进程可以部署在一台或多台机器。
-3. 事实版本不可修改，只能追加新版本。
-4. 每个 Field 和 Attribute 独立保存为 Pebble Key。
-5. DataNode 只提供精确 Key、精确 Field 读写，不提供普通扫描和删除接口。
-6. View 重建只使用旧 ActiveView 的 Key 集合，不扫描 DataNode。
-7. View 只有一个 JetStream Consumer；重建期间同一事件同时写 ActiveView 和 NewView。
-8. 低频 Backfill 不影响实时事件；有实时事件时暂停提交新的 Backfill Batch。
-9. Pebble 与 View 数据保存天数由用户分别配置，互不联动。
-10. 所有错误显式返回；不静默丢事件，不自动重试失败的整次 View 重建。
+3. 每个 Field 和 Attribute 独立保存为 Pebble Key，写入语义是字段级 Upsert。
+4. DataNode 只提供精确 RowKey、精确 Field 读写，不提供普通扫描和删除接口。
+5. Metadata SQLite 是配置事实源，进程通过现有 `snapshotcache` 定时加载不可变内存快照。
+6. 每个 Dataset 使用独立 NATS Subject，不定义 Dataset 或 DataNode 之间的业务顺序。
+7. View 只有一个 JetStream Consumer；同一 Dataset 的事件按 Subject 发布顺序串行应用。
+8. View 重建只使用旧 ActiveView 的 RowKey，不扫描 DataNode。
+9. 重建期间同一实时事件同时写 ActiveView 和 NewView；低频 Backfill 只在实时队列空闲时运行。
+10. Pebble 与 View 的保存时长分别配置，互不联动。
 
 ## 业务不变量
 
@@ -38,7 +38,7 @@ MooX 是个人量化交易系统。本设计优先保证数据正确、边界清
 - TimeSeries Subject 和 Frequency；
 - View、ViewColumn 和 View Grain。
 
-Record 的 `record_id` 和 `version` 不在 Metadata 枚举。Record View 的 Key 集合由已有 ActiveView 保存。
+Record 的 `record_id` 和 `version` 不在 Metadata 枚举。Record View 的 RowKey 集合由已有 ActiveView 保存。
 
 ### Append-only Schema
 
@@ -47,32 +47,33 @@ Record 的 `record_id` 和 `version` 不在 Metadata 枚举。Record View 的 Ke
 - `value_type` 永不修改。
 - 所有 Field 都允许缺失，不存在 Required 字段。
 - Schema 变更只允许为 Dataset 追加 Field。
-- Add Field 在 SQLite Commit 和 Runtime Schema 指针替换后才返回成功。
-- 新增 Field 不要求重启进程，但只适用于以后创建的新事实版本。
+- 新增 Field 不要求重启进程；Metadata Cache 刷新后即可写入。
+- 新增 Field 可以追溯补全历史 RowKey，例如新增因子字段后回填历史时点。
 
-### 不可变事实版本
+### 字段级 Upsert
 
-TimeSeries 的完整事实身份是：
+TimeSeries RowKey 是：
 
 ```text
 space_id + dataset_id + subject_id + freq + data_time
 ```
 
-Record 的完整事实身份是：
+Record RowKey 是：
 
 ```text
 space_id + dataset_id + record_id + version
 ```
 
-完整 FactKey 一旦创建，Field 和 Attribute 永久不变：
+`WriteFields` 对每个 `RowKey + FieldID` 或 `RowKey + AttributeKey` 直接执行 Upsert：
 
-- 相同 FactKey、相同完整内容是幂等成功，不产生新 Sequence 和事件；
-- 相同 FactKey、不同内容返回 `FACT_VERSION_IMMUTABLE`；
-- 不能为旧版本补写一个原本缺失的 Field；
-- 业务修正必须写入新的 `data_time` 或 `version`；
-- 不提供字段级删除、Attribute 单项删除或整行 DeleteRows。
+- Key 不存在时新增；
+- Key 已存在时覆盖旧值；
+- 一次请求可以只写部分 Field；
+- 可以为历史 RowKey 补写新增 Field；
+- 不提供字段删除、Attribute 删除或 DeleteRows；
+- 重复写入相同值允许产生新的 Outbox 事件，消费端 Upsert 后结果不变。
 
-DataNode 的写 RPC 保持名为 `WriteFields`。接口注释必须明确告诉用户：它创建不可变事实版本，不是修改旧版本。
+DataNode 不保存 RowMarker，不计算整行 `content_hash`，也不返回 `FACT_VERSION_IMMUTABLE`。
 
 ### Record Version
 
@@ -102,7 +103,7 @@ Browser
 
 storage-primary
   Metadata SQLite v4
-  Runtime Catalog
+  Metadata snapshotcache
   PrimaryStore
        | direct tRPC + Service HMAC
        |-> storage-node-market -> Pebble + Outbox
@@ -137,13 +138,15 @@ Storage 不保留 Shard 概念：
 | `storage-shard` | `storage-node` |
 | `role: shard` | `role: node` |
 | `shard_id` | `node_id` |
-| `source_shard_id` | 删除 |
-| `source_sequence` 行字段 | 删除 |
+| `FactKey` | `RowKey` |
+| `keep_days` | `keep_duration` |
+| `source_shard_id/source_sequence` | 删除 |
+| `node_sequence/DatasetProgress` | 删除 |
 | `storage_shard_*` | `storage_node_*` |
 
 代码、Proto、配置、Seed、CLI、指标、测试和现行文档必须一次性更新，不保留 Alias、Deprecated RPC 或旧 YAML 字段。
 
-## Metadata 与 Runtime Catalog
+## Metadata Cache
 
 Metadata 只接受 Schema v4。版本检查直接执行：
 
@@ -165,33 +168,35 @@ DataNode
 
 Dataset
   data_node_id
-  keep_days
+  keep_duration
 
 View
-  keep_days
+  keep_duration
   desired_view_revision
   active_view_revision
   active_slot
 ```
 
-`keep_days` 的统一语义：
+`keep_duration` 是可解析的持续时间：
 
-- `Dataset.keep_days` 只用于 TimeSeries Pebble 数据；`0` 表示永久保存；
-- Record 不自动清理，Record Dataset 的 `keep_days` 必须为 `0`；
-- `View.keep_days` 只用于 TimeSeries View；`0` 表示永久保存；
-- Record View 的 `keep_days` 必须为 `0`；
-- Dataset 与 View 的 `keep_days` 独立配置，系统不比较、不调整、不联动。
+- `Dataset.keep_duration` 只用于 TimeSeries Pebble 数据；`0` 表示永久保存；
+- Record 不自动清理，Record Dataset 的 `keep_duration` 必须为 `0`；
+- `View.keep_duration` 只用于 TimeSeries View；`0` 表示永久保存；
+- Record View 的 `keep_duration` 必须为 `0`；
+- Dataset 与 View 的 `keep_duration` 独立配置，系统不比较、不调整、不联动。
 
-`storage-primary` 启动时加载：
+Proto 和 SQLite 都保存规范化 Duration 字符串，例如 `90m`、`24h`、`4320h`；`0` 是唯一的永久保存值。服务入口使用 `time.ParseDuration` 校验并规范化。
+
+`storage-primary` 复用现有 `modules/storage/internal/service/metadata/cache`：
 
 ```text
-RuntimeCatalog
-  datasets[dataset_id] -> data_node_id, data_kind, subjects, freqs
-  data_nodes[node_id]   -> service_target, status
-  schemas[dataset_id]   -> atomic DatasetSchema pointer
+SQLite Metadata
+  -> snapshotcache Source 定时全量加载
+  -> 原子发布不可变 Snapshot
+  -> PrimaryStore 按索引读取 Dataset、Field、DataNode 和 View
 ```
 
-Routing 在运行期间不变。Field 追加时 Clone DatasetSchema 并原子替换指针；在途请求继续使用旧的不可变指针。低频 Metadata List 直接使用 SQLite `ORDER BY + LIMIT + OFFSET`，不保留通用全量 Cache。
+不新增 Runtime Catalog、DatasetSchema Clone 或单 Dataset 原子指针。Metadata CRUD 提交后可以主动 `Refresh` 缩短本进程生效时间；其他进程通过配置的刷新周期看到新快照。刷新失败继续使用上一份完整快照，不发布半快照。
 
 ## Pebble 字段级存储
 
@@ -200,20 +205,19 @@ Routing 在运行期间不变。Field 追加时 Clone DatasetSchema 并原子替
 每个 Field 和 Attribute 独立保存。`value_kind` 使用固定单字节命名空间：
 
 ```text
-0x00 = RowMarker
 0x01 = Dataset Field
 0x02 = Attribute
 ```
 
 Field 和同名 Attribute 因命名空间不同而不会冲突。
 
-TimeSeries 使用 UTC 日桶：
+TimeSeries 使用 UTC 时间桶。桶宽由维护配置决定，不绑定一天：
 
 ```text
 time_series
 | space_id
 | dataset_id
-| YYYY-MM-DD
+| bucket_start
 | subject_id
 | freq
 | data_time
@@ -235,25 +239,20 @@ record
 
 实际实现使用保持字节排序的长度前缀二进制 Tuple Codec，不继续使用字符串分隔和手工 `%` 转义。
 
-RowMarker 保存完整 FactKey 和确定性 `content_hash`。Hash 输入是按 Field ID、Attribute Key 排序后的完整事实内容，不包含请求时间、调用方或 Sequence。
-
 ### WriteFields
 
 ```text
 PrimaryStore
-  1. 从 Runtime Catalog 获取 DatasetSchema 和 DataNode
-  2. 校验 Field 归属、重复 Field、TypedValue 和请求上限
+  1. 从 Metadata Cache 获取 Dataset、Fields 和 DataNode
+  2. 校验 RowKey、Field 归属、重复 Field、TypedValue 和请求上限
   3. direct tRPC 调用 DataNode.WriteFields
 
 DataNode
-  4. 计算确定性 content_hash
-  5. 读取小型 RowMarker
-  6. Marker 不存在时准备 Field/Attribute Set
-  7. Marker Hash 相同则幂等成功
-  8. Marker Hash 不同则返回 FACT_VERSION_IMMUTABLE
-  9. 编码 DatasetFieldsChanged 和 MooxMessage
- 10. 校验最终 JetStream Payload
- 11. 原子提交 Marker、Field、Attribute、Sequence、Progress 和 Outbox
+  4. 将每个 Field/Attribute 编码为独立 Pebble Key
+  5. 编码 DatasetFieldsChanged 和 MooxMessage
+  6. 校验最终 JetStream Payload
+  7. 分配内部 outbox_id
+  8. 在一个 Pebble Batch 中 Upsert Field/Attribute 并写入 Outbox
 ```
 
 DataNode 不读取 Metadata，不理解 Field 类型，也不组装完整业务行。
@@ -266,56 +265,53 @@ DataNode 不提供“读取完整行”的 RPC。每次读取必须指定 Field�
 message ReadFieldsReq {
   string node_id = 1;
   string dataset_id = 2;
-  repeated FactKey keys = 3;
+  repeated RowKey keys = 3;
   repeated string field_ids = 4;
   repeated string attribute_keys = 5;
 }
 ```
 
-`field_ids` 必须非空。Response 对每个 FactKey 返回 `row_exists` 和请求字段中实际存在的值。
+`field_ids` 必须非空。Response 对每个 RowKey 只返回请求字段中实际存在的值，不返回依赖 RowMarker 的 `row_exists`。
 
-上层需要当前 Dataset 的全部生效字段时，由 PrimaryStore 从 Runtime Catalog 取得 Field ID 集合，再分批调用 DataNode。DataNode 不提供普通 `ReadRows`、`ScanRows`、`ScanNodeSnapshot` 或 `DeleteRows`。
+上层需要当前 Dataset 的全部生效字段时，由 PrimaryStore 从 Metadata Cache 取得 Field ID 集合，再分批调用 DataNode。DataNode 不提供普通 `ReadRows`、`ScanRows`、`ScanNodeSnapshot`、`GetDatasetProgress` 或 `DeleteRows`。
 
 Record 未指定 Version 时，DataNode 在已知 `record_id` 的 Prefix 内使用反向 Seek 返回字符顺序最大的 Version；这不是对外范围扫描。
 
-`GetDatasetProgress` 只供 PrimaryStore 状态查询、监控和故障诊断使用；View 重建不调用它，也不使用它决定双写或切换。
+### 原子提交与 Outbox
 
-### 原子提交与事件
-
-每个 DataNode 维护全局连续 `node_sequence`，每个 Dataset 保存最近一次提交使用的 `DatasetProgress.last_committed_sequence`。首次成功创建事实版本时，在一个 Pebble Batch 中提交：
+每次 `WriteFields` 在一个 Pebble Batch 中提交：
 
 ```text
-RowMarker
 Field Keys
 Attribute Keys
-node_sequence
-DatasetProgress.last_committed_sequence
-DatasetFieldsChanged Outbox
+__outbox/<outbox_id>
+__meta/next_outbox_id
 ```
 
-完全相同的幂等重试不推进 Sequence、不更新 Progress、不创建事件。DataNode 使用一个简单 `commitMu` 保证 Sequence、Pebble Commit 和 Outbox 顺序一致。
+`outbox_id` 是 DataNode 内部递增编号，只用于按 Pebble Key 顺序读取和删除 Outbox。它不写入业务事件，不对 RPC 暴露，也不参与 View 幂等或重建。
 
-`DatasetFieldsChanged` 顶层携带：
+每个 DataNode 只有一个 Outbox Relay。Relay 按 `outbox_id` 逐条同步发布，发布失败立即停止，后面的条目不得越过失败条目；只删除连续发布成功前缀。
+
+`DatasetFieldsChanged` 携带：
 
 ```text
-node_id
+space_id
 dataset_id
-sequence
-新建事实版本及其完整 Field/Attribute
+本次 Upsert 的 RowKey、Field 和 Attribute
 ```
 
-事实行和 Field 不保存 `source_node_id` 或 `source_sequence`。
+事件不携带 `node_sequence`、`source_sequence` 或 Dataset Progress。
 
 ## 数据保存与磁盘清理
 
 ### Pebble
 
-`storage-primary` 根据 TimeSeries Dataset 的 `keep_days` 计算已经完整过期的 UTC 日桶，调用 DataNode 内部 `CleanupExpiredBuckets`。DataNode 对整个桶执行 `DeleteRange`，并在后台对删除范围 Compact。
+`storage-primary` 根据 TimeSeries Dataset 的 `keep_duration` 和配置的桶宽计算完整过期桶，调用 DataNode 内部 `CleanupExpiredBuckets`。DataNode 对整个桶执行 `DeleteRange`，并在后台对删除范围 Compact。
 
-清理是物理维护，不属于业务事实变更：
+清理是物理维护，不属于业务字段变更：
 
 - 不生成 DatasetFieldsChanged；
-- 不推进 Node Sequence 或 Dataset Progress；
+- 不修改 Outbox ID 之外的任何业务进度；
 - 不提供给普通外部调用方；
 - Record 永不自动清理。
 
@@ -328,53 +324,48 @@ sequence
 <view-id>/slot-b.duckdb
 ```
 
-Bleve 使用对应的 `slot-a/` 和 `slot-b/` 目录。Metadata 的 `active_slot` 决定当前角色。DuckDB/View 清理不调用 Pebble 清理；它只在 A/B 重建时按 `View.keep_days` 过滤旧 ActiveView Key，切换成功后删除整个 OldView DB。
+Bleve 使用对应的 `slot-a/` 和 `slot-b/` 目录。Metadata 的 `active_slot` 决定当前角色。DuckDB/View 清理不调用 Pebble 清理；它只在 A/B 重建时按 `View.keep_duration` 过滤旧 ActiveView RowKey，切换成功后删除整个 OldView DB。
 
-增加 `keep_days` 不会恢复已经从 ActiveView 删除的 Key。需要恢复历史时由用户重新写入事实。
+增加 `keep_duration` 不会恢复已经从 ActiveView 删除的 RowKey。需要恢复历史时由用户重新写入字段。
 
-## JetStream 与单 Consumer
+## JetStream Subject 与单 Consumer
 
-`MOOX_STORAGE` 使用 JetStream 原生策略：
+所有 Dataset Subject 共用一个 Stream：
 
 ```text
-InterestPolicy
-DiscardNew
+Stream: MOOX_STORAGE
+Subjects:
+  - moox.storage.fields_changed.v1.>
 ```
+
+`MOOX_STORAGE` 使用 JetStream `InterestPolicy` 和 `DiscardNew`。
+
+每个 Dataset 使用独立 Subject：
+
+```text
+moox.storage.fields_changed.v1.<space-token>.<dataset-token>
+```
+
+`space-token` 和 `dataset-token` 使用统一的 `EncodeSubjectToken`：把非空 UTF-8 ID 编码为小写、无 Padding 的 Base32 单个 NATS Token。Consumer 使用 `DecodeSubjectToken` 解码，并校验 Subject 中的 Space/Dataset 与 Payload 一致。
+
+同一 Dataset 只由其唯一 DataNode 发布，因此该 Subject 内的发布顺序就是 Dataset 写入顺序。不同 Dataset 和不同 DataNode 之间不定义顺序。Archive、Factor 可以订阅明确 Dataset Subject；View 订阅通配符。
 
 View 只创建一个固定 Durable Consumer：
 
 ```text
-storage_view
+Durable: storage_view
+FilterSubject: moox.storage.fields_changed.v1.>
+MaxAckPending: 1
+FetchBatch: 1
 ```
 
-不创建 `storage_view_active`、`storage_view_rebuild` 或每 Build Consumer。Outbox 只允许 inspect 和 retry，不允许 force-skip。
+处理完当前事件并 ACK 后才获取下一条。ActiveView 临时失败时不释放当前 Delivery，也不获取下一条；Handler 对同一 Delivery 执行带 Backoff 的本地重试并定期发送 `InProgress`，进程退出后由 JetStream 重投未 ACK 消息。字段级 Upsert 使重复投递结果不变；Publisher 同时设置稳定 `Nats-Msg-Id`，减少“Broker 已持久化但确认丢失”导致的重复消息。
 
-事件按 DataNode 进入有界顺序 Lane。同一 Node 的 Sequence 串行；一个 Node 失败不阻塞其他 Node。ActiveView 持久化成功后才允许 ACK。
-
-## ViewIndex Progress
-
-每个物理 ViewIndex 独立保存：
-
-```proto
-message ViewIndexSourceProgress {
-  string node_id = 1;
-  string dataset_id = 2;
-  uint64 sequence = 3;
-}
-```
-
-协议不携带 `expected_last_applied_sequence`。ViewIndex 在事务内读取当前 Progress：
-
-- `sequence <= current`：幂等成功，不修改行；
-- `sequence > current`：原子提交行变更和新 Progress。
-
-Progress 可以跨过同 Node 上其他 Dataset 的 Sequence。`ActiveHandle` 只保存 `index_id`、`revision` 和列集合，不复制 Source Progress。
+不创建 Node/Dataset Sequence Lane、ViewIndex Source Progress、`storage_view_active`、`storage_view_rebuild` 或每 Build Consumer。Outbox 只允许 inspect 和 retry，不允许 force-skip。
 
 ## View A/B 重建
 
 ### 角色生命周期
-
-角色不是固定文件名：
 
 ```text
 重建前：slot-a = ActiveView，slot-b = 空
@@ -385,19 +376,30 @@ Progress 可以跨过同 Node 上其他 Dataset 的 Sequence。`ActiveHandle` �
 
 下一次重建反向复用空槽位。
 
-### 首次创建约束
+### 首次创建和关联约束
 
-TimeSeries 和 Record View 都必须在来源 Dataset 开始写入前创建。首次创建空 ActiveView，后续 Key 由实时事件持续加入。
+TimeSeries 和 Record View 都必须在主 Dataset 开始写入前创建。首次创建空 ActiveView，后续 RowKey 由实时事件持续加入。
 
-系统不支持从一个已经存在事实、但从未创建过 View 的 Dataset 自动发现历史 Key。A/B 重建继承旧 ActiveView 的 Key 集合，不能修复旧 ActiveView 已经缺失的 Key。
+系统不从 DataNode 枚举历史 RowKey。A/B 重建继承旧 ActiveView 的 RowKey 集合，不能修复旧 ActiveView 已经缺失的 RowKey。View 新关联的 Dataset 必须作为共享同一 View Grain 的次级 Dataset；它按旧 ActiveView RowKey 精确读取字段，不单独产生新 View Row。
+
+### 重建触发
+
+`storage-view` 定时基于 Metadata Cache 和 ActiveView 状态执行 Reconcile：
+
+1. Dataset 新增 Field，且关联 View 的 Desired Revision 发生变化；
+2. View 新关联 Dataset；
+3. TimeSeries ActiveView 覆盖时长超过 `2 * View.keep_duration`。
+
+`keep_duration=0` 时不因时间范围触发重建。倍数固定为 2，不增加配置字段。重建生成的 NewView 只保留最近 `keep_duration`，因此切换后至少再积累约一个 `keep_duration` 才会再次触发。
+
+状态为 BUILDING 或 FAILED 时不自动发起新 Build。FAILED 由用户处理后手动重建。
 
 ### 开始双写
 
-ViewBuild 保存：
+ViewBuild 只保存：
 
 ```text
 started_at
-base_progress[{node_id, dataset_id}] -> sequence
 new_slot
 status
 backfilled_rows
@@ -408,16 +410,14 @@ safe_error
 
 ```text
 1. 创建并清空 NewView
-2. 获取该 View 的 Apply 锁
+2. 获取该 View 的 Apply 锁，等待当前实时 Apply 完成
 3. 在 ActiveView 开启一致性只读事务
-4. 从同一事务读取 ActiveView Source Progress，保存为 base_progress
-5. 用 base_progress 初始化 NewView Source Progress
-6. 原子发布 ViewWriteTargets{Active, New}
-7. 释放 Apply 锁
-8. 启动 Backfill 协程
+4. 原子发布 ViewWriteTargets{Active, New}
+5. 释放 Apply 锁
+6. 启动 Backfill 协程
 ```
 
-只有一个 Consumer，因此不需要 Rebuild Consumer、Pebble Snapshot、Build Barrier 或等待 ActiveView 追平 DataNode。安装双写目标之前的事件已经包含在 ActiveView 基线中；安装后的事件由同一个 Handler 同时写两个目标。
+安装双写目标之前的事件已经包含在 ActiveView 事务基线中；安装后的事件由同一个 Handler 同时写两个目标。不需要 Rebuild Consumer、Pebble Snapshot、Build Barrier、Sequence Progress 或 Event Catch-up。
 
 ### 实时写与 ACK
 
@@ -433,17 +433,17 @@ safe_error
 写所有受影响 ActiveView -> 写正在重建 View 的 NewView -> 全部成功后 ACK
 ```
 
-任一 ActiveView 写失败时 NAK。所有 ActiveView 成功但 NewView 失败时：立即停止本次重建、标记 FAILED、移除 NewView、清理失败 DB，并正常 ACK 当前事件；ActiveView 继续服务。系统保存安全错误并等待用户手动重新触发，不自动重建。
+任一 ActiveView 写失败时保持当前 Delivery 未 ACK，并重试同一事件，不允许后续事件越过。所有 ActiveView 成功但 NewView 失败时：立即停止本次重建、标记 FAILED、移除 NewView、清理失败 DB，并正常 ACK 当前事件；ActiveView 继续服务。系统保存安全错误并等待用户手动重新触发，不自动重建。
 
 ### 空闲 Backfill
 
 Backfill 使用启动时 ActiveView 的一致性只读事务：
 
 1. 分页读取旧 ViewRowKey 和已有列；
-2. TimeSeries 按 `started_at` 和 `View.keep_days` 过滤；Record 不过滤；
+2. TimeSeries 按 `started_at` 和 `View.keep_duration` 过滤；Record 不过滤；
 3. 把已有列写入 NewView；
-4. 从 Metadata 获取当前 Revision 新增的列；
-5. 使用旧 Key 和明确 Field ID 调用 DataNode.ReadFields；
+4. 从 Metadata Cache 获取当前 Revision 的新增 Field 和新关联 Dataset；
+5. 使用旧 RowKey 和明确 Field ID 调用 DataNode.ReadFields；
 6. 只填充 NewView 当前缺失的值。
 
 实时事件优先。只要实时 View 事件排队或正在写入，Backfill 就不提交新 Batch。每个 Backfill Batch 最多 100 行或 50ms，完成后重新检查实时队列。已经开始的 DuckDB 事务不被强制中断；实时事件最多等待当前小 Batch 完成。
@@ -457,8 +457,8 @@ Backfill 失败时停止本次重建、标记 FAILED、移除并清理 NewView�
 Backfill 完成后：
 
 ```text
-1. 获取 View Apply 锁
-2. 确认 ActiveView 与 NewView Source Progress 相同
+1. 获取 View Apply 锁，等待当前实时 Apply 完成
+2. 确认 Build 仍是 BUILDING 且 ViewWriteTargets 仍指向该 NewView
 3. Metadata CAS 切换 active_slot 和 active_view_revision
 4. 原子发布新的 ActiveHandle
 5. 从 ViewWriteTargets 移除旧 ActiveView
@@ -467,7 +467,7 @@ Backfill 完成后：
 8. 删除 OldView DB
 ```
 
-切换持锁时间最多 2 秒；超时前未进入 Metadata CAS 时恢复原状态并保留 NewView，等待用户再次触发切换。DataView 查询从请求开始到结束持有同一个不可变 ActiveHandle，因此不会看到半成品或跨 Slot 结果。
+Apply 锁保证 Backfill 完成到切换之间没有只写 ActiveView 的事件，因此不需要比较 Source Progress。切换持锁时间最多 2 秒；超时前未进入 Metadata CAS 时恢复原状态并保留 NewView，等待用户再次触发切换。DataView 查询从请求开始到结束持有同一个不可变 ActiveHandle，因此不会看到半成品或跨 Slot 结果。
 
 ## 故障语义
 
@@ -476,14 +476,14 @@ Backfill 完成后：
 | DataNode 离线 | 只影响该节点 Dataset；其他节点继续服务 |
 | storage-primary 离线 | 事实读写和 Metadata 管理暂停；已打开 View 查询继续 |
 | storage-view 离线 | View 查询暂停；事实写入继续，JetStream 保留事件 |
+| Metadata Cache 刷新失败 | 继续使用上一份完整快照并报警 |
 | JetStream 离线或满 | Outbox 重试；达到本地上限后写入明确失败 |
-| ActiveView Apply 失败 | NAK，相同 Sequence 重投 |
+| ActiveView Apply 失败 | 同一 Delivery 本地退避重试并发送 InProgress；后续消息不获取 |
 | NewView 实时写失败 | 当前重建 FAILED，Active 成功的事件 ACK，等待人工重建 |
 | Backfill 失败 | 当前重建 FAILED，ActiveView 继续服务，等待人工重建 |
 | Backfill 长期没有空闲时间 | 保持 BUILDING，不影响实时事件 |
 | 切换超过 2 秒 | 不切换 Active，返回明确错误 |
 | Schema 非 v4 | 启动失败，用户清理数据库后重新部署 |
-| 旧 FactKey 内容冲突 | 返回 FACT_VERSION_IMMUTABLE |
 
 ## 两服务器 E2E
 
@@ -498,36 +498,42 @@ Server B: storage-node-factor
 
 必须验证：
 
-1. K 线和因子 Dataset 分属两个 DataNode；
-2. Field 和 Attribute 使用独立物理命名空间；
-3. 相同事实幂等，冲突旧版本被拒绝；
-4. Record 空 Version 读取字符顺序最大版本；
-5. 单 Consumer 正常更新 ActiveView；
-6. 重建开始后实时事件同时写 ActiveView/NewView；
-7. 持续实时写入时 Backfill 暂停，空闲后继续；
-8. NewView 或 Backfill 故障只终止 Build，ActiveView 继续并 ACK；
-9. TimeSeries View 按自身 `keep_days` 生成新 DB；
-10. Pebble 时间桶清理与 DuckDB 重建分别触发、互不联动；
-11. 切换期间查询零错误，新字段原子可见；
-12. 切换后删除 OldView DB；
-13. 无 DataNode Scan、Snapshot 或 DeleteRows RPC。
+1. K 线和因子 Dataset 分属两个 DataNode，并发布不同 Dataset Subject；
+2. Subject Token 可逆，Subject 与 Payload 不一致时拒绝消费；
+3. Field 和 Attribute 使用独立物理命名空间；
+4. 同一 RowKey 可以新增字段、覆盖字段和补写历史因子值；
+5. Record 空 Version 读取字符顺序最大版本；
+6. 内部 Outbox ID 有序发布但不进入事件；
+7. 单 Consumer 以 Batch 1、MaxAckPending 1 更新 ActiveView；
+8. 重建开始后实时事件同时写 ActiveView/NewView；
+9. 持续实时写入时 Backfill 暂停，空闲后继续；
+10. NewView 或 Backfill 故障只终止 Build，ActiveView 继续并 ACK；
+11. Dataset 新增 Field、View 新关联 Dataset 时触发重建；
+12. ActiveView 覆盖时长超过 `2 * keep_duration` 时触发重建；
+13. Pebble 时间桶清理与 DuckDB 重建分别触发、互不联动；
+14. 切换期间查询零错误，新字段原子可见；
+15. 切换后删除 OldView DB；
+16. 无 DataNode Scan、Snapshot、Progress 或 DeleteRows RPC。
 
 ## 验收标准
 
 - Metadata 只接受 Schema v4，代码中不存在 `metadataSchemaVersionCompatible`。
 - Dataset 创建后不可修改 DataNode；不存在 DatasetPlacement 和迁移工具。
+- Metadata 读取复用现有 `snapshotcache`，不存在独立 Runtime Catalog。
 - 不存在 Required、Dimensions、字段删除、DeleteRows、ReadRows、ScanRows 或 Snapshot RPC。
-- TimeSeries 使用 UTC 日桶；Record 不自动清理。
-- Field 使用 `0x01`，Attribute 使用 `0x02`，同名不冲突。
-- DataNode `WriteFields` 实现不可变版本和内容 Hash 幂等。
-- DataNode `ReadFields` 必须指定 Field；Record 空 Version 返回字符最大版本。
-- 首次事实提交原子包含字段、Sequence、Progress 和 Outbox。
-- JetStream 只有一个 `storage_view` Durable Consumer。
-- ViewIndex Progress 只有 `{node_id,dataset_id,sequence}`。
+- TimeSeries 使用可配置时间桶；Record 不自动清理。
+- Field 使用 `0x01`，Attribute 使用 `0x02`，不存在 RowMarker。
+- `WriteFields` 对 Field/Attribute 直接 Upsert，允许补写历史新增字段和覆盖旧值。
+- DataNode `ReadFields` 必须指定 RowKey 和 Field；Record 空 Version 返回字符最大版本。
+- 字段和内部 Outbox 条目在一个 Pebble Batch 中提交。
+- 每个 Dataset 使用 `moox.storage.fields_changed.v1.<space-token>.<dataset-token>`。
+- 事件不携带 Node/Dataset Sequence，ViewIndex 不保存 Source Progress。
+- JetStream 只有一个 `storage_view` Durable Consumer，`MaxAckPending=1`、`FetchBatch=1`。
 - 每个 View 使用独立 A/B DB；ActiveView/NewView/OldView 生命周期明确。
 - Backfill 只在实时队列空闲时小批运行，不能覆盖实时值。
 - NewView 或 Backfill 失败不阻塞 ActiveView，整次重建等待人工重试。
-- TimeSeries/Record View 都从旧 ActiveView Key 重建，不扫描 DataNode。
+- Dataset Field、View Dataset 关联和 `2 * keep_duration` 能触发对应重建。
+- TimeSeries/Record View 都从旧 ActiveView RowKey 重建，不扫描 DataNode。
 - 本地门禁、两轮独立代码审查和两服务器 E2E 全部通过。
 
 ## 明确不实现
@@ -535,9 +541,10 @@ Server B: storage-node-factor
 - Dataset 内分片、Replica、Leader Election、Quorum 和自动 Failover。
 - Dataset 迁移、复制、双写、回滚和 Rebalance。
 - Required、Dimensions、Schema Fence、Schema Revision 和旧协议兼容。
-- 字段级删除、Attribute 删除、DeleteRows 和历史事实修正。
-- DataNode 普通范围扫描、Snapshot Scan 和完整行读取。
+- RowMarker、整行 Content Hash、不可变 Fact 冲突和字段级删除。
+- DataNode 普通范围扫描、Snapshot Scan、Progress RPC 和完整行读取。
 - Record 自动过期清理。
+- Node/Dataset Sequence、ViewIndex Source Progress 和顺序 Lane。
 - 第二个 View Consumer、每 Build Consumer、Build Lease 和 Event Catch-up 状态机。
-- 从 DataNode 枚举历史 FactKey，或修复旧 ActiveView 缺失的 Key。
+- 从 DataNode 枚举历史 RowKey，或修复旧 ActiveView 缺失的 RowKey。
 - 自动重试失败的整次 View 重建。
