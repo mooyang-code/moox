@@ -177,7 +177,18 @@ func (e *MemoryEngine) Prepare(_ context.Context, id string, schema ViewIndexSch
 	defer e.mu.Unlock()
 	e.indexes[id] = &memoryIndex{schema: schema, rows: make(map[string]*pb.RowFieldValues)}
 	if e.root != "" {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(e.root, id)), 0o755); err != nil {
+		path := filepath.Join(e.root, id)
+		if e.name == "duckdb" {
+			path += ".duckdb"
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644); err != nil {
+				return err
+			} else {
+				_ = file.Close()
+			}
+		} else if err := os.MkdirAll(path, 0o755); err != nil {
 			return err
 		}
 	}
@@ -225,6 +236,15 @@ func (e *MemoryEngine) Remove(_ context.Context, id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.indexes, id)
+	if e.root != "" {
+		path := filepath.Join(e.root, id)
+		if e.name == "duckdb" {
+			path += ".duckdb"
+			_ = os.Remove(path)
+		} else {
+			_ = os.RemoveAll(path)
+		}
+	}
 	return nil
 }
 func (e *MemoryEngine) List(_ context.Context) ([]string, error) {
