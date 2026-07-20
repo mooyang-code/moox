@@ -51,7 +51,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
-	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx); err != nil {
@@ -74,7 +74,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	}
 	c.KV[0].History = 1
 	c.KV[0].MaxAge = originalTTL
-	if _, err := js.Publish(c.Topics[2].Topic, []byte("metric")); err != nil {
+	if _, err := js.Publish("moox.metrics.host.reported.v1", []byte("metric")); err != nil {
 		t.Fatal(err)
 	}
 	c.Streams[1].Subjects = []string{"moox.metrics.other.>"}

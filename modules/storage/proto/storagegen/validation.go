@@ -19,16 +19,16 @@ func (r *SearchRecordRowsReq) Validate() error {
 	return nil
 }
 
-func (r *MergeTimeSeriesRowsReq) Validate() error {
+func (r *WriteFieldsReq) Validate() error {
 	if r == nil || len(r.Rows) == 0 {
-		return fmt.Errorf("rows are required")
+		return fmt.Errorf("rows must not be empty")
 	}
 	return nil
 }
 
-func (r *MergeRecordRowsReq) Validate() error {
-	if r == nil || len(r.Rows) == 0 {
-		return fmt.Errorf("rows are required")
+func (r *ReadFieldsReq) Validate() error {
+	if r == nil || len(r.Keys) == 0 || len(r.FieldIds) == 0 {
+		return fmt.Errorf("keys and field_ids must not be empty")
 	}
 	return nil
 }

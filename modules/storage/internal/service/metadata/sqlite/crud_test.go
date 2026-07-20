@@ -1,3 +1,5 @@
+//go:build legacy_metadata_view
+
 package sqlite
 
 import (

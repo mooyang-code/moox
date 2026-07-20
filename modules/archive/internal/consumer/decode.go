@@ -41,13 +41,13 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if message.GetProtocolVersion() != 1 || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unsupported message protocol or kind")
 	}
-	if !strings.HasPrefix(message.GetTopic(), "moox.storage.rows_committed.time_series.v1.") || message.GetMessageType() != "moox.storage.time_series.rows_committed.v1" {
+	if !strings.HasPrefix(message.GetTopic(), "moox.storage.fields_changed.v1.") || message.GetMessageType() != "moox.storage.fields_changed.v1" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected topic or content type")
 	}
 	if strings.TrimSpace(message.GetMessageId()) == "" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message_id is required")
 	}
-	var event storagepb.TimeSeriesRowsCommitted
+	var event storagepb.DatasetFieldsChanged
 	if err := proto.Unmarshal(message.GetPayload(), &event); err != nil {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("decode time-series event: %w", err)
 	}
@@ -59,11 +59,7 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	}
 	writtenAt := message.GetOccurredAt().AsTime().UTC()
 	rows := make(map[string]domain.RowPatch)
-	for _, write := range event.GetWrites() {
-		if write.GetOperation() == storagepb.RowWriteOperation_ROW_WRITE_OPERATION_DELETE {
-			continue
-		}
-		row := write.GetRow()
+	for _, row := range event.GetRows() {
 		patch, err := decodeRow(&event, row, writtenAt)
 		if err != nil {
 			return domain.EventBatch{}, DecisionReject, err
@@ -87,12 +83,13 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	return batch, DecisionArchive, nil
 }
 
-func decodeRow(event *storagepb.TimeSeriesRowsCommitted, row *storagepb.TimeSeriesRow, writtenAt time.Time) (domain.RowPatch, error) {
+func decodeRow(event *storagepb.DatasetFieldsChanged, row *storagepb.RowFieldUpsert, writtenAt time.Time) (domain.RowPatch, error) {
 	if row == nil || row.GetKey() == nil {
 		return domain.RowPatch{}, fmt.Errorf("row key is required")
 	}
-	key := row.GetKey()
-	if key.GetSpaceId() != event.GetSpaceId() || key.GetDatasetId() != event.GetDatasetId() {
+	rowKey := row.GetKey()
+	key := rowKey.GetTimeSeries()
+	if key == nil || rowKey.GetSpaceId() != event.GetSpaceId() || rowKey.GetDatasetId() != event.GetDatasetId() {
 		return domain.RowPatch{}, fmt.Errorf("row identity mismatch")
 	}
 	dataTime, err := parseTime(key.GetDataTime())
@@ -102,12 +99,13 @@ func decodeRow(event *storagepb.TimeSeriesRowsCommitted, row *storagepb.TimeSeri
 	if key.GetSubjectId() == "" || key.GetFreq() == "" {
 		return domain.RowPatch{}, fmt.Errorf("subject_id and freq are required")
 	}
-	dimensions, err := domain.CanonicalStringMap(key.GetDimensions())
+	dimensions, err := domain.CanonicalStringMap(nil)
 	if err != nil {
 		return domain.RowPatch{}, err
 	}
-	columns := make(map[string]domain.Scalar, len(row.GetColumns()))
-	for _, column := range row.GetColumns() {
+	columns := make(map[string]domain.Scalar, len(row.GetFields()))
+	for _, field := range row.GetFields() {
+		column := &storagepb.ColumnValue{ColumnName: field.GetFieldId(), Value: field.GetValue(), ValueType: typedValueType(field.GetValue())}
 		if _, exists := columns[column.GetColumnName()]; exists {
 			return domain.RowPatch{}, fmt.Errorf("duplicate column %q", column.GetColumnName())
 		}
@@ -119,9 +117,45 @@ func decodeRow(event *storagepb.TimeSeriesRowsCommitted, row *storagepb.TimeSeri
 	}
 	attributes := make(map[string]string, len(row.GetAttributes()))
 	for k, v := range row.GetAttributes() {
-		attributes[k] = v
+		attributes[k] = typedValueString(v)
 	}
 	return domain.RowPatch{Partition: domain.PartitionKey{SpaceID: event.GetSpaceId(), DatasetID: event.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), Month: domain.MonthOf(dataTime)}, DataTime: dataTime, DimensionsJSON: dimensions, Attributes: attributes, WrittenAt: writtenAt, Columns: columns}, nil
+}
+
+func typedValueType(value *storagepb.TypedValue) storagepb.FieldValueType {
+	switch value.GetValue().(type) {
+	case *storagepb.TypedValue_StringValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
+	case *storagepb.TypedValue_IntValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
+	case *storagepb.TypedValue_DoubleValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+	case *storagepb.TypedValue_BoolValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL
+	case *storagepb.TypedValue_TimeValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
+	case *storagepb.TypedValue_JsonValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON
+	case *storagepb.TypedValue_BytesValue:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_BYTES
+	default:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
+	}
+}
+
+func typedValueString(value *storagepb.TypedValue) string {
+	switch value.GetValue().(type) {
+	case *storagepb.TypedValue_StringValue:
+		return value.GetStringValue()
+	case *storagepb.TypedValue_IntValue:
+		return fmt.Sprint(value.GetIntValue())
+	case *storagepb.TypedValue_DoubleValue:
+		return fmt.Sprint(value.GetDoubleValue())
+	case *storagepb.TypedValue_BoolValue:
+		return fmt.Sprint(value.GetBoolValue())
+	default:
+		return ""
+	}
 }
 
 func parseTime(raw string) (time.Time, error) {

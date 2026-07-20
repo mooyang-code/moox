@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package trpc.moox.storage;
+
+option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storagegen;storagepb";
+
+import "moox_common.proto";
+import "common.proto";
+import "rows.proto";
+
+message WriteFieldsReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  repeated RowFieldUpsert rows = 3;
+}
+
+message WriteFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowKey keys = 2;
+}
+
+message ReadFieldsReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string dataset_id = 3;
+  repeated RowKey keys = 4;
+  repeated string field_ids = 5;
+  repeated string attribute_keys = 6;
+}
+
+message ReadFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowFieldValues rows = 2;
+}
+
+message GetNodeStateReq {
+  string node_id = 1;
+}
+
+message GetNodeStateRsp {
+  common.RetInfo ret_info = 1;
+  string node_id = 2;
+  string status = 3;
+}
+
+message CleanupExpiredBucketsReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string dataset_id = 3;
+  string before_bucket_start = 4;
+}
+
+message CleanupExpiredBucketsRsp {
+  common.RetInfo ret_info = 1;
+  uint64 deleted_buckets = 2;
+}
+
+service DataNode {
+  rpc WriteFields(WriteFieldsReq) returns (WriteFieldsRsp);
+  rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
+  rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
+  rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
+}

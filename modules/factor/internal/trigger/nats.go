@@ -97,8 +97,8 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 			continue
 		}
 		for _, delivery := range deliveries {
-			event := &storagepb.TimeSeriesRowsCommitted{}
-			if delivery.Message.GetMessageType() != "moox.storage.time_series.rows_committed.v1" || !strings.HasPrefix(delivery.Message.GetContentType(), "application/x-protobuf") {
+			event := &storagepb.DatasetFieldsChanged{}
+			if delivery.Message.GetMessageType() != "moox.storage.fields_changed.v1" || !strings.HasPrefix(delivery.Message.GetContentType(), "application/x-protobuf") {
 				_ = delivery.Term(ctx)
 				continue
 			}

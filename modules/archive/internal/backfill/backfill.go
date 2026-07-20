@@ -112,7 +112,7 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 		if err != nil {
 			return nil, err
 		}
-		dims, err := domain.CanonicalStringMap(key.GetDimensions())
+		dims, err := domain.CanonicalStringMap(nil)
 		if err != nil {
 			return nil, err
 		}
