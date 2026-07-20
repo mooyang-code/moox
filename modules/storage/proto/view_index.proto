@@ -22,48 +22,25 @@ message ViewIndexSchema {
 
 enum ViewIndexRowWriteOperation {
   VIEW_INDEX_ROW_WRITE_OPERATION_UNSPECIFIED = 0;
-  VIEW_INDEX_ROW_WRITE_OPERATION_MERGE = 1;
-  VIEW_INDEX_ROW_WRITE_OPERATION_REPLACE = 2;
-  VIEW_INDEX_ROW_WRITE_OPERATION_DELETE = 3;
+  VIEW_INDEX_ROW_WRITE_OPERATION_UPSERT = 1;
 }
 
 message ViewIndexRowKey {
-  oneof key {
-    TimeSeriesKey time_series_key = 1;
-    RecordKey record_key = 2;
-  }
+  RowKey row_key = 1;
 }
 
 message ViewIndexRowWrite {
   ViewIndexRowWriteOperation operation = 1;
   ViewIndexRowKey key = 2;
-  repeated ColumnValue columns = 3;
-  map<string, string> attributes = 4;
-  repeated string attributes_to_delete = 5;
-  repeated string removed_column_names = 6;
-  string source_shard_id = 7;
-  uint64 source_sequence = 8;
-  repeated ColumnRemoval removed_columns = 9;
-}
-
-message ViewIndexShardCheckpointUpdate {
-  string shard_id = 1;
-  uint64 expected_last_applied_sequence = 2;
-  uint64 last_applied_sequence = 3;
-}
-
-message ViewIndexRangeUpdate {
-  optional string indexed_from = 1;
-  optional string indexed_to = 2;
+  repeated FieldValue fields = 3;
+  map<string, TypedValue> attributes = 4;
 }
 
 message ViewIndexApplyBatch {
   repeated ViewIndexRowWrite row_writes = 1;
-  repeated ViewIndexShardCheckpointUpdate checkpoint_updates = 2;
-  uint64 view_version = 3;
-  string view_schema_hash = 4;
-  ViewIndexRangeUpdate index_range_update = 5;
-  repeated string required_column_names = 6;
+  uint64 view_revision = 2;
+  string view_schema_hash = 3;
+  string write_mode = 4;
 }
 
 // ViewIndexStats 是无需扫描完整索引即可读取的持久化统计信息。
@@ -81,7 +58,6 @@ message ViewIndexStats {
   uint64 view_version = 9;
   string indexed_from = 10;
   string indexed_to = 11;
-  repeated ViewIndexShardCheckpointUpdate shard_checkpoints = 12;
 }
 
 message ViewIndexDescriptor {
@@ -151,13 +127,13 @@ message ListViewIndexesRsp {
 message QueryTimeSeriesIndexReq {
   common.AuthInfo auth_info = 1;
   string index_id = 2;
-  QueryTimeSeriesRowsReq query = 3;
+  repeated RowKey keys = 3;
+  repeated string field_ids = 4;
 }
 
 message QueryTimeSeriesIndexRsp {
   common.RetInfo ret_info = 1;
-  repeated ResultColumn columns = 2;
-  repeated TimeSeriesRow rows = 3;
+  repeated RowFieldValues rows = 2;
   common.PageResult page_result = 4;
 }
 
@@ -165,13 +141,13 @@ message SearchRecordIndexReq {
   common.AuthInfo auth_info = 1;
   string index_id = 2;
   string dataset_id = 3;
-  SearchRecordRowsReq query = 4;
+  repeated RowKey keys = 4;
+  repeated string field_ids = 5;
 }
 
 message SearchRecordIndexRsp {
   common.RetInfo ret_info = 1;
-  repeated ResultColumn columns = 2;
-  repeated RecordRow rows = 3;
+  repeated RowFieldValues rows = 2;
   common.PageResult page_result = 4;
 }
 

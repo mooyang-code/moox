@@ -201,7 +201,11 @@ func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
 	if s.Storage == "memory" {
 		storage = nats.MemoryStorage
 	}
-	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}
+	discard := nats.DiscardOld
+	if strings.EqualFold(s.Discard, "new") {
+		discard = nats.DiscardNew
+	}
+	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: 2 * time.Minute}
 }
 
 func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config.StreamConfig, cfg *config.Config) error {

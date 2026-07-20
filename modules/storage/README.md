@@ -11,7 +11,7 @@ MooX Storage 是面向量化金融场景的统一数据存储服务。它在**�
 - **Record 全文检索**：登记 Record View 后由 Bleve 维护 a/b 双槽索引，支持 `text_query` 与结构化过滤。
 - **TimeSeries 物化视图**：登记 TimeSeries View 后由 DuckDB 维护 a/b 双库，`QueryTimeSeriesRows` 只读取已激活槽位。
 - **冷归档**：定时把在线主存数据归档为 Parquet 并登记归档文件。
-- **可水平扩展**：通过路由规则把事实数据分片到多个在线主存节点；主存可同进程内嵌，也可独立部署。
+- **可按 Dataset 分机**：每个 Dataset 单归属一个 DataNode；K 线、因子和账户数据可以部署到不同服务器，同一个 Dataset 不继续分片。
 
 ### 存储引擎分工
 
@@ -49,9 +49,9 @@ Storage 的事实主存统一按 `key + version` 定位一行数据，PrimarySto
 
 ### View 版本与切换
 
-View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有确定性的 `a`、`b` 两个槽位：TimeSeries 槽位是一份独立 DuckDB 文件，Record 槽位是一个独立 Bleve 目录。`storage-view` 是唯一可以打开、查询和删除这些文件的进程；PrimaryStore 只通过 DataView/ViewIndex RPC 访问它。
+View 是可从 PrimaryStore 重建的近期派生读模型。每个 View 只有确定性的 `a`、`b` 两个槽位：TimeSeries 槽位是一份独立 DuckDB 文件，Record 槽位是一个独立 Bleve 目录。`storage-view` 是唯一可以打开、查询和删除这些文件的进程。
 
-只要 View 定义或字段变化，`view_version` 就递增，旧构建声明立即失效。`view` 先持久化 `PREPARING` 构建租约，再创建非活跃槽位，按页从 PrimaryStore 回扫 `retention_window`，保存游标并续租；追平增量后通过一次 `ActivateViewIndex` CAS 原子切换读取指针。旧槽位在引用排空及宽限期结束后整库删除，因此无需依赖 DuckDB 行删除或压缩回收空间。
+View 定义或字段变化时只更新 `desired_view_revision`。旧 Active Index 和 `active_view_revision` 继续提供查询；后台使用固定 `storage_view_rebuild` Consumer、DataNode Snapshot 和 JetStream Catch-up 构建非活跃槽位。新槽位追平后，系统最多暂停 Active Consumer 2 秒并原子切换 Index、Revision 与 Source Checkpoints；超时恢复旧 Active 更新并稍后重试。查询服务从不暂停，新字段只在切换完成后一次性可见；切换后不大于新 Checkpoint 的旧积压只做幂等 ACK，不回写 Index。
 
 TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真实物理列。`QueryTimeSeriesRows` 将 key、时间范围、结构化过滤、排序、`limit` 和分页下推到 DuckDB。Bleve 同样在引擎内完成版本范围、排序和 `size+1` 分页，查询端不会先加载完整命中集。
 
@@ -59,14 +59,14 @@ TimeSeries 槽位内只有固定表 `view_rows`，按 `ViewColumn` 展开为真�
 
 | 字段 | 含义 |
 | --- | --- |
-| `view_version` | 当前 View 定义版本，新增列或构建形态变化时递增 |
-| `active_view_version` | 当前线上读取的 View 版本 |
+| `desired_view_revision` | 期望 View 定义版本，新增列或构建形态变化时递增 |
+| `active_view_revision` | 当前线上读取的 View 版本 |
 | `active_index_id` | 当前线上读取的 a/b 槽位标识 |
-| `active_columns` / `active_view_schema_hash` | 与读取指针同时激活的字段快照，即使索引为空也可校验查询字段 |
+| `active_columns` | 与读取指针同时激活的字段快照，即使索引为空也可校验查询字段 |
 | `indexed_from` / `indexed_to` | 当前索引的保留范围 |
-| `index_build` | 当前构建租约，含 `build_id`、目标版本、状态、owner、游标、范围、计数和错误 |
+| `index_build` | 当前唯一构建，保存 `build_id`、目标 Revision、状态、范围、计数和错误 |
 
-构建状态依次为 `PREPARING -> BUILDING -> CATCHING_UP -> READY`；失败进入 `FAILED`。增量事件只写当前活动槽位，以及版本和 schema 都匹配的 `BUILDING/CATCHING_UP` 槽位。活动指针在最终 CAS 成功前保持不变，因此切换期间没有读空窗；新增字段在新槽位激活前返回 `VIEW_NOT_READY`。
+构建状态为 `BUILDING -> CATCHING_UP -> ACTIVE`；失败进入 `FAILED`。全系统同时只允许一个 Build，并只使用固定 `storage_view_active` 和 `storage_view_rebuild` 两个 Durable Consumer。活动指针在最终切换前保持不变，因此重建期间没有读空窗；新字段在新槽位激活前不进入公开查询 Schema。
 
 ## 环境要求
 
@@ -181,10 +181,10 @@ storage:
 | 角色 | 职责 |
 | --- | --- |
 | `primary` | 面向用户的写入和权威读取入口；校验列契约、解析路由、写 PrimaryStore，并发布行变更事件。 |
-| `shard` | 拥有固定 `shard_id` 的 Pebble DataShard；可嵌入 `primary` 或作为私网进程运行。 |
+| `node` | 拥有固定 `node_id` 的 Pebble DataNode；一个进程可以承载多个单归属 Dataset。 |
 | `view` | 消费 RowsCommitted 事件，管理本地 ViewIndex 物理 owner，向活动/构建槽位物化并提供 DataView 查询。 |
 
-默认运行角色是 `primary + view`。当 `primary.service_name` 为空时，进程内嵌本地 DataShard；当它非空时，PrimaryStore 通过 Node Service Gateway 调用远程 DataShard。
+标准部署分别运行 `primary`、一个或多个 `node`、`view` 进程；它们可以位于同一台机器，也可以按 Dataset 部署到不同服务器。PrimaryStore 根据 `Dataset.data_node_id` 直接通过 tRPC 调用 DataNode。
 
 标准部署将 PrimaryStore 和 View 分为 `storage-primary`、`storage-view` 两个进程。`storage-view` 使用 `config/storage_view/trpc_go.yaml` 作为唯一配置文件，其中同时声明 tRPC listener/client、`roles: [view]`、JetStream、ViewIndex 路径和维护参数；不再发布独立的 builder、query、index 进程配置。
 
@@ -225,6 +225,8 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 
 写入任何事实数据之前，必须先把元数据登记好。元数据是控制面，描述"数据长什么样、归谁、放哪、怎么查"。各概念及依赖关系如下（父在前、子在后）：
 
+Dataset Schema 遵循 Append-only 业务约束：已有字段不删除，`field_id` 不修改或复用，`value_type` 不修改；所有字段都允许缺失，系统不定义 Required 字段，后续只允许追加字段。Storage 不实现字段迁移或新旧 Schema 兼容。Add Field 在 SQLite Commit 和 PrimaryStore Runtime Schema 指针替换后才返回成功；此后新字段立即可写，写入不中断，也不需要重新部署。View 通过非活跃 Index 后台重建并原子切换，重建期间旧 Active Index 继续提供查询。
+
 | 概念 | 含义 | 归属 |
 | --- | --- | --- |
 | **Space** | 业务命名空间 / 工作区，是一切元数据的根 | — |
@@ -235,7 +237,7 @@ NATS transport 会为两个 subject 派生不同 durable consumer，避免 TimeS
 | **DatasetSubject** | Dataset 与 Subject 的应用层绑定关系，数据写入链路不强制校验 | Dataset + Subject |
 | **Field** | Space 级字段字典（`open`/`close`/`symbol`…），声明值类型、单位、示例 | Space |
 | **Factor** | 参数化因子定义（算法 + 参数），结果可作为列来源 | Space |
-| **DatasetColumn** | Dataset 的列契约，`origin_type` 指向 Field/Factor/System；可声明 required 等写入约束 | Dataset |
+| **DatasetColumn** | Dataset 的列契约，`origin_type` 指向 Field/Factor/System；所有列都允许缺失 | Dataset |
 | **View** | 查询入口，必须指定 `primary_dataset_id`；TimeSeries View 物化到 DuckDB，Record View 索引到 Bleve | Space |
 | **ViewColumn** | View 对外暴露的列 | View |
 | **PrimaryStoreNode** | 在线事实主存节点（Pebble），`endpoint` 决定访问地址（`local`=同进程） | — |
@@ -320,7 +322,7 @@ fields:
     write_example: "7.1500"
     status: active
 
-# Dataset 列契约：列 close 来自 Field close，必填
+# Dataset 列契约：列 close 来自 Field close；所有列都允许缺失
 dataset_columns:
   - space_id: crypto
     dataset_id: binance_spot_kline
@@ -328,7 +330,6 @@ dataset_columns:
     origin_type: field
     origin_id: close
     value_type: double
-    required: true
     status: active
 
 # 物化视图：以 binance_spot_kline 为主集，按 subject_id/freq/data_time 物化
@@ -485,7 +486,7 @@ storage:
     - primary
     - view
   primary:
-    service_name: trpc.moox.storage.DataShard   # 走远程物理分片
+    service_name: trpc.moox.storage.DataNode    # 直接调用 Dataset 所属 DataNode
   eventbus:
     type: nats
     nats_url: nats://10.0.0.9:4222
@@ -642,8 +643,8 @@ internal/
   typedvalue/       TypedValue 转换与比较
   retinfo/          错误码和 RPC 返回状态
   service/metadata/ Metadata RPC 与 SQLite/缓存目录
-  service/primarystore/ 路由、契约校验和跨 DataShard 编排
-  service/datashard/    固定 shard_id 的 Pebble 主存与 Outbox
+  service/primarystore/ Dataset 字段校验和 DataNode 路由
+  service/datanode/     固定 node_id 的 Pebble 主存与 Outbox
   service/dataview/     派生查询入口
   service/viewbuilder/  RowsCommitted 消费、映射和恢复
   service/viewindex/    ViewIndex 生命周期与 DuckDB/Bleve owner

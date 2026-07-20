@@ -67,6 +67,7 @@ type StreamConfig struct {
 	Name        string        `yaml:"name"`
 	Subjects    []string      `yaml:"subjects"`
 	Retention   string        `yaml:"retention"`
+	Discard     string        `yaml:"discard"`
 	Storage     string        `yaml:"storage"`
 	Replicas    int           `yaml:"replicas"`
 	MaxAge      time.Duration `yaml:"max_age"`

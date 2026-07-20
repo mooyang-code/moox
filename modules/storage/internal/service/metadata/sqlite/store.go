@@ -90,13 +90,27 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	return err
 }
 
-const metadataSchemaVersion = "3"
-
-func metadataSchemaVersionCompatible(version string) bool {
-	// Versions 2 and 3 share the additive metadata contract. The schema script
-	// only creates missing objects without downgrading an existing database.
-	return version == metadataSchemaVersion || version == "2"
+// ValidateSchemaVersion checks the persisted metadata schema without creating
+// or altering tables. Storage processes fail fast when the database is not the
+// supported v4 schema; users must handle incompatible upgrades explicitly.
+func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("metadata store is not open")
+	}
+	if err := s.checkSchemaVersion(ctx); err != nil {
+		return err
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 't_schema_meta'`).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return errors.New("storage metadata schema is not initialized")
+	}
+	return nil
 }
+
+const metadataSchemaVersion = "4"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -121,7 +135,7 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	}
 	var version string
 	err := s.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !metadataSchemaVersionCompatible(version)) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && version != metadataSchemaVersion) {
 		return errors.New("incompatible storage metadata schema; reset metadata database")
 	}
 	return err

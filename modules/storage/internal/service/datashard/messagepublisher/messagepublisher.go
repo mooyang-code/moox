@@ -1,3 +1,5 @@
+//go:build legacy_storage
+
 // Package messagepublisher exposes the committed-row publisher contract at
 // the DataShard ownership boundary. The transport implementation is shared
 // with the ViewBuilder consumer adapter so bootstrap can use one connection.

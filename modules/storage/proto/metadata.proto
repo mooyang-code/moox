@@ -81,8 +81,8 @@ message View {
   string filter_json = 8;
   // engine 是视图查询执行引擎标识，由控制面配置。
   string engine = 9;
-  // retention_window 是索引从 PrimaryStore 保留和回扫近期数据的窗口，例如 30d。
-  string retention_window = 10;
+  // keep_duration 是 TimeSeries View 保留 RowKey 的时间窗口；0 表示永久保存。
+  string keep_duration = 10;
   // active_index_id 是当前生效的 a/b 物理索引标识。
   string active_index_id = 11;
   // status 表示启用、停用、构建中、归档或删除等状态。
@@ -95,14 +95,16 @@ message View {
   string updated_at = 15;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 16;
-  // view_version 是 View 定义版本；新增字段或构建形态变化时递增。
-  uint64 view_version = 17;
-  // active_view_version 是当前线上读取的 View 版本。
-  uint64 active_view_version = 18;
+  // desired_view_revision 是待构建的 View 定义修订号。
+  uint64 desired_view_revision = 17;
+  // active_view_revision 是当前线上读取的 View 修订号。
+  uint64 active_view_revision = 18;
   // active_columns 是与 active_index_id 同时激活的不可变列快照。
   repeated ViewColumn active_columns = 19;
   // active_view_schema_hash 是当前线上索引的列形态哈希。
   string active_view_schema_hash = 20;
+  // active_slot identifies the active A/B physical index slot.
+  string active_slot = 21;
   // index_build 是当前持久化构建状态的只读投影。
   ViewIndexBuild index_build = 23;
   // indexed_from 是当前索引实际覆盖的最小业务时间或版本。
@@ -233,6 +235,10 @@ message Dataset {
   string updated_at = 10;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 11;
+  // data_node_id 是该 Dataset 的唯一 DataNode owner。
+  string data_node_id = 17;
+  // keep_duration 是 TimeSeries Pebble 数据的保留时长；0 表示永久保存。
+  string keep_duration = 18;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -355,12 +361,12 @@ message DatasetColumn {
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   FieldValueType value_type = 6;
-  // required 表示采集契约或全量导入时是否必填；字段级更新不要求每次携带。
-  bool required = 7;
-  // is_unique 表示该列是否参与数据集内唯一性约束。
-  bool is_unique = 8;
-  // aliases 是外部来源字段名别名。
-  repeated string aliases = 9;
+  // required is retained in the wire contract but ignored by field-level upserts.
+  bool required = 7 [deprecated = true];
+  // is_unique is retained for metadata clients and is not used for row identity.
+  bool is_unique = 8 [deprecated = true];
+  // aliases are retained for metadata clients.
+  repeated string aliases = 9 [deprecated = true];
   // status 表示启用、停用、构建中、归档或删除等状态。
   string status = 10;
   // created_at 是创建时间，使用项目统一时间字符串格式。
@@ -467,8 +473,6 @@ message ArchiveFile {
   string max_time = 9;
   // row_count 是文件内事实行数。
   uint64 row_count = 10;
-  // content_hash 是归档文件内容校验值。
-  string content_hash = 11;
   // columns 是该文件包含的事实列名列表。
   repeated string columns = 12;
   // status 表示启用、停用、归档、删除或失败等状态。
