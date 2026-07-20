@@ -176,7 +176,7 @@ func (m StorageViewMaintenance) IsEnabled() bool {
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string        `yaml:"service_name"`
-	ShardID     string        `yaml:"shard_id"`
+	NodeID      string        `yaml:"node_id"`
 	Outbox      StorageOutbox `yaml:"outbox"`
 }
 
@@ -207,8 +207,8 @@ func (c *StorageConfig) ApplyDefaults() {
 	if len(c.Roles) == 0 {
 		c.Roles = []string{"primary", "view"}
 	}
-	if c.Primary.ShardID == "" {
-		c.Primary.ShardID = "storage-shard-0"
+	if c.Primary.NodeID == "" {
+		c.Primary.NodeID = "storage-node-0"
 	}
 	if c.View.StorageRPC.GatewayTarget == "" {
 		c.View.StorageRPC.GatewayTarget = "ip://127.0.0.1:11003"

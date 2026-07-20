@@ -1,3 +1,5 @@
+//go:build legacy_eventconsumer
+
 package eventconsumer
 
 import (

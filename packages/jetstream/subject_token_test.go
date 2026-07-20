@@ -5,52 +5,52 @@ import (
 	"testing"
 )
 
-func TestShardTokenRoundTripUsesLowercaseUnpaddedBase32(t *testing.T) {
+func TestSubjectTokenRoundTripUsesLowercaseUnpaddedBase32(t *testing.T) {
 	for _, test := range []struct {
-		shardID string
-		want    string
+		value string
+		want  string
 	}{
-		{shardID: "foo", want: "mzxw6"},
-		{shardID: "shard-01"},
-		{shardID: "tenant/分片-1"},
-		{shardID: "a.b:c"},
+		{value: "foo", want: "mzxw6"},
+		{value: "shard-01"},
+		{value: "tenant/分片-1"},
+		{value: "a.b:c"},
 	} {
-		t.Run(test.shardID, func(t *testing.T) {
-			token, err := EncodeShardToken(test.shardID)
+		t.Run(test.value, func(t *testing.T) {
+			token, err := EncodeSubjectToken(test.value)
 			if err != nil {
-				t.Fatalf("EncodeShardToken() error = %v", err)
+				t.Fatalf("EncodeSubjectToken() error = %v", err)
 			}
 			if test.want != "" && token != test.want {
-				t.Fatalf("EncodeShardToken() = %q, want %q", token, test.want)
+				t.Fatalf("EncodeSubjectToken() = %q, want %q", token, test.want)
 			}
 			if token == "" || token != strings.ToLower(token) || strings.ContainsRune(token, '=') {
-				t.Fatalf("EncodeShardToken() = %q, want lowercase unpadded token", token)
+				t.Fatalf("EncodeSubjectToken() = %q, want lowercase unpadded token", token)
 			}
 
-			decoded, err := DecodeShardToken(token)
+			decoded, err := DecodeSubjectToken(token)
 			if err != nil {
-				t.Fatalf("DecodeShardToken() error = %v", err)
+				t.Fatalf("DecodeSubjectToken() error = %v", err)
 			}
-			if decoded != test.shardID {
-				t.Fatalf("DecodeShardToken() = %q, want %q", decoded, test.shardID)
+			if decoded != test.value {
+				t.Fatalf("DecodeSubjectToken() = %q, want %q", decoded, test.value)
 			}
 		})
 	}
 }
 
-func TestShardTokenRejectsInvalidInput(t *testing.T) {
-	for _, shardID := range []string{"", string([]byte{0xff, 0xfe})} {
+func TestSubjectTokenRejectsInvalidInput(t *testing.T) {
+	for _, value := range []string{"", string([]byte{0xff, 0xfe})} {
 		t.Run("encode", func(t *testing.T) {
-			if _, err := EncodeShardToken(shardID); err == nil {
-				t.Fatalf("EncodeShardToken(%q) succeeded, want error", shardID)
+			if _, err := EncodeSubjectToken(value); err == nil {
+				t.Fatalf("EncodeSubjectToken(%q) succeeded, want error", value)
 			}
 		})
 	}
 
 	for _, token := range []string{"", "MY", "mzxw6=", "mzxw60", "mzxw6.", "7y", "a"} {
 		t.Run(token, func(t *testing.T) {
-			if _, err := DecodeShardToken(token); err == nil {
-				t.Fatalf("DecodeShardToken(%q) succeeded, want error", token)
+			if _, err := DecodeSubjectToken(token); err == nil {
+				t.Fatalf("DecodeSubjectToken(%q) succeeded, want error", token)
 			}
 		})
 	}

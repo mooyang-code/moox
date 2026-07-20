@@ -3,4 +3,4 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}/modules/storage"
-exec go test -tags storage_consistency_contract -count=1 ./test -run StorageConsistencyContract
+env GOCACHE="${GOCACHE:-/tmp/moox-gocache}" go test -count=1 ./internal/service/datanode ./internal/service/viewindex

@@ -96,11 +96,6 @@ func binding(factorID string, sourceDataset string, subjectMode string, subjects
 	}
 }
 
-func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.TimeSeriesRowsCommitted {
-	return &storagepb.TimeSeriesRowsCommitted{
-		Writes: []*storagepb.TimeSeriesRowWrite{{Operation: storagepb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{
-			SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID,
-			Freq: freq, DataTime: dataTime.Format(time.RFC3339),
-		}}}},
-	}
+func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.DatasetFieldsChanged {
+	return &storagepb.DatasetFieldsChanged{SpaceId: spaceID, DatasetId: datasetID, Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339)}}}}}}
 }
