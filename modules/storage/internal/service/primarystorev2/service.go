@@ -110,6 +110,7 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		groups[group] = append(groups[group], key)
 	}
 	rowsByKey := make(map[string][]*pb.RowFieldValues, len(req.GetKeys()))
+	latestRecordRows := make(map[string][]*pb.RowFieldValues)
 	for _, group := range order {
 		keys := groups[group]
 		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
@@ -130,10 +131,23 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		for _, row := range rsp.GetRows() {
 			id := rowKeyIdentity(row.GetKey())
 			rowsByKey[id] = append(rowsByKey[id], row)
+			if row.GetKey().GetRecord() != nil {
+				latestID := latestRecordIdentity(row.GetKey())
+				latestRecordRows[latestID] = append(latestRecordRows[latestID], row)
+			}
 		}
 	}
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
+		if record := key.GetRecord(); record != nil && record.GetVersion() == "" {
+			id := latestRecordIdentity(key)
+			matches := latestRecordRows[id]
+			if len(matches) != 0 {
+				rows = append(rows, matches[0])
+				latestRecordRows[id] = matches[1:]
+			}
+			continue
+		}
 		id := rowKeyIdentity(key)
 		matches := rowsByKey[id]
 		if len(matches) == 0 {
@@ -143,6 +157,13 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		rowsByKey[id] = matches[1:]
 	}
 	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
+}
+
+func latestRecordIdentity(key *pb.RowKey) string {
+	if key == nil || key.GetRecord() == nil {
+		return ""
+	}
+	return key.GetSpaceId() + "\x00" + key.GetDatasetId() + "\x00" + key.GetRecord().GetRecordId()
 }
 
 func (s *Service) authorizeRequest(auth *pb.AuthInfo) error {

@@ -224,6 +224,52 @@ func TestCompatibilityRangeReadUsesActiveDataView(t *testing.T) {
 	}
 }
 
+func TestPrimaryReadFieldsReturnsResolvedLatestRecordVersion(t *testing.T) {
+	node, err := datanode.NewService(datanode.Options{
+		NodeID: "node-a", AuthSecret: "node-secret",
+		Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	svc, err := New(Options{
+		Node: node,
+		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey("node-secret", "primary")}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"1", "2"} {
+		key := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
+		rsp, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+			AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+			Rows: []*pb.RowFieldUpsert{{
+				Key: key,
+				Fields: []*pb.FieldValue{{
+					FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: version}},
+				}},
+			}},
+		})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("write version=%s rsp=%v err=%v", version, rsp, err)
+		}
+	}
+	rsp, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		Keys: []*pb.RowKey{{
+			SpaceId: "space", DatasetId: "records",
+			Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}},
+		}},
+		FieldIds: []string{"value"},
+	})
+	if err != nil || len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetRecord().GetVersion() != "2" {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+}
+
 func successRetInfo() *pb.RetInfo {
 	return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}
 }

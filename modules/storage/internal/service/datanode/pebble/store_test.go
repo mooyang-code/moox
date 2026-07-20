@@ -106,3 +106,25 @@ func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
 		t.Fatalf("rows=%v err=%v", rows, err)
 	}
 }
+
+func TestWriteRejectsEventLargerThanPublisherLimitBeforeCommit(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", MaxEventBytes: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
+	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}}}
+	if _, err := store.WriteFieldsEvent(context.Background(), []*pb.RowFieldUpsert{row}, func(string, string, []*pb.RowFieldUpsert) ([]byte, error) {
+		return make([]byte, 64), nil
+	}); err == nil {
+		t.Fatal("expected oversized event to be rejected")
+	}
+	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || len(rows[0].GetFields()) != 0 {
+		t.Fatalf("fact committed despite oversized event: %v", rows)
+	}
+}

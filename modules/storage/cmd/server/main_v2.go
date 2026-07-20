@@ -247,6 +247,9 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
+	if !svc.HasEngine("duckdb") {
+		return errors.New("storage-view requires a CGO-enabled DuckDB engine")
+	}
 	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
@@ -344,26 +347,34 @@ func runDataNodeRole() error {
 		nodeID = "storage-node-0"
 	}
 	authSecret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
-	svc, err := datanode.NewService(datanode.Options{NodeID: nodeID, AuthSecret: authSecret, Pebble: pebble.Options{NodeID: nodeID, Path: filepath.Join(root, "pebble", nodeID)}})
+	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
+	if rawURL == "" {
+		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for node role")
+	}
+	eventConfig := jetstream.ConfigFromEnv([]string{rawURL}, "storage-node")
+	svc, err := datanode.NewService(datanode.Options{
+		NodeID: nodeID, AuthSecret: authSecret,
+		Pebble: pebble.Options{
+			NodeID: nodeID, Path: filepath.Join(root, "pebble", nodeID),
+			MaxEventBytes: eventConfig.MaxPayloadBytes(),
+		},
+	})
 	if err != nil {
 		return err
 	}
 	defer svc.Close()
-	var relay *datanode.OutboxRelay
-	if rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL"); rawURL != "" {
-		client, err := jetstream.Connect(trpc.BackgroundContext(), jetstream.ConfigFromEnv([]string{rawURL}, "storage-node"))
-		if err != nil {
-			return err
-		}
-		defer client.Close()
-		publisher := eventconsumer.NewDatasetPublisher(client, nodeID)
-		relay, err = datanode.NewOutboxRelay(svc.Store(), publisher, datanode.OutboxRelayOptions{})
-		if err != nil {
-			return err
-		}
-		relay.Start(trpc.BackgroundContext())
-		defer relay.Close()
+	client, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
+	if err != nil {
+		return err
 	}
+	defer client.Close()
+	publisher := eventconsumer.NewDatasetPublisher(client, nodeID)
+	relay, err := datanode.NewOutboxRelay(svc.Store(), publisher, datanode.OutboxRelayOptions{})
+	if err != nil {
+		return err
+	}
+	relay.Start(trpc.BackgroundContext())
+	defer relay.Close()
 	s := trpc.NewServer()
 	listener := s.Service("trpc.moox.storage.DataNode")
 	if listener == nil {

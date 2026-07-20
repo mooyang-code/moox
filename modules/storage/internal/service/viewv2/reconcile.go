@@ -124,7 +124,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	}
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetDesiredViewRevision(),
-		Engine: strings.ToLower(view.GetEngine()), Columns: columns,
+		PrimaryDatasetID: view.GetPrimaryDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns,
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())
@@ -141,11 +141,16 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if err := requireSuccess(claim.GetRetInfo()); err != nil {
 		return err
 	}
+	if view.GetActiveIndexId() != "" {
+		if err := s.TrackViewBuild(view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
+			return err
+		}
+	}
 	prepared, err := s.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		AuthInfo: auth, IndexId: indexID, Engine: schema.Engine,
 		Schema: &pb.ViewIndexSchema{
 			SpaceId: schema.SpaceID, ViewId: schema.ViewID, ViewVersion: schema.ViewVersion,
-			Engine: schema.Engine, Columns: schema.Columns, ViewSchemaHash: schema.SchemaHash,
+			Engine: schema.Engine, Columns: schema.Columns, ViewSchemaHash: schema.SchemaHash, PrimaryDatasetId: schema.PrimaryDatasetID,
 		},
 	})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

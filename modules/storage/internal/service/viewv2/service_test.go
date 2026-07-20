@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
@@ -165,6 +166,23 @@ func TestViewDatasetMappingIncludesSpace(t *testing.T) {
 	}
 }
 
+func TestSecondaryDatasetEventMapsToPrimaryViewGrain(t *testing.T) {
+	writes := eventWrites(viewindex.ViewIndexSchema{
+		PrimaryDatasetID: "primary",
+		Columns: []*pb.ViewColumn{{
+			OriginId: "secondary.factor", ColumnName: "secondary.factor",
+		}},
+	}, "secondary", []*pb.RowFieldUpsert{{
+		Key: &pb.RowKey{SpaceId: "space", DatasetId: "secondary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
+		Fields: []*pb.FieldValue{{
+			FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}},
+		}},
+	}})
+	if len(writes) != 1 || writes[0].Key.Key.GetDatasetId() != "primary" {
+		t.Fatalf("writes=%v", writes)
+	}
+}
+
 func TestViewBuildBackfillDoesNotOverwriteLiveAndSwitchesAtomically(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
@@ -275,6 +293,23 @@ func TestBackfillReadsNewDatasetColumnsByExistingGrain(t *testing.T) {
 	})
 	if err != nil || result.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(result.GetRows()) != 1 || len(result.GetRows()[0].GetFields()) != 2 {
 		t.Fatalf("result=%v err=%v", result, err)
+	}
+}
+
+func TestBackfillWaitsForLiveWorkToDrain(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.liveWork.Store(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := svc.waitForLiveIdle(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v", err)
+	}
+	svc.liveWork.Store(0)
+	if err := svc.waitForLiveIdle(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

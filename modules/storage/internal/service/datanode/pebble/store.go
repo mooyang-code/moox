@@ -26,6 +26,7 @@ type Options struct {
 	Path              string
 	NodeID            string
 	BucketDuration    time.Duration
+	MaxEventBytes     int
 	DisableSyncWrites bool
 }
 
@@ -40,6 +41,7 @@ type Store struct {
 	writeOptions   *cpebble.WriteOptions
 	nodeID         string
 	bucketDuration time.Duration
+	maxEventBytes  int
 	outboxMu       sync.Mutex
 	maintenanceMu  sync.Mutex
 	maintenanceWG  sync.WaitGroup
@@ -64,7 +66,7 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration}, nil
+	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes}, nil
 }
 
 func (s *Store) Close() error {
@@ -186,6 +188,9 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			payload, err = BindOutboxID(payload, s.nodeID, id)
 			if err != nil {
 				return nil, err
+			}
+			if s.maxEventBytes > 0 && len(payload) > s.maxEventBytes {
+				return nil, invalidf("event payload size %d exceeds limit %d", len(payload), s.maxEventBytes)
 			}
 			if err := batch.Set([]byte(outboxKey(id)), payload, s.writeOptions); err != nil {
 				return nil, err

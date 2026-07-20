@@ -58,10 +58,10 @@ done
 for binary in moox-admin moox-web-host moox-cloudnode moox-collector; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected storage binary: ${binary}" >&2; exit 1; }
 done
-[[ ! -e "${TMP_ROOT}/unpacked/bin/moox-storage-node" ]]
+[[ -x "${TMP_ROOT}/unpacked/bin/moox-storage-node" ]]
 [[ -d "${TMP_ROOT}/unpacked/storage/config" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
-[[ ! -e "${TMP_ROOT}/unpacked/storage-node" ]]
+[[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
 [[ $(find "${TMP_ROOT}/unpacked/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]]
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]
 [[ -x "${TMP_ROOT}/unpacked/bin/moox-gateway" ]]
@@ -78,8 +78,8 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
 mkdir "${TMP_ROOT}/unpacked-shard"
 tar -C "${TMP_ROOT}/unpacked-shard" -xzf "${SHARD_ARCHIVE}"
 [[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-storage-node" ]]
-[[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-admin" ]]
-[[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-admin-cli" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-shard/bin/moox-admin" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-shard/bin/moox-admin-cli" ]]
 [[ -f "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml" ]]
 [[ -f "${TMP_ROOT}/unpacked-shard/storage-node/config/storage.yaml" ]]
 grep -q 'port: 20107' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"

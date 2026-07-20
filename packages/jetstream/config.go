@@ -57,6 +57,10 @@ func ConfigFromEnv(urls []string, name string) Config {
 	}
 }
 
+func (cfg Config) MaxPayloadBytes() int {
+	return cfg.normalized().MaxPayload
+}
+
 func firstEnv(names ...string) string {
 	for _, name := range names {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {

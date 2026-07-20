@@ -12,7 +12,7 @@ PACKAGE_ARCHIVE=""
 DEPLOY_PROFILE=""
 AUTO_GATEWAY_INPUTS=0
 WITH_STORAGE=1
-WITH_STORAGE_NODE=0
+WITH_STORAGE_NODE=1
 WITH_ARCHIVE=1
 WITH_EVENTBUS=1
 WITH_WEB_HOST=1
@@ -135,7 +135,7 @@ apply_profile() {
       WITH_GATEWAY=1
       WITH_WEB_HOST=0
       WITH_STORAGE=1
-      WITH_STORAGE_NODE=0
+      WITH_STORAGE_NODE=1
       WITH_ARCHIVE=0
       WITH_EVENTBUS=0
       WITH_CLOUDNODE=0
@@ -484,12 +484,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# An independent shard needs the Admin control plane to publish its restricted
-# route. Keep the minimal storage profile minimal unless this explicit option
-# is selected.
-if [[ "${DEPLOY_PROFILE}" == "storage" && "${WITH_STORAGE_NODE}" -eq 1 ]]; then
-  WITH_ADMIN=1
-fi
 if [[ "${WITH_STORAGE_NODE}" -eq 1 && "${WITH_STORAGE}" -ne 1 ]]; then
   fail "--with-storage-node requires storage to be enabled"
 fi

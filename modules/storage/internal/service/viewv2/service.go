@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -33,16 +34,21 @@ type Service struct {
 	primaryAuth *pb.AuthInfo
 	mu          sync.RWMutex
 	byData      map[datasetRef]map[string]struct{}
+	liveWork    atomic.Int64
 }
 
 type datasetRef struct{ spaceID, datasetID string }
 type viewRef struct{ spaceID, viewID string }
 
 type viewRuntime struct {
-	mu     sync.Mutex
-	active string
-	next   string
-	status string
+	mu           sync.Mutex
+	active       string
+	next         string
+	status       string
+	buildID      string
+	ownerID      string
+	metadata     MetadataClient
+	metadataAuth *pb.AuthInfo
 }
 
 func New(root, authSecret string) (*Service, error) {
@@ -78,6 +84,13 @@ func New(root, authSecret string) (*Service, error) {
 	return service, nil
 }
 
+func (s *Service) HasEngine(name string) bool {
+	if s == nil {
+		return false
+	}
+	return s.engines[strings.ToLower(strings.TrimSpace(name))] != nil
+}
+
 var _ pb.ViewIndexService = (*Service)(nil)
 var _ pb.DataViewService = (*Service)(nil)
 
@@ -97,20 +110,28 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	if engine == nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("view engine %q is unavailable", engineName))}, nil
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()}
+	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), PrimaryDatasetID: sch.GetPrimaryDatasetId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()}
 	err := engine.Prepare(ctx, req.GetIndexId(), schema)
 	if err != nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
+	viewKey := viewRef{spaceID: schema.SpaceID, viewID: schema.ViewID}
+	s.mu.Lock()
+	runtime := s.views[viewKey]
+	if runtime == nil {
+		runtime = &viewRuntime{}
+		s.views[viewKey] = runtime
+	}
+	s.mu.Unlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	s.mu.Lock()
 	s.removeIndexMappingsLocked(req.GetIndexId())
 	s.indexEngine[req.GetIndexId()] = engineName
 	s.schemas[req.GetIndexId()] = schema
-	viewKey := viewRef{spaceID: schema.SpaceID, viewID: schema.ViewID}
-	runtime := s.views[viewKey]
-	if runtime == nil {
-		runtime = &viewRuntime{active: req.GetIndexId(), status: "active"}
-		s.views[viewKey] = runtime
+	if runtime.active == "" {
+		runtime.active = req.GetIndexId()
+		runtime.status = "active"
 	} else if runtime.active != req.GetIndexId() {
 		runtime.next = req.GetIndexId()
 		runtime.status = "building"
@@ -578,7 +599,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if client == nil {
 		return nil, errors.New("eventbus client is required")
 	}
-	consumer, err := client.EnsurePullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: eventconsumer.DatasetFieldsChangedSubjectPrefix + ".>", AckWait: 30 * time.Second, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: time.Second})
+	consumer, err := client.EnsurePullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: eventconsumer.DatasetFieldsChangedSubjectPrefix + ".>", AckWait: 120 * time.Second, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: time.Second})
 	if err != nil {
 		return nil, err
 	}
@@ -605,6 +626,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				continue
 			}
 			for _, delivery := range deliveries {
+				s.liveWork.Add(1)
 				for loopCtx.Err() == nil {
 					err := s.applyDelivery(loopCtx, delivery)
 					if err == nil {
@@ -626,6 +648,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 							<-timer.C
 						}
 					}
+					s.liveWork.Add(-1)
 				}
 			}
 		}
@@ -682,6 +705,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		if runtime.next != "" {
 			if err := s.applyEventToIndex(ctx, runtime.next, datasetID, rows); err != nil {
 				failedID := runtime.next
+				s.failRuntimeBuild(ctx, viewKey, runtime, err)
 				runtime.next = ""
 				runtime.status = "failed"
 				runtime.mu.Unlock()
@@ -732,6 +756,9 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		batchSize = 100
 	}
 	for offset := 0; ; offset += batchSize {
+		if err := s.waitForLiveIdle(ctx); err != nil {
+			return err
+		}
 		runtime.mu.Lock()
 		activeID, nextID := runtime.active, runtime.next
 		runtime.mu.Unlock()
@@ -763,6 +790,9 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 				return err
 			}
 		}
+		if err := s.waitForLiveIdle(ctx); err != nil {
+			return err
+		}
 		runtime.mu.Lock()
 		if runtime.next != nextID {
 			runtime.mu.Unlock()
@@ -773,7 +803,9 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 			s.mu.RLock()
 			schema := s.schemas[nextID]
 			s.mu.RUnlock()
-			err = nextEngine.Apply(ctx, nextID, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill})
+			batchCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			err = nextEngine.Apply(batchCtx, nextID, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill})
+			cancel()
 		}
 		if err != nil {
 			failedID := runtime.next
@@ -785,6 +817,21 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		}
 		runtime.mu.Unlock()
 	}
+}
+
+func (s *Service) waitForLiveIdle(ctx context.Context) error {
+	for s.liveWork.Load() > 0 {
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
 }
 
 func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, activeID, nextID string, writes []viewindex.RowWrite) error {
@@ -878,6 +925,10 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 	runtime.active = runtime.next
 	runtime.next = ""
 	runtime.status = "active"
+	runtime.buildID = ""
+	runtime.ownerID = ""
+	runtime.metadata = nil
+	runtime.metadataAuth = nil
 	runtime.mu.Unlock()
 	if grace < 0 {
 		grace = 0
@@ -888,6 +939,38 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 		s.removeFailedBuild(trpc.BackgroundContext(), oldID)
 	}()
 	return ctx.Err()
+}
+
+func (s *Service) TrackViewBuild(spaceID, viewID, buildID, ownerID string, metadata MetadataClient, auth *pb.AuthInfo) error {
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if runtime == nil || metadata == nil || buildID == "" || ownerID == "" {
+		return errors.New("view build tracking requires runtime, metadata, build_id and owner_id")
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.buildID = buildID
+	runtime.ownerID = ownerID
+	runtime.metadata = metadata
+	if auth != nil {
+		runtime.metadataAuth = proto.Clone(auth).(*pb.AuthInfo)
+	}
+	return nil
+}
+
+func (s *Service) failRuntimeBuild(ctx context.Context, key viewRef, runtime *viewRuntime, cause error) {
+	if runtime == nil || runtime.metadata == nil || runtime.buildID == "" || runtime.ownerID == "" {
+		return
+	}
+	message := "new view live write failed"
+	if cause != nil {
+		message = cause.Error()
+	}
+	_, _ = runtime.metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
+		AuthInfo: runtime.metadataAuth, SpaceId: key.spaceID, ViewId: key.viewID,
+		BuildId: runtime.buildID, OwnerId: runtime.ownerID, Error: message,
+	})
 }
 
 func (s *Service) AttachActiveView(view *pb.View) error {
@@ -904,17 +987,21 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	}
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetActiveViewRevision(),
-		Engine: engineName, Columns: columns, SchemaHash: view.GetActiveViewSchemaHash(),
+		PrimaryDatasetID: view.GetPrimaryDatasetId(), Engine: engineName, Columns: columns, SchemaHash: view.GetActiveViewSchemaHash(),
 	}
-	s.mu.Lock()
-	s.indexEngine[view.GetActiveIndexId()] = engineName
-	s.schemas[view.GetActiveIndexId()] = schema
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
 		runtime = &viewRuntime{}
 		s.views[viewKey] = runtime
 	}
+	s.mu.Unlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	s.mu.Lock()
+	s.indexEngine[view.GetActiveIndexId()] = engineName
+	s.schemas[view.GetActiveIndexId()] = schema
 	runtime.active = view.GetActiveIndexId()
 	runtime.status = "active"
 	s.indexView[view.GetActiveIndexId()] = viewKey
@@ -1027,7 +1114,11 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 			}
 		}
 		if len(fields) != 0 {
-			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: row.GetKey()}, Fields: fields})
+			key := proto.Clone(row.GetKey()).(*pb.RowKey)
+			if schema.PrimaryDatasetID != "" {
+				key.DatasetId = schema.PrimaryDatasetID
+			}
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields})
 		}
 	}
 	return writes

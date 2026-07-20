@@ -16,6 +16,12 @@ type stubMetadataReader struct{}
 func (stubMetadataReader) GetSpace(context.Context, string) (*pb.Space, error) {
 	return nil, nil
 }
+
+func TestCompositeIDDoesNotCollideOnDots(t *testing.T) {
+	if compositeID("a.b", "c") == compositeID("a", "b.c") {
+		t.Fatal("composite metadata IDs collide")
+	}
+}
 func (stubMetadataReader) ListSpaces(context.Context, string, *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	return []*pb.Space{{
 		SpaceId: "crypto",

@@ -105,12 +105,13 @@ func (b ViewIndexApplyBatch) Validate() error {
 }
 
 type ViewIndexSchema struct {
-	SpaceID     string
-	ViewID      string
-	ViewVersion uint64
-	Engine      string
-	Columns     []*pb.ViewColumn
-	SchemaHash  string
+	SpaceID          string
+	ViewID           string
+	PrimaryDatasetID string
+	ViewVersion      uint64
+	Engine           string
+	Columns          []*pb.ViewColumn
+	SchemaHash       string
 }
 
 type BatchWrite struct {
@@ -497,9 +498,9 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 		SortOrder             uint32
 	}
 	shape := struct {
-		SpaceID, ViewID, Engine string
-		Columns                 []col
-	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, Engine: schema.Engine}
+		SpaceID, ViewID, PrimaryDatasetID, Engine string
+		Columns                                   []col
+	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, PrimaryDatasetID: schema.PrimaryDatasetID, Engine: schema.Engine}
 	for _, c := range schema.Columns {
 		if c != nil {
 			shape.Columns = append(shape.Columns, col{c.GetColumnName(), c.GetOriginId(), int32(c.GetOriginType()), int32(c.GetValueType()), c.GetSortOrder()})
