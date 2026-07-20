@@ -155,6 +155,7 @@ type ManagedEngine interface {
 type QueryEngine interface {
 	ManagedEngine
 	Query(context.Context, string, []*pb.RowKey, []string) ([]*pb.RowFieldValues, error)
+	Scan(context.Context, string, int, int) ([]*pb.RowFieldValues, error)
 }
 
 // MemoryEngine is a small engine core shared by DuckDB and Bleve owners. The
@@ -361,6 +362,38 @@ func (e *MemoryEngine) Query(_ context.Context, id string, keys []*pb.RowKey, fi
 		}
 	}
 	return out, nil
+}
+
+func (e *MemoryEngine) Scan(_ context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	idx := e.indexes[id]
+	if idx == nil {
+		return nil, fmt.Errorf("index %q is not prepared", id)
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	ids := make([]string, 0, len(idx.rows))
+	for rowID := range idx.rows {
+		ids = append(ids, rowID)
+	}
+	sort.Strings(ids)
+	if offset >= len(ids) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(ids) {
+		end = len(ids)
+	}
+	rows := make([]*pb.RowFieldValues, 0, end-offset)
+	for _, rowID := range ids[offset:end] {
+		rows = append(rows, proto.Clone(idx.rows[rowID]).(*pb.RowFieldValues))
+	}
+	return rows, nil
 }
 func (e *MemoryEngine) Write(ctx context.Context, id string, batch BatchWrite) error {
 	writes := make([]RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))

@@ -37,18 +37,18 @@ func appendRawPart(dst []byte, value []byte) []byte {
 
 func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts [][]byte, err error) {
 	if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
-		return 0, nil, fmt.Errorf("row key space_id and dataset_id are required")
+		return 0, nil, invalid("row key space_id and dataset_id are required")
 	}
 	base := [][]byte{[]byte(key.GetSpaceId()), []byte(key.GetDatasetId())}
 	switch value := key.GetKind().(type) {
 	case *pb.RowKey_TimeSeries:
 		row := value.TimeSeries
 		if row == nil || row.GetSubjectId() == "" || row.GetFreq() == "" || row.GetDataTime() == "" {
-			return 0, nil, fmt.Errorf("time-series row key requires subject_id, freq and data_time")
+			return 0, nil, invalid("time-series row key requires subject_id, freq and data_time")
 		}
 		at, parseErr := time.Parse(time.RFC3339Nano, row.GetDataTime())
 		if parseErr != nil {
-			return 0, nil, fmt.Errorf("invalid data_time: %w", parseErr)
+			return 0, nil, invalidf("invalid data_time: %w", parseErr)
 		}
 		if bucketDuration <= 0 {
 			bucketDuration = 24 * time.Hour
@@ -60,23 +60,23 @@ func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts []
 	case *pb.RowKey_Record:
 		row := value.Record
 		if row == nil || row.GetRecordId() == "" || row.GetVersion() == "" {
-			return 0, nil, fmt.Errorf("record row key requires record_id and version")
+			return 0, nil, invalid("record row key requires record_id and version")
 		}
 		return recordKind, append(base, []byte(row.GetRecordId()), []byte(row.GetVersion())), nil
 	default:
-		return 0, nil, fmt.Errorf("row key kind is required")
+		return 0, nil, invalid("row key kind is required")
 	}
 }
 
 func NormalizeRowKey(key *pb.RowKey) (*pb.RowKey, error) {
 	if key == nil {
-		return nil, fmt.Errorf("row key is required")
+		return nil, invalid("row key is required")
 	}
 	normalized := proto.Clone(key).(*pb.RowKey)
 	if row := normalized.GetTimeSeries(); row != nil {
 		at, err := time.Parse(time.RFC3339Nano, row.GetDataTime())
 		if err != nil {
-			return nil, fmt.Errorf("invalid data_time: %w", err)
+			return nil, invalidf("invalid data_time: %w", err)
 		}
 		row.DataTime = at.UTC().Format(canonicalTimeLayout)
 	}
@@ -100,7 +100,7 @@ func encodeRowPrefix(key *pb.RowKey, bucketDuration time.Duration) ([]byte, erro
 
 func encodeFieldKey(key *pb.RowKey, fieldID string, bucketDuration time.Duration) ([]byte, error) {
 	if fieldID == "" {
-		return nil, fmt.Errorf("field_id is required")
+		return nil, invalid("field_id is required")
 	}
 	prefix, err := encodeRowPrefix(key, bucketDuration)
 	if err != nil {
@@ -112,7 +112,7 @@ func encodeFieldKey(key *pb.RowKey, fieldID string, bucketDuration time.Duration
 
 func encodeAttributeKey(key *pb.RowKey, attribute string, bucketDuration time.Duration) ([]byte, error) {
 	if attribute == "" {
-		return nil, fmt.Errorf("attribute key is required")
+		return nil, invalid("attribute key is required")
 	}
 	prefix, err := encodeRowPrefix(key, bucketDuration)
 	if err != nil {

@@ -102,16 +102,16 @@ func (s *Store) GetFieldGroup(ctx context.Context, spaceID string, groupID strin
 }
 
 func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_field_groups
+	const where = `
+		FROM t_field_groups
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR COALESCE(c_parent_group_id, '') = ?)
-		ORDER BY c_space_id, COALESCE(c_parent_group_id, ''), c_sort_order, c_group_id
-	`, []any{spaceID, spaceID, parentGroupID, parentGroupID}, func() *pb.FieldGroup { return &pb.FieldGroup{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR COALESCE(c_parent_group_id, '') = ?)`
+	args := []any{spaceID, spaceID, parentGroupID, parentGroupID}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, COALESCE(c_parent_group_id, ''), c_sort_order, c_group_id`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.FieldGroup { return &pb.FieldGroup{} },
+	)
 }
 
 func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (coremetadata.FieldGroupCounts, error) {

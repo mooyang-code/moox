@@ -50,40 +50,27 @@ func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string
 
 func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_subjects
-		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_subject_type = ?)
-		  AND (? = '' OR c_market = ?)
-		ORDER BY c_space_id, c_subject_id
-	`, []any{spaceID, spaceID, subjectType, subjectType, market, market}, func() *pb.Subject { return &pb.Subject{} })
+	subjectIDsJSON, err := marshalJSON(subjectIDs)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(subjectIDs) > 0 {
-		allow := stringSet(subjectIDs)
-		filtered := items[:0]
-		for _, item := range items {
-			if allow[item.GetSubjectId()] {
-				filtered = append(filtered, item)
-			}
-		}
-		items = filtered
+	const where = `
+		FROM t_subjects
+		WHERE (? = '' OR c_space_id = ?)
+		  AND (? = '' OR c_subject_type = ?)
+		  AND (? = '' OR c_market = ?)
+		  AND (? = '[]' OR c_subject_id IN (SELECT value FROM json_each(?)))
+		  AND (? = '' OR instr(lower(c_subject_id), ?) > 0 OR instr(lower(c_subject_type), ?) > 0 OR instr(lower(c_name), ?) > 0 OR instr(lower(c_market), ?) > 0 OR instr(lower(c_currency), ?) > 0)`
+	args := []any{
+		spaceID, spaceID, subjectType, subjectType, market, market,
+		subjectIDsJSON, subjectIDsJSON,
+		keyword, keyword, keyword, keyword, keyword, keyword,
 	}
-	if keyword != "" {
-		filtered := items[:0]
-		for _, item := range items {
-			if strings.Contains(strings.ToLower(item.GetSubjectId()), keyword) ||
-				strings.Contains(strings.ToLower(item.GetSubjectType()), keyword) ||
-				strings.Contains(strings.ToLower(item.GetName()), keyword) ||
-				strings.Contains(strings.ToLower(item.GetMarket()), keyword) ||
-				strings.Contains(strings.ToLower(item.GetCurrency()), keyword) {
-				filtered = append(filtered, item)
-			}
-		}
-		items = filtered
-	}
-	return pageItems(items, page)
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_subject_id`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.Subject { return &pb.Subject{} },
+	)
 }
 
 func (s *Store) UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol) (*pb.SubjectSymbol, error) {

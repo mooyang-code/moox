@@ -138,6 +138,9 @@ func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*p
 	if req.GetNodeId() != s.nodeID {
 		return &pb.GetNodeStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.GetNodeStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	return &pb.GetNodeStateRsp{RetInfo: retinfo.Success("success"), NodeId: s.nodeID, Status: "READY"}, nil
 }
 
@@ -180,8 +183,8 @@ func errorCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
 	}
-	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "required") || strings.Contains(text, "invalid") || strings.Contains(text, "limit") || strings.Contains(text, "duplicate") {
+	var validation pebble.ValidationError
+	if errors.As(err, &validation) {
 		return pb.ErrorCode_INVALID_PARAM
 	}
 	return pb.ErrorCode_INNER_ERR

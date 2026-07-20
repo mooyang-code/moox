@@ -117,7 +117,7 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("rows are required")
+		return nil, invalid("rows are required")
 	}
 	normalizedRows := make([]*pb.RowFieldUpsert, 0, len(rows))
 	for _, row := range rows {
@@ -205,24 +205,24 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 
 func validateUpsert(row *pb.RowFieldUpsert) error {
 	if row == nil || row.GetKey() == nil {
-		return errors.New("row key is required")
+		return invalid("row key is required")
 	}
 	if len(row.GetFields()) == 0 && len(row.GetAttributes()) == 0 {
-		return errors.New("at least one field or attribute is required")
+		return invalid("at least one field or attribute is required")
 	}
 	seen := make(map[string]struct{}, len(row.GetFields()))
 	for _, field := range row.GetFields() {
 		if field == nil || field.GetFieldId() == "" || field.GetValue() == nil {
-			return errors.New("field_id and value are required")
+			return invalid("field_id and value are required")
 		}
 		if _, ok := seen[field.GetFieldId()]; ok {
-			return fmt.Errorf("duplicate field_id %q", field.GetFieldId())
+			return invalidf("duplicate field_id %q", field.GetFieldId())
 		}
 		seen[field.GetFieldId()] = struct{}{}
 	}
 	for name, value := range row.GetAttributes() {
 		if name == "" || value == nil {
-			return errors.New("attribute key and value are required")
+			return invalid("attribute key and value are required")
 		}
 	}
 	return nil
@@ -245,13 +245,13 @@ func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, att
 		return nil, errors.New("pebble store is closed")
 	}
 	if len(keys) == 0 {
-		return nil, errors.New("keys are required")
+		return nil, invalid("keys are required")
 	}
 	if len(fieldIDs) == 0 && len(attributeKeys) == 0 {
-		return nil, errors.New("field_ids or attribute_keys are required")
+		return nil, invalid("field_ids or attribute_keys are required")
 	}
 	if len(keys) > 10000 || (len(keys)*(len(fieldIDs)+len(attributeKeys))) > 100000 {
-		return nil, errors.New("read request exceeds key/field limit")
+		return nil, invalid("read request exceeds key/field limit")
 	}
 	result := make([]*pb.RowFieldValues, 0, len(keys))
 	for _, key := range keys {
@@ -351,7 +351,7 @@ func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
 func recordBasePrefix(key *pb.RowKey) ([]byte, error) {
 	record := key.GetRecord()
 	if record == nil || record.GetRecordId() == "" {
-		return nil, errors.New("record key is required")
+		return nil, invalid("record key is required")
 	}
 	out := []byte{recordKind}
 	out = appendRawPart(out, []byte(key.GetSpaceId()))

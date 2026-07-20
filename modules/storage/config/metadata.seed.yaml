@@ -55,6 +55,8 @@ datasets:
     name: 币安现货K线
     description: Binance spot OHLCV kline facts
     data_kind: time_series
+    data_node_id: storage-node-0
+    keep_duration: 4320h
     freqs: ["1m", "1h", "1d"]
     status: active
   - space_id: crypto
@@ -63,6 +65,8 @@ datasets:
     name: 币安现货标的
     description: Binance spot symbol profile facts
     data_kind: record
+    data_node_id: storage-node-0
+    keep_duration: "0"
     freqs: []
     status: active
   - space_id: crypto
@@ -71,6 +75,8 @@ datasets:
     name: 币安合约标的
     description: Binance USDT-M swap symbol metadata records
     data_kind: record
+    data_node_id: storage-node-0
+    keep_duration: "0"
     freqs: []
     status: active
 

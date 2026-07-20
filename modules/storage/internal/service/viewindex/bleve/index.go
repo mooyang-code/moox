@@ -132,6 +132,41 @@ func (i *Index) Query(ctx context.Context, id string, keys []*pb.RowKey, fields 
 	return out, nil
 }
 
+func (i *Index) Scan(ctx context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	index, err := i.openIndex(id)
+	if err != nil {
+		return nil, err
+	}
+	defer index.Close()
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	req := blevelib.NewSearchRequestOptions(blevelib.NewMatchAllQuery(), limit, offset, false)
+	req.Fields = []string{"row_proto"}
+	req.SortBy([]string{"_id"})
+	result, err := index.SearchInContext(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pb.RowFieldValues, 0, len(result.Hits))
+	for _, hit := range result.Hits {
+		encoded, _ := hit.Fields["row_proto"].(string)
+		row, err := decodeRow(encoded)
+		if err != nil {
+			return nil, err
+		}
+		if row != nil {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
 func (i *Index) Search(ctx context.Context, id, text string, fields []string, size int) ([]*pb.RowFieldValues, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -206,7 +241,30 @@ func (i *Index) Stat(_ context.Context, id string) (viewindex.ViewIndexStats, er
 	if closeErr != nil {
 		return viewindex.ViewIndexStats{}, closeErr
 	}
-	return viewindex.ViewIndexStats{Exists: true, ViewVersion: meta.ViewVersion, SchemaHash: meta.SchemaHash, UpdatedAt: meta.UpdatedAt, EntryCount: int64(count)}, nil
+	stats := viewindex.ViewIndexStats{Exists: true, ViewVersion: meta.ViewVersion, SchemaHash: meta.SchemaHash, UpdatedAt: meta.UpdatedAt, EntryCount: int64(count)}
+	index, err = i.openIndex(id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	req := blevelib.NewSearchRequestOptions(blevelib.NewMatchAllQuery(), int(count), 0, false)
+	req.Fields = []string{"row_proto"}
+	result, err := index.Search(req)
+	closeErr = index.Close()
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if closeErr != nil {
+		return viewindex.ViewIndexStats{}, closeErr
+	}
+	for _, hit := range result.Hits {
+		encoded, _ := hit.Fields["row_proto"].(string)
+		row, err := decodeRow(encoded)
+		if err != nil {
+			return viewindex.ViewIndexStats{}, err
+		}
+		updateRange(&stats, row.GetKey())
+	}
+	return stats, nil
 }
 
 func (i *Index) Remove(_ context.Context, id string) error {
@@ -396,6 +454,27 @@ func recordKey(key *pb.RecordKey) *pb.RowKey {
 		return nil
 	}
 	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: key.GetRecordId(), Version: key.GetVersion()}}}
+}
+
+func updateRange(stats *viewindex.ViewIndexStats, key *pb.RowKey) {
+	if stats == nil || key == nil {
+		return
+	}
+	value := ""
+	if row := key.GetTimeSeries(); row != nil {
+		value = row.GetDataTime()
+	} else if row := key.GetRecord(); row != nil {
+		value = row.GetVersion()
+	}
+	if value == "" {
+		return
+	}
+	if stats.IndexedFrom == "" || value < stats.IndexedFrom {
+		stats.IndexedFrom = value
+	}
+	if stats.IndexedTo == "" || value > stats.IndexedTo {
+		stats.IndexedTo = value
+	}
 }
 
 var _ viewindex.QueryEngine = (*Index)(nil)

@@ -35,6 +35,7 @@ message ReadFieldsRsp {
 
 message GetNodeStateReq {
   string node_id = 1;
+  common.AuthInfo auth_info = 2;
 }
 
 message GetNodeStateRsp {

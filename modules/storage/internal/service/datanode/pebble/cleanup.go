@@ -16,10 +16,10 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		return 0, errors.New("pebble store is closed")
 	}
 	if spaceID == "" || datasetID == "" {
-		return 0, errors.New("space_id and dataset_id are required")
+		return 0, invalid("space_id and dataset_id are required")
 	}
 	if beforeBucket.IsZero() {
-		return 0, errors.New("before bucket is required")
+		return 0, invalid("before bucket is required")
 	}
 	before := beforeBucket.UTC().Format(canonicalTimeLayout)
 	batch := s.db.NewBatch()

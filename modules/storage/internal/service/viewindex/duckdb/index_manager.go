@@ -148,6 +148,38 @@ func (m *IndexManager) Query(ctx context.Context, id string, keys []*pb.RowKey, 
 	return out, nil
 }
 
+func (m *IndexManager) Scan(ctx context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {
+	db, err := m.openExisting(id)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := db.QueryContext(ctx, `SELECT row_proto FROM view_rows ORDER BY row_id LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*pb.RowFieldValues
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		row := &pb.RowFieldValues{}
+		if err := proto.Unmarshal(raw, row); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.BatchWrite) error {
 	writes := make([]viewindex.RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))
 	for _, row := range batch.TimeSeriesRows {
@@ -185,6 +217,26 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT row_proto FROM view_rows`)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			_ = rows.Close()
+			return viewindex.ViewIndexStats{}, err
+		}
+		row := &pb.RowFieldValues{}
+		if err := proto.Unmarshal(raw, row); err != nil {
+			_ = rows.Close()
+			return viewindex.ViewIndexStats{}, err
+		}
+		updateRange(&stats, row.GetKey())
+	}
+	if err := rows.Close(); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	stats.Exists = true
@@ -284,6 +336,27 @@ func recordKey(key *pb.RecordKey) *pb.RowKey {
 		return nil
 	}
 	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: key.GetRecordId(), Version: key.GetVersion()}}}
+}
+
+func updateRange(stats *viewindex.ViewIndexStats, key *pb.RowKey) {
+	if stats == nil || key == nil {
+		return
+	}
+	value := ""
+	if row := key.GetTimeSeries(); row != nil {
+		value = row.GetDataTime()
+	} else if row := key.GetRecord(); row != nil {
+		value = row.GetVersion()
+	}
+	if value == "" {
+		return
+	}
+	if stats.IndexedFrom == "" || value < stats.IndexedFrom {
+		stats.IndexedFrom = value
+	}
+	if stats.IndexedTo == "" || value > stats.IndexedTo {
+		stats.IndexedTo = value
+	}
 }
 
 var _ viewindex.QueryEngine = (*IndexManager)(nil)
