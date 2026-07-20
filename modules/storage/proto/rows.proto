@@ -58,8 +58,6 @@ message TimeSeriesKey {
   string subject_id = 3;
   string freq = 4;
   string data_time = 5;
-  // Deprecated compatibility field; Dimensions are not part of RowKey.
-  map<string, string> dimensions = 6;
 }
 
 message RecordKey {
