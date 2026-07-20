@@ -2,35 +2,37 @@ package pebble
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 // The first byte is the physical namespace. Field and attribute values are
 // deliberately separate so a user supplied name can never collide with the
 // other value kind. There is intentionally no row-marker namespace.
 const (
-	fieldNamespace     byte = 0x01
-	attributeNamespace byte = 0x02
-	timeSeriesKind     byte = 0x01
-	recordKind         byte = 0x02
+	fieldNamespace      byte = 0x01
+	attributeNamespace  byte = 0x02
+	timeSeriesKind      byte = 0x01
+	recordKind          byte = 0x02
+	canonicalTimeLayout      = "2006-01-02T15:04:05.000000000Z"
 )
 
 func appendPart(dst []byte, value string) []byte {
-	var buf [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(buf[:], uint64(len(value)))
-	dst = append(dst, buf[:n]...)
-	return append(dst, value...)
+	return appendRawPart(dst, []byte(value))
 }
 
 func appendRawPart(dst []byte, value []byte) []byte {
-	var buf [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(buf[:], uint64(len(value)))
-	dst = append(dst, buf[:n]...)
-	return append(dst, value...)
+	for _, b := range value {
+		if b == 0 {
+			dst = append(dst, 0, 0xff)
+			continue
+		}
+		dst = append(dst, b)
+	}
+	return append(dst, 0, 0)
 }
 
 func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts [][]byte, err error) {
@@ -51,18 +53,37 @@ func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts []
 		if bucketDuration <= 0 {
 			bucketDuration = 24 * time.Hour
 		}
-		nanos := at.UTC().UnixNano()
-		bucket := time.Unix(0, nanos-(nanos%bucketDuration.Nanoseconds())).UTC().Format(time.RFC3339Nano)
-		return timeSeriesKind, append(base, []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(bucket), []byte(row.GetDataTime())), nil
+		at = at.UTC()
+		bucket := at.Truncate(bucketDuration).Format(canonicalTimeLayout)
+		dataTime := at.Format(canonicalTimeLayout)
+		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(dataTime)), nil
 	case *pb.RowKey_Record:
 		row := value.Record
-		if row == nil || row.GetRecordId() == "" {
-			return 0, nil, fmt.Errorf("record row key requires record_id")
+		if row == nil || row.GetRecordId() == "" || row.GetVersion() == "" {
+			return 0, nil, fmt.Errorf("record row key requires record_id and version")
 		}
 		return recordKind, append(base, []byte(row.GetRecordId()), []byte(row.GetVersion())), nil
 	default:
 		return 0, nil, fmt.Errorf("row key kind is required")
 	}
+}
+
+func NormalizeRowKey(key *pb.RowKey) (*pb.RowKey, error) {
+	if key == nil {
+		return nil, fmt.Errorf("row key is required")
+	}
+	normalized := proto.Clone(key).(*pb.RowKey)
+	if row := normalized.GetTimeSeries(); row != nil {
+		at, err := time.Parse(time.RFC3339Nano, row.GetDataTime())
+		if err != nil {
+			return nil, fmt.Errorf("invalid data_time: %w", err)
+		}
+		row.DataTime = at.UTC().Format(canonicalTimeLayout)
+	}
+	if _, _, err := rowParts(normalized, 24*time.Hour); err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 func encodeRowPrefix(key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
@@ -110,12 +131,27 @@ func encodeNamespacePrefix(namespace byte, key *pb.RowKey, bucketDuration time.D
 }
 
 func decodePart(data []byte) (string, []byte, error) {
-	n, consumed := binary.Uvarint(data)
-	if consumed <= 0 || uint64(len(data[consumed:])) < n {
-		return "", nil, fmt.Errorf("invalid key component")
+	value := make([]byte, 0, len(data))
+	for i := 0; i < len(data); {
+		if data[i] != 0 {
+			value = append(value, data[i])
+			i++
+			continue
+		}
+		if i+1 >= len(data) {
+			return "", nil, fmt.Errorf("invalid key component")
+		}
+		switch data[i+1] {
+		case 0:
+			return string(value), data[i+2:], nil
+		case 0xff:
+			value = append(value, 0)
+			i += 2
+		default:
+			return "", nil, fmt.Errorf("invalid key component")
+		}
 	}
-	end := consumed + int(n)
-	return string(data[consumed:end]), data[end:], nil
+	return "", nil, fmt.Errorf("invalid key component")
 }
 
 func isNamespaceKey(key []byte, namespace byte) bool {

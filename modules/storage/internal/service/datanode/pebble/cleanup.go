@@ -1,6 +1,7 @@
 package pebble
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -10,54 +11,59 @@ import (
 
 // CleanupExpiredBuckets deletes only time-series field/attribute keys older
 // than beforeBucket. Record versions are intentionally never removed here.
-func (s *Store) CleanupExpiredBuckets(ctx context.Context, datasetID string, beforeBucket time.Time) (uint64, error) {
+func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("pebble store is closed")
+	}
+	if spaceID == "" || datasetID == "" {
+		return 0, errors.New("space_id and dataset_id are required")
 	}
 	if beforeBucket.IsZero() {
 		return 0, errors.New("before bucket is required")
 	}
-	iter, err := s.db.NewIter(&cpebble.IterOptions{})
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-	var keys [][]byte
-	for iter.First(); iter.Valid(); iter.Next() {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		key := iter.Key()
-		if len(key) < 2 || (key[0] != fieldNamespace && key[0] != attributeNamespace) || key[1] != timeSeriesKind {
-			continue
-		}
-		parts, ok := decodePhysicalParts(key[2:])
-		if !ok || len(parts) != 7 {
-			continue
-		}
-		if datasetID != "" && parts[1] != datasetID {
-			continue
-		}
-		bucket, err := time.Parse(time.RFC3339Nano, parts[4])
-		if err != nil || !bucket.Before(beforeBucket) {
-			continue
-		}
-		keys = append(keys, append([]byte(nil), key...))
-	}
-	if len(keys) == 0 {
-		return 0, nil
-	}
+	before := beforeBucket.UTC().Format(canonicalTimeLayout)
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	for _, key := range keys {
-		if err := batch.Delete(key, s.writeOptions); err != nil {
+	ranges := make([][2][]byte, 0, 2)
+	buckets := make(map[string]struct{})
+	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
+		prefix := []byte{namespace, timeSeriesKind}
+		prefix = appendRawPart(prefix, []byte(spaceID))
+		prefix = appendRawPart(prefix, []byte(datasetID))
+		upper := appendPart(append([]byte(nil), prefix...), before)
+		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+		if err != nil {
 			return 0, err
+		}
+		for valid := iter.First(); valid; valid = iter.Next() {
+			if err := ctx.Err(); err != nil {
+				_ = iter.Close()
+				return 0, err
+			}
+			parts, ok := decodePhysicalParts(iter.Key()[2:])
+			if ok && len(parts) == 7 && parts[0] == spaceID && parts[1] == datasetID {
+				buckets[parts[2]] = struct{}{}
+			}
+		}
+		iterErr := iter.Error()
+		_ = iter.Close()
+		if iterErr != nil {
+			return 0, iterErr
+		}
+		if !bytes.Equal(prefix, upper) {
+			if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
+				return 0, err
+			}
+			ranges = append(ranges, [2][]byte{append([]byte(nil), prefix...), append([]byte(nil), upper...)})
 		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err
 	}
-	return uint64(len(keys)), nil
+	for _, bounds := range ranges {
+		s.compactAsync(bounds[0], bounds[1])
+	}
+	return uint64(len(buckets)), nil
 }
 
 func decodePhysicalParts(data []byte) ([]string, bool) {

@@ -24,9 +24,34 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	if err := s.WriteFields(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := s.CleanupExpiredBuckets(context.Background(), "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted == 0 {
+	deleted, err := s.CleanupExpiredBuckets(context.Background(), "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	if err != nil || deleted != 1 {
 		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	}
+}
+
+func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	row := func(space string) *pb.RowFieldUpsert {
+		return &pb.RowFieldUpsert{
+			Key:    &pb.RowKey{SpaceId: space, DatasetId: "shared", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: "2026-07-18T00:00:00Z"}}},
+			Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: space}}}},
+		}
+	}
+	if err := s.WriteFields(context.Background(), []*pb.RowFieldUpsert{row("a"), row("b")}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := s.CleanupExpiredBuckets(context.Background(), "a", "shared", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	if err != nil || deleted != 1 {
+		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	}
+	rows, err := s.ReadFields(context.Background(), []*pb.RowKey{row("b").GetKey()}, []string{"f"}, nil)
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
+		t.Fatalf("space b row removed: rows=%v err=%v", rows, err)
 	}
 }
 

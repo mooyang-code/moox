@@ -30,11 +30,19 @@ func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		if existing.GetDataNodeId() != "" && item.GetDataNodeId() != "" && existing.GetDataNodeId() != item.GetDataNodeId() {
 			return nil, errors.New("dataset data_node_id is immutable")
 		}
+		if existing.GetDataSourceId() != item.GetDataSourceId() {
+			return nil, errors.New("dataset data_source_id is immutable")
+		}
+		if existing.GetDataKind() != item.GetDataKind() {
+			return nil, errors.New("dataset data_kind is immutable")
+		}
 		if item.GetDataNodeId() == "" {
 			item.DataNodeId = existing.GetDataNodeId()
 		}
 	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, getErr
+	} else if strings.TrimSpace(item.GetDataNodeId()) == "" {
+		return nil, errors.New("dataset data_node_id is required on create")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)
@@ -400,16 +408,16 @@ func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) 
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_dataset_columns
+	const where = `
+		FROM t_dataset_columns
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_dataset_id = ?)
-		ORDER BY c_space_id, c_dataset_id, c_column_name
-	`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_dataset_id = ?)`
+	args := []any{spaceID, spaceID, datasetID, datasetID}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id, c_column_name`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.DatasetColumn { return &pb.DatasetColumn{} },
+	)
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {

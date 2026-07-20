@@ -42,9 +42,17 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_RECORD && key.GetRecord() == nil {
 		return fmt.Errorf("dataset %q requires record row key", key.GetDatasetId())
 	}
-	columns, _, err := v.reader.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), nil)
-	if err != nil {
-		return err
+	const pageSize = uint32(1000)
+	var columns []*pb.DatasetColumn
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := v.reader.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return err
+		}
+		columns = append(columns, items...)
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			break
+		}
 	}
 	allowed := make(map[string]*pb.DatasetColumn, len(columns)*2)
 	for _, column := range columns {

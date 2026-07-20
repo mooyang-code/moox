@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 type Validator interface {
@@ -16,6 +17,7 @@ type Validator interface {
 type NodeResolver func(context.Context, string, string) (pb.DataNodeService, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
+type routeKey struct{ spaceID, datasetID string }
 
 type Service struct {
 	resolve   NodeResolver
@@ -50,16 +52,22 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	groups := map[string][]*pb.RowFieldUpsert{}
+	groups := make(map[routeKey][]*pb.RowFieldUpsert)
+	order := make([]routeKey, 0)
 	for _, row := range req.GetRows() {
 		if err := validateRow(ctx, row, s.validate); err != nil {
 			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		groups[row.GetKey().GetDatasetId()] = append(groups[row.GetKey().GetDatasetId()], row)
+		group := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
+		if _, ok := groups[group]; !ok {
+			order = append(order, group)
+		}
+		groups[group] = append(groups[group], row)
 	}
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
-	for datasetID, rows := range groups {
-		node, err := s.resolve(ctx, rows[0].GetKey().GetSpaceId(), datasetID)
+	for _, group := range order {
+		rows := groups[group]
+		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
 			return nil, err
 		}
@@ -86,16 +94,22 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	groups := map[string][]*pb.RowKey{}
+	groups := make(map[routeKey][]*pb.RowKey)
+	order := make([]routeKey, 0)
 	for _, key := range req.GetKeys() {
 		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
 			return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is invalid"))}, nil
 		}
-		groups[key.GetDatasetId()] = append(groups[key.GetDatasetId()], key)
+		group := routeKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+		if _, ok := groups[group]; !ok {
+			order = append(order, group)
+		}
+		groups[group] = append(groups[group], key)
 	}
-	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
-	for datasetID, keys := range groups {
-		node, err := s.resolve(ctx, keys[0].GetSpaceId(), datasetID)
+	rowsByKey := make(map[string][]*pb.RowFieldValues, len(req.GetKeys()))
+	for _, group := range order {
+		keys := groups[group]
+		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
 			return nil, err
 		}
@@ -103,14 +117,27 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		if err != nil {
 			return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 		}
-		rsp, err := node.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: auth, DatasetId: datasetID, Keys: keys, FieldIds: req.GetFieldIds(), AttributeKeys: req.GetAttributeKeys()})
+		rsp, err := node.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: auth, DatasetId: group.datasetID, Keys: keys, FieldIds: req.GetFieldIds(), AttributeKeys: req.GetAttributeKeys()})
 		if err != nil {
 			return nil, err
 		}
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			return &pb.PrimaryReadFieldsRsp{RetInfo: rsp.GetRetInfo()}, nil
 		}
-		rows = append(rows, rsp.GetRows()...)
+		for _, row := range rsp.GetRows() {
+			id := rowKeyIdentity(row.GetKey())
+			rowsByKey[id] = append(rowsByKey[id], row)
+		}
+	}
+	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		id := rowKeyIdentity(key)
+		matches := rowsByKey[id]
+		if len(matches) == 0 {
+			continue
+		}
+		rows = append(rows, matches[0])
+		rowsByKey[id] = matches[1:]
 	}
 	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
 }
@@ -135,6 +162,9 @@ func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validato
 	}
 	if key.GetTimeSeries() == nil && key.GetRecord() == nil {
 		return errors.New("row key kind is required")
+	}
+	if record := key.GetRecord(); record != nil && strings.TrimSpace(record.GetVersion()) == "" {
+		return errors.New("record version is required for writes")
 	}
 	if len(row.GetFields()) == 0 && len(row.GetAttributes()) == 0 {
 		return errors.New("at least one field or attribute is required")
@@ -163,6 +193,11 @@ func (s *Service) signAuth(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
 		return auth, nil
 	}
 	return s.sign(auth)
+}
+
+func rowKeyIdentity(key *pb.RowKey) string {
+	raw, _ := proto.MarshalOptions{Deterministic: true}.Marshal(key)
+	return string(raw)
 }
 
 var _ pb.PrimaryStoreService = (*Service)(nil)

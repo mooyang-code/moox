@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -40,6 +41,9 @@ type Store struct {
 	nodeID         string
 	bucketDuration time.Duration
 	outboxMu       sync.Mutex
+	maintenanceMu  sync.Mutex
+	maintenanceWG  sync.WaitGroup
+	closing        bool
 }
 
 func Open(opts Options) (*Store, error) {
@@ -67,7 +71,25 @@ func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.maintenanceMu.Lock()
+	s.closing = true
+	s.maintenanceMu.Unlock()
+	s.maintenanceWG.Wait()
 	return s.db.Close()
+}
+
+func (s *Store) compactAsync(start, end []byte) {
+	s.maintenanceMu.Lock()
+	if s.closing {
+		s.maintenanceMu.Unlock()
+		return
+	}
+	s.maintenanceWG.Add(1)
+	s.maintenanceMu.Unlock()
+	go func() {
+		defer s.maintenanceWG.Done()
+		_ = s.db.Compact(start, end, true)
+	}()
 }
 
 func (s *Store) NodeID() string {
@@ -97,10 +119,18 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	if len(rows) == 0 {
 		return nil, errors.New("rows are required")
 	}
+	normalizedRows := make([]*pb.RowFieldUpsert, 0, len(rows))
 	for _, row := range rows {
 		if err := validateUpsert(row); err != nil {
 			return nil, err
 		}
+		key, err := NormalizeRowKey(row.GetKey())
+		if err != nil {
+			return nil, err
+		}
+		clone := proto.Clone(row).(*pb.RowFieldUpsert)
+		clone.Key = key
+		normalizedRows = append(normalizedRows, clone)
 	}
 	// One batch preserves all field changes from a request. Dataset event
 	// payloads are staged into the same batch with consecutive internal IDs.
@@ -108,7 +138,7 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	defer s.outboxMu.Unlock()
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	for _, row := range rows {
+	for _, row := range normalizedRows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -140,7 +170,7 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		}
 	}
 
-	grouped := groupRowsByDataset(rows)
+	grouped := groupRowsByDataset(normalizedRows)
 	entries := make([]*OutboxEntry, 0, len(grouped))
 	if event != nil {
 		nextID, err := s.nextOutboxID()
@@ -288,8 +318,8 @@ func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, att
 }
 
 func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
-	// The version is part of the row prefix. Scan all field keys for this
-	// record and choose the largest user-supplied version by string compare.
+	// The tuple codec preserves UTF-8 byte order, so the last key under each
+	// namespace prefix contains that namespace's largest record version.
 	base, err := recordBasePrefix(key)
 	if err != nil {
 		return nil, err
@@ -300,7 +330,7 @@ func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		for valid := iter.First(); valid; valid = iter.Next() {
+		if valid := iter.Last(); valid {
 			parts, ok := parseRecordValueKey(iter.Key())
 			if ok && parts.version > max {
 				max = parts.version
@@ -360,15 +390,10 @@ func (s *Store) nextOutboxID() (uint64, error) {
 		return 0, err
 	}
 	defer closer.Close()
-	var id uint64
-	if len(data) > 0 {
-		for _, b := range data {
-			if b < '0' || b > '9' {
-				return 0, errors.New("invalid next_outbox_id")
-			}
-			id = id*10 + uint64(b-'0')
-		}
+	if len(data) != 8 {
+		return 0, errors.New("invalid next_outbox_id")
 	}
+	id := binary.BigEndian.Uint64(data)
 	if id == 0 {
 		return 1, nil
 	}
@@ -376,7 +401,9 @@ func (s *Store) nextOutboxID() (uint64, error) {
 }
 
 func (s *Store) setNextOutboxID(batch *cpebble.Batch, id uint64) error {
-	return batch.Set([]byte(metaNextID), []byte(fmt.Sprintf("%d", id)), s.writeOptions)
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], id)
+	return batch.Set([]byte(metaNextID), data[:], s.writeOptions)
 }
 
 func outboxKey(id uint64) string { return fmt.Sprintf("%s%020d", outboxPrefix, id) }

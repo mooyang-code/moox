@@ -95,7 +95,7 @@ func (b ViewIndexApplyBatch) Validate() error {
 		if err := w.Validate(); err != nil {
 			return fmt.Errorf("row write %d: %w", i, err)
 		}
-		id := rowKeyID(w.Key.Key)
+		id := RowKeyID(w.Key.Key)
 		if _, ok := seen[id]; ok {
 			return fmt.Errorf("row write %d duplicates row key", i)
 		}
@@ -150,6 +150,11 @@ type ManagedEngine interface {
 	ViewIndexEngine
 	ViewIndexApplier
 	List(context.Context) ([]string, error)
+}
+
+type QueryEngine interface {
+	ManagedEngine
+	Query(context.Context, string, []*pb.RowKey, []string) ([]*pb.RowFieldValues, error)
 }
 
 // MemoryEngine is a small engine core shared by DuckDB and Bleve owners. The
@@ -220,7 +225,7 @@ func (e *MemoryEngine) Apply(_ context.Context, id string, batch ViewIndexApplyB
 		return fmt.Errorf("view schema hash conflict")
 	}
 	for _, w := range batch.RowWrites {
-		key := rowKeyID(w.Key.Key)
+		key := RowKeyID(w.Key.Key)
 		row := idx.rows[key]
 		if row == nil {
 			row = &pb.RowFieldValues{Key: w.Key.Key}
@@ -351,7 +356,7 @@ func (e *MemoryEngine) Query(_ context.Context, id string, keys []*pb.RowKey, fi
 	}
 	out := make([]*pb.RowFieldValues, 0, len(keys))
 	for _, k := range keys {
-		if row := idx.rows[rowKeyID(k)]; row != nil {
+		if row := idx.rows[RowKeyID(k)]; row != nil {
 			out = append(out, projectRow(row, fields))
 		}
 	}
@@ -384,10 +389,20 @@ func queryRecordKey(k *pb.RecordKey) *pb.RowKey {
 	}
 	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: k.GetRecordId(), Version: k.GetVersion()}}}
 }
-func rowKeyID(k *pb.RowKey) string {
+func RowKeyID(k *pb.RowKey) string {
 	raw, _ := protojson.Marshal(k)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func ApplyRowWrite(row *pb.RowFieldValues, write RowWrite, onlyMissing bool) *pb.RowFieldValues {
+	if row == nil {
+		row = &pb.RowFieldValues{Key: proto.Clone(write.Key.Key).(*pb.RowKey)}
+	} else {
+		row = proto.Clone(row).(*pb.RowFieldValues)
+	}
+	mergeFields(row, write.Fields, write.Attributes, onlyMissing)
+	return row
 }
 func mergeFields(row *pb.RowFieldValues, fields []*pb.FieldValue, attrs map[string]*pb.TypedValue, onlyMissing bool) {
 	pos := map[string]int{}
@@ -420,23 +435,23 @@ func mergeFields(row *pb.RowFieldValues, fields []*pb.FieldValue, attrs map[stri
 }
 func projectRow(row *pb.RowFieldValues, fields []string) *pb.RowFieldValues {
 	if len(fields) == 0 {
-		return row
+		return proto.Clone(row).(*pb.RowFieldValues)
 	}
 	want := map[string]struct{}{}
 	for _, f := range fields {
 		want[f] = struct{}{}
 	}
-	out := &pb.RowFieldValues{Key: row.Key, Attributes: map[string]*pb.TypedValue{}}
+	out := &pb.RowFieldValues{Key: proto.Clone(row.GetKey()).(*pb.RowKey), Attributes: map[string]*pb.TypedValue{}}
 	for _, f := range row.Fields {
 		if f != nil {
 			if _, ok := want[f.GetFieldId()]; ok {
-				out.Fields = append(out.Fields, f)
+				out.Fields = append(out.Fields, proto.Clone(f).(*pb.FieldValue))
 			}
 		}
 	}
 	for k, v := range row.Attributes {
 		if _, ok := want[k]; ok {
-			out.Attributes[k] = v
+			out.Attributes[k] = proto.Clone(v).(*pb.TypedValue)
 		}
 	}
 	return out

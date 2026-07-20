@@ -11,7 +11,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
+	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	viewv2 "github.com/mooyang-code/moox/modules/storage/internal/service/viewv2"
@@ -56,6 +58,11 @@ func runPrimaryRole() error {
 	if err := meta.ValidateSchemaVersion(trpc.BackgroundContext()); err != nil {
 		return fmt.Errorf("metadata schema validation failed: %w", err)
 	}
+	cached, err := metacache.New(trpc.BackgroundContext(), meta, metacache.Options{})
+	if err != nil {
+		return fmt.Errorf("open metadata cache: %w", err)
+	}
+	defer cached.Close()
 	secret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
 	if secret == "" {
 		return errors.New("MOOX_STORAGE_NODE_AUTH_SECRET is required for primary role")
@@ -76,7 +83,7 @@ func runPrimaryRole() error {
 	}
 	proxies := make(map[string]pb.DataNodeService, len(targets))
 	resolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
-		dataset, err := meta.GetDataset(ctx, spaceID, datasetID)
+		dataset, err := cached.GetDataset(ctx, spaceID, datasetID)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +101,7 @@ func runPrimaryRole() error {
 		}
 		return proxies[nodeID], nil
 	}
-	svc, err := primarystorev2.New(primarystorev2.Options{Resolver: resolver, Validator: primarystorev2.NewMetadataValidator(meta), Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystorev2.New(primarystorev2.Options{Resolver: resolver, Validator: primarystorev2.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" || auth.GetAppKey() != datanode.ServiceAuthKey(primarySecret, auth.GetAppId()) {
 			return errors.New("invalid primary auth")
 		}
@@ -110,12 +117,17 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached)
+	if err != nil {
+		return err
+	}
 	s := trpc.NewServer()
 	listener := s.Service("trpc.moox.storage.PrimaryStore")
 	if listener == nil {
 		return errors.New("PrimaryStore listener is not configured")
 	}
 	pb.RegisterPrimaryStoreService(listener, svc)
+	pb.RegisterMetadataService(s, metadataSvc)
 	return s.Serve()
 }
 
@@ -135,7 +147,14 @@ func runViewRole() error {
 	if root == "" {
 		root = "./var/storage"
 	}
-	svc := viewv2.New(filepath.Join(root, "view-indexes"))
+	viewSecret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
+	if viewSecret == "" {
+		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for view role")
+	}
+	svc, err := viewv2.New(filepath.Join(root, "view-indexes"), viewSecret)
+	if err != nil {
+		return err
+	}
 	var stopConsumer func()
 	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
 	if rawURL == "" {

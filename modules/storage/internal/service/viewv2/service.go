@@ -2,29 +2,67 @@ package viewv2
 
 import (
 	"context"
+	"crypto/hmac"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
+	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type Service struct {
-	engine *viewindex.MemoryEngine
-	mu     sync.RWMutex
-	byData map[string]map[string]struct{}
+	engines     map[string]viewindex.QueryEngine
+	indexEngine map[string]string
+	schemas     map[string]viewindex.ViewIndexSchema
+	authSecret  string
+	mu          sync.RWMutex
+	byData      map[datasetRef]map[string]struct{}
 }
 
-func New(root string) *Service {
-	return &Service{engine: viewindex.NewMemoryEngine("duckdb", root), byData: make(map[string]map[string]struct{})}
+type datasetRef struct{ spaceID, datasetID string }
+
+func New(root, authSecret string) (*Service, error) {
+	if strings.TrimSpace(authSecret) == "" {
+		return nil, errors.New("view auth secret is required")
+	}
+	bleveEngine, err := viewbleve.Open(viewbleve.Options{Path: filepath.Join(root, "bleve")})
+	if err != nil {
+		return nil, err
+	}
+	engines := map[string]viewindex.QueryEngine{"bleve": bleveEngine}
+	if duckdbEngine, err := viewduckdb.OpenIndexManager(viewduckdb.IndexManagerOptions{Root: filepath.Join(root, "duckdb")}); err == nil {
+		engines["duckdb"] = duckdbEngine
+	}
+	service := &Service{
+		engines:     engines,
+		indexEngine: make(map[string]string),
+		schemas:     make(map[string]viewindex.ViewIndexSchema),
+		authSecret:  authSecret,
+		byData:      make(map[datasetRef]map[string]struct{}),
+	}
+	for name, engine := range engines {
+		ids, err := engine.List(trpc.BackgroundContext())
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			service.indexEngine[id] = name
+		}
+	}
+	return service, nil
 }
 
 var _ pb.ViewIndexService = (*Service)(nil)
@@ -34,19 +72,35 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	if req == nil || req.GetSchema() == nil || req.GetIndexId() == "" {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id and schema are required"))}, nil
 	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	sch := req.GetSchema()
-	err := s.engine.Prepare(ctx, req.GetIndexId(), viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), ViewVersion: sch.GetViewVersion(), Engine: sch.GetEngine(), Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()})
+	engineName := strings.ToLower(strings.TrimSpace(sch.GetEngine()))
+	if engineName == "" {
+		engineName = strings.ToLower(strings.TrimSpace(req.GetEngine()))
+	}
+	engine := s.engines[engineName]
+	if engine == nil {
+		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("view engine %q is unavailable", engineName))}, nil
+	}
+	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()}
+	err := engine.Prepare(ctx, req.GetIndexId(), schema)
 	if err != nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	s.mu.Lock()
+	s.removeIndexMappingsLocked(req.GetIndexId())
+	s.indexEngine[req.GetIndexId()] = engineName
+	s.schemas[req.GetIndexId()] = schema
 	for _, column := range sch.GetColumns() {
 		dataset := viewColumnDataset(column)
 		if dataset != "" {
-			if s.byData[dataset] == nil {
-				s.byData[dataset] = make(map[string]struct{})
+			ref := datasetRef{spaceID: sch.GetSpaceId(), datasetID: dataset}
+			if s.byData[ref] == nil {
+				s.byData[ref] = make(map[string]struct{})
 			}
-			s.byData[dataset][req.GetIndexId()] = struct{}{}
+			s.byData[ref][req.GetIndexId()] = struct{}{}
 		}
 	}
 	s.mu.Unlock()
@@ -56,6 +110,9 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq) (*pb.ApplyViewIndexRsp, error) {
 	if req == nil || req.GetBatch() == nil || req.GetIndexId() == "" {
 		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id and batch are required"))}, nil
+	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	b := req.GetBatch()
 	writes := make([]viewindex.RowWrite, 0, len(b.GetRowWrites()))
@@ -69,7 +126,10 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 	if b.GetWriteMode() == "BACKFILL" {
 		mode = viewindex.Backfill
 	}
-	err := s.engine.Apply(ctx, req.GetIndexId(), viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: b.GetViewRevision(), ViewSchemaHash: b.GetViewSchemaHash(), WriteMode: mode})
+	engine, err := s.engineFor(req.GetIndexId())
+	if err == nil {
+		err = engine.Apply(ctx, req.GetIndexId(), viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: b.GetViewRevision(), ViewSchemaHash: b.GetViewSchemaHash(), WriteMode: mode})
+	}
 	if err != nil {
 		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -80,7 +140,14 @@ func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (
 	if req == nil || req.GetIndexId() == "" {
 		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id is required"))}, nil
 	}
-	st, err := s.engine.Stat(ctx, req.GetIndexId())
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	engine, err := s.engineFor(req.GetIndexId())
+	if err != nil {
+		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	st, err := engine.Stat(ctx, req.GetIndexId())
 	if err != nil {
 		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -91,27 +158,59 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	if req == nil || req.GetIndexId() == "" {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id is required"))}, nil
 	}
-	if err := s.engine.Remove(ctx, req.GetIndexId()); err != nil {
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	engine, err := s.engineFor(req.GetIndexId())
+	if err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
+	if err := engine.Remove(ctx, req.GetIndexId()); err != nil {
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	s.mu.Lock()
+	s.removeIndexMappingsLocked(req.GetIndexId())
+	delete(s.indexEngine, req.GetIndexId())
+	delete(s.schemas, req.GetIndexId())
+	s.mu.Unlock()
 	return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
 func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesReq) (*pb.ListViewIndexesRsp, error) {
-	ids, err := s.engine.List(ctx)
-	if err != nil {
-		return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	if req == nil {
+		return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	var ids []string
+	for _, engine := range s.engines {
+		engineIDs, err := engine.List(ctx)
+		if err != nil {
+			return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+		ids = append(ids, engineIDs...)
 	}
 	sort.Strings(ids)
 	out := make([]*pb.ViewIndexDescriptor, 0, len(ids))
 	for _, id := range ids {
-		st, _ := s.engine.Stat(ctx, id)
-		out = append(out, &pb.ViewIndexDescriptor{IndexId: id, Engine: s.engine.Engine(), Stats: &pb.ViewIndexStats{Exists: st.Exists, EntryCount: uint64(st.EntryCount), ViewSchemaHash: st.SchemaHash, ViewVersion: st.ViewVersion}})
+		engine, err := s.engineFor(id)
+		if err != nil {
+			continue
+		}
+		st, _ := engine.Stat(ctx, id)
+		out = append(out, &pb.ViewIndexDescriptor{IndexId: id, Engine: engine.Engine(), Stats: &pb.ViewIndexStats{Exists: st.Exists, EntryCount: uint64(st.EntryCount), ViewSchemaHash: st.SchemaHash, ViewVersion: st.ViewVersion}})
 	}
 	return &pb.ListViewIndexesRsp{RetInfo: retinfo.Success("success"), Indexes: out}, nil
 }
 
 func (s *Service) QueryTimeSeriesIndex(ctx context.Context, req *pb.QueryTimeSeriesIndexReq) (*pb.QueryTimeSeriesIndexRsp, error) {
+	if req == nil {
+		return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	rows, err := s.query(ctx, req.GetIndexId(), req.GetKeys(), req.GetFieldIds())
 	if err != nil {
 		return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -119,6 +218,12 @@ func (s *Service) QueryTimeSeriesIndex(ctx context.Context, req *pb.QueryTimeSer
 	return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
 }
 func (s *Service) SearchRecordIndex(ctx context.Context, req *pb.SearchRecordIndexReq) (*pb.SearchRecordIndexRsp, error) {
+	if req == nil {
+		return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	rows, err := s.query(ctx, req.GetIndexId(), req.GetKeys(), req.GetFieldIds())
 	if err != nil {
 		return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -134,6 +239,9 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if req == nil || req.GetViewId() == "" || len(req.GetKeys()) == 0 {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id and keys are required"))}, nil
 	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	keys := make([]*pb.RowKey, 0, len(req.GetKeys()))
 	for _, k := range req.GetKeys() {
 		if k == nil {
@@ -141,7 +249,11 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		}
 		keys = append(keys, timeSeriesRowKey(k))
 	}
-	rows, err := s.engine.Query(ctx, req.GetViewId(), keys, req.GetColumnNames())
+	engine, err := s.engineFor(req.GetViewId())
+	if err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	rows, err := engine.Query(ctx, req.GetViewId(), keys, req.GetColumnNames())
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -159,6 +271,9 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	if req == nil || req.GetViewId() == "" || len(req.GetKeys()) == 0 {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id and keys are required"))}, nil
 	}
+	if err := s.authorize(req.GetAuthInfo()); err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	keys := make([]*pb.RowKey, 0, len(req.GetKeys()))
 	for _, k := range req.GetKeys() {
 		if k == nil {
@@ -166,7 +281,18 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		}
 		keys = append(keys, recordRowKey(k))
 	}
-	rows, err := s.engine.Query(ctx, req.GetViewId(), keys, req.GetColumnNames())
+	engine, err := s.engineFor(req.GetViewId())
+	if err != nil {
+		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	var rows []*pb.RowFieldValues
+	if searcher, ok := engine.(interface {
+		Search(context.Context, string, string, []string, int) ([]*pb.RowFieldValues, error)
+	}); ok && strings.TrimSpace(req.GetTextQuery()) != "" {
+		rows, err = searcher.Search(ctx, req.GetViewId(), req.GetTextQuery(), req.GetColumnNames(), int(req.GetPage().GetSize()))
+	} else {
+		rows, err = engine.Query(ctx, req.GetViewId(), keys, req.GetColumnNames())
+	}
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -202,7 +328,11 @@ func (s *Service) query(ctx context.Context, id string, keys []*pb.RowKey, field
 	if id == "" || len(keys) == 0 {
 		return nil, errors.New("index_id and keys are required")
 	}
-	rows, err := s.engine.Query(ctx, id, keys, fields)
+	engine, err := s.engineFor(id)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := engine.Query(ctx, id, keys, fields)
 	if err != nil {
 		return nil, fmt.Errorf("query view index: %w", err)
 	}
@@ -231,12 +361,26 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				if loopCtx.Err() != nil {
 					return
 				}
+				timer := time.NewTimer(250 * time.Millisecond)
+				select {
+				case <-timer.C:
+				case <-loopCtx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				}
 				continue
 			}
 			for _, delivery := range deliveries {
 				for loopCtx.Err() == nil {
-					if err := s.applyDelivery(loopCtx, delivery); err == nil {
+					err := s.applyDelivery(loopCtx, delivery)
+					if err == nil {
 						_ = delivery.Ack(loopCtx)
+						break
+					}
+					if isPermanentDeliveryError(err) {
+						_ = delivery.Term(loopCtx)
 						break
 					}
 					// Keep the delivery pending while retrying. NAK would release
@@ -263,35 +407,95 @@ func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Deliver
 	}
 	spaceID, datasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
 	if err != nil {
-		return err
+		return permanentDeliveryError{err}
 	}
 	event := &pb.DatasetFieldsChanged{}
 	if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
-		return err
+		return permanentDeliveryError{err}
 	}
 	if event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
-		return errors.New("dataset event subject and payload mismatch")
+		return permanentDeliveryError{errors.New("dataset event subject and payload mismatch")}
 	}
 	s.mu.RLock()
-	ids := make([]string, 0, len(s.byData[datasetID]))
-	for id := range s.byData[datasetID] {
+	ref := datasetRef{spaceID: spaceID, datasetID: datasetID}
+	ids := make([]string, 0, len(s.byData[ref]))
+	for id := range s.byData[ref] {
 		ids = append(ids, id)
 	}
 	s.mu.RUnlock()
 	for _, id := range ids {
-		stat, err := s.engine.Stat(ctx, id)
+		engine, err := s.engineFor(id)
 		if err != nil {
 			return err
 		}
-		writes := make([]viewindex.RowWrite, 0, len(event.GetRows()))
-		for _, row := range event.GetRows() {
-			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: row.GetKey()}, Fields: row.GetFields(), Attributes: row.GetAttributes()})
+		stat, err := engine.Stat(ctx, id)
+		if err != nil {
+			return err
 		}
-		if err := s.engine.Apply(ctx, id, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: stat.ViewVersion, ViewSchemaHash: stat.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
+		s.mu.RLock()
+		schema := s.schemas[id]
+		s.mu.RUnlock()
+		writes := eventWrites(schema, datasetID, event.GetRows())
+		if len(writes) == 0 {
+			continue
+		}
+		if err := engine.Apply(ctx, id, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: stat.ViewVersion, ViewSchemaHash: stat.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Service) engineFor(id string) (viewindex.QueryEngine, error) {
+	s.mu.RLock()
+	name := s.indexEngine[id]
+	s.mu.RUnlock()
+	engine := s.engines[name]
+	if engine == nil {
+		return nil, fmt.Errorf("view index %q is not prepared", id)
+	}
+	return engine, nil
+}
+
+func (s *Service) removeIndexMappingsLocked(id string) {
+	for ref, ids := range s.byData {
+		delete(ids, id)
+		if len(ids) == 0 {
+			delete(s.byData, ref)
+		}
+	}
+}
+
+func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) []viewindex.RowWrite {
+	columns := make(map[string]string)
+	for _, column := range schema.Columns {
+		if column == nil || viewColumnDataset(column) != datasetID {
+			continue
+		}
+		_, source, ok := strings.Cut(column.GetOriginId(), ".")
+		if ok && source != "" {
+			columns[source] = column.GetColumnName()
+		}
+	}
+	if len(columns) == 0 {
+		return nil
+	}
+	writes := make([]viewindex.RowWrite, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		fields := make([]*pb.FieldValue, 0, len(row.GetFields()))
+		for _, field := range row.GetFields() {
+			if name := columns[field.GetFieldId()]; name != "" {
+				fields = append(fields, &pb.FieldValue{FieldId: name, Value: field.GetValue()})
+			}
+		}
+		if len(fields) != 0 {
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: row.GetKey()}, Fields: fields})
+		}
+	}
+	return writes
 }
 
 func viewColumnDataset(column *pb.ViewColumn) string {
@@ -299,8 +503,29 @@ func viewColumnDataset(column *pb.ViewColumn) string {
 		return ""
 	}
 	origin := column.GetOriginId()
-	if idx := strings.IndexByte(origin, '.'); idx > 0 {
+	if idx := strings.LastIndexByte(origin, '.'); idx > 0 {
 		return origin[:idx]
 	}
 	return ""
+}
+
+func (s *Service) authorize(auth *pb.AuthInfo) error {
+	if s == nil || strings.TrimSpace(s.authSecret) == "" {
+		return errors.New("view auth is not configured")
+	}
+	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
+		return errors.New("view auth is required")
+	}
+	expected := datanode.ServiceAuthKey(s.authSecret, auth.GetAppId())
+	if !hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(expected)) {
+		return errors.New("invalid view HMAC")
+	}
+	return nil
+}
+
+type permanentDeliveryError struct{ error }
+
+func isPermanentDeliveryError(err error) bool {
+	var target permanentDeliveryError
+	return errors.As(err, &target)
 }

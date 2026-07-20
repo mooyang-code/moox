@@ -63,7 +63,8 @@ func NewService(opts Options) (*Service, error) {
 	}
 	secret := opts.AuthSecret
 	if secret == "" {
-		secret = nodeID
+		_ = store.Close()
+		return nil, errors.New("auth secret is required")
 	}
 	return &Service{nodeID: nodeID, store: store, requireAuth: true, authSecret: secret}, nil
 }
@@ -93,7 +94,11 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.
 	}
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 	for _, row := range req.GetRows() {
-		keys = append(keys, row.GetKey())
+		key, err := pebble.NormalizeRowKey(row.GetKey())
+		if err != nil {
+			return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		keys = append(keys, key)
 	}
 	_ = entries // entries are durable and relayed asynchronously by the node.
 	return &pb.WriteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
@@ -137,8 +142,8 @@ func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*p
 }
 
 func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	if req == nil || req.GetDatasetId() == "" || req.GetBeforeBucketStart() == "" {
-		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id and before_bucket_start are required"))}, nil
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetBeforeBucketStart() == "" {
+		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and before_bucket_start are required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
@@ -150,7 +155,7 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	deleted, err := s.store.CleanupExpiredBuckets(ctx, req.GetDatasetId(), before)
+	deleted, err := s.store.CleanupExpiredBuckets(ctx, req.GetSpaceId(), req.GetDatasetId(), before)
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}

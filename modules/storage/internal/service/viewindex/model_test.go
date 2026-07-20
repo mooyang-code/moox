@@ -56,3 +56,29 @@ func TestViewIndexSlotRoundTrip(t *testing.T) {
 		t.Fatalf("inactive=%q", got)
 	}
 }
+
+func TestMemoryEngineQueryReturnsClone(t *testing.T) {
+	e := NewMemoryEngine("duckdb", t.TempDir())
+	schema := ViewIndexSchema{SpaceID: "s", ViewID: "v", ViewVersion: 1, SchemaHash: "h"}
+	if err := e.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
+	if err := e.Apply(context.Background(), "idx", ViewIndexApplyBatch{
+		RowWrites:      []RowWrite{{Key: RowKey{Key: key}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "original"}}}}}},
+		ViewRevision:   1,
+		ViewSchemaHash: "h",
+		WriteMode:      LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := e.Query(context.Background(), "idx", []*pb.RowKey{key}, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	rows[0].Fields[0].Value.Value = &pb.TypedValue_StringValue{StringValue: "mutated"}
+	again, err := e.Query(context.Background(), "idx", []*pb.RowKey{key}, nil)
+	if err != nil || again[0].GetFields()[0].GetValue().GetStringValue() != "original" {
+		t.Fatalf("shared state mutated: rows=%v err=%v", again, err)
+	}
+}

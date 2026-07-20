@@ -1,5 +1,3 @@
-//go:build legacy_storage
-
 package main
 
 import (
