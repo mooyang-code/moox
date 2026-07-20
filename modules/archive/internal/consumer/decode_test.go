@@ -14,7 +14,7 @@ import (
 
 func TestDecoderBuildsMonthlyPatches(t *testing.T) {
 	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
-	event := &storagepb.TimeSeriesRowsCommitted{ShardId: "shard-1", SpaceId: "crypto_binance", DatasetId: "spot_kline", Writes: []*storagepb.TimeSeriesRowWrite{{Operation: storagepb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-30T23:59:00Z"}, Columns: []*storagepb.ColumnValue{{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}}
+	event := &storagepb.DatasetFieldsChanged{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-30T23:59:00Z"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
 	payload, _ := proto.Marshal(event)
 	batch, decision, err := decoder.Decode(fixtureEnvelope(payload, "m1"))
 	if err != nil || decision != DecisionArchive || len(batch.Rows) != 1 {
@@ -27,7 +27,7 @@ func TestDecoderBuildsMonthlyPatches(t *testing.T) {
 
 func TestDecoderRejectsWholeEventWhenOneRowIsInvalid(t *testing.T) {
 	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
-	event := &storagepb.TimeSeriesRowsCommitted{ShardId: "shard-1", SpaceId: "crypto_binance", DatasetId: "spot_kline", Writes: []*storagepb.TimeSeriesRowWrite{{Operation: storagepb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "not-time"}}}}}
+	event := &storagepb.DatasetFieldsChanged{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "not-time"}}}}}}
 	payload, _ := proto.Marshal(event)
 	batch, decision, err := decoder.Decode(fixtureEnvelope(payload, "m2"))
 	if err == nil || decision != DecisionReject || len(batch.Rows) != 0 {
@@ -37,7 +37,7 @@ func TestDecoderRejectsWholeEventWhenOneRowIsInvalid(t *testing.T) {
 
 func TestDecoderIgnoresUnknownSource(t *testing.T) {
 	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
-	event := &storagepb.TimeSeriesRowsCommitted{ShardId: "shard-1", SpaceId: "stock_us", DatasetId: "equity_kline"}
+	event := &storagepb.DatasetFieldsChanged{SpaceId: "stock_us", DatasetId: "equity_kline"}
 	payload, _ := proto.Marshal(event)
 	batch, decision, err := decoder.Decode(fixtureEnvelope(payload, "m3"))
 	if err != nil || decision != DecisionIgnore || len(batch.Rows) != 0 {
@@ -47,7 +47,7 @@ func TestDecoderIgnoresUnknownSource(t *testing.T) {
 
 func fixtureEnvelope(payload []byte, messageID string) *messagepb.MooxMessage {
 	now := timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: messageID, Topic: "moox.storage.rows_committed.time_series.v1.shard-1", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-test", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.storage.time_series.rows_committed.v1", Payload: payload, SpaceId: "crypto_binance"}
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: messageID, Topic: "moox.storage.fields_changed.v1.YI", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-test", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"}
 }
 
 func TestParseTime(t *testing.T) {

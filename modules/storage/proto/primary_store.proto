@@ -35,4 +35,8 @@ message PrimaryReadFieldsRsp {
 service PrimaryStore {
   rpc WriteFields(PrimaryWriteFieldsReq) returns (PrimaryWriteFieldsRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
+  rpc MergeTimeSeriesRows(MergeTimeSeriesRowsReq) returns (MergeTimeSeriesRowsRsp);
+  rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+  rpc MergeRecordRows(MergeRecordRowsReq) returns (MergeRecordRowsRsp);
+  rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
 }

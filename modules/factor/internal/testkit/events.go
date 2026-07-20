@@ -7,17 +7,13 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// RowsChangedEvent creates a Storage rows_committed event for a set of subjects.
-func RowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.TimeSeriesRowsCommitted {
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(subjects))
+// RowsChangedEvent creates a Dataset field-change event for a set of subjects.
+func RowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.DatasetFieldsChanged {
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(subjects))
 	for _, subject := range subjects {
-		rows = append(rows, &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq, DataTime: barTime.UTC().Format(time.RFC3339)}})
+		rows = append(rows, &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: barTime.UTC().Format(time.RFC3339)}}}})
 	}
-	writes := make([]*storagepb.TimeSeriesRowWrite, 0, len(rows))
-	for _, row := range rows {
-		writes = append(writes, &storagepb.TimeSeriesRowWrite{Operation: storagepb.RowWriteOperation_ROW_WRITE_OPERATION_MERGE, Row: row})
-	}
-	return &storagepb.TimeSeriesRowsCommitted{ShardId: "shard-1", SpaceId: spaceID, DatasetId: datasetID, Writes: writes}
+	return &storagepb.DatasetFieldsChanged{SpaceId: spaceID, DatasetId: datasetID, Rows: rows}
 }
 
 // Symbols returns deterministic synthetic symbols.

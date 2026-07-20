@@ -58,6 +58,8 @@ message TimeSeriesKey {
   string subject_id = 3;
   string freq = 4;
   string data_time = 5;
+  // Deprecated compatibility field; Dimensions are not part of RowKey.
+  map<string, string> dimensions = 6;
 }
 
 message RecordKey {
@@ -70,9 +72,67 @@ message RecordKey {
 message TimeSeriesRow {
   TimeSeriesKey key = 1;
   repeated FieldValue fields = 2;
+  // Deprecated compatibility projection for downstream archive/factor code.
+  repeated ColumnValue columns = 3;
+  map<string, string> attributes = 4;
 }
 
 message RecordRow {
   RecordKey key = 1;
   repeated FieldValue fields = 2;
+  repeated ColumnValue columns = 3;
+  map<string, string> attributes = 4;
+}
+
+// The read wrappers are retained only so independently deployed Archive/Factor
+// clients can migrate to PrimaryStore field reads. New writes use
+// RowFieldUpsert and never use these messages.
+message ReadTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated TimeSeriesKey keys = 2;
+  TimeRange time_range = 3;
+  SortOrder order = 4;
+  repeated string column_names = 5;
+  common.Page page = 6;
+}
+
+message ReadTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TimeSeriesRow rows = 2;
+  common.PageResult page_result = 3;
+}
+
+message MergeTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated TimeSeriesRow rows = 2;
+}
+
+message MergeTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated string written_keys = 2;
+}
+
+message MergeRecordRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RecordRow rows = 2;
+}
+
+message MergeRecordRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordKey keys = 2;
+}
+
+message ReadRecordRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RecordKey keys = 2;
+  VersionRange version_range = 3;
+  SortOrder order = 4;
+  repeated string column_names = 5;
+  common.Page page = 6;
+}
+
+message ReadRecordRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+  common.PageResult page_result = 3;
 }
