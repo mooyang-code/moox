@@ -2,6 +2,7 @@ package viewv2
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -78,6 +79,10 @@ func TestMalformedDeliveryIsPermanent(t *testing.T) {
 	})
 	if !isPermanentDeliveryError(err) {
 		t.Fatalf("err=%v", err)
+	}
+	err = svc.applyDelivery(context.Background(), &jetstream.Delivery{DecodeError: errors.New("decode failed")})
+	if !isPermanentDeliveryError(err) {
+		t.Fatalf("decode err=%v", err)
 	}
 }
 

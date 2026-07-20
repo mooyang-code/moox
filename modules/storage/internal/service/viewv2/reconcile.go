@@ -16,6 +16,7 @@ import (
 
 type MetadataClient interface {
 	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
+	ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error)
 	ClaimViewIndexBuild(context.Context, *pb.ClaimViewIndexBuildReq, ...client.Option) (*pb.ClaimViewIndexBuildRsp, error)
 	UpdateViewIndexBuild(context.Context, *pb.UpdateViewIndexBuildReq, ...client.Option) (*pb.UpdateViewIndexBuildRsp, error)
 	ActivateViewIndex(context.Context, *pb.ActivateViewIndexReq, ...client.Option) (*pb.ActivateViewIndexRsp, error)
@@ -113,9 +114,17 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if !needsRebuild(view, stats) {
 		return nil
 	}
+	columns := view.GetColumns()
+	if len(columns) == 0 {
+		var err error
+		columns, err = loadDefaultViewColumns(ctx, opts.Metadata, auth, view)
+		if err != nil {
+			return err
+		}
+	}
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetDesiredViewRevision(),
-		Engine: strings.ToLower(view.GetEngine()), Columns: view.GetColumns(),
+		Engine: strings.ToLower(view.GetEngine()), Columns: columns,
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())
@@ -123,7 +132,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID,
 		IndexId: indexID, Engine: schema.Engine, TargetViewVersion: schema.ViewVersion,
-		OwnerId: opts.OwnerID, SchemaHash: schema.SchemaHash, Columns: view.GetColumns(),
+		OwnerId: opts.OwnerID, SchemaHash: schema.SchemaHash, Columns: columns,
 		ExpectedActiveIndexId: view.GetActiveIndexId(),
 	})
 	if err != nil {
@@ -177,6 +186,36 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
 	}
 	return nil
+}
+
+func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View) ([]*pb.ViewColumn, error) {
+	var columns []*pb.ViewColumn
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListDatasetColumns(ctx, &pb.ListDatasetColumnsReq{
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+			Page: &pb.Page{Page: pageNo, Size: 1000},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, column := range rsp.GetColumns() {
+			if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
+				continue
+			}
+			columns = append(columns, &pb.ViewColumn{
+				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
+				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+				OriginId:   view.GetPrimaryDatasetId() + "." + column.GetColumnName(),
+				ValueType:  column.GetValueType(),
+			})
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetColumns()) == 0 {
+			return columns, nil
+		}
+	}
 }
 
 func (s *Service) updateBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, from, to pb.ViewIndexBuild_State, rows uint64) error {

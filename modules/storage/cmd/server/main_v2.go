@@ -75,6 +75,10 @@ func runPrimaryRole() error {
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
 	}
+	viewSecret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
+	if viewSecret == "" {
+		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
+	}
 	targets := parseNodeTargets(os.Getenv("MOOX_STORAGE_NODE_TARGETS"))
 	if len(targets) == 0 {
 		if target := os.Getenv("MOOX_STORAGE_NODE_TARGET"); target != "" {
@@ -105,7 +109,27 @@ func runPrimaryRole() error {
 		}
 		return proxies[nodeID], nil
 	}
-	svc, err := primarystorev2.New(primarystorev2.Options{Resolver: resolver, Validator: primarystorev2.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
+	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
+	if viewTarget == "" {
+		viewTarget = "ip://127.0.0.1:20103"
+	}
+	viewProxy := &dataViewProxyAdapter{
+		proxy: pb.NewDataViewClientProxy(client.WithTarget(viewTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")),
+		auth:  &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(viewSecret, "storage-primary")},
+	}
+	viewResolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
+		views, err := cached.ListViewsByDataset(ctx, spaceID, datasetID)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, view := range views {
+			if view != nil && view.GetPrimaryDatasetId() == datasetID && view.GetActiveIndexId() != "" {
+				return viewProxy, view.GetViewId(), nil
+			}
+		}
+		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
+	}
+	svc, err := primarystorev2.New(primarystorev2.Options{Resolver: resolver, View: viewResolver, Validator: primarystorev2.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -277,6 +301,10 @@ func runViewRole() error {
 }
 
 type dataNodeProxyAdapter struct{ proxy pb.DataNodeClientProxy }
+type dataViewProxyAdapter struct {
+	proxy pb.DataViewClientProxy
+	auth  *pb.AuthInfo
+}
 
 func (a *dataNodeProxyAdapter) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
 	return a.proxy.WriteFields(ctx, req)
@@ -289,6 +317,18 @@ func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNode
 }
 func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return a.proxy.CleanupExpiredBuckets(ctx, req)
+}
+
+func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
+	clone := proto.Clone(req).(*pb.QueryTimeSeriesRowsReq)
+	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
+	return a.proxy.QueryTimeSeriesRows(ctx, clone)
+}
+
+func (a *dataViewProxyAdapter) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
+	clone := proto.Clone(req).(*pb.SearchRecordRowsReq)
+	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
+	return a.proxy.SearchRecordRows(ctx, clone)
 }
 
 // This small role entrypoint intentionally keeps the DataNode process

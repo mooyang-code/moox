@@ -80,6 +80,35 @@ datasets:
     freqs: []
     status: active
 
+views:
+  - space_id: crypto
+    view_id: binance_spot_kline_view
+    name: 现货行情视图
+    primary_dataset_id: binance_spot_kline
+    dataset_ids: [binance_spot_kline]
+    grain_keys: [subject_id, freq, data_time]
+    engine: duckdb
+    keep_duration: 4320h
+    status: active
+  - space_id: crypto
+    view_id: binance_spot_symbols_view
+    name: 现货标的视图
+    primary_dataset_id: binance_spot_symbols
+    dataset_ids: [binance_spot_symbols]
+    grain_keys: [record_id, version]
+    engine: bleve
+    keep_duration: "0"
+    status: active
+  - space_id: crypto
+    view_id: binance_swap_symbols_view
+    name: 合约标的视图
+    primary_dataset_id: binance_swap_symbols
+    dataset_ids: [binance_swap_symbols]
+    grain_keys: [record_id, version]
+    engine: bleve
+    keep_duration: "0"
+    status: active
+
 dataset_subjects:
   - space_id: crypto
     dataset_id: binance_spot_kline

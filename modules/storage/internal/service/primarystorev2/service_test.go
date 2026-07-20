@@ -16,6 +16,30 @@ type recordingNode struct {
 	read  func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
 }
 
+type recordingView struct {
+	timeReq *pb.QueryTimeSeriesRowsReq
+}
+
+func (v *recordingView) QueryTimeSeriesRows(_ context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
+	v.timeReq = req
+	key := req.GetKeys()[0]
+	key.DataTime = "2026-07-20T00:00:00Z"
+	return &pb.QueryTimeSeriesRowsRsp{
+		RetInfo: successRetInfo(),
+		Rows: []*pb.TimeSeriesRow{{
+			Key: key,
+			Fields: []*pb.FieldValue{{
+				FieldId: "prices.close",
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
+			}},
+		}},
+	}, nil
+}
+
+func (*recordingView) SearchRecordRows(context.Context, *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
+	return &pb.SearchRecordRowsRsp{RetInfo: successRetInfo()}, nil
+}
+
 func (n *recordingNode) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
 	return n.write(ctx, req)
 }
@@ -159,6 +183,44 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+}
+
+func TestCompatibilityRangeReadUsesActiveDataView(t *testing.T) {
+	view := &recordingView{}
+	node := &recordingNode{
+		write: func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+			return &pb.WriteFieldsRsp{RetInfo: successRetInfo()}, nil
+		},
+		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			t.Fatal("range read must not scan DataNode")
+			return nil, nil
+		},
+	}
+	svc, err := New(Options{
+		Node: node,
+		View: func(context.Context, string, string) (pb.DataViewService, string, error) {
+			return view, "prices-view", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		Keys:     []*pb.TimeSeriesKey{{SpaceId: "space", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{
+			StartTime: "2026-07-20T00:00:00Z",
+			EndTime:   "2026-07-20T01:00:00Z",
+		},
+		ColumnNames: []string{"close"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 ||
+		len(rsp.GetRows()[0].GetColumns()) != 1 || rsp.GetRows()[0].GetColumns()[0].GetColumnName() != "close" {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+	if view.timeReq == nil || view.timeReq.GetViewId() != "prices-view" {
+		t.Fatalf("view request=%v", view.timeReq)
 	}
 }
 

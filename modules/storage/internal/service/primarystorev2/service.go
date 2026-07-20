@@ -15,6 +15,7 @@ type Validator interface {
 	ValidateRow(context.Context, *pb.RowFieldUpsert) error
 }
 type NodeResolver func(context.Context, string, string) (pb.DataNodeService, error)
+type ViewResolver func(context.Context, string, string) (pb.DataViewService, string, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type routeKey struct{ spaceID, datasetID string }
@@ -24,6 +25,7 @@ type Service struct {
 	validate  Validator
 	sign      AuthSigner
 	authorize Authorizer
+	view      ViewResolver
 }
 
 type Options struct {
@@ -32,6 +34,7 @@ type Options struct {
 	Validator  Validator
 	AuthSigner AuthSigner
 	Authorizer Authorizer
+	View       ViewResolver
 }
 
 func New(opts Options) (*Service, error) {
@@ -42,7 +45,7 @@ func New(opts Options) (*Service, error) {
 	if resolve == nil {
 		return nil, errors.New("primary store node resolver is required")
 	}
-	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer}, nil
+	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer, view: opts.View}, nil
 }
 
 func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq) (*pb.PrimaryWriteFieldsRsp, error) {

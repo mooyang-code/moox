@@ -303,7 +303,12 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	}
 	var rows []*pb.RowFieldValues
 	if explicit && req.GetTimeRange() == nil {
-		rows, err = engine.Query(ctx, indexID, keys, req.GetColumnNames())
+		rows, err = engine.Query(ctx, indexID, keys, nil)
+		if err == nil {
+			for index := range rows {
+				rows[index] = selectFields(rows[index], req.GetColumnNames())
+			}
+		}
 	} else {
 		rows, err = scanAll(ctx, engine, indexID)
 		if err == nil {
@@ -352,9 +357,9 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		Search(context.Context, string, string, []string, int) ([]*pb.RowFieldValues, error)
 	}); ok && strings.TrimSpace(req.GetTextQuery()) != "" {
 		pageNo, size := queryPage(req.GetPage())
-		rows, err = searcher.Search(ctx, indexID, req.GetTextQuery(), req.GetColumnNames(), pageNo*size)
+		rows, err = searcher.Search(ctx, indexID, req.GetTextQuery(), nil, pageNo*size)
 	} else {
-		rows, err = engine.Query(ctx, indexID, keys, req.GetColumnNames())
+		rows, err = engine.Query(ctx, indexID, keys, nil)
 	}
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -517,7 +522,13 @@ func selectFields(row *pb.RowFieldValues, fields []string) *pb.RowFieldValues {
 	}
 	out := &pb.RowFieldValues{Key: proto.Clone(row.GetKey()).(*pb.RowKey)}
 	for _, field := range row.GetFields() {
-		if _, ok := want[field.GetFieldId()]; ok {
+		_, exact := want[field.GetFieldId()]
+		name := field.GetFieldId()
+		if index := strings.LastIndexByte(name, '.'); index >= 0 {
+			name = name[index+1:]
+		}
+		_, suffix := want[name]
+		if exact || suffix {
 			out.Fields = append(out.Fields, proto.Clone(field).(*pb.FieldValue))
 		}
 	}
@@ -624,7 +635,10 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 
 func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
 	if delivery == nil || delivery.Message == nil {
-		return errors.New("storage event delivery is empty")
+		if delivery != nil && delivery.DecodeError != nil {
+			return permanentDeliveryError{delivery.DecodeError}
+		}
+		return permanentDeliveryError{errors.New("storage event delivery is empty")}
 	}
 	spaceID, datasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
 	if err != nil {
