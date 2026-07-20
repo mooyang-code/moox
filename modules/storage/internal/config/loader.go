@@ -162,7 +162,7 @@ func (c HostMetricsCleanupConfig) Validate() error {
 
 type StorageTimeSeriesMaintenance struct {
 	DefaultKeepDuration string            `yaml:"default_keep_duration"`
-	KeepByFreq        map[string]string `yaml:"keep_by_freq"`
+	KeepByFreq          map[string]string `yaml:"keep_by_freq"`
 }
 
 type StorageRecordMaintenance struct {
