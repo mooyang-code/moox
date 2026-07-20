@@ -53,15 +53,13 @@ type MonitorMgrService interface {
 
 	ListAlertEvents(ctx context.Context, req *ListAlertEventsReq) (*ListAlertEventsRsp, error)
 
-	ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq) (*ListMonitorInstancesRsp, error)
-
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error)
-
-	GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq) (*GetPeerSnapshotRsp, error)
 
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error)
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error)
+
+	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
 
 	ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error)
 
@@ -396,24 +394,6 @@ func MonitorMgrService_ListAlertEvents_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func MonitorMgrService_ListMonitorInstances_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListMonitorInstancesReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorMgrService).ListMonitorInstances(ctx, reqbody.(*ListMonitorInstancesReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func MonitorMgrService_SyncSystemChecks_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SyncSystemChecksReq{}
 	filters, err := f(req)
@@ -422,24 +402,6 @@ func MonitorMgrService_SyncSystemChecks_Handler(svr interface{}, ctx context.Con
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MonitorMgrService).SyncSystemChecks(ctx, reqbody.(*SyncSystemChecksReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MonitorMgrService_GetPeerSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetPeerSnapshotReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorMgrService).GetPeerSnapshot(ctx, reqbody.(*GetPeerSnapshotReq))
 	}
 
 	var rsp interface{}
@@ -476,6 +438,24 @@ func MonitorMgrService_QueryHostMetricHistory_Handler(svr interface{}, ctx conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MonitorMgrService).QueryHostMetricHistory(ctx, reqbody.(*QueryHostMetricHistoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetDoctorContext_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDoctorContextReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetDoctorContext(ctx, reqbody.(*GetDoctorContextReq))
 	}
 
 	var rsp interface{}
@@ -794,16 +774,8 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_ListAlertEvents_Handler,
 		},
 		{
-			Name: "/trpc.moox.monitor.MonitorMgr/ListMonitorInstances",
-			Func: MonitorMgrService_ListMonitorInstances_Handler,
-		},
-		{
 			Name: "/trpc.moox.monitor.MonitorMgr/SyncSystemChecks",
 			Func: MonitorMgrService_SyncSystemChecks_Handler,
-		},
-		{
-			Name: "/trpc.moox.monitor.MonitorMgr/GetPeerSnapshot",
-			Func: MonitorMgrService_GetPeerSnapshot_Handler,
 		},
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListHostAgents",
@@ -812,6 +784,10 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/QueryHostMetricHistory",
 			Func: MonitorMgrService_QueryHostMetricHistory_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetDoctorContext",
+			Func: MonitorMgrService_GetDoctorContext_Handler,
 		},
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListMetricServices",
@@ -930,20 +906,17 @@ func (s *UnimplementedMonitorMgr) DeleteAlertRule(ctx context.Context, req *Dele
 func (s *UnimplementedMonitorMgr) ListAlertEvents(ctx context.Context, req *ListAlertEventsReq) (*ListAlertEventsRsp, error) {
 	return nil, errors.New("rpc ListAlertEvents of service MonitorMgr is not implemented")
 }
-func (s *UnimplementedMonitorMgr) ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq) (*ListMonitorInstancesRsp, error) {
-	return nil, errors.New("rpc ListMonitorInstances of service MonitorMgr is not implemented")
-}
 func (s *UnimplementedMonitorMgr) SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq) (*SyncSystemChecksRsp, error) {
 	return nil, errors.New("rpc SyncSystemChecks of service MonitorMgr is not implemented")
-}
-func (s *UnimplementedMonitorMgr) GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq) (*GetPeerSnapshotRsp, error) {
-	return nil, errors.New("rpc GetPeerSnapshot of service MonitorMgr is not implemented")
 }
 func (s *UnimplementedMonitorMgr) ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error) {
 	return nil, errors.New("rpc ListHostAgents of service MonitorMgr is not implemented")
 }
 func (s *UnimplementedMonitorMgr) QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error) {
 	return nil, errors.New("rpc QueryHostMetricHistory of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error) {
+	return nil, errors.New("rpc GetDoctorContext of service MonitorMgr is not implemented")
 }
 func (s *UnimplementedMonitorMgr) ListMetricServices(ctx context.Context, req *ListMetricServicesReq) (*ListMetricServicesRsp, error) {
 	return nil, errors.New("rpc ListMetricServices of service MonitorMgr is not implemented")
@@ -1027,15 +1000,13 @@ type MonitorMgrClientProxy interface {
 
 	ListAlertEvents(ctx context.Context, req *ListAlertEventsReq, opts ...client.Option) (rsp *ListAlertEventsRsp, err error)
 
-	ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq, opts ...client.Option) (rsp *ListMonitorInstancesRsp, err error)
-
 	SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq, opts ...client.Option) (rsp *SyncSystemChecksRsp, err error)
-
-	GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq, opts ...client.Option) (rsp *GetPeerSnapshotRsp, err error)
 
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq, opts ...client.Option) (rsp *ListHostAgentsRsp, err error)
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq, opts ...client.Option) (rsp *QueryHostMetricHistoryRsp, err error)
+
+	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (rsp *GetDoctorContextRsp, err error)
 
 	ListMetricServices(ctx context.Context, req *ListMetricServicesReq, opts ...client.Option) (rsp *ListMetricServicesRsp, err error)
 
@@ -1413,26 +1384,6 @@ func (c *MonitorMgrClientProxyImpl) ListAlertEvents(ctx context.Context, req *Li
 	return rsp, nil
 }
 
-func (c *MonitorMgrClientProxyImpl) ListMonitorInstances(ctx context.Context, req *ListMonitorInstancesReq, opts ...client.Option) (*ListMonitorInstancesRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListMonitorInstances")
-	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("monitor")
-	msg.WithCalleeService("MonitorMgr")
-	msg.WithCalleeMethod("ListMonitorInstances")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListMonitorInstancesRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *MonitorMgrClientProxyImpl) SyncSystemChecks(ctx context.Context, req *SyncSystemChecksReq, opts ...client.Option) (*SyncSystemChecksRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1447,26 +1398,6 @@ func (c *MonitorMgrClientProxyImpl) SyncSystemChecks(ctx context.Context, req *S
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncSystemChecksRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MonitorMgrClientProxyImpl) GetPeerSnapshot(ctx context.Context, req *GetPeerSnapshotReq, opts ...client.Option) (*GetPeerSnapshotRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetPeerSnapshot")
-	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("monitor")
-	msg.WithCalleeService("MonitorMgr")
-	msg.WithCalleeMethod("GetPeerSnapshot")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetPeerSnapshotRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1507,6 +1438,26 @@ func (c *MonitorMgrClientProxyImpl) QueryHostMetricHistory(ctx context.Context, 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &QueryHostMetricHistoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (*GetDoctorContextRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetDoctorContext")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetDoctorContext")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetDoctorContextRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

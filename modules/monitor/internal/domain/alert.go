@@ -54,20 +54,19 @@ func (AlertRule) TableName() string {
 }
 
 type AlertState struct {
-	ID              int64      `gorm:"column:c_id;primaryKey"`
-	SpaceID         string     `gorm:"column:c_space_id"`
-	RuleID          string     `gorm:"column:c_rule_id"`
-	CheckID         string     `gorm:"column:c_check_id"`
-	Status          string     `gorm:"column:c_status"`
-	FailureCount    int        `gorm:"column:c_failure_count"`
-	SuccessCount    int        `gorm:"column:c_success_count"`
-	OwnerInstanceID string     `gorm:"column:c_owner_instance_id"`
-	TriggeredAt     *time.Time `gorm:"column:c_triggered_at"`
-	ResolvedAt      *time.Time `gorm:"column:c_resolved_at"`
-	LastReminderAt  *time.Time `gorm:"column:c_last_reminder_at"`
-	DedupeKey       string     `gorm:"column:c_dedupe_key"`
-	CreatedAt       time.Time  `gorm:"column:c_ctime"`
-	UpdatedAt       time.Time  `gorm:"column:c_mtime"`
+	ID             int64      `gorm:"column:c_id;primaryKey"`
+	SpaceID        string     `gorm:"column:c_space_id"`
+	RuleID         string     `gorm:"column:c_rule_id"`
+	CheckID        string     `gorm:"column:c_check_id"`
+	Status         string     `gorm:"column:c_status"`
+	FailureCount   int        `gorm:"column:c_failure_count"`
+	SuccessCount   int        `gorm:"column:c_success_count"`
+	TriggeredAt    *time.Time `gorm:"column:c_triggered_at"`
+	ResolvedAt     *time.Time `gorm:"column:c_resolved_at"`
+	LastReminderAt *time.Time `gorm:"column:c_last_reminder_at"`
+	DedupeKey      string     `gorm:"column:c_dedupe_key"`
+	CreatedAt      time.Time  `gorm:"column:c_ctime"`
+	UpdatedAt      time.Time  `gorm:"column:c_mtime"`
 }
 
 func (AlertState) TableName() string {
@@ -75,17 +74,16 @@ func (AlertState) TableName() string {
 }
 
 type AlertEvent struct {
-	ID              int64     `gorm:"column:c_id;primaryKey"`
-	EventID         string    `gorm:"column:c_event_id"`
-	SpaceID         string    `gorm:"column:c_space_id"`
-	RuleID          string    `gorm:"column:c_rule_id"`
-	CheckID         string    `gorm:"column:c_check_id"`
-	EventType       string    `gorm:"column:c_event_type"`
-	Status          string    `gorm:"column:c_status"`
-	OwnerInstanceID string    `gorm:"column:c_owner_instance_id"`
-	Message         string    `gorm:"column:c_message"`
-	Payload         string    `gorm:"column:c_payload"`
-	CreatedAt       time.Time `gorm:"column:c_created_at"`
+	ID        int64     `gorm:"column:c_id;primaryKey"`
+	EventID   string    `gorm:"column:c_event_id"`
+	SpaceID   string    `gorm:"column:c_space_id"`
+	RuleID    string    `gorm:"column:c_rule_id"`
+	CheckID   string    `gorm:"column:c_check_id"`
+	EventType string    `gorm:"column:c_event_type"`
+	Status    string    `gorm:"column:c_status"`
+	Message   string    `gorm:"column:c_message"`
+	Payload   string    `gorm:"column:c_payload"`
+	CreatedAt time.Time `gorm:"column:c_created_at"`
 }
 
 func (AlertEvent) TableName() string {

@@ -91,19 +91,9 @@ export interface AlertEvent {
   check_id?: string;
   event_type?: string | number;
   status?: AlertStatus;
-  owner_instance_id?: string;
   message?: string;
   payload_json?: string;
   created_at?: string;
-}
-
-export interface MonitorInstance {
-  instance_id?: string;
-  base_url?: string;
-  status?: string;
-  last_seen_at?: string;
-  snapshot_json?: string;
-  is_local?: boolean;
 }
 
 export interface GroupSummary {
@@ -120,7 +110,6 @@ export interface MonitorOverview {
   degraded_checks?: number;
   down_checks?: number;
   firing_alerts?: number;
-  active_instances?: number;
   success_rate_24h?: number;
   p95_latency_ms?: number;
   groups?: GroupSummary[];

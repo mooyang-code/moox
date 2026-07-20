@@ -11,11 +11,10 @@ import (
 )
 
 type MetricEvent struct {
-	EventType       string
-	DedupeKey       string
-	Rule            *monitorpb.MetricRule
-	Evaluation      *RuleEvaluation
-	OwnerInstanceID string
+	EventType  string
+	DedupeKey  string
+	Rule       *monitorpb.MetricRule
+	Evaluation *RuleEvaluation
 }
 
 // WebhookMetricNotifier adapts the existing webhook implementation so metric
@@ -34,6 +33,6 @@ func (n WebhookMetricNotifier) SendMetric(ctx context.Context, webhook domain.We
 	if dedupeKey == "" {
 		dedupeKey = fmt.Sprintf("%s:%s:%s", event.Rule.GetSpaceId(), event.Rule.GetRuleId(), event.EventType)
 	}
-	legacy := alerting.Event{EventID: dedupeKey, EventType: event.EventType, Status: event.Evaluation.Status, OwnerInstanceID: event.OwnerInstanceID, Message: fmt.Sprintf("metric rule %s %s", event.Rule.GetRuleId(), event.EventType), Check: check, Result: result, DedupeKey: dedupeKey}
+	legacy := alerting.Event{EventID: dedupeKey, EventType: event.EventType, Status: event.Evaluation.Status, Message: fmt.Sprintf("metric rule %s %s", event.Rule.GetRuleId(), event.EventType), Check: check, Result: result, DedupeKey: dedupeKey}
 	return sender.Send(ctx, webhook, legacy)
 }

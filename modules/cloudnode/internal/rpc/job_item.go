@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -180,6 +181,7 @@ func (s *Service) submitJobItemsWithActiveKV(ctx context.Context, req *pb.Submit
 		if result.Created {
 			pub, err := s.executionQueue.Publish(ctx, item)
 			if err != nil {
+				_ = report.ObserveModuleRun("cloudnode", "dispatch", "error", "cloudnode-jobs", time.Now())
 				_ = s.jobState.MarkEnqueueFailed(ctx, item.GetSpaceId(), item.GetJobItemId(), err.Error())
 				ack.Status = pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED
 				ack.RejectReason = err.Error()
@@ -191,6 +193,9 @@ func (s *Service) submitJobItemsWithActiveKV(ctx context.Context, req *pb.Submit
 				}); err != nil {
 					return &pb.SubmitJobItemsRsp{RetInfo: retFromError(err)}, nil
 				}
+				now := time.Now().UTC()
+				_ = report.ObserveModuleRun("cloudnode", "dispatch", "success", "cloudnode-jobs", now)
+				_ = report.ObserveModuleWatermark("cloudnode", "dispatch", "cloudnode-jobs", now)
 			}
 		}
 		switch ack.GetStatus() {

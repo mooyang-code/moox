@@ -102,6 +102,20 @@ services:
       health_url: http://127.0.0.1:11419/readyz
       health_kind: readiness
       monitor_enabled: true
+  - name: moox_gateway
+    kind: gateway
+    deployment_mode: process
+    protocol: http
+    host: 127.0.0.1
+    port: 11002
+    gateway_enabled: false
+    scope: internal
+    status: active
+    description: 节点服务网关，承载服务路由与路由表刷新
+    extra_config:
+      health_url: http://127.0.0.1:11012/readyz
+      health_kind: readiness
+      monitor_enabled: true
   - name: moox_monitor
     kind: monitor
     deployment_mode: process
@@ -113,7 +127,7 @@ services:
     gateway_enabled: true
     scope: internal
     status: active
-    description: 独立服务监控模块，承载 HTTP/TCP 探测、告警和多实例协同
+    description: 独立服务监控模块，承载 HTTP/TCP 探测和告警
     extra_config:
       health_url: http://127.0.0.1:11409/readyz
       health_kind: readiness
@@ -216,7 +230,7 @@ services:
     gateway_service_id: hostagent
     gateway_enabled: true
     scope: internal
-    status: active
+    status: disabled
     description: 主机指标采集代理
     extra_config:
       health_url: http://127.0.0.1:11425/readyz
@@ -232,7 +246,7 @@ services:
     port: 11210
     gateway_enabled: false
     scope: internal
-    status: active
+    status: disabled
     description: 交易执行和账本服务
     extra_config:
       health_url: http://127.0.0.1:11210/readyz
@@ -320,6 +334,7 @@ services:
     extra_config:
       gateway_methods:
         - ListActiveServiceDeployments
+        - ListServiceDeployments
       gateway_callers: [admin-gateway, monitor, moox-cli]
   - name: trade_account
     kind: trade

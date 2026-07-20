@@ -60,12 +60,9 @@ done
 `网关节点` 查看 `route_hash`、`applied_route_hash`、路由数、最近心跳和错误；两个 hash
 必须一致。
 
-两台 Monitor 必须使用稳定实例 ID，且各自只配置对端。广州配置为
-`instance.instance_id=monitor-gz-122`，peer 为
-`{instance_id: monitor-hk-177, gateway_url: https://43.132.204.177, node_id: gateway-hk-177}`；
-香港配置为 `instance.instance_id=monitor-hk-177`，peer 为
-`{instance_id: monitor-gz-122, gateway_url: https://106.53.107.122, node_id: gateway-gz-122}`。
-不要使用默认的 hostname/PID 实例 ID；进程重启后它会变化，无法作为对端配置标识。
+V1 只部署一个 Monitor。部署脚本为所有非 Storage 进程注入
+`<service>@<node>` canonical instance ID、node ID 和每次启动新生成的 boot ID；不得用
+hostname/PID 回退，也不得配置 Monitor peer。
 
 ## 两节点部署命令
 
@@ -93,8 +90,7 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode i
   --gateway-ca-bundle /tmp/moox-gateway-peers.pem \
   --gateway-control-key-file /tmp/moox-gateway-control.key \
   --gateway-service-key-file /tmp/moox-gateway-service.key \
-  --monitor-instance-id monitor-gz-122 \
-  --monitor-peer monitor-hk-177,https://43.132.204.177,gateway-hk-177 \
+  --monitor-instance-id moox_monitor@gateway-gz-122 \
   --admin-password-file /tmp/moox-admin-password
 ```
 
@@ -104,7 +100,7 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode i
 ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/moox-ssh-hosts.sql
 ```
 
-创建香港网关节点和本机 Monitor 路由后，再部署香港：
+创建香港网关节点后再部署香港数据面；不要在第二个节点启用 Monitor：
 
 ```bash
 ./scripts/deploy-moox.sh \
@@ -115,19 +111,12 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/
   --gateway-ca-bundle /tmp/moox-gateway-peers.pem \
   --gateway-control-key-file /tmp/moox-gateway-control.key \
   --gateway-service-key-file /tmp/moox-gateway-service.key \
-  --monitor-instance-id monitor-hk-177 \
-  --monitor-peer monitor-gz-122,https://106.53.107.122,gateway-gz-122 \
-  --no-admin --no-web-host --no-storage --no-archive --no-eventbus \
+  --no-admin --no-web-host --no-monitor --no-storage --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor
 ```
 
-`--monitor-peer` 可重复传入；部署脚本严格校验三元组、稳定 ID 和 URL，并把实例 ID 与
-peer 列表写入 Monitor 配置。HTTPS peer URL 不能带账号、路径、查询或 fragment；明文
-HTTP 只允许 loopback。
-
-当 `--no-storage` 和 `--no-eventbus` 同时使用时，部署脚本按 peer-only Monitor 处理：关闭
-指标/主机指标消费并跳过 Storage 元数据初始化，只保留对端快照、状态和告警能力。这种模式
-适合互检节点，不代表完整监控数据节点。
+部署脚本拒绝 `--monitor-peer`。Monitor 需要完整 EventBus/metrics 链路，不存在
+`peer-only` 运行模式。远程节点检查通过 SSH 登录目标节点后运行 Doctor CLI。
 
 ## 路由检查
 
@@ -152,43 +141,17 @@ sqlite3 /home/ubuntu/moox/prod/data/admin.db \
 不要手工修改 `data/gateway/routes.json`。配置错误应在服务管理页面修正；Gateway 会拒绝
 整份非法快照并继续使用上一份有效配置。
 
-## 签名验收请求
+## Doctor 验收
 
-下面的函数使用节点部署的 service key 调用 Monitor 正式 RPC。它不会输出密钥：
-
-```bash
-signed_monitor_snapshot() {
-  host=$1 node_id=$2 root=$3
-  set -a; source "$root/secrets/gateway-service.env"; set +a
-  path=/api/service/monitor/GetPeerSnapshot
-  body='{}'
-  timestamp=$(date +%s)
-  nonce=$(openssl rand -hex 32)
-  body_hash=$(printf %s "$body" | openssl dgst -sha256 | awk '{print $NF}')
-  canonical=$(printf 'moox-gateway-auth-v1\nPOST\n%s\n%s\n%s\n%s\n%s' \
-    "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
-  signature=$(printf %s "$canonical" | openssl dgst -sha256 \
-    -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk '{print $NF}')
-  curl --fail --silent --show-error --cacert "$root/certs/gateway/peers.pem" \
-    -H 'Content-Type: application/json' \
-    -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" \
-    -H "X-Moox-Timestamp: $timestamp" -H "X-Moox-Nonce: $nonce" \
-    -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
-    --data "$body" "https://$host$path"
-}
-
-cd /home/ubuntu/moox/prod
-signed_monitor_snapshot 106.53.107.122 gateway-gz-122 "$PWD" | jq .
-signed_monitor_snapshot 43.132.204.177 gateway-hk-177 "$PWD" | jq .
-```
-
-响应必须包含成功的 `ret_info`、正确的 `instance_id`、新鲜的 `observed_at`、检查结果和
-最近告警事件。把广州签名中的 target node 改为香港（或反向操作）必须得到 HTTP 401。
+在 Monitor 所在节点运行 `./bin/moox-cli doctor bootstrap --format json`，等待两个 Reporter
+周期后运行 `./bin/moox-cli doctor diagnose --format json`。远程节点通过 SSH 在目标节点执行；
+`bootstrap --node` 只能使用本机 node ID。Context 和健康直读分别受 service HMAC 与 health
+HMAC 保护，公开诊断路径仍返回 `404`。
 
 ## 密钥替换
 
 系统只使用当前 key，不做双 key 兼容。control key 由 Admin 和两台 Gateway 共享；
-service key 由两台 Gateway 和所有机器调用方（目前包括两台 Monitor）共享。两把 key
+service key 由两台 Gateway 和授权机器调用方共享。两把 key
 必须不同，文件必须为 `0600`。
 
 ```bash
@@ -198,9 +161,9 @@ openssl rand -hex 32 > /tmp/moox-gateway-service.key
 test "$(cat /tmp/moox-gateway-control.key)" != "$(cat /tmp/moox-gateway-service.key)"
 ```
 
-替换时安排一次短暂停机：先停止两台 Monitor，再停止两台 Gateway，然后停止中央
+替换时安排一次短暂停机：先停止单实例 Monitor，再停止两台 Gateway，然后停止中央
 Admin；把同一份新 control key 安装到 Admin 和两台 Gateway，把同一份新 service key
-安装到两台 Gateway 和两台 Monitor；最后按下一节顺序启动。不要把 key 写入 YAML、命令
+安装到两台 Gateway 和授权调用方；最后按下一节顺序启动。不要把 key 写入 YAML、命令
 输出或日志，也不要复制任一 Caddy CA 私钥。部署脚本的
 `--gateway-control-key-file` 和 `--gateway-service-key-file` 会按正确权限安装原始 key 与环境文件。
 
@@ -211,9 +174,8 @@ Admin；把同一份新 control key 安装到 Admin 和两台 Gateway，把同�
 1. 广州基础设施服务和 Admin；
 2. 广州 Gateway，等待 `readyz`；
 3. 香港 Gateway，等待 `readyz`；
-4. 广州 Monitor；
-5. 香港 Monitor；
-6. 运行双方签名快照请求并核对 Admin route hash。
+4. 单实例 Monitor；
+5. 运行 Doctor 并核对 Admin route hash。
 
 单节点操作使用部署目录脚本：
 
@@ -227,20 +189,13 @@ Admin；把同一份新 control key 安装到 Admin 和两台 Gateway，把同�
 Admin 故障期间不要删除 `data/gateway/routes.json`；Gateway 会继续使用缓存。无缓存的新节点
 必须先恢复 Admin，首次拉取成功后才能 ready。
 
-## 对端故障演练
+## Monitor 故障演练
 
-默认 `pull_interval_seconds=10`、`timeout_seconds=5`，连续超过 `3 * timeout` 未收到对端
-快照后实例变为 `down` 并写入 `monitor-peer/<instance_id>` 的 triggered/firing 告警；恢复
-拉取后写入 resolved 告警。
-
-1. 先运行双方签名快照请求，确认两端都能看到对端实例为 `active`。
-2. 在香港执行 `./stop.sh monitor`，保持 Gateway 运行。
-3. 等待 25 秒，在广州服务监控的实例和告警事件中确认 `monitor-hk-177` 为 `down`，并出现
-   `monitor-peer/monitor-hk-177` 的 `triggered/firing` 事件。
-4. 在香港执行 `./start.sh monitor`，等待 15 秒；确认实例恢复为 `active` 且出现
-   `resolved` 事件。
-5. 反向停止广州 Monitor，重复验证香港侧。
-6. 最后再次执行双方签名快照请求和端口不可达检查。
+1. 先运行 bootstrap 和 diagnose，保存通过报告。
+2. 停止单实例 Monitor，保持业务服务和 Gateway 运行。
+3. `doctor diagnose` 必须返回 `INCONCLUSIVE` 和 `run_bootstrap`，不能静默执行另一套诊断。
+4. 在同节点运行 `doctor bootstrap`，确认业务 health 仍可检查且 Monitor 故障独立显示。
+5. 恢复 Monitor，等待两个 Reporter 周期，再次运行 diagnose。
 
 本地自动化对应命令：
 
@@ -248,6 +203,4 @@ Admin 故障期间不要删除 `data/gateway/routes.json`；Gateway 会继续使
 go test -count=1 ./modules/gateway/test ./modules/admin/test ./modules/monitor/test
 ```
 
-远端验收记录应包含时间、操作节点、双方 route hash、故障/恢复事件 ID，以及端口检查
-结果。旧 `moox-monitor-tunnel.service`、反向隧道脚本和环境文件必须在新链路验收完成后删除，
-删除后完整重做本节演练。
+远端验收记录应包含时间、操作节点、route hash、Doctor run ID、故障/恢复结果和端口检查。

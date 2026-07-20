@@ -162,9 +162,11 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return nil
 		}
 		deliveries, fetchErr := c.pull.Fetch(ctx, c.opts.Config.FetchBatchSize)
+		consumerPending.Set(float64(len(deliveries)))
 		for _, d := range deliveries {
 			_ = c.HandleDelivery(ctx, d)
 		}
+		consumerPending.Set(0)
 		if fetchErr != nil {
 			if errors.Is(fetchErr, context.Canceled) || errors.Is(fetchErr, context.DeadlineExceeded) {
 				return nil
@@ -242,6 +244,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 			return errors.New("empty metric delivery")
 		}
 		reason := fmt.Errorf("decode metric envelope: %w", d.DecodeError)
+		recordIngest("rejected", time.Time{})
 		if c.opts.DLQ == nil {
 			_ = d.Term(actionCtx)
 			return reason
@@ -251,6 +254,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 			_ = d.Nak(actionCtx, time.Second)
 			return fmt.Errorf("publish metrics DLQ: %w", err)
 		}
+		dlqTotal.Inc()
 		if err := d.Term(actionCtx); err != nil {
 			return fmt.Errorf("term rejected metric: %w", err)
 		}
@@ -258,6 +262,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	}
 	msg := d.Message
 	permanent := func(reason error) error {
+		recordIngest("rejected", time.Time{})
 		if c.opts.DLQ == nil {
 			_ = d.Term(actionCtx)
 			return reason
@@ -267,6 +272,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 			_ = d.Nak(actionCtx, time.Second)
 			return fmt.Errorf("publish metrics DLQ: %w", err)
 		}
+		dlqTotal.Inc()
 		if err := d.Term(actionCtx); err != nil {
 			return fmt.Errorf("term rejected metric: %w", err)
 		}
@@ -332,9 +338,11 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if duplicate {
 		return d.Ack(ctx)
 	}
+	recordIngest("success", observed)
 	return d.Ack(ctx)
 }
 func (c *Consumer) retry(ctx context.Context, d *jetstream.Delivery, err error) error {
+	recordIngest("error", time.Time{})
 	if d == nil {
 		return err
 	}

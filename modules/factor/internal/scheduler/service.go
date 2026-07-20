@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -301,6 +302,8 @@ func (s *Service) executeWithRetry(ctx context.Context, task Task) error {
 		elapsed, err := s.executeOnce(ctx, task)
 		if err == nil {
 			_ = s.record(ctx, task, domain.RunStatusSucceeded, "", elapsed, nil)
+			_ = report.ObserveModuleRun("factor", "calculate", "success", "factor-calculation", time.Now())
+			_ = report.ObserveModuleWatermark("factor", "calculate", "factor-calculation", task.BarTime)
 			return nil
 		}
 		lastErr = err
@@ -313,6 +316,7 @@ func (s *Service) executeWithRetry(ctx context.Context, task Task) error {
 		errMsg = lastErr.Error()
 	}
 	_ = s.record(ctx, task, domain.RunStatusFailed, errMsg, 0, lastErr)
+	_ = report.ObserveModuleRun("factor", "calculate", "error", "factor-calculation", time.Now())
 	if lastErr == nil {
 		return fmt.Errorf("factor task %s failed", task.TaskID)
 	}

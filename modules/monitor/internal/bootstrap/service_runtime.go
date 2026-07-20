@@ -2,36 +2,33 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	monitorpeer "github.com/mooyang-code/moox/modules/monitor/internal/peer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
-	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator, doctorContext *monitordoctor.Builder) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
-		InstanceID: cfg.Instance.InstanceID, BaseURL: cfg.Instance.BaseURL, Runner: runner, OnResult: hook,
+		InstanceID: cfg.Instance.InstanceID, Runner: runner, OnResult: hook,
 		SyncSystem: syncSystem, MetricsQuery: metricsQuery, MetricRules: metricRules, MetricEvaluator: metricEvaluator,
 		HostStore: hostStore, HostReader: hostReader, HostStorageReady: hostReady,
+		DoctorContext: doctorContext,
 	}))
 }
 
@@ -44,47 +41,13 @@ func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
 	return runner
 }
 
-func monitorResultHook(cfg *config.Config, runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
-	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{InstanceID: cfg.Instance.InstanceID})
-	peers := runtime.Repositories.Peers
-	maxPeerAge := time.Duration(0)
-	if cfg.Peer.Enabled && len(cfg.Peer.Peers) > 0 {
-		maxPeerAge = 3 * time.Duration(cfg.Peer.TimeoutSeconds) * time.Second
-	}
+func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
+	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{})
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
-		activeInstanceIDs := activeMonitorInstanceIDs(ctx, cfg.Instance.InstanceID, peers, maxPeerAge)
-		if err := evaluator.Evaluate(ctx, check, result, activeInstanceIDs); err != nil {
+		if err := evaluator.Evaluate(ctx, check, result); err != nil {
 			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)
 		}
 	}
-}
-
-func activeMonitorInstanceIDs(ctx context.Context, localID string, peers *store.PeerRepository, maxPeerAge time.Duration) []string {
-	seen := map[string]struct{}{}
-	var ids []string
-	if localID != "" {
-		ids = append(ids, localID)
-		seen[localID] = struct{}{}
-	}
-	if peers == nil || maxPeerAge <= 0 {
-		return ids
-	}
-	instances, err := peers.ListInstances(ctx)
-	if err != nil {
-		return ids
-	}
-	cutoff := time.Now().UTC().Add(-maxPeerAge)
-	for _, instance := range instances {
-		if instance.Status != domain.InstanceStatusActive || instance.InstanceID == "" || instance.LastSeenAt == nil || instance.LastSeenAt.Before(cutoff) {
-			continue
-		}
-		if _, ok := seen[instance.InstanceID]; ok {
-			continue
-		}
-		ids = append(ids, instance.InstanceID)
-		seen[instance.InstanceID] = struct{}{}
-	}
-	return ids
 }
 
 func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
@@ -149,23 +112,4 @@ func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(contex
 		}
 		return nil
 	}
-}
-
-func buildPeerPuller(cfg *config.Config, runtime *Runtime) (*monitorpeer.Puller, error) {
-	if !cfg.Peer.Enabled || len(cfg.Peer.Peers) == 0 {
-		return nil, nil
-	}
-	remotes := make([]monitorpeer.Remote, 0, len(cfg.Peer.Peers))
-	for _, item := range cfg.Peer.Peers {
-		remotes = append(remotes, monitorpeer.Remote{InstanceID: item.InstanceID, GatewayURL: item.GatewayURL, NodeID: item.NodeID})
-	}
-	puller, err := monitorpeer.NewPuller(runtime.Repositories.Peers, monitorpeer.PullerOptions{
-		Peers: remotes, Timeout: time.Duration(cfg.Peer.TimeoutSeconds) * time.Second,
-		Credentials: gatewayauth.Credentials{KeyID: cfg.Peer.ServiceAuth.KeyID, Secret: cfg.Peer.ServiceAuth.SecretKey},
-		CAFile:      cfg.Peer.ServiceAuth.CAFile, Alerts: runtime.Repositories.Alerts, OwnerInstanceID: cfg.Instance.InstanceID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("monitor peer gateway client initialization failed: %w", err)
-	}
-	return puller, nil
 }

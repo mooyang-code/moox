@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"regexp"
@@ -44,6 +43,7 @@ type Handler struct {
 	client     Publisher
 	sequence   atomic.Uint64
 	errorCount atomic.Uint64
+	lastError  atomic.Value
 	bootID     string
 }
 
@@ -52,17 +52,19 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if strings.TrimSpace(cfg.ServiceName) == "" {
 		return nil, fmt.Errorf("metrics reporter service name is required")
 	}
+	if err := cfg.validateIdentity(); err != nil {
+		return nil, err
+	}
+	if _, err := ValidatePipelineEnvironment(); err != nil {
+		return nil, err
+	}
 	if _, err := regexp.Compile(cfg.IncludeRegex); err != nil {
 		return nil, fmt.Errorf("include regex: %w", err)
 	}
 	if _, err := regexp.Compile(cfg.ExcludeRegex); err != nil {
 		return nil, fmt.Errorf("exclude regex: %w", err)
 	}
-	bootID := cfg.BootID
-	if bootID == "" {
-		bootID = newID()
-	}
-	return &Handler{cfg: cfg, gatherer: prometheus.DefaultGatherer, connector: connect, bootID: bootID}, nil
+	return &Handler{cfg: cfg, gatherer: prometheus.DefaultGatherer, connector: connect, bootID: cfg.BootID}, nil
 }
 
 func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gatherer) (*Handler, error) {
@@ -120,9 +122,18 @@ func (h *Handler) Handle(ctx context.Context) error {
 func (h *Handler) reportError(ctx context.Context, err error) error {
 	if err != nil {
 		h.errorCount.Add(1)
+		h.lastError.Store(err.Error())
 		log.WarnContextf(ctx, "metrics snapshot report failed for %s: %v", h.cfg.ServiceName, err)
 	}
 	return err
+}
+
+func (h *Handler) LastError() string {
+	if h == nil {
+		return ""
+	}
+	value, _ := h.lastError.Load().(string)
+	return value
 }
 
 func (h *Handler) ErrorCount() uint64 {
@@ -226,15 +237,13 @@ func (h *Handler) publisher(ctx context.Context) (Publisher, error) {
 }
 
 func connect(ctx context.Context, cfg Config) (Publisher, error) {
-	return jetstream.Connect(ctx, jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), "moox-"+cfg.ServiceName+"-metrics"))
-}
-
-func newID() string {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return fmt.Sprintf("boot-%d", time.Now().UnixNano())
+	jsConfig := jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), "moox-"+cfg.ServiceName+"-metrics")
+	if strings.TrimSpace(cfg.CredentialFile) != "" {
+		if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
+			return nil, fmt.Errorf("load metrics publisher credential: %w", err)
+		}
 	}
-	return fmt.Sprintf("%x", raw[:])
+	return jetstream.Connect(ctx, jsConfig)
 }
 
 // Keep the generated client_model import in this module-owned implementation;

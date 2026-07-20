@@ -304,5 +304,5 @@ func evaluationRowToPB(r monmetrics.MetricRuleEvaluationRow) *monitorpb.MetricRu
 	return out
 }
 func stateToPB(r monmetrics.MetricRuleStateRow) *monitorpb.MetricRuleState {
-	return &monitorpb.MetricRuleState{SpaceId: r.SpaceID, RuleId: r.RuleID, Status: alertStatusToPB(r.Status), TriggerCount: uint32(r.TriggerCount), RecoveryCount: uint32(r.RecoveryCount), OwnerInstanceId: r.OwnerInstanceID, LastEvaluatedAt: timePtrToString(r.LastEvaluatedAt), LastTriggeredAt: timePtrToString(r.LastTriggeredAt), LastRecoveredAt: timePtrToString(r.LastRecoveredAt)}
+	return &monitorpb.MetricRuleState{SpaceId: r.SpaceID, RuleId: r.RuleID, Status: alertStatusToPB(r.Status), TriggerCount: uint32(r.TriggerCount), RecoveryCount: uint32(r.RecoveryCount), LastEvaluatedAt: timePtrToString(r.LastEvaluatedAt), LastTriggeredAt: timePtrToString(r.LastTriggeredAt), LastRecoveredAt: timePtrToString(r.LastRecoveredAt)}
 }

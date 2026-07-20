@@ -29,8 +29,6 @@ func TestInitSchema(t *testing.T) {
 			"t_monitor_alert_rules",
 			"t_monitor_alert_states",
 			"t_monitor_alert_events",
-			"t_monitor_instances",
-			"t_monitor_peer_snapshots",
 		} {
 			if !db.Migrator().HasTable(table) {
 				t.Fatalf("table %s does not exist", table)

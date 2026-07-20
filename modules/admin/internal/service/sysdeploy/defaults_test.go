@@ -74,6 +74,13 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(monitor.ExtraConfig) != "http://127.0.0.1:11409/readyz" {
 		t.Fatalf("moox_monitor extra_config = %s", monitor.ExtraConfig)
 	}
+	gateway, ok := byName["moox_gateway"]
+	if !ok {
+		t.Fatal("moox_gateway deployment row missing")
+	}
+	if gateway.Port != 11002 || healthURL(gateway.ExtraConfig) != "http://127.0.0.1:11012/readyz" {
+		t.Fatalf("moox_gateway deployment = %#v", gateway)
+	}
 	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/readyz" {
 		t.Fatalf("cloudnode extra_config = %s", byName["moox_cloudnode"].ExtraConfig)
 	}

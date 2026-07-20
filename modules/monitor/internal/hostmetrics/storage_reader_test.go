@@ -63,7 +63,7 @@ func TestStorageReaderPaginatesAndRebuildsEntities(t *testing.T) {
 	}
 	start, _ := time.Parse(time.RFC3339Nano, fake.lastStart)
 	end, _ := time.Parse(time.RFC3339Nano, fake.lastEnd)
-	if end.Sub(start) > 72*time.Hour {
-		t.Fatalf("reader exceeded three-day bound: %s to %s", fake.lastStart, fake.lastEnd)
+	if end.Sub(start) > 7*24*time.Hour {
+		t.Fatalf("reader exceeded seven-day bound: %s to %s", fake.lastStart, fake.lastEnd)
 	}
 }

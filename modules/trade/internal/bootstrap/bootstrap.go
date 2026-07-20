@@ -107,7 +107,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("trade_account"))
+	h, err := report.NewHandler(report.DefaultConfig("moox_trade"))
 	if err != nil {
 		log.Warnf("trade metrics reporter disabled: %v", err)
 		return

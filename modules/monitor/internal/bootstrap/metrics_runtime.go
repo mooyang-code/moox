@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -53,23 +54,35 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runt
 				return
 			}
 			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
-			js, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(urls, "moox-monitor-metrics"))
+			jc := jetstream.ConfigFromEnv(urls, "moox-monitor-metrics")
+			if path := strings.TrimSpace(cfg.Metrics.EventBusCredentialFile); path != "" {
+				if err := jc.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
+					runtime.setMetricsIngestState(false, fmt.Errorf("metrics consumer credential: %w", err))
+					log.WarnContextf(ctx, "metrics consumer credential unavailable")
+					if !waitMetricsRetry(ctx) {
+						return
+					}
+					continue
+				}
+			}
+			js, err := jetstream.Connect(ctx, jc)
 			if err != nil {
-				log.WarnContextf(ctx, "metrics eventbus unavailable; ingestion degraded: %v", err)
-				select {
-				case <-ctx.Done():
+				runtime.setMetricsIngestState(false, err)
+				log.WarnContextf(ctx, "metrics eventbus unavailable; ingestion degraded")
+				if !waitMetricsRetry(ctx) {
 					return
-				case <-time.After(30 * time.Second):
 				}
 				continue
 			}
+			runtime.setMetricsIngestState(true, nil)
 			err = monmetrics.RunWhenReady(ctx, monmetrics.ConsumerOptions{Client: js, Storage: storage, MessageStore: repo, Authorizer: monmetrics.CheckProducerAuthorizer{Checks: runtime.Repositories.Checks}, DLQ: monmetrics.JetStreamDLQ(js, "moox-monitor", cfg.Instance.InstanceID), Config: cfg.Metrics, ServiceName: "moox-monitor", InstanceID: cfg.Instance.InstanceID})
 			_ = js.Close()
 			if ctx.Err() != nil {
 				return
 			}
 			if err != nil {
-				log.WarnContextf(ctx, "metrics ingestion stopped; retrying: %v", err)
+				runtime.setMetricsIngestState(false, err)
+				log.WarnContextf(ctx, "metrics ingestion stopped; retrying")
 			}
 			select {
 			case <-ctx.Done():
@@ -78,4 +91,26 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runt
 			}
 		}
 	})
+}
+
+func waitMetricsRetry(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(30 * time.Second):
+		return true
+	}
+}
+
+func sanitizedMetricsError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	for _, secretTerm := range []string{"credential", "authorization", "authentication", "password", "token"} {
+		if strings.Contains(message, secretTerm) {
+			return "eventbus authentication unavailable"
+		}
+	}
+	return "eventbus connection unavailable"
 }

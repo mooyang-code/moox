@@ -48,7 +48,6 @@ GATEWAY_CA_BUNDLE=""
 GATEWAY_CONTROL_KEY_FILE=""
 GATEWAY_SERVICE_KEY_FILE=""
 MONITOR_INSTANCE_ID=""
-MONITOR_PEERS=()
 STAGE_DEPLOY_LOCK=""
 STAGE_DEPLOY_LOCK_TOKEN="$$.${RANDOM}.${RANDOM}"
 STAGE_DEPLOY_LOCK_HELD=0
@@ -105,7 +104,6 @@ Options:
   --gateway-control-key-file <p>  Local 0600 raw cluster control key file (required).
   --gateway-service-key-file <p>  Local 0600 raw cluster service key file (required).
   --monitor-instance-id <id>      Stable Monitor instance ID (required when Monitor is enabled).
-  --monitor-peer <id>,<url>,<node>  Repeatable remote Monitor/Gateway tuple.
   -h, --help                      Show this help.
 
 Examples:
@@ -476,7 +474,6 @@ while [[ $# -gt 0 ]]; do
     --gateway-control-key-file) GATEWAY_CONTROL_KEY_FILE="${2:-}"; shift 2 ;;
     --gateway-service-key-file) GATEWAY_SERVICE_KEY_FILE="${2:-}"; shift 2 ;;
     --monitor-instance-id) MONITOR_INSTANCE_ID="${2:-}"; shift 2 ;;
-    --monitor-peer) MONITOR_PEERS+=("${2:-}"); shift 2 ;;
     -h|--help)
       usage
       exit 0
@@ -508,26 +505,6 @@ validate_gateway_control_url "${GATEWAY_CONTROL_URL}" || fail "--gateway-control
 if [[ "${WITH_MONITOR}" -eq 1 ]]; then
   [[ "${MONITOR_INSTANCE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
     fail "--monitor-instance-id is required when Monitor is enabled and must be a stable identifier"
-  validated_monitor_peers=()
-  for monitor_peer in ${MONITOR_PEERS[@]+"${MONITOR_PEERS[@]}"}; do
-    IFS=',' read -r peer_instance_id peer_gateway_url peer_node_id peer_extra <<<"${monitor_peer}"
-    [[ -n "${peer_instance_id}" && -n "${peer_gateway_url}" && -n "${peer_node_id}" && -z "${peer_extra:-}" ]] || \
-      fail "--monitor-peer must be exactly <instance_id>,<gateway_url>,<node_id>"
-    [[ "${peer_instance_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
-      fail "--monitor-peer instance ID must be a stable identifier"
-    [[ "${peer_node_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
-      fail "--monitor-peer node ID must be a stable identifier"
-    [[ "${peer_instance_id}" != "${MONITOR_INSTANCE_ID}" ]] || fail "--monitor-peer cannot target the local Monitor instance"
-    [[ "${peer_node_id}" != "${NODE_ID}" ]] || fail "--monitor-peer cannot target the local Gateway node"
-    validate_gateway_control_url "${peer_gateway_url}" || \
-      fail "--monitor-peer Gateway URL must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
-    for existing_peer in ${validated_monitor_peers[@]+"${validated_monitor_peers[@]}"}; do
-      IFS=',' read -r existing_instance _ existing_node <<<"${existing_peer}"
-      [[ "${existing_instance}" != "${peer_instance_id}" ]] || fail "--monitor-peer instance IDs must be unique"
-      [[ "${existing_node}" != "${peer_node_id}" ]] || fail "--monitor-peer node IDs must be unique"
-    done
-    validated_monitor_peers+=("${monitor_peer}")
-  done
 fi
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 [[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
@@ -847,19 +824,7 @@ patch_configs() {
       perl -0pi -e 's#(metrics:\n  enabled:) true#$1 false#' \
         "${STAGE_DIR}/monitor/config/app.yaml"
     fi
-    local monitor_peers_json
-    monitor_peers_json=$(python3 - ${MONITOR_PEERS[@]+"${MONITOR_PEERS[@]}"} <<'PY'
-import json
-import sys
-
-peers = []
-for value in sys.argv[1:]:
-    instance_id, gateway_url, node_id = value.split(",")
-    peers.append({"instance_id": instance_id, "gateway_url": gateway_url, "node_id": node_id})
-print(json.dumps(peers, separators=(",", ":")))
-PY
-)
-    MONITOR_INSTANCE_ID_VALUE="${MONITOR_INSTANCE_ID}" MONITOR_PEERS_JSON="${monitor_peers_json}" python3 - "${STAGE_DIR}/monitor/config/app.yaml" <<'PY'
+    MONITOR_INSTANCE_ID_VALUE="${MONITOR_INSTANCE_ID}" python3 - "${STAGE_DIR}/monitor/config/app.yaml" <<'PY'
 import json
 import os
 import pathlib
@@ -868,10 +833,9 @@ import sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
 instance_line = "  instance_id: " + json.dumps(os.environ["MONITOR_INSTANCE_ID_VALUE"])
-if text.count('  instance_id: ""') != 1 or text.count("  peers: []") != 1:
-    raise SystemExit("Monitor config template does not have the expected instance/peer fields")
+if text.count('  instance_id: ""') != 1:
+    raise SystemExit("Monitor config template does not have the expected instance field")
 text = text.replace('  instance_id: ""', instance_line, 1)
-text = text.replace("  peers: []", "  peers: " + os.environ["MONITOR_PEERS_JSON"], 1)
 path.write_text(text)
 PY
   fi
@@ -884,7 +848,7 @@ PY
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
-    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
+    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
   else
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
@@ -1118,6 +1082,35 @@ start_service() {
   echo "${name} started pid=${pid}"
 }
 
+runtime_identity_env() {
+  local service_name="$1"
+  local config_file="${2:-}"
+  local boot_id
+  if command -v uuidgen >/dev/null 2>&1; then
+    boot_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  else
+    boot_id="boot-$(date +%s)-$$-${RANDOM}"
+  fi
+  RUNTIME_IDENTITY_ENV=(
+    "MOOX_SERVICE_NAME=${service_name}"
+    "MOOX_INSTANCE_ID=${service_name}@${MOOX_GATEWAY_NODE_ID}"
+    "MOOX_NODE_ID=${MOOX_GATEWAY_NODE_ID}"
+    "MOOX_BOOT_ID=${boot_id}"
+  )
+  if [[ -n "${config_file}" && -f "${config_file}" ]]; then
+    RUNTIME_IDENTITY_ENV+=("MOOX_CONFIG_HASH=sha256:$(shasum -a 256 "${config_file}" | awk '{print $1}')")
+  fi
+  if [[ -f "${ROOT}/config/monitor-pipelines.yaml" ]]; then
+    RUNTIME_IDENTITY_ENV+=(
+      "MOOX_PIPELINE_CONFIG=${ROOT}/config/monitor-pipelines.yaml"
+      "MOOX_PIPELINE_CONFIG_HASH=sha256:$(shasum -a 256 "${ROOT}/config/monitor-pipelines.yaml" | awk '{print $1}')"
+    )
+  fi
+  if [[ -f "${HOME}/.config/moox/eventbus/metrics-publisher.yaml" ]]; then
+    RUNTIME_IDENTITY_ENV+=("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/metrics-publisher.yaml")
+  fi
+}
+
 STORAGE_SCHEMA_ENV=(
   "STORAGE_CONFIG_PATH=${ROOT}/storage/config"
   "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/storage.yaml"
@@ -1294,7 +1287,7 @@ apply_metrics_metadata() {
     return 0
   fi
   if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
-    echo "skip metrics metadata for peer-only Monitor deployment"
+    echo "skip metrics metadata for Monitor deployment without local metrics dependencies"
     return 0
   fi
   local route_seed="${METRICS_ROUTE_SEED}"
@@ -1322,7 +1315,7 @@ apply_host_metadata() {
     return 0
   fi
   if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
-    echo "skip host metadata for peer-only Monitor deployment"
+    echo "skip host metadata for Monitor deployment without local metrics dependencies"
     return 0
   fi
   local route_seed="${HOST_ROUTE_SEED}"
@@ -1419,8 +1412,9 @@ start_eventbus() {
     perl -0pi -e 's#credential_file:\s*""#credential_file: "'"${credential_dir}"'/internal-admin.yaml"#; s#tls_ca_file:\s*""#tls_ca_file: "'"${credential_dir}"'/ca.pem"#' \
       "${ROOT}/eventbus/config/app.yaml"
   fi
+  runtime_identity_env eventbus "${ROOT}/eventbus/config/app.yaml"
   start_service "eventbus" "${ROOT}/eventbus" \
-    "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
   wait_http http://127.0.0.1:11419/readyz "${MOOX_WAIT_EVENTBUS_SECONDS:-60}"
 }
 
@@ -1430,8 +1424,9 @@ start_archive() {
     exit 2
   fi
   gateway_service_env_for archive
+  runtime_identity_env moox_archive "${ROOT}/archive/config/app.yaml"
   start_service "archive" "${ROOT}/archive" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "${ROOT}/bin/moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
@@ -1513,8 +1508,9 @@ start_admin() {
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   gateway_service_env_for admin-gateway
+  runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
-    env "${ADMIN_SECRET_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=127.0.0.1:11003" "MOOX_NODE_GATEWAY_NODE_ID=${MOOX_ADMIN_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
@@ -1522,8 +1518,9 @@ start_admin() {
 
 start_gateway() {
   [[ "${WITH_GATEWAY}" == "1" ]] || { echo "gateway is disabled in this deployment package" >&2; exit 2; }
+	runtime_identity_env moox_gateway "${ROOT}/gateway/config/app.yaml"
 	start_service "gateway" "${ROOT}/gateway" \
-		env "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
+		env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
 			"${ROOT}/bin/moox-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
 
@@ -1533,8 +1530,9 @@ start_cloudnode() {
     exit 2
   fi
   init_cloudnode_schema
+  runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
-    env \
+    env "${RUNTIME_IDENTITY_ENV[@]}" \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
       "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
 }
@@ -1546,8 +1544,9 @@ start_collector() {
   fi
   init_collector_schema
   gateway_service_env_for collector
+  runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
   start_service "collector" "${ROOT}/collector" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
 start_factor() {
@@ -1558,8 +1557,9 @@ start_factor() {
   wait_factor_nats
   ensure_factor_python
   gateway_service_env_for factor
+  runtime_identity_env moox_factor "${ROOT}/factor/config/app.yaml"
   start_service "factor" "${ROOT}/factor" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor" -conf=config/trpc_go.yaml
 }
 
 start_strategy() {
@@ -1570,8 +1570,9 @@ start_strategy() {
   wait_nats strategy "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_STRATEGY_NATS_SECONDS:-60}"
   ensure_strategy_python
   gateway_service_env_for strategy
+  runtime_identity_env moox_strategy "${ROOT}/strategy/config/app.yaml"
   start_service "strategy" "${ROOT}/strategy" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime" \
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
@@ -1585,8 +1586,9 @@ start_monitor() {
   apply_host_metadata
   init_monitor_schema
   gateway_service_env_for monitor
+  runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
   start_service "monitor" "${ROOT}/monitor" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
@@ -1598,8 +1600,9 @@ start_web_host() {
     echo "web-host binary missing; skip" >&2
     return 1
   fi
+  runtime_identity_env web_host
   start_service "web-host" "${ROOT}" \
-    env \
+    env "${RUNTIME_IDENTITY_ENV[@]}" \
       "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-127.0.0.1:9528}" \
       "MOOX_WEB_HOST_HEALTH_ADDR=${MOOX_WEB_HOST_HEALTH_ADDR:-127.0.0.1:19527}" \
       "${ROOT}/bin/moox-web-host"
@@ -2337,6 +2340,10 @@ EOF
   copy_optional_web_host
 
   cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
+  cp "${ROOT}/modules/cli/config/cli.yaml" "${STAGE_DIR}/config/cli.yaml"
+  mkdir -p "${STAGE_DIR}/config/doctor"
+  cp "${ROOT}/packages/doctor/components.yaml" "${STAGE_DIR}/config/doctor/components.yaml"
+  cp "${ROOT}/packages/doctor/report.schema.json" "${STAGE_DIR}/config/doctor/report.schema.json"
   perl -0pi -e 's#hmac_key_file:\s*\./secrets/gateway-service\.key#credentials_file: ../../secrets/gateway-credentials.json#' "${STAGE_DIR}/gateway/config/app.yaml"
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/admin/config/." "${STAGE_DIR}/admin/config/"
@@ -2396,6 +2403,7 @@ EOF
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
   fi
   cp -R "${ROOT}/examples/." "${STAGE_DIR}/examples/"
+  cp "${ROOT}/examples/monitor-pipelines.yaml" "${STAGE_DIR}/config/monitor-pipelines.yaml"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp "${ROOT}/scripts/reset-storage-view-indexes.sh" "${STAGE_DIR}/reset-storage-view-indexes.sh"
   fi

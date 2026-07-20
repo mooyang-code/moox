@@ -16,7 +16,6 @@ health_auth:
 
 instance:
   instance_id: ""
-  base_url: "http://127.0.0.1:11409"
 
 scheduler:
   result_retention_days: 14
@@ -31,15 +30,6 @@ sysdeploy:
     target_node: ""
     ca_file: ""
 
-peer:
-  enabled: true
-  timeout_seconds: 5
-  service_auth:
-    key_id: ""
-    secret_key: ""
-    ca_file: ""
-  peers: []
-
 alert:
   send_timeout_seconds: 10
 
@@ -47,6 +37,7 @@ metrics:
   enabled: true
   eventbus_url: nats://127.0.0.1:4222
   eventbus_credential_file: ~/.config/moox/monitor/eventbus.yaml
+  pipeline_config_path: ../config/monitor-pipelines.yaml
   stream: MOOX_METRICS
   topic: moox.metrics.snapshot.reported.v1
   consumer: monitor_metrics_ingest_v1

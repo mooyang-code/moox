@@ -1,0 +1,212 @@
+version: 1
+components:
+  - component_id: admin_gateway
+    service_name: admin_gateway
+    role: public_gateway
+    description: Caddy-managed public HTTPS entrypoint
+    duties: [serve the public admin origin]
+    inputs: [HTTPS requests]
+    outputs: [admin and web-host traffic]
+    dependencies: []
+    transport: health_only
+    functional_observability: not_applicable
+    health_path: /readyz
+    config_paths: [admin/config/trpc_go.yaml]
+    writable_paths: [data/admin]
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: web_host
+    service_name: web_host
+    role: frontend
+    description: Embedded MooX administration web host
+    duties: [serve static administration assets]
+    inputs: [HTTP requests]
+    outputs: [web assets]
+    dependencies: [admin_gateway]
+    transport: health_only
+    functional_observability: not_applicable
+    health_path: /readyz
+    config_paths: []
+    writable_paths: [data/web-host]
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: storage_primary
+    service_name: storage-primary
+    role: storage
+    description: Storage primary process currently undergoing a separate refactor
+    duties: [serve current primary storage APIs]
+    inputs: [business writes and reads]
+    outputs: [existing storage facts]
+    dependencies: []
+    transport: reporter
+    functional_observability: deferred
+    health_path: /readyz
+    config_paths: []
+    writable_paths: []
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: storage_view
+    service_name: storage-view
+    role: storage
+    description: Storage view process currently undergoing a separate refactor
+    duties: [serve current view APIs]
+    inputs: [current storage facts]
+    outputs: [existing view facts]
+    dependencies: [storage_primary]
+    transport: reporter
+    functional_observability: deferred
+    health_path: /readyz
+    config_paths: []
+    writable_paths: []
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: eventbus
+    service_name: eventbus
+    role: eventbus
+    description: NATS JetStream event transport
+    duties: [transport metrics and business events]
+    inputs: [published events]
+    outputs: [durable subscriptions]
+    dependencies: []
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [eventbus/config/app.yaml, eventbus/config/trpc_go.yaml]
+    writable_paths: [data/eventbus]
+    recovery_action_ids: [verify_eventbus_credentials, restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_monitor
+    service_name: moox_monitor
+    role: monitor
+    description: Single-instance monitoring fact store and alert evaluator
+    duties: [ingest monitoring facts, evaluate alerts, serve bounded context]
+    inputs: [metrics and host snapshots]
+    outputs: [monitoring observations]
+    dependencies: [eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [monitor/config/app.yaml, monitor/config/trpc_go.yaml]
+    writable_paths: [data/monitor]
+    recovery_action_ids: [verify_eventbus_credentials, restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_gateway
+    service_name: moox_gateway
+    role: node_gateway
+    description: Node service gateway and route refresh process
+    duties: [route service traffic, refresh routes]
+    inputs: [service requests and route snapshots]
+    outputs: [proxied service responses]
+    dependencies: [eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [gateway/config/app.yaml, gateway/config/trpc_go.yaml]
+    writable_paths: [data/gateway]
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_collector
+    service_name: moox_collector
+    role: collector
+    description: Market data collection planner and executor
+    duties: [plan and execute collection tasks]
+    inputs: [collector rules and market windows]
+    outputs: [committed collection tasks]
+    dependencies: [eventbus, storage_primary]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [collector/config/app.yaml, collector/config/trpc_go.yaml]
+    writable_paths: [data/collector]
+    recovery_action_ids: [inspect_pipeline_input, restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_cloudnode
+    service_name: moox_cloudnode
+    role: cloudnode
+    description: Cloud job dispatch and execution coordinator
+    duties: [dispatch and track cloud jobs]
+    inputs: [job items]
+    outputs: [job results]
+    dependencies: [eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [cloudnode/config/app.yaml, cloudnode/config/trpc_go.yaml]
+    writable_paths: [data/cloudnode]
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_factor
+    service_name: moox_factor
+    role: factor
+    description: Factor calculation scheduler and runtime
+    duties: [calculate and persist factor results]
+    inputs: [factor inputs]
+    outputs: [factor results]
+    dependencies: [storage_primary, eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [factor/config/app.yaml, factor/config/trpc_go.yaml]
+    writable_paths: [data/factor]
+    recovery_action_ids: [replay_factor_window_manually, restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_strategy
+    service_name: moox_strategy
+    role: strategy
+    description: Strategy evaluation and target generation service
+    duties: [evaluate strategies and persist targets]
+    inputs: [factor and view inputs]
+    outputs: [strategy evaluations]
+    dependencies: [moox_factor, storage_view, eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [strategy/config/app.yaml, strategy/config/trpc_go.yaml]
+    writable_paths: [data/strategy]
+    recovery_action_ids: [inspect_pipeline_input, restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_trade
+    service_name: moox_trade
+    role: trade
+    description: Trade execution and reconciliation service
+    duties: [execute orders and reconcile state]
+    inputs: [target positions]
+    outputs: [orders and reconciliations]
+    dependencies: [eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [trade/config/app.yaml, trade/config/trpc_go.yaml]
+    writable_paths: [data/trade]
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: false
+  - component_id: moox_archive
+    service_name: moox_archive
+    role: archive
+    description: Journal archive and materialization service
+    duties: [archive journals and complete materialization]
+    inputs: [accepted journals]
+    outputs: [archive completions]
+    dependencies: [eventbus]
+    transport: reporter
+    functional_observability: active
+    health_path: /readyz
+    config_paths: [archive/config/app.yaml, archive/config/trpc_go.yaml]
+    writable_paths: [data/archive]
+    recovery_action_ids: [restart_service_manually]
+    required_in_default_profile: true
+  - component_id: moox_hostagent
+    service_name: moox_hostagent
+    role: hostagent
+    description: Host resource snapshot agent
+    duties: [collect bounded host resource snapshots]
+    inputs: [host operating system facts]
+    outputs: [host snapshots]
+    dependencies: [eventbus]
+    transport: host_snapshot
+    functional_observability: not_applicable
+    health_path: /readyz
+    config_paths: [hostagent/config/trpc_go.yaml]
+    writable_paths: [data/hostagent]
+    recovery_action_ids: [free_disk_space, restart_service_manually]
+    required_in_default_profile: false

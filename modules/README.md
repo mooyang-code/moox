@@ -12,10 +12,10 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [collector](./collector/) | `moox-collector`、`moox-collector-scf` | 采集控制面与 SCF 运行时 |
 | [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 唤醒/直调 |
 | [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
-| [monitor](./monitor/) | `moox-monitor` | 独立 HTTP/TCP 服务可用性监控、告警和多实例协同 |
+| [monitor](./monitor/) | `moox-monitor` | 单实例服务/指标事实存储、告警和有界 Doctor Context |
 | [eventbus](./eventbus/) | `moox-eventbus` | 统一 NATS JetStream broker、Stream/KV 拓扑与只读管理面 |
 | [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | Linux amd64/arm64 主机 CPU、内存、文件系统、磁盘和网络采集 |
-| [cli](./cli/) | `moox-cli` | 命令行工具（元数据导入、数据导入、运维辅助） |
+| [cli](./cli/) | `moox-cli` | 命令行工具（元数据/数据导入、Doctor 手工诊断、运维辅助） |
 | [factor](./factor/) | `moox-factor` | 因子定义、调度和 Python worker 计算，结果写回 Storage |
 | [strategy](./strategy/) | `moox-strategy` | 策略包、实时运行、回测、组合目标和绩效查询 |
 | [archive](./archive/) | `moox-archive` | Storage Journal、Parquet 月分区、COS 副本和恢复 |

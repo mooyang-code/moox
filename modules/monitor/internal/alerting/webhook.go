@@ -68,7 +68,7 @@ func renderTemplate(tpl string, event Event) string {
 		"{{latency_ms}}":    fmt.Sprintf("%d", event.Result.LatencyMS),
 		"{{error_message}}": jsonStringValue(event.Result.ErrorMessage),
 		"{{dedupe_key}}":    jsonStringValue(event.DedupeKey),
-		"{{instance_id}}":   jsonStringValue(event.OwnerInstanceID),
+		"{{instance_id}}":   jsonStringValue(event.Result.InstanceID),
 		"{{checked_at}}":    jsonStringValue(event.Result.CheckedAt.UTC().Format(time.RFC3339Nano)),
 	}
 	for old, newValue := range replacements {

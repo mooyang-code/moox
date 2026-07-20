@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,61 +49,6 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	rsp := monitorHealthSnapshot(cfg, runtime, nil)(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
-	}
-}
-
-func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
-	ctx := context.Background()
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
-	repo := mgr.Repositories().Peers
-	now := time.Now()
-	for _, instance := range []*domain.MonitorInstance{
-		{InstanceID: "monitor-b", Status: domain.InstanceStatusActive, LastSeenAt: &now},
-		{InstanceID: "monitor-c", Status: domain.InstanceStatusDown, LastSeenAt: &now},
-		{InstanceID: "monitor-a", Status: domain.InstanceStatusActive, LastSeenAt: &now},
-	} {
-		if err := repo.UpsertInstance(ctx, instance); err != nil {
-			t.Fatalf("upsert instance: %v", err)
-		}
-	}
-	got := activeMonitorInstanceIDs(ctx, "monitor-a", repo, time.Hour)
-	want := []string{"monitor-a", "monitor-b"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("active ids = %v, want %v", got, want)
-	}
-}
-
-func TestActiveMonitorInstanceIDsSkipsStaleAndDisabledPeers(t *testing.T) {
-	ctx := context.Background()
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
-	repo := mgr.Repositories().Peers
-	stale := time.Now().Add(-time.Hour)
-	if err := repo.UpsertInstance(ctx, &domain.MonitorInstance{
-		InstanceID: "monitor-stale",
-		Status:     domain.InstanceStatusActive,
-		LastSeenAt: &stale,
-	}); err != nil {
-		t.Fatalf("upsert stale instance: %v", err)
-	}
-	if got := activeMonitorInstanceIDs(ctx, "monitor-a", repo, 3*time.Second); !reflect.DeepEqual(got, []string{"monitor-a"}) {
-		t.Fatalf("active ids with stale peer = %v", got)
-	}
-	if got := activeMonitorInstanceIDs(ctx, "monitor-a", repo, 0); !reflect.DeepEqual(got, []string{"monitor-a"}) {
-		t.Fatalf("active ids with peers disabled = %v", got)
 	}
 }
 
@@ -169,11 +113,6 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
-
-	cfg.Peer.Enabled = false
-	puller, err := buildPeerPuller(cfg, rt)
-	assert.NoError(t, err)
-	assert.Nil(t, puller)
 
 	registerMetricsReporter(nil)
 	assert.NoError(t, registerHealth(nil, nil, rt, nil))
@@ -240,19 +179,6 @@ func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
 	t.Fatal("missing trpc.moox.monitor.sysdeploy.timer service")
 }
 
-func TestStartPeerPullerReturnsClientConstructionError(t *testing.T) {
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.Close() })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	cfg := config.Default()
-	cfg.Peer.Peers = []config.PeerEntry{{InstanceID: "monitor-peer", GatewayURL: "https://peer.example", NodeID: "gateway-peer"}}
-	cfg.Peer.ServiceAuth = config.ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret", CAFile: filepath.Join(t.TempDir(), "missing.pem")}
-	_, err = buildPeerPuller(cfg, &Runtime{Repositories: mgr.Repositories()})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "peer gateway client")
-}
-
 func TestWaitHostMetricsRespectsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -262,10 +188,6 @@ func TestWaitHostMetricsRespectsCancel(t *testing.T) {
 }
 
 func TestMonitorResultHook(t *testing.T) {
-	cfg := config.Default()
-	cfg.Instance.InstanceID = "monitor-a"
-	cfg.Instance.BaseURL = "http://localhost"
-
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -281,7 +203,7 @@ func TestMonitorResultHook(t *testing.T) {
 	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
 		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
 	}))
-	hook := monitorResultHook(cfg, rt)
+	hook := monitorResultHook(rt)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{
 		SpaceID: "default", CheckID: "c1", Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),

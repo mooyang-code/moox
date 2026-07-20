@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/report"
 )
 
 // Scheduler exposes bounded run-once Archive maintenance operations.
@@ -37,7 +39,16 @@ func (s Scheduler) MaterializeOnce(ctx context.Context) error {
 	}
 	writeErr := s.Writer.WriteDirty(ctx, pendingRows)
 	_, pruneErr := s.Writer.PruneMessageReceipts(ctx, now.Add(-retention))
-	return errors.Join(writeErr, pruneErr)
+	err := errors.Join(writeErr, pruneErr)
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	_ = report.ObserveModuleRun("archive", "materialize", result, "archive-materialize", now)
+	if err == nil {
+		_ = report.ObserveModuleWatermark("archive", "materialize", "archive-materialize", now)
+	}
+	return err
 }
 
 // FlushOnShutdown writes remaining dirty partitions without pruning receipts.

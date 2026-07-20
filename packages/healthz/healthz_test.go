@@ -132,6 +132,17 @@ func TestStandardMuxSeparatesLivenessAndReadiness(t *testing.T) {
 	}
 }
 
+func TestStandardMuxRejectsNonGETHealthRequests(t *testing.T) {
+	handler := StandardMux(func(context.Context) Response { return Response{Ready: true} }, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, path, nil))
+		if rr.Code != http.StatusMethodNotAllowed || rr.Header().Get("Allow") != http.MethodGet {
+			t.Fatalf("%s response = %d Allow=%q", path, rr.Code, rr.Header().Get("Allow"))
+		}
+	}
+}
+
 func TestRegisterNoProtocolServiceMuxRejectsMissingInputs(t *testing.T) {
 	if err := RegisterNoProtocolServiceMux(nil, NewMux()); err == nil {
 		t.Fatal("nil service should be rejected")
@@ -196,6 +207,21 @@ func TestHealthzHandlerPreservesDetails(t *testing.T) {
 	}
 	if rsp.Details["scheduler_ok"] != true {
 		t.Fatalf("scheduler_ok = %#v, want true", rsp.Details["scheduler_ok"])
+	}
+}
+
+func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_NAME", "moox_test")
+	t.Setenv("MOOX_INSTANCE_ID", "moox_test@node-a")
+	t.Setenv("MOOX_NODE_ID", "node-a")
+	t.Setenv("MOOX_BOOT_ID", "boot-a")
+	t.Setenv("MOOX_BUILD_TIME", "2026-07-19T00:00:00Z")
+	t.Setenv("MOOX_CONFIG_HASH", "sha256:config")
+	t.Setenv("MOOX_PIPELINE_CONFIG_HASH", "sha256:pipelines")
+
+	rsp := Base("test", "test@node-a", "v1", "commit", time.Now(), true)
+	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.PipelineConfigHash != "sha256:pipelines" {
+		t.Fatalf("runtime identity fields = %+v", rsp)
 	}
 }
 

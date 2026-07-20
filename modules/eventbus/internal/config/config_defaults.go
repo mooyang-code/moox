@@ -23,6 +23,7 @@ func Default() *Config {
 		},
 		Topics: []TopicConfig{
 			{Topic: "moox.metrics.host.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", PayloadVersion: 1, Enabled: true},
+			{Topic: "moox.metrics.snapshot.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/vnd.moox.metrics.snapshot+protobuf", PayloadVersion: 1, Enabled: true},
 			{Topic: "moox.dlq.message.rejected.v1", Stream: "MOOX_DLQ", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", PayloadVersion: 1, Enabled: true},
 		},
 		TopicFamilies: []TopicFamilyConfig{
@@ -31,6 +32,7 @@ func Default() *Config {
 		},
 		Consumers: []ConsumerConfig{
 			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
+			{Stream: "MOOX_METRICS", Durable: "monitor_metrics_ingest_v1", FilterSubject: "moox.metrics.snapshot.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
 			{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 1, MaxDeliver: -1},
 			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
 			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},

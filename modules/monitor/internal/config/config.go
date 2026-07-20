@@ -18,7 +18,6 @@ type Config struct {
 	Instance   InstanceConfig   `yaml:"instance"`
 	Scheduler  SchedulerConfig  `yaml:"scheduler"`
 	SysDeploy  SysDeployConfig  `yaml:"sysdeploy"`
-	Peer       PeerConfig       `yaml:"peer"`
 	Alert      AlertConfig      `yaml:"alert"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
 }
@@ -44,7 +43,6 @@ type HealthAuthConfig struct {
 
 type InstanceConfig struct {
 	InstanceID string `yaml:"instance_id"`
-	BaseURL    string `yaml:"base_url"`
 }
 
 type SchedulerConfig struct {
@@ -65,19 +63,6 @@ type ServiceAuthConfig struct {
 	CAFile     string `yaml:"ca_file"`
 }
 
-type PeerConfig struct {
-	Enabled        bool              `yaml:"enabled"`
-	TimeoutSeconds int               `yaml:"timeout_seconds"`
-	ServiceAuth    ServiceAuthConfig `yaml:"service_auth"`
-	Peers          []PeerEntry       `yaml:"peers"`
-}
-
-type PeerEntry struct {
-	InstanceID string `yaml:"instance_id"`
-	GatewayURL string `yaml:"gateway_url"`
-	NodeID     string `yaml:"node_id"`
-}
-
 type AlertConfig struct {
 	SendTimeoutSeconds int `yaml:"send_timeout_seconds"`
 }
@@ -86,6 +71,7 @@ type MetricsConfig struct {
 	Enabled                bool                 `yaml:"enabled"`
 	EventBusURL            string               `yaml:"eventbus_url"`
 	EventBusCredentialFile string               `yaml:"eventbus_credential_file"`
+	PipelineConfigPath     string               `yaml:"pipeline_config_path"`
 	Stream                 string               `yaml:"stream"`
 	Topic                  string               `yaml:"topic"`
 	Consumer               string               `yaml:"consumer"`
@@ -163,7 +149,6 @@ func Default() *Config {
 		HealthAuth: HealthAuthConfig{Version: "moox-health-v1"},
 		Instance: InstanceConfig{
 			InstanceID: defaultInstanceID(),
-			BaseURL:    "http://127.0.0.1:11409",
 		},
 		Scheduler: SchedulerConfig{
 			ResultRetentionDays: 14,
@@ -174,14 +159,10 @@ func Default() *Config {
 			Target:      "ip://127.0.0.1:11109",
 			ServiceAuth: ServiceAuthConfig{},
 		},
-		Peer: PeerConfig{
-			Enabled:        true,
-			TimeoutSeconds: 5,
-		},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", PipelineConfigPath: "../config/monitor-pipelines.yaml", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -214,9 +195,6 @@ func (c *Config) applyDefaults() {
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
 	}
-	if c.Instance.BaseURL == "" {
-		c.Instance.BaseURL = defaults.Instance.BaseURL
-	}
 	if c.Scheduler.ResultRetentionDays == 0 {
 		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
 	}
@@ -226,15 +204,15 @@ func (c *Config) applyDefaults() {
 	if c.SysDeploy.Target == "" {
 		c.SysDeploy.Target = defaults.SysDeploy.Target
 	}
-	if c.Peer.TimeoutSeconds == 0 {
-		c.Peer.TimeoutSeconds = defaults.Peer.TimeoutSeconds
-	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
 	}
 	metricsDefaults := Default().Metrics
 	if c.Metrics.EventBusURL == "" {
 		c.Metrics.EventBusURL = metricsDefaults.EventBusURL
+	}
+	if c.Metrics.PipelineConfigPath == "" {
+		c.Metrics.PipelineConfigPath = metricsDefaults.PipelineConfigPath
 	}
 	if c.Metrics.Stream == "" {
 		c.Metrics.Stream = metricsDefaults.Stream
@@ -338,38 +316,32 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
 	}
-	if v := os.Getenv("MOOX_MONITOR_BASE_URL"); v != "" {
-		c.Instance.BaseURL = v
-	}
 	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
 		c.SysDeploy.Target = v
 	}
 	if v := firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
 		c.Metrics.EventBusURL = v
 	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG")); v != "" {
+		c.Metrics.PipelineConfigPath = v
+	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.KeyID = v
-		c.Peer.ServiceAuth.KeyID = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
 		c.SysDeploy.ServiceAuth.SecretKey = v
-		c.Peer.ServiceAuth.SecretKey = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
 		c.SysDeploy.ServiceAuth.CAFile = v
-		c.Peer.ServiceAuth.CAFile = v
 	}
 }
 
 func (c *Config) Validate() error {
 	if c.Instance.InstanceID == "" {
 		return fmt.Errorf("instance.instance_id must not be empty")
-	}
-	if c.Instance.BaseURL == "" {
-		return fmt.Errorf("instance.base_url must not be empty")
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
@@ -391,11 +363,6 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	for i, peer := range c.Peer.Peers {
-		if peer.InstanceID == "" || peer.GatewayURL == "" || peer.NodeID == "" {
-			return fmt.Errorf("peer.peers[%d] requires instance_id, gateway_url, and node_id", i)
-		}
-	}
 	for name, values := range map[string][2]string{
 		"metrics.storage":      {c.Metrics.Storage.KeyID, c.Metrics.Storage.HMACKeyFile},
 		"metrics.host_storage": {c.Metrics.HostStorage.KeyID, c.Metrics.HostStorage.HMACKeyFile},
@@ -405,12 +372,6 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("%s hmac credentials: %w", name, err)
 			}
 		}
-	}
-	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (strings.TrimSpace(c.Peer.ServiceAuth.KeyID) == "" || strings.TrimSpace(c.Peer.ServiceAuth.SecretKey) == "") {
-		return fmt.Errorf("peer.service_auth key_id and secret_key must not be empty when peers are configured")
-	}
-	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && c.Peer.TimeoutSeconds <= 0 {
-		return fmt.Errorf("peer timeout_seconds must be positive when peers are configured")
 	}
 	return nil
 }

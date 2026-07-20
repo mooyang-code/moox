@@ -76,6 +76,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	service := newRPCService(repo, eng, cfg)
 	strategypb.RegisterStrategyMgrService(s, service)
+	if err := registerMetricsReporter(s); err != nil {
+		return nil, nil, err
+	}
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, cfg.Workers, healthState)
 	healthState.SetReady(true)

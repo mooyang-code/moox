@@ -7,13 +7,16 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -76,7 +79,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
-			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts, InstanceID: cfg.Instance.InstanceID,
+			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
 			Notifier: alerting.WebhookNotifier{},
 			Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, webhookID)
@@ -108,7 +111,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		metricRules = metricStores.Rules
 		metricEvaluator = monmetrics.NewMetricEvaluator(monmetrics.EvaluatorOptions{
-			RuleStore: metricRules, Catalog: metricsQuery.Catalog(), Storage: metricsStorage, InstanceID: cfg.Instance.InstanceID,
+			RuleStore: metricRules, Catalog: metricsQuery.Catalog(), Storage: metricsStorage,
 			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, id)
 			},
@@ -119,14 +122,23 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(cfg, runtime)
+	resultHook := monitorResultHook(runtime)
 	probeRunner := buildProbeRunner(cfg)
 	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	hostReady := func() bool { return false }
 	if hostGate != nil {
 		hostReady = hostGate.Ready
 	}
-	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator)
+	pipelines, pipelineErr := report.ValidatePipelineEnvironment()
+	if pipelineErr != nil {
+		_ = runtime.Close()
+		return nil, pipelineErr
+	}
+	doctorContext := &monitordoctor.Builder{
+		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
+	}
+	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
 	registerMetricsReporter(s)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()

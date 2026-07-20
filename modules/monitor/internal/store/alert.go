@@ -149,7 +149,6 @@ func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertSt
 			"c_status",
 			"c_failure_count",
 			"c_success_count",
-			"c_owner_instance_id",
 			"c_triggered_at",
 			"c_resolved_at",
 			"c_last_reminder_at",
@@ -191,7 +190,7 @@ func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit 
 	return events, err
 }
 
-// ListRecentEvents returns recent alert transitions across all spaces for peer snapshots.
+// ListRecentEvents returns recent alert transitions across all spaces.
 func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]domain.AlertEvent, error) {
 	if limit <= 0 {
 		limit = 100

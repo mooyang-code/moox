@@ -28,7 +28,6 @@ grep -q 'MOOX_HEALTH_AUTH_SECRET_KEY' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'sign_health_request' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_SERVICE_GATEWAY_CA_FILE' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'metadata-monitor-host-local-route.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'retention: 72h' "${ROOT}/modules/monitor/config/app.yaml"
 ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
 grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
 for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do

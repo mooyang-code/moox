@@ -306,7 +306,7 @@ func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
 	}
 }
 
-func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
+func TestDefaultSysdeployRouteAllowsBoundedInventoryLookup(t *testing.T) {
 	svc := newTestService(setupEmptySysDeployTestDB(t), "node-a")
 	ctx := context.Background()
 	require.NoError(t, svc.SeedDefaults(ctx))
@@ -320,14 +320,15 @@ func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
 	}
 	require.Equal(t, "sysdeploy", sysdeployRoute.ServiceID)
 	assert.True(t, sysdeployRoute.AllowsMethod("ListActiveServiceDeployments"))
+	assert.True(t, sysdeployRoute.AllowsMethod("ListServiceDeployments"))
 	assert.False(t, sysdeployRoute.AllowsMethod("CreateGatewayNode"))
-	assert.Equal(t, []string{"ListActiveServiceDeployments"}, sysdeployRoute.AllowedMethods)
+	assert.Equal(t, []string{"ListActiveServiceDeployments", "ListServiceDeployments"}, sysdeployRoute.AllowedMethods)
 	rsp, err := svc.GetGatewayNodeRoutes(ctx, &pb.GetGatewayNodeRoutesReq{NodeId: "node-a"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	for _, route := range rsp.GetRoutes() {
 		if route.GetServiceId() == "sysdeploy" {
-			assert.Equal(t, []string{"ListActiveServiceDeployments"}, route.GetAllowedMethods())
+			assert.Equal(t, []string{"ListActiveServiceDeployments", "ListServiceDeployments"}, route.GetAllowedMethods())
 		}
 	}
 	var secretRoute gatewayproxy.Route

@@ -109,27 +109,15 @@ func ruleToPB(rule domain.AlertRule) *monitorpb.AlertRule {
 
 func eventToPB(event domain.AlertEvent) *monitorpb.AlertEvent {
 	return &monitorpb.AlertEvent{
-		EventId:         event.EventID,
-		SpaceId:         event.SpaceID,
-		RuleId:          event.RuleID,
-		CheckId:         event.CheckID,
-		EventType:       alertEventTypeToPB(event.EventType),
-		Status:          alertStatusToPB(event.Status),
-		OwnerInstanceId: event.OwnerInstanceID,
-		Message:         event.Message,
-		PayloadJson:     event.Payload,
-		CreatedAt:       timeToString(event.CreatedAt),
-	}
-}
-
-func instanceToPB(instance domain.MonitorInstance) *monitorpb.MonitorInstance {
-	return &monitorpb.MonitorInstance{
-		InstanceId:   instance.InstanceID,
-		BaseUrl:      instance.BaseURL,
-		Status:       instance.Status,
-		LastSeenAt:   timePtrToString(instance.LastSeenAt),
-		SnapshotJson: instance.Snapshot,
-		IsLocal:      instance.IsLocal,
+		EventId:     event.EventID,
+		SpaceId:     event.SpaceID,
+		RuleId:      event.RuleID,
+		CheckId:     event.CheckID,
+		EventType:   alertEventTypeToPB(event.EventType),
+		Status:      alertStatusToPB(event.Status),
+		Message:     event.Message,
+		PayloadJson: event.Payload,
+		CreatedAt:   timeToString(event.CreatedAt),
 	}
 }
 

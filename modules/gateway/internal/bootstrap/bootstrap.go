@@ -249,6 +249,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err := registerRouteRefreshTimer(timerServer, runtime); err != nil {
 		return err
 	}
+	if err := registerMetricsReporter(timerServer); err != nil {
+		return err
+	}
 	state.SetStorageCheck(func() error {
 		if err := routeStore.Check(); err != nil {
 			return err

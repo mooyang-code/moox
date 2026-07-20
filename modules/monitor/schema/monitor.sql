@@ -102,7 +102,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_alert_states (
   c_status TEXT NOT NULL DEFAULT 'ok',
   c_failure_count INTEGER NOT NULL DEFAULT 0,
   c_success_count INTEGER NOT NULL DEFAULT 0,
-  c_owner_instance_id TEXT NOT NULL DEFAULT '',
   c_triggered_at DATETIME,
   c_resolved_at DATETIME,
   c_last_reminder_at DATETIME,
@@ -122,7 +121,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_alert_events (
   c_check_id TEXT NOT NULL,
   c_event_type TEXT NOT NULL,
   c_status TEXT NOT NULL,
-  c_owner_instance_id TEXT NOT NULL DEFAULT '',
   c_message TEXT NOT NULL DEFAULT '',
   c_payload TEXT NOT NULL DEFAULT '{}',
   c_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -132,35 +130,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_events_id
   ON t_monitor_alert_events(c_event_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_recent
   ON t_monitor_alert_events(c_space_id, c_created_at DESC);
-
-CREATE TABLE IF NOT EXISTS t_monitor_instances (
-  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  c_instance_id TEXT NOT NULL,
-  c_base_url TEXT NOT NULL DEFAULT '',
-  c_status TEXT NOT NULL DEFAULT 'unknown',
-  c_last_seen_at DATETIME,
-  c_snapshot TEXT NOT NULL DEFAULT '{}',
-  c_is_local INTEGER NOT NULL DEFAULT 0,
-  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_instances_id
-  ON t_monitor_instances(c_instance_id);
-
-CREATE TABLE IF NOT EXISTS t_monitor_peer_snapshots (
-  c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  c_instance_id TEXT NOT NULL,
-  c_base_url TEXT NOT NULL DEFAULT '',
-  c_status TEXT NOT NULL DEFAULT 'unknown',
-  c_snapshot TEXT NOT NULL DEFAULT '{}',
-  c_checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_peer_snapshots_instance
-  ON t_monitor_peer_snapshots(c_instance_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_monitor_checks_mtime
 AFTER UPDATE ON t_monitor_checks
@@ -188,20 +157,6 @@ AFTER UPDATE ON t_monitor_alert_states
 FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
   UPDATE t_monitor_alert_states SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_instances_mtime
-AFTER UPDATE ON t_monitor_instances
-FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-  UPDATE t_monitor_instances SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_peer_snapshots_mtime
-AFTER UPDATE ON t_monitor_peer_snapshots
-FOR EACH ROW WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-  UPDATE t_monitor_peer_snapshots SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 -- Application metrics catalog and ingestion state. Historical samples are kept
@@ -292,7 +247,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_states (
   c_status TEXT NOT NULL DEFAULT 'ok',
   c_trigger_count INTEGER NOT NULL DEFAULT 0,
   c_recovery_count INTEGER NOT NULL DEFAULT 0,
-  c_owner_instance_id TEXT NOT NULL DEFAULT '',
   c_last_evaluated_at DATETIME,
   c_last_triggered_at DATETIME,
   c_last_recovered_at DATETIME,

@@ -18,14 +18,14 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
-	require.Len(t, seed.Services, 30)
+	require.Len(t, seed.Services, 31)
 	processes := 0
 	for _, service := range seed.Services {
 		if service.DeploymentMode == "process" {
 			processes++
 		}
 	}
-	require.Equal(t, 13, processes)
+	require.Equal(t, 14, processes)
 }
 
 func TestLoadServiceDeploymentSeed_MatchesDefaultDeploymentContract(t *testing.T) {
@@ -72,13 +72,13 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(second.Bytes(), &result))
 	require.Equal(t, 0, result.Created)
-	require.Equal(t, 30, result.Updated)
+	require.Equal(t, 31, result.Updated)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
-	require.Equal(t, int64(30), count)
+	require.Equal(t, int64(31), count)
 }
 
 func TestValidateServiceDeploymentSeed_RejectsDuplicateAndInvalidGateway(t *testing.T) {
@@ -106,7 +106,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 31)
+	require.Len(t, seed.Services, 32)
 
 	var primary, shard serviceDeploymentEntry
 	for _, item := range seed.Services {
@@ -135,7 +135,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 31)
+	require.Len(t, seed.Services, 32)
 	shard := seed.Services[len(seed.Services)-1]
 	require.Equal(t, "storage-shard", shard.Name)
 	require.False(t, shard.GatewayEnabled)

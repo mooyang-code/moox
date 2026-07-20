@@ -1,10 +1,15 @@
 package metrics
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"context"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBoundedPage(t *testing.T) {
@@ -14,6 +19,25 @@ func TestBoundedPage(t *testing.T) {
 	offset, limit = boundedPage(10, 1000)
 	assert.Equal(t, 10, offset)
 	assert.Equal(t, 500, limit)
+}
+
+func TestListServicesForFiltersBeforeApplyingLimit(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	require.NoError(t, messageStore.db.Create([]MetricService{
+		{ServiceName: "unrelated", InstanceID: "unrelated@node-a", NodeID: "node-a", BootID: "b1"},
+		{ServiceName: "selected", InstanceID: "selected@node-a", NodeID: "node-a", BootID: "b2"},
+		{ServiceName: "selected", InstanceID: "selected-2@node-a", NodeID: "node-a", BootID: "b3"},
+	}).Error)
+	rows, err := NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 2)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "selected", rows[0].ServiceName)
+	_, err = NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 1)
+	require.Error(t, err)
 }
 
 func TestCanonicalJSON(t *testing.T) {

@@ -22,14 +22,6 @@ func TestAlertEvent_TableName_ShouldReturnMonitorAlertEventsTable(t *testing.T) 
 	assert.Equal(t, "t_monitor_alert_events", AlertEvent{}.TableName())
 }
 
-func TestMonitorInstance_TableName_ShouldReturnMonitorInstancesTable(t *testing.T) {
-	assert.Equal(t, "t_monitor_instances", MonitorInstance{}.TableName())
-}
-
-func TestPeerSnapshot_TableName_ShouldReturnMonitorPeerSnapshotsTable(t *testing.T) {
-	assert.Equal(t, "t_monitor_peer_snapshots", PeerSnapshot{}.TableName())
-}
-
 func TestCheckResult_TableName_ShouldReturnMonitorCheckResultsTable(t *testing.T) {
 	assert.Equal(t, "t_monitor_check_results", CheckResult{}.TableName())
 }

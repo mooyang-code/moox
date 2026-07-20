@@ -189,7 +189,6 @@ export interface MetricRuleState {
   status?: AlertStatusValue;
   trigger_count?: number;
   recovery_count?: number;
-  owner_instance_id?: string;
   last_evaluated_at?: string;
   last_triggered_at?: string;
   last_recovered_at?: string;

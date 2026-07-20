@@ -21,9 +21,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
-	if cfg.Instance.BaseURL != "http://127.0.0.1:11409" {
-		t.Fatalf("base url = %q", cfg.Instance.BaseURL)
-	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
 	}
@@ -32,9 +29,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	}
 	if !cfg.SysDeploy.Enabled || cfg.SysDeploy.Target != "ip://127.0.0.1:11109" {
 		t.Fatalf("sysdeploy = %+v", cfg.SysDeploy)
-	}
-	if !cfg.Peer.Enabled || cfg.Peer.TimeoutSeconds != 5 {
-		t.Fatalf("peer = %+v", cfg.Peer)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
@@ -60,7 +54,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("parse trpc config: %v", err)
 	}
-	if len(cfg.Server.Service) != 8 {
+	if len(cfg.Server.Service) != 7 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
 	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
@@ -85,8 +79,6 @@ func TestMonitorConfigEnvOverride(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
 instance:
   instance_id: monitor-test
-peer:
-  enabled: false
 `))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -106,16 +98,13 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
 		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
 	}
-	if cfg.Peer.ServiceAuth.KeyID != "monitor-key" || cfg.Peer.ServiceAuth.SecretKey != "monitor-secret" || cfg.Peer.ServiceAuth.CAFile != "/tmp/peers.pem" {
-		t.Fatalf("peer gateway auth = %#v", cfg.Peer.ServiceAuth)
-	}
 }
 
 func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
+	cfg, err := Load(writeConfig(t, "{}\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -126,7 +115,6 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 
 func TestMonitorConfigRequiresHealthCredentialsWhenSysDeployEnabled(t *testing.T) {
 	cfg := Default()
-	cfg.Peer.Enabled = false
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want health credential error")
 	}
@@ -141,72 +129,6 @@ func TestMonitorConfigValidatesInstanceID(t *testing.T) {
 	cfg.Instance.InstanceID = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want instance_id error")
-	}
-}
-
-func TestMonitorConfigValidatesPeerEntries(t *testing.T) {
-	path := writeConfig(t, `
-instance:
-  instance_id: monitor-test
-peer:
-  peers:
-    - instance_id: peer-a
-      gateway_url: http://127.0.0.1:11419
-`)
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load() error = nil, want invalid peer entry")
-	}
-}
-
-func TestMonitorConfigRequiresPeerGatewayCredentialsWhenConfigured(t *testing.T) {
-	cfg := Default()
-	cfg.Instance.InstanceID = "monitor-test"
-	cfg.Peer.Enabled = true
-	cfg.SysDeploy.Enabled = false
-	cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want peer gateway credentials error")
-	}
-	cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() = %v", err)
-	}
-}
-
-func TestMonitorConfigRejectsNonPositivePeerTimeout(t *testing.T) {
-	cfg := Default()
-	cfg.SysDeploy.Enabled = false
-	cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
-	cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
-	cfg.Peer.TimeoutSeconds = -1
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want non-positive peer timeout rejection")
-	}
-}
-
-func TestMonitorConfigDefaultsZeroPeerTimeoutBeforeValidation(t *testing.T) {
-	path := writeConfig(t, `
-instance:
-  instance_id: monitor-test
-sysdeploy:
-  enabled: false
-peer:
-  enabled: true
-  timeout_seconds: 0
-  service_auth:
-    key_id: monitor
-    secret_key: secret
-  peers:
-    - instance_id: peer-a
-      gateway_url: https://peer.example
-      node_id: gateway-peer-a
-`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() = %v", err)
-	}
-	if cfg.Peer.TimeoutSeconds != 5 {
-		t.Fatalf("peer timeout = %d, want default 5", cfg.Peer.TimeoutSeconds)
 	}
 }
 
@@ -235,6 +157,15 @@ func TestMonitorConfigRejectsLegacyHostRetention(t *testing.T) {
 	_, err := Load(writeConfig(t, "metrics:\n  host_storage:\n    retention: 72h\n"))
 	if err == nil {
 		t.Fatal("Load() error = nil, want unknown host retention field")
+	}
+}
+
+func TestMonitorConfigRejectsRemovedPeerConfiguration(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	_, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
+	if err == nil || !strings.Contains(err.Error(), "field peer not found") {
+		t.Fatalf("Load() error = %v, want removed peer field rejection", err)
 	}
 }
 

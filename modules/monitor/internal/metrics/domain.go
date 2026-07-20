@@ -96,7 +96,6 @@ type MetricRuleStateRow struct {
 	Status               string     `gorm:"column:c_status"`
 	TriggerCount         int        `gorm:"column:c_trigger_count"`
 	RecoveryCount        int        `gorm:"column:c_recovery_count"`
-	OwnerInstanceID      string     `gorm:"column:c_owner_instance_id"`
 	LastEvaluatedAt      *time.Time `gorm:"column:c_last_evaluated_at"`
 	LastTriggeredAt      *time.Time `gorm:"column:c_last_triggered_at"`
 	LastRecoveredAt      *time.Time `gorm:"column:c_last_recovered_at"`

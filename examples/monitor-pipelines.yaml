@@ -1,0 +1,58 @@
+version: 1
+pipelines:
+  - id: cloudnode-jobs
+    module: cloudnode
+    space_id: moox_system
+    input_dataset: job_items
+    output_dataset: dispatched_jobs
+    lag_tolerance: 5m
+    enabled: true
+    crosses_storage_deferred: false
+  - id: collector-market-data
+    module: collector
+    space_id: crypto
+    input_dataset: collector_tasks
+    output_dataset: market_data
+    lag_tolerance: 5m
+    enabled: true
+    crosses_storage_deferred: true
+  - id: factor-calculation
+    module: factor
+    space_id: crypto
+    input_dataset: market_data
+    output_dataset: factor_results
+    lag_tolerance: 10m
+    enabled: true
+    crosses_storage_deferred: true
+  - id: strategy-targets
+    module: strategy
+    space_id: crypto
+    input_dataset: factor_results
+    output_dataset: strategy_targets
+    lag_tolerance: 10m
+    enabled: true
+    crosses_storage_deferred: true
+  - id: trade-rebalance
+    module: trade
+    space_id: crypto
+    input_dataset: strategy_targets
+    output_dataset: trade_orders
+    lag_tolerance: 5m
+    enabled: true
+    crosses_storage_deferred: false
+  - id: archive-materialize
+    module: archive
+    space_id: moox_system
+    input_dataset: archive_journal
+    output_dataset: archive_files
+    lag_tolerance: 15m
+    enabled: true
+    crosses_storage_deferred: false
+  - id: monitor-metrics
+    module: monitor
+    space_id: moox_system
+    input_dataset: metric_snapshots
+    output_dataset: metric_samples
+    lag_tolerance: 2m
+    enabled: true
+    crosses_storage_deferred: false

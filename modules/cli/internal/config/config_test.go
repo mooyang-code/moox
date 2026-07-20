@@ -48,3 +48,12 @@ func TestConfig_LoadConfig_MissingFile_ShouldReturnError(t *testing.T) {
 	_, err = LoadConfig()
 	assert.Error(t, err)
 }
+
+func TestEffectiveDoctorUsesEnvironmentOverrides(t *testing.T) {
+	t.Setenv("MOOX_NODE_ID", "node-a")
+	t.Setenv("MOOX_DOCTOR_MONITOR_TARGET", "ip://monitor:11410")
+	got := (&Config{}).EffectiveDoctor()
+	assert.Equal(t, "node-a", got.NodeID)
+	assert.Equal(t, "ip://monitor:11410", got.MonitorTarget)
+	assert.Equal(t, "examples/service-deployments.seed.yaml", got.SeedPath)
+}

@@ -64,6 +64,4 @@ func TestEntityConverters(t *testing.T) {
 	assert.Equal(t, int32(3), rule.GetFailureThreshold())
 	event := eventToPB(domain.AlertEvent{EventID: "e", EventType: domain.AlertEventTriggered, Status: domain.AlertStatusFiring, CreatedAt: now})
 	assert.Equal(t, monitorpb.AlertEventType_ALERT_EVENT_TYPE_TRIGGERED, event.GetEventType())
-	instance := instanceToPB(domain.MonitorInstance{InstanceID: "i", IsLocal: true})
-	assert.True(t, instance.GetIsLocal())
 }

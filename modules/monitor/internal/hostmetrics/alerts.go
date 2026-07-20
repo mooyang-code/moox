@@ -23,7 +23,6 @@ import (
 type AlertEvaluator struct {
 	Cache      *RuleCache
 	Repository *store.AlertRepository
-	InstanceID string
 	Now        func() time.Time
 	Webhook    func(context.Context, string, string) (*domain.WebhookChannel, error)
 	Notifier   alerting.Notifier
@@ -146,7 +145,7 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		return err
 	}
 	if state == nil {
-		state = &domain.AlertState{SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusOK, OwnerInstanceID: e.InstanceID}
+		state = &domain.AlertState{SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusOK}
 	}
 	if failing {
 		state.FailureCount++
@@ -172,7 +171,7 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 
 func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID, messageID string, state *domain.AlertState, value float64, eventType string, now time.Time) error {
 	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
-	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, OwnerInstanceID: e.InstanceID, Payload: string(payload), CreatedAt: now}); err != nil {
+	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
 	if err := e.Repository.UpsertState(ctx, state); err != nil {
@@ -185,10 +184,10 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agen
 	if err != nil || webhook == nil {
 		return nil
 	}
-	event := alerting.Event{EventID: uuid.NewString(), EventType: eventType, Status: state.Status, OwnerInstanceID: e.InstanceID, Message: fmt.Sprintf("%s host metric %s=%v", agentID, strings.TrimPrefix(rule.CheckID, HostRulePrefix), value), Check: domain.Check{SpaceID: SpaceID, CheckID: rule.CheckID, Name: "Host metric"}, Result: domain.CheckResult{SpaceID: SpaceID, CheckID: rule.CheckID, Success: state.Status != domain.AlertStatusFiring, ErrorMessage: fmt.Sprintf("value=%v", value), CheckedAt: now}, Rule: rule, DedupeKey: rule.RuleID + ":" + rule.CheckID}
+	event := alerting.Event{EventID: uuid.NewString(), EventType: eventType, Status: state.Status, Message: fmt.Sprintf("%s host metric %s=%v", agentID, strings.TrimPrefix(rule.CheckID, HostRulePrefix), value), Check: domain.Check{SpaceID: SpaceID, CheckID: rule.CheckID, Name: "Host metric"}, Result: domain.CheckResult{SpaceID: SpaceID, CheckID: rule.CheckID, Success: state.Status != domain.AlertStatusFiring, ErrorMessage: fmt.Sprintf("value=%v", value), CheckedAt: now}, Rule: rule, DedupeKey: rule.RuleID + ":" + rule.CheckID}
 	if err := e.Notifier.Send(ctx, *webhook, event); err != nil {
 		// Notification failure is recorded best-effort and never rolls back the sample.
-		_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, OwnerInstanceID: e.InstanceID, Message: err.Error(), CreatedAt: now})
+		_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
 	}
 	return nil
 }
