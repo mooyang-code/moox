@@ -230,11 +230,11 @@ func TestStorageViewMaintenanceDefaults(t *testing.T) {
 	if maintenance.MaxPhysicalBytes != 512*1024*1024 || maintenance.MinFreeDiskBytes != 1024*1024*1024 {
 		t.Fatalf("byte watermarks = %d/%d", maintenance.MaxPhysicalBytes, maintenance.MinFreeDiskBytes)
 	}
-	if maintenance.TimeSeries.RetentionByFreq["1d"] != "730d" {
-		t.Fatalf("1d retention window = %q, want 730d", maintenance.TimeSeries.RetentionByFreq["1d"])
+	if maintenance.TimeSeries.KeepByFreq["1d"] != "730d" {
+		t.Fatalf("1d retention window = %q, want 730d", maintenance.TimeSeries.KeepByFreq["1d"])
 	}
-	if maintenance.Record.RetentionWindow != "30d" {
-		t.Fatalf("record retention window = %q, want 30d", maintenance.Record.RetentionWindow)
+	if maintenance.Record.KeepDuration != "30d" {
+		t.Fatalf("record retention window = %q, want 30d", maintenance.Record.KeepDuration)
 	}
 	cleanup := cfg.Maintenance.HostMetricsCleanup
 	if !cleanup.IsEnabled() || cleanup.MaxAge != "48h" || cleanup.BatchSize != 1000 || cleanup.MaxBatchesPerRun != 10 || len(cleanup.DatasetIDs) != 4 {
@@ -304,12 +304,12 @@ storage:
       allowed_lag: 5m
       remove_grace: 2m
       time_series:
-        default_retention_window: 14d
-        retention_by_freq:
+        default_keep_duration: 14d
+        keep_by_freq:
           1h: 60d
           1d: 1095d
       record:
-        retention_window: 45d
+        keep_duration: 45d
 `)
 	var cfg RuntimeConfig
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
@@ -324,11 +324,11 @@ storage:
 	if maintenance.MaxEntries != 300000 || maintenance.TargetEntries != 220000 {
 		t.Fatalf("entry watermarks = %d/%d", maintenance.MaxEntries, maintenance.TargetEntries)
 	}
-	if maintenance.TimeSeries.RetentionByFreq["1h"] != "60d" {
-		t.Fatalf("1h window = %q, want 60d", maintenance.TimeSeries.RetentionByFreq["1h"])
+	if maintenance.TimeSeries.KeepByFreq["1h"] != "60d" {
+		t.Fatalf("1h window = %q, want 60d", maintenance.TimeSeries.KeepByFreq["1h"])
 	}
-	if maintenance.Record.RetentionWindow != "45d" {
-		t.Fatalf("record retention window = %q, want 45d", maintenance.Record.RetentionWindow)
+	if maintenance.Record.KeepDuration != "45d" {
+		t.Fatalf("record retention window = %q, want 45d", maintenance.Record.KeepDuration)
 	}
 }
 

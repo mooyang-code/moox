@@ -491,15 +491,15 @@ dataset_columns:
     status: active
 
 primary_store_nodes:
-  - node_id: local
-    name: local-primary
-    endpoint: local
+  - node_id: storage-node-0
+    name: local-data-node
+    endpoint: 127.0.0.1:20107
     weight: 100
     status: active
 
 devices:
   - device_id: pebble-local
-    node_id: local
+    node_id: storage-node-0
     name: local-pebble-primary
     engine: pebble
     endpoint: ./var/storage/pebble
@@ -507,13 +507,13 @@ devices:
     attributes:
       node_id: storage-node-0
   - device_id: duckdb-local
-    node_id: local
+    node_id: storage-node-0
     name: local-duckdb-view
     engine: duckdb
     endpoint: ./var/storage/view-indexes/duckdb
     status: active
   - device_id: bleve-local
-    node_id: local
+    node_id: storage-node-0
     name: local-bleve-search
     engine: bleve
     endpoint: ./var/storage/view-indexes/bleve
@@ -524,7 +524,7 @@ primary_store_routes:
     dataset_id: binance_spot_kline
     subject_pattern: "*"
     hash_rule: subject_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active
   - space_id: crypto
@@ -532,7 +532,7 @@ primary_store_routes:
     dataset_id: binance_spot_symbols
     subject_pattern: "*"
     hash_rule: record_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active
   - space_id: crypto
@@ -540,6 +540,6 @@ primary_store_routes:
     dataset_id: binance_swap_symbols
     subject_pattern: "*"
     hash_rule: record_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active

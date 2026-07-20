@@ -106,7 +106,7 @@ storage:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
   primary:
-    service_name: trpc.moox.storage.DataShard
+    service_name: trpc.moox.storage.DataNode
   eventbus:
     type: jetstream
     urls:
@@ -151,12 +151,12 @@ storage:
       allowed_lag: 2m
       remove_grace: 60s
       time_series:
-        default_retention_window: 7d
-        retention_by_freq:
+        default_keep_duration: 7d
+        keep_by_freq:
           1m: 24h
           1h: 90d
           1d: 730d
       record:
-        retention_window: 30d
+        keep_duration: 30d
   health:
     addr: ":20211"

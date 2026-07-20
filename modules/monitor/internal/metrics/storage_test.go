@@ -74,12 +74,12 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 	if a.writes[0].GetKey().GetSubjectId() != "s1" {
 		t.Fatalf("subject id=%q", a.writes[0].GetKey().GetSubjectId())
 	}
-	if len(a.writes[0].GetKey().GetDimensions()) != 4 {
-		t.Fatalf("write dimensions=%v, want complete metric identity", a.writes[0].GetKey().GetDimensions())
+	if len(a.writes[0].GetAttributes()) != 4 {
+		t.Fatalf("write attributes=%v, want complete metric identity", a.writes[0].GetAttributes())
 	}
 }
 
-func TestStorageAdapterQueryHistorySelectorsIncludeDimensions(t *testing.T) {
+func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	a := &fakeAccess{}
 	adapter := NewStorageAdapter(a, &fakeMetadata{}, metricsStorageConfig())
 	_, err := adapter.QueryHistorySelectors(context.Background(), []HistorySelector{{SeriesID: "series-1", Dimensions: map[string]string{
@@ -92,8 +92,8 @@ func TestStorageAdapterQueryHistorySelectorsIncludeDimensions(t *testing.T) {
 		t.Fatalf("keys=%d, want 1", len(a.readReq.GetKeys()))
 	}
 	key := a.readReq.GetKeys()[0]
-	if key.GetSubjectId() != "series-1" || key.GetDimensions()["metric_name"] != "requests_total" {
-		t.Fatalf("query key=%+v, want subject and dimensions", key)
+	if key.GetSubjectId() != "series-1" {
+		t.Fatalf("query key=%+v, want series subject", key)
 	}
 }
 func TestStorageAdapterRejectsMissingRoute(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
@@ -24,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 func main() {
@@ -129,12 +131,11 @@ func runPrimaryRole() error {
 	cleanupAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
 	go runCleanupLoop(cleanupCtx, cached, resolver, cleanupAuth, time.Hour)
 	s := trpc.NewServer()
-	listener := s.Service("trpc.moox.storage.PrimaryStore")
-	if listener == nil {
-		return errors.New("PrimaryStore listener is not configured")
-	}
-	pb.RegisterPrimaryStoreService(listener, svc)
+	pb.RegisterPrimaryStoreService(s, svc)
 	pb.RegisterMetadataService(s, metadataSvc)
+	if err := registerRoleHealth(s, "storage-primary"); err != nil {
+		return err
+	}
 	return s.Serve()
 }
 
@@ -267,12 +268,11 @@ func runViewRole() error {
 	if indexListener == nil {
 		return errors.New("ViewIndex listener is not configured")
 	}
-	viewListener := s.Service("trpc.moox.storage.DataView")
-	if viewListener == nil {
-		return errors.New("DataView listener is not configured")
-	}
 	pb.RegisterViewIndexService(indexListener, svc)
-	pb.RegisterDataViewService(viewListener, svc)
+	pb.RegisterDataViewService(s, svc)
+	if err := registerRoleHealth(s, "storage-view"); err != nil {
+		return err
+	}
 	return s.Serve()
 }
 
@@ -330,5 +330,20 @@ func runDataNodeRole() error {
 		return errors.New("DataNode listener is not configured")
 	}
 	pb.RegisterDataNodeService(listener, svc)
+	if err := registerRoleHealth(s, "storage-node"); err != nil {
+		return err
+	}
 	return s.Serve()
+}
+
+func registerRoleHealth(s *server.Server, instance string) error {
+	if s == nil {
+		return errors.New("storage health server is unavailable")
+	}
+	state := storagehealth.New("storage", instance, "", "")
+	state.SetReady(true)
+	if err := storagehealth.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
+		return fmt.Errorf("register storage health: %w", err)
+	}
+	return nil
 }

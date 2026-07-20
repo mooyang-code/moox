@@ -10,6 +10,7 @@ import (
 	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewv2"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestPrimaryDataNodeViewFlow exercises the process boundaries in one test:
@@ -32,9 +33,9 @@ func TestPrimaryDataNodeViewFlow(t *testing.T) {
 	primary, err := primarystorev2.New(primarystorev2.Options{
 		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeService, error) { return nodes[dataset], nil },
 		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
-			clone := *in
+			clone := proto.Clone(in).(*pb.AuthInfo)
 			clone.AppKey = datanode.ServiceAuthKey(secret, clone.AppId)
-			return &clone, nil
+			return clone, nil
 		},
 	})
 	if err != nil {

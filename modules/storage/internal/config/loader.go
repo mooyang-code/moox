@@ -161,12 +161,12 @@ func (c HostMetricsCleanupConfig) Validate() error {
 }
 
 type StorageTimeSeriesMaintenance struct {
-	DefaultRetentionWindow string            `yaml:"default_retention_window"`
-	RetentionByFreq        map[string]string `yaml:"retention_by_freq"`
+	DefaultKeepDuration string            `yaml:"default_keep_duration"`
+	KeepByFreq        map[string]string `yaml:"keep_by_freq"`
 }
 
 type StorageRecordMaintenance struct {
-	RetentionWindow string `yaml:"retention_window"`
+	KeepDuration string `yaml:"keep_duration"`
 }
 
 func (m StorageViewMaintenance) IsEnabled() bool {
@@ -384,23 +384,23 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.Maintenance.RemoveGrace == "" {
 		c.View.Maintenance.RemoveGrace = "60s"
 	}
-	if c.View.Maintenance.TimeSeries.DefaultRetentionWindow == "" {
-		c.View.Maintenance.TimeSeries.DefaultRetentionWindow = "7d"
+	if c.View.Maintenance.TimeSeries.DefaultKeepDuration == "" {
+		c.View.Maintenance.TimeSeries.DefaultKeepDuration = "7d"
 	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq == nil {
-		c.View.Maintenance.TimeSeries.RetentionByFreq = map[string]string{}
+	if c.View.Maintenance.TimeSeries.KeepByFreq == nil {
+		c.View.Maintenance.TimeSeries.KeepByFreq = map[string]string{}
 	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq["1m"] == "" {
-		c.View.Maintenance.TimeSeries.RetentionByFreq["1m"] = "24h"
+	if c.View.Maintenance.TimeSeries.KeepByFreq["1m"] == "" {
+		c.View.Maintenance.TimeSeries.KeepByFreq["1m"] = "24h"
 	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq["1h"] == "" {
-		c.View.Maintenance.TimeSeries.RetentionByFreq["1h"] = "90d"
+	if c.View.Maintenance.TimeSeries.KeepByFreq["1h"] == "" {
+		c.View.Maintenance.TimeSeries.KeepByFreq["1h"] = "90d"
 	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq["1d"] == "" {
-		c.View.Maintenance.TimeSeries.RetentionByFreq["1d"] = "730d"
+	if c.View.Maintenance.TimeSeries.KeepByFreq["1d"] == "" {
+		c.View.Maintenance.TimeSeries.KeepByFreq["1d"] = "730d"
 	}
-	if c.View.Maintenance.Record.RetentionWindow == "" {
-		c.View.Maintenance.Record.RetentionWindow = "30d"
+	if c.View.Maintenance.Record.KeepDuration == "" {
+		c.View.Maintenance.Record.KeepDuration = "30d"
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"

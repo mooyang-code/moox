@@ -55,7 +55,7 @@ build_storage() {
 	    local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
 	    local tags=()
 	    if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then tags=(-tags "${STORAGE_BUILD_TAGS}"); fi
-	    for role in primary view; do
+	    for role in primary node view; do
 	      if ((${#tags[@]})); then
 	        GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build "${tags[@]}" \
 	          -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
@@ -69,13 +69,13 @@ build_storage() {
 	  )
 }
 
-build_storage_shard() {
+build_storage_node() {
 	local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
 	(
 		cd "${ROOT}/modules/storage"
 		GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
 			-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-			-o "${BIN_DIR}/$(binary_name moox-storage-shard)" ./cmd/server
+			-o "${BIN_DIR}/$(binary_name moox-storage-node)" ./cmd/server
 	)
 }
 
@@ -189,8 +189,8 @@ case "${TARGET_MODULE}" in
     build_storage
     build_storage_cli
     ;;
-  storage-shard)
-    build_storage_shard
+  storage-node)
+    build_storage_node
     ;;
   storage-cli)
     build_storage_cli

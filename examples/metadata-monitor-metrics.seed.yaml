@@ -24,6 +24,8 @@ datasets:
     name: 服务指标
     description: Historical tRPC application and business metrics
     data_kind: time_series
+    data_node_id: storage-node-0
+    keep_duration: 4320h
     freqs: ["30s"]
     status: active
 

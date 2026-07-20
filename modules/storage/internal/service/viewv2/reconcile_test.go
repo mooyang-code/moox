@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -42,23 +43,23 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 	if needsRebuild(base, viewindex.ViewIndexStats{}) {
 		t.Fatal("stable view unexpectedly needs rebuild")
 	}
-	missing := *base
+	missing := proto.Clone(base).(*pb.View)
 	missing.ActiveIndexId = ""
-	if !needsRebuild(&missing, viewindex.ViewIndexStats{}) {
+	if !needsRebuild(missing, viewindex.ViewIndexStats{}) {
 		t.Fatal("missing active index did not trigger rebuild")
 	}
-	revision := *base
+	revision := proto.Clone(base).(*pb.View)
 	revision.DesiredViewRevision = 2
-	if !needsRebuild(&revision, viewindex.ViewIndexStats{}) {
+	if !needsRebuild(revision, viewindex.ViewIndexStats{}) {
 		t.Fatal("desired revision did not trigger rebuild")
 	}
 	wide := viewindex.ViewIndexStats{IndexedFrom: "2026-07-17T00:00:00Z", IndexedTo: "2026-07-20T00:00:00Z"}
 	if !needsRebuild(base, wide) {
 		t.Fatal("coverage wider than twice keep_duration did not trigger rebuild")
 	}
-	permanent := *base
+	permanent := proto.Clone(base).(*pb.View)
 	permanent.KeepDuration = "0"
-	if needsRebuild(&permanent, wide) {
+	if needsRebuild(permanent, wide) {
 		t.Fatal("permanent view triggered time-based rebuild")
 	}
 }

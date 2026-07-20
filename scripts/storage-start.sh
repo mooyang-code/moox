@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$(basename "${SCRIPT_DIR}")" in
 storage-view) APP_NAME="${APP_NAME:-moox-storage-view}" ;;
-storage-shard) APP_NAME="${APP_NAME:-moox-storage-shard}" ;;
+storage-node) APP_NAME="${APP_NAME:-moox-storage-node}" ;;
 *) APP_NAME="${APP_NAME:-moox-storage-primary}" ;;
 esac
 PID_FILE="${SCRIPT_DIR}/${APP_NAME}.pid"
@@ -18,13 +18,32 @@ if [[ -x "${SCRIPT_DIR}/stop.sh" ]]; then
 fi
 
 case "${APP_NAME}" in
-  moox-storage-primary|moox-storage-view|moox-storage-shard) STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"; STORAGE_BUSINESS_CONFIG="" ;;
+  moox-storage-primary)
+    STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"
+    export MOOX_STORAGE_ROLE=primary
+    ;;
+  moox-storage-view)
+    STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"
+    export MOOX_STORAGE_ROLE=view
+    ;;
+  moox-storage-node)
+    STORAGE_FRAMEWORK_CONFIG="${SCRIPT_DIR}/config/trpc_go.yaml"
+    export MOOX_STORAGE_ROLE=node
+    export MOOX_STORAGE_NODE_ID="${MOOX_STORAGE_NODE_ID:-storage-node-0}"
+    ;;
   *) echo "unsupported storage role binary: ${APP_NAME}" >&2; exit 1 ;;
 esac
+export MOOX_STORAGE_NODE_AUTH_SECRET="${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}"
+if [[ "${MOOX_STORAGE_ROLE}" == "primary" || "${MOOX_STORAGE_ROLE}" == "view" ]]; then
+  export MOOX_STORAGE_PRIMARY_AUTH_SECRET="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}"
+fi
+if [[ "${MOOX_STORAGE_ROLE}" == "view" ]]; then
+  export MOOX_STORAGE_VIEW_AUTH_SECRET="${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}"
+fi
 export STORAGE_CONFIG_PATH="${SCRIPT_DIR}/config"
 export STORAGE_DATABASE_PATH="${SCRIPT_DIR}/database"
-if [[ "${APP_NAME}" == "moox-storage-shard" ]]; then
-  export MOOX_STORAGE_HOME="${MOOX_STORAGE_HOME:-${SCRIPT_DIR}/../data/storage-shard}"
+if [[ "${APP_NAME}" == "moox-storage-node" ]]; then
+  export MOOX_STORAGE_HOME="${MOOX_STORAGE_HOME:-${SCRIPT_DIR}/../data/storage-node}"
 else
   export MOOX_STORAGE_HOME="${MOOX_STORAGE_HOME:-${SCRIPT_DIR}/../data/storage}"
 fi

@@ -276,7 +276,7 @@ func (b *ProducerBus) publish(ctx context.Context, topic, messageType, spaceID, 
 	}
 	sequence := b.nextSequence.Add(1)
 	id := fmt.Sprintf("storage-%d", sequence)
-	// The DataShard sequence is copied into both the envelope and the
+	// The DataNode sequence is copied into both the envelope and the
 	// domain payload so relays and consumers can cross-check the boundary.
 	switch event := payload.(type) {
 	case *pb.TimeSeriesRowsCommitted:

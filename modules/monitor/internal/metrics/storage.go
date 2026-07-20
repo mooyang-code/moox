@@ -286,7 +286,8 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 }
 func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.TimeSeriesRow {
 	return &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID, SubjectId: s.SeriesID, Freq: cfg.Frequency, DataTime: s.ObservedAt.UTC().Format(time.RFC3339Nano), Dimensions: map[string]string{"service_name": s.ServiceName, "instance_id": s.InstanceID, "metric_name": s.MetricName, "metric_type": s.MetricType}},
+		Key:        &storagepb.TimeSeriesKey{SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID, SubjectId: s.SeriesID, Freq: cfg.Frequency, DataTime: s.ObservedAt.UTC().Format(time.RFC3339Nano)},
+		Attributes: map[string]string{"service_name": s.ServiceName, "instance_id": s.InstanceID, "metric_name": s.MetricName, "metric_type": s.MetricType},
 		Columns: []*storagepb.ColumnValue{
 			{ColumnName: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: s.Value}}},
 			{ColumnName: "labels_json", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: s.LabelsJSON}}},
@@ -323,9 +324,6 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	for _, selector := range selectors {
 		if selector.SeriesID != "" {
 			key := &storagepb.TimeSeriesKey{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
-			if len(selector.Dimensions) > 0 {
-				key.Dimensions = cloneStringMap(selector.Dimensions)
-			}
 			keys = append(keys, key)
 		}
 	}

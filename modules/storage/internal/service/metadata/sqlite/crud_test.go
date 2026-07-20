@@ -444,7 +444,7 @@ func TestUpsertViewShapeChangeAndBuildPreemptionAreAtomic(t *testing.T) {
 	store := openTestStore(t, ctx)
 	seedSQLiteViewDataset(t, ctx, store, "crypto")
 	view := sqliteTestView("crypto", "spot_kline_1m_view")
-	view.RetentionWindow = "24h"
+	view.KeepDuration = "24h"
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatalf("UpsertView: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestUpsertViewShapeChangeAndBuildPreemptionAreAtomic(t *testing.T) {
 	}
 
 	changed := sqliteTestView("crypto", "spot_kline_1m_view")
-	changed.RetentionWindow = "48h"
+	changed.KeepDuration = "48h"
 	if _, err := store.UpsertView(ctx, changed); err == nil {
 		t.Fatal("shape change succeeded despite build-delete failure")
 	}
@@ -470,7 +470,7 @@ func TestUpsertViewShapeChangeAndBuildPreemptionAreAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetView: %v", err)
 	}
-	if got.GetRetentionWindow() != "24h" || got.GetViewVersion() != 1 || got.GetIndexBuild().GetBuildId() != "build-1" {
+	if got.GetKeepDuration() != "24h" || got.GetViewVersion() != 1 || got.GetIndexBuild().GetBuildId() != "build-1" {
 		t.Fatalf("partial shape preemption persisted: %+v", got)
 	}
 }
