@@ -148,6 +148,28 @@ func (m *IndexManager) Query(ctx context.Context, id string, keys []*pb.RowKey, 
 	return out, nil
 }
 
+func (m *IndexManager) Delete(ctx context.Context, id string, keys []*pb.RowKey) error {
+	db, err := m.openExisting(id)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if key == nil {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM view_rows WHERE row_id = ?`, viewindex.RowKeyID(key)); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (m *IndexManager) Scan(ctx context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {
 	db, err := m.openExisting(id)
 	if err != nil {

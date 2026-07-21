@@ -165,6 +165,23 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Success("success"), DeletedBuckets: deleted}, nil
 }
 
+func (s *Service) ScanFields(ctx context.Context, req *pb.ScanFieldsReq) (*pb.ScanFieldsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.ScanFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.ScanFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ScanFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rows, page, err := s.store.ScanFields(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetDataKind(), req.GetTimeRange(), req.GetVersionRange(), req.GetFieldIds(), req.GetAttributeKeys(), req.GetPage())
+	if err != nil {
+		return &pb.ScanFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.ScanFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, PageResult: page}, nil
+}
+
 func (s *Service) validateAuth(auth *pb.AuthInfo) error {
 	if !s.requireAuth {
 		return nil

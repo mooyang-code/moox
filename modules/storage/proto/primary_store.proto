@@ -40,3 +40,21 @@ service PrimaryStore {
   rpc MergeRecordRows(MergeRecordRowsReq) returns (MergeRecordRowsRsp);
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
 }
+
+message GetShardHeadsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  DataKind data_kind = 4;
+}
+
+message GetShardHeadsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowKey keys = 2;
+}
+
+service PrimaryStoreScan {
+  rpc ScanTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+  rpc ScanRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+  rpc GetShardHeads(GetShardHeadsReq) returns (GetShardHeadsRsp);
+}

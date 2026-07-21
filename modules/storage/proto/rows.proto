@@ -92,6 +92,8 @@ message ReadTimeSeriesRowsReq {
   SortOrder order = 4;
   repeated string column_names = 5;
   common.Page page = 6;
+  string space_id = 7;
+  string dataset_id = 8;
 }
 
 message ReadTimeSeriesRowsRsp {
@@ -127,6 +129,8 @@ message ReadRecordRowsReq {
   SortOrder order = 4;
   repeated string column_names = 5;
   common.Page page = 6;
+  string space_id = 7;
+  string dataset_id = 8;
 }
 
 message ReadRecordRowsRsp {

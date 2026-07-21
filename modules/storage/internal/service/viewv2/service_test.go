@@ -31,6 +31,23 @@ func (fakeFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsRe
 	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
+type recoveryFieldReader struct{ primaryPresent bool }
+
+func (r recoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		row := &pb.RowFieldValues{Key: key}
+		if key.GetDatasetId() == "primary" && r.primaryPresent {
+			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "base", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}})
+		}
+		if key.GetDatasetId() == "secondary" {
+			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}})
+		}
+		rows = append(rows, row)
+	}
+	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+}
+
 func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
@@ -84,6 +101,18 @@ func TestMalformedDeliveryIsPermanent(t *testing.T) {
 	err = svc.applyDelivery(context.Background(), &jetstream.Delivery{DecodeError: errors.New("decode failed")})
 	if !isPermanentDeliveryError(err) {
 		t.Fatalf("decode err=%v", err)
+	}
+}
+
+func TestProcessDeliveryBalancesLiveWork(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.processDelivery(context.Background(), &jetstream.Delivery{DecodeError: errors.New("decode failed")})
+	if got := svc.liveWork.Load(); got != 0 {
+		t.Fatalf("live work count = %d, want 0", got)
 	}
 }
 
@@ -180,6 +209,53 @@ func TestSecondaryDatasetEventMapsToPrimaryViewGrain(t *testing.T) {
 	}})
 	if len(writes) != 1 || writes[0].Key.Key.GetDatasetId() != "primary" {
 		t.Fatalf("writes=%v", writes)
+	}
+}
+
+func TestSecondaryEventRecoversCompleteMissingViewRow(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "multi", Schema: &pb.ViewIndexSchema{
+		SpaceId: "space", ViewId: "multi", PrimaryDatasetId: "primary", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{OriginId: "primary.base", ColumnName: "base"}, {OriginId: "secondary.factor", ColumnName: "factor"}},
+	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
+	}
+	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view"})
+	svc.SetPrimaryReader(recoveryFieldReader{primaryPresent: true})
+	event := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "secondary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}},
+	}
+	engine, err := svc.engineFor("multi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := svc.schemas["multi"]
+	initial := eventWrites(schema, "secondary", []*pb.RowFieldUpsert{event})
+	recovered, deleted, err := svc.recoverMissingRows(ctx, engine, "multi", schema, "secondary", []*pb.RowFieldUpsert{event}, initial)
+	if err != nil || len(recovered) != 1 || len(recovered[0].Fields) != 2 {
+		t.Fatalf("recover failed recovered=%v deleted=%v err=%v", recovered, deleted, err)
+	}
+	if err := svc.applyDatasetEvent(ctx, "space", "secondary", []*pb.RowFieldUpsert{event}); err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.RowKey{SpaceId: "space", DatasetId: "primary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
+	rows, err := svc.query(ctx, "multi", []*pb.RowKey{key}, nil)
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 2 {
+		t.Fatalf("recovered rows=%v err=%v", rows, err)
+	}
+	svc.SetPrimaryReader(recoveryFieldReader{primaryPresent: false})
+	if err := svc.applyDatasetEvent(ctx, "space", "secondary", []*pb.RowFieldUpsert{event}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = svc.query(ctx, "multi", []*pb.RowKey{key}, nil)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("stale row was not deleted: rows=%v err=%v", rows, err)
 	}
 }
 

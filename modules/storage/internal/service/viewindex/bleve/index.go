@@ -132,6 +132,23 @@ func (i *Index) Query(ctx context.Context, id string, keys []*pb.RowKey, fields 
 	return out, nil
 }
 
+func (i *Index) Delete(ctx context.Context, id string, keys []*pb.RowKey) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	index, err := i.openIndex(id)
+	if err != nil {
+		return err
+	}
+	defer index.Close()
+	batch := index.NewBatch()
+	for _, key := range keys {
+		if key != nil {
+			batch.Delete(viewindex.RowKeyID(key))
+		}
+	}
+	return index.Batch(batch)
+}
+
 func (i *Index) Scan(ctx context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()

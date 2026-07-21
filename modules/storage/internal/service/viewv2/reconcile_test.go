@@ -18,6 +18,19 @@ type reconcileMetadata struct {
 	activated bool
 }
 
+type reconcileScan struct{}
+
+func (reconcileScan) ScanTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo()}, nil
+}
+
+func (reconcileScan) ScanRecordRows(_ context.Context, req *pb.ReadRecordRowsReq, _ ...client.Option) (*pb.ReadRecordRowsRsp, error) {
+	return &pb.ReadRecordRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.RecordRow{{
+		Key:    &pb.RecordKey{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), RecordId: "r1", Version: "1"},
+		Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "historical"}}}},
+	}}, PageResult: &pb.PageResult{Page: 1, Size: 100, Total: 1}}, nil
+}
+
 func (m *reconcileMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
 	return &pb.ListViewsRsp{RetInfo: successRetInfo(), Views: []*pb.View{m.view}, PageResult: &pb.PageResult{Page: 1, Size: 100}}, nil
 }
@@ -74,12 +87,13 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 	}
 	metadata := &reconcileMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "records", Engine: "bleve",
+		PrimaryDatasetId:    "records",
 		DesiredViewRevision: 1,
 		Columns: []*pb.ViewColumn{{
 			SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title",
 		}},
 	}}
-	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
+	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Scan: reconcileScan{}, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,5 +105,14 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 	list, err := svc.ListViewIndexes(context.Background(), &pb.ListViewIndexesReq{AuthInfo: auth})
 	if err != nil || len(list.GetIndexes()) != 1 {
 		t.Fatalf("indexes=%v err=%v", list, err)
+	}
+	indexID := viewindex.InactiveViewIndexID("space", "records", "")
+	engine, err := svc.engineFor(indexID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := engine.Scan(context.Background(), indexID, 0, 10)
+	if err != nil || len(rows) != 1 || rows[0].GetFields()[0].GetValue().GetStringValue() != "historical" {
+		t.Fatalf("initial rows=%v err=%v", rows, err)
 	}
 }

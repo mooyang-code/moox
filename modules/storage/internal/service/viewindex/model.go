@@ -157,6 +157,7 @@ type QueryEngine interface {
 	ManagedEngine
 	Query(context.Context, string, []*pb.RowKey, []string) ([]*pb.RowFieldValues, error)
 	Scan(context.Context, string, int, int) ([]*pb.RowFieldValues, error)
+	Delete(context.Context, string, []*pb.RowKey) error
 }
 
 // MemoryEngine is a small engine core shared by DuckDB and Bleve owners. The
@@ -363,6 +364,21 @@ func (e *MemoryEngine) Query(_ context.Context, id string, keys []*pb.RowKey, fi
 		}
 	}
 	return out, nil
+}
+
+func (e *MemoryEngine) Delete(_ context.Context, id string, keys []*pb.RowKey) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	idx, ok := e.indexes[id]
+	if !ok {
+		return os.ErrNotExist
+	}
+	for _, key := range keys {
+		if key != nil {
+			delete(idx.rows, RowKeyID(key))
+		}
+	}
+	return e.persistLocked(id)
 }
 
 func (e *MemoryEngine) Scan(_ context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {

@@ -156,6 +156,11 @@ func runPrimaryRole() error {
 	go runCleanupLoop(cleanupCtx, cached, resolver, cleanupAuth, time.Hour)
 	s := trpc.NewServer()
 	pb.RegisterPrimaryStoreService(s, svc)
+	scanListener := s.Service("trpc.moox.storage.PrimaryStoreScan.trpc")
+	if scanListener == nil {
+		return errors.New("PrimaryStoreScan listener is not configured")
+	}
+	pb.RegisterPrimaryStoreScanService(scanListener, svc)
 	pb.RegisterMetadataService(s, metadataSvc)
 	if err := registerRoleHealth(s, "storage-primary"); err != nil {
 		return err
@@ -268,10 +273,17 @@ func runViewRole() error {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
 	}
 	primaryProxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(primaryTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
+	primaryScanTarget := os.Getenv("MOOX_STORAGE_PRIMARY_SCAN_TARGET")
+	if primaryScanTarget == "" {
+		primaryScanTarget = "ip://127.0.0.1:20105"
+	}
+	primaryScanProxy := pb.NewPrimaryStoreScanClientProxy(client.WithTarget(primaryScanTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
+	svc.SetPrimaryReader(primaryProxy)
 	stopReconciler, err := svc.StartReconciler(trpc.BackgroundContext(), viewv2.ReconcilerOptions{
 		Metadata: metadataProxy,
 		Primary:  primaryProxy,
+		Scan:     primaryScanProxy,
 		OwnerID:  "storage-view",
 		Interval: 30 * time.Second,
 		Grace:    time.Minute,
@@ -320,6 +332,9 @@ func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNode
 }
 func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return a.proxy.CleanupExpiredBuckets(ctx, req)
+}
+func (a *dataNodeProxyAdapter) ScanFields(ctx context.Context, req *pb.ScanFieldsReq) (*pb.ScanFieldsRsp, error) {
+	return a.proxy.ScanFields(ctx, req)
 }
 
 func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {

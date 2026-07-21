@@ -32,6 +32,7 @@ type Service struct {
 	indexView   map[string]viewRef
 	authSecret  string
 	primaryAuth *pb.AuthInfo
+	primary     FieldReader
 	mu          sync.RWMutex
 	byData      map[datasetRef]map[string]struct{}
 	liveWork    atomic.Int64
@@ -626,34 +627,38 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				continue
 			}
 			for _, delivery := range deliveries {
-				s.liveWork.Add(1)
-				for loopCtx.Err() == nil {
-					err := s.applyDelivery(loopCtx, delivery)
-					if err == nil {
-						_ = delivery.Ack(loopCtx)
-						break
-					}
-					if isPermanentDeliveryError(err) {
-						_ = delivery.Term(loopCtx)
-						break
-					}
-					// Keep the delivery pending while retrying. NAK would release
-					// MaxAckPending and allow a later event to overtake it.
-					_ = delivery.InProgress(loopCtx)
-					timer := time.NewTimer(time.Second)
-					select {
-					case <-timer.C:
-					case <-loopCtx.Done():
-						if !timer.Stop() {
-							<-timer.C
-						}
-					}
-					s.liveWork.Add(-1)
-				}
+				s.processDelivery(loopCtx, delivery)
 			}
 		}
 	}()
 	return func() { cancel(); <-done }, nil
+}
+
+func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) {
+	s.liveWork.Add(1)
+	defer s.liveWork.Add(-1)
+	for ctx.Err() == nil {
+		err := s.applyDelivery(ctx, delivery)
+		if err == nil {
+			_ = delivery.Ack(ctx)
+			return
+		}
+		if isPermanentDeliveryError(err) {
+			_ = delivery.Term(ctx)
+			return
+		}
+		// Keep the delivery pending while retrying. NAK would release
+		// MaxAckPending and allow a later event to overtake it.
+		_ = delivery.InProgress(ctx)
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+		}
+	}
 }
 
 func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
@@ -738,7 +743,172 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(writes) == 0 {
 		return nil
 	}
+	needsRecovery := datasetID != schema.PrimaryDatasetID
+	if !needsRecovery {
+		needsRecovery, err = s.hasMissingRows(ctx, engine, id, writes)
+		if err != nil {
+			return err
+		}
+	}
+	if needsRecovery {
+		var deletes []*pb.RowKey
+		writes, deletes, err = s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, writes)
+		if err != nil {
+			return err
+		}
+		if len(deletes) != 0 {
+			if err := engine.Delete(ctx, id, deletes); err != nil {
+				return err
+			}
+		}
+		if len(writes) == 0 {
+			return nil
+		}
+	}
 	return engine.Apply(ctx, id, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
+}
+
+func (s *Service) hasMissingRows(ctx context.Context, engine viewindex.QueryEngine, id string, writes []viewindex.RowWrite) (bool, error) {
+	keys := make([]*pb.RowKey, 0, len(writes))
+	for _, write := range writes {
+		keys = append(keys, write.Key.Key)
+	}
+	rows, err := engine.Query(ctx, id, keys, nil)
+	if err != nil {
+		return false, err
+	}
+	present := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row != nil && row.GetKey() != nil {
+			present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
+		}
+	}
+	for _, key := range keys {
+		if _, ok := present[viewindex.RowKeyID(key)]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.QueryEngine, _ string, schema viewindex.ViewIndexSchema, datasetID string, events []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, []*pb.RowKey, error) {
+	s.mu.RLock()
+	reader := s.primary
+	auth := s.primaryAuth
+	if auth != nil {
+		auth = proto.Clone(auth).(*pb.AuthInfo)
+	}
+	s.mu.RUnlock()
+	if reader == nil || auth == nil {
+		return nil, nil, errors.New("primary reader and auth are required to recover a missing view row")
+	}
+	type sourceField struct{ dataset, source, target string }
+	var sources []sourceField
+	byDataset := make(map[string][]string)
+	seen := make(map[string]map[string]struct{})
+	for _, column := range schema.Columns {
+		if column == nil {
+			continue
+		}
+		sourceDataset := viewColumnDataset(column)
+		origin := column.GetOriginId()
+		if sourceDataset == "" || origin == "" {
+			continue
+		}
+		if index := strings.LastIndexByte(origin, '.'); index >= 0 && index+1 < len(origin) {
+			origin = origin[index+1:]
+		}
+		sources = append(sources, sourceField{dataset: sourceDataset, source: origin, target: column.GetColumnName()})
+		if seen[sourceDataset] == nil {
+			seen[sourceDataset] = make(map[string]struct{})
+		}
+		if _, ok := seen[sourceDataset][origin]; !ok {
+			seen[sourceDataset][origin] = struct{}{}
+			byDataset[sourceDataset] = append(byDataset[sourceDataset], origin)
+		}
+	}
+	eventRows := make(map[string]*pb.RowFieldUpsert, len(events))
+	for _, event := range events {
+		if event == nil || event.GetKey() == nil {
+			continue
+		}
+		key := proto.Clone(event.GetKey()).(*pb.RowKey)
+		key.DatasetId = schema.PrimaryDatasetID
+		eventRows[viewindex.RowKeyID(key)] = event
+	}
+	rowsByDataset := make(map[string]map[string]*pb.RowFieldValues)
+	for sourceDataset, fieldIDs := range byDataset {
+		keys := make([]*pb.RowKey, 0, len(writes))
+		for _, write := range writes {
+			key := proto.Clone(write.Key.Key).(*pb.RowKey)
+			key.DatasetId = sourceDataset
+			keys = append(keys, key)
+		}
+		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs})
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, nil, err
+		}
+		rowsByDataset[sourceDataset] = make(map[string]*pb.RowFieldValues)
+		for _, row := range rsp.GetRows() {
+			if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
+				rowsByDataset[sourceDataset][viewindex.RowKeyID(row.GetKey())] = row
+			}
+		}
+	}
+	result := make([]viewindex.RowWrite, 0, len(writes))
+	deletes := make([]*pb.RowKey, 0)
+	for _, write := range writes {
+		primaryKey := proto.Clone(write.Key.Key).(*pb.RowKey)
+		primaryKey.DatasetId = schema.PrimaryDatasetID
+		primaryID := viewindex.RowKeyID(primaryKey)
+		if _, ok := rowsByDataset[schema.PrimaryDatasetID][primaryID]; !ok {
+			deletes = append(deletes, write.Key.Key)
+			continue
+		}
+		complete := viewindex.RowWrite{Key: write.Key}
+		for _, source := range sources {
+			var fields []*pb.FieldValue
+			if row := rowsByDataset[source.dataset][viewindex.RowKeyID(withDataset(write.Key.Key, source.dataset))]; row != nil {
+				fields = append(fields, row.GetFields()...)
+			}
+			if source.dataset == datasetID {
+				if event := eventRows[primaryID]; event != nil {
+					fields = append(fields, event.GetFields()...)
+				}
+			}
+			complete.Fields = appendMatchingField(complete.Fields, fields, source.source, source.target)
+		}
+		result = append(result, complete)
+	}
+	return result, deletes, nil
+}
+
+func withDataset(key *pb.RowKey, datasetID string) *pb.RowKey {
+	clone := proto.Clone(key).(*pb.RowKey)
+	clone.DatasetId = datasetID
+	return clone
+}
+
+func appendMatchingField(dst, fields []*pb.FieldValue, source, target string) []*pb.FieldValue {
+	for _, field := range fields {
+		if field != nil && field.GetFieldId() == source {
+			value := &pb.FieldValue{FieldId: target, Value: field.GetValue()}
+			for index, existing := range dst {
+				if existing != nil && existing.GetFieldId() == target {
+					dst[index] = value
+					value = nil
+					break
+				}
+			}
+			if value != nil {
+				dst = append(dst, value)
+			}
+		}
+	}
+	return dst
 }
 
 func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batchSize int) error {
@@ -1043,6 +1213,12 @@ func (s *Service) SetPrimaryAuth(auth *pb.AuthInfo) {
 		return
 	}
 	s.primaryAuth = proto.Clone(auth).(*pb.AuthInfo)
+}
+
+func (s *Service) SetPrimaryReader(reader FieldReader) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.primary = reader
 }
 
 func (s *Service) removeFailedBuild(ctx context.Context, id string) {

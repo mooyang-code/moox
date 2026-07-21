@@ -87,6 +87,25 @@ func TestWriteFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.T
 	}
 }
 
+func TestScanFieldsEnumeratesHistoricalRowsByRange(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-19T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}},
+	}
+	if err := store.WriteFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	found, page, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z"}, nil, []string{"close"}, nil, &pb.Page{Page: 1, Size: 10})
+	if err != nil || len(found) != 1 || page.GetHasMore() || found[0].GetKey().GetTimeSeries().GetDataTime() != "2026-07-20T00:00:00.000000000Z" {
+		t.Fatalf("found=%v page=%v err=%v", found, page, err)
+	}
+}
+
 func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {

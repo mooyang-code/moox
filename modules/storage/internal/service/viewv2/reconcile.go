@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -27,9 +28,15 @@ type FieldReader interface {
 	ReadFields(context.Context, *pb.PrimaryReadFieldsReq, ...client.Option) (*pb.PrimaryReadFieldsRsp, error)
 }
 
+type PrimaryStoreScanClient interface {
+	ScanTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error)
+	ScanRecordRows(context.Context, *pb.ReadRecordRowsReq, ...client.Option) (*pb.ReadRecordRowsRsp, error)
+}
+
 type ReconcilerOptions struct {
 	Metadata MetadataClient
 	Primary  FieldReader
+	Scan     PrimaryStoreScanClient
 	Interval time.Duration
 	OwnerID  string
 	Grace    time.Duration
@@ -170,7 +177,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			s.failBuild(ctx, opts, auth, view, buildID, err)
 			return err
 		}
-	} else if err := s.MarkViewBuildReady(view.GetSpaceId(), view.GetViewId()); err != nil {
+	} else if err := s.BackfillInitialView(ctx, view, indexID, columns, opts.Primary, opts.Scan); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, err)
 		return err
 	}
@@ -221,6 +228,196 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 			return columns, nil
 		}
 	}
+}
+
+func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexID string, columns []*pb.ViewColumn, reader FieldReader, scan PrimaryStoreScanClient) error {
+	if view == nil || indexID == "" || scan == nil {
+		return errors.New("initial view build requires a primary scan client")
+	}
+	if view.GetPrimaryDatasetId() == "" {
+		return errors.New("initial view build requires primary_dataset_id")
+	}
+	s.mu.RLock()
+	schema := s.schemas[indexID]
+	s.mu.RUnlock()
+	fieldIDs := sourceFieldIDs(columns, view.GetPrimaryDatasetId())
+	if len(fieldIDs) == 0 {
+		return errors.New("initial view build requires primary dataset columns")
+	}
+	pageSize := uint32(100)
+	for pageNo := uint32(1); ; pageNo++ {
+		var writes []viewindex.RowWrite
+		var page *pb.PageResult
+		if isTimeSeriesView(view) {
+			rsp, err := scan.ScanTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+				AuthInfo: s.primaryAuthClone(), SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize},
+			})
+			if err != nil {
+				return err
+			}
+			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+				return err
+			}
+			page = rsp.GetPageResult()
+			for _, row := range rsp.GetRows() {
+				if row == nil || row.GetKey() == nil {
+					continue
+				}
+				key := &pb.RowKey{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: row.GetKey().GetSubjectId(), Freq: row.GetKey().GetFreq(), DataTime: row.GetKey().GetDataTime()}}}
+				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: row.GetFields(), Attributes: stringAttributes(row.GetAttributes())})
+			}
+		} else {
+			rsp, err := scan.ScanRecordRows(ctx, &pb.ReadRecordRowsReq{
+				AuthInfo: s.primaryAuthClone(), SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize},
+			})
+			if err != nil {
+				return err
+			}
+			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+				return err
+			}
+			page = rsp.GetPageResult()
+			for _, row := range rsp.GetRows() {
+				if row == nil || row.GetKey() == nil {
+					continue
+				}
+				key := &pb.RowKey{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: row.GetKey().GetRecordId(), Version: row.GetKey().GetVersion()}}}
+				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: row.GetFields(), Attributes: stringAttributes(row.GetAttributes())})
+			}
+		}
+		if len(writes) != 0 {
+			if reader != nil {
+				if err := s.enrichInitialRows(ctx, reader, schema, writes); err != nil {
+					return err
+				}
+			}
+			if err := s.waitForLiveIdle(ctx); err != nil {
+				return err
+			}
+			engine, err := s.engineFor(indexID)
+			if err != nil {
+				return err
+			}
+			if err := engine.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
+				return err
+			}
+		}
+		if page == nil || !page.GetHasMore() || len(writes) == 0 && page.GetTotal() == 0 {
+			return s.MarkViewBuildReady(view.GetSpaceId(), view.GetViewId())
+		}
+	}
+}
+
+func (s *Service) primaryAuthClone() *pb.AuthInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.primaryAuth == nil {
+		return nil
+	}
+	return proto.Clone(s.primaryAuth).(*pb.AuthInfo)
+}
+
+func sourceFieldIDs(columns []*pb.ViewColumn, datasetID string) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column == nil || viewColumnDataset(column) != datasetID {
+			continue
+		}
+		origin := column.GetOriginId()
+		if index := strings.LastIndexByte(origin, '.'); index >= 0 && index+1 < len(origin) {
+			origin = origin[index+1:]
+		}
+		if origin != "" {
+			if _, ok := seen[origin]; !ok {
+				seen[origin] = struct{}{}
+				ids = append(ids, origin)
+			}
+		}
+	}
+	return ids
+}
+
+func isTimeSeriesView(view *pb.View) bool {
+	for _, key := range view.GetGrainKeys() {
+		if key == "data_time" {
+			return true
+		}
+	}
+	return false
+}
+
+func stringAttributes(values map[string]string) map[string]*pb.TypedValue {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]*pb.TypedValue, len(values))
+	for key, value := range values {
+		out[key] = &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}
+	}
+	return out
+}
+
+func (s *Service) enrichInitialRows(ctx context.Context, reader FieldReader, schema viewindex.ViewIndexSchema, writes []viewindex.RowWrite) error {
+	type requested struct{ source, target string }
+	byDataset := make(map[string][]requested)
+	for _, column := range schema.Columns {
+		if column == nil {
+			continue
+		}
+		datasetID := viewColumnDataset(column)
+		if datasetID == "" || datasetID == schema.PrimaryDatasetID {
+			continue
+		}
+		origin := column.GetOriginId()
+		if index := strings.LastIndexByte(origin, '.'); index >= 0 && index+1 < len(origin) {
+			origin = origin[index+1:]
+		}
+		if origin != "" {
+			byDataset[datasetID] = append(byDataset[datasetID], requested{source: origin, target: column.GetColumnName()})
+		}
+	}
+	for datasetID, fields := range byDataset {
+		keys := make([]*pb.RowKey, 0, len(writes))
+		positions := make(map[string]int, len(writes))
+		fieldIDs := make([]string, 0, len(fields))
+		targets := make(map[string]string, len(fields))
+		for index, write := range writes {
+			key := proto.Clone(write.Key.Key).(*pb.RowKey)
+			key.DatasetId = datasetID
+			keys = append(keys, key)
+			positions[viewindex.RowKeyID(key)] = index
+		}
+		for _, field := range fields {
+			fieldIDs = append(fieldIDs, field.source)
+			targets[field.source] = field.target
+		}
+		auth := s.primaryAuthClone()
+		if auth == nil {
+			return errors.New("primary auth is not configured")
+		}
+		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs})
+		if err != nil {
+			return err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return err
+		}
+		for _, row := range rsp.GetRows() {
+			position, ok := positions[viewindex.RowKeyID(row.GetKey())]
+			if !ok {
+				continue
+			}
+			for _, field := range row.GetFields() {
+				if target := targets[field.GetFieldId()]; target != "" {
+					writes[position].Fields = append(writes[position].Fields, &pb.FieldValue{FieldId: target, Value: field.GetValue()})
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) updateBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, from, to pb.ViewIndexBuild_State, rows uint64) error {

@@ -26,6 +26,8 @@ func (*IndexManager) Apply(context.Context, string, viewindex.ViewIndexApplyBatc
 func (*IndexManager) Query(context.Context, string, []*pb.RowKey, []string) ([]*pb.RowFieldValues, error) {
 	return nil, errCGODisabled
 }
+
+func (*IndexManager) Delete(context.Context, string, []*pb.RowKey) error { return errCGODisabled }
 func (*IndexManager) Scan(context.Context, string, int, int) ([]*pb.RowFieldValues, error) {
 	return nil, errCGODisabled
 }
