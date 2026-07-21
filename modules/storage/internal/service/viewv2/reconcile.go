@@ -116,7 +116,21 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if build := view.GetIndexBuild(); build != nil {
 		switch build.GetState() {
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_FAILED:
-			return nil
+			if build.GetState() == pb.ViewIndexBuild_FAILED {
+				s.removeFailedBuild(ctx, build.GetIndexId())
+				return nil
+			}
+			if build.GetIndexId() == "" {
+				return nil
+			}
+			err := s.resumeViewBuild(ctx, opts, auth, view, build)
+			if err != nil {
+				var retry resumeBuildRetry
+				if !errors.As(err, &retry) {
+					s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
+				}
+			}
+			return err
 		}
 	}
 	if !needsRebuild(view, stats) {
@@ -166,45 +180,121 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		if prepareErr == nil {
 			prepareErr = requireSuccess(prepared.GetRetInfo())
 		}
-		s.failBuild(ctx, opts, auth, view, buildID, fmt.Errorf("prepare view index: %w", prepareErr))
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, fmt.Errorf("prepare view index: %w", prepareErr))
 		return prepareErr
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, 0); err != nil {
-		s.failBuild(ctx, opts, auth, view, buildID, err)
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}
 	if view.GetActiveIndexId() != "" {
 		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), 100, opts.Primary); err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, err)
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
 	} else {
 		datasetRsp, err := opts.Metadata.GetDataset(ctx, &pb.GetDatasetReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId()})
 		if err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, err)
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
 		if err := requireSuccess(datasetRsp.GetRetInfo()); err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, err)
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
 		if datasetRsp.GetDataset() == nil {
 			err := errors.New("primary dataset metadata is missing")
-			s.failBuild(ctx, opts, auth, view, buildID, err)
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
 		if err := s.BackfillInitialView(ctx, view, indexID, columns, datasetRsp.GetDataset().GetDataKind(), opts.Primary, opts.Scan); err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, err)
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, uint64(stats.EntryCount)); err != nil {
-		s.failBuild(ctx, opts, auth, view, buildID, err)
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}
 	activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, OwnerId: opts.OwnerID,
 	})
+	if err != nil {
+		return err
+	}
+	if err := requireSuccess(activated.GetRetInfo()); err != nil {
+		return err
+	}
+	if view.GetActiveIndexId() != "" {
+		return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
+	}
+	return nil
+}
+
+type resumeBuildRetry struct{ cause error }
+
+func (e resumeBuildRetry) Error() string { return e.cause.Error() }
+func (e resumeBuildRetry) Unwrap() error { return e.cause }
+
+func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
+	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
+		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: previous.GetBuildId(),
+		IndexId: previous.GetIndexId(), Engine: previous.GetEngine(), TargetViewVersion: previous.GetTargetViewVersion(),
+		OwnerId: opts.OwnerID, SchemaHash: previous.GetSchemaHash(), Columns: previous.GetColumns(),
+		ExpectedActiveIndexId: view.GetActiveIndexId(),
+	})
+	if err != nil {
+		return resumeBuildRetry{cause: err}
+	}
+	if err := requireSuccess(claim.GetRetInfo()); err != nil {
+		return resumeBuildRetry{cause: err}
+	}
+	build := claim.GetBuild()
+	if build == nil {
+		return errors.New("resumed view build metadata is missing")
+	}
+	if err := s.AttachPendingViewBuild(ctx, view); err != nil {
+		return err
+	}
+	if err := s.TrackViewBuild(view.GetSpaceId(), view.GetViewId(), build.GetBuildId(), opts.OwnerID, opts.Metadata, auth); err != nil {
+		return err
+	}
+	if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, build.GetEntriesWritten()); err != nil {
+		return err
+	}
+	if view.GetActiveIndexId() == "" {
+		datasetRsp, err := opts.Metadata.GetDataset(ctx, &pb.GetDatasetReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId()})
+		if err != nil {
+			return err
+		}
+		if err := requireSuccess(datasetRsp.GetRetInfo()); err != nil {
+			return err
+		}
+		if datasetRsp.GetDataset() == nil {
+			return errors.New("primary dataset metadata is missing")
+		}
+		columns := build.GetColumns()
+		if len(columns) == 0 {
+			columns = view.GetColumns()
+		}
+		if err := s.BackfillInitialView(ctx, view, build.GetIndexId(), columns, datasetRsp.GetDataset().GetDataKind(), opts.Primary, opts.Scan); err != nil {
+			return err
+		}
+		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
+			return err
+		}
+	} else {
+		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, build.GetEntriesWritten()); err != nil {
+			return err
+		}
+		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), 100, opts.Primary); err != nil {
+			return err
+		}
+		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
+			return err
+		}
+	}
+	activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: build.GetBuildId(), OwnerId: opts.OwnerID})
 	if err != nil {
 		return err
 	}
@@ -452,7 +542,7 @@ func (s *Service) updateBuild(ctx context.Context, opts ReconcilerOptions, auth 
 	return requireSuccess(rsp.GetRetInfo())
 }
 
-func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, cause error) {
+func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, cause error) {
 	message := "view build failed"
 	if cause != nil {
 		message = cause.Error()
@@ -461,6 +551,29 @@ func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *p
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
 		BuildId: buildID, OwnerId: opts.OwnerID, Error: message,
 	})
+	s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), indexID)
+}
+
+func (s *Service) discardFailedBuild(ctx context.Context, spaceID, viewID, indexID string) {
+	if indexID == "" {
+		return
+	}
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	if runtime.next == indexID {
+		runtime.next = ""
+		runtime.status = "active"
+	} else if runtime.active == indexID {
+		runtime.active = ""
+		runtime.status = "failed"
+	}
+	runtime.mu.Unlock()
+	s.removeFailedBuild(ctx, indexID)
 }
 
 func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
@@ -468,6 +581,9 @@ func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
 		return false
 	}
 	if view.GetActiveIndexId() == "" || view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
+		return true
+	}
+	if !stats.Exists {
 		return true
 	}
 	keep, err := time.ParseDuration(view.GetKeepDuration())

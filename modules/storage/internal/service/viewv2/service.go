@@ -978,9 +978,7 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 			s.mu.RLock()
 			schema := s.schemas[nextID]
 			s.mu.RUnlock()
-			batchCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-			err = nextEngine.Apply(batchCtx, nextID, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill})
-			cancel()
+			err = nextEngine.Apply(ctx, nextID, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill})
 		}
 		if err != nil {
 			failedID := runtime.next
@@ -1193,6 +1191,71 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	return nil
 }
 
+func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) error {
+	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetIndexBuild() == nil || view.GetIndexBuild().GetIndexId() == "" {
+		return errors.New("pending view build metadata is required")
+	}
+	build := view.GetIndexBuild()
+	engineName := strings.ToLower(strings.TrimSpace(build.GetEngine()))
+	if engineName == "" {
+		engineName = strings.ToLower(strings.TrimSpace(view.GetEngine()))
+	}
+	engine := s.engines[engineName]
+	if engine == nil {
+		return fmt.Errorf("view engine %q is unavailable", engineName)
+	}
+	stats, err := engine.Stat(ctx, build.GetIndexId())
+	if err != nil {
+		return err
+	}
+	if !stats.Exists {
+		return fmt.Errorf("pending view index %q is missing", build.GetIndexId())
+	}
+	columns := build.GetColumns()
+	if len(columns) == 0 {
+		columns = view.GetColumns()
+	}
+	version := build.GetTargetViewVersion()
+	if version == 0 {
+		version = view.GetDesiredViewRevision()
+	}
+	hash := build.GetSchemaHash()
+	if hash == "" {
+		hash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetPrimaryDatasetId()})
+	}
+	schema := viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, SchemaHash: hash, PrimaryDatasetID: view.GetPrimaryDatasetId()}
+	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	s.mu.Lock()
+	runtime := s.views[viewKey]
+	if runtime == nil {
+		runtime = &viewRuntime{}
+		s.views[viewKey] = runtime
+	}
+	s.indexEngine[build.GetIndexId()] = engineName
+	s.schemas[build.GetIndexId()] = schema
+	s.indexView[build.GetIndexId()] = viewKey
+	for _, column := range columns {
+		if datasetID := viewColumnDataset(column); datasetID != "" {
+			ref := datasetRef{spaceID: view.GetSpaceId(), datasetID: datasetID}
+			if s.byData[ref] == nil {
+				s.byData[ref] = make(map[string]struct{})
+			}
+			s.byData[ref][build.GetIndexId()] = struct{}{}
+		}
+	}
+	s.mu.Unlock()
+	runtime.mu.Lock()
+	if runtime.active == "" {
+		runtime.active = build.GetIndexId()
+		runtime.status = "active"
+	} else if runtime.active != build.GetIndexId() {
+		runtime.next = build.GetIndexId()
+		runtime.status = "building"
+	}
+	runtime.mu.Unlock()
+	return nil
+}
+
 func (s *Service) MarkViewBuildReady(spaceID, viewID string) error {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
@@ -1255,7 +1318,10 @@ func (s *Service) activeIndex(spaceID, viewID string) (string, *viewRuntime) {
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
 	if runtime != nil {
-		return runtime.active, runtime
+		runtime.mu.Lock()
+		indexID := runtime.active
+		runtime.mu.Unlock()
+		return indexID, runtime
 	}
 	return viewID, nil
 }

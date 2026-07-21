@@ -66,20 +66,20 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 		SpaceId: "s", ViewId: "v", ActiveIndexId: "idx",
 		DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h",
 	}
-	if needsRebuild(base, viewindex.ViewIndexStats{}) {
+	if needsRebuild(base, viewindex.ViewIndexStats{Exists: true}) {
 		t.Fatal("stable view unexpectedly needs rebuild")
 	}
 	missing := proto.Clone(base).(*pb.View)
 	missing.ActiveIndexId = ""
-	if !needsRebuild(missing, viewindex.ViewIndexStats{}) {
+	if !needsRebuild(missing, viewindex.ViewIndexStats{Exists: true}) {
 		t.Fatal("missing active index did not trigger rebuild")
 	}
 	revision := proto.Clone(base).(*pb.View)
 	revision.DesiredViewRevision = 2
-	if !needsRebuild(revision, viewindex.ViewIndexStats{}) {
+	if !needsRebuild(revision, viewindex.ViewIndexStats{Exists: true}) {
 		t.Fatal("desired revision did not trigger rebuild")
 	}
-	wide := viewindex.ViewIndexStats{IndexedFrom: "2026-07-17T00:00:00Z", IndexedTo: "2026-07-20T00:00:00Z"}
+	wide := viewindex.ViewIndexStats{Exists: true, IndexedFrom: "2026-07-17T00:00:00Z", IndexedTo: "2026-07-20T00:00:00Z"}
 	if !needsRebuild(base, wide) {
 		t.Fatal("coverage wider than twice keep_duration did not trigger rebuild")
 	}
