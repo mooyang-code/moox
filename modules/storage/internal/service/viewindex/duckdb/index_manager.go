@@ -125,8 +125,18 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if schemaHash != batch.ViewSchemaHash {
 		return errors.New("view schema hash conflict")
 	}
+	names := upsertColumnNames(columns)
+	stmt, err := tx.PrepareContext(ctx, upsertSQL(names, batch.WriteMode))
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
 	for _, write := range batch.RowWrites {
-		if err := writeRow(ctx, tx, columns, write, batch.WriteMode); err != nil {
+		args, err := rowArgs(columns, names, write)
+		if err != nil {
+			return err
+		}
+		if _, err := stmt.ExecContext(ctx, args...); err != nil {
 			return err
 		}
 	}
@@ -136,54 +146,19 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	return tx.Commit()
 }
 
-func writeRow(ctx context.Context, tx *sql.Tx, columns map[string]pb.FieldValueType, write viewindex.RowWrite, mode viewindex.WriteMode) error {
-	key := write.Key.Key.GetTimeSeries()
-	if key == nil {
-		return errors.New("duckdb only accepts time-series row keys")
-	}
-	when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
-	if err != nil {
-		return fmt.Errorf("invalid data_time: %w", err)
-	}
-	values := make(map[string]any, len(write.Fields)+len(write.Attributes))
-	for _, field := range write.Fields {
-		if field == nil {
-			continue
-		}
-		if _, ok := columns[field.GetFieldId()]; !ok {
-			return fmt.Errorf("unknown view column %q", field.GetFieldId())
-		}
-		value, err := typedValueToDB(field.GetValue())
-		if err != nil {
-			return fmt.Errorf("column %q: %w", field.GetFieldId(), err)
-		}
-		values[field.GetFieldId()] = value
-	}
-	for name, typed := range write.Attributes {
-		if _, ok := columns[name]; !ok {
-			return fmt.Errorf("unknown view column %q", name)
-		}
-		value, err := typedValueToDB(typed)
-		if err != nil {
-			return fmt.Errorf("column %q: %w", name, err)
-		}
-		values[name] = value
-	}
+func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
 	names := []string{"subject_id", "freq", "data_time"}
-	args := []any{key.GetSubjectId(), key.GetFreq(), when}
 	for name := range columns {
 		if isSystemColumn(name) {
 			continue
 		}
 		names = append(names, name)
-		args = append(args, values[name])
 	}
 	sort.Strings(names[3:])
-	// Rebuild args to match the sorted business-column order.
-	args = []any{key.GetSubjectId(), key.GetFreq(), when}
-	for _, name := range names[3:] {
-		args = append(args, values[name])
-	}
+	return names
+}
+
+func upsertSQL(names []string, mode viewindex.WriteMode) string {
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
 	sets := make([]string, 0, len(names)-3)
 	for _, name := range names[3:] {
@@ -194,9 +169,48 @@ func writeRow(ctx context.Context, tx *sql.Tx, columns map[string]pb.FieldValueT
 		}
 		sets = append(sets, set)
 	}
-	query := fmt.Sprintf("INSERT INTO view_rows (%s) VALUES (%s) ON CONFLICT (subject_id, freq, data_time) DO UPDATE SET %s", joinQuoted(names), placeholders, strings.Join(sets, ", "))
-	_, err = tx.ExecContext(ctx, query, args...)
-	return err
+	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES (%s) ON CONFLICT (subject_id, freq, data_time) DO UPDATE SET %s", joinQuoted(names), placeholders, strings.Join(sets, ", "))
+}
+
+func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite) ([]any, error) {
+	key := write.Key.Key.GetTimeSeries()
+	if key == nil {
+		return nil, errors.New("duckdb only accepts time-series row keys")
+	}
+	when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
+	if err != nil {
+		return nil, fmt.Errorf("invalid data_time: %w", err)
+	}
+	values := make(map[string]any, len(write.Fields)+len(write.Attributes))
+	for _, field := range write.Fields {
+		if field == nil {
+			continue
+		}
+		if _, ok := columns[field.GetFieldId()]; !ok {
+			return nil, fmt.Errorf("unknown view column %q", field.GetFieldId())
+		}
+		value, err := typedValueToDB(field.GetValue())
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", field.GetFieldId(), err)
+		}
+		values[field.GetFieldId()] = value
+	}
+	for name, typed := range write.Attributes {
+		if _, ok := columns[name]; !ok {
+			return nil, fmt.Errorf("unknown view column %q", name)
+		}
+		value, err := typedValueToDB(typed)
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", name, err)
+		}
+		values[name] = value
+	}
+	args := make([]any, 0, len(names))
+	args = append(args, key.GetSubjectId(), key.GetFreq(), when)
+	for _, name := range names[3:] {
+		args = append(args, values[name])
+	}
+	return args, nil
 }
 
 func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {

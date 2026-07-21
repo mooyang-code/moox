@@ -196,9 +196,9 @@ assert_grep 'log_path: \.\./logs/storage-primary' "${DEPLOY_DIR}/storage/config/
 assert_grep 'log_path: \.\./logs/storage-view' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20104' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20202' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-assert_grep 'scheduler=viewBuilderSchedule&startAtOnce=1' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'scheduler=viewReconcileSchedule&startAtOnce=1' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 if grep -Eq '[?&](params|disable|location)=' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"; then
-  echo "view builder timer contains options unsupported by the official tRPC timer" >&2
+  echo "view reconcile timer contains options unsupported by the official tRPC timer" >&2
   exit 1
 fi
 assert_grep 'timeout: 900000' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"

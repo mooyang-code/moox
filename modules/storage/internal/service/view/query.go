@@ -121,7 +121,10 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	for _, row := range rows {
 		out = append(out, &pb.RecordRow{Key: rowToRecordKey(row.GetKey()), Fields: row.GetFields()})
 	}
-	return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), Complete: false}, nil
+	// Record views have no time-window coverage; the active index itself is the completeness signal.
+	stats, statsErr := engine.Stat(ctx, indexID)
+	complete := statsErr == nil && stats.Exists
+	return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), Complete: complete}, nil
 }
 
 func filterGroups(spec *pb.FilterSpec) []viewindex.FilterGroup {

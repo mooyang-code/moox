@@ -118,14 +118,6 @@ type ViewIndexSchema struct {
 	SchemaHash       string
 }
 
-type BatchWrite struct {
-	TimeSeriesRows []*pb.TimeSeriesRow
-	RecordRows     []*pb.RecordRow
-	Columns        []*pb.ViewColumn
-	ViewVersion    uint64
-	SchemaHash     string
-}
-
 type ViewIndexStats struct {
 	Exists        bool
 	ViewVersion   uint64
@@ -175,20 +167,6 @@ type Engine interface {
 	Query(context.Context, string, QuerySpec) ([]*pb.RowFieldValues, int64, error)
 	Stat(context.Context, string) (ViewIndexStats, error)
 	Remove(context.Context, string) error
-}
-
-func queryTSKey(k *pb.TimeSeriesKey) *pb.RowKey {
-	if k == nil {
-		return nil
-	}
-	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: k.GetSubjectId(), Freq: k.GetFreq(), DataTime: k.GetDataTime()}}}
-}
-
-func queryRecordKey(k *pb.RecordKey) *pb.RowKey {
-	if k == nil {
-		return nil
-	}
-	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: k.GetRecordId(), Version: k.GetVersion()}}}
 }
 
 func RowKeyID(k *pb.RowKey) string {
