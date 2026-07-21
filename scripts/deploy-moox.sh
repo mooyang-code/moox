@@ -400,6 +400,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-storage)
       WITH_STORAGE=0
+      WITH_STORAGE_NODE=0
       shift
       ;;
     --with-storage-node)
