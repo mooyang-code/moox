@@ -78,7 +78,7 @@ func bumpViewVersion(ctx context.Context, tx *sql.Tx, spaceID, viewID string) er
 }
 
 func (s *Store) GetViewIndexBuild(ctx context.Context, spaceID, viewID string) (*pb.ViewIndexBuild, error) {
-	return scanViewIndexBuild(s.db.QueryRowContext(ctx, `SELECT `+viewIndexBuildColumns+`
+	return scanViewIndexBuild(s.queryDB(ctx).QueryRowContext(ctx, `SELECT `+viewIndexBuildColumns+`
 		FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID))
 }
 

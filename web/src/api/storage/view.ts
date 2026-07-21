@@ -1,6 +1,6 @@
 import { callStorage as callView } from "./http";
 import type {
-  FilterExpr,
+  FilterSpec,
   Page,
   PageResult,
   RecordKey,
@@ -21,7 +21,7 @@ export interface QueryTimeSeriesRowsReq {
   keys?: TimeSeriesKey[];
   time_range?: TimeRange;
   column_names?: string[];
-  filters?: FilterExpr[];
+  filter?: FilterSpec;
   sorts?: SortSpec[];
   page?: Page;
   limit?: number;
@@ -34,7 +34,7 @@ export interface SearchRecordRowsReq {
   keys?: RecordKey[];
   text_query?: string;
   version_range?: VersionRange;
-  filters?: FilterExpr[];
+  filter?: FilterSpec;
   sorts?: SortSpec[];
   column_names?: string[];
   page?: Page;

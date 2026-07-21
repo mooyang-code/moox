@@ -83,7 +83,12 @@ func queryMessages[T proto.Message](ctx context.Context, db queryer, query strin
 	return items, rows.Err()
 }
 
-func queryPagedMessages[T proto.Message](ctx context.Context, db *sql.DB, query string, countQuery string, args []any, page *pb.Page, newMessage func() T) ([]T, *pb.PageResult, error) {
+type readDB interface {
+	queryRower
+	queryer
+}
+
+func queryPagedMessages[T proto.Message](ctx context.Context, db readDB, query string, countQuery string, args []any, page *pb.Page, newMessage func() T) ([]T, *pb.PageResult, error) {
 	pageNo, size, offset := normalizePage(page)
 	limit := int(size)
 	pagedArgs := append([]any{}, args...)
@@ -100,7 +105,7 @@ func queryPagedMessages[T proto.Message](ctx context.Context, db *sql.DB, query 
 	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: hasMore}, nil
 }
 
-func countRows(ctx context.Context, db *sql.DB, query string, args []any) (uint32, error) {
+func countRows(ctx context.Context, db queryRower, query string, args []any) (uint32, error) {
 	var total int64
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
 		return 0, err
@@ -216,8 +221,10 @@ func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
 			size = page.GetSize()
 		}
 	}
-	start := int((pageNo - 1) * size)
-	if start > len(items) {
+	offset64 := uint64(pageNo-1) * uint64(size)
+	maxInt := int(^uint(0) >> 1)
+	start := int(offset64)
+	if offset64 > uint64(maxInt) || start > len(items) {
 		start = len(items)
 	}
 	end := start + int(size)

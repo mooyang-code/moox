@@ -74,6 +74,7 @@ export interface TypedValue {
   json_value?: string;
   bytes_value?: string;
   list_value?: TypedValueList;
+  null_value?: "NULL_VALUE_UNSPECIFIED" | "NULL_VALUE" | number;
 }
 
 export interface ColumnValue {
@@ -87,9 +88,35 @@ export interface SortSpec {
   desc?: boolean;
 }
 
-export interface FilterExpr {
-  expr: string;
-  args?: Record<string, TypedValue>;
+export type FilterOp =
+  | "FILTER_OP_UNSPECIFIED"
+  | "FILTER_OP_EQ"
+  | "FILTER_OP_NE"
+  | "FILTER_OP_GT"
+  | "FILTER_OP_GTE"
+  | "FILTER_OP_LT"
+  | "FILTER_OP_LTE"
+  | "FILTER_OP_IN"
+  | "FILTER_OP_NOT_IN"
+  | "FILTER_OP_LIKE"
+  | "FILTER_OP_BETWEEN"
+  | "FILTER_OP_NOT_LIKE"
+  | number;
+
+export interface FilterCond {
+  column: string;
+  op: FilterOp;
+  values: TypedValue[];
+}
+
+export interface FilterGroup {
+  conds: FilterCond[];
+  logical?: "FILTER_LOGICAL_AND" | "FILTER_LOGICAL_OR" | number;
+}
+
+export interface FilterSpec {
+  groups: FilterGroup[];
+  group_logical?: "FILTER_LOGICAL_AND" | "FILTER_LOGICAL_OR" | number;
 }
 
 export interface DataSource {

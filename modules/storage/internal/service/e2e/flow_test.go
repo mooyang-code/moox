@@ -1,3 +1,5 @@
+//go:build cgo
+
 package e2e
 
 import (
@@ -7,8 +9,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/viewv2"
+	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
+	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -30,7 +32,7 @@ func TestPrimaryDataNodeViewFlow(t *testing.T) {
 	defer nodeA.Close()
 	defer nodeB.Close()
 	nodes := map[string]pb.DataNodeService{"prices": nodeA, "factors": nodeB}
-	primary, err := primarystorev2.New(primarystorev2.Options{
+	primary, err := primarystore.New(primarystore.Options{
 		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeService, error) { return nodes[dataset], nil },
 		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
 			clone := proto.Clone(in).(*pb.AuthInfo)
@@ -54,15 +56,15 @@ func TestPrimaryDataNodeViewFlow(t *testing.T) {
 		t.Fatalf("primary read: rsp=%v err=%v", read, err)
 	}
 
-	view, err := viewv2.New(filepath.Join(t.TempDir(), "view"), secret)
+	view, err := viewservice.New(filepath.Join(t.TempDir(), "view"), secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	viewAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
-	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "schema-1"}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("view prepare: rsp=%v err=%v", rsp, err)
 	}
-	if rsp, err := view.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Batch: &pb.ViewIndexApplyBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: []*pb.ViewIndexRowWrite{{Key: &pb.ViewIndexRowKey{RowKey: priceKey}, Fields: []*pb.FieldValue{priceField}}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := view.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: []*pb.ViewIndexRowWrite{{Key: &pb.ViewIndexRowKey{RowKey: priceKey}, Fields: []*pb.FieldValue{priceField}}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("view apply: rsp=%v err=%v", rsp, err)
 	}
 	result, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: viewAuth, ViewId: "prices-view", Keys: []*pb.TimeSeriesKey{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}, ColumnNames: []string{"close"}})

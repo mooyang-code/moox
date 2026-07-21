@@ -37,7 +37,7 @@ message ViewIndexRowWrite {
   map<string, TypedValue> attributes = 4;
 }
 
-message ViewIndexApplyBatch {
+message ViewIndexWriteBatch {
   repeated ViewIndexRowWrite row_writes = 1;
   uint64 view_revision = 2;
   string view_schema_hash = 3;
@@ -49,9 +49,9 @@ message ViewIndexStats {
   bool exists = 1;
   uint64 entry_count = 2;
   string min_version = 3;
-  string max_version = 4;
-  string view_schema_hash = 5;
-  uint64 physical_bytes = 6;
+	string max_version = 4;
+	string view_schema_hash = 5;
+	reserved 6;
   string updated_at = 7;
   // free_disk_bytes is the owner filesystem's currently available capacity.
   uint64 free_disk_bytes = 8;
@@ -82,7 +82,7 @@ message ApplyViewIndexReq {
   common.AuthInfo auth_info = 1;
   string index_id = 2;
   string engine = 3;
-  ViewIndexApplyBatch batch = 4;
+  ViewIndexWriteBatch batch = 4;
 }
 
 message ApplyViewIndexRsp {

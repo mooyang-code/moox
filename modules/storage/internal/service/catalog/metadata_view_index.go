@@ -1,4 +1,4 @@
-package primarystore
+package catalog
 
 import (
 	"context"

@@ -20,20 +20,14 @@ func (*IndexManager) Engine() string                              { return "duck
 func (*IndexManager) Prepare(context.Context, string, viewindex.ViewIndexSchema) error {
 	return errCGODisabled
 }
-func (*IndexManager) Apply(context.Context, string, viewindex.ViewIndexApplyBatch) error {
+func (*IndexManager) Write(context.Context, string, viewindex.ViewIndexWriteBatch) error {
 	return errCGODisabled
 }
-func (*IndexManager) Query(context.Context, string, []*pb.RowKey, []string) ([]*pb.RowFieldValues, error) {
-	return nil, errCGODisabled
-}
-
-func (*IndexManager) Delete(context.Context, string, []*pb.RowKey) error { return errCGODisabled }
-func (*IndexManager) Scan(context.Context, string, int, int) ([]*pb.RowFieldValues, error) {
-	return nil, errCGODisabled
+func (*IndexManager) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+	return nil, 0, errCGODisabled
 }
 func (*IndexManager) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{}, errCGODisabled
 }
-func (*IndexManager) Remove(context.Context, string) error   { return errCGODisabled }
-func (*IndexManager) List(context.Context) ([]string, error) { return nil, errCGODisabled }
-func (*IndexManager) Close() error                           { return nil }
+func (*IndexManager) Remove(context.Context, string) error { return errCGODisabled }
+func (*IndexManager) Close() error                         { return nil }

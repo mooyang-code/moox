@@ -1,4 +1,4 @@
-package viewv2
+package view
 
 import (
 	"context"
@@ -16,22 +16,6 @@ import (
 type reconcileMetadata struct {
 	view      *pb.View
 	activated bool
-}
-
-type reconcileScan struct{}
-
-func (reconcileScan) ScanTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.TimeSeriesRow{{
-		Key:    &pb.TimeSeriesKey{SpaceId: "space", DatasetId: "prices", SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-20T00:00:00.000000000Z"},
-		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
-	}}, PageResult: &pb.PageResult{Page: 1, Size: 100, Total: 1}}, nil
-}
-
-func (reconcileScan) ScanRecordRows(_ context.Context, req *pb.ReadRecordRowsReq, _ ...client.Option) (*pb.ReadRecordRowsRsp, error) {
-	return &pb.ReadRecordRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.RecordRow{{
-		Key:    &pb.RecordKey{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), RecordId: "r1", Version: "1"},
-		Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "historical"}}}},
-	}}, PageResult: &pb.PageResult{Page: 1, Size: 100, Total: 1}}, nil
 }
 
 func (m *reconcileMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
@@ -103,7 +87,7 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 			SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title",
 		}},
 	}}
-	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Scan: reconcileScan{}, Interval: time.Hour})
+	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +105,8 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := engine.Scan(context.Background(), indexID, 0, 10)
-	if err != nil || len(rows) != 1 || rows[0].GetFields()[0].GetValue().GetStringValue() != "historical" {
+	rows, _, err := engine.Query(context.Background(), indexID, viewindex.QuerySpec{Limit: 10})
+	if err != nil || len(rows) != 0 {
 		t.Fatalf("initial rows=%v err=%v", rows, err)
 	}
 }
@@ -136,7 +120,7 @@ func TestReconcilerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices", DesiredViewRevision: 1,
 		Columns: []*pb.ViewColumn{{SpaceId: "space", ViewId: "prices", OriginId: "prices.close", ColumnName: "prices.close"}},
 	}}
-	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Scan: reconcileScan{}, Interval: time.Hour})
+	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +130,8 @@ func TestReconcilerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := engine.Scan(context.Background(), indexID, 0, 10)
-	if err != nil || len(rows) != 1 || rows[0].GetKey().GetTimeSeries() == nil {
+	rows, _, err := engine.Query(context.Background(), indexID, viewindex.QuerySpec{Limit: 10})
+	if err != nil || len(rows) != 0 {
 		t.Fatalf("time-series rows=%v err=%v", rows, err)
 	}
 }

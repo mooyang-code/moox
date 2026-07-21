@@ -98,7 +98,7 @@ func (s *Store) prepareFieldGroup(ctx context.Context, item *pb.FieldGroup) (str
 }
 
 func (s *Store) GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_field_groups WHERE c_space_id = ? AND c_group_id = ?`, []any{spaceID, groupID}, func() *pb.FieldGroup { return &pb.FieldGroup{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_field_groups WHERE c_space_id = ? AND c_group_id = ?`, []any{spaceID, groupID}, func() *pb.FieldGroup { return &pb.FieldGroup{} })
 }
 
 func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
@@ -107,7 +107,7 @@ func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroup
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR COALESCE(c_parent_group_id, '') = ?)`
 	args := []any{spaceID, spaceID, parentGroupID, parentGroupID}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, COALESCE(c_parent_group_id, ''), c_sort_order, c_group_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.FieldGroup { return &pb.FieldGroup{} },
@@ -116,7 +116,7 @@ func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroup
 
 func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (coremetadata.FieldGroupCounts, error) {
 	result := coremetadata.FieldGroupCounts{ByGroup: make(map[string]uint64)}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.queryDB(ctx).QueryContext(ctx, `
 		SELECT g.c_group_id, COALESCE(g.c_parent_group_id, ''), COUNT(f.c_field_id)
 		FROM t_field_groups g
 		LEFT JOIN t_fields f ON f.c_space_id = g.c_space_id AND f.c_group_id = g.c_group_id
@@ -146,7 +146,7 @@ func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (coremet
 			result.ByGroup[parentID] += result.ByGroup[groupID]
 		}
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_fields WHERE c_space_id = ? AND COALESCE(c_group_id, '') = ''`, spaceID).Scan(&result.Ungrouped); err != nil {
+	if err := s.queryDB(ctx).QueryRowContext(ctx, `SELECT COUNT(1) FROM t_fields WHERE c_space_id = ? AND COALESCE(c_group_id, '') = ''`, spaceID).Scan(&result.Ungrouped); err != nil {
 		return result, err
 	}
 	result.Total += result.Ungrouped

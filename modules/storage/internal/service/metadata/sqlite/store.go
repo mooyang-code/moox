@@ -12,6 +12,35 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type readSnapshotContextKey struct{}
+
+// queryDB keeps all metadata reads in one transaction while the cache is
+// rebuilding. Normal requests continue to use the long-lived database handle.
+func (s *Store) queryDB(ctx context.Context) readDB {
+	if tx, ok := ctx.Value(readSnapshotContextKey{}).(*sql.Tx); ok {
+		return tx
+	}
+	return s.db
+}
+
+// WithReadSnapshot executes a cache refresh against one SQLite read snapshot.
+// It is intentionally optional so non-SQLite metadata readers keep working.
+func (s *Store) WithReadSnapshot(ctx context.Context, fn func(context.Context) error) error {
+	if s == nil || s.db == nil {
+		return errors.New("metadata store is not open")
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	readCtx := context.WithValue(ctx, readSnapshotContextKey{}, tx)
+	if err := fn(readCtx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 // Options 保存 SQLite 元数据存储打开配置。
 type Options struct {
 	Path       string

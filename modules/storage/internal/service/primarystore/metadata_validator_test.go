@@ -1,4 +1,4 @@
-package primarystorev2
+package primarystore
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func (r *pagedMetadataReader) ListDatasetColumns(_ context.Context, _, _ string,
 func TestMetadataValidatorReadsAllDatasetColumnPages(t *testing.T) {
 	columns := make([]*pb.DatasetColumn, 1001)
 	for i := range columns {
-		columns[i] = &pb.DatasetColumn{ColumnName: fmt.Sprintf("field_%04d", i), OriginId: fmt.Sprintf("field_%04d", i), Status: "active"}
+		columns[i] = &pb.DatasetColumn{ColumnName: fmt.Sprintf("field_%04d", i), OriginId: fmt.Sprintf("field_%04d", i), ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}
 	}
 	validator := NewMetadataValidator(&pagedMetadataReader{columns: columns})
 	err := validator.ValidateRow(context.Background(), &pb.RowFieldUpsert{

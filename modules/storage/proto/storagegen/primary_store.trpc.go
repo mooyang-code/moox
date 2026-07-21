@@ -179,96 +179,6 @@ func RegisterPrimaryStoreService(s server.Service, svr PrimaryStoreService) {
 	}
 }
 
-// PrimaryStoreScanService defines service.
-type PrimaryStoreScanService interface {
-	ScanTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
-
-	ScanRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
-
-	GetShardHeads(ctx context.Context, req *GetShardHeadsReq) (*GetShardHeadsRsp, error)
-}
-
-func PrimaryStoreScanService_ScanTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReadTimeSeriesRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreScanService).ScanTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func PrimaryStoreScanService_ScanRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReadRecordRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreScanService).ScanRecordRows(ctx, reqbody.(*ReadRecordRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func PrimaryStoreScanService_GetShardHeads_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetShardHeadsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreScanService).GetShardHeads(ctx, reqbody.(*GetShardHeadsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// PrimaryStoreScanServer_ServiceDesc descriptor for server.RegisterService.
-var PrimaryStoreScanServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.storage.PrimaryStoreScan",
-	HandlerType: ((*PrimaryStoreScanService)(nil)),
-	Methods: []server.Method{
-		{
-			Name: "/trpc.moox.storage.PrimaryStoreScan/ScanTimeSeriesRows",
-			Func: PrimaryStoreScanService_ScanTimeSeriesRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.PrimaryStoreScan/ScanRecordRows",
-			Func: PrimaryStoreScanService_ScanRecordRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.PrimaryStoreScan/GetShardHeads",
-			Func: PrimaryStoreScanService_GetShardHeads_Handler,
-		},
-	},
-}
-
-// RegisterPrimaryStoreScanService registers service.
-func RegisterPrimaryStoreScanService(s server.Service, svr PrimaryStoreScanService) {
-	if err := s.Register(&PrimaryStoreScanServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("PrimaryStoreScan register error:%v", err))
-	}
-}
-
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedPrimaryStore struct{}
@@ -290,18 +200,6 @@ func (s *UnimplementedPrimaryStore) MergeRecordRows(ctx context.Context, req *Me
 }
 func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service PrimaryStore is not implemented")
-}
-
-type UnimplementedPrimaryStoreScan struct{}
-
-func (s *UnimplementedPrimaryStoreScan) ScanTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc ScanTimeSeriesRows of service PrimaryStoreScan is not implemented")
-}
-func (s *UnimplementedPrimaryStoreScan) ScanRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
-	return nil, errors.New("rpc ScanRecordRows of service PrimaryStoreScan is not implemented")
-}
-func (s *UnimplementedPrimaryStoreScan) GetShardHeads(ctx context.Context, req *GetShardHeadsReq) (*GetShardHeadsRsp, error) {
-	return nil, errors.New("rpc GetShardHeads of service PrimaryStoreScan is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -448,84 +346,6 @@ func (c *PrimaryStoreClientProxyImpl) ReadRecordRows(ctx context.Context, req *R
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadRecordRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// PrimaryStoreScanClientProxy defines service client proxy
-type PrimaryStoreScanClientProxy interface {
-	ScanTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
-
-	ScanRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
-
-	GetShardHeads(ctx context.Context, req *GetShardHeadsReq, opts ...client.Option) (rsp *GetShardHeadsRsp, err error)
-}
-
-type PrimaryStoreScanClientProxyImpl struct {
-	client client.Client
-	opts   []client.Option
-}
-
-var NewPrimaryStoreScanClientProxy = func(opts ...client.Option) PrimaryStoreScanClientProxy {
-	return &PrimaryStoreScanClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *PrimaryStoreScanClientProxyImpl) ScanTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStoreScan/ScanTimeSeriesRows")
-	msg.WithCalleeServiceName(PrimaryStoreScanServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStoreScan")
-	msg.WithCalleeMethod("ScanTimeSeriesRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReadTimeSeriesRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreScanClientProxyImpl) ScanRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStoreScan/ScanRecordRows")
-	msg.WithCalleeServiceName(PrimaryStoreScanServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStoreScan")
-	msg.WithCalleeMethod("ScanRecordRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReadRecordRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreScanClientProxyImpl) GetShardHeads(ctx context.Context, req *GetShardHeadsReq, opts ...client.Option) (*GetShardHeadsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStoreScan/GetShardHeads")
-	msg.WithCalleeServiceName(PrimaryStoreScanServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStoreScan")
-	msg.WithCalleeMethod("GetShardHeads")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetShardHeadsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -27,7 +27,6 @@ storage:
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore
-    primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200

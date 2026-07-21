@@ -65,10 +65,6 @@ services:
           port: 20102
           gateway_methods: [MergeTimeSeriesRows, ReadTimeSeriesRows, MergeRecordRows, ReadRecordRows]
           gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
-        - service_path: trpc.moox.storage.PrimaryStoreScan
-          port: 20105
-          gateway_methods: [ScanTimeSeriesRows, ScanRecordRows, GetShardHeads]
-          gateway_callers: [storage-view, archive]
   - name: storage-view
     kind: storage
     deployment_mode: process

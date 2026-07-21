@@ -226,7 +226,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 	for _, item := range seed.PrimaryStoreNodes {
 		if _, err := store.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{
 			NodeId: item.NodeID, Name: item.Name, Endpoint: item.Endpoint, Weight: item.Weight,
-			Status: item.Status, ConfigJson: item.ConfigJSON,
+			Status: item.Status, ConfigJson: item.ConfigJSON, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("storage_node", item.NodeID, err)
 		}
@@ -532,12 +532,13 @@ type seedViewColumn struct {
 
 // seedPrimaryStoreNode 描述待初始化的主存节点。
 type seedPrimaryStoreNode struct {
-	NodeID     string `yaml:"node_id"`
-	Name       string `yaml:"name"`
-	Endpoint   string `yaml:"endpoint"`
-	Weight     uint32 `yaml:"weight"`
-	ConfigJSON string `yaml:"config_json"`
-	Status     string `yaml:"status"`
+	NodeID     string            `yaml:"node_id"`
+	Name       string            `yaml:"name"`
+	Endpoint   string            `yaml:"endpoint"`
+	Weight     uint32            `yaml:"weight"`
+	ConfigJSON string            `yaml:"config_json"`
+	Status     string            `yaml:"status"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedDevice 描述待初始化的物理存储设备。

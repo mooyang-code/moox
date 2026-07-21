@@ -81,6 +81,7 @@ ensure_required_binary moox-gateway
 ensure_required_binary moox-gateway-cli
 ensure_required_binary moox-storage-primary
 ensure_required_binary moox-storage-view
+ensure_required_binary moox-storage-node
 ensure_required_binary moox-storage-cli
 
 HEALTH_SECRET_CLI="${TMP_ROOT}/moox-admin-cli"
@@ -117,6 +118,7 @@ GATEWAY_ARGS=(
   --dir "${DEPLOY_DIR}" \
   --stage "${STAGE_DIR}" \
   --skip-build \
+  --with-storage-node \
   --no-start \
   --no-web-host \
   --no-cloudnode \
@@ -125,7 +127,7 @@ GATEWAY_ARGS=(
   --no-monitor \
   "${GATEWAY_ARGS[@]}" >/dev/null
 
-for binary in moox-storage-primary moox-storage-view; do
+for binary in moox-storage-primary moox-storage-view moox-storage-node; do
   assert_file "${DEPLOY_DIR}/bin/${binary}"
 done
 for binary in moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
@@ -137,7 +139,7 @@ assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
 secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
-"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
+"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"

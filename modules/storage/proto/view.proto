@@ -35,12 +35,12 @@ message QueryTimeSeriesRowsReq {
   string view_id = 3;
   // keys 是时序查询 key；范围读时 key.data_time 可为空，实际版本集合由 time_range 表达。
   repeated TimeSeriesKey keys = 4;
-  // time_range 是闭区间时间范围。
+  // time_range 是左闭右开时间范围。
   TimeRange time_range = 5;
   // column_names 是要返回的列名；为空时返回 View 默认列。
   repeated string column_names = 6;
-  // filters 是结构化过滤条件列表。
-  repeated FilterExpr filters = 7;
+  // filter 是结构化过滤条件。
+  FilterSpec filter = 7;
   // sorts 是排序条件列表。
   repeated SortSpec sorts = 8;
   // page 是分页参数。
@@ -83,8 +83,8 @@ message SearchRecordRowsReq {
   string text_query = 5;
   // version_range 是可选版本范围。
   VersionRange version_range = 6;
-  // filters 是结构化过滤条件列表。
-  repeated FilterExpr filters = 7;
+  // filter 是结构化字段过滤，与 text_query 取 AND。
+  FilterSpec filter = 7;
   // sorts 是排序条件列表。
   repeated SortSpec sorts = 8;
   // column_names 是要返回的列名；为空时返回 View 默认列。
@@ -110,8 +110,8 @@ message SearchRecordRowsRsp {
 
 // DataView 是用户侧 View 查询服务。
 // View 索引是可从 PrimaryStore 重建的有界派生结果，不是完整事实存储；
-// 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 viewbuilder
-// 角色的 op=maintain 调度驱动（schema 抢占重建、容量切换、ready switch、
+// 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 view
+// 角色的 reconcile 调度驱动（schema 抢占重建、容量切换、ready switch、
 // 陈旧清理），不提供手动重建 RPC。
 service DataView {
   // QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。

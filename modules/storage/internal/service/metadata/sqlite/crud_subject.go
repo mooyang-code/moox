@@ -45,7 +45,7 @@ func upsertSubject(ctx context.Context, store execQueryRower, item *pb.Subject) 
 }
 
 func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, []any{spaceID, subjectID}, func() *pb.Subject { return &pb.Subject{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, []any{spaceID, subjectID}, func() *pb.Subject { return &pb.Subject{} })
 }
 
 func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
@@ -66,7 +66,7 @@ func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType st
 		subjectIDsJSON, subjectIDsJSON,
 		keyword, keyword, keyword, keyword, keyword, keyword,
 	}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_subject_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.Subject { return &pb.Subject{} },
@@ -108,7 +108,7 @@ func (s *Store) ListSubjectSymbols(ctx context.Context, spaceID string, subjectI
 		  AND (? = '' OR c_data_source_id = ?)
 		  AND (? = '' OR c_external_symbol = ?)`
 	args := []any{spaceID, spaceID, subjectID, subjectID, dataSourceID, dataSourceID, externalSymbol, externalSymbol}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_data_source_id, c_external_symbol`,
 		`SELECT COUNT(1) `+where,
 		args,
@@ -212,7 +212,7 @@ func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, dataset
 		  AND (? = '' OR c_dataset_id = ?)
 		  AND (? = '' OR c_subject_id = ?)`
 	args := []any{spaceID, spaceID, datasetID, datasetID, subjectID, subjectID}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id, c_subject_id`,
 		`SELECT COUNT(1) `+where,
 		args,

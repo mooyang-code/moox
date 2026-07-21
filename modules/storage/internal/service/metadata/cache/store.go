@@ -89,6 +89,35 @@ type entry struct {
 	Payload        []byte   `json:"payload"`
 }
 
+// MetadataSnapshot is an immutable read view captured from one cache
+// publication. It is used by request-level validators to avoid mixing two
+// metadata generations during one write.
+type MetadataSnapshot struct {
+	items []entry
+}
+
+func (s *Store) Snapshot() *MetadataSnapshot {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	raw := s.cache.Snapshot()
+	if raw == nil {
+		return nil
+	}
+	items := make([]entry, len(raw.Items))
+	for i, item := range raw.Items {
+		items[i] = item
+		items[i].Payload = append([]byte(nil), item.Payload...)
+		items[i].DatasetIDs = append([]string(nil), item.DatasetIDs...)
+		items[i].Freqs = append([]string(nil), item.Freqs...)
+	}
+	return &MetadataSnapshot{items: items}
+}
+
+func (s *Store) SnapshotReader() metadata.SnapshotReader { return s.Snapshot() }
+
+func (s *Store) RequestSnapshot() metadata.RequestSnapshot { return s.Snapshot() }
+
 var _ metadata.Reader = (*Store)(nil)
 
 func New(ctx context.Context, base metadata.Reader, opts Options) (*Store, error) {
@@ -165,6 +194,24 @@ func (s *Store) Refresh(ctx context.Context) error {
 	return s.cache.Refresh(ctx)
 }
 
+func (s *MetadataSnapshot) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
+	return snapshotGetProto(s, ctx, kindDataset, spaceID, datasetID, func() *pb.Dataset { return &pb.Dataset{} })
+}
+
+func (s *MetadataSnapshot) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	items, err := snapshotDecodeEntries(s.snapshotList(kindDatasetColumn, func(item entry) bool {
+		return (spaceID == "" || item.SpaceID == spaceID) && (datasetID == "" || item.DatasetID == datasetID)
+	}), func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	if err != nil {
+		return nil, nil, err
+	}
+	return pageItems(items, page)
+}
+
+func (s *MetadataSnapshot) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
+	return snapshotGetProto(s, ctx, kindPrimaryStoreNode, "", nodeID, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
+}
+
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
 	return getProto(s, ctx, kindSpace, "", spaceID, func() *pb.Space { return &pb.Space{} })
 }
@@ -193,11 +240,30 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 }
 
 func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindView, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(status == "" || item.Status == status) &&
-			(datasetID == "" || item.DatasetID == datasetID || containsString(item.DatasetIDs, datasetID))
-	}), func() *pb.View { return &pb.View{} })
+	var raw []entry
+	if spaceID != "" && datasetID != "" {
+		// Primary dataset hits use the dedicated index; secondary DatasetIDs still need a scan.
+		raw = append(raw, s.listByIndex(indexViewPrimaryDataset, kindView, spaceID, datasetID)...)
+		raw = append(raw, s.list(kindView, func(item entry) bool {
+			return item.SpaceID == spaceID && item.DatasetID != datasetID && containsString(item.DatasetIDs, datasetID)
+		})...)
+		if status != "" {
+			filtered := make([]entry, 0, len(raw))
+			for _, item := range raw {
+				if item.Status == status {
+					filtered = append(filtered, item)
+				}
+			}
+			raw = filtered
+		}
+	} else {
+		raw = s.list(kindView, func(item entry) bool {
+			return (spaceID == "" || item.SpaceID == spaceID) &&
+				(status == "" || item.Status == status) &&
+				(datasetID == "" || item.DatasetID == datasetID || containsString(item.DatasetIDs, datasetID))
+		})
+	}
+	items, err := decodeEntries(raw, func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -315,11 +381,26 @@ func (s *Store) ListDatasets(ctx context.Context, spaceID string, dataSourceID s
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindDatasetSubject, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(datasetID == "" || item.DatasetID == datasetID) &&
-			(subjectID == "" || item.SubjectID == subjectID)
-	}), func() *pb.DatasetSubject { return &pb.DatasetSubject{} })
+	var raw []entry
+	if spaceID != "" && datasetID != "" {
+		raw = s.listByIndex(indexDataset, kindDatasetSubject, spaceID, datasetID)
+		if subjectID != "" {
+			filtered := make([]entry, 0, len(raw))
+			for _, item := range raw {
+				if item.SubjectID == subjectID {
+					filtered = append(filtered, item)
+				}
+			}
+			raw = filtered
+		}
+	} else {
+		raw = s.list(kindDatasetSubject, func(item entry) bool {
+			return (spaceID == "" || item.SpaceID == spaceID) &&
+				(datasetID == "" || item.DatasetID == datasetID) &&
+				(subjectID == "" || item.SubjectID == subjectID)
+		})
+	}
+	items, err := decodeEntries(raw, func() *pb.DatasetSubject { return &pb.DatasetSubject{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -380,7 +461,42 @@ func (s *Store) ListFields(ctx context.Context, query metadata.FieldQuery) ([]*p
 }
 
 func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (metadata.FieldGroupCounts, error) {
-	return s.base.CountFieldsByGroup(ctx, spaceID)
+	result := metadata.FieldGroupCounts{ByGroup: make(map[string]uint64)}
+	groups, err := decodeEntries(s.list(kindFieldGroup, func(item entry) bool { return spaceID == "" || item.SpaceID == spaceID }), func() *pb.FieldGroup { return &pb.FieldGroup{} })
+	if err != nil {
+		return result, err
+	}
+	fields, err := decodeEntries(s.list(kindField, func(item entry) bool { return spaceID == "" || item.SpaceID == spaceID }), func() *pb.Field { return &pb.Field{} })
+	if err != nil {
+		return result, err
+	}
+	parents := make(map[string]string, len(groups))
+	for _, group := range groups {
+		if group != nil {
+			parents[group.GetGroupId()] = group.GetParentGroupId()
+			if _, ok := result.ByGroup[group.GetGroupId()]; !ok {
+				result.ByGroup[group.GetGroupId()] = 0
+			}
+		}
+	}
+	for _, field := range fields {
+		if field == nil {
+			continue
+		}
+		result.Total++
+		groupID := field.GetGroupId()
+		if groupID == "" {
+			result.Ungrouped++
+			continue
+		}
+		result.ByGroup[groupID]++
+	}
+	for groupID, parentID := range parents {
+		if parentID != "" {
+			result.ByGroup[parentID] += result.ByGroup[groupID]
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error) {
@@ -398,10 +514,16 @@ func (s *Store) ListFactors(ctx context.Context, spaceID string, algorithm strin
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindDatasetColumn, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(datasetID == "" || item.DatasetID == datasetID)
-	}), func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	var raw []entry
+	if spaceID != "" && datasetID != "" {
+		raw = s.listByIndex(indexDataset, kindDatasetColumn, spaceID, datasetID)
+	} else {
+		raw = s.list(kindDatasetColumn, func(item entry) bool {
+			return (spaceID == "" || item.SpaceID == spaceID) &&
+				(datasetID == "" || item.DatasetID == datasetID)
+		})
+	}
+	items, err := decodeEntries(raw, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -425,9 +547,24 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*pb.Device, err
 }
 
 func (s *Store) ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindDevice, func(item entry) bool {
-		return (nodeID == "" || item.NodeID == nodeID) && (engine == "" || item.Engine == engine)
-	}), func() *pb.Device { return &pb.Device{} })
+	var raw []entry
+	if nodeID != "" {
+		raw = s.listByIndex(indexNode, kindDevice, nodeID)
+		if engine != "" {
+			filtered := make([]entry, 0, len(raw))
+			for _, item := range raw {
+				if item.Engine == engine {
+					filtered = append(filtered, item)
+				}
+			}
+			raw = filtered
+		}
+	} else {
+		raw = s.list(kindDevice, func(item entry) bool {
+			return engine == "" || item.Engine == engine
+		})
+	}
+	items, err := decodeEntries(raw, func() *pb.Device { return &pb.Device{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -439,12 +576,27 @@ func (s *Store) GetPrimaryStoreRoute(ctx context.Context, spaceID string, routeI
 }
 
 func (s *Store) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindPrimaryStoreRoute, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(datasetID == "" || item.DatasetID == datasetID) &&
-			(subjectID == "" || item.SubjectID == subjectID) &&
-			(nodeID == "" || item.NodeID == nodeID)
-	}), func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
+	var raw []entry
+	if spaceID != "" && datasetID != "" {
+		raw = s.listByIndex(indexDataset, kindPrimaryStoreRoute, spaceID, datasetID)
+		if subjectID != "" || nodeID != "" {
+			filtered := make([]entry, 0, len(raw))
+			for _, item := range raw {
+				if (subjectID == "" || item.SubjectID == subjectID) && (nodeID == "" || item.NodeID == nodeID) {
+					filtered = append(filtered, item)
+				}
+			}
+			raw = filtered
+		}
+	} else {
+		raw = s.list(kindPrimaryStoreRoute, func(item entry) bool {
+			return (spaceID == "" || item.SpaceID == spaceID) &&
+				(datasetID == "" || item.DatasetID == datasetID) &&
+				(subjectID == "" || item.SubjectID == subjectID) &&
+				(nodeID == "" || item.NodeID == nodeID)
+		})
+	}
+	items, err := decodeEntries(raw, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -452,9 +604,15 @@ func (s *Store) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, data
 }
 
 func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindArchiveFile, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) && (datasetID == "" || item.DatasetID == datasetID)
-	}), func() *pb.ArchiveFile { return &pb.ArchiveFile{} })
+	var raw []entry
+	if spaceID != "" && datasetID != "" {
+		raw = s.listByIndex(indexDataset, kindArchiveFile, spaceID, datasetID)
+	} else {
+		raw = s.list(kindArchiveFile, func(item entry) bool {
+			return (spaceID == "" || item.SpaceID == spaceID) && (datasetID == "" || item.DatasetID == datasetID)
+		})
+	}
+	items, err := decodeEntries(raw, func() *pb.ArchiveFile { return &pb.ArchiveFile{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -484,7 +642,69 @@ func (s *Store) list(kind string, predicate func(entry) bool) []entry {
 	return s.cache.List(snapshotcache.Query[entry]{Filters: filters})
 }
 
+func (s *Store) listByIndex(indexName string, key ...string) []entry {
+	return s.cache.List(snapshotcache.Query[entry]{
+		Filters: []snapshotcache.Filter[entry]{snapshotcache.Eq[entry](indexName, key...)},
+	})
+}
+
+func (s *MetadataSnapshot) snapshotList(kind string, predicate func(entry) bool) []entry {
+	if s == nil {
+		return nil
+	}
+	out := make([]entry, 0)
+	for _, item := range s.items {
+		if item.Kind == kind && (predicate == nil || predicate(item)) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func snapshotGetProto[T proto.Message](s *MetadataSnapshot, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, err
+		}
+	}
+	for _, item := range s.snapshotList(kind, func(item entry) bool {
+		return item.SpaceID == spaceID && item.ID == id
+	}) {
+		return decodeEntry(item, newMessage)
+	}
+	var zero T
+	return zero, notFound(kind, spaceID, id)
+}
+
+func snapshotDecodeEntries[T proto.Message](items []entry, newMessage func() T) ([]T, error) {
+	out := make([]T, 0, len(items))
+	for _, item := range items {
+		value, err := decodeEntry(item, newMessage)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
 func (s *Store) fetchEntries(ctx context.Context) ([]entry, error) {
+	if snapshotter, ok := s.base.(interface {
+		WithReadSnapshot(context.Context, func(context.Context) error) error
+	}); ok {
+		var out []entry
+		err := snapshotter.WithReadSnapshot(ctx, func(snapshotCtx context.Context) error {
+			var err error
+			out, err = s.fetchEntriesFrom(snapshotCtx)
+			return err
+		})
+		return out, err
+	}
+	return s.fetchEntriesFrom(ctx)
+}
+
+func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	var out []entry
 	var err error
 
@@ -862,8 +1082,10 @@ func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
 			size = page.GetSize()
 		}
 	}
-	start := int((pageNo - 1) * size)
-	if start > len(items) {
+	offset64 := uint64(pageNo-1) * uint64(size)
+	maxInt := int(^uint(0) >> 1)
+	start := int(offset64)
+	if offset64 > uint64(maxInt) || start > len(items) {
 		start = len(items)
 	}
 	end := start + int(size)

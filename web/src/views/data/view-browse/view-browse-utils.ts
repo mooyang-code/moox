@@ -4,7 +4,8 @@ import type {
   Factor,
   Field,
   FieldValueType,
-  FilterExpr,
+  FilterCond,
+  FilterSpec,
   PageResult,
   SortSpec,
   TypedValue,
@@ -146,63 +147,59 @@ export function previewPagerText(limit: number) {
   return `仅展示前${limit}条数据`;
 }
 
-export function buildViewFilterExprs(filters: ViewFilterState[]): FilterExpr[] {
-  const out: FilterExpr[] = [];
+export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {
+  const out: FilterCond[] = [];
   for (const filter of filters) {
     const fieldName = filter.fieldName.trim();
     if (!fieldName) continue;
-    const argPrefix = safeArgName(fieldName);
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
 
     if (filter.operator === "empty") {
-      out.push({ expr: `is_empty(${fieldName})`, args: {} });
+      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [{ null_value: "NULL_VALUE" }] });
       continue;
     }
     if (filter.operator === "not_empty") {
-      out.push({ expr: `is_not_empty(${fieldName})`, args: {} });
+      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [{ null_value: "NULL_VALUE" }] });
       continue;
     }
     if (filter.operator === "range") {
       const startValue = (filter.startValue || "").trim();
       const endValue = (filter.endValue || "").trim();
       if (startValue) {
-        const argName = `${argPrefix}_start`;
-        out.push({ expr: `${fieldName} >= $${argName}`, args: { [argName]: typedFilterValue(startValue, valueType) } });
+        out.push({ column: fieldName, op: "FILTER_OP_GTE", values: [typedFilterValue(startValue, valueType)] });
       }
       if (endValue) {
-        const argName = `${argPrefix}_end`;
-        out.push({ expr: `${fieldName} <= $${argName}`, args: { [argName]: typedFilterValue(endValue, valueType) } });
+        out.push({ column: fieldName, op: "FILTER_OP_LTE", values: [typedFilterValue(endValue, valueType)] });
       }
       continue;
     }
 
     const value = (filter.value || "").trim();
     if (!value) continue;
-    const argName = `${argPrefix}_${filter.operator}`;
     const typedValue = typedFilterValue(value, valueType);
     if (filter.operator === "prefix") {
-      out.push({ expr: `starts_with(${fieldName}, $${argName})`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `${value}%` }] });
       continue;
     }
     if (filter.operator === "suffix") {
-      out.push({ expr: `ends_with(${fieldName}, $${argName})`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `%${value}` }] });
       continue;
     }
     if (filter.operator === "not_contains") {
-      out.push({ expr: `not_contains(${fieldName}, $${argName})`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_NOT_LIKE", values: [{ string_value: `%${value}%` }] });
       continue;
     }
     if (filter.operator === "eq") {
-      out.push({ expr: `${fieldName} == $${argName}`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [typedValue] });
       continue;
     }
     if (filter.operator === "neq") {
-      out.push({ expr: `${fieldName} != $${argName}`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [typedValue] });
       continue;
     }
-    out.push({ expr: `${fieldName} contains $${argName}`, args: { [argName]: typedValue } });
+    out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `%${value}%` }] });
   }
-  return out;
+  return out.length === 0 ? undefined : { groups: [{ conds: out, logical: "FILTER_LOGICAL_AND" }], group_logical: "FILTER_LOGICAL_AND" };
 }
 
 export function klineSubjectIdFromFilters(filters: ViewFilterState[]) {
@@ -296,10 +293,6 @@ function isOriginType(value: unknown, name: string, alias: number) {
 
 function isTimeSeriesDataKind(value: unknown) {
   return value === "DATA_KIND_TIME_SERIES" || value === 2;
-}
-
-function safeArgName(value: string) {
-  return value.replace(/[^A-Za-z0-9_]/g, "_") || "value";
 }
 
 function typedFilterValue(value: string, valueType: FieldValueType): TypedValue {

@@ -26,8 +26,6 @@ type DataNodeService interface {
 	GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error)
 
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error)
-
-	ScanFields(ctx context.Context, req *ScanFieldsReq) (*ScanFieldsRsp, error)
 }
 
 func DataNodeService_WriteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -102,24 +100,6 @@ func DataNodeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func DataNodeService_ScanFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ScanFieldsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).ScanFields(ctx, reqbody.(*ScanFieldsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // DataNodeServer_ServiceDesc descriptor for server.RegisterService.
 var DataNodeServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataNode",
@@ -140,10 +120,6 @@ var DataNodeServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataNode/CleanupExpiredBuckets",
 			Func: DataNodeService_CleanupExpiredBuckets_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNode/ScanFields",
-			Func: DataNodeService_ScanFields_Handler,
 		},
 	},
 }
@@ -171,9 +147,6 @@ func (s *UnimplementedDataNode) GetNodeState(ctx context.Context, req *GetNodeSt
 func (s *UnimplementedDataNode) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error) {
 	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNode is not implemented")
 }
-func (s *UnimplementedDataNode) ScanFields(ctx context.Context, req *ScanFieldsReq) (*ScanFieldsRsp, error) {
-	return nil, errors.New("rpc ScanFields of service DataNode is not implemented")
-}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -190,8 +163,6 @@ type DataNodeClientProxy interface {
 	GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (rsp *GetNodeStateRsp, err error)
 
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (rsp *CleanupExpiredBucketsRsp, err error)
-
-	ScanFields(ctx context.Context, req *ScanFieldsReq, opts ...client.Option) (rsp *ScanFieldsRsp, err error)
 }
 
 type DataNodeClientProxyImpl struct {
@@ -277,26 +248,6 @@ func (c *DataNodeClientProxyImpl) CleanupExpiredBuckets(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CleanupExpiredBucketsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodeClientProxyImpl) ScanFields(ctx context.Context, req *ScanFieldsReq, opts ...client.Option) (*ScanFieldsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/ScanFields")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
-	msg.WithCalleeMethod("ScanFields")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ScanFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

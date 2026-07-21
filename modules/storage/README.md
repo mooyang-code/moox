@@ -117,10 +117,10 @@ MOOX_STORAGE_ROLE=node
 MOOX_STORAGE_ROLE=view
 ```
 
-Primary 通过 `MOOX_STORAGE_NODE_TARGETS` 配置节点：
+Primary 从 Metadata Catalog 的 `PrimaryStoreNode.attributes.service_target` 路由到节点：
 
 ```text
-storage-node-0=ip://127.0.0.1:20107
+service_target: ip://127.0.0.1:20107
 ```
 
 View 使用：

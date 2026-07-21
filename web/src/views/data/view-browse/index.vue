@@ -714,7 +714,7 @@ async function loadTimeSeriesViewRows() {
       view_id: view.view_id,
       ...(timeRange ? { time_range: timeRange } : {}),
       ...(preferredColumnNames.value.length > 0 ? { column_names: preferredColumnNames.value } : {}),
-      filters: activeFilterExprs(),
+      filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
       limit: VIEW_BROWSE_PREVIEW_LIMIT,
       page: { page: pagination.current, size: pagination.pageSize },
@@ -754,7 +754,7 @@ async function loadRecordViewRows() {
       space_id,
       view_id: view.view_id,
       text_query: recordKeyword.value.trim(),
-      filters: activeFilterExprs(),
+      filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
       page: { page: pagination.current, size: pagination.pageSize }
     });
@@ -1003,7 +1003,7 @@ async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]
       view_id: viewId,
       ...(timeRange ? { time_range: timeRange } : {}),
       ...(klineColumnNames.value.length > 0 ? { column_names: klineColumnNames.value } : {}),
-      filters: activeFilterExprs(),
+      filter: activeFilterExprs(),
       sorts: buildKlineQuerySorts(),
       limit,
       page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },

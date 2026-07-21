@@ -9,23 +9,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
+	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
-	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
-	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/viewbuilder/eventconsumer"
-	viewv2 "github.com/mooyang-code/moox/modules/storage/internal/service/viewv2"
+	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
+	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
+	_ "trpc.group/trpc-go/trpc-database/timer"
+	_ "trpc.group/trpc-go/trpc-filter/recovery"
+	_ "trpc.group/trpc-go/trpc-filter/validation"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
+	_ "trpc.group/trpc-go/trpc-log-cls"
+	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 func main() {
@@ -79,19 +88,17 @@ func runPrimaryRole() error {
 	if viewSecret == "" {
 		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
 	}
-	targets := parseNodeTargets(os.Getenv("MOOX_STORAGE_NODE_TARGETS"))
-	if len(targets) == 0 {
-		if target := os.Getenv("MOOX_STORAGE_NODE_TARGET"); target != "" {
-			nodeID := os.Getenv("MOOX_STORAGE_NODE_ID")
-			if nodeID == "" {
-				nodeID = "storage-node-0"
-			}
-			targets[nodeID] = target
-		}
-	}
-	proxies := make(map[string]pb.DataNodeService, len(targets))
+	proxies := make(map[string]pb.DataNodeService)
+	var proxiesMu sync.Mutex
 	resolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
-		dataset, err := cached.GetDataset(ctx, spaceID, datasetID)
+		snapshot := metadata.RequestSnapshotFromContext(ctx)
+		if snapshot == nil {
+			snapshot = cached.Snapshot()
+		}
+		if snapshot == nil {
+			return nil, errors.New("metadata cache snapshot is unavailable")
+		}
+		dataset, err := snapshot.GetDataset(ctx, spaceID, datasetID)
 		if err != nil {
 			return nil, err
 		}
@@ -99,10 +106,25 @@ func runPrimaryRole() error {
 			return nil, fmt.Errorf("dataset %s/%s has no data_node_id", spaceID, datasetID)
 		}
 		nodeID := dataset.GetDataNodeId()
-		target := targets[nodeID]
-		if target == "" {
-			return nil, fmt.Errorf("data node %q has no configured target", nodeID)
+		node, err := snapshot.GetPrimaryStoreNode(ctx, nodeID)
+		if err != nil {
+			return nil, err
 		}
+		target := ""
+		if node != nil {
+			target = node.GetAttributes()["service_target"]
+			if target == "" {
+				target = node.GetEndpoint()
+			}
+		}
+		if target == "" {
+			return nil, fmt.Errorf("data node %q has no service_target", nodeID)
+		}
+		if !strings.Contains(target, "://") {
+			target = "ip://" + target
+		}
+		proxiesMu.Lock()
+		defer proxiesMu.Unlock()
 		if proxies[nodeID] == nil {
 			proxy := pb.NewDataNodeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
 			proxies[nodeID] = &dataNodeProxyAdapter{proxy: proxy}
@@ -129,7 +151,7 @@ func runPrimaryRole() error {
 		}
 		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
 	}
-	svc, err := primarystorev2.New(primarystorev2.Options{Resolver: resolver, View: viewResolver, Validator: primarystorev2.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -155,39 +177,33 @@ func runPrimaryRole() error {
 	cleanupAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
 	go runCleanupLoop(cleanupCtx, cached, resolver, cleanupAuth, time.Hour)
 	s := trpc.NewServer()
-	pb.RegisterPrimaryStoreService(s, svc)
-	scanListener := s.Service("trpc.moox.storage.PrimaryStoreScan.trpc")
-	if scanListener == nil {
-		return errors.New("PrimaryStoreScan listener is not configured")
+	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc", "trpc.moox.storage.PrimaryStore.http"} {
+		if listener := s.Service(name); listener != nil {
+			pb.RegisterPrimaryStoreService(listener, svc)
+		}
 	}
-	pb.RegisterPrimaryStoreScanService(scanListener, svc)
-	pb.RegisterMetadataService(s, metadataSvc)
+	for _, name := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.Metadata.trpc", "trpc.moox.storage.Metadata.http"} {
+		if listener := s.Service(name); listener != nil {
+			pb.RegisterMetadataService(listener, metadataSvc)
+		}
+	}
 	if err := registerRoleHealth(s, "storage-primary"); err != nil {
 		return err
 	}
 	return s.Serve()
 }
 
-func parseNodeTargets(raw string) map[string]string {
-	result := make(map[string]string)
-	for _, pair := range strings.Split(raw, ",") {
-		parts := strings.SplitN(strings.TrimSpace(pair), "=", 2)
-		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-			result[parts[0]] = parts[1]
-		}
-	}
-	return result
-}
-
 type datasetReader interface {
 	ListDatasets(context.Context, string, string, pb.DataKind, string, *pb.Page) ([]*pb.Dataset, *pb.PageResult, error)
 }
 
-func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarystorev2.NodeResolver, auth *pb.AuthInfo, interval time.Duration) {
+func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	_ = cleanupDatasets(ctx, reader, resolver, auth, time.Now().UTC())
+	if err := cleanupDatasets(ctx, reader, resolver, auth, time.Now().UTC()); err != nil {
+		log.Printf("storage cleanup initial run failed: %v", err)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -195,12 +211,14 @@ func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarys
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			_ = cleanupDatasets(ctx, reader, resolver, auth, now.UTC())
+			if err := cleanupDatasets(ctx, reader, resolver, auth, now.UTC()); err != nil {
+				log.Printf("storage cleanup run failed: %v", err)
+			}
 		}
 	}
 }
 
-func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primarystorev2.NodeResolver, auth *pb.AuthInfo, now time.Time) error {
+func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, now time.Time) error {
 	var result error
 	for pageNo := uint32(1); ; pageNo++ {
 		datasets, page, err := reader.ListDatasets(ctx, "", "", pb.DataKind_DATA_KIND_TIME_SERIES, "", &pb.Page{Page: pageNo, Size: 1000})
@@ -221,7 +239,7 @@ func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primary
 				result = errors.Join(result, err)
 				continue
 			}
-			before := now.UTC().Add(-keep).Truncate(24 * time.Hour).Format("2006-01-02T15:04:05.000000000Z")
+			before := now.UTC().Add(-keep).Truncate(cleanupBucketDuration()).Format("2006-01-02T15:04:05.000000000Z")
 			rsp, err := node.CleanupExpiredBuckets(ctx, &pb.CleanupExpiredBucketsReq{
 				AuthInfo: auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), BeforeBucketStart: before,
 			})
@@ -239,6 +257,16 @@ func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primary
 	}
 }
 
+func cleanupBucketDuration() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_BUCKET_DURATION")); raw != "" {
+		if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
+			return duration
+		}
+		log.Printf("invalid MOOX_STORAGE_BUCKET_DURATION=%q; using 24h", raw)
+	}
+	return 24 * time.Hour
+}
+
 func runViewRole() error {
 	root := os.Getenv("MOOX_STORAGE_HOME")
 	if root == "" {
@@ -248,7 +276,7 @@ func runViewRole() error {
 	if viewSecret == "" {
 		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for view role")
 	}
-	svc, err := viewv2.New(filepath.Join(root, "view-indexes"), viewSecret)
+	svc, err := viewservice.New(filepath.Join(root, "view-indexes"), viewSecret)
 	if err != nil {
 		return err
 	}
@@ -259,31 +287,23 @@ func runViewRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
 	}
-	metadataTarget := os.Getenv("MOOX_STORAGE_METADATA_TARGET")
-	if metadataTarget == "" {
-		metadataTarget = "ip://127.0.0.1:20100"
-	}
-	metadataProxy := pb.NewMetadataClientProxy(client.WithTarget(metadataTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
-	primaryTarget := os.Getenv("MOOX_STORAGE_PRIMARY_TARGET")
-	if primaryTarget == "" {
-		primaryTarget = "ip://127.0.0.1:20101"
-	}
+	metadataTarget := envOrDefault("MOOX_STORAGE_METADATA_TARGET", "ip://127.0.0.1:20200")
+	metadataNetwork := envOrDefault("MOOX_STORAGE_METADATA_NETWORK", "tcp")
+	metadataProtocol := envOrDefault("MOOX_STORAGE_METADATA_PROTOCOL", "http")
+	metadataProxy := pb.NewMetadataClientProxy(client.WithTarget(metadataTarget), client.WithNetwork(metadataNetwork), client.WithProtocol(metadataProtocol))
+	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20201")
+	primaryNetwork := envOrDefault("MOOX_STORAGE_PRIMARY_NETWORK", "tcp")
+	primaryProtocol := envOrDefault("MOOX_STORAGE_PRIMARY_PROTOCOL", "http")
 	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
 	}
-	primaryProxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(primaryTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
-	primaryScanTarget := os.Getenv("MOOX_STORAGE_PRIMARY_SCAN_TARGET")
-	if primaryScanTarget == "" {
-		primaryScanTarget = "ip://127.0.0.1:20105"
-	}
-	primaryScanProxy := pb.NewPrimaryStoreScanClientProxy(client.WithTarget(primaryScanTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
+	primaryProxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(primaryTarget), client.WithNetwork(primaryNetwork), client.WithProtocol(primaryProtocol))
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	stopReconciler, err := svc.StartReconciler(trpc.BackgroundContext(), viewv2.ReconcilerOptions{
+	stopReconciler, err := svc.StartReconciler(trpc.BackgroundContext(), viewservice.ReconcilerOptions{
 		Metadata: metadataProxy,
 		Primary:  primaryProxy,
-		Scan:     primaryScanProxy,
 		OwnerID:  "storage-view",
 		Interval: 30 * time.Second,
 		Grace:    time.Minute,
@@ -308,11 +328,22 @@ func runViewRole() error {
 		return errors.New("ViewIndex listener is not configured")
 	}
 	pb.RegisterViewIndexService(indexListener, svc)
-	pb.RegisterDataViewService(s, svc)
+	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc", "trpc.moox.storage.DataView.http"} {
+		if listener := s.Service(name); listener != nil {
+			pb.RegisterDataViewService(listener, svc)
+		}
+	}
 	if err := registerRoleHealth(s, "storage-view"); err != nil {
 		return err
 	}
 	return s.Serve()
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 type dataNodeProxyAdapter struct{ proxy pb.DataNodeClientProxy }
@@ -333,10 +364,6 @@ func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNode
 func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return a.proxy.CleanupExpiredBuckets(ctx, req)
 }
-func (a *dataNodeProxyAdapter) ScanFields(ctx context.Context, req *pb.ScanFieldsReq) (*pb.ScanFieldsRsp, error) {
-	return a.proxy.ScanFields(ctx, req)
-}
-
 func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
 	clone := proto.Clone(req).(*pb.QueryTimeSeriesRowsReq)
 	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)

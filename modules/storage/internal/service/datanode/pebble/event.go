@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -51,6 +52,7 @@ func BuildDatasetFieldsChangedMessage(nodeID string, spaceID, datasetID string, 
 func BindOutboxID(data []byte, nodeID string, outboxID uint64) ([]byte, error) {
 	msg := &messagepb.MooxMessage{}
 	if err := proto.Unmarshal(data, msg); err != nil {
+		log.Printf("storage outbox message %d has invalid envelope: %v", outboxID, err)
 		return data, nil
 	}
 	token, err := jetstream.EncodeSubjectToken(nodeID)

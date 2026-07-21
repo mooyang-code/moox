@@ -77,15 +77,14 @@ type StorageEmbeddedEventBus struct {
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName         string                 `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName     string                 `yaml:"primary_store_service_name"`
-	PrimaryStoreScanServiceName string                 `yaml:"primary_store_scan_service_name"`
-	IndexServiceName            string                 `yaml:"index_service_name"`
-	BatchSize                   int                    `yaml:"batch_size"`
-	BatchWaitMS                 int                    `yaml:"batch_wait_ms"`
-	MaxWorkers                  int                    `yaml:"max_workers"`
-	Maintenance                 StorageViewMaintenance `yaml:"maintenance"`
-	StorageRPC                  StorageRPCConfig       `yaml:"storage_rpc"`
+	MetadataServiceName     string                 `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName string                 `yaml:"primary_store_service_name"`
+	IndexServiceName        string                 `yaml:"index_service_name"`
+	BatchSize               int                    `yaml:"batch_size"`
+	BatchWaitMS             int                    `yaml:"batch_wait_ms"`
+	MaxWorkers              int                    `yaml:"max_workers"`
+	Maintenance             StorageViewMaintenance `yaml:"maintenance"`
+	StorageRPC              StorageRPCConfig       `yaml:"storage_rpc"`
 }
 
 type StorageRPCConfig struct {
@@ -326,9 +325,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.PrimaryStoreServiceName == "" {
 		c.View.PrimaryStoreServiceName = "trpc.moox.storage.PrimaryStore"
-	}
-	if c.View.PrimaryStoreScanServiceName == "" {
-		c.View.PrimaryStoreScanServiceName = "trpc.moox.storage.PrimaryStoreScan"
 	}
 	if c.View.IndexServiceName == "" {
 		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"

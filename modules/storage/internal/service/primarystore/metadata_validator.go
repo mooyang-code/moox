@@ -1,9 +1,10 @@
-package primarystorev2
+package primarystore
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -25,11 +26,50 @@ func NewMetadataValidator(reader metadataReader) *MetadataValidator {
 }
 
 func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUpsert) error {
-	if v == nil || v.reader == nil {
+	return v.validateRow(ctx, row, v.snapshotReader(ctx))
+}
+
+func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFieldUpsert) error {
+	reader := v.snapshotReader(ctx)
+	for _, row := range rows {
+		if err := v.validateRow(ctx, row, reader); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// snapshotReader prefers the request-scoped snapshot so validation and routing
+// share one immutable metadata view for the whole write.
+func (v *MetadataValidator) snapshotReader(ctx context.Context) metadataReader {
+	if snapshot := metadata.RequestSnapshotFromContext(ctx); snapshot != nil {
+		return snapshot
+	}
+	if provider, ok := v.reader.(interface {
+		SnapshotReader() metadata.SnapshotReader
+	}); ok {
+		if snapshot := provider.SnapshotReader(); snapshot != nil {
+			return snapshot
+		}
+	}
+	return v.reader
+}
+
+func (v *MetadataValidator) RequestSnapshot() metadata.RequestSnapshot {
+	if provider, ok := v.reader.(interface {
+		RequestSnapshot() metadata.RequestSnapshot
+	}); ok {
+		return provider.RequestSnapshot()
+	}
+	return nil
+}
+
+func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUpsert, reader metadataReader) error {
+	if v == nil || reader == nil {
 		return fmt.Errorf("metadata validator is not configured")
 	}
 	key := row.GetKey()
-	dataset, err := v.reader.GetDataset(ctx, key.GetSpaceId(), key.GetDatasetId())
+	dataset, err := reader.GetDataset(ctx, key.GetSpaceId(), key.GetDatasetId())
 	if err != nil {
 		return err
 	}
@@ -45,7 +85,7 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 	const pageSize = uint32(1000)
 	var columns []*pb.DatasetColumn
 	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := v.reader.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), &pb.Page{Page: pageNo, Size: pageSize})
+		items, page, err := reader.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), &pb.Page{Page: pageNo, Size: pageSize})
 		if err != nil {
 			return err
 		}
@@ -68,7 +108,13 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 			return fmt.Errorf("field %q is not registered in dataset %q", field.GetFieldId(), key.GetDatasetId())
 		}
 		declared, actual := column.GetValueType(), typedValueType(field.GetValue())
-		if declared != pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED && actual != pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED && declared != actual {
+		if declared == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
+			return fmt.Errorf("field %q has no declared value type", field.GetFieldId())
+		}
+		if actual == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
+			return fmt.Errorf("field %q has no value type", field.GetFieldId())
+		}
+		if declared != actual {
 			return fmt.Errorf("field %q type mismatch: got %s want %s", field.GetFieldId(), actual.String(), declared.String())
 		}
 	}

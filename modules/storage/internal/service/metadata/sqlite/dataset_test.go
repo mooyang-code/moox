@@ -10,8 +10,8 @@ import (
 
 func TestUpsertDatasetRequiresDataNodeOnCreate(t *testing.T) {
 	ctx := context.Background()
-	store := openV2TestStore(t, ctx)
-	seedV2DatasetParents(t, ctx, store)
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
 	_, err := store.UpsertDataset(ctx, &pb.Dataset{
 		SpaceId:      "space",
 		DatasetId:    "dataset",
@@ -26,8 +26,8 @@ func TestUpsertDatasetRequiresDataNodeOnCreate(t *testing.T) {
 
 func TestUpsertDatasetRejectsIdentityChanges(t *testing.T) {
 	ctx := context.Background()
-	store := openV2TestStore(t, ctx)
-	seedV2DatasetParents(t, ctx, store)
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
 	original := &pb.Dataset{
 		SpaceId:      "space",
 		DatasetId:    "dataset",
@@ -52,7 +52,7 @@ func TestUpsertDatasetRejectsIdentityChanges(t *testing.T) {
 	}
 }
 
-func openV2TestStore(t *testing.T, ctx context.Context) *Store {
+func openTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	store, err := Open(ctx, Options{
 		Path:       filepath.Join(t.TempDir(), "metadata.db"),
@@ -68,7 +68,7 @@ func openV2TestStore(t *testing.T, ctx context.Context) *Store {
 	return store
 }
 
-func seedV2DatasetParents(t *testing.T, ctx context.Context, store *Store) {
+func seedDatasetParents(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
 	if _, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: "space", Name: "Space"}); err != nil {
 		t.Fatal(err)

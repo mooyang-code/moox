@@ -12,7 +12,7 @@ enum SortOrder {
   SORT_ORDER_DESC = 1;
 }
 
-// TimeRange 表示闭区间时间条件：[start_time, end_time]。
+// TimeRange 表示左闭右开时间条件：[start_time, end_time)。
 // start_time / end_time 为空时表示对应方向无界。
 // 对外请求必须使用 RFC3339 / RFC3339Nano 时间格式，例如：
 //   2025-03-03T00:05:00Z
@@ -21,9 +21,9 @@ enum SortOrder {
 // 服务端会统一归一化为 UTC + 固定 9 位纳秒格式：
 //   2006-01-02T15:04:05.000000000Z
 message TimeRange {
-  // start_time 是闭区间下界，必须为 RFC3339/RFC3339Nano；为空表示无下界。
+  // start_time 是左闭下界，必须为 RFC3339/RFC3339Nano；为空表示无下界。
   string start_time = 1;
-  // end_time 是闭区间上界，必须为 RFC3339/RFC3339Nano；为空表示无上界。
+  // end_time 是右开上界，必须为 RFC3339/RFC3339Nano；为空表示无上界。
   string end_time = 2;
 }
 
@@ -104,12 +104,46 @@ message SortSpec {
   bool desc = 2;
 }
 
-// FilterExpr 表示服务端支持的过滤表达式。
-message FilterExpr {
-  // expr 是表达式文本，服务端只接受受支持的表达式子集。
-  string expr = 1;
-  // args 是表达式使用的命名参数。
-  map<string, TypedValue> args = 2;
+// FilterOp 是结构化过滤条件的操作符。
+enum FilterOp {
+  FILTER_OP_UNSPECIFIED = 0;
+  FILTER_OP_EQ = 1;
+  FILTER_OP_NE = 2;
+  FILTER_OP_GT = 3;
+  FILTER_OP_GTE = 4;
+  FILTER_OP_LT = 5;
+  FILTER_OP_LTE = 6;
+  FILTER_OP_IN = 7;
+  FILTER_OP_NOT_IN = 8;
+  FILTER_OP_LIKE = 9;
+  FILTER_OP_BETWEEN = 10;
+  FILTER_OP_NOT_LIKE = 11;
+}
+
+// FilterLogical 是条件组内或条件组之间的布尔关系。
+enum FilterLogical {
+  FILTER_LOGICAL_AND = 0;
+  FILTER_LOGICAL_OR = 1;
+}
+
+// FilterCond 是一个列白名单约束下的参数化条件。
+message FilterCond {
+  string column = 1;
+  FilterOp op = 2;
+  repeated TypedValue values = 3;
+}
+
+// FilterGroup 是一组按 logical 组合的条件。
+message FilterGroup {
+  repeated FilterCond conds = 1;
+  FilterLogical logical = 2;
+}
+
+// FilterSpec 是顶层条件组合。暂不支持文本表达式逃生舱。
+message FilterSpec {
+  repeated FilterGroup groups = 1;
+  FilterLogical group_logical = 2;
+  reserved 3;
 }
 
 // DataKind 表示 Dataset 的结构形态。

@@ -32,10 +32,6 @@ func (n *cleanupNode) CleanupExpiredBuckets(_ context.Context, req *pb.CleanupEx
 	n.request = req
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
-func (*cleanupNode) ScanFields(context.Context, *pb.ScanFieldsReq) (*pb.ScanFieldsRsp, error) {
-	return nil, nil
-}
-
 func TestCleanupDatasetsUsesSpaceAndKeepDuration(t *testing.T) {
 	node := &cleanupNode{}
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)

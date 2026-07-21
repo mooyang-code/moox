@@ -36,12 +36,12 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
-	return scanMessageWithSQLTimestamps(s.db.QueryRowContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
+	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
 }
 
 func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	pageNo, size, offset := normalizePage(page)
-	rows, err := s.db.QueryContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, size, offset)
+	rows, err := s.queryDB(ctx).QueryContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, size, offset)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -58,7 +58,7 @@ func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]
 		return nil, nil, err
 	}
 	var total uint32
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_spaces WHERE (? = '' OR c_owner = ?)`, owner, owner).Scan(&total); err != nil {
+	if err := s.queryDB(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM t_spaces WHERE (? = '' OR c_owner = ?)`, owner, owner).Scan(&total); err != nil {
 		return nil, nil, err
 	}
 	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: uint64(offset)+uint64(len(items)) < uint64(total)}, nil
@@ -92,7 +92,7 @@ func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.
 }
 
 func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
 }
 
 func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string, market string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
@@ -104,7 +104,7 @@ func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string
 		  AND (? = '' OR c_market = ?)
 		  AND (? = '' OR instr(lower(c_data_source_id), lower(?)) > 0 OR instr(lower(c_name), lower(?)) > 0 OR instr(lower(c_kind), lower(?)) > 0 OR instr(lower(c_market), lower(?)) > 0)`
 	args := []any{spaceID, spaceID, kind, kind, market, market, keyword, keyword, keyword, keyword, keyword}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_data_source_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.DataSource { return &pb.DataSource{} },

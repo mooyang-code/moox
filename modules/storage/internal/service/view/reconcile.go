@@ -1,9 +1,10 @@
-package viewv2
+package view
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -29,15 +30,9 @@ type FieldReader interface {
 	ReadFields(context.Context, *pb.PrimaryReadFieldsReq, ...client.Option) (*pb.PrimaryReadFieldsRsp, error)
 }
 
-type PrimaryStoreScanClient interface {
-	ScanTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error)
-	ScanRecordRows(context.Context, *pb.ReadRecordRowsReq, ...client.Option) (*pb.ReadRecordRowsRsp, error)
-}
-
 type ReconcilerOptions struct {
 	Metadata MetadataClient
 	Primary  FieldReader
-	Scan     PrimaryStoreScanClient
 	Interval time.Duration
 	OwnerID  string
 	Grace    time.Duration
@@ -67,7 +62,9 @@ func (s *Service) StartReconciler(ctx context.Context, opts ReconcilerOptions) (
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				_ = s.reconcileOnce(loopCtx, opts)
+				if err := s.reconcileOnce(loopCtx, opts); err != nil {
+					log.Printf("storage view reconcile failed: %v", err)
+				}
 			}
 		}
 	}()
@@ -86,6 +83,9 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 		}
 		for _, view := range rsp.GetViews() {
 			if err := s.reconcileView(ctx, opts, auth, view); err != nil {
+				if view != nil {
+					log.Printf("storage view reconcile %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
+				}
 				continue
 			}
 		}
@@ -220,24 +220,8 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 	} else {
-		datasetRsp, err := opts.Metadata.GetDataset(ctx, &pb.GetDatasetReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId()})
-		if err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			return err
-		}
-		if err := requireSuccess(datasetRsp.GetRetInfo()); err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			return err
-		}
-		if datasetRsp.GetDataset() == nil {
-			err := errors.New("primary dataset metadata is missing")
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			return err
-		}
-		if err := s.BackfillInitialView(ctx, view, indexID, columns, datasetRsp.GetDataset().GetDataKind(), opts.Primary, opts.Scan); err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			return err
-		}
+		// A first build starts empty and is filled by the subscribed change stream.
+		// DataNode deliberately exposes no range scan API.
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, uint64(stats.EntryCount)); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
@@ -256,7 +240,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if view.GetActiveIndexId() != "" {
 		return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
 	}
-	return nil
+	return s.AttachActiveView(activatedViewMetadata(activated.GetView(), view, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns))
 }
 
 type resumeBuildRetry struct{ cause error }
@@ -308,23 +292,8 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 		activePhysicalExists = activeStats.Exists
 	}
 	if !activePhysicalExists {
-		datasetRsp, err := opts.Metadata.GetDataset(ctx, &pb.GetDatasetReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId()})
-		if err != nil {
-			return err
-		}
-		if err := requireSuccess(datasetRsp.GetRetInfo()); err != nil {
-			return err
-		}
-		if datasetRsp.GetDataset() == nil {
-			return errors.New("primary dataset metadata is missing")
-		}
-		columns := build.GetColumns()
-		if len(columns) == 0 {
-			columns = view.GetColumns()
-		}
-		if err := s.BackfillInitialView(ctx, view, build.GetIndexId(), columns, datasetRsp.GetDataset().GetDataKind(), opts.Primary, opts.Scan); err != nil {
-			return err
-		}
+		// A recovered build without a physical active index also resumes from
+		// the change stream; historical enumeration is intentionally absent.
 		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
 			return err
 		}
@@ -349,7 +318,34 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 	if view.GetActiveIndexId() != "" {
 		return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
 	}
-	return nil
+	return s.AttachActiveView(activatedViewMetadata(activated.GetView(), view, build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns()))
+}
+
+func activatedViewMetadata(response, source *pb.View, indexID, engine string, revision uint64, schemaHash string, columns []*pb.ViewColumn) *pb.View {
+	var result *pb.View
+	if response != nil {
+		result = proto.Clone(response).(*pb.View)
+	} else if source != nil {
+		result = proto.Clone(source).(*pb.View)
+	} else {
+		result = &pb.View{}
+	}
+	if result.GetActiveIndexId() == "" {
+		result.ActiveIndexId = indexID
+	}
+	if result.GetEngine() == "" {
+		result.Engine = engine
+	}
+	if result.GetActiveViewRevision() == 0 {
+		result.ActiveViewRevision = revision
+	}
+	if result.GetActiveViewSchemaHash() == "" {
+		result.ActiveViewSchemaHash = schemaHash
+	}
+	if len(result.GetActiveColumns()) == 0 {
+		result.ActiveColumns = columns
+	}
+	return result
 }
 
 func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View) ([]*pb.ViewColumn, error) {
@@ -379,98 +375,6 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetColumns()) == 0 {
 			return columns, nil
 		}
-	}
-}
-
-func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexID string, columns []*pb.ViewColumn, dataKind pb.DataKind, reader FieldReader, scan PrimaryStoreScanClient) error {
-	if err := s.acquireBackfill(ctx); err != nil {
-		return err
-	}
-	defer s.releaseLiveGate()
-	if view == nil || indexID == "" || scan == nil {
-		return errors.New("initial view build requires a primary scan client")
-	}
-	if view.GetPrimaryDatasetId() == "" {
-		return errors.New("initial view build requires primary_dataset_id")
-	}
-	if dataKind != pb.DataKind_DATA_KIND_TIME_SERIES && dataKind != pb.DataKind_DATA_KIND_RECORD {
-		return errors.New("initial view build requires a valid primary dataset kind")
-	}
-	s.mu.RLock()
-	schema := s.schemas[indexID]
-	s.mu.RUnlock()
-	fieldIDs := sourceFieldIDs(columns, view.GetPrimaryDatasetId())
-	if len(fieldIDs) == 0 {
-		return errors.New("initial view build requires primary dataset columns")
-	}
-	pageSize := uint32(100)
-	pageToken := ""
-	for pageNo := uint32(1); ; pageNo++ {
-		var writes []viewindex.RowWrite
-		var page *pb.PageResult
-		nextPageToken := ""
-		if dataKind == pb.DataKind_DATA_KIND_TIME_SERIES {
-			rsp, err := scan.ScanTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: s.primaryAuthClone(), SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
-				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize}, PageToken: pageToken,
-			})
-			if err != nil {
-				return err
-			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return err
-			}
-			page = rsp.GetPageResult()
-			nextPageToken = rsp.GetNextPageToken()
-			for _, row := range rsp.GetRows() {
-				if row == nil || row.GetKey() == nil {
-					continue
-				}
-				key := &pb.RowKey{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: row.GetKey().GetSubjectId(), Freq: row.GetKey().GetFreq(), DataTime: row.GetKey().GetDataTime()}}}
-				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: row.GetFields(), Attributes: stringAttributes(row.GetAttributes())})
-			}
-		} else {
-			rsp, err := scan.ScanRecordRows(ctx, &pb.ReadRecordRowsReq{
-				AuthInfo: s.primaryAuthClone(), SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
-				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize}, PageToken: pageToken,
-			})
-			if err != nil {
-				return err
-			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return err
-			}
-			page = rsp.GetPageResult()
-			nextPageToken = rsp.GetNextPageToken()
-			for _, row := range rsp.GetRows() {
-				if row == nil || row.GetKey() == nil {
-					continue
-				}
-				key := &pb.RowKey{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: row.GetKey().GetRecordId(), Version: row.GetKey().GetVersion()}}}
-				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: row.GetFields(), Attributes: stringAttributes(row.GetAttributes())})
-			}
-		}
-		if len(writes) != 0 {
-			if reader != nil {
-				if err := s.enrichInitialRows(ctx, reader, schema, writes); err != nil {
-					return err
-				}
-			}
-			engine, err := s.engineFor(indexID)
-			if err != nil {
-				return err
-			}
-			if err := engine.Apply(ctx, indexID, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
-				return err
-			}
-		}
-		if page == nil || !page.GetHasMore() || len(writes) == 0 && page.GetTotal() == 0 {
-			return s.MarkViewBuildReady(view.GetSpaceId(), view.GetViewId())
-		}
-		if nextPageToken == "" {
-			return errors.New("primary scan returned has_more without a page token")
-		}
-		pageToken = nextPageToken
 	}
 }
 
@@ -591,10 +495,12 @@ func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *p
 	if cause != nil {
 		message = cause.Error()
 	}
-	_, _ = opts.Metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
+	if _, err := opts.Metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
 		BuildId: buildID, OwnerId: opts.OwnerID, Error: message,
-	})
+	}); err != nil {
+		log.Printf("storage view failed to mark build %s/%s as failed: %v", view.GetSpaceId(), view.GetViewId(), err)
+	}
 	s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), indexID)
 }
 

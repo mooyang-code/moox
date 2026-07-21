@@ -27,6 +27,33 @@ type FieldGroupCounts struct {
 	Ungrouped uint64
 }
 
+// SnapshotReader is the request-scoped metadata surface used by validators.
+// Implementations must expose one immutable cache generation.
+type SnapshotReader interface {
+	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
+	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
+}
+
+// RequestSnapshot is the immutable metadata generation shared by validation
+// and route resolution for one PrimaryStore request.
+type RequestSnapshot interface {
+	SnapshotReader
+	GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error)
+}
+
+type requestSnapshotContextKey struct{}
+
+func WithRequestSnapshot(ctx context.Context, snapshot RequestSnapshot) context.Context {
+	return context.WithValue(ctx, requestSnapshotContextKey{}, snapshot)
+}
+
+func RequestSnapshotFromContext(ctx context.Context) RequestSnapshot {
+	if snapshot, ok := ctx.Value(requestSnapshotContextKey{}).(RequestSnapshot); ok {
+		return snapshot
+	}
+	return nil
+}
+
 // Reader 定义元数据存储的只读查询接口。
 type Reader interface {
 	GetSpace(ctx context.Context, spaceID string) (*pb.Space, error)

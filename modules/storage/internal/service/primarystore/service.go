@@ -1,4 +1,4 @@
-package primarystorev2
+package primarystore
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -55,10 +56,30 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
+	if provider, ok := s.validate.(interface {
+		RequestSnapshot() metadata.RequestSnapshot
+	}); ok {
+		if snapshot := provider.RequestSnapshot(); snapshot != nil {
+			ctx = metadata.WithRequestSnapshot(ctx, snapshot)
+		}
+	}
 	groups := make(map[routeKey][]*pb.RowFieldUpsert)
 	order := make([]routeKey, 0)
+	if batchValidator, ok := s.validate.(interface {
+		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
+	}); ok {
+		if err := batchValidator.ValidateRows(ctx, req.GetRows()); err != nil {
+			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+	}
 	for _, row := range req.GetRows() {
-		if err := validateRow(ctx, row, s.validate); err != nil {
+		validator := s.validate
+		if _, batched := s.validate.(interface {
+			ValidateRows(context.Context, []*pb.RowFieldUpsert) error
+		}); batched {
+			validator = nil
+		}
+		if err := validateRow(ctx, row, validator); err != nil {
 			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		group := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
@@ -72,18 +93,18 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 		rows := groups[group]
 		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
-			return nil, err
+			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		auth, err := s.signAuth(req.GetAuthInfo())
 		if err != nil {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
 		rsp, err := node.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: auth, Rows: rows})
 		if err != nil {
-			return nil, err
+			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: rsp.GetRetInfo()}, nil
+			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
 		}
 		keys = append(keys, rsp.GetKeys()...)
 	}
@@ -200,15 +221,6 @@ func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validato
 	}
 	if key.GetTimeSeries() == nil && key.GetRecord() == nil {
 		return errors.New("row key kind is required")
-	}
-	if row.GetOperation() == pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE {
-		if len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0 {
-			return errors.New("delete row must not contain fields or attributes")
-		}
-		if validator != nil {
-			return validator.ValidateRow(ctx, row)
-		}
-		return nil
 	}
 	if record := key.GetRecord(); record != nil && strings.TrimSpace(record.GetVersion()) == "" {
 		return errors.New("record version is required for writes")

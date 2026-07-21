@@ -1,4 +1,4 @@
-package primarystorev2
+package primarystore
 
 import (
 	"context"
@@ -16,30 +16,6 @@ type recordingNode struct {
 	read  func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
 }
 
-type recordingView struct {
-	timeReq *pb.QueryTimeSeriesRowsReq
-}
-
-func (v *recordingView) QueryTimeSeriesRows(_ context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-	v.timeReq = req
-	key := req.GetKeys()[0]
-	key.DataTime = "2026-07-20T00:00:00Z"
-	return &pb.QueryTimeSeriesRowsRsp{
-		RetInfo: successRetInfo(),
-		Rows: []*pb.TimeSeriesRow{{
-			Key: key,
-			Fields: []*pb.FieldValue{{
-				FieldId: "prices.close",
-				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
-			}},
-		}},
-	}, nil
-}
-
-func (*recordingView) SearchRecordRows(context.Context, *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
-	return &pb.SearchRecordRowsRsp{RetInfo: successRetInfo()}, nil
-}
-
 func (n *recordingNode) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
 	return n.write(ctx, req)
 }
@@ -54,10 +30,6 @@ func (n *recordingNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.
 
 func (n *recordingNode) CleanupExpiredBuckets(context.Context, *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return &pb.CleanupExpiredBucketsRsp{}, nil
-}
-
-func (n *recordingNode) ScanFields(ctx context.Context, req *pb.ScanFieldsReq) (*pb.ScanFieldsRsp, error) {
-	return &pb.ScanFieldsRsp{RetInfo: successRetInfo()}, nil
 }
 
 func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
@@ -80,30 +52,6 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 	bad, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}})
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("bad rsp=%v err=%v", bad, err)
-	}
-}
-
-func TestPrimaryStoreScanReadsHistoricalRecordsFromDataNode(t *testing.T) {
-	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: "node-secret", Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close()
-	svc, err := New(Options{Node: node, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
-		return &pb.AuthInfo{AppId: auth.GetAppId(), AppKey: datanode.ServiceAuthKey("node-secret", auth.GetAppId())}, nil
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, version := range []string{"1", "2"} {
-		key := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
-		if rsp, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "storage-view"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: version}}}}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			t.Fatalf("write version=%s rsp=%v err=%v", version, rsp, err)
-		}
-	}
-	rsp, err := svc.ScanRecordRows(context.Background(), &pb.ReadRecordRowsReq{AuthInfo: &pb.AuthInfo{AppId: "storage-view"}, SpaceId: "space", DatasetId: "records", ColumnNames: []string{"title"}, Page: &pb.Page{Page: 1, Size: 10}})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 2 {
-		t.Fatalf("scan rsp=%v err=%v", rsp, err)
 	}
 }
 
@@ -211,44 +159,6 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-}
-
-func TestCompatibilityRangeReadUsesActiveDataView(t *testing.T) {
-	view := &recordingView{}
-	node := &recordingNode{
-		write: func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
-			return &pb.WriteFieldsRsp{RetInfo: successRetInfo()}, nil
-		},
-		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-			t.Fatal("range read must not scan DataNode")
-			return nil, nil
-		},
-	}
-	svc, err := New(Options{
-		Node: node,
-		View: func(context.Context, string, string) (pb.DataViewService, string, error) {
-			return view, "prices-view", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Keys:     []*pb.TimeSeriesKey{{SpaceId: "space", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m"}},
-		TimeRange: &pb.TimeRange{
-			StartTime: "2026-07-20T00:00:00Z",
-			EndTime:   "2026-07-20T01:00:00Z",
-		},
-		ColumnNames: []string{"close"},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 ||
-		len(rsp.GetRows()[0].GetColumns()) != 1 || rsp.GetRows()[0].GetColumns()[0].GetColumnName() != "close" {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-	if view.timeReq == nil || view.timeReq.GetViewId() != "prices-view" {
-		t.Fatalf("view request=%v", view.timeReq)
 	}
 }
 

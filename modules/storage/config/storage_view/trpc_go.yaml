@@ -60,11 +60,6 @@ client:
       network: tcp
       protocol: http
       timeout: 3000
-    - name: trpc.moox.storage.PrimaryStoreScan
-      target: ip://127.0.0.1:20105
-      network: tcp
-      protocol: trpc
-      timeout: 120000
     - name: trpc.moox.storage.Metadata
       target: ip://127.0.0.1:20200
       network: tcp
@@ -131,7 +126,6 @@ storage:
       hmac_key_file: ""
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore
-    primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200

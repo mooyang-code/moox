@@ -52,11 +52,6 @@ var storageViewMetadataMethods = map[string]struct{}{
 }
 
 var storagePrivilegedMethods = map[string]map[string]struct{}{
-	"trpc.moox.storage.PrimaryStoreScan": {
-		"ScanTimeSeriesRows": {},
-		"ScanRecordRows":     {},
-		"GetShardHeads":      {},
-	},
 	"trpc.moox.storage.DataShard": {
 		"MergeRows":     {},
 		"ReadRows":      {},
@@ -161,21 +156,6 @@ func ValidateRoute(route Route) error {
 		for _, caller := range route.AllowedCallers {
 			if caller != "storage-primary" {
 				return fmt.Errorf("DataShard routes only allow storage-primary caller")
-			}
-		}
-	}
-	if route.ServicePath == "trpc.moox.storage.PrimaryStoreScan" {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				return fmt.Errorf("PrimaryStoreScan routes cannot use wildcard allowed_methods")
-			}
-			if _, ok := storagePrivilegedMethods[route.ServicePath][method]; !ok {
-				return fmt.Errorf("PrimaryStoreScan method %q is not routable", method)
-			}
-		}
-		for _, caller := range route.AllowedCallers {
-			if caller == "*" || (caller != "storage-view" && caller != "archive") {
-				return fmt.Errorf("PrimaryStoreScan routes only allow storage-view or archive callers")
 			}
 		}
 	}

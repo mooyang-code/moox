@@ -136,7 +136,7 @@ func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.
 }
 
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+	view, err := getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 			  SELECT 1 FROM json_each(c_dataset_ids_json) AS dataset_ref WHERE dataset_ref.value = ?
 		  ))`
 	args := []any{spaceID, spaceID, status, status, datasetID, datasetID, datasetID}
-	items, pageResult, err := queryPagedMessages(ctx, s.db,
+	items, pageResult, err := queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_view_id`,
 		`SELECT COUNT(1) `+where,
 		args,
@@ -272,7 +272,7 @@ func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID stri
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_view_id = ?)`
 	args := []any{spaceID, spaceID, viewID, viewID}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_sort_order, c_column_name`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.ViewColumn { return &pb.ViewColumn{} },

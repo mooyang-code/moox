@@ -7,11 +7,11 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	primarystorev2 "github.com/mooyang-code/moox/modules/storage/internal/service/primarystorev2"
+	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func TestStorageV2RoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
+func TestStorageRoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
 	ctx := context.Background()
 	const secret = "contract-secret"
 	newNode := func(id string) *datanode.Service {
@@ -30,7 +30,7 @@ func TestStorageV2RoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
 		"space-a/shared": newNode("node-a"),
 		"space-b/shared": newNode("node-b"),
 	}
-	primary, err := primarystorev2.New(primarystorev2.Options{
+	primary, err := primarystore.New(primarystore.Options{
 		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
 			return nodes[spaceID+"/"+datasetID], nil
 		},

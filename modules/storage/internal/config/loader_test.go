@@ -58,9 +58,6 @@ func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
 	if cfg.Storage.EventBus.MaxDeliver != -1 {
 		t.Fatalf("EventBus.MaxDeliver = %d, want -1", cfg.Storage.EventBus.MaxDeliver)
 	}
-	if cfg.Storage.View.PrimaryStoreScanServiceName != "trpc.moox.storage.PrimaryStoreScan" {
-		t.Fatalf("View.PrimaryStoreScanServiceName = %q, want PrimaryStoreScan service", cfg.Storage.View.PrimaryStoreScanServiceName)
-	}
 }
 
 func TestStorageEventBusValidateDeliveryLimits(t *testing.T) {

@@ -52,7 +52,6 @@ platforms_value="${RELEASE_PLATFORMS//,/ }"
 read -r -a platforms <<< "${platforms_value}"
 [[ "${#platforms[@]}" -gt 0 ]] || { echo "release platform list is empty" >&2; exit 2; }
 
-host_platform="$(go env GOOS)/$(go env GOARCH)"
 write_checksum() {
   local archive="$1"
   local checksum="${archive%.tar.gz}.sha256"
@@ -77,16 +76,11 @@ build_platform() {
     exit 2
   }
 
-  if [[ -z "${storage_cgo}" ]]; then
-    if [[ "${platform}" == "${host_platform}" ]]; then
-      storage_cgo=1
-    else
-      # DuckDB is a CGO dependency. Cross-building it requires a target C
-      # toolchain, so portable matrix builds use Storage's explicit no-CGO
-      # fallback unless the caller supplies STORAGE_CGO_ENABLED=1.
-      storage_cgo=0
-    fi
-  fi
+	if [[ -z "${storage_cgo}" ]]; then
+		# The View role requires DuckDB, including on cross-built targets. A
+		# no-CGO artifact is valid only for deployments that do not start View.
+		storage_cgo=1
+	fi
 
   echo "==> release ${VERSION} (${platform}, STORAGE_CGO_ENABLED=${storage_cgo})"
   if ((DRY_RUN)); then

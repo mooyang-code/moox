@@ -14,8 +14,6 @@ const storagePrimaryGatewayMethods = "[\"MergeTimeSeriesRows\",\"ReadTimeSeriesR
 const storageViewGatewayMethods = "[\"QueryTimeSeriesRows\",\"SearchRecordRows\"]"
 const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"moox-cli\",\"storage-view\"]"
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
-const storagePrimaryScanGatewayMethods = "[\"ScanTimeSeriesRows\",\"ScanRecordRows\",\"GetShardHeads\"]"
-const storagePrimaryScanGatewayCallers = "[\"storage-view\",\"archive\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {
@@ -91,7 +89,7 @@ func withExtra(item Deployment, extra string) Deployment {
 }
 
 func storagePrimaryExtraConfig() string {
-	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["ClaimViewIndexBuild","UpdateViewIndexBuild","ActivateViewIndex","FailViewIndexBuild"],"gateway_callers":["storage-view"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":%s,"gateway_callers":%s},{"service_path":"trpc.moox.storage.PrimaryStoreScan","port":20105,"gateway_methods":%s,"gateway_callers":%s}]}`, storageMetadataGatewayMethods, storageMetadataGatewayCallers, storagePrimaryGatewayMethods, storagePrimaryGatewayCallers, storagePrimaryScanGatewayMethods, storagePrimaryScanGatewayCallers)
+	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["ClaimViewIndexBuild","UpdateViewIndexBuild","ActivateViewIndex","FailViewIndexBuild"],"gateway_callers":["storage-view"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":%s,"gateway_callers":%s}]}`, storageMetadataGatewayMethods, storageMetadataGatewayCallers, storagePrimaryGatewayMethods, storagePrimaryGatewayCallers)
 }
 
 func storageViewExtraConfig() string {

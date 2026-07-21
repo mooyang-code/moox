@@ -64,11 +64,11 @@ func (s *Store) UpsertPrimaryStoreNode(ctx context.Context, item *pb.PrimaryStor
 }
 
 func (s *Store) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_primary_store_nodes WHERE c_node_id = ?`, []any{nodeID}, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_primary_store_nodes WHERE c_node_id = ?`, []any{nodeID}, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
 }
 
 func (s *Store) ListPrimaryStoreNodes(ctx context.Context, page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json FROM t_primary_store_nodes ORDER BY c_node_id`,
 		`SELECT COUNT(1) FROM t_primary_store_nodes`,
 		nil, page, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} },
@@ -127,7 +127,7 @@ func placementShardID(attributes map[string]string) string {
 }
 
 func (s *Store) GetDevice(ctx context.Context, deviceID string) (*pb.Device, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_storage_devices WHERE c_device_id = ?`, []any{deviceID}, func() *pb.Device { return &pb.Device{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_storage_devices WHERE c_device_id = ?`, []any{deviceID}, func() *pb.Device { return &pb.Device{} })
 }
 
 func (s *Store) ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
@@ -136,7 +136,7 @@ func (s *Store) ListDevices(ctx context.Context, nodeID string, engine string, p
 		WHERE (? = '' OR c_node_id = ?)
 		  AND (? = '' OR c_engine = ?)`
 	args := []any{nodeID, nodeID, engine, engine}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_device_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.Device { return &pb.Device{} },
@@ -213,7 +213,7 @@ func supportedPrimaryStoreHashRule(rule string) bool {
 }
 
 func (s *Store) GetPrimaryStoreRoute(ctx context.Context, spaceID string, routeID string) (*pb.PrimaryStoreRoute, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_primary_store_routes WHERE c_space_id = ? AND c_route_id = ?`, []any{spaceID, routeID}, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_primary_store_routes WHERE c_space_id = ? AND c_route_id = ?`, []any{spaceID, routeID}, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
 }
 
 func (s *Store) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
@@ -224,7 +224,7 @@ func (s *Store) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, data
 		  AND (? = '' OR c_subject_id = ?)
 		  AND (? = '' OR c_node_id = ?)`
 	args := []any{spaceID, spaceID, datasetID, datasetID, subjectID, subjectID, nodeID, nodeID}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_priority, c_route_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} },
@@ -273,7 +273,7 @@ func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID 
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_dataset_id = ?)`
 	args := []any{spaceID, spaceID, datasetID, datasetID}
-	return queryPagedMessages(ctx, s.db,
+	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_attrs_json `+where+` ORDER BY c_partition_key, c_file_uri`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.ArchiveFile { return &pb.ArchiveFile{} },

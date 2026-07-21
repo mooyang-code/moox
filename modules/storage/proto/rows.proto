@@ -40,7 +40,6 @@ message FieldValue {
 enum RowFieldOperation {
   ROW_FIELD_OPERATION_UNSPECIFIED = 0;
   ROW_FIELD_OPERATION_UPSERT = 1;
-  ROW_FIELD_OPERATION_DELETE = 2;
 }
 
 // RowFieldUpsert is a partial row update. Omitted fields are left unchanged.

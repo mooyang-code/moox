@@ -523,6 +523,8 @@ primary_store_nodes:
   - node_id: storage-node-0
     name: local-data-node
     endpoint: 127.0.0.1:20107
+    attributes:
+      service_target: ip://127.0.0.1:20107
     weight: 100
     status: active
 
