@@ -23,7 +23,7 @@ ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/scripts/reset-storage-view-indexes.sh" "${FIXTURE_ROOT}/scripts/reset-storage-view-indexes.sh"
 
-for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-shard moox-gateway moox-gateway-cli moox-admin moox-admin-cli moox-cli; do
+for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-gateway moox-gateway-cli moox-admin moox-admin-cli moox-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -58,10 +58,10 @@ done
 for binary in moox-admin moox-web-host moox-cloudnode moox-collector; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected storage binary: ${binary}" >&2; exit 1; }
 done
-[[ ! -e "${TMP_ROOT}/unpacked/bin/moox-storage-shard" ]]
+[[ -x "${TMP_ROOT}/unpacked/bin/moox-storage-node" ]]
 [[ -d "${TMP_ROOT}/unpacked/storage/config" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
-[[ ! -e "${TMP_ROOT}/unpacked/storage-shard" ]]
+[[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
 [[ $(find "${TMP_ROOT}/unpacked/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]]
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]
 [[ -x "${TMP_ROOT}/unpacked/bin/moox-gateway" ]]
@@ -71,22 +71,22 @@ grep -q 'target: ip://127.0.0.1:20201' "${TMP_ROOT}/unpacked/storage-view/config
 grep -q '^    - view$' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
-  --profile storage --with-storage-shard --package-only --archive "${SHARD_ARCHIVE}" \
+  --profile storage --with-storage-node --package-only --archive "${SHARD_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-shard" --stage "${TMP_ROOT}/stage-shard" \
   --goos linux --goarch amd64 --skip-build --node-id storage \
   --gateway-control-url http://127.0.0.1:11000 >/dev/null
 mkdir "${TMP_ROOT}/unpacked-shard"
 tar -C "${TMP_ROOT}/unpacked-shard" -xzf "${SHARD_ARCHIVE}"
-[[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-storage-shard" ]]
-[[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-admin" ]]
-[[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-admin-cli" ]]
-[[ -f "${TMP_ROOT}/unpacked-shard/storage-shard/config/trpc_go.yaml" ]]
-[[ -f "${TMP_ROOT}/unpacked-shard/storage-shard/config/storage.yaml" ]]
-grep -q 'port: 20107' "${TMP_ROOT}/unpacked-shard/storage-shard/config/trpc_go.yaml"
-grep -q 'shard_id: storage-shard-0' "${TMP_ROOT}/unpacked-shard/storage-shard/config/storage.yaml"
-grep -q 'default_services+=(storage-shard)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
-grep -q 'service_name: trpc.moox.storage.DataShard' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
-grep -q 'start_storage_shard' "${TMP_ROOT}/unpacked-shard/start.sh"
-grep -q 'stop_service "storage-shard"' "${TMP_ROOT}/unpacked-shard/stop.sh"
+[[ -x "${TMP_ROOT}/unpacked-shard/bin/moox-storage-node" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-shard/bin/moox-admin" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-shard/bin/moox-admin-cli" ]]
+[[ -f "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml" ]]
+[[ -f "${TMP_ROOT}/unpacked-shard/storage-node/config/storage.yaml" ]]
+grep -q 'port: 20107' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"
+grep -q 'node_id: storage-node-0' "${TMP_ROOT}/unpacked-shard/storage-node/config/storage.yaml"
+grep -q 'default_services+=(storage-node)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
+grep -q 'service_name: trpc.moox.storage.DataNode' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
+grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
+grep -q 'stop_service "storage-node"' "${TMP_ROOT}/unpacked-shard/stop.sh"
 
 echo 'storage deployment profile contract passed'

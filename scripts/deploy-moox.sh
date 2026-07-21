@@ -12,7 +12,7 @@ PACKAGE_ARCHIVE=""
 DEPLOY_PROFILE=""
 AUTO_GATEWAY_INPUTS=0
 WITH_STORAGE=1
-WITH_STORAGE_SHARD=0
+WITH_STORAGE_NODE=1
 WITH_ARCHIVE=1
 WITH_EVENTBUS=1
 WITH_WEB_HOST=1
@@ -76,7 +76,7 @@ Options:
   --package-only                  Build the selected deployment archive without transport or install.
   --archive <path>                Output archive required by --package-only.
   --no-storage                    Do not package/stop/start moox-storage; preserve existing remote storage files.
-  --with-storage-shard            Package the optional independent DataShard process.
+  --with-storage-node            Package the optional independent DataNode process.
   --no-archive                    Do not package/start moox-archive.
   --no-eventbus                   Do not package/stop/start moox-eventbus; preserve existing remote EventBus files.
   --no-web-host                   Do not package/start moox-web-host.
@@ -135,7 +135,7 @@ apply_profile() {
       WITH_GATEWAY=1
       WITH_WEB_HOST=0
       WITH_STORAGE=1
-      WITH_STORAGE_SHARD=0
+      WITH_STORAGE_NODE=1
       WITH_ARCHIVE=0
       WITH_EVENTBUS=0
       WITH_CLOUDNODE=0
@@ -400,10 +400,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-storage)
       WITH_STORAGE=0
+      WITH_STORAGE_NODE=0
       shift
       ;;
-    --with-storage-shard)
-      WITH_STORAGE_SHARD=1
+    --with-storage-node)
+      WITH_STORAGE_NODE=1
       shift
       ;;
     --no-archive)
@@ -484,14 +485,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# An independent shard needs the Admin control plane to publish its restricted
-# route. Keep the minimal storage profile minimal unless this explicit option
-# is selected.
-if [[ "${DEPLOY_PROFILE}" == "storage" && "${WITH_STORAGE_SHARD}" -eq 1 ]]; then
-  WITH_ADMIN=1
-fi
-if [[ "${WITH_STORAGE_SHARD}" -eq 1 && "${WITH_STORAGE}" -ne 1 ]]; then
-  fail "--with-storage-shard requires storage to be enabled"
+if [[ "${WITH_STORAGE_NODE}" -eq 1 && "${WITH_STORAGE}" -ne 1 ]]; then
+  fail "--with-storage-node requires storage to be enabled"
 fi
 
 [[ -n "${TARGET}" ]] || fail "--target cannot be empty"
@@ -654,10 +649,10 @@ HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
 STAGE_DIR="${STAGE_DIR:-${ROOT}/release/deploy-stage/moox}"
 
-build_storage_shard_binary() {
-  [[ "${WITH_STORAGE_SHARD}" -eq 1 ]] || return 0
+build_storage_node_binary() {
+  [[ "${WITH_STORAGE_NODE}" -eq 1 ]] || return 0
   TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-    "${ROOT}/scripts/build.sh" storage-shard
+    "${ROOT}/scripts/build.sh" storage-node
 }
 
 build_core_binaries() {
@@ -715,13 +710,13 @@ build_core_binaries() {
     log "cross build detected; storage requires CGO-enabled DuckDB build"
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" all
-    build_storage_shard_binary
+    build_storage_node_binary
     return
   fi
 
   TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
     "${ROOT}/scripts/build.sh" all
-  build_storage_shard_binary
+  build_storage_node_binary
 }
 
 build_web_host_binary() {
@@ -879,22 +874,22 @@ PY
       [[ -f "${conf}" ]] || continue
       perl -pi -e 'if (/^server:/) { $server = 1 } if (/^(client|plugins):/) { $server = 0 } if ($server && /^      ip:\s*127\.0\.0\.1\s*$/) { s#127\.0\.0\.1#0.0.0.0# }' "${conf}"
     done
-    if [[ "${WITH_STORAGE_SHARD}" -eq 1 ]]; then
-      perl -pi -e 'if (/^server:/) { $server = 1 } if (/^(client|plugins):/) { $server = 0 } if ($server && /^      ip:\s*127\.0\.0\.1\s*$/) { s#127\.0\.0\.1#0.0.0.0# }' "${STAGE_DIR}/storage-shard/config/trpc_go.yaml"
+    if [[ "${WITH_STORAGE_NODE}" -eq 1 ]]; then
+      perl -pi -e 'if (/^server:/) { $server = 1 } if (/^(client|plugins):/) { $server = 0 } if ($server && /^      ip:\s*127\.0\.0\.1\s*$/) { s#127\.0\.0\.1#0.0.0.0# }' "${STAGE_DIR}/storage-node/config/trpc_go.yaml"
     fi
   fi
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-primary#g' \
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-view#g' "${view_conf}"
-  if [[ "${WITH_STORAGE_SHARD}" -eq 1 ]]; then
-    perl -0pi -e 's#(service_name:\s*)""#${1}trpc.moox.storage.DataShard#g' \
+  if [[ "${WITH_STORAGE_NODE}" -eq 1 ]]; then
+    perl -0pi -e 's#(service_name:\s*)""#${1}trpc.moox.storage.DataNode#g' \
       "${STAGE_DIR}/storage/config/storage.yaml" "${STAGE_DIR}/storage/config/trpc_go.yaml"
-    perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage-shard#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage-shard/pebble#g; s#log_path:\s*\./logs#log_path: ../logs/storage-shard#g' \
-      "${STAGE_DIR}/storage-shard/config/trpc_go.yaml" "${STAGE_DIR}/storage-shard/config/storage.yaml"
+    perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage-node#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage-node/pebble#g; s#log_path:\s*\./logs#log_path: ../logs/storage-node#g' \
+      "${STAGE_DIR}/storage-node/config/trpc_go.yaml" "${STAGE_DIR}/storage-node/config/storage.yaml"
     if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
-      perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml#' "${STAGE_DIR}/storage-shard/config/storage.yaml"
+      perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml#' "${STAGE_DIR}/storage-node/config/storage.yaml"
     else
-      perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/storage-shard/config/storage.yaml"
+      perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/storage-node/config/storage.yaml"
     fi
   fi
 }
@@ -966,7 +961,7 @@ if [[ -r "${ROOT}/secrets/admin-jwt.env" ]]; then
   ADMIN_SECRET_ENV+=("MOOX_ADMIN_JWT_SECRET_KEY=$(read_env_value "${ROOT}/secrets/admin-jwt.env" MOOX_ADMIN_JWT_SECRET_KEY)")
 fi
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_SHARD="${MOOX_WITH_STORAGE_SHARD:-__WITH_STORAGE_SHARD__}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
@@ -977,16 +972,16 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
-if [[ "${WITH_STORAGE_SHARD}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
-  echo "storage-shard requires storage" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
+  echo "storage-node requires storage" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" == "1" && ! -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard is enabled but its package is missing" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" != "1" && -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard package is present but storage-shard is disabled" >&2
+if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
 MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-__NODE_ID__}"
@@ -1259,7 +1254,7 @@ probe_service() {
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-primary) url=http://127.0.0.1:20210/readyz ;;
     storage-view) url=http://127.0.0.1:20211/readyz ;;
-    storage-shard) url=http://127.0.0.1:20212/readyz ;;
+    storage-node) url=http://127.0.0.1:20212/readyz ;;
     *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
   curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
@@ -1388,6 +1383,7 @@ start_storage_process() {
 	local trpc_conf="$3"
 	local storage_conf="$4"
 	gateway_service_env_for "${name}"
+	local role="${name#storage-}"
 	start_service "${name}" "${ROOT}/storage" \
     env \
       "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
@@ -1395,6 +1391,11 @@ start_storage_process() {
       "STORAGE_CONFIG_PATH=${ROOT}/storage/config" \
       "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/${storage_conf}" \
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
+      "MOOX_STORAGE_ROLE=${role}" \
+      "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
+      "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
+      "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
+      "MOOX_STORAGE_NODE_TARGETS=${MOOX_STORAGE_NODE_TARGETS:-storage-node-0=ip://127.0.0.1:20107}" \
       "STORAGE_SCHEMA_FILE=${ROOT}/storage/schema/metadata.sql" \
       "${ROOT}/bin/${binary}" \
       -conf="config/${trpc_conf}"
@@ -1444,34 +1445,43 @@ start_storage_view() {
       "MOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003" \
       "MOOX_STORAGE_CONFIG=${ROOT}/storage-view/config/trpc_go.yaml" \
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
+      "MOOX_STORAGE_ROLE=view" \
+      "MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-nats://127.0.0.1:4222}" \
+      "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
+      "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
+      "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
       "${ROOT}/bin/moox-storage-view" \
       -conf=config/trpc_go.yaml
 }
 
-start_storage_shard() {
-  if [[ "${WITH_STORAGE_SHARD}" != "1" ]]; then
-    echo "storage-shard is disabled in this deployment package" >&2
+start_storage_node() {
+  if [[ "${WITH_STORAGE_NODE}" != "1" ]]; then
+    echo "storage-node is disabled in this deployment package" >&2
     exit 2
   fi
   gateway_service_env_for storage-primary
-  start_service "storage-shard" "${ROOT}/storage-shard" \
+  start_service "storage-node" "${ROOT}/storage-node" \
     env \
       "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003" \
-      "MOOX_OTEL_SERVICE_NAME=moox-storage-shard" \
-      "MOOX_STORAGE_CONFIG=${ROOT}/storage-shard/config/storage.yaml" \
-      "MOOX_STORAGE_HOME=${ROOT}/data/storage-shard" \
-      "${ROOT}/bin/moox-storage-shard" \
+      "MOOX_OTEL_SERVICE_NAME=moox-storage-node" \
+      "MOOX_STORAGE_CONFIG=${ROOT}/storage-node/config/storage.yaml" \
+      "MOOX_STORAGE_HOME=${ROOT}/data/storage-node" \
+      "MOOX_STORAGE_ROLE=node" \
+      "MOOX_STORAGE_NODE_ID=${MOOX_STORAGE_NODE_ID:-storage-node-0}" \
+      "MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-nats://127.0.0.1:4222}" \
+      "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
+      "${ROOT}/bin/moox-storage-node" \
       -conf=config/trpc_go.yaml
 }
 
 start_storage() {
   start_storage_primary
-  if [[ "${WITH_STORAGE_SHARD}" == "1" ]]; then
-    start_storage_shard
-    wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_SHARD_SECONDS:-30}"
-    wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_SHARD_SECONDS:-30}"
+  if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
+    start_storage_node
+    wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
+    wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
   fi
   wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   wait_tcp 127.0.0.1 4222 "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
@@ -1492,10 +1502,10 @@ start_admin() {
       --db-path "${ROOT}/data/admin.db" \
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}")
-    if [[ "${WITH_STORAGE_SHARD}" == "1" ]]; then
-      service_seed_args+=(--with-storage-shard)
+    if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
+      service_seed_args+=(--with-storage-node)
     else
-      service_seed_args+=(--disable-storage-shard)
+      service_seed_args+=(--disable-storage-node)
     fi
     "${ROOT}/bin/moox-admin-cli" "${service_seed_args[@]}" >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
         echo "Storage shard service deployment import failed" >&2
@@ -1671,14 +1681,14 @@ case "${SERVICE}" in
     wait_tcp 127.0.0.1 4222 "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
     start_storage_view
     ;;
-  storage-shard)
+  storage-node)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
       echo "storage is disabled in this deployment package" >&2
       exit 2
     fi
-    start_storage_shard
-    wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_SHARD_SECONDS:-30}"
-    wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_SHARD_SECONDS:-30}"
+    start_storage_node
+    wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
+    wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
     ;;
   cloudnode) start_cloudnode ;;
   collector) start_collector ;;
@@ -1689,7 +1699,7 @@ case "${SERVICE}" in
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-shard cloudnode collector factor strategy monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1707,7 +1717,7 @@ set -a
 source "${ROOT}/secrets/health-auth.env"
 set +a
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_SHARD="${MOOX_WITH_STORAGE_SHARD:-__WITH_STORAGE_SHARD__}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
@@ -1718,16 +1728,16 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
-if [[ "${WITH_STORAGE_SHARD}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
-  echo "storage-shard requires storage" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
+  echo "storage-node requires storage" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" == "1" && ! -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard is enabled but its package is missing" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" != "1" && -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard package is present but storage-shard is disabled" >&2
+if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
 
@@ -1834,8 +1844,8 @@ case "${SERVICE}" in
       stop_service "cloudnode"
     fi
     if [[ "${WITH_STORAGE}" == "1" ]]; then
-      if [[ "${WITH_STORAGE_SHARD}" == "1" ]]; then
-        stop_service "storage-shard"
+      if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
+        stop_service "storage-node"
       fi
       stop_service "storage-view"
       stop_service "storage-primary"
@@ -1853,8 +1863,8 @@ case "${SERVICE}" in
       echo "storage is disabled in this deployment package" >&2
       exit 2
     fi
-    if [[ "${WITH_STORAGE_SHARD}" == "1" ]]; then
-      stop_service "storage-shard"
+    if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
+      stop_service "storage-node"
     fi
     stop_service "storage-view"
     stop_service "storage-primary"
@@ -1870,7 +1880,7 @@ case "${SERVICE}" in
   archive)
     stop_service "archive"
     ;;
-  storage-primary|storage-view|storage-shard)
+  storage-primary|storage-view|storage-node)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
       echo "storage is disabled in this deployment package" >&2
       exit 2
@@ -1925,7 +1935,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-shard cloudnode collector factor strategy monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1954,7 +1964,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_SHARD="${MOOX_WITH_STORAGE_SHARD:-__WITH_STORAGE_SHARD__}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
@@ -1965,16 +1975,16 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
-if [[ "${WITH_STORAGE_SHARD}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
-  echo "storage-shard requires storage" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
+  echo "storage-node requires storage" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" == "1" && ! -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard is enabled but its package is missing" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" != "1" && -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard package is present but storage-shard is disabled" >&2
+if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
 
@@ -1998,8 +2008,8 @@ if [[ "${WITH_MONITOR}" == "1" ]]; then
   services=(monitor "${services[@]}")
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
-  if [[ "${WITH_STORAGE_SHARD}" == "1" ]]; then
-    services+=(storage-shard)
+  if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
+    services+=(storage-node)
   fi
   services=(storage-primary storage-view "${services[@]}")
 fi
@@ -2040,7 +2050,7 @@ set -a
 source "${ROOT}/secrets/health-auth.env"
 set +a
 WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_SHARD="${MOOX_WITH_STORAGE_SHARD:-__WITH_STORAGE_SHARD__}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
 WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
 WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
 WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
@@ -2051,16 +2061,16 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
-if [[ "${WITH_STORAGE_SHARD}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
-  echo "storage-shard requires storage" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
+  echo "storage-node requires storage" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" == "1" && ! -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard is enabled but its package is missing" >&2
+if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_SHARD}" != "1" && -d "${ROOT}/storage-shard" ]]; then
-  echo "storage-shard package is present but storage-shard is disabled" >&2
+if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+  echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
 LOG_FILE="${ROOT}/logs/healthcheck.log"
@@ -2091,7 +2101,7 @@ probe_service() {
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-primary) url=http://127.0.0.1:20210/readyz ;;
     storage-view) url=http://127.0.0.1:20211/readyz ;;
-    storage-shard) url=http://127.0.0.1:20212/readyz ;;
+    storage-node) url=http://127.0.0.1:20212/readyz ;;
     *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
   curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
@@ -2106,8 +2116,8 @@ if [[ "${WITH_EVENTBUS}" == "1" ]]; then
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
 	default_services+=(storage-primary storage-view)
-  if [[ "${WITH_STORAGE_SHARD}" == "1" ]]; then
-    default_services+=(storage-shard)
+  if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
+    default_services+=(storage-node)
   fi
 fi
 if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
@@ -2182,7 +2192,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_SHARD__#${WITH_STORAGE_SHARD}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -2287,8 +2297,8 @@ EOF
   chmod +x "${STAGE_DIR}/lib/caddy-managed.sh" "${STAGE_DIR}/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/storage/config" "${STAGE_DIR}/storage/schema" "${STAGE_DIR}/storage-view/config"
-  if [[ "${WITH_STORAGE_SHARD}" -eq 1 ]]; then
-      mkdir -p "${STAGE_DIR}/storage-shard/config"
+  if [[ "${WITH_STORAGE_NODE}" -eq 1 ]]; then
+      mkdir -p "${STAGE_DIR}/storage-node/config"
     fi
   fi
 
@@ -2333,8 +2343,8 @@ EOF
     copy_required_binary "moox-storage-primary"
     copy_required_binary "moox-storage-view"
     copy_required_binary "moox-storage-cli"
-    if [[ "${WITH_STORAGE_SHARD}" -eq 1 ]]; then
-      copy_required_binary "moox-storage-shard"
+    if [[ "${WITH_STORAGE_NODE}" -eq 1 ]]; then
+      copy_required_binary "moox-storage-node"
     fi
   fi
   copy_optional_web_host
@@ -2389,11 +2399,11 @@ EOF
     # The bundled primary process owns the primary role only. The View role
     # has its own process and its own storage business config.
     cp "${ROOT}/modules/storage/config/storage.primary.yaml" "${STAGE_DIR}/storage/config/storage.yaml"
-    if [[ "${WITH_STORAGE_SHARD}" -eq 1 ]]; then
-      cp "${ROOT}/modules/storage/config/trpc_go.shard.yaml" "${STAGE_DIR}/storage-shard/config/trpc_go.yaml"
-      cp "${ROOT}/modules/storage/config/storage.shard.yaml" "${STAGE_DIR}/storage-shard/config/storage.yaml"
+    if [[ "${WITH_STORAGE_NODE}" -eq 1 ]]; then
+      cp "${ROOT}/modules/storage/config/trpc_go.node.yaml" "${STAGE_DIR}/storage-node/config/trpc_go.yaml"
+      cp "${ROOT}/modules/storage/config/storage.node.yaml" "${STAGE_DIR}/storage-node/config/storage.yaml"
     fi
-    rm -f "${STAGE_DIR}/storage/config/trpc_go.shard.yaml" "${STAGE_DIR}/storage/config/storage.shard.yaml"
+    rm -f "${STAGE_DIR}/storage/config/trpc_go.node.yaml" "${STAGE_DIR}/storage/config/storage.node.yaml"
     cp "${STAGE_DIR}/storage/config/trpc_go.primary.yaml" "${STAGE_DIR}/storage/config/trpc_go.yaml"
     printf '\n' >> "${STAGE_DIR}/storage/config/trpc_go.yaml"
     cat "${STAGE_DIR}/storage/config/storage.primary.yaml" >> "${STAGE_DIR}/storage/config/trpc_go.yaml"
@@ -2486,7 +2496,7 @@ sync_local_stage() {
   if command -v rsync >/dev/null 2>&1; then
     local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/' --exclude '/secrets/' --exclude '/certs/' --exclude '/config/caddy/Caddyfile' --exclude '/config/caddy/Caddyfile.rollback')
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/storage/' --exclude '/storage-view/' --exclude '/storage-shard/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-shard')
+      rsync_excludes+=(--exclude '/storage/' --exclude '/storage-view/' --exclude '/storage-node/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-node')
     fi
     if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
@@ -2555,11 +2565,11 @@ sync_local_stage() {
       rm -f "${deploy_dir}/bin/moox-monitor" "${deploy_dir}/bin/moox-monitor-cli"
     fi
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
-      rm -rf "${deploy_dir}/storage" "${deploy_dir}/storage-view" "${deploy_dir}/storage-shard"
+      rm -rf "${deploy_dir}/storage" "${deploy_dir}/storage-view" "${deploy_dir}/storage-node"
       rm -f "${deploy_dir}/bin/moox-storage" "${deploy_dir}/bin/moox-storage-cli" \
         "${deploy_dir}/bin/moox-storage-primary" \
         "${deploy_dir}/bin/moox-storage-view" \
-        "${deploy_dir}/bin/moox-storage-shard"
+        "${deploy_dir}/bin/moox-storage-node"
     fi
     cp -R "${STAGE_DIR}/." "${deploy_dir}/"
   fi
@@ -2631,12 +2641,12 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_shard quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
   quoted_with_storage="$(shell_quote "${WITH_STORAGE}")"
-  quoted_with_storage_shard="$(shell_quote "${WITH_STORAGE_SHARD}")"
+  quoted_with_storage_node="$(shell_quote "${WITH_STORAGE_NODE}")"
   quoted_with_archive="$(shell_quote "${WITH_ARCHIVE}")"
   quoted_with_eventbus="$(shell_quote "${WITH_EVENTBUS}")"
   quoted_with_cloudnode="$(shell_quote "${WITH_CLOUDNODE}")"
@@ -2658,7 +2668,7 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_SHARD=${quoted_with_storage_shard} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -2776,11 +2786,11 @@ if [[ "${WITH_STRATEGY}" == "1" ]]; then
   rm -f "${DEPLOY_DIR}/bin/moox-strategy" "${DEPLOY_DIR}/bin/moox-strategy-cli"
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
-  rm -rf "${DEPLOY_DIR}/storage" "${DEPLOY_DIR}/storage-view" "${DEPLOY_DIR}/storage-shard"
+  rm -rf "${DEPLOY_DIR}/storage" "${DEPLOY_DIR}/storage-view" "${DEPLOY_DIR}/storage-node"
   rm -f "${DEPLOY_DIR}/bin/moox-storage" "${DEPLOY_DIR}/bin/moox-storage-cli" \
     "${DEPLOY_DIR}/bin/moox-storage-primary" \
     "${DEPLOY_DIR}/bin/moox-storage-view" \
-    "${DEPLOY_DIR}/bin/moox-storage-shard"
+    "${DEPLOY_DIR}/bin/moox-storage-node"
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"

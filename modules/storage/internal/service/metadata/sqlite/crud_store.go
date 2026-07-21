@@ -68,11 +68,11 @@ func (s *Store) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.Pri
 }
 
 func (s *Store) ListPrimaryStoreNodes(ctx context.Context, page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `SELECT c_attrs_json FROM t_primary_store_nodes ORDER BY c_node_id`, nil, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json FROM t_primary_store_nodes ORDER BY c_node_id`,
+		`SELECT COUNT(1) FROM t_primary_store_nodes`,
+		nil, page, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} },
+	)
 }
 
 func (s *Store) UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error) {
@@ -131,16 +131,16 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*pb.Device, err
 }
 
 func (s *Store) ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_storage_devices
+	const where = `
+		FROM t_storage_devices
 		WHERE (? = '' OR c_node_id = ?)
-		  AND (? = '' OR c_engine = ?)
-		ORDER BY c_device_id
-	`, []any{nodeID, nodeID, engine, engine}, func() *pb.Device { return &pb.Device{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_engine = ?)`
+	args := []any{nodeID, nodeID, engine, engine}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_device_id`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.Device { return &pb.Device{} },
+	)
 }
 
 func (s *Store) UpsertPrimaryStoreRoute(ctx context.Context, item *pb.PrimaryStoreRoute) (*pb.PrimaryStoreRoute, error) {
@@ -217,18 +217,18 @@ func (s *Store) GetPrimaryStoreRoute(ctx context.Context, spaceID string, routeI
 }
 
 func (s *Store) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_primary_store_routes
+	const where = `
+		FROM t_primary_store_routes
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_dataset_id = ?)
 		  AND (? = '' OR c_subject_id = ?)
-		  AND (? = '' OR c_node_id = ?)
-		ORDER BY c_priority, c_route_id
-	`, []any{spaceID, spaceID, datasetID, datasetID, subjectID, subjectID, nodeID, nodeID}, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_node_id = ?)`
+	args := []any{spaceID, spaceID, datasetID, datasetID, subjectID, subjectID, nodeID, nodeID}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_priority, c_route_id`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} },
+	)
 }
 
 func (s *Store) RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error) {
@@ -268,14 +268,14 @@ func (s *Store) RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (
 }
 
 func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_archive_files
+	const where = `
+		FROM t_archive_files
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_dataset_id = ?)
-		ORDER BY c_partition_key, c_file_uri
-	`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.ArchiveFile { return &pb.ArchiveFile{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_dataset_id = ?)`
+	args := []any{spaceID, spaceID, datasetID, datasetID}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_partition_key, c_file_uri`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.ArchiveFile { return &pb.ArchiveFile{} },
+	)
 }

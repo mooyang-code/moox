@@ -24,6 +24,10 @@ type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 type execQueryRower interface {
 	queryRower
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -37,13 +41,6 @@ var (
 var ErrViewIndexBuildConflict = errors.New("view index build conflict")
 
 const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
-
-const viewIndexBuildColumns = `
-	c_space_id, c_view_id, c_build_id, c_index_id, c_engine,
-	c_target_view_version, c_state, c_owner_id, c_lease_expires_at,
-	c_cursor_json, c_snapshot_end, c_coverage_start, c_coverage_end,
-	c_entries_written, c_schema_hash, c_columns_json, c_started_at,
-	c_updated_at, c_finished_at, c_error`
 
 func buildLeaseTTL(seconds uint32) time.Duration {
 	if seconds == 0 {
@@ -68,7 +65,7 @@ func getMessage[T proto.Message](ctx context.Context, db queryRower, query strin
 	return scanMessage(row, newMessage)
 }
 
-func queryMessages[T proto.Message](ctx context.Context, db *sql.DB, query string, args []any, newMessage func() T) ([]T, error) {
+func queryMessages[T proto.Message](ctx context.Context, db queryer, query string, args []any, newMessage func() T) ([]T, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

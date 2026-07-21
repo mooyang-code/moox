@@ -35,6 +35,7 @@ message ReadFieldsRsp {
 
 message GetNodeStateReq {
   string node_id = 1;
+  common.AuthInfo auth_info = 2;
 }
 
 message GetNodeStateRsp {
@@ -48,6 +49,7 @@ message CleanupExpiredBucketsReq {
   string node_id = 2;
   string dataset_id = 3;
   string before_bucket_start = 4;
+  string space_id = 5;
 }
 
 message CleanupExpiredBucketsRsp {

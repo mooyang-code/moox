@@ -38,7 +38,7 @@ grep -Fq '工程接入状态' docs/策略模块架构设计.md
 grep -Fq '构建、发布和标准部署链路已接入' docs/策略模块架构设计.md
 ! grep -Fq '建议 HTTP 端口 `11408`' docs/策略模块架构设计.md
 
-grep -Fq '派生写入成功后才返回 success' docs/存储引擎架构.md
-grep -Fq '`Nak` 并由 JetStream 重投' docs/存储引擎架构.md
+grep -Fq '全部 Active 写入成功后才 ACK' docs/存储引擎架构.md
+grep -Fq '永久无效消息执行 `Term`' docs/存储引擎架构.md
 
 echo 'architecture documentation contract passed'

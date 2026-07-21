@@ -101,10 +101,17 @@ func groupRows(rows []struct {
 }
 
 func baseKey(space, dataset, subject, freq, dataTime string, dimensions map[string]string) *storagepb.TimeSeriesKey {
-	return &storagepb.TimeSeriesKey{SpaceId: space, DatasetId: dataset, SubjectId: subject, Freq: freq, DataTime: dataTime, Dimensions: dimensions}
+	return &storagepb.TimeSeriesKey{SpaceId: space, DatasetId: dataset, SubjectId: subject, Freq: freq, DataTime: dataTime}
 }
 func attrs(agentID, messageID string) map[string]string {
 	return map[string]string{"agent_id": agentID, "message_id": messageID}
+}
+func attrsWithDimensions(agentID, messageID string, dimensions map[string]string) map[string]string {
+	values := attrs(agentID, messageID)
+	for key, value := range dimensions {
+		values[key] = value
+	}
+	return values
 }
 func intColumn(name string, value uint64) *storagepb.ColumnValue {
 	return &storagepb.ColumnValue{ColumnName: name, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(value)}}}
@@ -127,7 +134,8 @@ func resourceRow(space, dataset, freq, at string, snapshot *hostmetricpb.HostSna
 }
 
 func filesystemRow(space, dataset, freq, at string, fs *hostmetricpb.FilesystemMetric, agentID, messageID string) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{Key: baseKey(space, dataset, agentID, freq, at, map[string]string{"device": fs.GetDevice(), "mountpoint": fs.GetMountpoint()}), Attributes: attrs(agentID, messageID), Columns: []*storagepb.ColumnValue{stringColumn("device", fs.GetDevice()), stringColumn("mountpoint", fs.GetMountpoint()), stringColumn("fs_type", fs.GetFsType()), intColumn("total_bytes", fs.GetTotalBytes()), intColumn("used_bytes", fs.GetUsedBytes()), intColumn("available_bytes", fs.GetAvailableBytes()), doubleColumn("usage_percent", fs.GetUsagePercent()), boolColumn("read_only", fs.GetReadOnly())}}
+	dimensions := map[string]string{"device": fs.GetDevice(), "mountpoint": fs.GetMountpoint()}
+	return &storagepb.TimeSeriesRow{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Attributes: attrsWithDimensions(agentID, messageID, dimensions), Columns: []*storagepb.ColumnValue{stringColumn("device", fs.GetDevice()), stringColumn("mountpoint", fs.GetMountpoint()), stringColumn("fs_type", fs.GetFsType()), intColumn("total_bytes", fs.GetTotalBytes()), intColumn("used_bytes", fs.GetUsedBytes()), intColumn("available_bytes", fs.GetAvailableBytes()), doubleColumn("usage_percent", fs.GetUsagePercent()), boolColumn("read_only", fs.GetReadOnly())}}
 }
 
 func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, agentID, messageID string) *storagepb.TimeSeriesRow {
@@ -135,7 +143,8 @@ func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, age
 	if disk.GetRateAvailable() {
 		columns = append(columns, doubleColumn("read_bytes_per_second", disk.GetReadBytesPerSecond()), doubleColumn("write_bytes_per_second", disk.GetWriteBytesPerSecond()), doubleColumn("read_iops", disk.GetReadIops()), doubleColumn("write_iops", disk.GetWriteIops()), doubleColumn("utilization_percent", disk.GetUtilizationPercent()))
 	}
-	return &storagepb.TimeSeriesRow{Key: baseKey(space, dataset, agentID, freq, at, map[string]string{"device": disk.GetDevice()}), Attributes: attrs(agentID, messageID), Columns: columns}
+	dimensions := map[string]string{"device": disk.GetDevice()}
+	return &storagepb.TimeSeriesRow{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Attributes: attrsWithDimensions(agentID, messageID, dimensions), Columns: columns}
 }
 
 func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMetric, agentID, messageID string) *storagepb.TimeSeriesRow {
@@ -143,7 +152,8 @@ func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMe
 	if network.GetRateAvailable() {
 		columns = append(columns, doubleColumn("receive_bytes_per_second", network.GetReceiveBytesPerSecond()), doubleColumn("transmit_bytes_per_second", network.GetTransmitBytesPerSecond()))
 	}
-	return &storagepb.TimeSeriesRow{Key: baseKey(space, dataset, agentID, freq, at, map[string]string{"device": network.GetDevice()}), Attributes: attrs(agentID, messageID), Columns: columns}
+	dimensions := map[string]string{"device": network.GetDevice()}
+	return &storagepb.TimeSeriesRow{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Attributes: attrsWithDimensions(agentID, messageID, dimensions), Columns: columns}
 }
 
 func sortedFilesystems(items []*hostmetricpb.FilesystemMetric) []*hostmetricpb.FilesystemMetric {

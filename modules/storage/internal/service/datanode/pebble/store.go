@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -25,6 +26,7 @@ type Options struct {
 	Path              string
 	NodeID            string
 	BucketDuration    time.Duration
+	MaxEventBytes     int
 	DisableSyncWrites bool
 }
 
@@ -39,7 +41,11 @@ type Store struct {
 	writeOptions   *cpebble.WriteOptions
 	nodeID         string
 	bucketDuration time.Duration
+	maxEventBytes  int
 	outboxMu       sync.Mutex
+	maintenanceMu  sync.Mutex
+	maintenanceWG  sync.WaitGroup
+	closing        bool
 }
 
 func Open(opts Options) (*Store, error) {
@@ -60,14 +66,32 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration}, nil
+	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes}, nil
 }
 
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.maintenanceMu.Lock()
+	s.closing = true
+	s.maintenanceMu.Unlock()
+	s.maintenanceWG.Wait()
 	return s.db.Close()
+}
+
+func (s *Store) compactAsync(start, end []byte) {
+	s.maintenanceMu.Lock()
+	if s.closing {
+		s.maintenanceMu.Unlock()
+		return
+	}
+	s.maintenanceWG.Add(1)
+	s.maintenanceMu.Unlock()
+	go func() {
+		defer s.maintenanceWG.Done()
+		_ = s.db.Compact(start, end, true)
+	}()
 }
 
 func (s *Store) NodeID() string {
@@ -95,12 +119,20 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("rows are required")
+		return nil, invalid("rows are required")
 	}
+	normalizedRows := make([]*pb.RowFieldUpsert, 0, len(rows))
 	for _, row := range rows {
 		if err := validateUpsert(row); err != nil {
 			return nil, err
 		}
+		key, err := NormalizeRowKey(row.GetKey())
+		if err != nil {
+			return nil, err
+		}
+		clone := proto.Clone(row).(*pb.RowFieldUpsert)
+		clone.Key = key
+		normalizedRows = append(normalizedRows, clone)
 	}
 	// One batch preserves all field changes from a request. Dataset event
 	// payloads are staged into the same batch with consecutive internal IDs.
@@ -108,7 +140,7 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	defer s.outboxMu.Unlock()
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	for _, row := range rows {
+	for _, row := range normalizedRows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -140,7 +172,7 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		}
 	}
 
-	grouped := groupRowsByDataset(rows)
+	grouped := groupRowsByDataset(normalizedRows)
 	entries := make([]*OutboxEntry, 0, len(grouped))
 	if event != nil {
 		nextID, err := s.nextOutboxID()
@@ -156,6 +188,9 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			payload, err = BindOutboxID(payload, s.nodeID, id)
 			if err != nil {
 				return nil, err
+			}
+			if s.maxEventBytes > 0 && len(payload) > s.maxEventBytes {
+				return nil, invalidf("event payload size %d exceeds limit %d", len(payload), s.maxEventBytes)
 			}
 			if err := batch.Set([]byte(outboxKey(id)), payload, s.writeOptions); err != nil {
 				return nil, err
@@ -175,24 +210,24 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 
 func validateUpsert(row *pb.RowFieldUpsert) error {
 	if row == nil || row.GetKey() == nil {
-		return errors.New("row key is required")
+		return invalid("row key is required")
 	}
 	if len(row.GetFields()) == 0 && len(row.GetAttributes()) == 0 {
-		return errors.New("at least one field or attribute is required")
+		return invalid("at least one field or attribute is required")
 	}
 	seen := make(map[string]struct{}, len(row.GetFields()))
 	for _, field := range row.GetFields() {
 		if field == nil || field.GetFieldId() == "" || field.GetValue() == nil {
-			return errors.New("field_id and value are required")
+			return invalid("field_id and value are required")
 		}
 		if _, ok := seen[field.GetFieldId()]; ok {
-			return fmt.Errorf("duplicate field_id %q", field.GetFieldId())
+			return invalidf("duplicate field_id %q", field.GetFieldId())
 		}
 		seen[field.GetFieldId()] = struct{}{}
 	}
 	for name, value := range row.GetAttributes() {
 		if name == "" || value == nil {
-			return errors.New("attribute key and value are required")
+			return invalid("attribute key and value are required")
 		}
 	}
 	return nil
@@ -215,13 +250,13 @@ func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, att
 		return nil, errors.New("pebble store is closed")
 	}
 	if len(keys) == 0 {
-		return nil, errors.New("keys are required")
+		return nil, invalid("keys are required")
 	}
 	if len(fieldIDs) == 0 && len(attributeKeys) == 0 {
-		return nil, errors.New("field_ids or attribute_keys are required")
+		return nil, invalid("field_ids or attribute_keys are required")
 	}
 	if len(keys) > 10000 || (len(keys)*(len(fieldIDs)+len(attributeKeys))) > 100000 {
-		return nil, errors.New("read request exceeds key/field limit")
+		return nil, invalid("read request exceeds key/field limit")
 	}
 	result := make([]*pb.RowFieldValues, 0, len(keys))
 	for _, key := range keys {
@@ -288,8 +323,8 @@ func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, att
 }
 
 func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
-	// The version is part of the row prefix. Scan all field keys for this
-	// record and choose the largest user-supplied version by string compare.
+	// The tuple codec preserves UTF-8 byte order, so the last key under each
+	// namespace prefix contains that namespace's largest record version.
 	base, err := recordBasePrefix(key)
 	if err != nil {
 		return nil, err
@@ -300,7 +335,7 @@ func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		for valid := iter.First(); valid; valid = iter.Next() {
+		if valid := iter.Last(); valid {
 			parts, ok := parseRecordValueKey(iter.Key())
 			if ok && parts.version > max {
 				max = parts.version
@@ -321,7 +356,7 @@ func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
 func recordBasePrefix(key *pb.RowKey) ([]byte, error) {
 	record := key.GetRecord()
 	if record == nil || record.GetRecordId() == "" {
-		return nil, errors.New("record key is required")
+		return nil, invalid("record key is required")
 	}
 	out := []byte{recordKind}
 	out = appendRawPart(out, []byte(key.GetSpaceId()))
@@ -360,15 +395,10 @@ func (s *Store) nextOutboxID() (uint64, error) {
 		return 0, err
 	}
 	defer closer.Close()
-	var id uint64
-	if len(data) > 0 {
-		for _, b := range data {
-			if b < '0' || b > '9' {
-				return 0, errors.New("invalid next_outbox_id")
-			}
-			id = id*10 + uint64(b-'0')
-		}
+	if len(data) != 8 {
+		return 0, errors.New("invalid next_outbox_id")
 	}
+	id := binary.BigEndian.Uint64(data)
 	if id == 0 {
 		return 1, nil
 	}
@@ -376,7 +406,9 @@ func (s *Store) nextOutboxID() (uint64, error) {
 }
 
 func (s *Store) setNextOutboxID(batch *cpebble.Batch, id uint64) error {
-	return batch.Set([]byte(metaNextID), []byte(fmt.Sprintf("%d", id)), s.writeOptions)
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], id)
+	return batch.Set([]byte(metaNextID), data[:], s.writeOptions)
 }
 
 func outboxKey(id uint64) string { return fmt.Sprintf("%s%020d", outboxPrefix, id) }

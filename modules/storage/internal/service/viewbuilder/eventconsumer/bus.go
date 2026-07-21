@@ -16,7 +16,7 @@ import (
 type TimeSeriesRowsCommittedHandler func(ctx context.Context, event *pb.TimeSeriesRowsCommitted) error
 type RecordRowsCommittedHandler func(ctx context.Context, event *pb.RecordRowsCommitted) error
 
-// RowsCommittedEvent is the single logical delivery lane for DataShard
+// RowsCommittedEvent is the single logical delivery lane for DataNode
 // commits. The two payload types retain their domain-specific schemas, but a
 // ViewBuilder must consume them through one ordered subscription.
 type RowsCommittedEvent struct {

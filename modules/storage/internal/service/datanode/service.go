@@ -63,7 +63,8 @@ func NewService(opts Options) (*Service, error) {
 	}
 	secret := opts.AuthSecret
 	if secret == "" {
-		secret = nodeID
+		_ = store.Close()
+		return nil, errors.New("auth secret is required")
 	}
 	return &Service{nodeID: nodeID, store: store, requireAuth: true, authSecret: secret}, nil
 }
@@ -93,7 +94,11 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.
 	}
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 	for _, row := range req.GetRows() {
-		keys = append(keys, row.GetKey())
+		key, err := pebble.NormalizeRowKey(row.GetKey())
+		if err != nil {
+			return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		keys = append(keys, key)
 	}
 	_ = entries // entries are durable and relayed asynchronously by the node.
 	return &pb.WriteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
@@ -133,12 +138,15 @@ func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*p
 	if req.GetNodeId() != s.nodeID {
 		return &pb.GetNodeStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.GetNodeStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	return &pb.GetNodeStateRsp{RetInfo: retinfo.Success("success"), NodeId: s.nodeID, Status: "READY"}, nil
 }
 
 func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	if req == nil || req.GetDatasetId() == "" || req.GetBeforeBucketStart() == "" {
-		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id and before_bucket_start are required"))}, nil
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetBeforeBucketStart() == "" {
+		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and before_bucket_start are required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
@@ -150,7 +158,7 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	deleted, err := s.store.CleanupExpiredBuckets(ctx, req.GetDatasetId(), before)
+	deleted, err := s.store.CleanupExpiredBuckets(ctx, req.GetSpaceId(), req.GetDatasetId(), before)
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
@@ -175,8 +183,8 @@ func errorCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
 	}
-	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "required") || strings.Contains(text, "invalid") || strings.Contains(text, "limit") || strings.Contains(text, "duplicate") {
+	var validation pebble.ValidationError
+	if errors.As(err, &validation) {
 		return pb.ErrorCode_INVALID_PARAM
 	}
 	return pb.ErrorCode_INNER_ERR

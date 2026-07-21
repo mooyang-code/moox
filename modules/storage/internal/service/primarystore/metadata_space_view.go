@@ -1,5 +1,3 @@
-//go:build legacy_storage
-
 package primarystore
 
 import (
@@ -137,9 +135,10 @@ func clearViewIndexRuntimeState(view *pb.View) {
 		return
 	}
 	view.ActiveIndexId = ""
-	view.ActiveViewVersion = 0
+	view.ActiveViewRevision = 0
 	view.ActiveColumns = nil
 	view.ActiveViewSchemaHash = ""
+	view.ActiveSlot = "slot-a"
 	view.IndexedFrom = ""
 	view.IndexedTo = ""
 	view.IndexBuild = nil

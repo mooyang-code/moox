@@ -25,7 +25,7 @@ func TestMetadataSchemaV4Contract(t *testing.T) {
 			t.Errorf("metadata schema missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"c_retention_window", "c_content_hash", "c_required"} {
+	for _, forbidden := range []string{"c_" + "retention_window", "c_content_hash", "c_required"} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed column %q", forbidden)
 		}

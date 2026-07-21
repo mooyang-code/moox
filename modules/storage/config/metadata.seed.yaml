@@ -55,6 +55,8 @@ datasets:
     name: 币安现货K线
     description: Binance spot OHLCV kline facts
     data_kind: time_series
+    data_node_id: storage-node-0
+    keep_duration: 4320h
     freqs: ["1m", "1h", "1d"]
     status: active
   - space_id: crypto
@@ -63,6 +65,8 @@ datasets:
     name: 币安现货标的
     description: Binance spot symbol profile facts
     data_kind: record
+    data_node_id: storage-node-0
+    keep_duration: "0"
     freqs: []
     status: active
   - space_id: crypto
@@ -71,7 +75,38 @@ datasets:
     name: 币安合约标的
     description: Binance USDT-M swap symbol metadata records
     data_kind: record
+    data_node_id: storage-node-0
+    keep_duration: "0"
     freqs: []
+    status: active
+
+views:
+  - space_id: crypto
+    view_id: binance_spot_kline_view
+    name: 现货行情视图
+    primary_dataset_id: binance_spot_kline
+    dataset_ids: [binance_spot_kline]
+    grain_keys: [subject_id, freq, data_time]
+    engine: duckdb
+    keep_duration: 4320h
+    status: active
+  - space_id: crypto
+    view_id: binance_spot_symbols_view
+    name: 现货标的视图
+    primary_dataset_id: binance_spot_symbols
+    dataset_ids: [binance_spot_symbols]
+    grain_keys: [record_id, version]
+    engine: bleve
+    keep_duration: "0"
+    status: active
+  - space_id: crypto
+    view_id: binance_swap_symbols_view
+    name: 合约标的视图
+    primary_dataset_id: binance_swap_symbols
+    dataset_ids: [binance_swap_symbols]
+    grain_keys: [record_id, version]
+    engine: bleve
+    keep_duration: "0"
     status: active
 
 dataset_subjects:
@@ -485,15 +520,15 @@ dataset_columns:
     status: active
 
 primary_store_nodes:
-  - node_id: local
-    name: local-primary
-    endpoint: local
+  - node_id: storage-node-0
+    name: local-data-node
+    endpoint: 127.0.0.1:20107
     weight: 100
     status: active
 
 devices:
   - device_id: pebble-local
-    node_id: local
+    node_id: storage-node-0
     name: local-pebble-primary
     engine: pebble
     endpoint: ./var/storage/pebble
@@ -501,13 +536,13 @@ devices:
     attributes:
       node_id: storage-node-0
   - device_id: duckdb-local
-    node_id: local
+    node_id: storage-node-0
     name: local-duckdb-view
     engine: duckdb
     endpoint: ./var/storage/view-indexes/duckdb
     status: active
   - device_id: bleve-local
-    node_id: local
+    node_id: storage-node-0
     name: local-bleve-search
     engine: bleve
     endpoint: ./var/storage/view-indexes/bleve
@@ -518,7 +553,7 @@ primary_store_routes:
     dataset_id: binance_spot_kline
     subject_pattern: "*"
     hash_rule: subject_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active
   - space_id: crypto
@@ -526,7 +561,7 @@ primary_store_routes:
     dataset_id: binance_spot_symbols
     subject_pattern: "*"
     hash_rule: record_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active
   - space_id: crypto
@@ -534,6 +569,6 @@ primary_store_routes:
     dataset_id: binance_swap_symbols
     subject_pattern: "*"
     hash_rule: record_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active

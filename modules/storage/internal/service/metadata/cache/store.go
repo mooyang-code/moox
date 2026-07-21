@@ -287,7 +287,7 @@ func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string
 // GetDatasetColumn returns one immutable Dataset column from the current snapshot.
 // The column key is scoped by Dataset, so callers cannot accidentally cross spaces.
 func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
-	return getProto(s, ctx, kindDatasetColumn, spaceID, datasetID+"."+columnName, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	return getProto(s, ctx, kindDatasetColumn, spaceID, compositeID(datasetID, columnName), func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }
 
 // GetDataNode is the concise DataNode name used by the new storage write path.
@@ -688,7 +688,7 @@ func (s *Store) fetchDatasetColumns(ctx context.Context, out []entry) ([]entry, 
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDatasetColumn, SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), ID: item.GetDatasetId() + "." + item.GetColumnName(), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDatasetColumn, SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), ID: compositeID(item.GetDatasetId(), item.GetColumnName()), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -720,7 +720,7 @@ func (s *Store) fetchViewColumns(ctx context.Context, out []entry) ([]entry, err
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindViewColumn, SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), ID: item.GetViewId() + "." + item.GetColumnName(), ValueType: int32(item.GetValueType())}, item)
+		out, err = appendEntry(out, entry{Kind: kindViewColumn, SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), ID: compositeID(item.GetViewId(), item.GetColumnName()), ValueType: int32(item.GetValueType())}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -884,6 +884,10 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func compositeID(owner, name string) string {
+	return owner + "\x00" + name
 }
 
 func stringSet(items []string) map[string]bool {

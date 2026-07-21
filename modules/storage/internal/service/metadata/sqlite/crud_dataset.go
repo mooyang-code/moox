@@ -30,11 +30,19 @@ func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		if existing.GetDataNodeId() != "" && item.GetDataNodeId() != "" && existing.GetDataNodeId() != item.GetDataNodeId() {
 			return nil, errors.New("dataset data_node_id is immutable")
 		}
+		if existing.GetDataSourceId() != item.GetDataSourceId() {
+			return nil, errors.New("dataset data_source_id is immutable")
+		}
+		if existing.GetDataKind() != item.GetDataKind() {
+			return nil, errors.New("dataset data_kind is immutable")
+		}
 		if item.GetDataNodeId() == "" {
 			item.DataNodeId = existing.GetDataNodeId()
 		}
 	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, getErr
+	} else if strings.TrimSpace(item.GetDataNodeId()) == "" {
+		return nil, errors.New("dataset data_node_id is required on create")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)
@@ -92,26 +100,19 @@ func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID 
 }
 
 func (s *Store) ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_datasets
+	const where = `
+		FROM t_datasets
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_data_source_id = ?)
 		  AND (? = '' OR c_data_kind = ?)
-		ORDER BY c_space_id, c_dataset_id
-	`, []any{spaceID, spaceID, dataSourceID, dataSourceID, dataKindFilter(dataKind), dataKindFilter(dataKind)}, func() *pb.Dataset { return &pb.Dataset{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	if freq != "" {
-		filtered := items[:0]
-		for _, item := range items {
-			if containsString(item.GetFreqs(), freq) {
-				filtered = append(filtered, item)
-			}
-		}
-		items = filtered
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR EXISTS (SELECT 1 FROM json_each(c_freqs_json) WHERE value = ?))`
+	kind := dataKindFilter(dataKind)
+	args := []any{spaceID, spaceID, dataSourceID, dataSourceID, kind, kind, freq, freq}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.Dataset { return &pb.Dataset{} },
+	)
 }
 
 func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, error) {
@@ -263,13 +264,12 @@ func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) (
 		args = append(args, pattern, pattern, pattern)
 	}
 
-	statement := `SELECT c_attrs_json FROM t_fields WHERE ` + strings.Join(where, " AND ") +
-		` ORDER BY ` + sortColumn + ` ` + direction + `, c_field_id ` + direction
-	items, err := queryMessages(ctx, s.db, statement, args, func() *pb.Field { return &pb.Field{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, query.Page)
+	whereSQL := strings.Join(where, " AND ")
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json FROM t_fields WHERE `+whereSQL+` ORDER BY `+sortColumn+` `+direction+`, c_field_id `+direction,
+		`SELECT COUNT(1) FROM t_fields WHERE `+whereSQL,
+		args, query.Page, func() *pb.Field { return &pb.Field{} },
+	)
 }
 
 func escapeLikePattern(value string) string {
@@ -310,16 +310,16 @@ func (s *Store) GetFactor(ctx context.Context, spaceID string, factorID string) 
 }
 
 func (s *Store) ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_factors
+	const where = `
+		FROM t_factors
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_algorithm = ?)
-		ORDER BY c_space_id, c_factor_id
-	`, []any{spaceID, spaceID, algorithm, algorithm}, func() *pb.Factor { return &pb.Factor{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_algorithm = ?)`
+	args := []any{spaceID, spaceID, algorithm, algorithm}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_factor_id`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.Factor { return &pb.Factor{} },
+	)
 }
 
 func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
@@ -400,16 +400,16 @@ func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) 
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_dataset_columns
+	const where = `
+		FROM t_dataset_columns
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_dataset_id = ?)
-		ORDER BY c_space_id, c_dataset_id, c_column_name
-	`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_dataset_id = ?)`
+	args := []any{spaceID, spaceID, datasetID, datasetID}
+	return queryPagedMessages(ctx, s.db,
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id, c_column_name`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.DatasetColumn { return &pb.DatasetColumn{} },
+	)
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {

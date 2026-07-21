@@ -82,16 +82,16 @@ fields:
   - { space_id: crypto, group_id: derivatives, field_id: funding_rate, name: 资金费率, value_type: double, unit: percent, sort_order: 10, status: active }
 
 datasets:
-  - { space_id: stock_cn, dataset_id: stock_kline, data_source_id: quantclass_stock, name: 股票行情, data_kind: time_series, freqs: [5m, 15m, 1h, 1d], status: active, attributes: { source_directories: 股票历史日线数据|股票历史全息日线数据|股票1小时K线数据|股票1小时k线数据Pro|股票5分钟收盘价|股票15分钟收盘价 } }
-  - { space_id: stock_cn, dataset_id: index_kline, data_source_id: quantclass_stock, name: 指数行情, data_kind: time_series, freqs: [1h, 1d], status: active, attributes: { source_directories: 主要指数历史日线数据|指数1小时K线数据 } }
-  - { space_id: stock_cn, dataset_id: financial_statement_metric, data_source_id: quantclass_stock, name: 财报指标明细, data_kind: record, freqs: [quarter], status: active, attributes: { source_directories: 邢不行财务数据, storage_model: long_form } }
-  - { space_id: stock_cn, dataset_id: financial_summary, data_source_id: quantclass_stock, name: 财务摘要, data_kind: record, freqs: [quarter], status: active, attributes: { source_directories: 财务预处理数据, storage_model: wide_common_metrics } }
-  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, data_source_id: quantclass_hk, name: 港股日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: AH港股数据 } }
-  - { space_id: stock_us, dataset_id: stock_kline_daily, data_source_id: quantclass_us, name: 美股日行情, data_kind: time_series, freqs: [1d], status: active, attributes: { source_directories: 美股日线数据 } }
-  - { space_id: crypto, dataset_id: binance_spot_kline_1h, data_source_id: binance, name: 币安现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 现货1小时数据-币对分类 } }
-  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, data_source_id: binance, name: 币安永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: 永续合约1小时数据-币对分类 } }
-  - { space_id: crypto, dataset_id: okx_spot_kline_1h, data_source_id: okx, name: 欧易现货小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX现货1小时数据-币对分类 } }
-  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, data_source_id: okx, name: 欧易永续小时行情, data_kind: time_series, freqs: [1h], status: active, attributes: { source_directories: OKX永续合约1小时数据-币对分类 } }
+  - { space_id: stock_cn, dataset_id: stock_kline, data_source_id: quantclass_stock, name: 股票行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [5m, 15m, 1h, 1d], status: active, attributes: { source_directories: 股票历史日线数据|股票历史全息日线数据|股票1小时K线数据|股票1小时k线数据Pro|股票5分钟收盘价|股票15分钟收盘价 } }
+  - { space_id: stock_cn, dataset_id: index_kline, data_source_id: quantclass_stock, name: 指数行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1h, 1d], status: active, attributes: { source_directories: 主要指数历史日线数据|指数1小时K线数据 } }
+  - { space_id: stock_cn, dataset_id: financial_statement_metric, data_source_id: quantclass_stock, name: 财报指标明细, data_kind: record, data_node_id: storage-node-0, keep_duration: "0", freqs: [quarter], status: active, attributes: { source_directories: 邢不行财务数据, storage_model: long_form } }
+  - { space_id: stock_cn, dataset_id: financial_summary, data_source_id: quantclass_stock, name: 财务摘要, data_kind: record, data_node_id: storage-node-0, keep_duration: "0", freqs: [quarter], status: active, attributes: { source_directories: 财务预处理数据, storage_model: wide_common_metrics } }
+  - { space_id: stock_hk, dataset_id: ah_stock_kline_daily, data_source_id: quantclass_hk, name: 港股日行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1d], status: active, attributes: { source_directories: AH港股数据 } }
+  - { space_id: stock_us, dataset_id: stock_kline_daily, data_source_id: quantclass_us, name: 美股日行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1d], status: active, attributes: { source_directories: 美股日线数据 } }
+  - { space_id: crypto, dataset_id: binance_spot_kline_1h, data_source_id: binance, name: 币安现货小时行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1h], status: active, attributes: { source_directories: 现货1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: binance_perpetual_kline_1h, data_source_id: binance, name: 币安永续小时行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1h], status: active, attributes: { source_directories: 永续合约1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: okx_spot_kline_1h, data_source_id: okx, name: 欧易现货小时行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1h], status: active, attributes: { source_directories: OKX现货1小时数据-币对分类 } }
+  - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, data_source_id: okx, name: 欧易永续小时行情, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: [1h], status: active, attributes: { source_directories: OKX永续合约1小时数据-币对分类 } }
 
 dataset_columns:
   - { space_id: stock_cn, dataset_id: stock_kline, column_name: open, origin_type: field, origin_id: open, value_type: double, status: active }
@@ -175,16 +175,16 @@ dataset_columns:
   - { space_id: crypto, dataset_id: okx_perpetual_kline_1h, column_name: raw_payload, origin_type: field, origin_id: raw_payload, value_type: json, status: active }
 
 views:
-  - { space_id: stock_cn, view_id: stock_kline_1d_view, name: A股日行情查询, primary_dataset_id: stock_kline, dataset_ids: [stock_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: stock_cn, view_id: index_kline_1d_view, name: A股指数日行情查询, primary_dataset_id: index_kline, dataset_ids: [index_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
+  - { space_id: stock_cn, view_id: stock_kline_1d_view, name: A股日行情查询, primary_dataset_id: stock_kline, dataset_ids: [stock_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, keep_duration: 8760h, status: active }
+  - { space_id: stock_cn, view_id: index_kline_1d_view, name: A股指数日行情查询, primary_dataset_id: index_kline, dataset_ids: [index_kline], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, keep_duration: 8760h, status: active }
   - { space_id: stock_cn, view_id: financial_metric_view, name: 财报指标明细查询, primary_dataset_id: financial_statement_metric, dataset_ids: [financial_statement_metric], grain_keys: [record_id, version], engine: bleve, status: active }
   - { space_id: stock_cn, view_id: financial_summary_view, name: 财务摘要查询, primary_dataset_id: financial_summary, dataset_ids: [financial_summary], grain_keys: [record_id, version], engine: bleve, status: active }
-  - { space_id: stock_hk, view_id: stock_kline_1d_view, name: 港股日行情查询, primary_dataset_id: ah_stock_kline_daily, dataset_ids: [ah_stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: stock_us, view_id: stock_kline_1d_view, name: 美股日行情查询, primary_dataset_id: stock_kline_daily, dataset_ids: [stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, retention_window: 365d, status: active }
-  - { space_id: crypto, view_id: binance_spot_1h_view, name: 币安现货小时行情查询, primary_dataset_id: binance_spot_kline_1h, dataset_ids: [binance_spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto, view_id: binance_perpetual_1h_view, name: 币安永续小时行情查询, primary_dataset_id: binance_perpetual_kline_1h, dataset_ids: [binance_perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto, view_id: okx_spot_1h_view, name: 欧易现货小时行情查询, primary_dataset_id: okx_spot_kline_1h, dataset_ids: [okx_spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
-  - { space_id: crypto, view_id: okx_perpetual_1h_view, name: 欧易永续小时行情查询, primary_dataset_id: okx_perpetual_kline_1h, dataset_ids: [okx_perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, retention_window: 180d, status: active }
+  - { space_id: stock_hk, view_id: stock_kline_1d_view, name: 港股日行情查询, primary_dataset_id: ah_stock_kline_daily, dataset_ids: [ah_stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, keep_duration: 8760h, status: active }
+  - { space_id: stock_us, view_id: stock_kline_1d_view, name: 美股日行情查询, primary_dataset_id: stock_kline_daily, dataset_ids: [stock_kline_daily], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1d"}', engine: duckdb, keep_duration: 8760h, status: active }
+  - { space_id: crypto, view_id: binance_spot_1h_view, name: 币安现货小时行情查询, primary_dataset_id: binance_spot_kline_1h, dataset_ids: [binance_spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, keep_duration: 4320h, status: active }
+  - { space_id: crypto, view_id: binance_perpetual_1h_view, name: 币安永续小时行情查询, primary_dataset_id: binance_perpetual_kline_1h, dataset_ids: [binance_perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, keep_duration: 4320h, status: active }
+  - { space_id: crypto, view_id: okx_spot_1h_view, name: 欧易现货小时行情查询, primary_dataset_id: okx_spot_kline_1h, dataset_ids: [okx_spot_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, keep_duration: 4320h, status: active }
+  - { space_id: crypto, view_id: okx_perpetual_1h_view, name: 欧易永续小时行情查询, primary_dataset_id: okx_perpetual_kline_1h, dataset_ids: [okx_perpetual_kline_1h], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1h"}', engine: duckdb, keep_duration: 4320h, status: active }
 
 view_columns:
   # View 只投影结构化业务列；subject_id、freq、data_time、record_id、version 由系统 Key 提供。
@@ -255,10 +255,10 @@ view_columns:
   - { space_id: crypto, view_id: okx_perpetual_1h_view, column_name: okx_perpetual_kline_1h.funding_rate, origin_type: dataset_column, origin_id: okx_perpetual_kline_1h.funding_rate, value_type: double, sort_order: 70, attributes: {display_name: 资金费率} }
 
 primary_store_nodes:
-  - { node_id: local, name: 本地主存节点, endpoint: 127.0.0.1:20100, weight: 100, status: active }
+  - { node_id: storage-node-0, name: 本地数据节点, endpoint: 127.0.0.1:20107, weight: 100, status: active }
 
 primary_store_routes:
-  - { space_id: crypto, route_id: route-binance-spot-kline-1h, dataset_id: binance_spot_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active }
-  - { space_id: crypto, route_id: route-binance-perpetual-kline-1h, dataset_id: binance_perpetual_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active }
-  - { space_id: crypto, route_id: route-okx-spot-kline-1h, dataset_id: okx_spot_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active }
-  - { space_id: crypto, route_id: route-okx-perpetual-kline-1h, dataset_id: okx_perpetual_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: local, priority: 100, status: active }
+  - { space_id: crypto, route_id: route-binance-spot-kline-1h, dataset_id: binance_spot_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: storage-node-0, priority: 100, status: active }
+  - { space_id: crypto, route_id: route-binance-perpetual-kline-1h, dataset_id: binance_perpetual_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: storage-node-0, priority: 100, status: active }
+  - { space_id: crypto, route_id: route-okx-spot-kline-1h, dataset_id: okx_spot_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: storage-node-0, priority: 100, status: active }
+  - { space_id: crypto, route_id: route-okx-perpetual-kline-1h, dataset_id: okx_perpetual_kline_1h, subject_pattern: "*", hash_rule: subject_id, node_id: storage-node-0, priority: 100, status: active }

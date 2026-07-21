@@ -47,7 +47,7 @@ moox-trade      -> modules/trade/schema
 1. 启动 `moox-admin`，生成新的 `data/admin.db`。
 2. 启动 `moox-cloudnode`，生成新的 cloudnode 数据库。
 3. 启动 `moox-collector`，生成新的 collector 数据库。
-4. 启动 `storage-primary` 和 `storage-view`；需要物理分片时另外启动私网 `storage-shard`。
+4. 启动 `storage-primary` 和 `storage-view`；需要物理分片时另外启动私网 `storage-node`。
 5. 在管理台创建演示用 Space，例如 `crypto`。
 6. 使用 `moox-cli metadata import` 导入平台拓扑和业务元数据。
 7. 在管理台或通过 cloudnode API 创建云账户、两阶段上传 collector SCF 代码包（`InitPackageUpload` → COS 直传 → `CompletePackageUpload`）、部署云节点。

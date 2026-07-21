@@ -1,5 +1,3 @@
-//go:build legacy_storage
-
 package metadata
 
 import (

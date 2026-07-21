@@ -1,5 +1,3 @@
-//go:build legacy_storage
-
 package metadata
 
 import (
@@ -139,6 +137,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
 			Freqs: item.Freqs, Status: item.Status, Attributes: item.Attributes,
+			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
@@ -204,7 +203,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertView(ctx, &pb.View{
 			SpaceId: item.SpaceID, ViewId: item.ViewID, Name: item.Name, Description: item.Description,
 			PrimaryDatasetId: item.PrimaryDatasetID, DatasetIds: item.DatasetIDs, GrainKeys: item.GrainKeys,
-			FilterJson: item.FilterJSON, Engine: item.Engine, RetentionWindow: item.RetentionWindow,
+			FilterJson: item.FilterJSON, Engine: item.Engine, KeepDuration: item.KeepDuration,
 			Status: item.Status,
 		}); err != nil {
 			return result, seedErr("view", item.ViewID, err)
@@ -430,10 +429,12 @@ type seedDataset struct {
 	SpaceID      string            `yaml:"space_id"`
 	DatasetID    string            `yaml:"dataset_id"`
 	DataSourceID string            `yaml:"data_source_id"`
+	DataNodeID   string            `yaml:"data_node_id"`
 	Name         string            `yaml:"name"`
 	Description  string            `yaml:"description"`
 	DataKind     string            `yaml:"data_kind"`
 	Freqs        []string          `yaml:"freqs"`
+	KeepDuration string            `yaml:"keep_duration"`
 	Status       string            `yaml:"status"`
 	Attributes   map[string]string `yaml:"attributes"`
 }
@@ -512,7 +513,7 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`
-	RetentionWindow  string   `yaml:"retention_window"`
+	KeepDuration     string   `yaml:"keep_duration"`
 	Status           string   `yaml:"status"`
 }
 

@@ -477,13 +477,13 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 		}
 		row := &pb.TimeSeriesRow{
 			Key: &pb.TimeSeriesKey{
-				SpaceId:    ctx.Options.SpaceID,
-				DatasetId:  ctx.Options.DatasetID,
-				SubjectId:  ctx.Options.SubjectID,
-				Freq:       ctx.Options.Freq,
-				Dimensions: dimensions,
-				DataTime:   dataTime,
+				SpaceId:   ctx.Options.SpaceID,
+				DatasetId: ctx.Options.DatasetID,
+				SubjectId: ctx.Options.SubjectID,
+				Freq:      ctx.Options.Freq,
+				DataTime:  dataTime,
 			},
+			Attributes: dimensions,
 		}
 		for index, name := range normalizedHeader {
 			if name == "" || name == ctx.Options.TimeColumn {

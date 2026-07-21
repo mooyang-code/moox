@@ -95,7 +95,7 @@ func (b ViewIndexApplyBatch) Validate() error {
 		if err := w.Validate(); err != nil {
 			return fmt.Errorf("row write %d: %w", i, err)
 		}
-		id := rowKeyID(w.Key.Key)
+		id := RowKeyID(w.Key.Key)
 		if _, ok := seen[id]; ok {
 			return fmt.Errorf("row write %d duplicates row key", i)
 		}
@@ -105,12 +105,13 @@ func (b ViewIndexApplyBatch) Validate() error {
 }
 
 type ViewIndexSchema struct {
-	SpaceID     string
-	ViewID      string
-	ViewVersion uint64
-	Engine      string
-	Columns     []*pb.ViewColumn
-	SchemaHash  string
+	SpaceID          string
+	ViewID           string
+	PrimaryDatasetID string
+	ViewVersion      uint64
+	Engine           string
+	Columns          []*pb.ViewColumn
+	SchemaHash       string
 }
 
 type BatchWrite struct {
@@ -150,6 +151,12 @@ type ManagedEngine interface {
 	ViewIndexEngine
 	ViewIndexApplier
 	List(context.Context) ([]string, error)
+}
+
+type QueryEngine interface {
+	ManagedEngine
+	Query(context.Context, string, []*pb.RowKey, []string) ([]*pb.RowFieldValues, error)
+	Scan(context.Context, string, int, int) ([]*pb.RowFieldValues, error)
 }
 
 // MemoryEngine is a small engine core shared by DuckDB and Bleve owners. The
@@ -220,7 +227,7 @@ func (e *MemoryEngine) Apply(_ context.Context, id string, batch ViewIndexApplyB
 		return fmt.Errorf("view schema hash conflict")
 	}
 	for _, w := range batch.RowWrites {
-		key := rowKeyID(w.Key.Key)
+		key := RowKeyID(w.Key.Key)
 		row := idx.rows[key]
 		if row == nil {
 			row = &pb.RowFieldValues{Key: w.Key.Key}
@@ -351,11 +358,43 @@ func (e *MemoryEngine) Query(_ context.Context, id string, keys []*pb.RowKey, fi
 	}
 	out := make([]*pb.RowFieldValues, 0, len(keys))
 	for _, k := range keys {
-		if row := idx.rows[rowKeyID(k)]; row != nil {
+		if row := idx.rows[RowKeyID(k)]; row != nil {
 			out = append(out, projectRow(row, fields))
 		}
 	}
 	return out, nil
+}
+
+func (e *MemoryEngine) Scan(_ context.Context, id string, offset, limit int) ([]*pb.RowFieldValues, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	idx := e.indexes[id]
+	if idx == nil {
+		return nil, fmt.Errorf("index %q is not prepared", id)
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	ids := make([]string, 0, len(idx.rows))
+	for rowID := range idx.rows {
+		ids = append(ids, rowID)
+	}
+	sort.Strings(ids)
+	if offset >= len(ids) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(ids) {
+		end = len(ids)
+	}
+	rows := make([]*pb.RowFieldValues, 0, end-offset)
+	for _, rowID := range ids[offset:end] {
+		rows = append(rows, proto.Clone(idx.rows[rowID]).(*pb.RowFieldValues))
+	}
+	return rows, nil
 }
 func (e *MemoryEngine) Write(ctx context.Context, id string, batch BatchWrite) error {
 	writes := make([]RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))
@@ -384,10 +423,20 @@ func queryRecordKey(k *pb.RecordKey) *pb.RowKey {
 	}
 	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: k.GetRecordId(), Version: k.GetVersion()}}}
 }
-func rowKeyID(k *pb.RowKey) string {
+func RowKeyID(k *pb.RowKey) string {
 	raw, _ := protojson.Marshal(k)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func ApplyRowWrite(row *pb.RowFieldValues, write RowWrite, onlyMissing bool) *pb.RowFieldValues {
+	if row == nil {
+		row = &pb.RowFieldValues{Key: proto.Clone(write.Key.Key).(*pb.RowKey)}
+	} else {
+		row = proto.Clone(row).(*pb.RowFieldValues)
+	}
+	mergeFields(row, write.Fields, write.Attributes, onlyMissing)
+	return row
 }
 func mergeFields(row *pb.RowFieldValues, fields []*pb.FieldValue, attrs map[string]*pb.TypedValue, onlyMissing bool) {
 	pos := map[string]int{}
@@ -420,23 +469,23 @@ func mergeFields(row *pb.RowFieldValues, fields []*pb.FieldValue, attrs map[stri
 }
 func projectRow(row *pb.RowFieldValues, fields []string) *pb.RowFieldValues {
 	if len(fields) == 0 {
-		return row
+		return proto.Clone(row).(*pb.RowFieldValues)
 	}
 	want := map[string]struct{}{}
 	for _, f := range fields {
 		want[f] = struct{}{}
 	}
-	out := &pb.RowFieldValues{Key: row.Key, Attributes: map[string]*pb.TypedValue{}}
+	out := &pb.RowFieldValues{Key: proto.Clone(row.GetKey()).(*pb.RowKey), Attributes: map[string]*pb.TypedValue{}}
 	for _, f := range row.Fields {
 		if f != nil {
 			if _, ok := want[f.GetFieldId()]; ok {
-				out.Fields = append(out.Fields, f)
+				out.Fields = append(out.Fields, proto.Clone(f).(*pb.FieldValue))
 			}
 		}
 	}
 	for k, v := range row.Attributes {
 		if _, ok := want[k]; ok {
-			out.Attributes[k] = v
+			out.Attributes[k] = proto.Clone(v).(*pb.TypedValue)
 		}
 	}
 	return out
@@ -449,9 +498,9 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 		SortOrder             uint32
 	}
 	shape := struct {
-		SpaceID, ViewID, Engine string
-		Columns                 []col
-	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, Engine: schema.Engine}
+		SpaceID, ViewID, PrimaryDatasetID, Engine string
+		Columns                                   []col
+	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, PrimaryDatasetID: schema.PrimaryDatasetID, Engine: schema.Engine}
 	for _, c := range schema.Columns {
 		if c != nil {
 			shape.Columns = append(shape.Columns, col{c.GetColumnName(), c.GetOriginId(), int32(c.GetOriginType()), int32(c.GetValueType()), c.GetSortOrder()})

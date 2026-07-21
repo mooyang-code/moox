@@ -18,6 +18,7 @@ message ViewIndexSchema {
   string engine = 4;
   repeated ViewColumn columns = 5;
   string view_schema_hash = 6;
+  string primary_dataset_id = 7;
 }
 
 enum ViewIndexRowWriteOperation {

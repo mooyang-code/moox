@@ -45,11 +45,10 @@ var dataRowsExportCmd = &cobra.Command{
 		if dataStorageURL != "" {
 			rsp, err := exportRowsRemote(trpc.BackgroundContext(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
 				Keys: []*pb.TimeSeriesKey{{
-					SpaceId:    defaultFlag(dataSpaceID, "default"),
-					DatasetId:  datasetID,
-					SubjectId:  dataSubjectID,
-					Freq:       dataFreq,
-					Dimensions: parseDimensions(dataDimensions),
+					SpaceId:   defaultFlag(dataSpaceID, "default"),
+					DatasetId: datasetID,
+					SubjectId: dataSubjectID,
+					Freq:      dataFreq,
 				}},
 				TimeRange: &pb.TimeRange{
 					StartTime: dataStartTime,

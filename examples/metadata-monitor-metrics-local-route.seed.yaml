@@ -4,6 +4,6 @@ primary_store_routes:
     dataset_id: moox_service_metrics
     subject_pattern: "*"
     hash_rule: subject_id
-    node_id: local
+    node_id: storage-node-0
     priority: 100
     status: active
