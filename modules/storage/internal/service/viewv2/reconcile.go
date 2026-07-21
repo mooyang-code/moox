@@ -113,12 +113,18 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 	}
+	failedBuild := false
 	if build := view.GetIndexBuild(); build != nil {
 		switch build.GetState() {
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_FAILED:
 			if build.GetState() == pb.ViewIndexBuild_FAILED {
 				s.removeFailedBuild(ctx, build.GetIndexId())
-				return nil
+				view.IndexBuild = nil
+				failedBuild = true
+				break
+			}
+			if failedBuild {
+				break
 			}
 			if build.GetIndexId() == "" {
 				return nil
@@ -133,7 +139,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 	}
-	if !needsRebuild(view, stats) {
+	if !failedBuild && !needsRebuild(view, stats) {
 		return nil
 	}
 	columns := view.GetColumns()
