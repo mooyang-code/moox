@@ -100,9 +100,21 @@ func TestScanFieldsEnumeratesHistoricalRowsByRange(t *testing.T) {
 	if err := store.WriteFields(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	found, page, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z"}, nil, []string{"close"}, nil, &pb.Page{Page: 1, Size: 10})
+	found, page, _, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z"}, nil, []string{"close"}, nil, &pb.Page{Page: 1, Size: 10}, "", pb.SortOrder_SORT_ORDER_ASC)
 	if err != nil || len(found) != 1 || page.GetHasMore() || found[0].GetKey().GetTimeSeries().GetDataTime() != "2026-07-20T00:00:00.000000000Z" {
 		t.Fatalf("found=%v page=%v err=%v", found, page, err)
+	}
+	first, firstPage, token, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, nil, nil, []string{"close"}, nil, &pb.Page{Page: 1, Size: 1}, "", pb.SortOrder_SORT_ORDER_ASC)
+	if err != nil || len(first) != 1 || !firstPage.GetHasMore() || token == "" {
+		t.Fatalf("first page rows=%v page=%v token=%q err=%v", first, firstPage, token, err)
+	}
+	second, secondPage, _, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, nil, nil, []string{"close"}, nil, &pb.Page{Page: 2, Size: 1}, token, pb.SortOrder_SORT_ORDER_ASC)
+	if err != nil || len(second) != 1 || secondPage.GetHasMore() || first[0].GetKey().GetTimeSeries().GetDataTime() == second[0].GetKey().GetTimeSeries().GetDataTime() {
+		t.Fatalf("second page rows=%v page=%v err=%v", second, secondPage, err)
+	}
+	desc, _, _, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, nil, nil, []string{"close"}, nil, &pb.Page{Page: 1, Size: 10}, "", pb.SortOrder_SORT_ORDER_DESC)
+	if err != nil || len(desc) != 2 || desc[0].GetKey().GetTimeSeries().GetDataTime() != "2026-07-20T00:00:00.000000000Z" {
+		t.Fatalf("descending rows=%v err=%v", desc, err)
 	}
 }
 

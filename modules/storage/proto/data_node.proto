@@ -68,12 +68,15 @@ message ScanFieldsReq {
   repeated string field_ids = 8;
   repeated string attribute_keys = 9;
   common.Page page = 10;
+  string page_token = 11;
+  SortOrder order = 12;
 }
 
 message ScanFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
   common.PageResult page_result = 3;
+  string next_page_token = 4;
 }
 
 service DataNode {

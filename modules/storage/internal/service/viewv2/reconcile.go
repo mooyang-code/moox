@@ -17,6 +17,7 @@ import (
 
 type MetadataClient interface {
 	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
+	GetDataset(context.Context, *pb.GetDatasetReq, ...client.Option) (*pb.GetDatasetRsp, error)
 	ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error)
 	ClaimViewIndexBuild(context.Context, *pb.ClaimViewIndexBuildReq, ...client.Option) (*pb.ClaimViewIndexBuildRsp, error)
 	UpdateViewIndexBuild(context.Context, *pb.UpdateViewIndexBuildReq, ...client.Option) (*pb.UpdateViewIndexBuildRsp, error)
@@ -177,9 +178,25 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			s.failBuild(ctx, opts, auth, view, buildID, err)
 			return err
 		}
-	} else if err := s.BackfillInitialView(ctx, view, indexID, columns, opts.Primary, opts.Scan); err != nil {
-		s.failBuild(ctx, opts, auth, view, buildID, err)
-		return err
+	} else {
+		datasetRsp, err := opts.Metadata.GetDataset(ctx, &pb.GetDatasetReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId()})
+		if err != nil {
+			s.failBuild(ctx, opts, auth, view, buildID, err)
+			return err
+		}
+		if err := requireSuccess(datasetRsp.GetRetInfo()); err != nil {
+			s.failBuild(ctx, opts, auth, view, buildID, err)
+			return err
+		}
+		if datasetRsp.GetDataset() == nil {
+			err := errors.New("primary dataset metadata is missing")
+			s.failBuild(ctx, opts, auth, view, buildID, err)
+			return err
+		}
+		if err := s.BackfillInitialView(ctx, view, indexID, columns, datasetRsp.GetDataset().GetDataKind(), opts.Primary, opts.Scan); err != nil {
+			s.failBuild(ctx, opts, auth, view, buildID, err)
+			return err
+		}
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, uint64(stats.EntryCount)); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, err)
@@ -230,12 +247,17 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 	}
 }
 
-func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexID string, columns []*pb.ViewColumn, reader FieldReader, scan PrimaryStoreScanClient) error {
+func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexID string, columns []*pb.ViewColumn, dataKind pb.DataKind, reader FieldReader, scan PrimaryStoreScanClient) error {
+	s.liveGate.Lock()
+	defer s.liveGate.Unlock()
 	if view == nil || indexID == "" || scan == nil {
 		return errors.New("initial view build requires a primary scan client")
 	}
 	if view.GetPrimaryDatasetId() == "" {
 		return errors.New("initial view build requires primary_dataset_id")
+	}
+	if dataKind != pb.DataKind_DATA_KIND_TIME_SERIES && dataKind != pb.DataKind_DATA_KIND_RECORD {
+		return errors.New("initial view build requires a valid primary dataset kind")
 	}
 	s.mu.RLock()
 	schema := s.schemas[indexID]
@@ -245,13 +267,15 @@ func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexI
 		return errors.New("initial view build requires primary dataset columns")
 	}
 	pageSize := uint32(100)
+	pageToken := ""
 	for pageNo := uint32(1); ; pageNo++ {
 		var writes []viewindex.RowWrite
 		var page *pb.PageResult
-		if isTimeSeriesView(view) {
+		nextPageToken := ""
+		if dataKind == pb.DataKind_DATA_KIND_TIME_SERIES {
 			rsp, err := scan.ScanTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: s.primaryAuthClone(), SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
-				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize},
+				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize}, PageToken: pageToken,
 			})
 			if err != nil {
 				return err
@@ -260,6 +284,7 @@ func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexI
 				return err
 			}
 			page = rsp.GetPageResult()
+			nextPageToken = rsp.GetNextPageToken()
 			for _, row := range rsp.GetRows() {
 				if row == nil || row.GetKey() == nil {
 					continue
@@ -270,7 +295,7 @@ func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexI
 		} else {
 			rsp, err := scan.ScanRecordRows(ctx, &pb.ReadRecordRowsReq{
 				AuthInfo: s.primaryAuthClone(), SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
-				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize},
+				ColumnNames: fieldIDs, Page: &pb.Page{Page: pageNo, Size: pageSize}, PageToken: pageToken,
 			})
 			if err != nil {
 				return err
@@ -279,6 +304,7 @@ func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexI
 				return err
 			}
 			page = rsp.GetPageResult()
+			nextPageToken = rsp.GetNextPageToken()
 			for _, row := range rsp.GetRows() {
 				if row == nil || row.GetKey() == nil {
 					continue
@@ -307,6 +333,10 @@ func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexI
 		if page == nil || !page.GetHasMore() || len(writes) == 0 && page.GetTotal() == 0 {
 			return s.MarkViewBuildReady(view.GetSpaceId(), view.GetViewId())
 		}
+		if nextPageToken == "" {
+			return errors.New("primary scan returned has_more without a page token")
+		}
+		pageToken = nextPageToken
 	}
 }
 
@@ -338,15 +368,6 @@ func sourceFieldIDs(columns []*pb.ViewColumn, datasetID string) []string {
 		}
 	}
 	return ids
-}
-
-func isTimeSeriesView(view *pb.View) bool {
-	for _, key := range view.GetGrainKeys() {
-		if key == "data_time" {
-			return true
-		}
-	}
-	return false
 }
 
 func stringAttributes(values map[string]string) map[string]*pb.TypedValue {

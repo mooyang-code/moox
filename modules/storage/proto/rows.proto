@@ -94,12 +94,14 @@ message ReadTimeSeriesRowsReq {
   common.Page page = 6;
   string space_id = 7;
   string dataset_id = 8;
+  string page_token = 9;
 }
 
 message ReadTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
   repeated TimeSeriesRow rows = 2;
   common.PageResult page_result = 3;
+  string next_page_token = 4;
 }
 
 message MergeTimeSeriesRowsReq {
@@ -131,10 +133,12 @@ message ReadRecordRowsReq {
   common.Page page = 6;
   string space_id = 7;
   string dataset_id = 8;
+  string page_token = 9;
 }
 
 message ReadRecordRowsRsp {
   common.RetInfo ret_info = 1;
   repeated RecordRow rows = 2;
   common.PageResult page_result = 3;
+  string next_page_token = 4;
 }

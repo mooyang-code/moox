@@ -175,11 +175,11 @@ func (s *Service) ScanFields(ctx context.Context, req *pb.ScanFieldsReq) (*pb.Sc
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.ScanFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	rows, page, err := s.store.ScanFields(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetDataKind(), req.GetTimeRange(), req.GetVersionRange(), req.GetFieldIds(), req.GetAttributeKeys(), req.GetPage())
+	rows, page, nextToken, err := s.store.ScanFields(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetDataKind(), req.GetTimeRange(), req.GetVersionRange(), req.GetFieldIds(), req.GetAttributeKeys(), req.GetPage(), req.GetPageToken(), req.GetOrder())
 	if err != nil {
 		return &pb.ScanFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.ScanFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, PageResult: page}, nil
+	return &pb.ScanFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, PageResult: page, NextPageToken: nextToken}, nil
 }
 
 func (s *Service) validateAuth(auth *pb.AuthInfo) error {

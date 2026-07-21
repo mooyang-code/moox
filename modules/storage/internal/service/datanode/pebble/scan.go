@@ -1,7 +1,9 @@
 package pebble
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"sort"
 	"time"
@@ -15,19 +17,22 @@ import (
 // then reads the requested values through the same point-read path as normal
 // PrimaryStore reads. It never reads a View index, so View initial builds cannot
 // accidentally recurse through the materialized view they are creating.
-func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind pb.DataKind, timeRange *pb.TimeRange, versionRange *pb.VersionRange, fieldIDs, attributeKeys []string, page *pb.Page) ([]*pb.RowFieldValues, *pb.PageResult, error) {
+func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind pb.DataKind, timeRange *pb.TimeRange, versionRange *pb.VersionRange, fieldIDs, attributeKeys []string, page *pb.Page, pageToken string, order pb.SortOrder) ([]*pb.RowFieldValues, *pb.PageResult, string, error) {
 	if s == nil || s.db == nil {
-		return nil, nil, errors.New("pebble store is closed")
+		return nil, nil, "", errors.New("pebble store is closed")
 	}
 	if spaceID == "" || datasetID == "" {
-		return nil, nil, invalid("space_id and dataset_id are required")
+		return nil, nil, "", invalid("space_id and dataset_id are required")
 	}
 	if kind != pb.DataKind_DATA_KIND_TIME_SERIES && kind != pb.DataKind_DATA_KIND_RECORD {
-		return nil, nil, invalid("data_kind must be time_series or record")
+		return nil, nil, "", invalid("data_kind must be time_series or record")
 	}
 	start, end, err := scanBounds(timeRange, versionRange, kind)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
+	}
+	if (len(fieldIDs) != 0) != (len(attributeKeys) != 0) && order != pb.SortOrder_SORT_ORDER_DESC {
+		return s.scanNamespacePage(ctx, spaceID, datasetID, kind, start, end, fieldIDs, attributeKeys, page, pageToken)
 	}
 
 	requestedFields := stringSet(fieldIDs)
@@ -53,12 +58,12 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 		upper := nextPrefix(prefix)
 		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		for valid := iter.First(); valid; valid = iter.Next() {
 			if err := ctx.Err(); err != nil {
 				_ = iter.Close()
-				return nil, nil, err
+				return nil, nil, "", err
 			}
 			parts, ok := decodePhysicalParts(iter.Key()[2:])
 			if !ok {
@@ -96,7 +101,7 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 		iterErr := iter.Error()
 		_ = iter.Close()
 		if iterErr != nil {
-			return nil, nil, iterErr
+			return nil, nil, "", iterErr
 		}
 	}
 	if len(fieldIDs) == 0 && len(attributeKeys) == 0 {
@@ -108,12 +113,12 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 	for _, key := range keys {
 		ordered = append(ordered, key)
 	}
-	sort.Slice(ordered, func(i, j int) bool { return rowKeyIdentity(ordered[i]) < rowKeyIdentity(ordered[j]) })
+	sort.Slice(ordered, func(i, j int) bool { return scanKeyLess(ordered[i], ordered[j], kind, order) })
 	total := len(ordered)
 	pageNo, pageSize := scanPage(page)
 	offset := (int(pageNo) - 1) * pageSize
 	if offset >= len(ordered) {
-		return nil, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: false}, nil
+		return nil, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: false}, "", nil
 	}
 	endOffset := offset + pageSize
 	if endOffset > len(ordered) {
@@ -122,9 +127,74 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 	ordered = ordered[offset:endOffset]
 	rows, err := s.ReadFields(ctx, ordered, fieldIDs, attributeKeys)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return rows, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: endOffset < total}, nil
+	return rows, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: endOffset < total}, "", nil
+}
+
+func (s *Store) scanNamespacePage(ctx context.Context, spaceID, datasetID string, kind pb.DataKind, start, end string, fieldIDs, attributeKeys []string, page *pb.Page, pageToken string) ([]*pb.RowFieldValues, *pb.PageResult, string, error) {
+	namespace := fieldNamespace
+	if len(fieldIDs) == 0 {
+		namespace = attributeNamespace
+	}
+	kindByte := timeSeriesKind
+	if kind == pb.DataKind_DATA_KIND_RECORD {
+		kindByte = recordKind
+	}
+	prefix := []byte{namespace, kindByte}
+	prefix = appendRawPart(prefix, []byte(spaceID))
+	prefix = appendRawPart(prefix, []byte(datasetID))
+	lower := prefix
+	if pageToken != "" {
+		cursor, err := base64.RawURLEncoding.DecodeString(pageToken)
+		if err != nil || !bytes.HasPrefix(cursor, prefix) {
+			return nil, nil, "", invalid("invalid page_token")
+		}
+		lower = nextPrefix(cursor)
+	}
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: nextPrefix(prefix)})
+	if err != nil {
+		return nil, nil, "", err
+	}
+	defer iter.Close()
+	_, pageSize := scanPage(page)
+	keys := make([]*pb.RowKey, 0, pageSize)
+	var lastRowPrefix, lastReturned []byte
+	hasMore := false
+	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, "", err
+		}
+		parts, ok := decodePhysicalParts(iter.Key()[2:])
+		if !ok {
+			continue
+		}
+		key, _, ok := decodeScannedRow(parts, kind, spaceID, datasetID)
+		if !ok || !scanKeyInRange(key, start, end) {
+			continue
+		}
+		rowPrefix, err := encodeNamespacePrefix(namespace, key, s.bucketDuration)
+		if err != nil || bytes.Equal(lastRowPrefix, rowPrefix) {
+			continue
+		}
+		if len(keys) == pageSize {
+			hasMore = true
+			break
+		}
+		lastRowPrefix = rowPrefix
+		lastReturned = append(lastReturned[:0], rowPrefix...)
+		keys = append(keys, key)
+	}
+	rows, err := s.ReadFields(ctx, keys, fieldIDs, attributeKeys)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	next := ""
+	if hasMore {
+		next = base64.RawURLEncoding.EncodeToString(lastReturned)
+	}
+	pageNo, _ := scanPage(page)
+	return rows, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), HasMore: hasMore}, next, nil
 }
 
 func decodeScannedRow(parts []string, kind pb.DataKind, spaceID, datasetID string) (*pb.RowKey, string, bool) {
@@ -191,6 +261,27 @@ func scanKeyInRange(key *pb.RowKey, start, end string) bool {
 		}
 	}
 	return (start == "" || value >= start) && (end == "" || value <= end)
+}
+
+func scanKeyLess(left, right *pb.RowKey, kind pb.DataKind, order pb.SortOrder) bool {
+	leftValue, rightValue := "", ""
+	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
+		leftValue, rightValue = left.GetTimeSeries().GetDataTime(), right.GetTimeSeries().GetDataTime()
+		if leftValue == rightValue {
+			leftValue += "\x00" + left.GetTimeSeries().GetSubjectId() + "\x00" + left.GetTimeSeries().GetFreq()
+			rightValue += "\x00" + right.GetTimeSeries().GetSubjectId() + "\x00" + right.GetTimeSeries().GetFreq()
+		}
+	} else {
+		leftValue, rightValue = left.GetRecord().GetVersion(), right.GetRecord().GetVersion()
+		if leftValue == rightValue {
+			leftValue += "\x00" + left.GetRecord().GetRecordId()
+			rightValue += "\x00" + right.GetRecord().GetRecordId()
+		}
+	}
+	if order == pb.SortOrder_SORT_ORDER_DESC {
+		return leftValue > rightValue
+	}
+	return leftValue < rightValue
 }
 
 func scanPage(page *pb.Page) (uint, int) {

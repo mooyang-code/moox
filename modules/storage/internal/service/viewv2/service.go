@@ -36,6 +36,7 @@ type Service struct {
 	mu          sync.RWMutex
 	byData      map[datasetRef]map[string]struct{}
 	liveWork    atomic.Int64
+	liveGate    sync.RWMutex
 }
 
 type datasetRef struct{ spaceID, datasetID string }
@@ -635,6 +636,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 }
 
 func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) {
+	s.liveGate.RLock()
+	defer s.liveGate.RUnlock()
 	s.liveWork.Add(1)
 	defer s.liveWork.Add(-1)
 	for ctx.Err() == nil {
@@ -916,6 +919,8 @@ func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batc
 }
 
 func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader) error {
+	s.liveGate.Lock()
+	defer s.liveGate.Unlock()
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()

@@ -31,7 +31,7 @@ func (s *Service) ScanTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	rsp, err := node.ScanFields(ctx, &pb.ScanFieldsReq{
 		AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
 		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, TimeRange: req.GetTimeRange(),
-		FieldIds: req.GetColumnNames(), Page: req.GetPage(),
+		FieldIds: req.GetColumnNames(), Page: req.GetPage(), PageToken: req.GetPageToken(), Order: req.GetOrder(),
 	})
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func (s *Service) ScanTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		}
 		rows = append(rows, &pb.TimeSeriesRow{Key: legacyTimeSeriesKey(row.GetKey()), Fields: row.GetFields(), Columns: legacyColumns(row.GetFields())})
 	}
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult()}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult(), NextPageToken: rsp.GetNextPageToken()}, nil
 }
 
 func (s *Service) ScanRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
@@ -71,7 +71,7 @@ func (s *Service) ScanRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	rsp, err := node.ScanFields(ctx, &pb.ScanFieldsReq{
 		AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
 		DataKind: pb.DataKind_DATA_KIND_RECORD, VersionRange: req.GetVersionRange(),
-		FieldIds: req.GetColumnNames(), Page: req.GetPage(),
+		FieldIds: req.GetColumnNames(), Page: req.GetPage(), PageToken: req.GetPageToken(), Order: req.GetOrder(),
 	})
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ func (s *Service) ScanRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 		}
 		rows = append(rows, &pb.RecordRow{Key: legacyRecordKey(row.GetKey()), Fields: row.GetFields(), Columns: legacyColumns(row.GetFields())})
 	}
-	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult()}, nil
+	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult(), NextPageToken: rsp.GetNextPageToken()}, nil
 }
 
 func (s *Service) GetShardHeads(ctx context.Context, req *pb.GetShardHeadsReq) (*pb.GetShardHeadsRsp, error) {
