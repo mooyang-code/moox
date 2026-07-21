@@ -117,6 +117,27 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 	total := len(ordered)
 	pageNo, pageSize := scanPage(page)
 	offset := (int(pageNo) - 1) * pageSize
+	if pageToken != "" {
+		cursorData, err := base64.RawURLEncoding.DecodeString(pageToken)
+		if err != nil {
+			return nil, nil, "", invalid("invalid page_token")
+		}
+		cursor := &pb.RowKey{}
+		if err := proto.Unmarshal(cursorData, cursor); err != nil || cursor.GetSpaceId() != spaceID || cursor.GetDatasetId() != datasetID {
+			return nil, nil, "", invalid("invalid page_token")
+		}
+		offset = 0
+		for offset < len(ordered) {
+			if order == pb.SortOrder_SORT_ORDER_DESC {
+				if scanKeyLess(ordered[offset], cursor, kind, pb.SortOrder_SORT_ORDER_ASC) {
+					break
+				}
+			} else if scanKeyLess(cursor, ordered[offset], kind, pb.SortOrder_SORT_ORDER_ASC) {
+				break
+			}
+			offset++
+		}
+	}
 	if offset >= len(ordered) {
 		return nil, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: false}, "", nil
 	}
@@ -129,7 +150,15 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 	if err != nil {
 		return nil, nil, "", err
 	}
-	return rows, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: endOffset < total}, "", nil
+	next := ""
+	if endOffset < total {
+		cursorData, err := proto.Marshal(ordered[len(ordered)-1])
+		if err != nil {
+			return nil, nil, "", err
+		}
+		next = base64.RawURLEncoding.EncodeToString(cursorData)
+	}
+	return rows, &pb.PageResult{Page: uint32(pageNo), Size: uint32(pageSize), Total: uint32(total), HasMore: endOffset < total}, next, nil
 }
 
 func (s *Store) scanNamespacePage(ctx context.Context, spaceID, datasetID string, kind pb.DataKind, start, end string, fieldIDs, attributeKeys []string, page *pb.Page, pageToken string) ([]*pb.RowFieldValues, *pb.PageResult, string, error) {

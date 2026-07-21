@@ -187,7 +187,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}
-	if view.GetActiveIndexId() != "" {
+	if view.GetActiveIndexId() != "" && stats.Exists {
 		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), 100, opts.Primary); err != nil {
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
@@ -220,9 +220,11 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, OwnerId: opts.OwnerID,
 	})
 	if err != nil {
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}
 	if err := requireSuccess(activated.GetRetInfo()); err != nil {
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}
 	if view.GetActiveIndexId() != "" {
@@ -262,7 +264,19 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 	if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, build.GetEntriesWritten()); err != nil {
 		return err
 	}
-	if view.GetActiveIndexId() == "" {
+	activePhysicalExists := view.GetActiveIndexId() != ""
+	if activePhysicalExists {
+		activeEngine, err := s.engineFor(view.GetActiveIndexId())
+		if err != nil {
+			return err
+		}
+		activeStats, err := activeEngine.Stat(ctx, view.GetActiveIndexId())
+		if err != nil {
+			return err
+		}
+		activePhysicalExists = activeStats.Exists
+	}
+	if !activePhysicalExists {
 		datasetRsp, err := opts.Metadata.GetDataset(ctx, &pb.GetDatasetReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId()})
 		if err != nil {
 			return err
@@ -338,8 +352,10 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 }
 
 func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexID string, columns []*pb.ViewColumn, dataKind pb.DataKind, reader FieldReader, scan PrimaryStoreScanClient) error {
-	s.liveGate.Lock()
-	defer s.liveGate.Unlock()
+	if err := s.acquireBackfill(ctx); err != nil {
+		return err
+	}
+	defer s.releaseLiveGate()
 	if view == nil || indexID == "" || scan == nil {
 		return errors.New("initial view build requires a primary scan client")
 	}
@@ -408,9 +424,6 @@ func (s *Service) BackfillInitialView(ctx context.Context, view *pb.View, indexI
 				if err := s.enrichInitialRows(ctx, reader, schema, writes); err != nil {
 					return err
 				}
-			}
-			if err := s.waitForLiveIdle(ctx); err != nil {
-				return err
 			}
 			engine, err := s.engineFor(indexID)
 			if err != nil {

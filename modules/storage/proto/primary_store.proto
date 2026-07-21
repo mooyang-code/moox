@@ -28,6 +28,7 @@ message PrimaryReadFieldsReq {
 message PrimaryReadFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
+  repeated RowKey existing_keys = 3;
 }
 
 // PrimaryStore is the metadata-validating user boundary. It never exposes

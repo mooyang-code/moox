@@ -208,8 +208,9 @@ type PrimaryReadFieldsRsp struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	Rows    []*RowFieldValues `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
+	RetInfo      *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Rows         []*RowFieldValues `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
+	ExistingKeys []*RowKey         `protobuf:"bytes,3,rep,name=existing_keys,json=existingKeys,proto3" json:"existing_keys,omitempty"`
 }
 
 func (x *PrimaryReadFieldsRsp) Reset() {
@@ -254,6 +255,13 @@ func (x *PrimaryReadFieldsRsp) GetRetInfo() *commonpb.RetInfo {
 func (x *PrimaryReadFieldsRsp) GetRows() []*RowFieldValues {
 	if x != nil {
 		return x.Rows
+	}
+	return nil
+}
+
+func (x *PrimaryReadFieldsRsp) GetExistingKeys() []*RowKey {
+	if x != nil {
+		return x.ExistingKeys
 	}
 	return nil
 }
@@ -421,7 +429,7 @@ var file_primary_store_proto_rawDesc = []byte{
 	0x09, 0x52, 0x08, 0x66, 0x69, 0x65, 0x6c, 0x64, 0x49, 0x64, 0x73, 0x12, 0x25, 0x0a, 0x0e, 0x61,
 	0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x5f, 0x6b, 0x65, 0x79, 0x73, 0x18, 0x04, 0x20,
 	0x03, 0x28, 0x09, 0x52, 0x0d, 0x61, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x4b, 0x65,
-	0x79, 0x73, 0x22, 0x83, 0x01, 0x0a, 0x14, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x52, 0x65,
+	0x79, 0x73, 0x22, 0xc3, 0x01, 0x0a, 0x14, 0x50, 0x72, 0x69, 0x6d, 0x61, 0x72, 0x79, 0x52, 0x65,
 	0x61, 0x64, 0x46, 0x69, 0x65, 0x6c, 0x64, 0x73, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72,
 	0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e,
 	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e,
@@ -429,7 +437,11 @@ var file_primary_store_proto_rawDesc = []byte{
 	0x6f, 0x12, 0x35, 0x0a, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32,
 	0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72,
 	0x61, 0x67, 0x65, 0x2e, 0x52, 0x6f, 0x77, 0x46, 0x69, 0x65, 0x6c, 0x64, 0x56, 0x61, 0x6c, 0x75,
-	0x65, 0x73, 0x52, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x22, 0xbf, 0x01, 0x0a, 0x10, 0x47, 0x65, 0x74,
+	0x65, 0x73, 0x52, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x12, 0x3e, 0x0a, 0x0d, 0x65, 0x78, 0x69, 0x73,
+	0x74, 0x69, 0x6e, 0x67, 0x5f, 0x6b, 0x65, 0x79, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72,
+	0x61, 0x67, 0x65, 0x2e, 0x52, 0x6f, 0x77, 0x4b, 0x65, 0x79, 0x52, 0x0c, 0x65, 0x78, 0x69, 0x73,
+	0x74, 0x69, 0x6e, 0x67, 0x4b, 0x65, 0x79, 0x73, 0x22, 0xbf, 0x01, 0x0a, 0x10, 0x47, 0x65, 0x74,
 	0x53, 0x68, 0x61, 0x72, 0x64, 0x48, 0x65, 0x61, 0x64, 0x73, 0x52, 0x65, 0x71, 0x12, 0x37, 0x0a,
 	0x09, 0x61, 0x75, 0x74, 0x68, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b,
 	0x32, 0x1a, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d,
@@ -559,33 +571,34 @@ var file_primary_store_proto_depIdxs = []int32{
 	9,  // 5: trpc.moox.storage.PrimaryReadFieldsReq.keys:type_name -> trpc.moox.storage.RowKey
 	8,  // 6: trpc.moox.storage.PrimaryReadFieldsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	10, // 7: trpc.moox.storage.PrimaryReadFieldsRsp.rows:type_name -> trpc.moox.storage.RowFieldValues
-	6,  // 8: trpc.moox.storage.GetShardHeadsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
-	11, // 9: trpc.moox.storage.GetShardHeadsReq.data_kind:type_name -> trpc.moox.storage.DataKind
-	8,  // 10: trpc.moox.storage.GetShardHeadsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	9,  // 11: trpc.moox.storage.GetShardHeadsRsp.keys:type_name -> trpc.moox.storage.RowKey
-	0,  // 12: trpc.moox.storage.PrimaryStore.WriteFields:input_type -> trpc.moox.storage.PrimaryWriteFieldsReq
-	2,  // 13: trpc.moox.storage.PrimaryStore.ReadFields:input_type -> trpc.moox.storage.PrimaryReadFieldsReq
-	12, // 14: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:input_type -> trpc.moox.storage.MergeTimeSeriesRowsReq
-	13, // 15: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:input_type -> trpc.moox.storage.ReadTimeSeriesRowsReq
-	14, // 16: trpc.moox.storage.PrimaryStore.MergeRecordRows:input_type -> trpc.moox.storage.MergeRecordRowsReq
-	15, // 17: trpc.moox.storage.PrimaryStore.ReadRecordRows:input_type -> trpc.moox.storage.ReadRecordRowsReq
-	13, // 18: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:input_type -> trpc.moox.storage.ReadTimeSeriesRowsReq
-	15, // 19: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:input_type -> trpc.moox.storage.ReadRecordRowsReq
-	4,  // 20: trpc.moox.storage.PrimaryStoreScan.GetShardHeads:input_type -> trpc.moox.storage.GetShardHeadsReq
-	1,  // 21: trpc.moox.storage.PrimaryStore.WriteFields:output_type -> trpc.moox.storage.PrimaryWriteFieldsRsp
-	3,  // 22: trpc.moox.storage.PrimaryStore.ReadFields:output_type -> trpc.moox.storage.PrimaryReadFieldsRsp
-	16, // 23: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:output_type -> trpc.moox.storage.MergeTimeSeriesRowsRsp
-	17, // 24: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:output_type -> trpc.moox.storage.ReadTimeSeriesRowsRsp
-	18, // 25: trpc.moox.storage.PrimaryStore.MergeRecordRows:output_type -> trpc.moox.storage.MergeRecordRowsRsp
-	19, // 26: trpc.moox.storage.PrimaryStore.ReadRecordRows:output_type -> trpc.moox.storage.ReadRecordRowsRsp
-	17, // 27: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:output_type -> trpc.moox.storage.ReadTimeSeriesRowsRsp
-	19, // 28: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:output_type -> trpc.moox.storage.ReadRecordRowsRsp
-	5,  // 29: trpc.moox.storage.PrimaryStoreScan.GetShardHeads:output_type -> trpc.moox.storage.GetShardHeadsRsp
-	21, // [21:30] is the sub-list for method output_type
-	12, // [12:21] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	9,  // 8: trpc.moox.storage.PrimaryReadFieldsRsp.existing_keys:type_name -> trpc.moox.storage.RowKey
+	6,  // 9: trpc.moox.storage.GetShardHeadsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	11, // 10: trpc.moox.storage.GetShardHeadsReq.data_kind:type_name -> trpc.moox.storage.DataKind
+	8,  // 11: trpc.moox.storage.GetShardHeadsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,  // 12: trpc.moox.storage.GetShardHeadsRsp.keys:type_name -> trpc.moox.storage.RowKey
+	0,  // 13: trpc.moox.storage.PrimaryStore.WriteFields:input_type -> trpc.moox.storage.PrimaryWriteFieldsReq
+	2,  // 14: trpc.moox.storage.PrimaryStore.ReadFields:input_type -> trpc.moox.storage.PrimaryReadFieldsReq
+	12, // 15: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:input_type -> trpc.moox.storage.MergeTimeSeriesRowsReq
+	13, // 16: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:input_type -> trpc.moox.storage.ReadTimeSeriesRowsReq
+	14, // 17: trpc.moox.storage.PrimaryStore.MergeRecordRows:input_type -> trpc.moox.storage.MergeRecordRowsReq
+	15, // 18: trpc.moox.storage.PrimaryStore.ReadRecordRows:input_type -> trpc.moox.storage.ReadRecordRowsReq
+	13, // 19: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:input_type -> trpc.moox.storage.ReadTimeSeriesRowsReq
+	15, // 20: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:input_type -> trpc.moox.storage.ReadRecordRowsReq
+	4,  // 21: trpc.moox.storage.PrimaryStoreScan.GetShardHeads:input_type -> trpc.moox.storage.GetShardHeadsReq
+	1,  // 22: trpc.moox.storage.PrimaryStore.WriteFields:output_type -> trpc.moox.storage.PrimaryWriteFieldsRsp
+	3,  // 23: trpc.moox.storage.PrimaryStore.ReadFields:output_type -> trpc.moox.storage.PrimaryReadFieldsRsp
+	16, // 24: trpc.moox.storage.PrimaryStore.MergeTimeSeriesRows:output_type -> trpc.moox.storage.MergeTimeSeriesRowsRsp
+	17, // 25: trpc.moox.storage.PrimaryStore.ReadTimeSeriesRows:output_type -> trpc.moox.storage.ReadTimeSeriesRowsRsp
+	18, // 26: trpc.moox.storage.PrimaryStore.MergeRecordRows:output_type -> trpc.moox.storage.MergeRecordRowsRsp
+	19, // 27: trpc.moox.storage.PrimaryStore.ReadRecordRows:output_type -> trpc.moox.storage.ReadRecordRowsRsp
+	17, // 28: trpc.moox.storage.PrimaryStoreScan.ScanTimeSeriesRows:output_type -> trpc.moox.storage.ReadTimeSeriesRowsRsp
+	19, // 29: trpc.moox.storage.PrimaryStoreScan.ScanRecordRows:output_type -> trpc.moox.storage.ReadRecordRowsRsp
+	5,  // 30: trpc.moox.storage.PrimaryStoreScan.GetShardHeads:output_type -> trpc.moox.storage.GetShardHeadsRsp
+	22, // [22:31] is the sub-list for method output_type
+	13, // [13:22] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_primary_store_proto_init() }

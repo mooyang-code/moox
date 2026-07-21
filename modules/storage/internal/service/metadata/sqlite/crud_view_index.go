@@ -192,7 +192,7 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	view.ActiveColumns = cloneViewColumns(columns)
 	view.ActiveSlot = string(ref.Slot)
 	view.ActiveViewSchemaHash = coreviewindex.HashViewIndexSchema(coreviewindex.ViewIndexSchema{
-		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetActiveViewRevision(), Engine: view.GetEngine(), Columns: columns,
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetPrimaryDatasetId(), ViewVersion: view.GetActiveViewRevision(), Engine: view.GetEngine(), Columns: columns,
 	})
 	view.Columns = nil
 	view.IndexBuild = nil
@@ -236,7 +236,7 @@ func (s *Store) FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBui
 	now := s.nowUTC().Format(sqliteBuildTimestampLayout)
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE t_view_index_builds SET c_state = ?, c_status = 'failed', c_safe_error = ?, c_updated_at = ?
-		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ? AND c_status = 'building'
+		WHERE c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_owner_id = ? AND c_status IN ('building', 'ready')
 	`, pb.ViewIndexBuild_FAILED, message, now, req.GetSpaceId(), req.GetViewId(), req.GetBuildId(), req.GetOwnerId())
 	if err != nil {
 		return nil, err

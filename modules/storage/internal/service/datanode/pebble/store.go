@@ -246,22 +246,28 @@ func groupRowsByDataset(rows []*pb.RowFieldUpsert) map[datasetGroup][]*pb.RowFie
 }
 
 func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, error) {
+	rows, _, err := s.ReadFieldsWithPresence(ctx, keys, fieldIDs, attributeKeys)
+	return rows, err
+}
+
+func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, []*pb.RowKey, error) {
 	if s == nil || s.db == nil {
-		return nil, errors.New("pebble store is closed")
+		return nil, nil, errors.New("pebble store is closed")
 	}
 	if len(keys) == 0 {
-		return nil, invalid("keys are required")
+		return nil, nil, invalid("keys are required")
 	}
 	if len(fieldIDs) == 0 && len(attributeKeys) == 0 {
-		return nil, invalid("field_ids or attribute_keys are required")
+		return nil, nil, invalid("field_ids or attribute_keys are required")
 	}
 	if len(keys) > 10000 || (len(keys)*(len(fieldIDs)+len(attributeKeys))) > 100000 {
-		return nil, invalid("read request exceeds key/field limit")
+		return nil, nil, invalid("read request exceeds key/field limit")
 	}
 	result := make([]*pb.RowFieldValues, 0, len(keys))
+	existing := make([]*pb.RowKey, 0, len(keys))
 	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		resolved := key
 		if key != nil {
@@ -269,48 +275,55 @@ func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, att
 				var err error
 				resolved, err = s.resolveMaxRecordVersion(key)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
+		}
+		present, err := s.rowExists(resolved)
+		if err != nil {
+			return nil, nil, err
+		}
+		if present {
+			existing = append(existing, resolved)
 		}
 		row := &pb.RowFieldValues{Key: resolved}
 		for _, id := range fieldIDs {
 			physical, err := encodeFieldKey(resolved, id, s.bucketDuration)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			data, closer, err := s.db.Get(physical)
 			if errors.Is(err, cpebble.ErrNotFound) {
 				continue
 			}
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			value := &pb.TypedValue{}
 			err = proto.Unmarshal(data, value)
 			_ = closer.Close()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: id, Value: value})
 		}
 		for _, name := range attributeKeys {
 			physical, err := encodeAttributeKey(resolved, name, s.bucketDuration)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			data, closer, err := s.db.Get(physical)
 			if errors.Is(err, cpebble.ErrNotFound) {
 				continue
 			}
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			value := &pb.TypedValue{}
 			err = proto.Unmarshal(data, value)
 			_ = closer.Close()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if row.Attributes == nil {
 				row.Attributes = make(map[string]*pb.TypedValue)
@@ -319,7 +332,30 @@ func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, att
 		}
 		result = append(result, row)
 	}
-	return result, nil
+	return result, existing, nil
+}
+
+func (s *Store) rowExists(key *pb.RowKey) (bool, error) {
+	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
+		prefix, err := encodeNamespacePrefix(namespace, key, s.bucketDuration)
+		if err != nil {
+			return false, err
+		}
+		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
+		if err != nil {
+			return false, err
+		}
+		found := iter.First()
+		iterErr := iter.Error()
+		_ = iter.Close()
+		if iterErr != nil {
+			return false, iterErr
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {

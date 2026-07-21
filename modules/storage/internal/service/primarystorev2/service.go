@@ -110,6 +110,8 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		groups[group] = append(groups[group], key)
 	}
 	rowsByKey := make(map[string][]*pb.RowFieldValues, len(req.GetKeys()))
+	existingByKey := make(map[string]bool, len(req.GetKeys()))
+	existingLatest := make(map[string]bool, len(req.GetKeys()))
 	latestRecordRows := make(map[string][]*pb.RowFieldValues)
 	for _, group := range order {
 		keys := groups[group]
@@ -136,6 +138,12 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 				latestRecordRows[latestID] = append(latestRecordRows[latestID], row)
 			}
 		}
+		for _, key := range rsp.GetExistingKeys() {
+			existingByKey[rowKeyIdentity(key)] = true
+			if key.GetRecord() != nil {
+				existingLatest[latestRecordIdentity(key)] = true
+			}
+		}
 	}
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
@@ -156,7 +164,13 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		rows = append(rows, matches[0])
 		rowsByKey[id] = matches[1:]
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
+	existing := make([]*pb.RowKey, 0, len(existingByKey))
+	for _, key := range req.GetKeys() {
+		if existingByKey[rowKeyIdentity(key)] || (key.GetRecord() != nil && existingLatest[latestRecordIdentity(key)]) {
+			existing = append(existing, key)
+		}
+	}
+	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
 }
 
 func latestRecordIdentity(key *pb.RowKey) string {

@@ -25,18 +25,19 @@ import (
 )
 
 type Service struct {
-	engines     map[string]viewindex.QueryEngine
-	indexEngine map[string]string
-	schemas     map[string]viewindex.ViewIndexSchema
-	views       map[viewRef]*viewRuntime
-	indexView   map[string]viewRef
-	authSecret  string
-	primaryAuth *pb.AuthInfo
-	primary     FieldReader
-	mu          sync.RWMutex
-	byData      map[datasetRef]map[string]struct{}
-	liveWork    atomic.Int64
-	liveGate    sync.RWMutex
+	engines      map[string]viewindex.QueryEngine
+	indexEngine  map[string]string
+	schemas      map[string]viewindex.ViewIndexSchema
+	views        map[viewRef]*viewRuntime
+	indexView    map[string]viewRef
+	authSecret   string
+	primaryAuth  *pb.AuthInfo
+	primary      FieldReader
+	mu           sync.RWMutex
+	byData       map[datasetRef]map[string]struct{}
+	liveWork     atomic.Int64
+	liveGateOnce sync.Once
+	liveGate     chan struct{}
 }
 
 type datasetRef struct{ spaceID, datasetID string }
@@ -636,10 +637,12 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 }
 
 func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) {
-	s.liveGate.RLock()
-	defer s.liveGate.RUnlock()
 	s.liveWork.Add(1)
 	defer s.liveWork.Add(-1)
+	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
+		return
+	}
+	defer s.releaseLiveGate()
 	for ctx.Err() == nil {
 		err := s.applyDelivery(ctx, delivery)
 		if err == nil {
@@ -662,6 +665,45 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 			}
 		}
 	}
+}
+
+func (s *Service) initLiveGate() {
+	s.liveGateOnce.Do(func() {
+		s.liveGate = make(chan struct{}, 1)
+		s.liveGate <- struct{}{}
+	})
+}
+
+func (s *Service) acquireBackfill(ctx context.Context) error {
+	s.initLiveGate()
+	select {
+	case <-s.liveGate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) acquireLiveDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	s.initLiveGate()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.liveGate:
+			return nil
+		case <-ticker.C:
+			if delivery != nil {
+				_ = delivery.InProgress(ctx)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *Service) releaseLiveGate() {
+	s.liveGate <- struct{}{}
 }
 
 func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
@@ -839,7 +881,11 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.QueryEngin
 		key.DatasetId = schema.PrimaryDatasetID
 		eventRows[viewindex.RowKeyID(key)] = event
 	}
-	rowsByDataset := make(map[string]map[string]*pb.RowFieldValues)
+	type sourceRows struct {
+		values  map[string]*pb.RowFieldValues
+		present map[string]struct{}
+	}
+	rowsByDataset := make(map[string]sourceRows)
 	for sourceDataset, fieldIDs := range byDataset {
 		keys := make([]*pb.RowKey, 0, len(writes))
 		for _, write := range writes {
@@ -854,12 +900,19 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.QueryEngin
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
 			return nil, nil, err
 		}
-		rowsByDataset[sourceDataset] = make(map[string]*pb.RowFieldValues)
+		loaded := sourceRows{values: make(map[string]*pb.RowFieldValues), present: make(map[string]struct{})}
 		for _, row := range rsp.GetRows() {
 			if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
-				rowsByDataset[sourceDataset][viewindex.RowKeyID(row.GetKey())] = row
+				loaded.values[viewindex.RowKeyID(row.GetKey())] = row
+				loaded.present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
 			}
 		}
+		for _, key := range rsp.GetExistingKeys() {
+			if key != nil {
+				loaded.present[viewindex.RowKeyID(key)] = struct{}{}
+			}
+		}
+		rowsByDataset[sourceDataset] = loaded
 	}
 	result := make([]viewindex.RowWrite, 0, len(writes))
 	deletes := make([]*pb.RowKey, 0)
@@ -867,14 +920,14 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.QueryEngin
 		primaryKey := proto.Clone(write.Key.Key).(*pb.RowKey)
 		primaryKey.DatasetId = schema.PrimaryDatasetID
 		primaryID := viewindex.RowKeyID(primaryKey)
-		if _, ok := rowsByDataset[schema.PrimaryDatasetID][primaryID]; !ok {
+		if _, ok := rowsByDataset[schema.PrimaryDatasetID].present[primaryID]; !ok {
 			deletes = append(deletes, write.Key.Key)
 			continue
 		}
 		complete := viewindex.RowWrite{Key: write.Key}
 		for _, source := range sources {
 			var fields []*pb.FieldValue
-			if row := rowsByDataset[source.dataset][viewindex.RowKeyID(withDataset(write.Key.Key, source.dataset))]; row != nil {
+			if row := rowsByDataset[source.dataset].values[viewindex.RowKeyID(withDataset(write.Key.Key, source.dataset))]; row != nil {
 				fields = append(fields, row.GetFields()...)
 			}
 			if source.dataset == datasetID {
@@ -919,8 +972,10 @@ func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batc
 }
 
 func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader) error {
-	s.liveGate.Lock()
-	defer s.liveGate.Unlock()
+	if err := s.acquireBackfill(ctx); err != nil {
+		return err
+	}
+	defer s.releaseLiveGate()
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -931,9 +986,6 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		batchSize = 100
 	}
 	for offset := 0; ; offset += batchSize {
-		if err := s.waitForLiveIdle(ctx); err != nil {
-			return err
-		}
 		runtime.mu.Lock()
 		activeID, nextID := runtime.active, runtime.next
 		runtime.mu.Unlock()
@@ -964,9 +1016,6 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 			if err := s.enrichBackfillRows(ctx, reader, activeID, nextID, writes); err != nil {
 				return err
 			}
-		}
-		if err := s.waitForLiveIdle(ctx); err != nil {
-			return err
 		}
 		runtime.mu.Lock()
 		if runtime.next != nextID {

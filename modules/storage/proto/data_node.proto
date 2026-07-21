@@ -31,6 +31,7 @@ message ReadFieldsReq {
 message ReadFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
+  repeated RowKey existing_keys = 3;
 }
 
 message GetNodeStateReq {

@@ -121,11 +121,11 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.Re
 			}
 		}
 	}
-	rows, err := s.store.ReadFields(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys())
+	rows, existing, err := s.store.ReadFieldsWithPresence(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys())
 	if err != nil {
 		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
+	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
 }
 
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {

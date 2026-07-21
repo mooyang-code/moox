@@ -116,6 +116,31 @@ func TestScanFieldsEnumeratesHistoricalRowsByRange(t *testing.T) {
 	if err != nil || len(desc) != 2 || desc[0].GetKey().GetTimeSeries().GetDataTime() != "2026-07-20T00:00:00.000000000Z" {
 		t.Fatalf("descending rows=%v err=%v", desc, err)
 	}
+	descFirst, descPage, descToken, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, nil, nil, []string{"close"}, nil, &pb.Page{Page: 1, Size: 1}, "", pb.SortOrder_SORT_ORDER_DESC)
+	if err != nil || len(descFirst) != 1 || !descPage.GetHasMore() || descToken == "" {
+		t.Fatalf("descending first page rows=%v page=%v token=%q err=%v", descFirst, descPage, descToken, err)
+	}
+	descSecond, descSecondPage, _, err := store.ScanFields(context.Background(), "s", "prices", pb.DataKind_DATA_KIND_TIME_SERIES, nil, nil, []string{"close"}, nil, &pb.Page{Page: 2, Size: 1}, descToken, pb.SortOrder_SORT_ORDER_DESC)
+	if err != nil || len(descSecond) != 1 || descSecondPage.GetHasMore() || descSecond[0].GetKey().GetTimeSeries().GetDataTime() != "2026-07-19T00:00:00.000000000Z" {
+		t.Fatalf("descending second page rows=%v page=%v err=%v", descSecond, descSecondPage, err)
+	}
+}
+
+func TestReadFieldsReportsPhysicalRowPresenceWithoutRequestedField(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	present := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "present", Version: "1"}}}
+	missing := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "missing", Version: "1"}}}
+	if err := store.WriteFields(context.Background(), []*pb.RowFieldUpsert{{Key: present, Fields: []*pb.FieldValue{{FieldId: "stored", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, existing, err := store.ReadFieldsWithPresence(context.Background(), []*pb.RowKey{present, missing}, []string{"not_stored"}, nil)
+	if err != nil || len(rows) != 2 || len(existing) != 1 || existing[0].GetRecord().GetRecordId() != "present" {
+		t.Fatalf("rows=%v existing=%v err=%v", rows, existing, err)
+	}
 }
 
 func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
