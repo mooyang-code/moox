@@ -785,6 +785,17 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	schema := s.schemas[id]
 	s.mu.RUnlock()
 	writes := eventWrites(schema, datasetID, rows)
+	deletes := eventDeleteKeys(schema, datasetID, rows)
+	if datasetID == schema.PrimaryDatasetID && len(deletes) != 0 {
+		if err := engine.Delete(ctx, id, deletes); err != nil {
+			return err
+		}
+	}
+	if datasetID != schema.PrimaryDatasetID {
+		for _, key := range deletes {
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}})
+		}
+	}
 	if len(writes) == 0 {
 		return nil
 	}
@@ -810,7 +821,11 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 			return nil
 		}
 	}
-	return engine.Apply(ctx, id, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
+	mode := viewindex.LiveWrite
+	if needsRecovery {
+		mode = viewindex.Replace
+	}
+	return engine.Apply(ctx, id, viewindex.ViewIndexApplyBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: mode})
 }
 
 func (s *Service) hasMissingRows(ctx context.Context, engine viewindex.QueryEngine, id string, writes []viewindex.RowWrite) (bool, error) {
@@ -1080,8 +1095,8 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 			continue
 		}
 		datasetID := viewColumnDataset(column)
-		_, source, ok := strings.Cut(column.GetOriginId(), ".")
-		if datasetID != "" && ok && source != "" {
+		source := viewColumnSource(column, datasetID)
+		if datasetID != "" && source != "" {
 			byDataset[datasetID] = append(byDataset[datasetID], requestedField{source: source, target: column.GetColumnName()})
 		}
 	}
@@ -1390,8 +1405,8 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 		if column == nil || viewColumnDataset(column) != datasetID {
 			continue
 		}
-		_, source, ok := strings.Cut(column.GetOriginId(), ".")
-		if ok && source != "" {
+		source := viewColumnSource(column, datasetID)
+		if source != "" {
 			columns[source] = column.GetColumnName()
 		}
 	}
@@ -1400,7 +1415,7 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 	}
 	writes := make([]viewindex.RowWrite, 0, len(rows))
 	for _, row := range rows {
-		if row == nil || row.GetKey() == nil {
+		if row == nil || row.GetKey() == nil || row.GetOperation() == pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE {
 			continue
 		}
 		fields := make([]*pb.FieldValue, 0, len(row.GetFields()))
@@ -1418,6 +1433,36 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 		}
 	}
 	return writes
+}
+
+func eventDeleteKeys(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) []*pb.RowKey {
+	keys := make([]*pb.RowKey, 0)
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil || row.GetOperation() != pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE {
+			continue
+		}
+		key := proto.Clone(row.GetKey()).(*pb.RowKey)
+		if schema.PrimaryDatasetID != "" {
+			key.DatasetId = schema.PrimaryDatasetID
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func viewColumnSource(column *pb.ViewColumn, datasetID string) string {
+	if column == nil {
+		return ""
+	}
+	origin := column.GetOriginId()
+	prefix := datasetID + "."
+	if strings.HasPrefix(origin, prefix) {
+		return strings.TrimPrefix(origin, prefix)
+	}
+	if idx := strings.LastIndexByte(origin, '.'); idx >= 0 && idx+1 < len(origin) {
+		return origin[idx+1:]
+	}
+	return ""
 }
 
 func viewColumnDataset(column *pb.ViewColumn) string {

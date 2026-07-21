@@ -131,6 +131,8 @@ func batchFromProto(in *pb.ViewIndexApplyBatch) ViewIndexApplyBatch {
 	out.ViewSchemaHash = in.GetViewSchemaHash()
 	if strings.EqualFold(in.GetWriteMode(), "BACKFILL") {
 		out.WriteMode = Backfill
+	} else if strings.EqualFold(in.GetWriteMode(), "REPLACE") {
+		out.WriteMode = Replace
 	} else {
 		out.WriteMode = LiveWrite
 	}

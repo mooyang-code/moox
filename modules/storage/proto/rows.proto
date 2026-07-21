@@ -37,11 +37,18 @@ message FieldValue {
   TypedValue value = 2;
 }
 
+enum RowFieldOperation {
+  ROW_FIELD_OPERATION_UNSPECIFIED = 0;
+  ROW_FIELD_OPERATION_UPSERT = 1;
+  ROW_FIELD_OPERATION_DELETE = 2;
+}
+
 // RowFieldUpsert is a partial row update. Omitted fields are left unchanged.
 message RowFieldUpsert {
   RowKey key = 1;
   repeated FieldValue fields = 2;
   map<string, TypedValue> attributes = 3;
+  RowFieldOperation operation = 4;
 }
 
 message RowFieldValues {

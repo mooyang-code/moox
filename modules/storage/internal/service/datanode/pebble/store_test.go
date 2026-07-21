@@ -143,6 +143,25 @@ func TestReadFieldsReportsPhysicalRowPresenceWithoutRequestedField(t *testing.T)
 	}
 }
 
+func TestWriteFieldsDeleteRemovesPhysicalRowAndEmitsNoValues(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
+	if err := store.WriteFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "stored", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Operation: pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE}}); err != nil {
+		t.Fatal(err)
+	}
+	_, existing, err := store.ReadFieldsWithPresence(context.Background(), []*pb.RowKey{key}, []string{"stored"}, nil)
+	if err != nil || len(existing) != 0 {
+		t.Fatalf("deleted row still exists: existing=%v err=%v", existing, err)
+	}
+}
+
 func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {

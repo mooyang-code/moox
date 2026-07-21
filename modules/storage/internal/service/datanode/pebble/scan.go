@@ -31,10 +31,6 @@ func (s *Store) ScanFields(ctx context.Context, spaceID, datasetID string, kind 
 	if err != nil {
 		return nil, nil, "", err
 	}
-	if (len(fieldIDs) != 0) != (len(attributeKeys) != 0) && order != pb.SortOrder_SORT_ORDER_DESC {
-		return s.scanNamespacePage(ctx, spaceID, datasetID, kind, start, end, fieldIDs, attributeKeys, page, pageToken)
-	}
-
 	requestedFields := stringSet(fieldIDs)
 	requestedAttributes := stringSet(attributeKeys)
 	keys := make(map[string]*pb.RowKey)

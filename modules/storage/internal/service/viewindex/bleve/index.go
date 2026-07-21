@@ -99,7 +99,7 @@ func (i *Index) Apply(ctx context.Context, id string, batch viewindex.ViewIndexA
 		if err != nil {
 			return err
 		}
-		row = viewindex.ApplyRowWrite(row, write, batch.WriteMode == viewindex.Backfill)
+		row = viewindex.ApplyRowWriteWithMode(row, write, batch.WriteMode == viewindex.Backfill, batch.WriteMode == viewindex.Replace)
 		if err := index.Index(docID, rowDocument(row)); err != nil {
 			return err
 		}

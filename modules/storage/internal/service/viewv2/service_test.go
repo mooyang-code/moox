@@ -12,6 +12,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -41,6 +42,23 @@ func (r recoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFi
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "base", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}})
 		}
 		if key.GetDatasetId() == "secondary" {
+			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}})
+		}
+		rows = append(rows, row)
+	}
+	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+}
+
+type sparseRecoveryFieldReader struct{ secondaryPresent bool }
+
+func (r sparseRecoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		row := &pb.RowFieldValues{Key: key}
+		if key.GetDatasetId() == "primary" {
+			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "base", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}})
+		}
+		if key.GetDatasetId() == "secondary" && r.secondaryPresent {
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}})
 		}
 		rows = append(rows, row)
@@ -256,6 +274,48 @@ func TestSecondaryEventRecoversCompleteMissingViewRow(t *testing.T) {
 	rows, err = svc.query(ctx, "multi", []*pb.RowKey{key}, nil)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("stale row was not deleted: rows=%v err=%v", rows, err)
+	}
+}
+
+func TestViewEventUsesDatasetDotsAndClearsDeletedSecondaryFields(t *testing.T) {
+	schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "dots", PrimaryDatasetID: "primary", ViewVersion: 1, SchemaHash: "hash", Columns: []*pb.ViewColumn{
+		{OriginId: "market.v2.close", ColumnName: "close"},
+	}}
+	event := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market.v2", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}}}}
+	writes := eventWrites(schema, "market.v2", []*pb.RowFieldUpsert{event})
+	if len(writes) != 1 || len(writes[0].Fields) != 1 || writes[0].Fields[0].GetFieldId() != "close" {
+		t.Fatalf("dataset with dot was not mapped: %v", writes)
+	}
+
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "delete-secondary", Schema: &pb.ViewIndexSchema{
+		SpaceId: "space", ViewId: "delete-secondary", PrimaryDatasetId: "primary", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{OriginId: "primary.base", ColumnName: "base"}, {OriginId: "secondary.factor", ColumnName: "factor"}},
+	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
+	}
+	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view"})
+	svc.SetPrimaryReader(recoveryFieldReader{primaryPresent: true})
+	upsert := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "secondary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
+	if err := svc.applyDatasetEvent(ctx, "space", "secondary", []*pb.RowFieldUpsert{upsert}); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetPrimaryReader(sparseRecoveryFieldReader{})
+	deleted := proto.Clone(upsert).(*pb.RowFieldUpsert)
+	deleted.Fields = nil
+	deleted.Operation = pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE
+	if err := svc.applyDatasetEvent(ctx, "space", "secondary", []*pb.RowFieldUpsert{deleted}); err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.RowKey{SpaceId: "space", DatasetId: "primary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
+	rows, err := svc.query(ctx, "delete-secondary", []*pb.RowKey{key}, nil)
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 || rows[0].GetFields()[0].GetFieldId() != "base" {
+		t.Fatalf("deleted secondary field remained: rows=%v err=%v", rows, err)
 	}
 }
 

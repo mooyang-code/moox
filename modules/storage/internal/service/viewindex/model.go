@@ -31,11 +31,15 @@ type WriteMode uint8
 const (
 	LiveWrite WriteMode = iota + 1
 	Backfill
+	Replace
 )
 
 func (m WriteMode) String() string {
 	if m == Backfill {
 		return "BACKFILL"
+	}
+	if m == Replace {
+		return "REPLACE"
 	}
 	return "LIVE_WRITE"
 }
@@ -234,7 +238,8 @@ func (e *MemoryEngine) Apply(_ context.Context, id string, batch ViewIndexApplyB
 			row = &pb.RowFieldValues{Key: w.Key.Key}
 			idx.rows[key] = row
 		}
-		mergeFields(row, w.Fields, w.Attributes, batch.WriteMode == Backfill)
+		row = ApplyRowWriteWithMode(row, w, batch.WriteMode == Backfill, batch.WriteMode == Replace)
+		idx.rows[key] = row
 	}
 	idx.schema.ViewVersion = batch.ViewRevision
 	idx.schema.SchemaHash = batch.ViewSchemaHash
@@ -446,6 +451,19 @@ func RowKeyID(k *pb.RowKey) string {
 }
 
 func ApplyRowWrite(row *pb.RowFieldValues, write RowWrite, onlyMissing bool) *pb.RowFieldValues {
+	return ApplyRowWriteWithMode(row, write, onlyMissing, false)
+}
+
+func ApplyRowWriteWithMode(row *pb.RowFieldValues, write RowWrite, onlyMissing, replace bool) *pb.RowFieldValues {
+	if replace {
+		fields := make([]*pb.FieldValue, 0, len(write.Fields))
+		for _, field := range write.Fields {
+			if field != nil {
+				fields = append(fields, proto.Clone(field).(*pb.FieldValue))
+			}
+		}
+		return &pb.RowFieldValues{Key: proto.Clone(write.Key.Key).(*pb.RowKey), Fields: fields, Attributes: cloneAttributes(write.Attributes)}
+	}
 	if row == nil {
 		row = &pb.RowFieldValues{Key: proto.Clone(write.Key.Key).(*pb.RowKey)}
 	} else {
@@ -453,6 +471,17 @@ func ApplyRowWrite(row *pb.RowFieldValues, write RowWrite, onlyMissing bool) *pb
 	}
 	mergeFields(row, write.Fields, write.Attributes, onlyMissing)
 	return row
+}
+
+func cloneAttributes(attrs map[string]*pb.TypedValue) map[string]*pb.TypedValue {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make(map[string]*pb.TypedValue, len(attrs))
+	for key, value := range attrs {
+		out[key] = proto.Clone(value).(*pb.TypedValue)
+	}
+	return out
 }
 func mergeFields(row *pb.RowFieldValues, fields []*pb.FieldValue, attrs map[string]*pb.TypedValue, onlyMissing bool) {
 	pos := map[string]int{}

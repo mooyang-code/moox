@@ -201,6 +201,15 @@ func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validato
 	if key.GetTimeSeries() == nil && key.GetRecord() == nil {
 		return errors.New("row key kind is required")
 	}
+	if row.GetOperation() == pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE {
+		if len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0 {
+			return errors.New("delete row must not contain fields or attributes")
+		}
+		if validator != nil {
+			return validator.ValidateRow(ctx, row)
+		}
+		return nil
+	}
 	if record := key.GetRecord(); record != nil && strings.TrimSpace(record.GetVersion()) == "" {
 		return errors.New("record version is required for writes")
 	}

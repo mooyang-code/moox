@@ -144,6 +144,12 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if row.GetOperation() == pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE {
+			if err := s.deleteRowFromBatch(batch, row.GetKey()); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		for _, field := range row.GetFields() {
 			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId(), s.bucketDuration)
 			if err != nil {
@@ -208,9 +214,40 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	return entries, nil
 }
 
+func (s *Store) deleteRowFromBatch(batch *cpebble.Batch, key *pb.RowKey) error {
+	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
+		prefix, err := encodeNamespacePrefix(namespace, key, s.bucketDuration)
+		if err != nil {
+			return err
+		}
+		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
+		if err != nil {
+			return err
+		}
+		for valid := iter.First(); valid; valid = iter.Next() {
+			if err := batch.Delete(append([]byte(nil), iter.Key()...), s.writeOptions); err != nil {
+				_ = iter.Close()
+				return err
+			}
+		}
+		if err := iter.Error(); err != nil {
+			_ = iter.Close()
+			return err
+		}
+		_ = iter.Close()
+	}
+	return nil
+}
+
 func validateUpsert(row *pb.RowFieldUpsert) error {
 	if row == nil || row.GetKey() == nil {
 		return invalid("row key is required")
+	}
+	if row.GetOperation() == pb.RowFieldOperation_ROW_FIELD_OPERATION_DELETE {
+		if len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0 {
+			return invalid("delete row must not contain fields or attributes")
+		}
+		return nil
 	}
 	if len(row.GetFields()) == 0 && len(row.GetAttributes()) == 0 {
 		return invalid("at least one field or attribute is required")

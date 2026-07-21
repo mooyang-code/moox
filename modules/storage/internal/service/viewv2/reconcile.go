@@ -116,12 +116,32 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	failedBuild := false
 	if build := view.GetIndexBuild(); build != nil {
 		switch build.GetState() {
-		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_FAILED:
+		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, pb.ViewIndexBuild_FAILED:
 			if build.GetState() == pb.ViewIndexBuild_FAILED {
 				s.removeFailedBuild(ctx, build.GetIndexId())
 				view.IndexBuild = nil
 				failedBuild = true
 				break
+			}
+			if build.GetState() == pb.ViewIndexBuild_READY {
+				if err := s.AttachPendingViewBuild(ctx, view); err != nil {
+					s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
+					return err
+				}
+				activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: build.GetBuildId(), OwnerId: opts.OwnerID})
+				if err != nil {
+					return activationRetry{cause: err}
+				}
+				if err := requireSuccess(activated.GetRetInfo()); err != nil {
+					s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
+					view.IndexBuild = nil
+					failedBuild = true
+					break
+				}
+				if view.GetActiveIndexId() != "" {
+					return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
+				}
+				return nil
 			}
 			if failedBuild {
 				break
@@ -132,7 +152,8 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			err := s.resumeViewBuild(ctx, opts, auth, view, build)
 			if err != nil {
 				var retry resumeBuildRetry
-				if !errors.As(err, &retry) {
+				var activation activationRetry
+				if !errors.As(err, &retry) && !errors.As(err, &activation) {
 					s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
 				}
 			}
@@ -226,8 +247,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, OwnerId: opts.OwnerID,
 	})
 	if err != nil {
-		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-		return err
+		return activationRetry{cause: err}
 	}
 	if err := requireSuccess(activated.GetRetInfo()); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
@@ -243,6 +263,11 @@ type resumeBuildRetry struct{ cause error }
 
 func (e resumeBuildRetry) Error() string { return e.cause.Error() }
 func (e resumeBuildRetry) Unwrap() error { return e.cause }
+
+type activationRetry struct{ cause error }
+
+func (e activationRetry) Error() string { return e.cause.Error() }
+func (e activationRetry) Unwrap() error { return e.cause }
 
 func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
 	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
@@ -316,7 +341,7 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 	}
 	activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: build.GetBuildId(), OwnerId: opts.OwnerID})
 	if err != nil {
-		return err
+		return activationRetry{cause: err}
 	}
 	if err := requireSuccess(activated.GetRetInfo()); err != nil {
 		return err

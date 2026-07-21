@@ -105,7 +105,7 @@ func (m *IndexManager) Apply(ctx context.Context, id string, batch viewindex.Vie
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		row = viewindex.ApplyRowWrite(row, write, batch.WriteMode == viewindex.Backfill)
+		row = viewindex.ApplyRowWriteWithMode(row, write, batch.WriteMode == viewindex.Backfill, batch.WriteMode == viewindex.Replace)
 		raw, err = proto.Marshal(row)
 		if err != nil {
 			return err
