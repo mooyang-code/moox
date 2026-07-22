@@ -16,8 +16,20 @@ func TestEventConsumerOptionsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Stream != "MOOX_STORAGE" || opts.Durable != "storage_view" || opts.FetchBatch != 8 || opts.MaxWorkers != 4 || opts.Ordering != "subject" {
+	if opts.Stream != "MOOX_STORAGE" || opts.Durable != "storage_view" || opts.AckWaitMS != 120000 || opts.FetchBatch != 8 || opts.MaxWorkers != 4 || opts.Ordering != "subject" {
 		t.Fatalf("options = %+v", opts)
+	}
+}
+
+func TestDeliveryHeartbeatIntervalUsesAckWait(t *testing.T) {
+	if got := deliveryHeartbeatInterval(120 * time.Second); got != 30*time.Second {
+		t.Fatalf("heartbeat interval = %s, want 30s", got)
+	}
+	if got := deliveryHeartbeatInterval(18 * time.Second); got != 6*time.Second {
+		t.Fatalf("heartbeat interval = %s, want 6s", got)
+	}
+	if got := deliveryHeartbeatInterval(500 * time.Millisecond); got != time.Second {
+		t.Fatalf("heartbeat lower bound = %s, want 1s", got)
 	}
 }
 

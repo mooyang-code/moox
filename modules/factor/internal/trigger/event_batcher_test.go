@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 type pendingStoreFake struct {
+	mu        sync.Mutex
 	rows      map[string]pendingStoreRow
 	processed map[string]struct{}
 	commitErr error
@@ -22,19 +24,20 @@ type pendingStoreRow struct {
 	receivedAt time.Time
 }
 
-func (s *pendingStoreFake) PutPendingEvent(_ context.Context, id string, event *storagepb.DatasetFieldsChanged, at time.Time) error {
+func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event *storagepb.DatasetFieldsChanged, at time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.rows == nil {
 		s.rows = map[string]pendingStoreRow{}
 	}
-	if _, ok := s.rows[id]; !ok {
-		s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.DatasetFieldsChanged), receivedAt: at}
+	if _, ok := s.processed[id]; ok {
+		return false, nil
 	}
-	return nil
-}
-
-func (s *pendingStoreFake) IsProcessedEvent(_ context.Context, id string) (bool, error) {
-	_, ok := s.processed[id]
-	return ok, nil
+	if _, ok := s.rows[id]; ok {
+		return false, nil
+	}
+	s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.DatasetFieldsChanged), receivedAt: at}
+	return true, nil
 }
 
 func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.DatasetFieldsChanged, time.Time) error) error {
@@ -47,6 +50,8 @@ func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(strin
 }
 
 func (s *pendingStoreFake) CommitPendingEvents(_ context.Context, ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.commitErr != nil {
 		return s.commitErr
 	}
@@ -58,6 +63,31 @@ func (s *pendingStoreFake) CommitPendingEvents(_ context.Context, ids []string) 
 		delete(s.rows, id)
 	}
 	return nil
+}
+
+func TestDurableEventBatcherClaimsDuplicateMessageOnlyOnce(t *testing.T) {
+	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	inbox := &pendingStoreFake{}
+	d := NewDurableEventBatcher(2*time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")}, inbox)
+	e := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := d.IngestMessage(context.Background(), "same-message", e, now); err != nil {
+				t.Errorf("claim duplicate event: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	tasks, err := d.FlushPending(context.Background(), now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || len(tasks[0].PendingEventIDs) != 1 {
+		t.Fatalf("tasks = %+v, want one task with one pending event", tasks)
+	}
 }
 
 func TestDurableEventBatcherPersistsAndReplaysBeforeFlush(t *testing.T) {

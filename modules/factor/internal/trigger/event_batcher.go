@@ -83,15 +83,12 @@ func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, even
 	if messageID == "" {
 		return errors.New("factor event message_id is required")
 	}
-	processed, err := d.inbox.IsProcessedEvent(ctx, messageID)
+	claimed, err := d.inbox.ClaimPendingEvent(ctx, messageID, event, now)
 	if err != nil {
 		return err
 	}
-	if processed {
+	if !claimed {
 		return nil
-	}
-	if err := d.inbox.PutPendingEvent(ctx, messageID, event, now); err != nil {
-		return err
 	}
 	if !d.ingestMemory(messageID, event, now) {
 		return d.inbox.CommitPendingEvents(ctx, []string{messageID})
@@ -182,9 +179,11 @@ func (d *EventBatcher) Flush(now time.Time) []Task {
 // CommitPending only after downstream task acceptance. If downstream work
 // fails, RestorePending rehydrates the still-pending rows.
 func (d *EventBatcher) FlushPending(ctx context.Context, now time.Time) ([]Task, error) {
-	_ = ctx
 	if d == nil {
 		return nil, errors.New("factor event batcher is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -201,6 +200,9 @@ func (d *EventBatcher) FlushPending(ctx context.Context, now time.Time) ([]Task,
 	})
 	tasks := make([]Task, 0, len(keys))
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		b := d.buckets[key]
 		b.task.FactorIDs = orderedFactorIDs(b.factors, d.bindings)
 		b.task.PendingEventIDs = orderedMessageIDs(b.messageIDs)
@@ -245,13 +247,6 @@ func (d *EventBatcher) Replay(ctx context.Context) error {
 		return nil
 	}
 	return d.inbox.LoadPendingEvents(ctx, func(messageID string, event *storagepb.DatasetFieldsChanged, receivedAt time.Time) error {
-		processed, err := d.inbox.IsProcessedEvent(ctx, messageID)
-		if err != nil {
-			return err
-		}
-		if processed {
-			return nil
-		}
 		if !d.ingestMemory(messageID, event, receivedAt) {
 			return d.inbox.CommitPendingEvents(ctx, []string{messageID})
 		}

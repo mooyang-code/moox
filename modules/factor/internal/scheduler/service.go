@@ -99,6 +99,12 @@ func (s *Service) EnqueueChecked(ctx context.Context, task Task) error {
 	if s == nil {
 		return errors.New("scheduler is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := keyOf(task)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,11 +23,19 @@ func TestEventInboxPersistsAcrossRestartAndCommitsDuplicateIDsIdempotently(t *te
 	if err := first.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.PutPendingEvent(ctx, "message-1", event, now); err != nil {
+	claimed, err := first.ClaimPendingEvent(ctx, "message-1", event, now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.PutPendingEvent(ctx, "message-1", &storagepb.DatasetFieldsChanged{SpaceId: "wrong"}, now.Add(time.Minute)); err != nil {
+	if !claimed {
+		t.Fatal("first claim did not win")
+	}
+	claimed, err = first.ClaimPendingEvent(ctx, "message-1", &storagepb.DatasetFieldsChanged{SpaceId: "wrong"}, now.Add(time.Minute))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("duplicate claim won")
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
@@ -53,23 +62,8 @@ func TestEventInboxPersistsAcrossRestartAndCommitsDuplicateIDsIdempotently(t *te
 	if loaded != 1 {
 		t.Fatalf("loaded pending events = %d, want 1", loaded)
 	}
-	processed, err := restarted.IsProcessedEvent(ctx, "message-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if processed {
-		t.Fatal("message is processed before commit")
-	}
-
 	if err := restarted.CommitPendingEvents(ctx, []string{"message-1", "message-1"}); err != nil {
 		t.Fatal(err)
-	}
-	processed, err = restarted.IsProcessedEvent(ctx, "message-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processed {
-		t.Fatal("message is not marked processed")
 	}
 	loaded = 0
 	if err := restarted.LoadPendingEvents(ctx, func(string, *storagepb.DatasetFieldsChanged, time.Time) error {
@@ -82,8 +76,12 @@ func TestEventInboxPersistsAcrossRestartAndCommitsDuplicateIDsIdempotently(t *te
 		t.Fatalf("pending events after commit = %d, want 0", loaded)
 	}
 
-	if err := restarted.PutPendingEvent(ctx, "message-1", event, now.Add(time.Hour)); err != nil {
+	claimed, err = restarted.ClaimPendingEvent(ctx, "message-1", event, now.Add(time.Hour))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("processed redelivery claimed")
 	}
 	loaded = 0
 	if err := restarted.LoadPendingEvents(ctx, func(string, *storagepb.DatasetFieldsChanged, time.Time) error {
@@ -94,5 +92,48 @@ func TestEventInboxPersistsAcrossRestartAndCommitsDuplicateIDsIdempotently(t *te
 	}
 	if loaded != 0 {
 		t.Fatalf("redelivery reappeared after processed commit: %d", loaded)
+	}
+}
+
+func TestEventInboxConcurrentDuplicateClaimHasOneWinner(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/factor.db"
+	db, err := Open(&Options{Path: path, MaxOpenConns: 8, MaxIdleConns: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	event := &storagepb.DatasetFieldsChanged{SpaceId: "crypto", DatasetId: "kline"}
+	var wg sync.WaitGroup
+	results := make(chan bool, 16)
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, err := db.ClaimPendingEvent(ctx, "same-message", event, time.Now().UTC())
+			results <- claimed
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	winners := 0
+	for claimed := range results {
+		if claimed {
+			winners++
+		}
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("claim winners = %d, want 1", winners)
 	}
 }

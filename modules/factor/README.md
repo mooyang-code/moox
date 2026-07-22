@@ -8,6 +8,8 @@
 
 实时 delivery 在 ACK 前先写入 Factor SQLite 的 `t_factor_event_inbox`；进程重启会 replay 未 flush 的 inbox，窗口 flush 后才删除对应记录。这个本地 pending inbox 是 live durable 之外的恢复边界，不替代 `MOOX_STORAGE/factor_calc`，也不把 replay 伪装成 live durable。
 
+调度器当前仍是进程内内存队列：inbox claim、稳定任务 ID 和 writeback 幂等共同提供 durable at-least-once 语义，并让 replay/redelivery 收敛到同一逻辑任务；这不是跨进程 exactly-once。若需要跨进程执行恢复，应另行引入持久化 scheduler/outbox，不在本次修复范围内。
+
 ## 现状
 
 ```bash

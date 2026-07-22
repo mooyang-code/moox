@@ -24,6 +24,7 @@ import (
 type EventConsumerOptions struct {
 	Stream        string
 	Durable       string
+	AckWaitMS     int
 	FetchBatch    int
 	MaxWorkers    int
 	MaxAckPending int
@@ -38,6 +39,9 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 	}
 	if strings.TrimSpace(o.Durable) == "" {
 		o.Durable = "storage_view"
+	}
+	if o.AckWaitMS == 0 {
+		o.AckWaitMS = 120000
 	}
 	if o.FetchBatch == 0 {
 		o.FetchBatch = 8
@@ -62,6 +66,9 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 	}
 	if o.MaxAckPending < 0 {
 		return o, errors.New("storage view max_ack_pending must not be negative")
+	}
+	if o.AckWaitMS < 1 {
+		return o, errors.New("storage view ack_wait_ms must be positive")
 	}
 	if o.MaxAckPending > 0 && o.FetchBatch > o.MaxAckPending {
 		return o, fmt.Errorf("storage view fetch_batch %d exceeds max_ack_pending %d", o.FetchBatch, o.MaxAckPending)
@@ -111,7 +118,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		return s.processDelivery(ctx, delivery, heartbeat)
 	}, reporter, laneMetricsHooks{
 		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
-			return newDeliveryHeartbeat(ctx, delivery, 30*time.Second, opts.Metrics)
+			return newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(time.Duration(opts.AckWaitMS)*time.Millisecond), opts.Metrics)
 		},
 		onSubmit: func(delivery *jetstream.Delivery) {
 			opts.Metrics.ObserveLaneSubmit()
@@ -191,7 +198,7 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 		heartbeat = queued[0]
 	}
 	if heartbeat == nil {
-		heartbeat = newDeliveryHeartbeat(ctx, delivery, 30*time.Second, metrics)
+		heartbeat = newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(120*time.Second), metrics)
 	}
 	defer func() { heartbeat.stop() }()
 	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
@@ -870,6 +877,20 @@ func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, int
 		}
 	}()
 	return h
+}
+
+func deliveryHeartbeatInterval(ackWait time.Duration) time.Duration {
+	if ackWait <= 0 {
+		ackWait = 120 * time.Second
+	}
+	interval := ackWait / 3
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	if interval < time.Second {
+		interval = time.Second
+	}
+	return interval
 }
 
 func (h *deliveryHeartbeat) report(err error) {

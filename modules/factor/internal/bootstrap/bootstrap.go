@@ -2,9 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -454,7 +456,7 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 	}
 	return scheduler.Task{
 		FactorTask: engine.FactorTask{
-			TaskID:        fmt.Sprintf("ft-%d", time.Now().UnixNano()),
+			TaskID:        deterministicTaskID(task),
 			Kind:          domain.FactorKindTimeseries,
 			SpaceID:       task.SpaceID,
 			SourceDataset: task.SourceDataset,
@@ -468,6 +470,38 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 		TriggerType: "event",
 		FactorIDs:   append([]string(nil), task.FactorIDs...),
 	}, nil
+}
+
+// deterministicTaskID makes replay and JetStream redelivery converge on the
+// same logical scheduler task. The scheduler itself remains an in-memory
+// queue, so this is a durable at-least-once boundary with deterministic task
+// identity, not a cross-process exactly-once guarantee.
+func deterministicTaskID(task trigger.Task) string {
+	factorIDs := append([]string(nil), task.FactorIDs...)
+	sort.Strings(factorIDs)
+	pendingIDs := append([]string(nil), task.PendingEventIDs...)
+	sort.Strings(pendingIDs)
+	h := sha256.New()
+	write := func(value string) {
+		_, _ = h.Write([]byte(fmt.Sprintf("%d:%s;", len(value), value)))
+	}
+	for _, value := range []string{
+		task.SpaceID,
+		task.SourceDataset,
+		task.TargetDataset,
+		task.SubjectID,
+		task.Freq,
+		task.BarTime.UTC().Format(time.RFC3339Nano),
+	} {
+		write(value)
+	}
+	for _, factorID := range factorIDs {
+		write("factor:" + factorID)
+	}
+	for _, messageID := range pendingIDs {
+		write("message:" + messageID)
+	}
+	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
 }
 
 func syncTaskMetadata(ctx context.Context, meta *registry.MetadataSync, task scheduler.Task, repo *store.FactorRepository) error {

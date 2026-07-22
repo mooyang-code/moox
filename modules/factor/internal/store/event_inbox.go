@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -26,33 +25,28 @@ type processedEventRecord struct {
 
 func (processedEventRecord) TableName() string { return "t_factor_event_processed" }
 
-func (s *Store) PutPendingEvent(ctx context.Context, messageID string, event *storagepb.DatasetFieldsChanged, receivedAt time.Time) error {
+// ClaimPendingEvent atomically inserts an event only when it is not already
+// pending or processed. RowsAffected is the ownership decision, so concurrent
+// Factor instances cannot both put the same message into their memory window.
+func (s *Store) ClaimPendingEvent(ctx context.Context, messageID string, event *storagepb.DatasetFieldsChanged, receivedAt time.Time) (bool, error) {
 	if s == nil || s.db == nil {
-		return gorm.ErrInvalidDB
+		return false, gorm.ErrInvalidDB
 	}
 	payload, err := proto.Marshal(event)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if receivedAt.IsZero() {
 		receivedAt = time.Now().UTC()
 	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&pendingEventRecord{MessageID: messageID, Payload: payload, ReceivedAt: receivedAt}).Error
-}
-
-func (s *Store) IsProcessedEvent(ctx context.Context, messageID string) (bool, error) {
-	if s == nil || s.db == nil {
-		return false, gorm.ErrInvalidDB
-	}
-	var record processedEventRecord
-	err := s.db.WithContext(ctx).Where("c_message_id = ?", messageID).First(&record).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	result := s.db.WithContext(ctx).Exec(`
+		INSERT INTO t_factor_event_inbox (c_message_id, c_payload, c_received_at)
+		SELECT ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM t_factor_event_processed WHERE c_message_id = ?
+		)
+		ON CONFLICT(c_message_id) DO NOTHING`, messageID, payload, receivedAt, messageID)
+	return result.RowsAffected == 1, result.Error
 }
 
 func (s *Store) LoadPendingEvents(ctx context.Context, visit func(string, *storagepb.DatasetFieldsChanged, time.Time) error) error {
