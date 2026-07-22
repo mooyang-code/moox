@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -48,8 +49,11 @@ type NATSConsumer struct {
 	eventBatcher *EventBatcher
 	client       *jetstream.Client
 	consumer     *jetstream.PullConsumer
+	runner       *jetstream.Runner
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+	mu           sync.Mutex
+	runErr       error
 }
 
 func NewNATSConsumer(cfg NATSConfig, eventBatcher *EventBatcher) *NATSConsumer {
@@ -80,6 +84,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 		return err
 	}
 	c.client, c.consumer = client, consumer
+	c.runner = jetstream.NewRunner(consumer, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16})
 	loopCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.wg.Add(1)
@@ -95,43 +100,47 @@ func (c *NATSConsumer) Close() error {
 		_ = c.consumer.Close()
 	}
 	c.wg.Wait()
+	c.mu.Lock()
+	runErr := c.runErr
+	c.mu.Unlock()
 	if c.client != nil {
-		return c.client.Close()
+		return errors.Join(runErr, c.client.Close())
 	}
-	return nil
+	return runErr
 }
 
 func (c *NATSConsumer) loop(ctx context.Context) {
 	defer c.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		deliveries, err := c.consumer.Fetch(ctx, 16)
-		if err != nil && len(deliveries) == 0 {
-			if ctx.Err() != nil {
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		for _, delivery := range deliveries {
-			event := &storagepb.DatasetFieldsChanged{}
-			spaceID, datasetID, err := validateStorageFieldsChangedEnvelope(delivery.Message)
-			if err != nil {
-				_ = delivery.Term(ctx)
-				continue
-			}
-			if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil || event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
-				_ = delivery.Term(ctx)
-				continue
-			}
-			if c.eventBatcher != nil {
-				c.eventBatcher.Ingest(event, time.Now().UTC())
-			}
-			_ = delivery.Ack(ctx)
-		}
+	if err := c.runner.Run(ctx); err != nil && ctx.Err() == nil {
+		c.recordError(err)
 	}
+}
+
+func (c *NATSConsumer) recordError(err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	c.runErr = errors.Join(c.runErr, err)
+	c.mu.Unlock()
+}
+
+type storageEventHandler struct{ eventBatcher *EventBatcher }
+
+func (h storageEventHandler) Handle(_ context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	if delivery == nil || delivery.Message == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM}
+	}
+	event := &storagepb.DatasetFieldsChanged{}
+	spaceID, datasetID, err := validateStorageFieldsChangedEnvelope(delivery.Message)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM}
+	}
+	if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil || event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
+		return jetstream.HandlerResult{Decision: jetstream.TERM}
+	}
+	if h.eventBatcher != nil {
+		h.eventBatcher.Ingest(event, time.Now().UTC())
+	}
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }

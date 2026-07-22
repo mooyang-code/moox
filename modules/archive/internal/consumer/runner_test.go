@@ -34,7 +34,7 @@ func (f *fakePullConsumer) Close() error {
 	return nil
 }
 
-func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
+func TestRunnerStopsNormallyOnCancel(t *testing.T) {
 	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
 	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic()}
 	consumer := &fakePullConsumer{
@@ -51,9 +51,7 @@ func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
 	runner := NewRunner(consumer, handler, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := runner.Run(ctx)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, runner.Run(ctx))
 }
 
 func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {

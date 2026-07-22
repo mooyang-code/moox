@@ -157,28 +157,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 	c.wg.Add(1)
 	defer c.wg.Done()
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil
-		}
-		deliveries, fetchErr := c.pull.Fetch(ctx, c.opts.Config.FetchBatchSize)
-		consumerPending.Set(float64(len(deliveries)))
-		for _, d := range deliveries {
-			_ = c.HandleDelivery(ctx, d)
-		}
-		consumerPending.Set(0)
-		if fetchErr != nil {
-			if errors.Is(fetchErr, context.Canceled) || errors.Is(fetchErr, context.DeadlineExceeded) {
-				return nil
-			}
-			if errors.Is(fetchErr, jetstream.ErrClosed) {
-				return nil
-			}
-			// A decode error may accompany valid deliveries (and, when enabled,
-			// a poison delivery). Those are handled above; continue fetching.
-			continue
-		}
-	}
+	runner := jetstream.NewRunner(c.pull, c, jetstream.RunnerConfig{BatchSize: c.opts.Config.FetchBatchSize})
+	return runner.Run(ctx)
 }
 
 // RunWhenReady keeps the monitor process alive while Storage metadata or the
@@ -231,52 +211,41 @@ func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 	}
 }
 
-func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) error {
+func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.HandlerResult {
 	if d == nil {
-		return errors.New("empty metric delivery")
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("empty metric delivery")}
 	}
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	actionCtx := ctx
 	if d.Message == nil {
 		if d.DecodeError == nil {
-			return errors.New("empty metric delivery")
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("empty metric delivery")}
 		}
 		reason := fmt.Errorf("decode metric envelope: %w", d.DecodeError)
 		recordIngest("rejected", time.Time{})
 		if c.opts.DLQ == nil {
-			_ = d.Term(actionCtx)
-			return reason
+			return jetstream.HandlerResult{Decision: jetstream.TERM}
 		}
 		dlq := malformedRejectionMessage(d, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
 		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
-			_ = d.Nak(actionCtx, time.Second)
-			return fmt.Errorf("publish metrics DLQ: %w", err)
+			return c.retry(fmt.Errorf("publish metrics DLQ: %w", err))
 		}
 		dlqTotal.Inc()
-		if err := d.Term(actionCtx); err != nil {
-			return fmt.Errorf("term rejected metric: %w", err)
-		}
-		return reason
+		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
 	msg := d.Message
-	permanent := func(reason error) error {
+	permanent := func(reason error) jetstream.HandlerResult {
 		recordIngest("rejected", time.Time{})
 		if c.opts.DLQ == nil {
-			_ = d.Term(actionCtx)
-			return reason
+			return jetstream.HandlerResult{Decision: jetstream.TERM}
 		}
 		dlq := rejectionMessage(msg, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
 		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
-			_ = d.Nak(actionCtx, time.Second)
-			return fmt.Errorf("publish metrics DLQ: %w", err)
+			return c.retry(fmt.Errorf("publish metrics DLQ: %w", err))
 		}
 		dlqTotal.Inc()
-		if err := d.Term(actionCtx); err != nil {
-			return fmt.Errorf("term rejected metric: %w", err)
-		}
-		return reason
+		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
 	if msg.GetTopic() != c.opts.Config.Topic && msg.GetTopic() != MetricTopic {
 		return permanent(fmt.Errorf("unsupported metric topic %q", msg.GetTopic()))
@@ -296,24 +265,24 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 	if c.opts.Authorizer != nil {
 		ok, err := c.opts.Authorizer.IsRegistered(ctx, msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId())
 		if err != nil {
-			return c.retry(actionCtx, d, fmt.Errorf("authorize metric producer: %w", err))
+			return c.retry(fmt.Errorf("authorize metric producer: %w", err))
 		}
 		if !ok {
 			// SysDeploy synchronization is asynchronous on Monitor startup. Keep
 			// a legitimate first snapshot long enough for the registry to converge;
 			// persistently unknown producers still go to the DLQ.
 			if d.DeliveryCount < unknownProducerGraceDeliveries {
-				return c.retry(actionCtx, d, fmt.Errorf("metric producer %s/%s is not registered yet", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
+				return c.retry(fmt.Errorf("metric producer %s/%s is not registered yet", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
 			}
 			return permanent(fmt.Errorf("unregistered metric producer %s/%s", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
 		}
 	}
 	duplicate, err := c.opts.MessageStore.IsDuplicate(ctx, msg.GetMessageId())
 	if err != nil {
-		return c.retry(actionCtx, d, err)
+		return c.retry(err)
 	}
 	if duplicate {
-		return d.Ack(ctx)
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
 	snapshot := new(metricspb.MetricSnapshot)
 	if err := proto.Unmarshal(msg.GetPayload(), snapshot); err != nil {
@@ -329,27 +298,25 @@ func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) er
 		return permanent(err)
 	}
 	if err := c.opts.Storage.WriteSamples(ctx, samples); err != nil {
-		return c.retry(actionCtx, d, err)
+		return c.retry(err)
 	}
 	duplicate, err = c.opts.MessageStore.CommitIngest(ctx, msg, samples)
 	if err != nil {
-		return c.retry(actionCtx, d, err)
+		return c.retry(err)
 	}
 	if duplicate {
-		return d.Ack(ctx)
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
 	recordIngest("success", observed)
-	return d.Ack(ctx)
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
-func (c *Consumer) retry(ctx context.Context, d *jetstream.Delivery, err error) error {
+func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) error {
+	return c.Handle(ctx, d).Err
+}
+
+func (c *Consumer) retry(err error) jetstream.HandlerResult {
 	recordIngest("error", time.Time{})
-	if d == nil {
-		return err
-	}
-	if nakErr := d.Nak(ctx, time.Second); nakErr != nil {
-		return fmt.Errorf("%v; nak: %w", err, nakErr)
-	}
-	return err
+	return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 }
 func rejectionMessage(original *messagepb.MooxMessage, reason, service, instance string) *messagepb.MooxMessage {
 	payload, _ := proto.Marshal(original)

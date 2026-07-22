@@ -310,6 +310,7 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 	}
 	deliveries := make([]*Delivery, 0, len(msgs))
 	var firstDecodeErr error
+	var transportErr error
 	for _, msg := range msgs {
 		delivery, decodeErr := deliveryFromMessage(msg, p.cfg.Stream, p.cfg.Durable, p.client.cfg.MaxPayload)
 		if delivery != nil {
@@ -320,7 +321,9 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 				// Poison messages must be terminated even when the caller's fetch context
 				// has expired; otherwise they immediately redeliver forever.
 				termCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), time.Second)
-				_ = msg.Term(nats.Context(termCtx))
+				if termErr := msg.Term(nats.Context(termCtx)); termErr != nil {
+					transportErr = errors.Join(transportErr, fmt.Errorf("term poison delivery: %w", termErr))
+				}
 				cancel()
 			} else if delivery != nil {
 				deliveries = append(deliveries, delivery)
@@ -332,7 +335,7 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 		}
 		deliveries = append(deliveries, delivery)
 	}
-	return deliveries, firstDecodeErr
+	return deliveries, errors.Join(firstDecodeErr, transportErr)
 }
 
 func (p *PullConsumer) Close() error {

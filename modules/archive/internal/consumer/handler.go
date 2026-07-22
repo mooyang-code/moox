@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 )
 
@@ -52,15 +53,36 @@ func NewHandler(decoder DecoderAPI, store Journal, notifier DirtyNotifier) *Hand
 }
 
 func (h *Handler) Handle(ctx context.Context, delivery Delivery) error {
+	result := h.HandleDecision(ctx, delivery)
 	if delivery == nil {
-		return fmt.Errorf("delivery is nil")
+		return result.Err
+	}
+	var actionErr error
+	switch result.Decision {
+	case jetstream.ACK:
+		actionErr = delivery.Ack(ctx)
+	case jetstream.RETRY:
+		actionErr = delivery.Nak(ctx, result.Delay)
+	case jetstream.TERM:
+		actionErr = delivery.Term(ctx)
+	default:
+		actionErr = fmt.Errorf("invalid archive handler decision %d", result.Decision)
+	}
+	return errors.Join(result.Err, actionErr)
+}
+
+// HandleDecision contains archive business processing only. The shared
+// JetStream runner owns the resulting ACK/NAK/TERM action.
+func (h *Handler) HandleDecision(ctx context.Context, delivery Delivery) jetstream.HandlerResult {
+	if delivery == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("delivery is nil")}
 	}
 	if decodeErr := delivery.DecodeError(); decodeErr != nil {
 		return h.reject(ctx, delivery, decodeErr)
 	}
 	batch, decision, decodeErr := h.decoder.Decode(delivery.Envelope())
 	if decision == DecisionIgnore {
-		return delivery.Ack(ctx)
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
 	if decision == DecisionReject || decodeErr != nil {
 		if decodeErr == nil {
@@ -71,28 +93,21 @@ func (h *Handler) Handle(ctx context.Context, delivery Delivery) error {
 	result, err := h.journal.Append(ctx, batch)
 	if err != nil {
 		delay := retryDelay(delivery.DeliveryCount())
-		if nakErr := delivery.Nak(ctx, delay); nakErr != nil {
-			return nakErr
-		}
-		return &RetryScheduledError{Delay: delay}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: delay, Err: err}
 	}
 	if !result.Duplicate && h.notifier != nil {
 		h.notifier.Notify(result.Partitions)
 	}
-	if err := delivery.Ack(ctx); err != nil {
-		return err
-	}
-	return nil
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
-func (h *Handler) reject(ctx context.Context, delivery Delivery, reason error) error {
+func (h *Handler) reject(ctx context.Context, delivery Delivery, reason error) jetstream.HandlerResult {
 	err := h.journal.Quarantine(ctx, journal.QuarantineRecord{MessageID: delivery.MessageID(), Subject: delivery.Subject(), StreamSeq: delivery.StreamSequence(), Delivery: delivery.DeliveryCount(), Reason: reason.Error(), RawEnvelope: delivery.RawEnvelope()})
 	if err != nil {
 		delay := retryDelay(delivery.DeliveryCount())
-		_ = delivery.Nak(ctx, delay)
-		return &RetryScheduledError{Delay: delay}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: delay, Err: err}
 	}
-	return delivery.Term(ctx)
+	return jetstream.HandlerResult{Decision: jetstream.TERM}
 }
 
 func retryDelay(deliveries uint64) time.Duration {
