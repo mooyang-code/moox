@@ -172,6 +172,23 @@ if ! awk '
   echo "storage-view must preflight EventBus topology before starting" >&2
   exit 1
 fi
+topology_block="$(sed -n '/^wait_eventbus_storage_view_topology() {/,/^}/p' "${DEPLOY_DIR}/start.sh")"
+grep -Fq '[[ "${attempts}" =~ ^[1-9][0-9]*$ ]]' <<<"${topology_block}" || {
+  echo "storage-view topology preflight must validate a positive wait duration" >&2
+  exit 1
+}
+grep -Fq 'mktemp "${TMPDIR:-/tmp}/moox-eventbus-topology.XXXXXX"' <<<"${topology_block}" || {
+  echo "storage-view topology preflight must use a temporary response file" >&2
+  exit 1
+}
+grep -Fq -- '--output "${response_file}"' <<<"${topology_block}" || {
+  echo "storage-view topology preflight must save the metrics response" >&2
+  exit 1
+}
+if grep -Eq '\|[[:space:]]*grep' <<<"${topology_block}"; then
+  echo "storage-view topology preflight must not pipe curl into grep" >&2
+  exit 1
+fi
 assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 if grep -Eq 'storage-view-(index|builder|query)|storage\.view_(index|builder|query)\.yaml' "${DEPLOY_DIR}/start.sh"; then

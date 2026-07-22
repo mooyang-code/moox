@@ -1237,6 +1237,12 @@ wait_eventbus_storage_view_topology() {
   fi
   local attempts="${MOOX_WAIT_EVENTBUS_TOPOLOGY_SECONDS:-60}"
   local metrics_url="http://127.0.0.1:11419/metrics"
+  [[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "MOOX_WAIT_EVENTBUS_TOPOLOGY_SECONDS must be a positive integer" >&2
+    return 1
+  }
+  local response_file
+  response_file="$(mktemp "${TMPDIR:-/tmp}/moox-eventbus-topology.XXXXXX")"
   echo "waiting for EventBus storage_view durable topology"
   for _ in $(seq 1 "${attempts}"); do
     if curl --fail --silent --max-time 2 \
@@ -1244,11 +1250,14 @@ wait_eventbus_storage_view_topology() {
       "http://127.0.0.1:11419/readyz" >/dev/null 2>&1 && \
       curl --fail --silent --max-time 2 \
       -H "X-Moox-Health-Auth: $(sign_health_request GET /metrics)" \
-      "${metrics_url}" | grep -Fq 'moox_eventbus_consumer_pending{stream="MOOX_STORAGE",consumer="storage_view"}'; then
+      --output "${response_file}" "${metrics_url}" >/dev/null 2>&1 && \
+      grep -Fq 'moox_eventbus_consumer_pending{stream="MOOX_STORAGE",consumer="storage_view"}' "${response_file}"; then
+      rm -f "${response_file}"
       return 0
     fi
     sleep 1
   done
+  rm -f "${response_file}"
   echo "EventBus storage_view durable topology not ready after ${attempts}s" >&2
   return 1
 }

@@ -266,7 +266,7 @@ func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error
 }
 func usersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
 	return fmt.Sprintf("users:\n"+
-		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+
 		"  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.metrics.host.reported.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: metrics-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.metrics.snapshot.reported.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: monitor-hostmetrics-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.dlq.message.rejected.v1\", \"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_hostmetrics_ingest_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+

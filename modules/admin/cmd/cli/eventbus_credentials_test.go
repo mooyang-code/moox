@@ -93,6 +93,9 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "moox.metrics.snapshot.reported.v1")
+	internalAdminACL := eventBusACLBlock(yaml, "eventbus-internal-admin")
+	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "$JS.EVENT.ADVISORY.API"]}`, aclLine(internalAdminACL, "subscribe:"))
+	assert.NotContains(t, aclLine(internalAdminACL, "subscribe:"), "$JS.EVENT.ADVISORY.API.>")
 	for role, password := range map[string]string{
 		"eventbus-internal-admin":      "a",
 		"hostagent-publisher":          "b",
@@ -152,6 +155,9 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.ACK`)
 	assert.Contains(t, cloudnodeACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	for _, role := range eventBusRoles {
+		if role == "eventbus-internal-admin" {
+			continue
+		}
 		acl := eventBusACLBlock(yaml, role)
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")

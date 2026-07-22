@@ -47,6 +47,31 @@ func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
 	}
 }
 
+func TestReadInternalCredentialsResolvesRelativeCAFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "internal-admin.yaml")
+	if err := os.WriteFile(path, []byte("username: eventbus-internal-admin\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	credentials, err := readInternalCredentials(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.CAFile != filepath.Join(dir, "ca.pem") {
+		t.Fatalf("CAFile = %q, want %q", credentials.CAFile, filepath.Join(dir, "ca.pem"))
+	}
+}
+
+func TestInternalClientCAFilePrefersConfiguredDeploymentCA(t *testing.T) {
+	if got := internalClientCAFile("/etc/moox/eventbus/ca.pem", "/tmp/credential-dir/ca.pem", "/etc/moox/broker-ca.pem"); got != "/etc/moox/eventbus/ca.pem" {
+		t.Fatalf("configured CA = %q", got)
+	}
+	if got := internalClientCAFile("", "/tmp/credential-dir/ca.pem", "/etc/moox/broker-ca.pem"); got != "/tmp/credential-dir/ca.pem" {
+		t.Fatalf("credential CA = %q", got)
+	}
+}
+
 func freePort(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
