@@ -300,7 +300,7 @@ func TestRegisterDataSubjectRollsBackAggregateOnBindingFailure(t *testing.T) {
 	seedSpaceSourceDataset(t, ctx, store)
 	for _, datasetID := range []string{"dataset-a", "dataset-b"} {
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
-			SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", Name: datasetID,
+			SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", DataNodeId: "node-a", Name: datasetID,
 			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 		}); err != nil {
 			t.Fatalf("UpsertDataset(%s): %v", datasetID, err)
@@ -884,15 +884,22 @@ func seedSpaceSourceDataset(t *testing.T, ctx context.Context, store *Store) {
 	}); err != nil {
 		t.Fatalf("UpsertDataSource: %v", err)
 	}
+	if _, err := store.RegisterDataNode(ctx, "node-a", "trpc://node-a", "Node A"); err != nil {
+		t.Fatalf("RegisterDataNode: %v", err)
+	}
 	if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 		SpaceId:      "space",
 		DatasetId:    "dataset",
 		DataSourceId: "source",
+		DataNodeId:   "node-a",
 		Name:         "Dataset",
 		DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
 		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDataset: %v", err)
+	}
+	if _, err := store.CommitDatasetActivation(ctx, "space", "dataset", 1); err != nil {
+		t.Fatalf("CommitDatasetActivation: %v", err)
 	}
 }
 

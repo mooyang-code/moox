@@ -68,13 +68,13 @@ func TestDataNodeDeleteRequiresDisabledAndNoDatasets(t *testing.T) {
 	if err := store.DeleteDataNode(ctx, "node-a"); !errors.Is(err, ErrDataNodeMustBeDisabled) {
 		t.Fatalf("delete active node error=%v, want=%v", err, ErrDataNodeMustBeDisabled)
 	}
-	if _, err := store.UpdateDataNode(ctx, "node-a", "Node A", "disabled"); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
 		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_RECORD,
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateDataNode(ctx, "node-a", "Node A", "disabled"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteDataNode(ctx, "node-a"); !errors.Is(err, ErrDataNodeReferenced) {

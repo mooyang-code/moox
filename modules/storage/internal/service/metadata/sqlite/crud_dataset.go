@@ -69,7 +69,7 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
+	return item, nil
 }
 
 func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
@@ -153,7 +153,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
+	return item, nil
 }
 
 func normalizeKeepDuration(value string, kind pb.DataKind) (string, error) {
@@ -246,7 +246,7 @@ func (s *Store) RebindDatasetDataNode(ctx context.Context, spaceID, datasetID, n
 	if spaceID == "" || datasetID == "" || nodeID == "" {
 		return nil, errors.New("space_id, dataset_id and node_id are required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginImmediate(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (s *Store) RebindDatasetDataNode(ctx context.Context, spaceID, datasetID, n
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetDataset(ctx, spaceID, datasetID)
+	return updated, nil
 }
 
 func (s *Store) CommitDatasetActivation(ctx context.Context, spaceID, datasetID string, expectedRevision uint64) (*pb.Dataset, error) {
@@ -303,7 +303,7 @@ func (s *Store) CommitDatasetActivation(ctx context.Context, spaceID, datasetID 
 	if spaceID == "" || datasetID == "" {
 		return nil, errors.New("space_id and dataset_id are required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginImmediate(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +350,7 @@ func (s *Store) CommitDatasetActivation(ctx context.Context, spaceID, datasetID 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetDataset(ctx, spaceID, datasetID)
+	return updated, nil
 }
 
 func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, string, error) {
@@ -380,14 +380,14 @@ func validateDatasetStatus(status string) error {
 	return nil
 }
 
-func getDatasetTx(ctx context.Context, tx *sql.Tx, spaceID, datasetID string) (*pb.Dataset, error) {
+func getDatasetTx(ctx context.Context, tx queryRower, spaceID, datasetID string) (*pb.Dataset, error) {
 	return scanMessageWithSQLTimestamps(tx.QueryRowContext(ctx, `
 		SELECT c_attrs_json, c_ctime, c_mtime FROM t_datasets
 		WHERE c_space_id = ? AND c_dataset_id = ?
 	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
 }
 
-func requireActiveDataNode(ctx context.Context, tx *sql.Tx, nodeID string) error {
+func requireActiveDataNode(ctx context.Context, tx queryRower, nodeID string) error {
 	var status string
 	if err := tx.QueryRowContext(ctx, `SELECT c_status FROM t_data_nodes WHERE c_node_id = ?`, nodeID).Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

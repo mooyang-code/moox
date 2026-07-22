@@ -68,8 +68,8 @@ func (s *Store) RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_archive_files (c_space_id, c_archive_file_id, c_dataset_id, c_device_id, c_partition_key, c_file_uri, c_file_format, c_min_time, c_max_time, c_row_count, c_content_hash, c_columns_json, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_archive_files (c_space_id, c_archive_file_id, c_dataset_id, c_device_id, c_partition_key, c_file_uri, c_file_format, c_min_time, c_max_time, c_row_count, c_columns_json, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_archive_file_id) DO UPDATE SET
 			c_dataset_id = excluded.c_dataset_id,
 			c_device_id = excluded.c_device_id,
@@ -79,11 +79,10 @@ func (s *Store) RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (
 			c_min_time = excluded.c_min_time,
 			c_max_time = excluded.c_max_time,
 			c_row_count = excluded.c_row_count,
-			c_content_hash = excluded.c_content_hash,
 			c_columns_json = excluded.c_columns_json,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetArchiveFileId(), item.GetDatasetId(), item.GetDeviceId(), item.GetPartitionKey(), item.GetFileUri(), item.GetFileFormat(), item.GetMinTime(), item.GetMaxTime(), item.GetRowCount(), "", columns, item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetArchiveFileId(), item.GetDatasetId(), item.GetDeviceId(), item.GetPartitionKey(), item.GetFileUri(), item.GetFileFormat(), item.GetMinTime(), item.GetMaxTime(), item.GetRowCount(), columns, item.GetStatus(), raw)
 	return item, err
 }
 

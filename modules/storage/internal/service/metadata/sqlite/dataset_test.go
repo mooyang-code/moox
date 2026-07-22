@@ -112,6 +112,7 @@ func TestDatasetRebindUsesRevisionAndLifecycleGuards(t *testing.T) {
 	if rebound.GetRevision() != 2 || rebound.GetDataNodeId() != "node-b" {
 		t.Fatalf("rebound dataset = %v", rebound)
 	}
+	assertDatasetMatchesStore(t, ctx, store, rebound)
 	if _, err := store.RebindDatasetDataNode(ctx, "space", "dataset", "node-b", rebound.GetRevision()); err == nil {
 		t.Fatal("rebind to the current data node succeeded")
 	}
@@ -119,6 +120,73 @@ func TestDatasetRebindUsesRevisionAndLifecycleGuards(t *testing.T) {
 		t.Fatalf("rebind to disabled node error = %v, want %v", err, ErrDataNodeDisabled)
 	}
 	assertDatasetUnchanged(t, ctx, store, rebound)
+}
+
+func TestDatasetRebindRejectsLockedDatasetAndPreservesFullRow(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	registerActiveNode(t, ctx, store, "node-b")
+	created := createTestDataset(t, ctx, store, "dataset", "node-a")
+	active, err := store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := store.UpdateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset", Name: active.GetName(),
+		Description: "locked row", Freqs: []string{"1m", "1h"}, KeepDuration: "48h",
+		Attributes: map[string]string{"owner": "storage"}, Status: "disabled", Revision: active.GetRevision(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.RebindDatasetDataNode(ctx, "space", "dataset", "node-b", locked.GetRevision())
+	if !errors.Is(err, ErrBindingLocked) {
+		t.Fatalf("locked rebind error = %v, want %v", err, ErrBindingLocked)
+	}
+	assertDatasetUnchanged(t, ctx, store, locked)
+}
+
+func TestDatasetRebindConcurrentCASReturnsOneConflict(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	registerActiveNode(t, ctx, store, "node-b")
+	registerActiveNode(t, ctx, store, "node-c")
+	created := createTestDataset(t, ctx, store, "dataset", "node-a")
+
+	type result struct {
+		dataset *pb.Dataset
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, nodeID := range []string{"node-b", "node-c"} {
+		go func(nodeID string) {
+			<-start
+			item, err := store.RebindDatasetDataNode(ctx, "space", "dataset", nodeID, created.GetRevision())
+			results <- result{dataset: item, err: err}
+		}(nodeID)
+	}
+	close(start)
+
+	var success, conflict int
+	for range 2 {
+		got := <-results
+		switch {
+		case got.err == nil:
+			success++
+		case errors.Is(got.err, ErrRevisionConflict):
+			conflict++
+		default:
+			t.Fatalf("concurrent rebind error = %v, want nil or ErrRevisionConflict", got.err)
+		}
+	}
+	if success != 1 || conflict != 1 {
+		t.Fatalf("concurrent rebind outcomes = success:%d conflict:%d, want 1:1", success, conflict)
+	}
 }
 
 func TestDatasetActivationCASAndIdempotency(t *testing.T) {
@@ -141,6 +209,7 @@ func TestDatasetActivationCASAndIdempotency(t *testing.T) {
 	if active.GetStatus() != "active" || !active.GetBindingLocked() || active.GetRevision() != 2 {
 		t.Fatalf("activated dataset = %v", active)
 	}
+	assertDatasetMatchesStore(t, ctx, store, active)
 	retry, err := store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision()-1)
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +235,7 @@ func TestDatasetActivationCASAndIdempotency(t *testing.T) {
 	if reactivated.GetRevision() != disabled.GetRevision()+1 || reactivated.GetStatus() != "active" || !reactivated.GetBindingLocked() {
 		t.Fatalf("reactivated dataset = %v", reactivated)
 	}
+	assertDatasetMatchesStore(t, ctx, store, reactivated)
 }
 
 func TestDatasetActivationRejectsActiveUnlockedState(t *testing.T) {
@@ -214,11 +284,16 @@ func TestListDatasetsFiltersByDataNodeIDs(t *testing.T) {
 
 func assertDatasetUnchanged(t *testing.T, ctx context.Context, store *Store, want *pb.Dataset) {
 	t.Helper()
+	assertDatasetMatchesStore(t, ctx, store, want)
+}
+
+func assertDatasetMatchesStore(t *testing.T, ctx context.Context, store *Store, want *pb.Dataset) {
+	t.Helper()
 	got, err := store.GetDataset(ctx, want.GetSpaceId(), want.GetDatasetId())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetDataNodeId() != want.GetDataNodeId() || got.GetStatus() != want.GetStatus() || got.GetBindingLocked() != want.GetBindingLocked() || got.GetRevision() != want.GetRevision() || got.GetName() != want.GetName() {
+	if !proto.Equal(got, want) {
 		t.Fatalf("dataset changed: got=%v want=%v", got, want)
 	}
 }
