@@ -36,9 +36,7 @@ for binary in moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host; d
 done
 cat >"${FIXTURE_ROOT}/bin/moox-admin-cli" <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
-[[ "${1:-}" == random-secret ]]
-printf '{"status":"ok","bytes":32,"secret":"%064d"}\n' 0
+exit 126
 EOF
 chmod +x "${FIXTURE_ROOT}/bin/moox-admin-cli"
 

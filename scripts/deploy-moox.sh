@@ -118,6 +118,7 @@ apply_profile() {
       WITH_GATEWAY=1
       WITH_WEB_HOST=1
       WITH_STORAGE=0
+      WITH_STORAGE_NODE=0
       WITH_ARCHIVE=0
       WITH_EVENTBUS=0
       WITH_CLOUDNODE=0
@@ -289,7 +290,10 @@ generate_secret() {
     openssl rand -hex 32
     return
   fi
-  output=$("${cli}" random-secret --bytes 32)
+  if ! output=$("${cli}" random-secret --bytes 32 2>/dev/null); then
+    openssl rand -hex 32
+    return
+  fi
   secret=$(printf '%s' "${output}" | sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
   [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
   [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || fail "moox-admin-cli returned an invalid ${purpose} secret"
