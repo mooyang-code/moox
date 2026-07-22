@@ -22,7 +22,7 @@ const defaultSetupFile = "./custom.toml"
 type setupDeps struct {
 	load               func(string) (*setupconfig.Snapshot, error)
 	validate           func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	validateDeployment func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	validateDeployment func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
 	trustHost          func(context.Context, *setupconfig.Snapshot, string, string) error
 	deployControl      func(context.Context, *setupconfig.Snapshot) error
 	deployService      func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
@@ -146,8 +146,12 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validateDeployment(cmd.Context(), snapshot); err != nil {
-			return err
+		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost})
+		if validationErr != nil {
+			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
+				return encodeErr
+			}
+			return validationErr
 		}
 		if err := deps.deployControl(cmd.Context(), snapshot); err != nil {
 			return err
@@ -252,8 +256,16 @@ func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validateDeployment(cmd.Context(), snapshot); err != nil {
+		storageHost, err := findSetupHost(snapshot.Manifest, host)
+		if err != nil {
 			return err
+		}
+		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost, storageHost})
+		if validationErr != nil {
+			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
+				return encodeErr
+			}
+			return validationErr
 		}
 		status, err := deps.status(cmd.Context(), snapshot)
 		if err != nil || status.State != "completed" {
@@ -310,7 +322,7 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 		deps.validate = defaults.validate
 	}
 	if deps.validateDeployment == nil {
-		deps.validateDeployment = deps.validate
+		deps.validateDeployment = defaults.validateDeployment
 	}
 	if deps.trustHost == nil {
 		deps.trustHost = defaults.trustHost
@@ -448,8 +460,8 @@ func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (
 	return setupvalidate.Run(ctx, snapshot, setupvalidate.Dependencies{Identity: identity, SSH: commandSSHChecker{}})
 }
 
-func defaultSetupValidateDeployment(ctx context.Context, snapshot *setupconfig.Snapshot) (setupvalidate.Result, error) {
-	return setupvalidate.RunSSH(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}})
+func defaultSetupValidateDeployment(ctx context.Context, snapshot *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
+	return setupvalidate.RunSSHHosts(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}}, hosts)
 }
 
 type commandSSHChecker struct{}

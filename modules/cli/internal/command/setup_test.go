@@ -27,7 +27,7 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			validateCalls++
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
-		validateDeployment: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
 			deploymentValidateCalls++
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
@@ -134,10 +134,14 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
 	selected := ""
+	var validatedHosts []string
 	reset := true
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
+			for _, host := range hosts {
+				validatedHosts = append(validatedHosts, host.Name)
+			}
 			return setupvalidate.Result{}, nil
 		},
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
@@ -154,8 +158,25 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", selected)
+	require.Equal(t, []string{"control", "compute"}, validatedHosts)
 	require.False(t, reset, "reset must default to false")
 	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false}`, output.String())
+}
+
+func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "host:control", Status: "invalid", Code: "host_key_unknown", Fingerprint: "SHA256:verified"}}}, setupvalidate.ErrValidationFailed
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml"})
+	require.ErrorIs(t, cmd.Execute(), setupvalidate.ErrValidationFailed)
+	require.JSONEq(t, `{"checks":[{"name":"host:control","status":"invalid","code":"host_key_unknown","fingerprint":"SHA256:verified"}]}`, output.String())
 }
 
 func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
@@ -164,7 +185,7 @@ func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
 	var reset bool
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
 			return setupvalidate.Result{}, nil
 		},
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
@@ -189,7 +210,7 @@ func TestSetupDeployStorageRequiresCompletedControlSetup(t *testing.T) {
 	deployed := false
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
 			return setupvalidate.Result{}, nil
 		},
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
