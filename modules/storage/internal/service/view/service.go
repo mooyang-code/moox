@@ -182,6 +182,25 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 	case "REPLACE":
 		mode = viewindex.Replace
 	}
+	if mode == viewindex.LiveWrite {
+		if err := s.acquireLiveDelivery(ctx, nil); err != nil {
+			return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+		defer s.releaseLiveDelivery()
+	} else {
+		if err := s.acquireBackfill(ctx); err != nil {
+			return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		}
+		defer s.releaseBackfill()
+	}
+	s.mu.RLock()
+	viewKey, hasView := s.indexView[req.GetIndexId()]
+	runtime := s.views[viewKey]
+	s.mu.RUnlock()
+	if hasView && runtime != nil {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+	}
 	engine, err := s.engineFor(req.GetIndexId())
 	if err == nil {
 		err = engine.Write(ctx, req.GetIndexId(), viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: b.GetViewRevision(), ViewSchemaHash: b.GetViewSchemaHash(), WriteMode: mode})
@@ -338,8 +357,8 @@ func (s *Service) removeFailedBuild(ctx context.Context, id string) {
 func (s *Service) engineFor(id string) (viewindex.Engine, error) {
 	s.mu.RLock()
 	name := s.indexEngine[id]
-	s.mu.RUnlock()
 	engine := s.engines[name]
+	s.mu.RUnlock()
 	if engine == nil {
 		return nil, fmt.Errorf("view index %q is not prepared: %w", id, errViewIndexNotReady)
 	}

@@ -11,8 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
@@ -52,13 +52,13 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
 	_, err = store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetFieldsChangedMessage("node", spaceID, datasetID, rows)
+		return pebble.BuildRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetFieldsChangedMessage("node", spaceID, datasetID, rows)
+		return pebble.BuildRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,19 +89,16 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	if len(publisher.attempts) != 3 || !bytes.Equal(publisher.attempts[1], publisher.attempts[2]) {
 		t.Fatalf("retry attempts = %d, bytes stable = %t", len(publisher.attempts), len(publisher.attempts) == 3 && bytes.Equal(publisher.attempts[1], publisher.attempts[2]))
 	}
-	failedAttempt := &messagepb.MooxMessage{}
-	retryAttempt := &messagepb.MooxMessage{}
+	failedAttempt := &eventpb.EventMessage{}
+	retryAttempt := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(publisher.attempts[1], failedAttempt); err != nil {
 		t.Fatal(err)
 	}
 	if err := proto.Unmarshal(publisher.attempts[2], retryAttempt); err != nil {
 		t.Fatal(err)
 	}
-	if failedAttempt.GetPublishedAt() == nil || retryAttempt.GetPublishedAt() == nil || !failedAttempt.GetPublishedAt().AsTime().Equal(retryAttempt.GetPublishedAt().AsTime()) {
-		t.Fatalf("PublishedAt changed across retry: %v vs %v", failedAttempt.GetPublishedAt(), retryAttempt.GetPublishedAt())
-	}
-	if failedAttempt.GetMessageId() == "" || failedAttempt.GetMessageId() != retryAttempt.GetMessageId() {
-		t.Fatalf("MessageID changed across retry: %q vs %q", failedAttempt.GetMessageId(), retryAttempt.GetMessageId())
+	if failedAttempt.GetEventId() == "" || failedAttempt.GetEventId() != retryAttempt.GetEventId() {
+		t.Fatalf("EventID changed across retry: %q vs %q", failedAttempt.GetEventId(), retryAttempt.GetEventId())
 	}
 	entries, err = store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 0 {
@@ -117,7 +114,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
 	if _, err := store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetFieldsChangedMessage("node", spaceID, datasetID, rows)
+		return pebble.BuildRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	}); err != nil {
 		t.Fatal(err)
 	}

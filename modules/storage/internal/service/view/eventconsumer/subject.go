@@ -7,11 +7,11 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-const DatasetFieldsChangedSubjectPrefix = "moox.storage.fields_changed.v1"
+const RowsUpsertedSubjectPrefix = "moox.storage.rows_upserted.v1"
 
-func DatasetFieldsChangedSubject(prefix, spaceID, datasetID string) (string, error) {
+func RowsUpsertedSubject(prefix, spaceID, datasetID string) (string, error) {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = DatasetFieldsChangedSubjectPrefix
+		prefix = RowsUpsertedSubjectPrefix
 	}
 	spaceToken, err := jetstream.EncodeSubjectToken(spaceID)
 	if err != nil {
@@ -24,9 +24,9 @@ func DatasetFieldsChangedSubject(prefix, spaceID, datasetID string) (string, err
 	return fmt.Sprintf("%s.%s.%s", strings.TrimSuffix(prefix, "."), spaceToken, datasetToken), nil
 }
 
-func ParseDatasetFieldsChangedSubject(prefix, subject string) (string, string, error) {
+func ParseRowsUpsertedSubject(prefix, subject string) (string, string, error) {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = DatasetFieldsChangedSubjectPrefix
+		prefix = RowsUpsertedSubjectPrefix
 	}
 	parts := strings.Split(subject, ".")
 	prefixParts := strings.Split(strings.TrimSuffix(prefix, "."), ".")

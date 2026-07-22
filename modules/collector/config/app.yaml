@@ -20,6 +20,9 @@ storage:
   key_id: collector
   hmac_key_file: ""
 
+eventbus:
+  urls: [nats://127.0.0.1:4222]
+
 sysdeploy:
   # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 JobItem。
   # 同机后台调用默认直连 service gateway；远程环境应使用 HTTPS 11001。

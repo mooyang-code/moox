@@ -23,6 +23,7 @@ type Kline struct {
 	Volume      common.Decimal `json:"volume"`
 	QuoteVolume common.Decimal `json:"quote_volume"`
 	TradeCount  int64          `json:"trade_count"`
+	Revision    uint64         `json:"revision"`
 }
 
 // NewKline 创建K线数据

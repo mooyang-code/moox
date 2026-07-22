@@ -170,6 +170,12 @@ assert_grep 'register-node' "${DEPLOY_DIR}/start.sh"
 assert_grep 'import-seed' "${DEPLOY_DIR}/start.sh"
 assert_grep 'doctor bootstrap --format json' "${DEPLOY_DIR}/start.sh"
 assert_grep 'activate-datasets' "${DEPLOY_DIR}/start.sh"
+assert_file "${DEPLOY_DIR}/secrets/storage-node-auth.env"
+assert_grep '^MOOX_STORAGE_NODE_AUTH_SECRET=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/storage-node-auth.env"
+if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"; then
+  echo "storage deployment must not depend on route seed environment variables" >&2
+  exit 1
+fi
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'wait_eventbus_storage_view_topology' "${DEPLOY_DIR}/start.sh"

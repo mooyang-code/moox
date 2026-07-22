@@ -4,19 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DatasetPublisher publishes one durable message to the subject owned by a
 // Dataset. The transport message id is stable for a DataNode outbox id.
 type DatasetPublisher struct {
-	client   *jetstream.Client
-	producer *messagepb.Producer
+	client *jetstream.Client
 }
 
 func (p *DatasetPublisher) PublishMessage(ctx context.Context, data []byte) error {
@@ -28,54 +29,71 @@ func (p *DatasetPublisher) PublishMessageWithAck(ctx context.Context, data []byt
 	if p == nil || p.client == nil {
 		return nil, errors.New("storage eventbus client is nil")
 	}
-	msg := &messagepb.MooxMessage{}
+	msg := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(data, msg); err != nil {
 		return nil, err
 	}
-	if msg.GetTopic() == "" || msg.GetMessageId() == "" {
+	if msg.GetEventName() != events.StorageRowsUpserted.Name || msg.GetEventVersion() != events.StorageRowsUpserted.Version || msg.GetEventId() == "" || msg.GetSubjectId() == "" || msg.GetSpaceId() == "" {
 		return nil, errors.New("dataset event envelope is incomplete")
 	}
-	return p.client.Publish(ctx, msg)
+	subject := eventSubject(msg)
+	if subject == "" {
+		return nil, errors.New("dataset event subject cannot be derived")
+	}
+	return p.client.PublishRaw(ctx, subject, msg.GetEventId(), data, events.ContentType)
 }
 
-func NewDatasetPublisher(client *jetstream.Client, producerID string) *DatasetPublisher {
-	return &DatasetPublisher{client: client, producer: &messagepb.Producer{ServiceName: "moox-storage", InstanceId: producerID}}
+func eventSubject(message *eventpb.EventMessage) string {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return ""
+	}
+	spec, ok := registry.Spec(events.StorageRowsUpserted)
+	if !ok {
+		return ""
+	}
+	template, err := events.NewSubjectTemplate(spec.Subject)
+	if err != nil {
+		return ""
+	}
+	subject, err := template.Render(message.GetSpaceId(), message.GetSubjectId())
+	if err != nil {
+		return ""
+	}
+	return subject
 }
 
-func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.DatasetFieldsChanged, outboxID uint64) error {
+func NewDatasetPublisher(client *jetstream.Client, _ string) *DatasetPublisher {
+	return &DatasetPublisher{client: client}
+}
+
+func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.RowsUpserted, outboxID uint64) error {
 	if p == nil || p.client == nil {
 		return errors.New("storage eventbus client is nil")
 	}
 	if event == nil || event.GetSpaceId() == "" || event.GetDatasetId() == "" {
-		return errors.New("dataset fields changed payload requires space_id and dataset_id")
+		return errors.New("rows upserted payload requires space_id and dataset_id")
 	}
-	subject, err := DatasetFieldsChangedSubject("", event.GetSpaceId(), event.GetDatasetId())
+	rowPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	if err != nil {
-		return err
-	}
-	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("marshal dataset fields changed: %w", err)
+		return fmt.Errorf("marshal rows payload: %w", err)
 	}
 	messageID := fmt.Sprintf("storage-%d", outboxID)
 	if outboxID == 0 {
 		messageID = fmt.Sprintf("storage-%s", event.GetDatasetId())
 	}
-	now := timestamppb.Now()
-	msg := &messagepb.MooxMessage{
-		ProtocolVersion: jetstream.ProtocolVersion,
-		MessageId:       messageID,
-		Topic:           subject,
-		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
-		Producer:        p.producer,
-		SpaceId:         event.GetSpaceId(),
-		OccurredAt:      now,
-		PublishedAt:     now,
-		ContentType:     jetstream.StorageFieldsChangedContentType,
-		MessageType:     jetstream.StorageFieldsChangedMessageType,
-		Payload:         payload,
-		Attributes:      map[string]string{"dataset_id": event.GetDatasetId()},
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
 	}
-	_, err = p.client.Publish(ctx, msg)
+	encoded, err := registry.Encode(events.StorageRowsUpserted, &eventstoragepb.RowsUpserted{DatasetId: event.GetDatasetId(), Rows: rowPayload}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
+	if err != nil {
+		return err
+	}
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
+	if err != nil {
+		return err
+	}
+	_, err = p.client.PublishRaw(ctx, encoded.Subject, messageID, body, events.ContentType)
 	return err
 }

@@ -14,6 +14,9 @@ import (
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/marketpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -24,6 +27,8 @@ const (
 )
 
 var errKlineNotClosed = errors.New("K线尚未闭合")
+
+var eventPublisher *events.Publisher
 
 // KlineCollector K线数据采集器
 type KlineCollector struct {
@@ -84,6 +89,9 @@ func (c *KlineCollector) DataType() string {
 func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
 	if params == nil {
 		return fmt.Errorf("K线采集参数不能为空")
+	}
+	if params.Live {
+		return c.CollectLive(ctx, params)
 	}
 	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
 		params.InstType, params.Symbol, params.Interval)
@@ -154,6 +162,81 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	}
 	log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d", params.InstType, params.Symbol, params.Interval, total)
 	return nil
+}
+
+// SetEventPublisher configures the explicit live market-event path. Historical
+// collection remains on Collect's direct Storage path unless Live is true.
+func SetEventPublisher(publisher *events.Publisher) {
+	eventPublisher = publisher
+}
+
+// CollectLive fetches closed market bars and publishes market.kline.closed. It
+// deliberately does not call Storage; streamcalc owns materialization.
+func (c *KlineCollector) CollectLive(ctx context.Context, params *sources.CollectParams) error {
+	if params == nil || strings.TrimSpace(params.SpaceID) == "" {
+		return fmt.Errorf("实时K线采集需要 space_id")
+	}
+	if eventPublisher == nil {
+		return fmt.Errorf("实时K线采集未配置 EventBus publisher")
+	}
+	if _, err := normalizeFreq(params.Interval); err != nil {
+		return err
+	}
+	exchangeKlines, err := c.fetchKlines(ctx, params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: 1000})
+	if err != nil {
+		return err
+	}
+	klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
+	closed, _ := filterClosedKlines(klines, c.currentTime())
+	for _, kline := range closed {
+		payload, err := marketKlinePayload(kline)
+		if err != nil {
+			return err
+		}
+		eventID := fmt.Sprintf("%s:%s:%s:%s:%s:%d", params.SpaceID, kline.Exchange, params.SubjectID, params.Interval, kline.OpenTime.UTC().Format(time.RFC3339Nano), kline.Revision)
+		if _, err := eventPublisher.Publish(ctx, events.MarketKlineClosed, payload, events.PublishOptions{
+			EventID: eventID, OccurredAt: kline.CloseTime.UTC(), SpaceID: params.SpaceID, SubjectID: params.SubjectID,
+		}); err != nil {
+			return fmt.Errorf("发布实时K线事件: %w", err)
+		}
+	}
+	return nil
+}
+
+func marketKlinePayload(kline *market.Kline) (*marketpb.KlineClosed, error) {
+	if kline == nil {
+		return nil, fmt.Errorf("K线为空")
+	}
+	open, err := kline.Open.Float64()
+	if err != nil {
+		return nil, fmt.Errorf("解析实时K线开盘价: %w", err)
+	}
+	high, err := kline.High.Float64()
+	if err != nil {
+		return nil, fmt.Errorf("解析实时K线最高价: %w", err)
+	}
+	low, err := kline.Low.Float64()
+	if err != nil {
+		return nil, fmt.Errorf("解析实时K线最低价: %w", err)
+	}
+	closeValue, err := kline.Close.Float64()
+	if err != nil {
+		return nil, fmt.Errorf("解析实时K线收盘价: %w", err)
+	}
+	volume, err := kline.Volume.Float64()
+	if err != nil {
+		return nil, fmt.Errorf("解析实时K线成交量: %w", err)
+	}
+	quoteVolume, err := kline.QuoteVolume.Float64()
+	if err != nil {
+		return nil, fmt.Errorf("解析实时K线成交额: %w", err)
+	}
+	return &marketpb.KlineClosed{
+		Exchange: kline.Exchange, Symbol: kline.Symbol, Frequency: kline.Interval,
+		WindowStart: timestamppb.New(kline.OpenTime.UTC()), WindowEnd: timestamppb.New(kline.CloseTime.UTC()),
+		Open: open, High: high, Low: low, Close: closeValue, Volume: volume, QuoteVolume: quoteVolume, TradeCount: kline.TradeCount,
+		Revision: kline.Revision,
+	}, nil
 }
 
 func (c *KlineCollector) currentTime() time.Time {

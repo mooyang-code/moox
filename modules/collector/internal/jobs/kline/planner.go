@@ -45,6 +45,7 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 					"code_package_id":   params.Target.CodePackageID,
 					"schedule_interval": params.Schedule.Interval,
 					"schedule_timezone": params.Schedule.Timezone,
+					"live":              params.Collector.Live,
 				},
 			})
 		}

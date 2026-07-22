@@ -2,12 +2,12 @@ package eventconsumer
 
 import "testing"
 
-func TestDatasetFieldsChangedSubjectRoundTrip(t *testing.T) {
-	subject, err := DatasetFieldsChangedSubject("", "量化.space", "kline/BTC")
+func TestRowsUpsertedSubjectRoundTrip(t *testing.T) {
+	subject, err := RowsUpsertedSubject("", "量化.space", "kline/BTC")
 	if err != nil {
 		t.Fatal(err)
 	}
-	spaceID, datasetID, err := ParseDatasetFieldsChangedSubject("", subject)
+	spaceID, datasetID, err := ParseRowsUpsertedSubject("", subject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,8 +16,8 @@ func TestDatasetFieldsChangedSubjectRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDatasetFieldsChangedSubjectRejectsMismatch(t *testing.T) {
-	if _, _, err := ParseDatasetFieldsChangedSubject("", DatasetFieldsChangedSubjectPrefix+".bad.bad"); err == nil {
+func TestRowsUpsertedSubjectRejectsMismatch(t *testing.T) {
+	if _, _, err := ParseRowsUpsertedSubject("", RowsUpsertedSubjectPrefix+".bad.bad"); err == nil {
 		t.Fatal("expected invalid token")
 	}
 }

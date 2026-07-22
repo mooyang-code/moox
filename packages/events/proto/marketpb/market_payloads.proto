@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package trpc.moox.market;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/events/proto/marketpb;marketpb";
+
+message TradeReceived {
+  string exchange = 1;
+  string trade_id = 2;
+  string symbol = 3;
+  double price = 4;
+  double quantity = 5;
+  bool buyer_maker = 6;
+  google.protobuf.Timestamp trade_time = 7;
+}
+
+message KlineClosed {
+  string exchange = 1;
+  string symbol = 2;
+  string frequency = 3;
+  google.protobuf.Timestamp window_start = 4;
+  google.protobuf.Timestamp window_end = 5;
+  double open = 6;
+  double high = 7;
+  double low = 8;
+  double close = 9;
+  double volume = 10;
+  double quote_volume = 11;
+  int64 trade_count = 12;
+  uint64 revision = 13;
+}

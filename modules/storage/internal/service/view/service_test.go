@@ -12,8 +12,9 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -113,7 +114,7 @@ func TestMalformedDeliveryIsPermanent(t *testing.T) {
 	}
 	err = svc.applyDelivery(context.Background(), &jetstream.Delivery{
 		Subject: "malformed",
-		Message: &messagepb.MooxMessage{Payload: []byte("not-protobuf")},
+		RawData: []byte("not-protobuf"), ContentType: events.ContentType, RawMessageID: "malformed",
 	})
 	if !isPermanentDeliveryError(err) {
 		t.Fatalf("err=%v", err)
@@ -124,47 +125,44 @@ func TestMalformedDeliveryIsPermanent(t *testing.T) {
 	}
 }
 
-func TestApplyDeliveryRejectsInvalidStorageEnvelope(t *testing.T) {
-	base := validStorageDeliveryMessage(t)
-	tests := []struct {
-		name   string
-		mutate func(*messagepb.MooxMessage, *jetstream.Delivery)
-	}{
-		{name: "kind", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
-			message.Kind = messagepb.MessageKind_MESSAGE_KIND_COMMAND
-		}},
-		{name: "content type", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
-			message.ContentType = "application/x-protobuf; message=other.Message"
-		}},
-		{name: "message type", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
-			message.MessageType = "moox.storage.other.v1"
-		}},
-		{name: "subject and topic mismatch", mutate: func(_ *messagepb.MooxMessage, delivery *jetstream.Delivery) {
-			delivery.Subject = "moox.storage.fields_changed.v1.mzxw6.b3RoZXI"
-		}},
-		{name: "payload identity mismatch", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
-			message.Payload, _ = proto.Marshal(&pb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "other"})
-		}},
+func TestApplyDeliveryRejectsInvalidStorageEvent(t *testing.T) {
+	svc := svcForDeliveryTest(t)
+	if err := svc.applyDelivery(context.Background(), &jetstream.Delivery{RawData: []byte("legacy"), ContentType: "application/x-protobuf"}); !isPermanentDeliveryError(err) {
+		t.Fatalf("legacy event error = %v, want permanent error", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			message := proto.Clone(base).(*messagepb.MooxMessage)
-			delivery := &jetstream.Delivery{Subject: base.Topic, Message: message}
-			test.mutate(message, delivery)
-			if err := svcForDeliveryTest(t).applyDelivery(context.Background(), delivery); !isPermanentDeliveryError(err) {
-				t.Fatalf("applyDelivery() error = %v, want permanent error", err)
-			}
-		})
+	encoded, raw := validRawStorageDelivery(t)
+	if err := svc.applyDelivery(context.Background(), &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: "wrong-id", ContentType: events.ContentType}); !isPermanentDeliveryError(err) {
+		t.Fatalf("event id mismatch = %v, want permanent error", err)
 	}
 }
 
-func validStorageDeliveryMessage(t *testing.T) *messagepb.MooxMessage {
+func TestApplyDeliveryAcceptsGovernedRawEventMessage(t *testing.T) {
+	svc := svcForDeliveryTest(t)
+	encoded, raw := validRawStorageDelivery(t)
+	if err := svc.applyDelivery(context.Background(), &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: encoded.Message.GetEventId(), ContentType: events.ContentType}); err != nil {
+		t.Fatalf("apply governed raw event: %v", err)
+	}
+}
+
+func validRawStorageDelivery(t *testing.T) (events.EncodedEvent, []byte) {
 	t.Helper()
-	payload, err := proto.Marshal(&pb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "bar"})
+	registry, err := events.DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType, Payload: payload}
+	rows, err := proto.Marshal(&pb.RowsUpserted{SpaceId: "foo", DatasetId: "bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := registry.Encode(events.StorageRowsUpserted, &eventstoragepb.RowsUpserted{DatasetId: "bar", Rows: rows}, events.PublishOptions{EventID: "storage-test-1", OccurredAt: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), SpaceID: "foo", SubjectID: "bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := proto.Marshal(encoded.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded, raw
 }
 
 func svcForDeliveryTest(t *testing.T) *Service {

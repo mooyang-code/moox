@@ -6,6 +6,7 @@ replace (
 	github.com/mooyang-code/moox/modules/storage => ./
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen => ./proto/storagegen
 	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+	github.com/mooyang-code/moox/packages/events => ../../packages/events
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
@@ -20,6 +21,7 @@ require (
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000

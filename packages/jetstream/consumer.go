@@ -338,6 +338,55 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 	return deliveries, errors.Join(firstDecodeErr, transportErr)
 }
 
+// FetchRaw fetches deliveries without decoding the business envelope. It is
+// the narrow transport boundary used by packages/events for EventMessage.
+func (p *PullConsumer) FetchRaw(ctx context.Context, batch int) ([]*Delivery, error) {
+	if p == nil {
+		return nil, ErrInvalidConsumer
+	}
+	p.mu.RLock()
+	closed := p.closed
+	sub := p.sub
+	p.mu.RUnlock()
+	if closed || sub == nil {
+		return nil, ErrClosed
+	}
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	if batch <= 0 {
+		batch = 1
+	}
+	fetchCtx := ctx
+	internalTimeout := false
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > p.cfg.FetchMaxWait {
+		var cancel context.CancelFunc
+		fetchCtx, cancel = context.WithTimeout(ctx, p.cfg.FetchMaxWait)
+		defer cancel()
+		internalTimeout = true
+	}
+	msgs, err := sub.Fetch(batch, nats.Context(fetchCtx))
+	if err != nil {
+		if internalTimeout && errors.Is(err, context.DeadlineExceeded) {
+			return nil, nats.ErrTimeout
+		}
+		return nil, err
+	}
+	deliveries := make([]*Delivery, 0, len(msgs))
+	var firstErr error
+	for _, msg := range msgs {
+		delivery, decodeErr := rawDeliveryFromMessage(msg, p.cfg.Stream, p.cfg.Durable, p.client.cfg.MaxPayload)
+		if delivery != nil {
+			delivery.client = p.client
+			deliveries = append(deliveries, delivery)
+		}
+		if decodeErr != nil && firstErr == nil {
+			firstErr = decodeErr
+		}
+	}
+	return deliveries, firstErr
+}
+
 func (p *PullConsumer) Close() error {
 	if p == nil {
 		return nil

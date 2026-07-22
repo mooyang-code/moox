@@ -8,11 +8,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -51,6 +54,25 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			_ = dbm.Close()
 		}
 	}()
+	eventClient, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(cfg.EventBus.URLs, "collector"))
+	if err != nil {
+		return nil, fmt.Errorf("连接 EventBus 失败: %w", err)
+	}
+	keepEventClient := false
+	defer func() {
+		if !keepEventClient {
+			_ = eventClient.Close()
+		}
+	}()
+	eventRegistry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("加载事件注册表失败: %w", err)
+	}
+	eventPublisher, err := events.NewPublisher(eventClient, eventRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("初始化事件发布器失败: %w", err)
+	}
+	binance.SetEventPublisher(eventPublisher)
 	if err := dbm.ApplySchema(collectorschema.AllSQL()); err != nil {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
@@ -76,10 +98,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	registerMetricsReporter(s)
 
 	keepDB = true
+	keepEventClient = true
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done
 			_ = dbm.Close()
+			_ = eventClient.Close()
 		}()
 	}
 	log.InfoContextf(ctx, "moox-collector 初始化完成")

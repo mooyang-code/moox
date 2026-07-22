@@ -2,6 +2,7 @@ package binance
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,16 @@ func TestKlineCollector_SourceAndDataType(t *testing.T) {
 	c := &KlineCollector{}
 	assert.Equal(t, "binance", c.Source())
 	assert.Equal(t, "kline", c.DataType())
+}
+
+func TestKlineCollectorLivePathRequiresEventPublisher(t *testing.T) {
+	old := eventPublisher
+	eventPublisher = nil
+	defer func() { eventPublisher = old }()
+	err := (&KlineCollector{}).Collect(context.Background(), &sources.CollectParams{Live: true, SpaceID: "crypto", Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m"})
+	if err == nil || !strings.Contains(err.Error(), "EventBus publisher") {
+		t.Fatalf("live Collect() error = %v", err)
+	}
 }
 
 func TestNormalizeFreq_ShouldNormalizeUnits(t *testing.T) {

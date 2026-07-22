@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package trpc.moox.event.storage;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/events/proto/storagepb;storagepb";
+
+message RowsUpserted {
+  string dataset_id = 1;
+  string subject_id = 2;
+  string frequency = 3;
+  google.protobuf.Timestamp data_time = 4;
+  uint64 revision = 5;
+  bytes rows = 6;
+}

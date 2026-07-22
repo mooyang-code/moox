@@ -70,13 +70,13 @@ func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding) {
 	d.bindings = append([]domain.FactorBinding(nil), bindings...)
 }
 
-// Ingest adds one Storage fields_changed event into fixed-window buckets.
-func (d *EventBatcher) Ingest(event *storagepb.DatasetFieldsChanged, now time.Time) {
+// Ingest adds one Storage rows_upserted event into fixed-window buckets.
+func (d *EventBatcher) Ingest(event *storagepb.RowsUpserted, now time.Time) {
 	_ = d.ingestMemory("", event, now)
 }
 
 // IngestMessage persists the event before exposing it to the in-memory window.
-func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, event *storagepb.DatasetFieldsChanged, now time.Time) error {
+func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, event *storagepb.RowsUpserted, now time.Time) error {
 	if d == nil || d.inbox == nil {
 		return errors.New("factor event inbox is not configured")
 	}
@@ -96,7 +96,7 @@ func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, even
 	return nil
 }
 
-func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.DatasetFieldsChanged, now time.Time) bool {
+func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.RowsUpserted, now time.Time) bool {
 	if d == nil || event == nil {
 		return false
 	}
@@ -246,7 +246,7 @@ func (d *EventBatcher) Replay(ctx context.Context) error {
 	if d == nil || d.inbox == nil {
 		return nil
 	}
-	return d.inbox.LoadPendingEvents(ctx, func(messageID string, event *storagepb.DatasetFieldsChanged, receivedAt time.Time) error {
+	return d.inbox.LoadPendingEvents(ctx, func(messageID string, event *storagepb.RowsUpserted, receivedAt time.Time) error {
 		if !d.ingestMemory(messageID, event, receivedAt) {
 			return d.inbox.CommitPendingEvents(ctx, []string{messageID})
 		}

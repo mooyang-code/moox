@@ -1,0 +1,19 @@
+eventbus:
+  urls: [nats://127.0.0.1:4222]
+  stream: MOOX_MARKET
+  durable: streamcalc_kline_v1
+  fetch_batch: 32
+  fetch_max_wait: 1s
+
+aggregation:
+  input_frequency: 1m
+  target_frequency: 5m
+  allowed_lateness: 30s
+
+storage:
+  target: ip://127.0.0.1:11003
+  space_id: crypto
+  dataset_id: kline_5m
+
+state:
+  checkpoint_path: ./data/streamcalc/checkpoint.json

@@ -27,6 +27,7 @@ type collectTask struct {
 	SubjectID  string
 	Symbol     string
 	Interval   string
+	Live       bool
 }
 
 // executeResult 执行结果
@@ -51,10 +52,12 @@ func buildCollectHandler(
 ) func() error {
 	return func() error {
 		params := &sources.CollectParams{
+			SpaceID:   task.SpaceID,
 			InstType:  task.InstType,
 			Symbol:    task.Symbol,
 			SubjectID: task.SubjectID,
 			Interval:  task.Interval,
+			Live:      task.Live,
 		}
 
 		log.InfoContextf(ctx, "执行采集: taskID=%s, source=%s, dataType=%s, symbol=%s, interval=%s",
@@ -176,6 +179,7 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 			SubjectID:  taskEvent.SubjectID,
 			Symbol:     taskEvent.Symbol,
 			Interval:   interval,
+			Live:       taskEvent.Live,
 		})
 	}
 

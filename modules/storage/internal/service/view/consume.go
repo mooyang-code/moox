@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -137,7 +139,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		defer consumer.Close()
 		defer dispatcher.Close()
 		for loopCtx.Err() == nil {
-			deliveries, fetchErr := consumer.Fetch(loopCtx, opts.FetchBatch)
+			deliveries, fetchErr := consumer.FetchRaw(loopCtx, opts.FetchBatch)
 			opts.Metrics.AddConsumerLagMessages(int64(len(deliveries)))
 			for _, delivery := range deliveries {
 				opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
@@ -307,31 +309,53 @@ func (s *Service) releaseLiveGate() {
 }
 
 func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
-	if delivery == nil || delivery.Message == nil {
-		if delivery != nil && delivery.DecodeError != nil {
-			return permanentDeliveryError{delivery.DecodeError}
-		}
+	if delivery == nil {
 		return permanentDeliveryError{errors.New("storage event delivery is empty")}
 	}
-	spaceID, datasetID, err := jetstream.ValidateStorageFieldsChangedEnvelope(delivery.Message)
-	if err != nil {
-		return permanentDeliveryError{err}
+	if delivery.DecodeError != nil {
+		return permanentDeliveryError{delivery.DecodeError}
 	}
-	subjectSpaceID, subjectDatasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
-	if err != nil {
-		return permanentDeliveryError{err}
+	if delivery.ContentType == events.ContentType {
+		event := &eventpb.EventMessage{}
+		if err := proto.Unmarshal(delivery.RawData, event); err != nil {
+			return permanentDeliveryError{err}
+		}
+		if delivery.RawMessageID == "" || event.GetEventId() != delivery.RawMessageID {
+			return permanentDeliveryError{fmt.Errorf("storage event_id %q does not match NATS message id %q", event.GetEventId(), delivery.RawMessageID)}
+		}
+		if event.GetEventName() != events.StorageRowsUpserted.Name || event.GetEventVersion() != events.StorageRowsUpserted.Version {
+			return permanentDeliveryError{errors.New("unexpected storage event name/version")}
+		}
+		registry, err := events.DefaultRegistry()
+		if err != nil {
+			return permanentDeliveryError{err}
+		}
+		spec, ok := registry.Spec(events.StorageRowsUpserted)
+		if !ok {
+			return permanentDeliveryError{errors.New("storage event is not registered")}
+		}
+		template, err := events.NewSubjectTemplate(spec.Subject)
+		if err != nil {
+			return permanentDeliveryError{err}
+		}
+		expected, err := template.Render(event.GetSpaceId(), event.GetSubjectId())
+		if err != nil || expected != delivery.Subject {
+			return permanentDeliveryError{fmt.Errorf("storage event subject mismatch: got %q want %q", delivery.Subject, expected)}
+		}
+		payload := &eventstoragepb.RowsUpserted{}
+		if err := proto.Unmarshal(event.GetPayload(), payload); err != nil {
+			return permanentDeliveryError{err}
+		}
+		rowEvent := &pb.RowsUpserted{}
+		if err := proto.Unmarshal(payload.GetRows(), rowEvent); err != nil {
+			return permanentDeliveryError{err}
+		}
+		if payload.GetDatasetId() != event.GetSubjectId() || rowEvent.GetSpaceId() != event.GetSpaceId() || rowEvent.GetDatasetId() != event.GetSubjectId() {
+			return permanentDeliveryError{errors.New("storage event payload identity mismatch")}
+		}
+		return s.applyDatasetEvent(ctx, event.GetSpaceId(), event.GetSubjectId(), rowEvent.GetRows())
 	}
-	if subjectSpaceID != spaceID || subjectDatasetID != datasetID {
-		return permanentDeliveryError{errors.New("storage delivery subject and envelope topic mismatch")}
-	}
-	event := &pb.DatasetFieldsChanged{}
-	if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
-		return permanentDeliveryError{err}
-	}
-	if event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
-		return permanentDeliveryError{errors.New("dataset event subject and payload mismatch")}
-	}
-	return s.applyDatasetEvent(ctx, spaceID, datasetID, event.GetRows())
+	return permanentDeliveryError{fmt.Errorf("unexpected storage event content type %q", delivery.ContentType)}
 }
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {

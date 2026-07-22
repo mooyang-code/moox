@@ -121,7 +121,13 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 		Symbol:     symbol,
 		Intervals:  intervals,
 		Immediate:  true,
+		Live:       boolValue(payload, "live"),
 	}, nil
+}
+
+func boolValue(payload map[string]any, key string) bool {
+	value, ok := payload[key].(bool)
+	return ok && value
 }
 
 func stringValue(payload map[string]any, key string) string {

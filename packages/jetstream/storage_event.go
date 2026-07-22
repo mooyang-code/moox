@@ -8,17 +8,17 @@ import (
 )
 
 const (
-	StorageFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
-	StorageFieldsChangedMessageType = "moox.storage.fields_changed.v1"
-	StorageFieldsChangedTopicPrefix = "moox.storage.fields_changed.v1."
+	StorageRowsUpsertedContentType = "application/x-protobuf; message=trpc.moox.storage.RowsUpserted"
+	StorageRowsUpsertedMessageType = "moox.storage.rows_upserted.v1"
+	StorageRowsUpsertedTopicPrefix = "moox.storage.rows_upserted.v1."
 )
 
-// ValidateStorageFieldsChangedTopic validates the concrete two-token storage
+// ValidateStorageRowsUpsertedTopic validates the concrete two-token storage
 // subject and returns the identifiers encoded in those tokens.
-func ValidateStorageFieldsChangedTopic(topic string) (string, string, error) {
+func ValidateStorageRowsUpsertedTopic(topic string) (string, string, error) {
 	parts := strings.Split(topic, ".")
-	if len(parts) != 6 || strings.Join(parts[:4], ".") != strings.TrimSuffix(StorageFieldsChangedTopicPrefix, ".") {
-		return "", "", fmt.Errorf("storage fields_changed topic must contain exactly two subject tokens")
+	if len(parts) != 6 || strings.Join(parts[:4], ".") != strings.TrimSuffix(StorageRowsUpsertedTopicPrefix, ".") {
+		return "", "", fmt.Errorf("storage rows_upserted topic must contain exactly two subject tokens")
 	}
 	spaceID, err := DecodeSubjectToken(parts[4])
 	if err != nil {
@@ -31,21 +31,21 @@ func ValidateStorageFieldsChangedTopic(topic string) (string, string, error) {
 	return spaceID, datasetID, nil
 }
 
-// ValidateStorageFieldsChangedEnvelope validates the storage-specific
+// ValidateStorageRowsUpsertedEnvelope validates the storage-specific
 // content, event kind, and topic contract. Protocol validation remains at the
 // generic envelope boundary.
-func ValidateStorageFieldsChangedEnvelope(msg *messagepb.MooxMessage) (string, string, error) {
+func ValidateStorageRowsUpsertedEnvelope(msg *messagepb.MooxMessage) (string, string, error) {
 	if msg == nil {
 		return "", "", fmt.Errorf("storage envelope is nil")
 	}
 	if msg.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
 		return "", "", fmt.Errorf("unexpected storage message kind %q", msg.GetKind())
 	}
-	if msg.GetContentType() != StorageFieldsChangedContentType {
+	if msg.GetContentType() != StorageRowsUpsertedContentType {
 		return "", "", fmt.Errorf("unexpected storage content type %q", msg.GetContentType())
 	}
-	if msg.GetMessageType() != StorageFieldsChangedMessageType {
+	if msg.GetMessageType() != StorageRowsUpsertedMessageType {
 		return "", "", fmt.Errorf("unexpected storage message type %q", msg.GetMessageType())
 	}
-	return ValidateStorageFieldsChangedTopic(msg.GetTopic())
+	return ValidateStorageRowsUpsertedTopic(msg.GetTopic())
 }

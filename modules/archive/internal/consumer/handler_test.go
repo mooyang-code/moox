@@ -87,6 +87,7 @@ func (f *fakeDelivery) Subject() string                  { return f.message.GetT
 func (f *fakeDelivery) StreamSequence() uint64           { return 1 }
 func (f *fakeDelivery) DeliveryCount() uint64            { return 1 }
 func (f *fakeDelivery) DecodeError() error               { return nil }
+func (f *fakeDelivery) ContentType() string              { return "" }
 func (f *fakeDelivery) Ack(context.Context) error {
 	if f.ackFn != nil {
 		return f.ackFn()

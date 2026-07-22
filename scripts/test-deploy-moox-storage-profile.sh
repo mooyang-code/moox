@@ -52,6 +52,7 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing storage binary: ${binary}" >&2; exit 1; }
 done
+[[ -x "${TMP_ROOT}/unpacked/bin/moox-cli" ]]
 for binary in moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected split View binary: ${binary}" >&2; exit 1; }
 done
@@ -59,6 +60,9 @@ for binary in moox-admin moox-web-host moox-cloudnode moox-collector; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected storage binary: ${binary}" >&2; exit 1; }
 done
 [[ -x "${TMP_ROOT}/unpacked/bin/moox-storage-node" ]]
+[[ -f "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" ]]
+[[ $(stat -f '%Lp' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" 2>/dev/null || stat -c '%a' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env") == 600 ]]
+grep -Eq '^MOOX_STORAGE_NODE_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env"
 [[ -d "${TMP_ROOT}/unpacked/storage/config" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
@@ -142,6 +146,15 @@ grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage/config/storage
 grep -q 'default_services+=(storage-node)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
 grep -q 'service_name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
 grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
+grep -q 'register-node' "${TMP_ROOT}/unpacked-shard/start.sh"
+grep -q 'import-seed' "${TMP_ROOT}/unpacked-shard/start.sh"
+grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked-shard/start.sh"
+grep -q 'activate-datasets' "${TMP_ROOT}/unpacked-shard/start.sh"
+grep -q 'source "\${ROOT}/secrets/storage-node-auth.env"' "${TMP_ROOT}/unpacked-shard/start.sh"
+if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"; then
+  echo "storage deployment must not depend on route seed environment variables" >&2
+  exit 1
+fi
 grep -q 'stop_service "storage-node"' "${TMP_ROOT}/unpacked-shard/stop.sh"
 
 TLS_ARCHIVE="${TMP_ROOT}/storage-tls.tar.gz"

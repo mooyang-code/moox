@@ -37,7 +37,7 @@ func TestPersistentRestartAndDeliverySemantics(t *testing.T) {
 	if _, err := kv.Create("job-1", []byte("active")); err != nil {
 		t.Fatalf("KV Create() error = %v", err)
 	}
-	consumerCfg := jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "e2e-restart", FilterSubject: "moox.storage.fields_changed.v1.>", AckWait: 200 * time.Millisecond, MaxDeliver: 5, MaxAckPending: 8, FetchMaxWait: time.Second}
+	consumerCfg := jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "e2e-restart", FilterSubject: "moox.storage.rows_upserted.v1.>", AckWait: 200 * time.Millisecond, MaxDeliver: 5, MaxAckPending: 8, FetchMaxWait: time.Second}
 	consumer, err := client.NewPullConsumer(ctx, consumerCfg)
 	if err != nil {
 		t.Fatalf("NewPullConsumer() error = %v", err)
@@ -279,11 +279,11 @@ func testMessage(id, topic string, payload []byte) *messagepb.MooxMessage {
 
 func storageTestMessage(id string, payload []byte) *messagepb.MooxMessage {
 	now := timestamppb.Now()
-	return &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType, Payload: payload, SpaceId: "foo"}
+	return &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: "moox.storage.rows_upserted.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: jetstream.StorageRowsUpsertedContentType, MessageType: jetstream.StorageRowsUpsertedMessageType, Payload: payload, SpaceId: "foo"}
 }
 
 func storageEventPayload() []byte {
-	payload, err := proto.Marshal(&storagepb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "bar"})
+	payload, err := proto.Marshal(&storagepb.RowsUpserted{SpaceId: "foo", DatasetId: "bar"})
 	if err != nil {
 		panic(err)
 	}

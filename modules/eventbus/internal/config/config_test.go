@@ -23,7 +23,7 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	cfg := Default()
 	for _, consumer := range cfg.Consumers {
 		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "moox_archive_kline_v1" {
-			if consumer.FilterSubject != "moox.storage.fields_changed.v1.>" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
+			if consumer.FilterSubject != "moox.storage.rows.upserted.v1.>" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
 				t.Fatalf("archive consumer = %#v", consumer)
 			}
 			return
@@ -88,7 +88,7 @@ func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 		"bad version":          func(c *Config) { c.Topics[0].PayloadVersion = 0 },
 		"version mismatch":     func(c *Config) { c.Topics[0].PayloadVersion = 2 },
 		"cluster default name": func(c *Config) { c.Broker.Cluster.Enabled = true },
-		"overlap":              func(c *Config) { c.Streams[1].Subjects = []string{"moox.storage.>"} },
+		"overlap":              func(c *Config) { c.Streams[1].Subjects = []string{"moox.metrics.>"} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := Default()
@@ -117,7 +117,7 @@ func TestValidateSubject(t *testing.T) {
 }
 
 func TestTopicVersion(t *testing.T) {
-	version, err := topicVersion("moox.storage.fields_changed.v1")
+	version, err := topicVersion("moox.storage.rows_upserted.v1")
 	require.NoError(t, err)
 	assert.Equal(t, uint32(1), version)
 	_, err = topicVersion("moox.storage.rows_committed")

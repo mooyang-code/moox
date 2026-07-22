@@ -109,6 +109,7 @@ type TaskExecuteEvent struct {
 	Symbol     string   `json:"symbol"`
 	Intervals  []string `json:"intervals"`
 	Immediate  bool     `json:"immediate"` // 是否立即执行
+	Live       bool     `json:"live,omitempty"`
 }
 
 // ProbeResponse 心跳探测响应

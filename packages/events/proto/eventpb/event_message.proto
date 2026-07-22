@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package trpc.moox.events;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/events/proto/eventpb;eventpb";
+
+// EventMessage is the small, explicit outer contract shared by all business
+// events. NATS subjects remain infrastructure routing and are not business
+// metadata sources.
+message EventMessage {
+  string event_id = 1;
+  string event_name = 2;
+  uint32 event_version = 3;
+  string space_id = 4;
+  string subject_id = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+  bytes payload = 7;
+}

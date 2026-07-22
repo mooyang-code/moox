@@ -29,6 +29,7 @@ type CollectorSpec struct {
 	Market    string   `json:"market"`
 	DataType  string   `json:"data_type"`
 	Intervals []string `json:"intervals"`
+	Live      bool     `json:"live,omitempty"`
 }
 
 // CollectTarget describes where collected rows should be written.

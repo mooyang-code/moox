@@ -2,15 +2,23 @@ package consumer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
 )
 
 type PullConsumer interface {
 	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
 	Close() error
+}
+
+type rawPullConsumer interface {
+	FetchRaw(context.Context, int) ([]*jetstream.Delivery, error)
 }
 
 type Runner struct {
@@ -22,7 +30,35 @@ func NewRunner(consumer PullConsumer, handler *Handler, batch int) *Runner {
 	if batch <= 0 {
 		batch = 1
 	}
-	return &Runner{shared: jetstream.NewRunner(consumer, decisionHandler{handler: handler}, jetstream.RunnerConfig{BatchSize: batch}), batch: batch}
+	return &Runner{shared: jetstream.NewRunner(rawPullAdapter{consumer}, decisionHandler{handler: handler}, jetstream.RunnerConfig{BatchSize: batch}), batch: batch}
+}
+
+type rawPullAdapter struct{ PullConsumer }
+
+func (a rawPullAdapter) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
+	if raw, ok := a.PullConsumer.(rawPullConsumer); ok {
+		items, err := raw.FetchRaw(ctx, batch)
+		for _, item := range items {
+			if item == nil || len(item.RawData) == 0 {
+				continue
+			}
+			if item.ContentType == events.ContentType {
+				outer := new(eventpb.EventMessage)
+				if err := proto.Unmarshal(item.RawData, outer); err != nil {
+					item.DecodeError = err
+				} else if item.RawMessageID == "" || outer.GetEventId() != item.RawMessageID {
+					item.DecodeError = fmt.Errorf("event_id %q does not match NATS message id %q", outer.GetEventId(), item.RawMessageID)
+				}
+				continue
+			}
+		}
+		return items, err
+	}
+	return a.FetchRaw(ctx, batch)
+}
+
+func (a rawPullAdapter) FetchRaw(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
+	return a.PullConsumer.Fetch(ctx, batch)
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -59,6 +95,7 @@ func (d deliveryAdapter) Subject() string        { return d.Delivery.Subject }
 func (d deliveryAdapter) StreamSequence() uint64 { return d.Delivery.StreamSeq }
 func (d deliveryAdapter) DeliveryCount() uint64  { return d.Delivery.DeliveryCount }
 func (d deliveryAdapter) DecodeError() error     { return d.Delivery.DecodeError }
+func (d deliveryAdapter) ContentType() string    { return d.Delivery.ContentType }
 
 type decisionHandler struct{ handler *Handler }
 

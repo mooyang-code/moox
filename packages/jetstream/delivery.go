@@ -24,6 +24,7 @@ type Delivery struct {
 	DecodeError  error
 	RawData      []byte
 	RawMessageID string
+	ContentType  string
 
 	msg        *nats.Msg
 	client     *Client
@@ -104,6 +105,7 @@ func deliveryFromMessage(msg *nats.Msg, stream, consumer string, maxPayload int)
 		Consumer:     consumer,
 		RawData:      append([]byte(nil), msg.Data...),
 		RawMessageID: msg.Header.Get(nats.MsgIdHdr),
+		ContentType:  msg.Header.Get("Content-Type"),
 		msg:          msg,
 	}
 	token, tokenErr := encodeDeliveryToken(stream, consumer, msg.Reply)
@@ -121,6 +123,42 @@ func deliveryFromMessage(msg *nats.Msg, stream, consumer string, maxPayload int)
 		return delivery, delivery.DecodeError
 	}
 	delivery.Message = decoded
+	delivery.StreamSeq = metadata.Sequence.Stream
+	delivery.ConsumerSeq = metadata.Sequence.Consumer
+	delivery.DeliveryCount = metadata.NumDelivered
+	return delivery, nil
+}
+
+func rawDeliveryFromMessage(msg *nats.Msg, stream, consumer string, maxPayload int) (*Delivery, error) {
+	if msg == nil {
+		return nil, fmt.Errorf("%w: NATS message is nil", ErrDecode)
+	}
+	delivery := &Delivery{
+		Subject:      msg.Subject,
+		Stream:       stream,
+		Consumer:     consumer,
+		RawData:      append([]byte(nil), msg.Data...),
+		RawMessageID: msg.Header.Get(nats.MsgIdHdr),
+		ContentType:  msg.Header.Get("Content-Type"),
+		msg:          msg,
+	}
+	token, tokenErr := encodeDeliveryToken(stream, consumer, msg.Reply)
+	if tokenErr == nil {
+		delivery.PersistentToken = token
+	}
+	if delivery.RawMessageID == "" {
+		delivery.DecodeError = fmt.Errorf("%w: message_id header is required", ErrDecode)
+		return delivery, delivery.DecodeError
+	}
+	if maxPayload > 0 && len(msg.Data) > maxPayload {
+		delivery.DecodeError = fmt.Errorf("%w: raw payload size %d exceeds %d", ErrDecode, len(msg.Data), maxPayload)
+		return delivery, delivery.DecodeError
+	}
+	metadata, err := msg.Metadata()
+	if err != nil {
+		delivery.DecodeError = fmt.Errorf("%w: metadata: %w", ErrDecode, err)
+		return delivery, delivery.DecodeError
+	}
 	delivery.StreamSeq = metadata.Sequence.Stream
 	delivery.ConsumerSeq = metadata.Sequence.Consumer
 	delivery.DeliveryCount = metadata.NumDelivered

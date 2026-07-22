@@ -13,7 +13,7 @@ type PendingEventStore interface {
 	// ClaimPendingEvent persists an unprocessed event and reports whether this
 	// caller won the claim. Duplicate pending rows and processed redeliveries
 	// must return claimed=false without exposing the event to memory.
-	ClaimPendingEvent(context.Context, string, *storagepb.DatasetFieldsChanged, time.Time) (claimed bool, err error)
-	LoadPendingEvents(context.Context, func(string, *storagepb.DatasetFieldsChanged, time.Time) error) error
+	ClaimPendingEvent(context.Context, string, *storagepb.RowsUpserted, time.Time) (claimed bool, err error)
+	LoadPendingEvents(context.Context, func(string, *storagepb.RowsUpserted, time.Time) error) error
 	CommitPendingEvents(context.Context, []string) error
 }

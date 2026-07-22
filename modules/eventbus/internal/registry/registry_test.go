@@ -51,7 +51,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
-	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.fields_changed.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.rows.upserted.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx); err != nil {

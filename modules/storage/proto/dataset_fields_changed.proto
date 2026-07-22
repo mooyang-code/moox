@@ -6,9 +6,9 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 
 import "rows.proto";
 
-// DatasetFieldsChanged is the durable field-upsert event. Ordering and
-// delivery are provided by the transport; no source sequence is embedded.
-message DatasetFieldsChanged {
+// RowsUpserted is retained as the row payload schema while the outer
+// event contract lives in packages/events.EventMessage.
+message RowsUpserted {
   string space_id = 1;
   string dataset_id = 2;
   repeated RowFieldUpsert rows = 3;

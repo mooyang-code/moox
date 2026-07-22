@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 func (c *Config) Validate() error {
@@ -175,6 +177,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("topic family %q must be covered by exactly one stream, got %d", f.Pattern, matches)
 		}
 	}
+	if err := validateGovernedEventFamilies(c); err != nil {
+		return err
+	}
 	for i := range c.TopicFamilies {
 		for j := i + 1; j < len(c.TopicFamilies); j++ {
 			if c.TopicFamilies[i].Enabled && c.TopicFamilies[j].Enabled && patternsOverlap(c.TopicFamilies[i].Pattern, c.TopicFamilies[j].Pattern) {
@@ -209,6 +214,32 @@ func (c *Config) Validate() error {
 		}
 		if k.Replicas > 1 {
 			return fmt.Errorf("kv %q replicas=%d are not supported in V1 standalone mode", k.Bucket, k.Replicas)
+		}
+	}
+	return nil
+}
+
+func validateGovernedEventFamilies(c *Config) error {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return fmt.Errorf("load event registry: %w", err)
+	}
+	for _, event := range []events.EventType{events.MarketTradeReceived, events.MarketKlineClosed, events.StorageRowsUpserted} {
+		spec, ok := registry.Spec(event)
+		if !ok {
+			return fmt.Errorf("governed event %s is not registered", event.Name)
+		}
+		base := strings.ReplaceAll(strings.ReplaceAll(spec.Subject, ".<space>", ""), ".<subject>", "")
+		want := base + ".>"
+		found := false
+		for _, family := range c.TopicFamilies {
+			if family.Enabled && family.Pattern == want && family.Stream == spec.Stream {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("governed event %s is missing topic family %q in stream %q", event.Name, want, spec.Stream)
 		}
 	}
 	return nil
@@ -296,6 +327,9 @@ func validPayloadContentType(value string) bool {
 		return true
 	}
 	if value == "application/vnd.moox.metrics.snapshot+protobuf" {
+		return true
+	}
+	if value == "application/vnd.moox.event+protobuf" {
 		return true
 	}
 	return strings.HasPrefix(value, "application/x-protobuf; message=") && len(strings.TrimPrefix(value, "application/x-protobuf; message=")) > 0

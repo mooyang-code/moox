@@ -13,16 +13,16 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
-	storageSubject := "moox.storage.fields_changed.v1.>"
+	storageSubject := "moox.storage.rows.upserted.v1.>"
 	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +61,14 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pull, err := client.BindManagedPullConsumer(context.Background(), jetstream.ConsumerBindRef{Stream: "MOOX_STORAGE", Durable: "archive-e2e", FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true})
 	if err != nil {
 		t.Fatal(err)
@@ -74,13 +82,12 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	go func() { runErr <- runner.Run(ctx) }()
 
 	publish := func(id, dataTime, close string) {
-		event := &storagepb.DatasetFieldsChanged{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
+		event := &storagepb.RowsUpserted{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
 		payload, err := proto.Marshal(event)
 		if err != nil {
 			t.Fatal(err)
 		}
-		now := timestamppb.Now()
-		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: storageEventTopic(t, event.GetSpaceId(), event.GetDatasetId()), Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType, Payload: payload, SpaceId: event.GetSpaceId()})
+		_, err = publisher.Publish(context.Background(), events.StorageRowsUpserted, &eventstoragepb.RowsUpserted{DatasetId: event.GetDatasetId(), Rows: payload}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,19 +111,6 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("archive files were not materialized")
-}
-
-func storageEventTopic(t *testing.T, spaceID, datasetID string) string {
-	t.Helper()
-	spaceToken, err := jetstream.EncodeSubjectToken(spaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	datasetToken, err := jetstream.EncodeSubjectToken(datasetID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return fmt.Sprintf("%s%s.%s", jetstream.StorageFieldsChangedTopicPrefix, spaceToken, datasetToken)
 }
 
 func parseFloat(t *testing.T, value string) float64 {

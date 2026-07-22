@@ -32,8 +32,16 @@ health:
   addr: "127.0.0.1:11419"
 
 streams:
+  - name: MOOX_MARKET
+    subjects: ["moox.market.>"]
+    retention: limits
+    discard: new
+    storage: file
+    replicas: 1
+    max_age: 168h
+    max_bytes: 2147483648
   - name: MOOX_STORAGE
-    subjects: ["moox.storage.fields_changed.v1.>"]
+    subjects: ["moox.storage.rows.upserted.v1.>"]
     retention: limits
     discard: new
     storage: file
@@ -77,6 +85,8 @@ streams:
     max_bytes: 536870912
 
 topics:
+  - {topic: moox.market.trade.received.v1, stream: MOOX_MARKET, kind: 1, payload_content_type: "application/vnd.moox.event+protobuf", payload_version: 1, enabled: true}
+  - {topic: moox.market.kline.closed.v1, stream: MOOX_MARKET, kind: 1, payload_content_type: "application/vnd.moox.event+protobuf", payload_version: 1, enabled: true}
   - {topic: moox.metrics.host.reported.v1, stream: MOOX_METRICS, kind: 3, payload_content_type: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", payload_version: 1, enabled: true}
   - {topic: moox.metrics.snapshot.reported.v1, stream: MOOX_METRICS, kind: 3, payload_content_type: "application/vnd.moox.metrics.snapshot+protobuf", payload_version: 1, enabled: true}
   - {topic: moox.dlq.message.rejected.v1, stream: MOOX_DLQ, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", payload_version: 1, enabled: true}
@@ -94,7 +104,9 @@ topics:
   - {topic: moox.strategy.execution.requested.v1, stream: MOOX_STRATEGY, kind: 1, payload_content_type: "application/json", payload_version: 1, enabled: true}
 
 topic_families:
-  - {pattern: moox.storage.fields_changed.v1.>, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", payload_version: 1, enabled: true}
+  - {pattern: moox.market.trade.received.v1.>, stream: MOOX_MARKET, kind: 1, payload_content_type: "application/vnd.moox.event+protobuf", payload_version: 1, enabled: true}
+  - {pattern: moox.market.kline.closed.v1.>, stream: MOOX_MARKET, kind: 1, payload_content_type: "application/vnd.moox.event+protobuf", payload_version: 1, enabled: true}
+  - {pattern: moox.storage.rows.upserted.v1.>, stream: MOOX_STORAGE, kind: 1, payload_content_type: "application/vnd.moox.event+protobuf", payload_version: 1, enabled: true}
   - pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
     stream: MOOX_CLOUDNODE_EXEC
     kind: 2
@@ -103,6 +115,15 @@ topic_families:
     enabled: true
 
 consumers:
+  - stream: MOOX_MARKET
+    durable: streamcalc_kline_v1
+    filter_subject: moox.market.kline.closed.v1.>
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 256
+    max_deliver: -1
   - stream: MOOX_TRADE
     durable: trade_execution_v1
     filter_subject: moox.trade.execution.slice_ready.v1
@@ -159,7 +180,7 @@ consumers:
     max_deliver: 3
   - stream: MOOX_STORAGE
     durable: storage_view
-    filter_subject: moox.storage.fields_changed.v1.>
+    filter_subject: moox.storage.rows.upserted.v1.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant
@@ -168,7 +189,7 @@ consumers:
     max_deliver: -1
   - stream: MOOX_STORAGE
     durable: factor_calc
-    filter_subject: moox.storage.fields_changed.v1.>
+    filter_subject: moox.storage.rows.upserted.v1.>
     ack_policy: explicit
     deliver_policy: new
     replay_policy: instant
@@ -177,7 +198,7 @@ consumers:
     max_deliver: 5
   - stream: MOOX_STORAGE
     durable: moox_archive_kline_v1
-    filter_subject: moox.storage.fields_changed.v1.>
+    filter_subject: moox.storage.rows.upserted.v1.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant

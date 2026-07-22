@@ -1,0 +1,23 @@
+version: 1
+events:
+  - name: market.trade.received
+    version: 1
+    payload: trpc.moox.market.TradeReceived
+    subject: moox.market.trade.received.v1.<space>.<subject>
+    stream: MOOX_MARKET
+    partition_key: subject_id
+    owner: collector
+  - name: market.kline.closed
+    version: 1
+    payload: trpc.moox.market.KlineClosed
+    subject: moox.market.kline.closed.v1.<space>.<subject>
+    stream: MOOX_MARKET
+    partition_key: subject_id
+    owner: streamcalc
+  - name: storage.rows.upserted
+    version: 1
+    payload: trpc.moox.event.storage.RowsUpserted
+    subject: moox.storage.rows.upserted.v1.<space>.<subject>
+    stream: MOOX_STORAGE
+    partition_key: subject_id
+    owner: storage

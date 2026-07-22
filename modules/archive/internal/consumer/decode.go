@@ -7,6 +7,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
@@ -22,6 +25,57 @@ const (
 
 type Decoder struct {
 	sources map[string]map[string]struct{}
+}
+
+// DecodeEvent adapts the governed EventMessage contract into the archive's
+// existing row decoder. The adapter is deliberately here, at the archive
+// boundary, so storage event metadata is never inferred from a NATS subject.
+func (d *Decoder) DecodeEvent(raw []byte, subject string) (domain.EventBatch, Decision, error) {
+	message := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(raw, message); err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	if message.GetEventName() != events.StorageRowsUpserted.Name || message.GetEventVersion() != events.StorageRowsUpserted.Version {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected storage event name/version")
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	spec, ok := registry.Spec(events.StorageRowsUpserted)
+	if !ok {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event is not registered")
+	}
+	template, err := events.NewSubjectTemplate(spec.Subject)
+	if err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	expected, err := template.Render(message.GetSpaceId(), message.GetSubjectId())
+	if err != nil || subject != expected {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event subject mismatch: got %q want %q", subject, expected)
+	}
+	payload := &eventstoragepb.RowsUpserted{}
+	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	rowEvent := &storagepb.RowsUpserted{}
+	if err := proto.Unmarshal(payload.GetRows(), rowEvent); err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	if payload.GetDatasetId() != message.GetSubjectId() || rowEvent.GetSpaceId() != message.GetSpaceId() || rowEvent.GetDatasetId() != message.GetSubjectId() {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event payload identity mismatch")
+	}
+	spaceToken, err := jetstream.EncodeSubjectToken(message.GetSpaceId())
+	if err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	datasetToken, err := jetstream.EncodeSubjectToken(message.GetSubjectId())
+	if err != nil {
+		return domain.EventBatch{}, DecisionReject, err
+	}
+	legacyTopic := fmt.Sprintf("%s%s.%s", jetstream.StorageRowsUpsertedTopicPrefix, spaceToken, datasetToken)
+	legacy := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: message.GetEventId(), Topic: legacyTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, SpaceId: message.GetSpaceId(), OccurredAt: message.GetOccurredAt(), ContentType: jetstream.StorageRowsUpsertedContentType, MessageType: jetstream.StorageRowsUpsertedMessageType, Payload: payload.GetRows()}
+	return d.Decode(legacy)
 }
 
 func NewDecoder(sources map[string][]string) *Decoder {
@@ -42,14 +96,14 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if message.GetProtocolVersion() != jetstream.ProtocolVersion || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unsupported message protocol or kind")
 	}
-	spaceID, datasetID, err := jetstream.ValidateStorageFieldsChangedEnvelope(message)
+	spaceID, datasetID, err := jetstream.ValidateStorageRowsUpsertedEnvelope(message)
 	if err != nil {
 		return domain.EventBatch{}, DecisionReject, err
 	}
 	if strings.TrimSpace(message.GetMessageId()) == "" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message_id is required")
 	}
-	var event storagepb.DatasetFieldsChanged
+	var event storagepb.RowsUpserted
 	if err := proto.Unmarshal(message.GetPayload(), &event); err != nil {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("decode time-series event: %w", err)
 	}
@@ -88,7 +142,7 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	return batch, DecisionArchive, nil
 }
 
-func decodeRow(event *storagepb.DatasetFieldsChanged, row *storagepb.RowFieldUpsert, writtenAt time.Time) (domain.RowPatch, error) {
+func decodeRow(event *storagepb.RowsUpserted, row *storagepb.RowFieldUpsert, writtenAt time.Time) (domain.RowPatch, error) {
 	if row == nil || row.GetKey() == nil {
 		return domain.RowPatch{}, fmt.Errorf("row key is required")
 	}
