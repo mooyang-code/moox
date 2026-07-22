@@ -12,7 +12,7 @@ MooX 尚未上线。本次变更不保留旧表迁移、旧 RPC、字段别名�
 2. 删除不再参与运行时决策的主存路由、权重和拓扑概念。
 3. 让管理台在一个 DataNode 页面内展示节点及其全部 Dataset。
 4. 明确部署流程与管理台的字段所有权，防止人工修改运行地址。
-5. 允许从未接收写入的 Dataset 安全更换 DataNode，但不建设数据迁移能力。
+5. 允许尚未激活的 Dataset 安全更换 DataNode，但不建设数据迁移能力。
 
 ## 非目标
 
@@ -57,12 +57,14 @@ Dataset 创建时必须指定有效的 `data_node_id`。Metadata 不保存额外
 
 Dataset 增加持久化字段 `binding_locked`：
 
-- 新建 Dataset 时为 `false`。
-- `storage-primary` 接受该 Dataset 的第一次写请求前，先将其原子设置为 `true`。
-- 一旦为 `true`，永不恢复为 `false`，即使后续写请求失败或数据被人工清理。
-- 常规写路径在锁定后不重复更新 Metadata。
+- 新建 Dataset 固定为 `status=disabled`、`binding_locked=false`。
+- Dataset 通过激活自检后，服务在同一事务中设置 `status=active`、`binding_locked=true`。
+- 一旦为 `true`，永不恢复为 `false`，即使 Dataset 后续被停用或数据被人工清理。
+- 常规写路径不更新绑定状态，只读取 Metadata Snapshot。
 
-这种保守锁定避免通过扫描 Pebble 判断“是否无数据”，也避免写入与重新绑定并发发生。
+这种激活门禁把放置决策移出写入热路径，也避免通过扫描 Pebble 判断“是否无数据”。
+
+Dataset 同时增加从 `1` 开始的单调递增 `revision`。任何 Dataset Metadata 变更都在同一事务中递增 revision，激活和重新绑定使用它做乐观并发控制；时间戳不承担 CAS 语义。
 
 管理员可在 Dataset 页面执行“更换数据节点”。服务端必须同时满足以下条件：
 
@@ -73,7 +75,7 @@ Dataset 增加持久化字段 `binding_locked`：
 
 操作直接把旧 `data_node_id` 原子更新为新值。系统不持久化空 `data_node_id`，因此界面上的“解绑”始终是一次“解绑并重新绑定”。
 
-这条规则将原设计中“创建后永久不可修改”收窄为“首次写入锁定后永久不可修改”。锁定后的 Dataset 不支持迁移；用户只能保留原节点或删除 Dataset。
+这条规则将原设计中“创建后永久不可修改”收窄为“首次激活后永久不可修改”。锁定后的 Dataset 不支持迁移；用户只能保留原节点或删除 Dataset。
 
 ## Schema
 
@@ -83,6 +85,7 @@ Metadata Schema 升级到 v5，并只接受 v5：
 - `t_data_nodes` 只保存最终 DataNode 字段；
 - `t_datasets.c_data_node_id` 增加外键和查询索引；
 - `t_datasets` 增加非空布尔字段 `c_binding_locked`，默认 `0`；
+- `t_datasets` 增加正整数 `c_revision`，默认 `1`，每次 Dataset 变更原子递增；
 - 删除 `t_primary_store_routes`；
 - 删除 `t_dataset_topology_locks`；
 - 删除 `t_storage_devices.c_node_id`；DataNode 的 Pebble 路径由部署配置管理，Device 不再表示 DataNode、DuckDB 或 Bleve 的子组件；
@@ -128,11 +131,24 @@ DatasetSummary
 
 ### Dataset 接口
 
-- Dataset 创建和读取消息公开 `data_node_id`、`keep_duration` 和 `binding_locked`。
+- Dataset 创建和读取消息公开 `data_node_id`、`keep_duration`、`binding_locked` 和 `revision`。
 - Dataset 列表请求增加可选 `data_node_id` 过滤条件。
 - 新增 `RebindDatasetDataNode` 命令，参数包含 `space_id`、`dataset_id` 和新的 `data_node_id`。
-- 通用 `UpdateDataset` 不允许修改 `data_node_id` 或 `binding_locked`。
-- 第一次写入通过 Metadata 内部原子操作锁定绑定；重复锁定必须幂等。
+- 新增只读 `CheckDatasetActivation`，返回逐项检查结果和当前 Dataset revision，不修改 Metadata。
+- 新增幂等 `ActivateDataset`，内部复用同一个激活检查器，并携带客户端最近观察到的 Dataset revision。
+- 通用 `UpdateDataset` 不允许修改 `data_node_id`、`binding_locked`，也不允许把状态改为 `active`；启用必须经过 `ActivateDataset`。
+- `ActivateDataset` 对已锁定且已启用的 Dataset 返回幂等成功；对已锁定但停用的 Dataset 重新执行 readiness 检查后只恢复 `active`，不改变绑定。
+
+激活检查器至少验证：
+
+1. Dataset 状态与锁定组合合法：`disabled + unlocked` 可以首次激活，`disabled + locked` 可以重新启用，`active + locked` 视为幂等已激活，`active + unlocked` 必须失败；
+2. Dataset Schema 和 `keep_duration` 合法；
+3. 绑定的 DataNode 存在且为 `active`；
+4. `service_target` 格式合法并可访问；
+5. DataNode 的签名 readiness 响应成功，且返回的 `node_id` 与 Metadata 一致；
+6. 提交激活时 Dataset revision 没有变化。
+
+网络检查发生在事务外。检查通过后，服务打开短事务再次校验 Dataset revision、状态和 DataNode 引用，再提交状态转换。状态已变化时返回冲突，调用方重新执行自检，不持有数据库事务等待网络。
 
 ### 删除约束
 
@@ -146,25 +162,26 @@ DataNode 只有在 `status=disabled` 且没有任何 Dataset 引用时才能删�
 
 ```text
 Write/Read request
-  -> storage-primary 读取 Dataset
+  -> storage-primary 从 Metadata Snapshot 读取 active Dataset
   -> Dataset.data_node_id
-  -> DataNode.service_target
+  -> 从同一 Snapshot 读取 active DataNode.service_target
   -> 直接调用 storage-node
 ```
 
-运行时不得读取路由表、权重、Subject Pattern、Hash Rule 或 Endpoint 兜底字段。
+运行时不得访问 Metadata SQLite，也不得读取路由表、权重、Subject Pattern、Hash Rule 或 Endpoint 兜底字段。Dataset 或 DataNode 非 active 时立即拒绝读写。
 
-### 第一次写入
+### Dataset 激活
 
 ```text
-Write request
-  -> 校验 Dataset 和 DataNode 为 active
-  -> binding_locked=false 时执行原子 LockDatasetBinding
-  -> 刷新或更新当前 Metadata Snapshot
-  -> 转发到固定 DataNode
+初始化或部署流程
+  -> CheckDatasetActivation（只读）
+  -> 检查结果全部通过
+  -> ActivateDataset（内部复查 + revision CAS）
+  -> 原子提交 status=active + binding_locked=true
+  -> 刷新 Metadata Snapshot
 ```
 
-锁定必须发生在转发之前。锁定成功但转发失败时仍保持锁定，以正确性优先，不允许请求重试期间更换节点。
+激活封装属于 Storage 领域能力，初始化流程和自检模块都通过同一接口使用，不能各自复制检查规则。激活成功后普通写入只依赖缓存；激活失败时 Dataset 保持 disabled。
 
 ### 更换 DataNode
 
@@ -191,19 +208,22 @@ DataNode 表格展示：
 - 名称；
 - `service_target`；
 - 状态；
-- Dataset 数量，通过 `datasets.length` 计算；
+- Dataset 标签列表；
 - 更新时间；
 - 查看、编辑、启停和删除操作。
 
-点击 Dataset 数量或“查看数据集”打开节点详情抽屉。抽屉直接使用 `ListDataNodes` 已返回的数据，展示 Space、Dataset ID、名称、数据类型、保存时长和状态，并提供跳转 Dataset 页面的操作。抽屉内不编辑 Dataset。
+Dataset 列直接展示节点下的全部 Dataset 名称，每个名称使用紧凑、可点击的 Tag。Tag 点击后跳转 Dataset 页面，Tooltip 显示 Space 和 Dataset ID；无 Dataset 时显示 `-`。Tag 可以自然换行，但必须限制列宽并固定操作列，不能挤压 `service_target` 或操作按钮。
+
+“查看”操作打开节点详情抽屉。抽屉直接使用 `ListDataNodes` 已返回的数据，展示 Space、Dataset ID、名称、数据类型、保存时长和状态，并提供跳转 Dataset 页面的操作。抽屉内不编辑 Dataset。
 
 ### Dataset 页面
 
 - 创建 Dataset 时必须选择 active DataNode，并填写 `keep_duration`。
 - 编辑页只读展示当前 DataNode 和绑定锁定状态。
+- 新建 Dataset 默认停用；“启用”操作调用 `CheckDatasetActivation` 展示结果，通过后再调用 `ActivateDataset`。
 - `disabled` 且 `binding_locked=false` 时显示“更换数据节点”。
 - 操作对话框必须选择新的 active DataNode 后才能提交。
-- `binding_locked=true` 时隐藏操作，并在信息提示中说明已有写入的 Dataset 不支持迁移。
+- `binding_locked=true` 时隐藏更换节点操作，并在信息提示中说明已激活的 Dataset 不支持迁移。
 
 ### 信息提示
 
@@ -219,11 +239,19 @@ DataNode 详情提示以下信息：
 Dataset 详情提示以下信息：
 
 - Dataset 始终必须绑定一个 DataNode；
-- 第一次写入后绑定永久锁定；
-- “更换数据节点”只适用于从未写入且已停用的 Dataset；
+- 第一次激活后绑定永久锁定；
+- “更换数据节点”只适用于尚未激活的 Dataset；
 - 系统不提供已有数据迁移。
 
 Info 图标必须支持鼠标悬停、键盘聚焦和无障碍名称。Tooltip 不得遮挡标题、表格操作或对话框。
+
+## Doctor 与自检边界
+
+现有 `doctor bootstrap|diagnose` 默认保持只读，不因一次普通诊断命令修改 Dataset 状态。Doctor Runner 只调用 `CheckDatasetActivation` 并把结果记录为 Observation，不直接调用 `ActivateDataset`。
+
+初始化或部署编排在 Doctor bootstrap 总结为 HEALTHY 后，显式调用 `ActivateDataset`。这一步必须在部署日志中记录 Dataset ID、检查摘要、激活结果和 Metadata revision。若用户只运行 Doctor 诊断，不会触发激活。
+
+Storage readiness 检查从现有 deferred 状态升级为 active 时，应复用固定 Check ID 和有界超时，不允许任意脚本、动态检查 DSL 或自动修复动作。激活是用户启动的初始化流程中的显式状态转换，不属于 Doctor 自动修复。
 
 ## 清理范围
 
@@ -247,7 +275,10 @@ Info 图标必须支持鼠标悬停、键盘聚焦和无障碍名称。Tooltip �
 - `ListDataNodes` 正确批量组装全部 Dataset，空节点返回空数组。
 - 节点启用或仍被 Dataset 引用时拒绝删除。
 - Dataset 创建必须绑定 active DataNode。
-- 首次写入在转发前锁定绑定，重复写入不重复修改 Metadata。
+- Dataset 创建后固定为 disabled 且未锁定。
+- 激活检查只读、结果有界，并校验 DataNode 身份与 readiness。
+- 激活使用 revision CAS 原子提交 active 和 binding_locked，冲突时不提交。
+- 普通读写只使用 Metadata Snapshot，不访问 SQLite。
 - 仅 `disabled + binding_locked=false` 的 Dataset 可以重新绑定。
 - 路由解析只使用 `Dataset.data_node_id -> DataNode.service_target`。
 - Schema v5、Seed、Cache Snapshot 和 CLI 摘要使用最终模型。
@@ -255,18 +286,20 @@ Info 图标必须支持鼠标悬停、键盘聚焦和无障碍名称。Tooltip �
 ### 前端
 
 - Storage 页面不再出现路由 Tab，未知 Tab 回落到节点视图。
-- 节点表格从 `datasets.length` 展示数量，详情抽屉不发起二次 Dataset 请求。
+- 节点表格把全部 Dataset 名称展示为可点击 Tag，详情抽屉不发起二次 Dataset 请求。
 - 部署所有字段只读，名称和状态可编辑。
 - 删除和重新绑定操作根据后端约束显示正确状态及错误提示。
 - Info Tooltip 支持 hover、focus 和无障碍名称。
 - Dataset 创建请求包含 `data_node_id` 和 `keep_duration`。
+- Dataset 启用流程先显示激活检查结果，通过后再提交激活。
 
 ### 合同与 E2E
 
 - 增加旧符号零残留合同测试；扫描实现、生成物、配置和现行说明文档，排除带有取代声明的历史设计记录。
 - 重新生成 Storage Proto，并测试 Storage、Gateway 及所有 Metadata 消费方。
-- E2E 覆盖节点注册、Dataset 创建、列表聚合、首次写入锁定、禁止重新绑定、空 Dataset 重新绑定和节点删除约束。
-- 管理台 E2E 覆盖节点详情、Info Tooltip、Dataset 创建和更换节点流程。
+- E2E 覆盖节点注册、Dataset 创建、只读激活检查、revision 冲突、显式激活、缓存写路径、禁止重新绑定、未激活 Dataset 重新绑定和节点删除约束。
+- Doctor E2E 证明普通 bootstrap 只输出激活 Observation，不修改 Dataset；部署 E2E 证明 HEALTHY 后显式激活。
+- 管理台 E2E 覆盖节点 Dataset Tag、节点详情、Info Tooltip、Dataset 创建、激活和更换节点流程。
 
 ## 发布验证
 

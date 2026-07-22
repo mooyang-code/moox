@@ -4,6 +4,8 @@
 
 本设计已于 2026-07-19 完成讨论确认。它是 Storage 当前实现的目标事实源，取代此前关于 DataShard、多 Consumer、Pebble 行级 Merge、不可变整行、字段级删除、Snapshot Scan、Sequence Progress、Dataset 迁移和通用 Schema 演进的设计。
 
+DataNode 管理、Dataset 激活和绑定锁定规则已由《Storage DataNode 管理模型收敛设计》（2026-07-22）修订；两份文档冲突时，以 2026-07-22 设计为准。
+
 MooX 是个人量化交易系统。本设计优先保证数据正确、边界清楚和长期可维护，不建设高可用、在线迁移和通用分布式存储平台。
 
 ## 设计原则
@@ -24,7 +26,7 @@ MooX 是个人量化交易系统。本设计优先保证数据正确、边界清
 ### Dataset 单归属
 
 - Dataset 创建时必须指定 `data_node_id`。
-- `data_node_id` 创建后永久不可修改。
+- Dataset 首次激活前可以通过专用命令原子更换 `data_node_id`；首次激活后永久不可修改。
 - Dataset 不按 Subject、RowKey、时间范围或权重继续分片。
 - 系统不提供 Dataset 迁移、复制、切换、回滚或 Rebalance。
 - 用户的停机复制和重新部署属于系统外人工操作。
@@ -169,6 +171,8 @@ DataNode
 Dataset
   data_node_id
   keep_duration
+  binding_locked
+  revision
 
 View
   keep_duration
