@@ -14,6 +14,8 @@
 
 `config/app.yaml` declares the broker, Streams, Topics, and KV buckets. Stream/KV reconciliation is completed before `/readyz` becomes successful. Retention and storage changes are rejected automatically; only bounded limits and descriptions may be changed in place.
 
+The `consumers` section is also the single source of truth for durable consumer topology. Storage View, Factor, and Archive use `packages/jetstream.BindManagedPullConsumer` with only their Stream, Durable, fetch wait, and poison-decode choice; they do not create, update, or delete consumers and must not duplicate filter or delivery limits in service configuration.
+
 The `store_dir` is runtime state and is intentionally not included in release archives. Deployment rewrites it to `../data/eventbus/jetstream`.
 
 ## Disk Bounds

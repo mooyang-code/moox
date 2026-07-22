@@ -10,7 +10,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
-	nats "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -40,7 +39,7 @@ type NATSConfig struct {
 	URL            string
 	Stream         string
 	Consumer       string
-	Subject        string
+	FetchMaxWait   time.Duration
 	CredentialFile string
 }
 
@@ -75,7 +74,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consumer, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: c.cfg.Stream, Durable: c.cfg.Consumer, FilterSubject: c.cfg.Subject, AckWait: 60 * time.Second, MaxDeliver: 5, MaxAckPending: 1000, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverNewPolicy})
+	consumer, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: c.cfg.Stream, Durable: c.cfg.Consumer, FetchMaxWait: c.cfg.FetchMaxWait, DeliverDecodeErrors: true})
 	if err != nil {
 		_ = client.Close()
 		return err

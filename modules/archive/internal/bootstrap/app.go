@@ -20,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	nats "github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -98,8 +97,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer natsClient.Close()
 	state.NATSReady.Store(true)
-	ref := jetstream.ConsumerRef{Stream: a.Config.Archive.EventBus.Stream, Durable: a.Config.Archive.EventBus.Durable, FilterSubject: a.Config.Archive.EventBus.Subject, AckWait: a.Config.Archive.EventBus.AckWait, MaxDeliver: -1, MaxAckPending: a.Config.Archive.EventBus.MaxAckPending, FetchMaxWait: a.Config.Archive.EventBus.FetchMaxWait, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true}
-	pull, err := natsClient.BindPullConsumer(ctx, ref)
+	pull, err := natsClient.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: a.Config.Archive.EventBus.Stream, Durable: a.Config.Archive.EventBus.Durable, FetchMaxWait: a.Config.Archive.EventBus.FetchMaxWait, DeliverDecodeErrors: true})
 	if err != nil {
 		return err
 	}

@@ -25,6 +25,16 @@ type ConsumerRef struct {
 	DeliverDecodeErrors bool
 }
 
+// ConsumerBindRef identifies a predeclared durable whose server-side
+// configuration is authoritative. Only fetch behavior may be overridden by
+// the binding client.
+type ConsumerBindRef struct {
+	Stream              string
+	Durable             string
+	FetchMaxWait        time.Duration
+	DeliverDecodeErrors bool
+}
+
 type ConsumerConfig struct {
 	Stream        string
 	Durable       string
@@ -68,7 +78,33 @@ func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullCo
 	}, false)
 }
 
+// BindManagedPullConsumer binds an existing durable using its server-side
+// configuration. It never creates, updates, or deletes a consumer.
+func (c *Client) BindManagedPullConsumer(ctx context.Context, ref ConsumerBindRef) (*PullConsumer, error) {
+	cfg := ConsumerConfig{
+		Stream: ref.Stream, Durable: ref.Durable,
+		FetchMaxWait: ref.FetchMaxWait, DeliverDecodeErrors: ref.DeliverDecodeErrors,
+	}
+	info, err := c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
+	if errors.Is(err, nats.ErrConsumerNotFound) {
+		return nil, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, strings.TrimSpace(cfg.Stream), strings.TrimSpace(cfg.Durable))
+	}
+	if err != nil {
+		return nil, classifyConsumerError("inspect consumer", err)
+	}
+	cfg.FilterSubject = info.Config.FilterSubject
+	cfg.AckWait = info.Config.AckWait
+	cfg.MaxDeliver = info.Config.MaxDeliver
+	cfg.MaxAckPending = info.Config.MaxAckPending
+	cfg.DeliverPolicy = info.Config.DeliverPolicy
+	return c.openPullConsumerWithInfo(ctx, cfg, false, info)
+}
+
 func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, create bool) (*PullConsumer, error) {
+	return c.openPullConsumerWithInfo(ctx, cfg, create, nil)
+}
+
+func (c *Client) openPullConsumerWithInfo(ctx context.Context, cfg ConsumerConfig, create bool, suppliedInfo *nats.ConsumerInfo) (*PullConsumer, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -109,24 +145,28 @@ func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, creat
 		cfg.DeliverPolicy = nats.DeliverAllPolicy
 	}
 
-	consumerCfg := &nats.ConsumerConfig{
-		Name:          cfg.Durable,
-		Durable:       cfg.Durable,
-		FilterSubject: cfg.FilterSubject,
-		AckPolicy:     nats.AckExplicitPolicy,
-		AckWait:       cfg.AckWait,
-		MaxDeliver:    cfg.MaxDeliver,
-		MaxAckPending: cfg.MaxAckPending,
-		DeliverPolicy: cfg.DeliverPolicy,
-	}
-	info, err := c.js.ConsumerInfo(cfg.Stream, cfg.Durable, nats.Context(ctx))
-	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-		return nil, classifyConsumerError("inspect consumer", err)
+	info := suppliedInfo
+	var err error
+	if info == nil {
+		info, err = c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
+		if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+			return nil, classifyConsumerError("inspect consumer", err)
+		}
 	}
 	if err := contextErr(ctx, "after consumer inspection"); err != nil {
 		return nil, err
 	}
 	if errors.Is(err, nats.ErrConsumerNotFound) && create {
+		consumerCfg := &nats.ConsumerConfig{
+			Name:          cfg.Durable,
+			Durable:       cfg.Durable,
+			FilterSubject: cfg.FilterSubject,
+			AckPolicy:     nats.AckExplicitPolicy,
+			AckWait:       cfg.AckWait,
+			MaxDeliver:    cfg.MaxDeliver,
+			MaxAckPending: cfg.MaxAckPending,
+			DeliverPolicy: cfg.DeliverPolicy,
+		}
 		if _, addErr := c.js.AddConsumer(cfg.Stream, consumerCfg, nats.Context(ctx)); addErr != nil && !errors.Is(addErr, nats.ErrConsumerNameAlreadyInUse) {
 			return nil, classifyConsumerError("create consumer", addErr)
 		}
@@ -161,6 +201,37 @@ func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, creat
 		return nil, err
 	}
 	return &PullConsumer{client: c, sub: sub, cfg: cfg}, nil
+}
+
+func (c *Client) inspectConsumer(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	stream = strings.TrimSpace(stream)
+	durable = strings.TrimSpace(durable)
+	if stream == "" || durable == "" {
+		return nil, fmt.Errorf("%w: stream and durable are required", ErrInvalidConsumer)
+	}
+	if strings.ContainsAny(stream, " \t\r\n") || strings.ContainsAny(durable, " \t\r\n") {
+		return nil, fmt.Errorf("%w: stream and durable cannot contain whitespace", ErrInvalidConsumer)
+	}
+	if err := contextErr(ctx, "before consumer inspection"); err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, fmt.Errorf("%w: client is nil", ErrConnection)
+	}
+	if err := c.alive(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
+	}
+	info, err := c.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if err := contextErr(ctx, "after consumer inspection"); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func contextErr(ctx context.Context, operation string) error {

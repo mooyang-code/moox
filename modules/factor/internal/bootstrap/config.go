@@ -46,12 +46,12 @@ type StorageConfig struct {
 
 // NATSConfig describes the Storage event stream subscription.
 type NATSConfig struct {
-	URLs           []string `yaml:"urls"`
-	URL            string   `yaml:"url"`
-	Stream         string   `yaml:"stream"`
-	Consumer       string   `yaml:"consumer"`
-	Subject        string   `yaml:"subject"`
-	CredentialFile string   `yaml:"credential_file"`
+	URLs           []string      `yaml:"urls"`
+	URL            string        `yaml:"url"`
+	Stream         string        `yaml:"stream"`
+	Consumer       string        `yaml:"consumer"`
+	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
+	CredentialFile string        `yaml:"credential_file"`
 }
 
 // EngineConfig describes the local Python factor engine.
@@ -130,11 +130,11 @@ func Default() *Config {
 			GatewayTarget: "ip://127.0.0.1:11003",
 		},
 		NATS: NATSConfig{
-			URLs:     []string{"nats://127.0.0.1:4222"},
-			URL:      "nats://127.0.0.1:4222",
-			Stream:   "MOOX_STORAGE",
-			Consumer: "factor_calc",
-			Subject:  "moox.storage.fields_changed.v1.>",
+			URLs:         []string{"nats://127.0.0.1:4222"},
+			URL:          "nats://127.0.0.1:4222",
+			Stream:       "MOOX_STORAGE",
+			Consumer:     "factor_calc",
+			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
 			PythonBin:           "python3",
@@ -201,8 +201,8 @@ func (c *Config) applyDefaults() {
 	if c.NATS.Consumer == "" {
 		c.NATS.Consumer = "factor_calc"
 	}
-	if c.NATS.Subject == "" {
-		c.NATS.Subject = "moox.storage.fields_changed.v1.>"
+	if c.NATS.FetchMaxWait == 0 {
+		c.NATS.FetchMaxWait = time.Second
 	}
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"

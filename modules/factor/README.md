@@ -2,6 +2,8 @@
 
 因子计算模块。`moox-factor` 是独立 tRPC 服务进程，负责后续因子定义管理、事件触发计算、Python worker 执行和 Storage 结果写回。
 
+实时 Storage 触发器只读取 EventBus 的 `stream`、`consumer` 和 `fetch_max_wait`，通过 managed bind 使用服务端预声明的 `factor_calc` durable；filter、ACK 和投递限制不在 Factor 配置中重复声明。
+
 ## 现状
 
 ```bash

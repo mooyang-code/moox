@@ -133,7 +133,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			URL:            cfg.NATS.URL,
 			Stream:         cfg.NATS.Stream,
 			Consumer:       cfg.NATS.Consumer,
-			Subject:        cfg.NATS.Subject,
+			FetchMaxWait:   cfg.NATS.FetchMaxWait,
 			CredentialFile: cfg.NATS.CredentialFile,
 		}, eventBatcher)
 		if err := consumer.Start(ctx); err != nil {
