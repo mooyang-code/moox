@@ -766,6 +766,33 @@ copy_optional_web_host() {
   fail "missing moox-web-host binary; use --no-web-host or build it without --skip-build"
 }
 
+storage_binary_sha256() {
+  local path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{print $1}'
+    return
+  fi
+  sha256sum "${path}" | awk '{print $1}'
+}
+
+write_storage_build_provenance() {
+  [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
+  local commit="unknown" dirty=true primary_hash node_hash view_hash
+  if commit_candidate=$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null) && [[ "${commit_candidate}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    commit="$(printf '%s' "${commit_candidate}" | tr '[:upper:]' '[:lower:]')"
+    dirty=false
+    if ! git -C "${ROOT}" diff --quiet --ignore-submodules -- || ! git -C "${ROOT}" diff --cached --quiet --ignore-submodules --; then
+      dirty=true
+    fi
+  fi
+  primary_hash="$(storage_binary_sha256 "${STAGE_DIR}/bin/moox-storage-primary")"
+  node_hash="$(storage_binary_sha256 "${STAGE_DIR}/bin/moox-storage-node")"
+  view_hash="$(storage_binary_sha256 "${STAGE_DIR}/bin/moox-storage-view")"
+  cat >"${STAGE_DIR}/build-provenance.json" <<EOF
+{"schema_version":1,"commit":"${commit}","dirty":${dirty},"binary_hashes":{"moox-storage-primary":"${primary_hash}","moox-storage-node":"${node_hash}","moox-storage-view":"${view_hash}"}}
+EOF
+}
+
 patch_configs() {
 	[[ -f "${STAGE_DIR}/gateway/config/trpc_go.yaml" ]] || fail "missing Gateway tRPC Timer config"
 	if [[ "${WITH_ADMIN}" -eq 1 ]]; then
@@ -1341,12 +1368,20 @@ import_storage_metadata() {
 
 run_storage_doctor() {
   if [[ "${WITH_ADMIN}" != "1" || "${WITH_MONITOR}" != "1" || ! -x "${ROOT}/bin/moox-cli" ]]; then
-    echo "skip storage Doctor bootstrap: control-plane Doctor is not deployed"
-    return 0
+    echo "defer Dataset activation: control-plane Doctor is not deployed"
+    return 1
   fi
   local report="${ROOT}/logs/storage/doctor-bootstrap.json"
   echo "running read-only Doctor bootstrap before Dataset activation"
-  "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"
+  if ! "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"; then
+    echo "defer Dataset activation: Doctor bootstrap failed"
+    return 1
+  fi
+  if ! grep -Eq '"conclusion"[[:space:]]*:[[:space:]]*"HEALTHY"' "${report}"; then
+    echo "defer Dataset activation: Doctor conclusion is not HEALTHY"
+    return 1
+  fi
+  return 0
 }
 
 activate_storage_datasets() {
@@ -1504,8 +1539,11 @@ start_storage() {
 }
 
 complete_storage_bootstrap() {
-  run_storage_doctor
-  activate_storage_datasets
+  if run_storage_doctor; then
+    activate_storage_datasets
+  else
+    echo "Storage started without Dataset activation; run explicit activation after a HEALTHY Doctor result"
+  fi
   start_storage_view
   wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
   wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
@@ -2380,6 +2418,7 @@ EOF
       copy_required_binary "moox-storage-node"
     fi
   fi
+  write_storage_build_provenance
   copy_optional_web_host
 
   cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"

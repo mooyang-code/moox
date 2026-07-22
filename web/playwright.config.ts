@@ -8,6 +8,7 @@ export default defineConfig({
   globalSetup: remote ? "./tests/remote-auth-global-setup.ts" : undefined,
   use: {
     baseURL: process.env.MOOX_REMOTE_BASE_URL || "http://127.0.0.1:9527",
+    ignoreHTTPSErrors: remote,
     trace: remote ? "off" : "retain-on-failure",
     video: remote ? "off" : "on-first-retry",
     storageState: undefined

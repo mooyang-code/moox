@@ -107,22 +107,78 @@ func TestStorageTargetAddressAndNamespaceValidation(t *testing.T) {
 func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 	t.Parallel()
 	api := &fakeStorageMetadataAPI{}
-	session := &remoteStorageSession{metadata: api, auth: &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: "signed"}}
+	primary := &fakeStoragePrimaryAPI{}
+	session := &remoteStorageSession{
+		metadata:    api,
+		primary:     primary,
+		auth:        &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: "signed"},
+		nodeAuth:    &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: "deploy-signed"},
+		primaryAuth: &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: "primary-signed"},
+	}
 	result, err := runStorageLifecycle(context.Background(), session, "task16")
 	require.NoError(t, err)
 	require.Equal(t, "passed", result.Status)
 	require.Equal(t, "completed", result.Cleanup)
-	require.Equal(t, []string{"space_created", "data_source_created", "dataset_created_disabled", "activation_checks_passed", "dataset_activated_locked"}, result.Assertions)
-	require.Equal(t, []string{"active", "disabled"}, api.spaceStatuses)
-	require.Equal(t, []string{"active", "disabled"}, api.sourceStatuses)
-	require.Equal(t, []string{"disabled", "disabled"}, api.datasetStatuses)
+	require.Equal(t, []string{
+		"space_created", "data_source_created", "dataset_created_disabled", "dataset_column_created",
+		"activation_checks_passed", "dataset_activated_locked", "row_written", "row_read_back",
+		"locked_rebind_rejected", "active_node_delete_rejected", "referenced_node_delete_rejected", "temporary_node_deleted",
+	}, result.Assertions)
+	require.Equal(t, []string{"task16_constraint", "task16_dataset"}, api.deletedDatasets)
+	require.Equal(t, []string{"task16_source"}, api.deletedSources)
+	require.Equal(t, []string{"task16_space"}, api.deletedSpaces)
+	require.Equal(t, []string{"task16_node"}, api.deletedNodes)
+	require.True(t, primary.deleted)
 	for _, auth := range api.auths {
+		if auth.GetAppId() == "storage-deployer" {
+			require.Equal(t, "deploy-signed", auth.GetAppKey())
+			continue
+		}
 		require.Equal(t, "storage-metadata", auth.GetAppId())
 		require.Equal(t, "signed", auth.GetAppKey())
 	}
+	require.Equal(t, "storage-e2e", primary.auth.GetAppId())
+	require.Equal(t, "primary-signed", primary.auth.GetAppKey())
 	var encoded map[string]any
 	require.NoError(t, json.Unmarshal(mustJSON(t, result), &encoded))
 	require.NotContains(t, string(mustJSON(t, result)), "task16_space")
+	require.NotContains(t, string(mustJSON(t, result)), "row-value")
+}
+
+func TestValidateStorageBuildProvenanceRequiresExactRemoteArtifacts(t *testing.T) {
+	t.Parallel()
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	hashes := map[string]string{
+		"moox-storage-primary": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"moox-storage-node":    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"moox-storage-view":    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}
+	local := storageBuildProvenance{SchemaVersion: 1, Commit: commit, Dirty: false, BinaryHashes: hashes}
+	remote := storageBuildProvenance{SchemaVersion: 1, Commit: commit, Dirty: false, BinaryHashes: hashes}
+	require.NoError(t, validateStorageBuildProvenance(local, remote, hashes))
+
+	remote.Commit = "1123456789abcdef0123456789abcdef01234567"
+	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch")
+	remote.Commit = commit
+	actual := map[string]string{}
+	for name, hash := range hashes {
+		actual[name] = hash
+	}
+	actual["moox-storage-node"] = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	require.EqualError(t, validateStorageBuildProvenance(local, remote, actual), "storage_provenance_mismatch")
+	local.Dirty = true
+	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch")
+}
+
+func TestStorageBrowserEndpointUsesDiscoveredControlHost(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	host, err := resolveStorageBrowserHost(snapshot.Manifest, "compute")
+	require.NoError(t, err)
+	require.Equal(t, "control", host.Name)
+	require.Equal(t, "203.0.113.8", host.Address)
+	_, err = resolveStorageBrowserHost(snapshot.Manifest, "missing")
+	require.Error(t, err)
 }
 
 func mustJSON(t *testing.T, value any) []byte {
@@ -133,10 +189,13 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 type fakeStorageMetadataAPI struct {
-	spaceStatuses   []string
-	sourceStatuses  []string
-	datasetStatuses []string
-	auths           []*storagepb.AuthInfo
+	auths               []*storagepb.AuthInfo
+	deletedSpaces       []string
+	deletedSources      []string
+	deletedDatasets     []string
+	deletedNodes        []string
+	temporaryNode       *storagepb.DataNode
+	temporaryReferenced bool
 }
 
 func (f *fakeStorageMetadataAPI) remember(auth *storagepb.AuthInfo) { f.auths = append(f.auths, auth) }
@@ -144,46 +203,49 @@ func storageOK() *storagepb.RetInfo                                 { return &st
 
 func (f *fakeStorageMetadataAPI) CreateSpace(_ context.Context, req *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error) {
 	f.remember(req.GetAuthInfo())
-	f.spaceStatuses = append(f.spaceStatuses, req.GetSpace().GetStatus())
 	return &storagepb.CreateSpaceRsp{RetInfo: storageOK(), Space: req.GetSpace()}, nil
 }
 func (f *fakeStorageMetadataAPI) UpdateSpace(_ context.Context, req *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error) {
 	f.remember(req.GetAuthInfo())
-	f.spaceStatuses = append(f.spaceStatuses, req.GetSpace().GetStatus())
 	return &storagepb.UpdateSpaceRsp{RetInfo: storageOK(), Space: req.GetSpace()}, nil
 }
 func (f *fakeStorageMetadataAPI) DeleteSpace(_ context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
 	f.remember(req.GetAuthInfo())
+	f.deletedSpaces = append(f.deletedSpaces, req.GetSpaceId())
 	return &storagepb.DeleteSpaceRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) CreateDataSource(_ context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
 	f.remember(req.GetAuthInfo())
-	f.sourceStatuses = append(f.sourceStatuses, req.GetDataSource().GetStatus())
 	return &storagepb.CreateDataSourceRsp{RetInfo: storageOK(), DataSource: req.GetDataSource()}, nil
 }
 func (f *fakeStorageMetadataAPI) UpdateDataSource(_ context.Context, req *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error) {
 	f.remember(req.GetAuthInfo())
-	f.sourceStatuses = append(f.sourceStatuses, req.GetDataSource().GetStatus())
 	return &storagepb.UpdateDataSourceRsp{RetInfo: storageOK(), DataSource: req.GetDataSource()}, nil
 }
 func (f *fakeStorageMetadataAPI) DeleteDataSource(_ context.Context, req *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error) {
 	f.remember(req.GetAuthInfo())
+	f.deletedSources = append(f.deletedSources, req.GetDataSourceId())
 	return &storagepb.DeleteDataSourceRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
-	f.datasetStatuses = append(f.datasetStatuses, req.GetDataset().GetStatus())
 	dataset := *req.GetDataset()
 	dataset.Revision = 7
+	if f.temporaryNode != nil && dataset.GetDataNodeId() == f.temporaryNode.GetNodeId() {
+		f.temporaryReferenced = true
+	}
 	return &storagepb.CreateDatasetRsp{RetInfo: storageOK(), Dataset: &dataset}, nil
 }
 func (f *fakeStorageMetadataAPI) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
-	f.datasetStatuses = append(f.datasetStatuses, req.GetDataset().GetStatus())
 	return &storagepb.UpdateDatasetRsp{RetInfo: storageOK(), Dataset: req.GetDataset()}, nil
 }
 func (f *fakeStorageMetadataAPI) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
+	f.deletedDatasets = append(f.deletedDatasets, req.GetDatasetId())
+	if req.GetDatasetId() == "task16_constraint" {
+		f.temporaryReferenced = false
+	}
 	return &storagepb.DeleteDatasetRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
@@ -194,13 +256,33 @@ func (f *fakeStorageMetadataAPI) RebindDatasetDataNode(_ context.Context, req *s
 	f.remember(req.GetAuthInfo())
 	return &storagepb.RebindDatasetDataNodeRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
 }
+func (f *fakeStorageMetadataAPI) RegisterDataNode(_ context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
+	f.remember(req.GetAuthInfo())
+	f.temporaryNode = &storagepb.DataNode{NodeId: req.GetNodeId(), Name: req.GetInitialName(), ServiceTarget: req.GetServiceTarget(), Status: "active"}
+	return &storagepb.RegisterDataNodeRsp{RetInfo: storageOK(), Node: f.temporaryNode}, nil
+}
+func (f *fakeStorageMetadataAPI) UpdateDataNode(_ context.Context, req *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error) {
+	f.remember(req.GetAuthInfo())
+	if f.temporaryNode != nil && req.GetNodeId() == f.temporaryNode.GetNodeId() {
+		f.temporaryNode.Status = req.GetStatus()
+		f.temporaryNode.Name = req.GetName()
+	}
+	return &storagepb.UpdateDataNodeRsp{RetInfo: storageOK(), Node: f.temporaryNode}, nil
+}
 func (f *fakeStorageMetadataAPI) ListDataNodes(_ context.Context, req *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error) {
 	f.remember(req.GetAuthInfo())
-	return &storagepb.ListDataNodesRsp{RetInfo: storageOK(), Items: []*storagepb.DataNodeListItem{{Node: &storagepb.DataNode{NodeId: "node-1", Status: "active"}}}, PageResult: &storagepb.PageResult{}}, nil
+	return &storagepb.ListDataNodesRsp{RetInfo: storageOK(), Items: []*storagepb.DataNodeListItem{{Node: &storagepb.DataNode{NodeId: "node-1", Name: "部署节点", ServiceTarget: "ip://127.0.0.1:20107", Status: "active"}}}, PageResult: &storagepb.PageResult{}}, nil
 }
 func (f *fakeStorageMetadataAPI) DeleteDataNode(_ context.Context, req *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error) {
 	f.remember(req.GetAuthInfo())
-	return &storagepb.DeleteDataNodeRsp{RetInfo: storageOK()}, nil
+	if req.GetNodeId() == "node-1" {
+		return &storagepb.DeleteDataNodeRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+	}
+	if f.temporaryNode == nil || f.temporaryNode.GetStatus() != "disabled" || f.temporaryReferenced {
+		return &storagepb.DeleteDataNodeRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+	}
+	f.deletedNodes = append(f.deletedNodes, req.GetNodeId())
+	return &storagepb.DeleteDataNodeRsp{RetInfo: storageOK(), Node: f.temporaryNode}, nil
 }
 func (f *fakeStorageMetadataAPI) CheckDatasetActivation(_ context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
 	f.remember(req.GetAuthInfo())
@@ -209,4 +291,31 @@ func (f *fakeStorageMetadataAPI) CheckDatasetActivation(_ context.Context, req *
 func (f *fakeStorageMetadataAPI) ActivateDataset(_ context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
 	return &storagepb.ActivateDatasetRsp{RetInfo: storageOK(), Dataset: &storagepb.Dataset{DatasetId: req.GetDatasetId(), Status: "active", BindingLocked: true, Revision: req.GetExpectedRevision() + 1}}, nil
+}
+
+type fakeStoragePrimaryAPI struct {
+	auth    *storagepb.AuthInfo
+	row     *storagepb.RowFieldUpsert
+	deleted bool
+}
+
+func (f *fakeStoragePrimaryAPI) WriteFields(_ context.Context, req *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error) {
+	f.auth = req.GetAuthInfo()
+	f.row = req.GetRows()[0]
+	return &storagepb.PrimaryWriteFieldsRsp{RetInfo: storageOK(), Keys: []*storagepb.RowKey{f.row.GetKey()}}, nil
+}
+
+func (f *fakeStoragePrimaryAPI) ReadFields(_ context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
+	f.auth = req.GetAuthInfo()
+	return &storagepb.PrimaryReadFieldsRsp{
+		RetInfo:      storageOK(),
+		Rows:         []*storagepb.RowFieldValues{{Key: f.row.GetKey(), Fields: f.row.GetFields()}},
+		ExistingKeys: []*storagepb.RowKey{f.row.GetKey()},
+	}, nil
+}
+
+func (f *fakeStoragePrimaryAPI) DeleteFields(_ context.Context, req *storagepb.PrimaryDeleteFieldsReq) (*storagepb.PrimaryDeleteFieldsRsp, error) {
+	f.auth = req.GetAuthInfo()
+	f.deleted = true
+	return &storagepb.PrimaryDeleteFieldsRsp{RetInfo: storageOK(), Keys: req.GetKeys()}, nil
 }

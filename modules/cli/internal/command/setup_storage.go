@@ -28,6 +28,8 @@ const (
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
 	storageAuthFile              = "$HOME/moox/storage/secrets/storage-node-auth.env"
 	storagePrimaryAuthFile       = "$HOME/moox/storage/secrets/gateway-storage-primary.key"
+	storageRemoteProvenanceFile  = "$HOME/moox/storage/build-provenance.json"
+	storageLocalProvenanceFile   = "release/deploy-stage/moox/build-provenance.json"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
 )
 
@@ -65,6 +67,13 @@ type storageBrowserResult struct {
 	Mobile  string `json:"mobile"`
 }
 
+type storageBuildProvenance struct {
+	SchemaVersion int               `json:"schema_version"`
+	Commit        string            `json:"commit"`
+	Dirty         bool              `json:"dirty"`
+	BinaryHashes  map[string]string `json:"binary_hashes"`
+}
+
 type storageMetadataAPI interface {
 	CreateSpace(context.Context, *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error)
 	UpdateSpace(context.Context, *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error)
@@ -76,6 +85,8 @@ type storageMetadataAPI interface {
 	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
+	RegisterDataNode(context.Context, *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error)
+	UpdateDataNode(context.Context, *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error)
 	RebindDatasetDataNode(context.Context, *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error)
 	DeleteDataNode(context.Context, *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error)
 	ListDataNodes(context.Context, *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error)
@@ -138,6 +149,14 @@ func (c *storageMetadataProxy) UpsertDatasetColumn(ctx context.Context, req *sto
 	return c.proxy.UpsertDatasetColumn(ctx, req, c.options...)
 }
 
+func (c *storageMetadataProxy) RegisterDataNode(ctx context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
+	return c.proxy.RegisterDataNode(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) UpdateDataNode(ctx context.Context, req *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error) {
+	return c.proxy.UpdateDataNode(ctx, req, c.options...)
+}
+
 func (c *storageMetadataProxy) RebindDatasetDataNode(ctx context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {
 	return c.proxy.RebindDatasetDataNode(ctx, req, c.options...)
 }
@@ -189,6 +208,7 @@ type remoteStorageSession struct {
 	metadata        storageMetadataAPI
 	primary         storagePrimaryAPI
 	auth            *storagepb.AuthInfo
+	nodeAuth        *storagepb.AuthInfo
 	primaryAuth     *storagepb.AuthInfo
 	cancel          context.CancelFunc
 	listener        net.Listener
@@ -240,6 +260,7 @@ func newRemoteStorageSession(ctx context.Context, transport setupssh.Client, sec
 		metadata:        &storageMetadataProxy{proxy: storagepb.NewMetadataClientProxy(options...), options: options},
 		primary:         &storagePrimaryProxy{proxy: storagepb.NewPrimaryStoreClientProxy(primaryOptions...), options: primaryOptions},
 		auth:            &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		nodeAuth:        &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: security.HMACSHA256Hex(secret, []byte("storage-deployer"))},
 		primaryAuth:     &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
 		cancel:          cancel,
 		listener:        listener,
@@ -345,13 +366,13 @@ func newSetupBrowserE2EStorageCommand(deps setupDeps) *cobra.Command {
 }
 
 func defaultSetupVerifyStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string) (storageVerifyResult, error) {
-	host, transport, session, root, err := openRemoteStorage(ctx, snapshot, name)
+	_, transport, session, root, err := openRemoteStorage(ctx, snapshot, name)
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
 	defer transport.Close()
 	defer session.Close()
-	return verifyRemoteStorage(ctx, transport, session, host.Name, root)
+	return verifyRemoteStorage(ctx, transport, session, root)
 }
 
 func defaultSetupE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, namespace string) (storageE2EResult, error) {
@@ -424,14 +445,32 @@ printf '%s' "$value"`}, nil)
 	return strings.TrimSpace(result.Stdout), nil
 }
 
-func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session *remoteStorageSession, hostName, root string) (storageVerifyResult, error) {
+func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session *remoteStorageSession, root string) (storageVerifyResult, error) {
 	components, err := readStorageComponents(ctx, transport)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	localProvenance, err := readLocalStorageBuildProvenance(root)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	remoteProvenance, err := readRemoteStorageBuildProvenance(ctx, transport)
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
 	hashes, err := readStorageBinaryHashes(ctx, transport)
 	if err != nil {
 		return storageVerifyResult{}, err
+	}
+	if err := validateStorageBuildProvenance(localProvenance, remoteProvenance, hashes); err != nil {
+		return storageVerifyResult{}, err
+	}
+	routeRPCRegistered, err := readRemoteRouteRPCRegistered(ctx, transport)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	if routeRPCRegistered {
+		return storageVerifyResult{}, errors.New("storage_route_rpc_registered")
 	}
 	schemaVersion, err := readStorageSchemaVersion(ctx, transport)
 	if err != nil {
@@ -464,22 +503,96 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if err != nil || state == nil || state.GetRetInfo() == nil || state.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || state.GetNodeId() != selected.GetNodeId() || state.GetStatus() != "READY" {
 		return storageVerifyResult{}, errors.New("storage_verification_failed")
 	}
-	commit, err := localGitCommit(ctx, root)
-	if err != nil {
-		return storageVerifyResult{}, errors.New("storage_verification_commit_unavailable")
-	}
-	_ = hostName
 	return storageVerifyResult{
 		Status:             "passed",
-		Commit:             commit,
+		Commit:             remoteProvenance.Commit,
 		Components:         components,
 		BinaryHashes:       hashes,
 		SchemaVersion:      schemaVersion,
 		DataNode:           storageDataNodeIdentity{NodeID: state.GetNodeId(), Status: state.GetStatus()},
 		NodeCount:          len(items),
 		DatasetCount:       datasetCount,
-		RouteRPCRegistered: false,
+		RouteRPCRegistered: routeRPCRegistered,
 	}, nil
+}
+
+func readLocalStorageBuildProvenance(root string) (storageBuildProvenance, error) {
+	if strings.TrimSpace(root) == "" {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, storageLocalProvenanceFile))
+	if err != nil {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	return decodeStorageBuildProvenance(raw)
+}
+
+func readRemoteStorageBuildProvenance(ctx context.Context, transport setupssh.Client) (storageBuildProvenance, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+test -f "` + storageRemoteProvenanceFile + `"
+cat "` + storageRemoteProvenanceFile + `"`}, nil)
+	if err != nil {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	return decodeStorageBuildProvenance([]byte(result.Stdout))
+}
+
+func decodeStorageBuildProvenance(raw []byte) (storageBuildProvenance, error) {
+	var provenance storageBuildProvenance
+	if err := json.Unmarshal(raw, &provenance); err != nil {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	return provenance, nil
+}
+
+func validateStorageBuildProvenance(local, remote storageBuildProvenance, actual map[string]string) error {
+	if local.SchemaVersion != 1 || remote.SchemaVersion != 1 || local.Dirty || remote.Dirty || !validStorageCommit(local.Commit) || local.Commit != remote.Commit {
+		return errors.New("storage_provenance_mismatch")
+	}
+	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
+		localHash := strings.ToLower(strings.TrimSpace(local.BinaryHashes[name]))
+		remoteHash := strings.ToLower(strings.TrimSpace(remote.BinaryHashes[name]))
+		actualHash := strings.ToLower(strings.TrimSpace(actual[name]))
+		if !validStorageSHA256(localHash) || localHash != remoteHash || localHash != actualHash {
+			return errors.New("storage_provenance_mismatch")
+		}
+	}
+	return nil
+}
+
+func validStorageCommit(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) == 40 && validStorageHex(value)
+}
+
+func validStorageSHA256(value string) bool {
+	return len(value) == 64 && validStorageHex(value)
+}
+
+func validStorageHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func readRemoteRouteRPCRegistered(ctx context.Context, transport setupssh.Client) (bool, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+command -v strings >/dev/null
+if strings "$HOME/moox/storage/bin/moox-storage-primary" "$HOME/moox/storage/bin/moox-storage-node" "$HOME/moox/storage/bin/moox-storage-view" | grep -Eq 'ListStorageRoutes|GetStorageRoute|UpsertStorageRoute|DeleteStorageRoute'; then
+  printf registered
+else
+  printf absent
+fi`}, nil)
+	if err != nil {
+		return false, errors.New("storage_route_probe_unavailable")
+	}
+	switch strings.TrimSpace(result.Stdout) {
+	case "registered":
+		return true, nil
+	case "absent":
+		return false, nil
+	default:
+		return false, errors.New("storage_route_probe_unavailable")
+	}
 }
 
 func readStorageComponents(ctx context.Context, transport setupssh.Client) (map[string]storageComponent, error) {
@@ -548,23 +661,6 @@ printf '%s' "$version"`}, nil)
 	return version, nil
 }
 
-func localGitCommit(ctx context.Context, root string) (string, error) {
-	output, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return "", err
-	}
-	commit := strings.TrimSpace(string(output))
-	if len(commit) != 40 {
-		return "", errors.New("invalid commit")
-	}
-	for _, r := range commit {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
-			return "", errors.New("invalid commit")
-		}
-	}
-	return strings.ToLower(commit), nil
-}
-
 func storageTargetAddress(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme != "ip" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -602,7 +698,7 @@ func listAllStorageDataNodes(ctx context.Context, api storageMetadataAPI, auth *
 }
 
 func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, namespace string) (result storageE2EResult, returnErr error) {
-	if session == nil || session.metadata == nil {
+	if session == nil || session.metadata == nil || session.primary == nil {
 		return storageE2EResult{}, errors.New("storage_e2e_unavailable")
 	}
 	if err := validateStorageNamespace(namespace); err != nil {
@@ -612,12 +708,17 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	spaceID := namespace + "_space"
 	sourceID := namespace + "_source"
 	datasetID := namespace + "_dataset"
+	constraintDatasetID := namespace + "_constraint"
+	temporaryNodeID := namespace + "_node"
 	var space *storagepb.Space
 	var source *storagepb.DataSource
 	var dataset *storagepb.Dataset
+	var constraintDataset *storagepb.Dataset
+	var temporaryNode *storagepb.DataNode
+	var rowKey *storagepb.RowKey
 	var cleanupErr error
 	defer func() {
-		cleanupErr = cleanupStorageLifecycle(ctx, session, space, source, dataset)
+		cleanupErr = cleanupStorageLifecycle(ctx, session, space, source, []*storagepb.Dataset{constraintDataset, dataset}, rowKey, temporaryNode)
 		if cleanupErr != nil {
 			result.Cleanup = "failed"
 			if returnErr == nil {
@@ -635,16 +736,23 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	if err != nil {
 		return result, errors.New("storage_e2e_metadata_unavailable")
 	}
-	var nodeID string
+	var deployedNode *storagepb.DataNode
 	for _, item := range items {
 		if item != nil && item.GetNode() != nil && item.GetNode().GetStatus() == "active" {
-			nodeID = item.GetNode().GetNodeId()
+			deployedNode = item.GetNode()
 			break
 		}
 	}
-	if nodeID == "" {
+	if deployedNode == nil || strings.TrimSpace(deployedNode.GetServiceTarget()) == "" {
 		return result, errors.New("storage_e2e_node_unavailable")
 	}
+	temporaryResponse, err := session.metadata.RegisterDataNode(ctx, &storagepb.RegisterDataNodeReq{
+		AuthInfo: session.nodeAuth, NodeId: temporaryNodeID, ServiceTarget: deployedNode.GetServiceTarget(), InitialName: "E2E 临时节点",
+	})
+	if err != nil || temporaryResponse == nil || temporaryResponse.GetRetInfo() == nil || temporaryResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || temporaryResponse.GetNode() == nil {
+		return result, errors.New("storage_e2e_temporary_node_failed")
+	}
+	temporaryNode = temporaryResponse.GetNode()
 	space = &storagepb.Space{SpaceId: spaceID, Name: "E2E 临时空间", Owner: "storage-e2e", Status: "active"}
 	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: space})
 	if err != nil || spaceResponse == nil || spaceResponse.GetRetInfo() == nil || spaceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -657,13 +765,20 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 		return result, errors.New("storage_e2e_data_source_failed")
 	}
 	result.Assertions = append(result.Assertions, "data_source_created")
-	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: "E2E 临时集", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "1h", Status: "disabled", DataNodeId: nodeID}
+	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: "E2E 临时集", DataKind: storagepb.DataKind_DATA_KIND_RECORD, KeepDuration: "0", Status: "disabled", DataNodeId: deployedNode.GetNodeId()}
 	datasetResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: dataset})
 	if err != nil || datasetResponse == nil || datasetResponse.GetRetInfo() == nil || datasetResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || datasetResponse.GetDataset() == nil {
 		return result, errors.New("storage_e2e_dataset_failed")
 	}
 	dataset = datasetResponse.GetDataset()
 	result.Assertions = append(result.Assertions, "dataset_created_disabled")
+	columnResponse, err := session.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: session.auth, Column: &storagepb.DatasetColumn{
+		SpaceId: spaceID, DatasetId: datasetID, ColumnName: "value", OriginId: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", Attributes: map[string]string{"display_name": "数值"},
+	}})
+	if err != nil || columnResponse == nil || columnResponse.GetRetInfo() == nil || columnResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_dataset_column_failed")
+	}
+	result.Assertions = append(result.Assertions, "dataset_column_created")
 	checkResponse, err := session.metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: session.auth, SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil || checkResponse == nil || checkResponse.GetRetInfo() == nil || checkResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || !checkResponse.GetReady() {
 		return result, errors.New("storage_e2e_activation_check_failed")
@@ -675,26 +790,78 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	}
 	dataset = activated.GetDataset()
 	result.Assertions = append(result.Assertions, "dataset_activated_locked")
+	rowKey = &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "row-1", Version: "1"}}}
+	row := &storagepb.RowFieldUpsert{Key: rowKey, Fields: []*storagepb.FieldValue{{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "row-value"}}}}, Operation: storagepb.RowFieldOperation_ROW_FIELD_OPERATION_UPSERT}
+	writeResponse, err := session.primary.WriteFields(ctx, &storagepb.PrimaryWriteFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
+	if err != nil || writeResponse == nil || writeResponse.GetRetInfo() == nil || writeResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(writeResponse.GetKeys()) != 1 {
+		return result, errors.New("storage_e2e_write_failed")
+	}
+	result.Assertions = append(result.Assertions, "row_written")
+	readResponse, err := session.primary.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{AuthInfo: session.primaryAuth, Keys: []*storagepb.RowKey{rowKey}, FieldIds: []string{"value"}})
+	if err != nil || readResponse == nil || readResponse.GetRetInfo() == nil || readResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(readResponse.GetRows()) != 1 || len(readResponse.GetRows()[0].GetFields()) != 1 || readResponse.GetRows()[0].GetFields()[0].GetValue().GetStringValue() != "row-value" {
+		return result, errors.New("storage_e2e_read_failed")
+	}
+	result.Assertions = append(result.Assertions, "row_read_back")
+	rebindResponse, err := session.metadata.RebindDatasetDataNode(ctx, &storagepb.RebindDatasetDataNodeReq{AuthInfo: session.auth, SpaceId: spaceID, DatasetId: datasetID, DataNodeId: temporaryNodeID, ExpectedRevision: dataset.GetRevision()})
+	if err != nil || rebindResponse == nil || rebindResponse.GetRetInfo() == nil || rebindResponse.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_locked_rebind_accepted")
+	}
+	result.Assertions = append(result.Assertions, "locked_rebind_rejected")
+	activeDelete, err := session.metadata.DeleteDataNode(ctx, &storagepb.DeleteDataNodeReq{AuthInfo: session.auth, NodeId: temporaryNodeID})
+	if err != nil || activeDelete == nil || activeDelete.GetRetInfo() == nil || activeDelete.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_active_node_delete_accepted")
+	}
+	result.Assertions = append(result.Assertions, "active_node_delete_rejected")
+	constraintResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: &storagepb.Dataset{
+		SpaceId: spaceID, DatasetId: constraintDatasetID, DataSourceId: sourceID, Name: "E2E 约束集", DataKind: storagepb.DataKind_DATA_KIND_RECORD, KeepDuration: "0", Status: "disabled", DataNodeId: temporaryNodeID,
+	}})
+	if err != nil || constraintResponse == nil || constraintResponse.GetRetInfo() == nil || constraintResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || constraintResponse.GetDataset() == nil {
+		return result, errors.New("storage_e2e_constraint_dataset_failed")
+	}
+	constraintDataset = constraintResponse.GetDataset()
+	disabledNode, err := session.metadata.UpdateDataNode(ctx, &storagepb.UpdateDataNodeReq{AuthInfo: session.auth, NodeId: temporaryNodeID, Name: temporaryNode.GetName(), Status: "disabled"})
+	if err != nil || disabledNode == nil || disabledNode.GetRetInfo() == nil || disabledNode.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_temporary_node_disable_failed")
+	}
+	referencedDelete, err := session.metadata.DeleteDataNode(ctx, &storagepb.DeleteDataNodeReq{AuthInfo: session.auth, NodeId: temporaryNodeID})
+	if err != nil || referencedDelete == nil || referencedDelete.GetRetInfo() == nil || referencedDelete.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_referenced_node_delete_accepted")
+	}
+	result.Assertions = append(result.Assertions, "referenced_node_delete_rejected")
+	if err := deleteStorageDataset(ctx, session, constraintDataset); err != nil {
+		return result, err
+	}
+	constraintDataset = nil
+	deletedNode, err := session.metadata.DeleteDataNode(ctx, &storagepb.DeleteDataNodeReq{AuthInfo: session.auth, NodeId: temporaryNodeID})
+	if err != nil || deletedNode == nil || deletedNode.GetRetInfo() == nil || deletedNode.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_temporary_node_delete_failed")
+	}
+	temporaryNode = nil
+	result.Assertions = append(result.Assertions, "temporary_node_deleted")
 	return result, nil
 }
 
-func cleanupStorageLifecycle(ctx context.Context, session *remoteStorageSession, space *storagepb.Space, source *storagepb.DataSource, dataset *storagepb.Dataset) error {
+func cleanupStorageLifecycle(ctx context.Context, session *remoteStorageSession, space *storagepb.Space, source *storagepb.DataSource, datasets []*storagepb.Dataset, rowKey *storagepb.RowKey, temporaryNode *storagepb.DataNode) error {
 	if session == nil {
 		return errors.New("storage_e2e_cleanup_failed")
 	}
 	var first error
-	if dataset != nil {
-		copy := *dataset
-		copy.Status = "disabled"
-		response, err := session.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: session.auth, Dataset: &copy})
+	if rowKey != nil {
+		response, err := session.primary.DeleteFields(ctx, &storagepb.PrimaryDeleteFieldsReq{AuthInfo: session.primaryAuth, Keys: []*storagepb.RowKey{rowKey}, FieldIds: []string{"value"}})
 		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			first = errors.New("dataset cleanup failed")
+			first = errors.New("row cleanup failed")
+		}
+	}
+	for _, dataset := range datasets {
+		if dataset == nil {
+			continue
+		}
+		if err := deleteStorageDataset(ctx, session, dataset); err != nil && first == nil {
+			first = err
 		}
 	}
 	if source != nil {
-		copy := *source
-		copy.Status = "disabled"
-		response, err := session.metadata.UpdateDataSource(ctx, &storagepb.UpdateDataSourceReq{AuthInfo: session.auth, DataSource: &copy})
+		response, err := session.metadata.DeleteDataSource(ctx, &storagepb.DeleteDataSourceReq{AuthInfo: session.auth, SpaceId: source.GetSpaceId(), DataSourceId: source.GetDataSourceId()})
 		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			if first == nil {
 				first = errors.New("data source cleanup failed")
@@ -702,16 +869,36 @@ func cleanupStorageLifecycle(ctx context.Context, session *remoteStorageSession,
 		}
 	}
 	if space != nil {
-		copy := *space
-		copy.Status = "disabled"
-		response, err := session.metadata.UpdateSpace(ctx, &storagepb.UpdateSpaceReq{AuthInfo: session.auth, Space: &copy})
+		response, err := session.metadata.DeleteSpace(ctx, &storagepb.DeleteSpaceReq{AuthInfo: session.auth, SpaceId: space.GetSpaceId()})
 		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			if first == nil {
 				first = errors.New("space cleanup failed")
 			}
 		}
 	}
+	if temporaryNode != nil {
+		response, err := session.metadata.UpdateDataNode(ctx, &storagepb.UpdateDataNodeReq{AuthInfo: session.auth, NodeId: temporaryNode.GetNodeId(), Name: temporaryNode.GetName(), Status: "disabled"})
+		if err == nil && response != nil && response.GetRetInfo() != nil && response.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+			deleted, deleteErr := session.metadata.DeleteDataNode(ctx, &storagepb.DeleteDataNodeReq{AuthInfo: session.auth, NodeId: temporaryNode.GetNodeId()})
+			if deleteErr != nil || deleted == nil || deleted.GetRetInfo() == nil || deleted.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+				err = errors.New("temporary node cleanup failed")
+			}
+		} else {
+			err = errors.New("temporary node cleanup failed")
+		}
+		if err != nil && first == nil {
+			first = err
+		}
+	}
 	return first
+}
+
+func deleteStorageDataset(ctx context.Context, session *remoteStorageSession, dataset *storagepb.Dataset) error {
+	response, err := session.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: session.auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return errors.New("dataset cleanup failed")
+	}
+	return nil
 }
 
 func validateStorageNamespace(namespace string) error {
@@ -735,7 +922,7 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 	if snapshot == nil || strings.TrimSpace(repoRoot) == "" {
 		return storageBrowserResult{}, errors.New("browser_e2e_invalid")
 	}
-	host, err := findSetupHost(snapshot.Manifest, name)
+	host, err := resolveStorageBrowserHost(snapshot.Manifest, name)
 	if err != nil {
 		return storageBrowserResult{}, err
 	}
@@ -744,6 +931,13 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 		return storageBrowserResult{}, err
 	}
 	defer transport.Close()
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+"$HOME/moox/prod/status.sh" admin >/dev/null
+"$HOME/moox/prod/status.sh" gateway >/dev/null
+"$HOME/moox/prod/status.sh" web-host >/dev/null
+curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
+	}
 	forwardContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	listener, err := transport.ForwardLocal(forwardContext, storageBrowserRemoteAddress)
@@ -757,9 +951,10 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 	}
 	command := exec.CommandContext(ctx, "pnpm", "--dir", "web", "exec", "playwright", "test", storageE2ESpec, "--project=chromium")
 	command.Dir = root
+	baseURL := "https://" + listener.Addr().String()
 	command.Env = append(os.Environ(),
 		"MOOX_REMOTE_PLAYWRIGHT=1",
-		"MOOX_REMOTE_BASE_URL=http://"+listener.Addr().String(),
+		"MOOX_REMOTE_BASE_URL="+baseURL,
 		"MOOX_REMOTE_TRACE=off",
 		"MOOX_REMOTE_VIDEO=off",
 	)
@@ -771,7 +966,7 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 		_ = stdin.Close()
 		return storageBrowserResult{}, errors.New("browser_e2e_start_failed")
 	}
-	credentials := map[string]string{"base_url": "http://" + listener.Addr().String(), "username": snapshot.Manifest.Admin.Username, "password": snapshot.Manifest.Admin.Password}
+	credentials := map[string]string{"base_url": baseURL, "username": snapshot.Manifest.Admin.Username, "password": snapshot.Manifest.Admin.Password}
 	encodeErr := json.NewEncoder(stdin).Encode(credentials)
 	_ = stdin.Close()
 	waitErr := command.Wait()
@@ -779,4 +974,15 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 		return storageBrowserResult{}, errors.New("browser_e2e_failed")
 	}
 	return storageBrowserResult{Status: "passed", Desktop: "passed", Mobile: "passed"}, nil
+}
+
+func resolveStorageBrowserHost(manifest setupconfig.Manifest, requestedStorageHost string) (setupconfig.Host, error) {
+	if _, err := findSetupHost(manifest, requestedStorageHost); err != nil {
+		return setupconfig.Host{}, err
+	}
+	control := manifest.ControlHost
+	if strings.TrimSpace(control.Name) == "" || strings.TrimSpace(control.Address) == "" {
+		return setupconfig.Host{}, errors.New("browser_e2e_control_unavailable")
+	}
+	return control, nil
 }

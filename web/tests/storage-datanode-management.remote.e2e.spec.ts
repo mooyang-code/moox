@@ -9,11 +9,11 @@ type RpcBody = {
   datasets?: Array<{ dataset_id?: string; status?: string; binding_locked?: boolean }>;
 };
 
-function waitForMethod(page: Page, method: string) {
+function waitForMethod(page: Page, method: string, service = "storage") {
   return page
     .waitForResponse(response => {
       if (response.request().method() !== "POST") return false;
-      return new URL(response.url()).pathname === `/api/admin/storage/${method}`;
+      return new URL(response.url()).pathname === `/api/admin/${service}/${method}`;
     })
     .then(async response => {
       expect(response.ok(), `${method} HTTP response`).toBeTruthy();
@@ -63,7 +63,7 @@ async function openDataNodePage(page: Page, query: string) {
 }
 
 async function openDatasetPage(page: Page) {
-  const spacesResponse = waitForMethod(page, "ListSpaces");
+  const spacesResponse = waitForMethod(page, "ListSpaces", "space");
   const nodesResponse = waitForMethod(page, "ListDataNodes");
   const datasetsResponse = waitForMethod(page, "ListDatasets");
   await page.goto("/#/data/datasets");

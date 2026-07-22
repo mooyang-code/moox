@@ -66,6 +66,11 @@ done
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]
 [[ -x "${TMP_ROOT}/unpacked/bin/moox-gateway" ]]
 [[ -f "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" ]]
+[[ -f "${TMP_ROOT}/unpacked/build-provenance.json" ]]
+grep -q '"schema_version":1' "${TMP_ROOT}/unpacked/build-provenance.json"
+for binary in moox-storage-primary moox-storage-node moox-storage-view; do
+  grep -Eq "\"${binary}\":\"[0-9a-f]{64}\"" "${TMP_ROOT}/unpacked/build-provenance.json"
+done
 [[ $(stat -f '%Lp' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" 2>/dev/null || stat -c '%a' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env") == 600 ]]
 grep -Eq '^MOOX_STORAGE_NODE_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env"
 grep -A 20 '^server:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.yaml" | grep -q 'ip: 0.0.0.0'
@@ -100,13 +105,22 @@ assert_order "${TMP_ROOT}/unpacked/start.sh" \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
   '^  import_storage_metadata$' \
-  '^  run_storage_doctor$' \
-  '^  activate_storage_datasets$' \
+  '^  if run_storage_doctor; then$' \
+  '^    activate_storage_datasets$' \
   '^  start_storage_view$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${TMP_ROOT}/unpacked/start.sh")"
 grep -q 'doctor bootstrap --format json' <<<"${doctor_body}"
+grep -q 'return 1' <<<"${doctor_body}"
+grep -q '"conclusion".*"HEALTHY"' <<<"${doctor_body}"
 if grep -q 'activate-datasets' <<<"${doctor_body}"; then
   echo 'ordinary Doctor path must not activate Datasets' >&2
+  exit 1
+fi
+bootstrap_body="$(awk '/^complete_storage_bootstrap\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${TMP_ROOT}/unpacked/start.sh")"
+grep -q '^  if run_storage_doctor; then$' <<<"${bootstrap_body}"
+grep -q '^    activate_storage_datasets$' <<<"${bootstrap_body}"
+if grep -q '^  activate_storage_datasets$' <<<"${bootstrap_body}"; then
+  echo 'Storage-only profile must not activate Datasets without a HEALTHY Doctor result' >&2
   exit 1
 fi
 
