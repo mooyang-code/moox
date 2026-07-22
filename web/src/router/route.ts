@@ -280,11 +280,6 @@ export const staticRoutes = [
         meta: { title: "ops-storage" }
       },
       {
-        path: "/ops/storage/routes",
-        redirect: { path: "/ops/storage/nodes", query: { tab: "routes" } },
-        meta: { title: "ops-storage", hide: true }
-      },
-      {
         path: "/ops/storage/archive",
         redirect: { path: "/ops/storage/nodes", query: { tab: "archive" } },
         meta: { title: "ops-storage", hide: true }

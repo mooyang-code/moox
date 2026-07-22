@@ -43,7 +43,6 @@ import {
   listDataSources,
   listFactors,
   listFields,
-  listPrimaryStoreRoutes,
   listSubjects,
   listViews
 } from "@/api/storage/metadata";
@@ -133,16 +132,6 @@ const stats = reactive<StatItem[]>([
     color: "#ea580c"
   },
   {
-    key: "routes",
-    group: "主存",
-    label: "主存路由",
-    description: "数据集到 PrimaryStore 的路由配置",
-    path: "/ops/storage/routes",
-    value: 0,
-    hasMore: false,
-    color: "#475569"
-  },
-  {
     key: "archives",
     group: "归档",
     label: "归档文件",
@@ -174,14 +163,13 @@ async function load() {
   try {
     const space_id = selectedSpaceId.value;
     const page = { page: 1, size: 1 };
-    const [sources, subjects, datasets, fields, factors, views, routes, archives] = await Promise.all([
+    const [sources, subjects, datasets, fields, factors, views, archives] = await Promise.all([
       listDataSources({ space_id, page }),
       listSubjects({ space_id, page }),
       listDatasets({ space_id, page }),
       listFields({ space_id, page }),
       listFactors({ space_id, page }),
       listViews({ space_id, page }),
-      listPrimaryStoreRoutes({ space_id, page }),
       listArchiveFiles({ space_id, page })
     ]);
 
@@ -191,7 +179,6 @@ async function load() {
     setStat("fields", countFrom(fields.page_result, fields.fields?.length));
     setStat("factors", countFrom(factors.page_result, factors.factors?.length));
     setStat("views", countFrom(views.page_result, views.views?.length));
-    setStat("routes", countFrom(routes.page_result, routes.primary_store_routes?.length));
     setStat("archives", countFrom(archives.page_result, archives.archive_files?.length));
   } finally {
     loading.value = false;
