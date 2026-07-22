@@ -20,10 +20,10 @@ data_sources:
     status: active
 
 datasets:
-  - {space_id: moox_system, dataset_id: host_resource_v1, data_source_id: moox_host_agent, name: 主机资源, description: Per-minute host CPU and memory snapshots, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: active}
-  - {space_id: moox_system, dataset_id: host_fs_v1, data_source_id: moox_host_agent, name: 主机文件系统, description: Per-minute filesystem snapshots, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: active}
-  - {space_id: moox_system, dataset_id: host_disk_v1, data_source_id: moox_host_agent, name: 主机磁盘, description: Per-minute disk counters and rates, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: active}
-  - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: 主机网络, description: Per-minute network counters and rates, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: active}
+  - {space_id: moox_system, dataset_id: host_resource_v1, data_source_id: moox_host_agent, name: 主机资源, description: Per-minute host CPU and memory snapshots, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: disabled}
+  - {space_id: moox_system, dataset_id: host_fs_v1, data_source_id: moox_host_agent, name: 主机文件系统, description: Per-minute filesystem snapshots, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: disabled}
+  - {space_id: moox_system, dataset_id: host_disk_v1, data_source_id: moox_host_agent, name: 主机磁盘, description: Per-minute disk counters and rates, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: disabled}
+  - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: 主机网络, description: Per-minute network counters and rates, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: disabled}
 
 views:
   - {space_id: moox_system, view_id: host_resource_view, name: 主机资源视图, primary_dataset_id: host_resource_v1, dataset_ids: [host_resource_v1], grain_keys: [subject_id, freq, data_time], engine: duckdb, keep_duration: 4320h, status: active}

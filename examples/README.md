@@ -7,11 +7,9 @@ API 或采集流程生成，不在这里维护交易所、标的或历史行情�
 
 - `metadata-quant-initial.seed.yaml`：量化业务元数据唯一初始化事实源，包含 A 股、
   港股、美股和加密货币市场。
-- `platform-local.seed.yaml`：本地开发与演示的单节点存储拓扑。
+- `platform-local.seed.yaml`：兼容既有本地 bootstrap 命令的空 seed；DataNode 注册由部署流程负责。
 - `metadata-monitor-metrics.seed.yaml`：MooX 服务指标逻辑元数据。
-- `metadata-monitor-metrics-local-route.seed.yaml`：服务指标的本地主存路由。
 - `metadata-monitor-host.seed.yaml`：主机资源逻辑元数据。
-- `metadata-monitor-host-local-route.seed.yaml`：主机资源的本地主存路由。
 - `service-deployments.seed.yaml`：Admin `t_service_deployments` 的初始化清单，区分独立进程
   (`deployment_mode: process`) 与同进程 RPC 端点 (`deployment_mode: endpoint`)。
 

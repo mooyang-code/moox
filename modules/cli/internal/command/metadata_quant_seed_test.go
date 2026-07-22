@@ -44,4 +44,9 @@ func TestQuantInitialSeedUsesUnifiedCryptoMarket(t *testing.T) {
 		"okx_spot_1h_view",
 		"okx_perpetual_1h_view",
 	}, viewIDs)
+	for _, item := range seed.Datasets {
+		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
+		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
+		require.Equal(t, "disabled", item.Status, item.DatasetID)
+	}
 }

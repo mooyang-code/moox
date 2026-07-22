@@ -29,9 +29,7 @@ validate_monitor_metadata_seeds() {
   for seed in \
     "${ROOT}/examples/platform-local.seed.yaml" \
     "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" \
-    "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" \
-    "${ROOT}/examples/metadata-monitor-host.seed.yaml" \
-    "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"; do
+    "${ROOT}/examples/metadata-monitor-host.seed.yaml"; do
     [[ -s "${seed}" ]] || {
       echo "missing metadata seed: ${seed}" >&2
       exit 1
@@ -42,16 +40,19 @@ validate_monitor_metadata_seeds() {
   # Use a host-built CLI here: the release binary may be cross-compiled for
   # Linux/arm64 and cannot be executed on the packaging workstation.
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --dry-run >/dev/null)
-  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml" --dry-run >/dev/null)
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --dry-run >/dev/null)
-  (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml" --dry-run >/dev/null)
   grep -q 'host_storage:' "${ROOT}/modules/monitor/config/app.yaml"
   grep -q 'result_retention_days: 14' "${ROOT}/modules/monitor/config/app.yaml"
+  ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
   ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
-  grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+  for seed in "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" "${ROOT}/examples/metadata-monitor-host.seed.yaml"; do
+    grep -q 'data_node_id: storage-node-0' "${seed}"
+    grep -q 'keep_duration:' "${seed}"
+    ! awk '/^datasets:/{inside=1; next} inside && /^(views|fields|dataset_columns):/{inside=0} inside && /status: active/{found=1} END{exit found ? 0 : 1}' "${seed}"
+  done
   for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
     grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
-    grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+    grep -q "dataset_id: ${dataset}.*status: disabled" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
   done
 }
 

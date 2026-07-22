@@ -262,8 +262,6 @@ MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 MOOX_WAIT_EVENTBU
 TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/eventbus.pid")")
 MOOX_TEST_CAPTURE_DIR="${TMP}/captures" STARTUP_WAIT_SECONDS=0 \
   MOOX_METRICS_STORAGE_METADATA_URL="http://127.0.0.1:${metadata_port}" \
-  MOOX_METRICS_STORAGE_ROUTE_SEED="${MONITOR_DEPLOY}/examples/metadata-monitor-metrics-local-route.seed.yaml" \
-  MOOX_HOST_STORAGE_ROUTE_SEED="${MONITOR_DEPLOY}/examples/metadata-monitor-host-local-route.seed.yaml" \
   "${MONITOR_DEPLOY}/start.sh" monitor >/dev/null
 TEST_PIDS+=("$(cat "${MONITOR_DEPLOY}/run/monitor.pid")")
 for _ in $(seq 1 50); do

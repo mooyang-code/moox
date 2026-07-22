@@ -17,23 +17,23 @@ grep -q 'data/eventbus/jetstream' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'logs/eventbus' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'apply_metrics_metadata' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'metadata-monitor-metrics.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'MOOX_METRICS_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"
+! grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED|local-route' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_METRICS_STORAGE_METADATA_URL' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'apply_host_metadata' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'metadata-monitor-host.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'MOOX_HOST_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'secrets/health-auth.env' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'moox-admin-cli.*random-secret.*--bytes 32' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_HEALTH_AUTH_SECRET_KEY' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'sign_health_request' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_SERVICE_GATEWAY_CA_FILE' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'metadata-monitor-host-local-route.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
 ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
-grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
 for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
   grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
-  grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
+  grep -q "dataset_id: ${dataset}.*status: disabled" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
 done
+grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
+grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
 
 if ! awk '/start_eventbus\(\)/ { start=NR } /start_storage\(\)/ { storage=NR } END { exit !(start < storage) }' "${ROOT}/scripts/deploy-moox.sh"; then
   echo "eventbus must start before storage" >&2

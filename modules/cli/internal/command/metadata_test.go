@@ -17,13 +17,6 @@ import (
 	"testing"
 )
 
-func TestValidateReservedInternalSpacesAllowsTopologyReferenceSeed(t *testing.T) {
-	seed := metadataSeed{PrimaryStoreRoutes: []seedPrimaryStoreRoute{{SpaceID: "moox_system", DatasetID: "moox_service_metrics", SubjectPattern: "*", HashRule: "subject_id"}}}
-	if err := validateReservedInternalSpaces(seed); err != nil {
-		t.Fatalf("route-only seed should reference an existing reserved space: %v", err)
-	}
-}
-
 func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {
 	seed := metadataSeed{Datasets: []seedDataset{{SpaceID: "moox_system", DatasetID: "moox_service_metrics"}}}
 	if err := validateReservedInternalSpaces(seed); err == nil {
@@ -46,16 +39,15 @@ func TestLoadMetadataSeed_ParsesMinimalYAML(t *testing.T) {
 func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	t.Parallel()
 	seed := metadataSeed{
-		Spaces:            []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}, {SpaceID: "crypto", Name: "加密货币市场"}},
-		DataSources:       []seedDataSource{{SpaceID: "stock_cn", DataSourceID: "stock"}, {SpaceID: "crypto", DataSourceID: "binance"}},
-		FieldGroups:       []seedFieldGroup{{SpaceID: "stock_cn", GroupID: "quote"}, {SpaceID: "crypto", GroupID: "quote"}},
-		Fields:            []seedField{{SpaceID: "stock_cn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto", FieldID: "close", GroupID: "quote"}},
-		Datasets:          []seedDataset{{SpaceID: "stock_cn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
-		DatasetColumns:    []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
-		Views:             []seedView{{SpaceID: "stock_cn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
-		ViewColumns:       []seedViewColumn{{SpaceID: "stock_cn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto", ViewID: "kline", ColumnName: "close"}},
-		PrimaryStoreNodes: []seedPrimaryStoreNode{{NodeID: "storage"}},
-		Devices:           []seedDevice{{DeviceID: "duckdb"}},
+		Spaces:         []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}, {SpaceID: "crypto", Name: "加密货币市场"}},
+		DataSources:    []seedDataSource{{SpaceID: "stock_cn", DataSourceID: "stock"}, {SpaceID: "crypto", DataSourceID: "binance"}},
+		FieldGroups:    []seedFieldGroup{{SpaceID: "stock_cn", GroupID: "quote"}, {SpaceID: "crypto", GroupID: "quote"}},
+		Fields:         []seedField{{SpaceID: "stock_cn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto", FieldID: "close", GroupID: "quote"}},
+		Datasets:       []seedDataset{{SpaceID: "stock_cn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
+		DatasetColumns: []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
+		Views:          []seedView{{SpaceID: "stock_cn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
+		ViewColumns:    []seedViewColumn{{SpaceID: "stock_cn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto", ViewID: "kline", ColumnName: "close"}},
+		Devices:        []seedDevice{{DeviceID: "duckdb"}},
 	}
 
 	selected, err := selectMetadataSpaces(seed, []string{" A股市场 "})
@@ -68,7 +60,6 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	require.Len(t, selected.DatasetColumns, 1)
 	require.Len(t, selected.Views, 1)
 	require.Len(t, selected.ViewColumns, 1)
-	require.Len(t, selected.PrimaryStoreNodes, 1, "global storage topology is preserved")
 	require.Len(t, selected.Devices, 1, "global devices are preserved")
 }
 
@@ -98,6 +89,25 @@ func TestBuildMetadataImportCalls_AcceptsEmptySeed(t *testing.T) {
 	if err != nil || len(calls) != 0 {
 		t.Fatalf("calls=%d err=%v", len(calls), err)
 	}
+}
+
+func TestBuildMetadataImportCallsRequiresDatasetBindingAndRetention(t *testing.T) {
+	_, err := buildMetadataImportCalls(metadataSeed{Datasets: []seedDataset{{DatasetID: "missing-node", KeepDuration: "1h"}}})
+	require.ErrorContains(t, err, "data_node_id is required")
+	_, err = buildMetadataImportCalls(metadataSeed{Datasets: []seedDataset{{DatasetID: "missing-retention", DataNodeID: "storage-node-0"}}})
+	require.ErrorContains(t, err, "keep_duration is required")
+}
+
+func TestSeedDatasetToPBAlwaysStartsDisabled(t *testing.T) {
+	dataset, err := (seedDataset{
+		SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "Kline",
+		DataKind: "TIME_SERIES", DataNodeID: " storage-node-0 ", KeepDuration: " 1h ",
+		seedCommon: seedCommon{Status: "active"},
+	}).toPB()
+	require.NoError(t, err)
+	assert.Equal(t, "storage-node-0", dataset.GetDataNodeId())
+	assert.Equal(t, "1h", dataset.GetKeepDuration())
+	assert.Equal(t, "disabled", dataset.GetStatus())
 }
 
 func TestParseDataKind(t *testing.T) {
@@ -162,24 +172,22 @@ func TestValidateReservedInternalSpacesAcceptsDeclaredSpace(t *testing.T) {
 
 func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	seed := metadataSeed{
-		Spaces:             []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
-		DataSources:        []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
-		Subjects:           []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
-		SubjectSymbols:     []seedSubjectSymbol{{SpaceID: "crypto", SubjectID: "BTC", DataSourceID: "binance", ExternalSymbol: "BTCUSDT"}},
-		Datasets:           []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", Freqs: []string{"1m"}}},
-		DatasetSubjects:    []seedDatasetSubject{{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC"}},
-		Fields:             []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
-		Factors:            []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},
-		DatasetColumns:     []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
-		Views:              []seedView{{SpaceID: "crypto", ViewID: "v1", Name: "View", DatasetIDs: []string{"kline"}}},
-		ViewColumns:        []seedViewColumn{{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}},
-		PrimaryStoreNodes:  []seedPrimaryStoreNode{{NodeID: "node-1", Name: "Node"}},
-		Devices:            []seedDevice{{DeviceID: "dev-1", NodeID: "node-1", Name: "Device"}},
-		PrimaryStoreRoutes: []seedPrimaryStoreRoute{{SpaceID: "moox_system", RouteID: "r1", DatasetID: "metrics", SubjectPattern: "*", HashRule: "subject_id"}},
+		Spaces:          []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
+		DataSources:     []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
+		Subjects:        []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
+		SubjectSymbols:  []seedSubjectSymbol{{SpaceID: "crypto", SubjectID: "BTC", DataSourceID: "binance", ExternalSymbol: "BTCUSDT"}},
+		Datasets:        []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"}}},
+		DatasetSubjects: []seedDatasetSubject{{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC"}},
+		Fields:          []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
+		Factors:         []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},
+		DatasetColumns:  []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
+		Views:           []seedView{{SpaceID: "crypto", ViewID: "v1", Name: "View", DatasetIDs: []string{"kline"}}},
+		ViewColumns:     []seedViewColumn{{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}},
+		Devices:         []seedDevice{{DeviceID: "dev-1", Name: "Device"}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(calls), 14)
+	require.GreaterOrEqual(t, len(calls), 13)
 }
 
 func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
@@ -219,10 +227,6 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 	assert.True(t, metadataContractsEqual("dataset_columns",
 		&pb.DatasetColumn{SpaceId: "crypto", DatasetId: "kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 		&pb.DatasetColumn{SpaceId: "crypto", DatasetId: "kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
-	))
-	assert.True(t, metadataContractsEqual("primary_store_routes",
-		&pb.PrimaryStoreRoute{SpaceId: "moox_system", RouteId: "r1", DatasetId: "metrics", Status: "active"},
-		&pb.PrimaryStoreRoute{SpaceId: "moox_system", RouteId: "r1", DatasetId: "metrics", Status: "active"},
 	))
 }
 
@@ -332,7 +336,7 @@ func TestMetadataNotFoundAcceptsGenericNotFound(t *testing.T) {
 func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
 	req := &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "stock_cn", FieldId: "close"}}
 	assert.Equal(t, "stock_cn", protoMessageSpaceID(req.ProtoReflect()))
-	assert.Empty(t, protoMessageSpaceID((&pb.ListPrimaryStoreNodesReq{}).ProtoReflect()))
+	assert.Empty(t, protoMessageSpaceID((&pb.ListDataNodesReq{}).ProtoReflect()))
 }
 
 func TestSeedToPBAllTypes(t *testing.T) {
@@ -353,15 +357,7 @@ func TestSeedToPBAllTypes(t *testing.T) {
 	viewCol, err := (seedViewColumn{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, "close", viewCol.GetColumnName())
-	assert.Equal(t, "node-1", (seedPrimaryStoreNode{NodeID: "node-1"}).toPB().GetNodeId())
-	assert.Equal(t, "dev-1", (seedDevice{DeviceID: "dev-1", NodeID: "node-1"}).toPB().GetDeviceId())
-	assert.Equal(t, "r1", (seedPrimaryStoreRoute{SpaceID: "moox_system", RouteID: "r1"}).toPB().GetRouteId())
-}
-
-func TestIsReservedReferenceSeed(t *testing.T) {
-	seed := metadataSeed{PrimaryStoreRoutes: []seedPrimaryStoreRoute{{SpaceID: "moox_system"}}}
-	assert.True(t, isReservedReferenceSeed(seed))
-	assert.False(t, isReservedReferenceSeed(metadataSeed{Spaces: []seedSpace{{SpaceID: "default"}}}))
+	assert.Equal(t, "dev-1", (seedDevice{DeviceID: "dev-1"}).toPB().GetDeviceId())
 }
 
 func metadataTestServer(t *testing.T, handlers map[string]func(w http.ResponseWriter, r *http.Request)) *httptest.Server {

@@ -51,7 +51,7 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 		selected[spaceID] = struct{}{}
 	}
 	keep := func(spaceID string) bool { _, ok := selected[spaceID]; return ok }
-	out := metadataSeed{PrimaryStoreNodes: seed.PrimaryStoreNodes, Devices: seed.Devices}
+	out := metadataSeed{Devices: seed.Devices}
 	for _, item := range seed.Spaces {
 		if keep(item.SpaceID) {
 			out.Spaces = append(out.Spaces, item)
@@ -110,11 +110,6 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 	for _, item := range seed.ViewColumns {
 		if keep(item.SpaceID) {
 			out.ViewColumns = append(out.ViewColumns, item)
-		}
-	}
-	for _, item := range seed.PrimaryStoreRoutes {
-		if keep(item.SpaceID) {
-			out.PrimaryStoreRoutes = append(out.PrimaryStoreRoutes, item)
 		}
 	}
 	return out, nil
