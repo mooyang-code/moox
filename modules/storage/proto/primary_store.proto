@@ -31,11 +31,24 @@ message PrimaryReadFieldsRsp {
   repeated RowKey existing_keys = 3;
 }
 
+message PrimaryDeleteFieldsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RowKey keys = 2;
+  repeated string field_ids = 3;
+  repeated string attribute_keys = 4;
+}
+
+message PrimaryDeleteFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowKey keys = 2;
+}
+
 // PrimaryStore is the metadata-validating user boundary. It never exposes
 // DataNode merge/scan terminology and routes one Dataset to its owner node.
 service PrimaryStore {
   rpc WriteFields(PrimaryWriteFieldsReq) returns (PrimaryWriteFieldsRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
+  rpc DeleteFields(PrimaryDeleteFieldsReq) returns (PrimaryDeleteFieldsRsp);
   rpc MergeTimeSeriesRows(MergeTimeSeriesRowsReq) returns (MergeTimeSeriesRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc MergeRecordRows(MergeRecordRowsReq) returns (MergeRecordRowsRsp);

@@ -115,7 +115,7 @@ func runPrimaryRole() error {
 		}
 		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -409,6 +409,9 @@ func (a *dataNodeProxyAdapter) WriteFields(ctx context.Context, req *pb.WriteFie
 }
 func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return a.proxy.ReadFields(ctx, req)
+}
+func (a *dataNodeProxyAdapter) DeleteFields(ctx context.Context, req *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
+	return a.proxy.DeleteFields(ctx, req)
 }
 func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return a.proxy.GetNodeState(ctx, req)

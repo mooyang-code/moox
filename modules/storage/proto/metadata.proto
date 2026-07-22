@@ -511,6 +511,17 @@ message UpdateSpaceRsp {
   Space space = 2;
 }
 
+// DeleteSpaceReq 表示删除一个使用空间及其级联元数据。
+message DeleteSpaceReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+}
+
+// DeleteSpaceRsp 表示删除使用空间的结果。
+message DeleteSpaceRsp {
+  common.RetInfo ret_info = 1;
+}
+
 // GetSpaceReq 表示获取使用空间的请求。
 message GetSpaceReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -689,6 +700,18 @@ message UpdateDataSourceRsp {
   common.RetInfo ret_info = 1;
   // data_source 是更新后的数据来源元数据。
   DataSource data_source = 2;
+}
+
+// DeleteDataSourceReq 表示删除一个没有数据集引用的数据来源。
+message DeleteDataSourceReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string data_source_id = 3;
+}
+
+// DeleteDataSourceRsp 表示删除数据来源的结果。
+message DeleteDataSourceRsp {
+  common.RetInfo ret_info = 1;
 }
 
 // GetDataSourceReq 表示获取数据来源的请求。
@@ -895,6 +918,18 @@ message UpdateDatasetRsp {
   common.RetInfo ret_info = 1;
   // dataset 是更新后的数据集元数据。
   Dataset dataset = 2;
+}
+
+// DeleteDatasetReq 表示删除一个临时数据集及其依赖行。
+message DeleteDatasetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+// DeleteDatasetRsp 表示删除数据集的结果。
+message DeleteDatasetRsp {
+  common.RetInfo ret_info = 1;
 }
 
 // GetDatasetReq 表示获取数据集的请求。
@@ -1548,6 +1583,8 @@ service Metadata {
   rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
   // 更新使用空间。
   rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
+  // 删除使用空间及其级联元数据。
+  rpc DeleteSpace(DeleteSpaceReq) returns (DeleteSpaceRsp);
   // 按 ID 获取使用空间。
   rpc GetSpace(GetSpaceReq) returns (GetSpaceRsp);
   // 列出使用空间。
@@ -1578,6 +1615,8 @@ service Metadata {
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
   // 更新数据来源。
   rpc UpdateDataSource(UpdateDataSourceReq) returns (UpdateDataSourceRsp);
+  // 删除数据来源。
+  rpc DeleteDataSource(DeleteDataSourceReq) returns (DeleteDataSourceRsp);
   // 按 ID 获取数据来源。
   rpc GetDataSource(GetDataSourceReq) returns (GetDataSourceRsp);
   // 列出数据来源。
@@ -1600,6 +1639,8 @@ service Metadata {
   rpc CreateDataset(CreateDatasetReq) returns (CreateDatasetRsp);
   // 更新数据集。
   rpc UpdateDataset(UpdateDatasetReq) returns (UpdateDatasetRsp);
+  // 删除数据集。
+  rpc DeleteDataset(DeleteDatasetReq) returns (DeleteDatasetRsp);
   // 按 ID 获取数据集。
   rpc GetDataset(GetDatasetReq) returns (GetDatasetRsp);
   // 列出数据集。

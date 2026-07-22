@@ -19,6 +19,7 @@ type NodeResolver func(context.Context, string, string) (pb.DataNodeRuntimeServi
 type ViewResolver func(context.Context, string, string) (pb.DataViewService, string, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
+type SnapshotProvider func() metadata.RequestSnapshot
 type routeKey struct{ spaceID, datasetID string }
 
 type Service struct {
@@ -27,6 +28,7 @@ type Service struct {
 	sign      AuthSigner
 	authorize Authorizer
 	view      ViewResolver
+	snapshot  SnapshotProvider
 }
 
 type Options struct {
@@ -36,6 +38,7 @@ type Options struct {
 	AuthSigner AuthSigner
 	Authorizer Authorizer
 	View       ViewResolver
+	Snapshot   SnapshotProvider
 }
 
 func New(opts Options) (*Service, error) {
@@ -46,7 +49,28 @@ func New(opts Options) (*Service, error) {
 	if resolve == nil {
 		return nil, errors.New("data node resolver is required")
 	}
-	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer, view: opts.View}, nil
+	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer, view: opts.View, snapshot: opts.Snapshot}, nil
+}
+
+// requestContext captures one immutable metadata generation before a request
+// starts grouping or routing rows. The snapshot is cache-only; it must never
+// fall back to the persistent metadata store on the PrimaryStore hot path.
+func (s *Service) requestContext(ctx context.Context) context.Context {
+	if metadata.RequestSnapshotFromContext(ctx) != nil {
+		return ctx
+	}
+	var snapshot metadata.RequestSnapshot
+	if s.snapshot != nil {
+		snapshot = s.snapshot()
+	} else if provider, ok := s.validate.(interface {
+		RequestSnapshot() metadata.RequestSnapshot
+	}); ok {
+		snapshot = provider.RequestSnapshot()
+	}
+	if snapshot == nil {
+		return ctx
+	}
+	return metadata.WithRequestSnapshot(ctx, snapshot)
 }
 
 func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq) (*pb.PrimaryWriteFieldsRsp, error) {
@@ -56,13 +80,7 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if provider, ok := s.validate.(interface {
-		RequestSnapshot() metadata.RequestSnapshot
-	}); ok {
-		if snapshot := provider.RequestSnapshot(); snapshot != nil {
-			ctx = metadata.WithRequestSnapshot(ctx, snapshot)
-		}
-	}
+	ctx = s.requestContext(ctx)
 	groups := make(map[routeKey][]*pb.RowFieldUpsert)
 	order := make([]routeKey, 0)
 	if batchValidator, ok := s.validate.(interface {
@@ -118,6 +136,7 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
+	ctx = s.requestContext(ctx)
 	groups := make(map[routeKey][]*pb.RowKey)
 	order := make([]routeKey, 0)
 	for _, key := range req.GetKeys() {
@@ -192,6 +211,48 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		}
 	}
 	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+}
+
+func (s *Service) DeleteFields(ctx context.Context, req *pb.PrimaryDeleteFieldsReq) (*pb.PrimaryDeleteFieldsRsp, error) {
+	if req == nil || len(req.GetKeys()) == 0 || (len(req.GetFieldIds()) == 0 && len(req.GetAttributeKeys()) == 0) {
+		return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys and field_ids or attribute_keys are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	groups := make(map[routeKey][]*pb.RowKey)
+	order := make([]routeKey, 0)
+	for _, key := range req.GetKeys() {
+		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
+			return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is invalid"))}, nil
+		}
+		group := routeKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+		if _, ok := groups[group]; !ok {
+			order = append(order, group)
+		}
+		groups[group] = append(groups[group], key)
+	}
+	deleted := make([]*pb.RowKey, 0, len(req.GetKeys()))
+	for _, group := range order {
+		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
+		if err != nil {
+			return nil, err
+		}
+		auth, err := s.signAuth(req.GetAuthInfo())
+		if err != nil {
+			return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		}
+		rsp, err := node.DeleteFields(ctx, &pb.DeleteFieldsReq{AuthInfo: auth, Keys: groups[group], FieldIds: req.GetFieldIds(), AttributeKeys: req.GetAttributeKeys()})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return &pb.PrimaryDeleteFieldsRsp{RetInfo: rsp.GetRetInfo(), Keys: deleted}, nil
+		}
+		deleted = append(deleted, rsp.GetKeys()...)
+	}
+	return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: deleted}, nil
 }
 
 func latestRecordIdentity(key *pb.RowKey) string {

@@ -152,6 +152,10 @@ func (f *fakeStorageMetadataAPI) UpdateSpace(_ context.Context, req *storagepb.U
 	f.spaceStatuses = append(f.spaceStatuses, req.GetSpace().GetStatus())
 	return &storagepb.UpdateSpaceRsp{RetInfo: storageOK(), Space: req.GetSpace()}, nil
 }
+func (f *fakeStorageMetadataAPI) DeleteSpace(_ context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.DeleteSpaceRsp{RetInfo: storageOK()}, nil
+}
 func (f *fakeStorageMetadataAPI) CreateDataSource(_ context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
 	f.remember(req.GetAuthInfo())
 	f.sourceStatuses = append(f.sourceStatuses, req.GetDataSource().GetStatus())
@@ -161,6 +165,10 @@ func (f *fakeStorageMetadataAPI) UpdateDataSource(_ context.Context, req *storag
 	f.remember(req.GetAuthInfo())
 	f.sourceStatuses = append(f.sourceStatuses, req.GetDataSource().GetStatus())
 	return &storagepb.UpdateDataSourceRsp{RetInfo: storageOK(), DataSource: req.GetDataSource()}, nil
+}
+func (f *fakeStorageMetadataAPI) DeleteDataSource(_ context.Context, req *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.DeleteDataSourceRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
@@ -174,9 +182,25 @@ func (f *fakeStorageMetadataAPI) UpdateDataset(_ context.Context, req *storagepb
 	f.datasetStatuses = append(f.datasetStatuses, req.GetDataset().GetStatus())
 	return &storagepb.UpdateDatasetRsp{RetInfo: storageOK(), Dataset: req.GetDataset()}, nil
 }
+func (f *fakeStorageMetadataAPI) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.DeleteDatasetRsp{RetInfo: storageOK()}, nil
+}
+func (f *fakeStorageMetadataAPI) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.UpsertDatasetColumnRsp{RetInfo: storageOK(), Column: req.GetColumn()}, nil
+}
+func (f *fakeStorageMetadataAPI) RebindDatasetDataNode(_ context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.RebindDatasetDataNodeRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+}
 func (f *fakeStorageMetadataAPI) ListDataNodes(_ context.Context, req *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error) {
 	f.remember(req.GetAuthInfo())
 	return &storagepb.ListDataNodesRsp{RetInfo: storageOK(), Items: []*storagepb.DataNodeListItem{{Node: &storagepb.DataNode{NodeId: "node-1", Status: "active"}}}, PageResult: &storagepb.PageResult{}}, nil
+}
+func (f *fakeStorageMetadataAPI) DeleteDataNode(_ context.Context, req *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.DeleteDataNodeRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) CheckDatasetActivation(_ context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
 	f.remember(req.GetAuthInfo())

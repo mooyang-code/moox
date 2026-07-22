@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -92,6 +93,28 @@ func TestActivateDatasetCommitsWithExpectedRevision(t *testing.T) {
 	require.Equal(t, "active", rsp.GetDataset().GetStatus())
 	require.True(t, rsp.GetDataset().GetBindingLocked())
 	require.Equal(t, uint64(8), rsp.GetDataset().GetRevision())
+}
+
+func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t *testing.T) {
+	dataset := newActivationReader("disabled", "ip://127.0.0.1:19090").dataset
+	runtime := &fakeNodeStateChecker{rsp: readyNodeState("node-a")}
+	store := &activationMetadataStore{dataset: dataset, node: &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:19090"}}
+	svc, err := NewMetadataServiceWithNodeStateChecker(store, &metacache.Store{}, "secret", runtime)
+	require.NoError(t, err)
+
+	first, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, first.GetRetInfo().GetCode())
+	require.Contains(t, first.GetRetInfo().GetMsg(), "publication is pending")
+	require.Equal(t, "active", first.GetDataset().GetStatus())
+	require.True(t, first.GetDataset().GetBindingLocked())
+	require.Equal(t, uint64(8), first.GetDataset().GetRevision())
+
+	retry, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, retry.GetRetInfo().GetCode())
+	require.Equal(t, uint64(8), retry.GetDataset().GetRevision())
+	require.Equal(t, 1, store.commitCalls)
 }
 
 func TestActivateDatasetCASConflictDoesNotChangeState(t *testing.T) {

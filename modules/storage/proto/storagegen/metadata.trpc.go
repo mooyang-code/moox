@@ -23,6 +23,8 @@ type MetadataService interface {
 	CreateSpace(ctx context.Context, req *CreateSpaceReq) (*CreateSpaceRsp, error)
 	// UpdateSpace 更新使用空间。
 	UpdateSpace(ctx context.Context, req *UpdateSpaceReq) (*UpdateSpaceRsp, error)
+	// DeleteSpace 删除使用空间及其级联元数据。
+	DeleteSpace(ctx context.Context, req *DeleteSpaceReq) (*DeleteSpaceRsp, error)
 	// GetSpace 按 ID 获取使用空间。
 	GetSpace(ctx context.Context, req *GetSpaceReq) (*GetSpaceRsp, error)
 	// ListSpaces 列出使用空间。
@@ -51,6 +53,8 @@ type MetadataService interface {
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error)
 	// UpdateDataSource 更新数据来源。
 	UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq) (*UpdateDataSourceRsp, error)
+	// DeleteDataSource 删除数据来源。
+	DeleteDataSource(ctx context.Context, req *DeleteDataSourceReq) (*DeleteDataSourceRsp, error)
 	// GetDataSource 按 ID 获取数据来源。
 	GetDataSource(ctx context.Context, req *GetDataSourceReq) (*GetDataSourceRsp, error)
 	// ListDataSources 列出数据来源。
@@ -71,6 +75,8 @@ type MetadataService interface {
 	CreateDataset(ctx context.Context, req *CreateDatasetReq) (*CreateDatasetRsp, error)
 	// UpdateDataset 更新数据集。
 	UpdateDataset(ctx context.Context, req *UpdateDatasetReq) (*UpdateDatasetRsp, error)
+	// DeleteDataset 删除数据集。
+	DeleteDataset(ctx context.Context, req *DeleteDatasetReq) (*DeleteDatasetRsp, error)
 	// GetDataset 按 ID 获取数据集。
 	GetDataset(ctx context.Context, req *GetDatasetReq) (*GetDatasetRsp, error)
 	// ListDatasets 列出数据集。
@@ -167,6 +173,24 @@ func MetadataService_UpdateSpace_Handler(svr interface{}, ctx context.Context, f
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).UpdateSpace(ctx, reqbody.(*UpdateSpaceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_DeleteSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteSpaceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).DeleteSpace(ctx, reqbody.(*DeleteSpaceReq))
 	}
 
 	var rsp interface{}
@@ -429,6 +453,24 @@ func MetadataService_UpdateDataSource_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
+func MetadataService_DeleteDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteDataSourceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).DeleteDataSource(ctx, reqbody.(*DeleteDataSourceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MetadataService_GetDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetDataSourceReq{}
 	filters, err := f(req)
@@ -599,6 +641,24 @@ func MetadataService_UpdateDataset_Handler(svr interface{}, ctx context.Context,
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).UpdateDataset(ctx, reqbody.(*UpdateDatasetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_DeleteDataset_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteDatasetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).DeleteDataset(ctx, reqbody.(*DeleteDatasetReq))
 	}
 
 	var rsp interface{}
@@ -1235,6 +1295,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpdateSpace_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/DeleteSpace",
+			Func: MetadataService_DeleteSpace_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/GetSpace",
 			Func: MetadataService_GetSpace_Handler,
 		},
@@ -1291,6 +1355,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpdateDataSource_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/DeleteDataSource",
+			Func: MetadataService_DeleteDataSource_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/GetDataSource",
 			Func: MetadataService_GetDataSource_Handler,
 		},
@@ -1329,6 +1397,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Metadata/UpdateDataset",
 			Func: MetadataService_UpdateDataset_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/DeleteDataset",
+			Func: MetadataService_DeleteDataset_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/GetDataset",
@@ -1490,6 +1562,11 @@ func (s *UnimplementedMetadata) UpdateSpace(ctx context.Context, req *UpdateSpac
 	return nil, errors.New("rpc UpdateSpace of service Metadata is not implemented")
 }
 
+// DeleteSpace 删除使用空间及其级联元数据。
+func (s *UnimplementedMetadata) DeleteSpace(ctx context.Context, req *DeleteSpaceReq) (*DeleteSpaceRsp, error) {
+	return nil, errors.New("rpc DeleteSpace of service Metadata is not implemented")
+}
+
 // GetSpace 按 ID 获取使用空间。
 func (s *UnimplementedMetadata) GetSpace(ctx context.Context, req *GetSpaceReq) (*GetSpaceRsp, error) {
 	return nil, errors.New("rpc GetSpace of service Metadata is not implemented")
@@ -1560,6 +1637,11 @@ func (s *UnimplementedMetadata) UpdateDataSource(ctx context.Context, req *Updat
 	return nil, errors.New("rpc UpdateDataSource of service Metadata is not implemented")
 }
 
+// DeleteDataSource 删除数据来源。
+func (s *UnimplementedMetadata) DeleteDataSource(ctx context.Context, req *DeleteDataSourceReq) (*DeleteDataSourceRsp, error) {
+	return nil, errors.New("rpc DeleteDataSource of service Metadata is not implemented")
+}
+
 // GetDataSource 按 ID 获取数据来源。
 func (s *UnimplementedMetadata) GetDataSource(ctx context.Context, req *GetDataSourceReq) (*GetDataSourceRsp, error) {
 	return nil, errors.New("rpc GetDataSource of service Metadata is not implemented")
@@ -1608,6 +1690,11 @@ func (s *UnimplementedMetadata) CreateDataset(ctx context.Context, req *CreateDa
 // UpdateDataset 更新数据集。
 func (s *UnimplementedMetadata) UpdateDataset(ctx context.Context, req *UpdateDatasetReq) (*UpdateDatasetRsp, error) {
 	return nil, errors.New("rpc UpdateDataset of service Metadata is not implemented")
+}
+
+// DeleteDataset 删除数据集。
+func (s *UnimplementedMetadata) DeleteDataset(ctx context.Context, req *DeleteDatasetReq) (*DeleteDatasetRsp, error) {
+	return nil, errors.New("rpc DeleteDataset of service Metadata is not implemented")
 }
 
 // GetDataset 按 ID 获取数据集。
@@ -1792,6 +1879,8 @@ type MetadataClientProxy interface {
 	CreateSpace(ctx context.Context, req *CreateSpaceReq, opts ...client.Option) (rsp *CreateSpaceRsp, err error)
 	// UpdateSpace 更新使用空间。
 	UpdateSpace(ctx context.Context, req *UpdateSpaceReq, opts ...client.Option) (rsp *UpdateSpaceRsp, err error)
+	// DeleteSpace 删除使用空间及其级联元数据。
+	DeleteSpace(ctx context.Context, req *DeleteSpaceReq, opts ...client.Option) (rsp *DeleteSpaceRsp, err error)
 	// GetSpace 按 ID 获取使用空间。
 	GetSpace(ctx context.Context, req *GetSpaceReq, opts ...client.Option) (rsp *GetSpaceRsp, err error)
 	// ListSpaces 列出使用空间。
@@ -1820,6 +1909,8 @@ type MetadataClientProxy interface {
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (rsp *CreateDataSourceRsp, err error)
 	// UpdateDataSource 更新数据来源。
 	UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq, opts ...client.Option) (rsp *UpdateDataSourceRsp, err error)
+	// DeleteDataSource 删除数据来源。
+	DeleteDataSource(ctx context.Context, req *DeleteDataSourceReq, opts ...client.Option) (rsp *DeleteDataSourceRsp, err error)
 	// GetDataSource 按 ID 获取数据来源。
 	GetDataSource(ctx context.Context, req *GetDataSourceReq, opts ...client.Option) (rsp *GetDataSourceRsp, err error)
 	// ListDataSources 列出数据来源。
@@ -1840,6 +1931,8 @@ type MetadataClientProxy interface {
 	CreateDataset(ctx context.Context, req *CreateDatasetReq, opts ...client.Option) (rsp *CreateDatasetRsp, err error)
 	// UpdateDataset 更新数据集。
 	UpdateDataset(ctx context.Context, req *UpdateDatasetReq, opts ...client.Option) (rsp *UpdateDatasetRsp, err error)
+	// DeleteDataset 删除数据集。
+	DeleteDataset(ctx context.Context, req *DeleteDatasetReq, opts ...client.Option) (rsp *DeleteDatasetRsp, err error)
 	// GetDataset 按 ID 获取数据集。
 	GetDataset(ctx context.Context, req *GetDatasetReq, opts ...client.Option) (rsp *GetDatasetRsp, err error)
 	// ListDatasets 列出数据集。
@@ -1953,6 +2046,26 @@ func (c *MetadataClientProxyImpl) UpdateSpace(ctx context.Context, req *UpdateSp
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateSpaceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) DeleteSpace(ctx context.Context, req *DeleteSpaceReq, opts ...client.Option) (*DeleteSpaceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/DeleteSpace")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("DeleteSpace")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteSpaceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -2239,6 +2352,26 @@ func (c *MetadataClientProxyImpl) UpdateDataSource(ctx context.Context, req *Upd
 	return rsp, nil
 }
 
+func (c *MetadataClientProxyImpl) DeleteDataSource(ctx context.Context, req *DeleteDataSourceReq, opts ...client.Option) (*DeleteDataSourceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/DeleteDataSource")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("DeleteDataSource")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteDataSourceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func (c *MetadataClientProxyImpl) GetDataSource(ctx context.Context, req *GetDataSourceReq, opts ...client.Option) (*GetDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -2433,6 +2566,26 @@ func (c *MetadataClientProxyImpl) UpdateDataset(ctx context.Context, req *Update
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateDatasetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) DeleteDataset(ctx context.Context, req *DeleteDatasetReq, opts ...client.Option) (*DeleteDatasetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/DeleteDataset")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("DeleteDataset")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteDatasetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

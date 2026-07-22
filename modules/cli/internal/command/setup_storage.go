@@ -24,8 +24,10 @@ import (
 
 const (
 	storageMetadataRemoteAddress = "127.0.0.1:20200"
+	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
 	storageAuthFile              = "$HOME/moox/storage/secrets/storage-node-auth.env"
+	storagePrimaryAuthFile       = "$HOME/moox/storage/secrets/gateway-storage-primary.key"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
 )
 
@@ -66,13 +68,25 @@ type storageBrowserResult struct {
 type storageMetadataAPI interface {
 	CreateSpace(context.Context, *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error)
 	UpdateSpace(context.Context, *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error)
+	DeleteSpace(context.Context, *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error)
 	CreateDataSource(context.Context, *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error)
 	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error)
+	DeleteDataSource(context.Context, *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error)
 	CreateDataset(context.Context, *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
 	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
+	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
+	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
+	RebindDatasetDataNode(context.Context, *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error)
+	DeleteDataNode(context.Context, *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error)
 	ListDataNodes(context.Context, *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
 	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
+}
+
+type storagePrimaryAPI interface {
+	WriteFields(context.Context, *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error)
+	ReadFields(context.Context, *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error)
+	DeleteFields(context.Context, *storagepb.PrimaryDeleteFieldsReq) (*storagepb.PrimaryDeleteFieldsRsp, error)
 }
 
 type storageRuntimeAPI interface {
@@ -92,6 +106,10 @@ func (c *storageMetadataProxy) UpdateSpace(ctx context.Context, req *storagepb.U
 	return c.proxy.UpdateSpace(ctx, req, c.options...)
 }
 
+func (c *storageMetadataProxy) DeleteSpace(ctx context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
+	return c.proxy.DeleteSpace(ctx, req, c.options...)
+}
+
 func (c *storageMetadataProxy) CreateDataSource(ctx context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
 	return c.proxy.CreateDataSource(ctx, req, c.options...)
 }
@@ -100,12 +118,32 @@ func (c *storageMetadataProxy) UpdateDataSource(ctx context.Context, req *storag
 	return c.proxy.UpdateDataSource(ctx, req, c.options...)
 }
 
+func (c *storageMetadataProxy) DeleteDataSource(ctx context.Context, req *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error) {
+	return c.proxy.DeleteDataSource(ctx, req, c.options...)
+}
+
 func (c *storageMetadataProxy) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	return c.proxy.CreateDataset(ctx, req, c.options...)
 }
 
 func (c *storageMetadataProxy) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
 	return c.proxy.UpdateDataset(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+	return c.proxy.DeleteDataset(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	return c.proxy.UpsertDatasetColumn(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) RebindDatasetDataNode(ctx context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {
+	return c.proxy.RebindDatasetDataNode(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) DeleteDataNode(ctx context.Context, req *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error) {
+	return c.proxy.DeleteDataNode(ctx, req, c.options...)
 }
 
 func (c *storageMetadataProxy) ListDataNodes(ctx context.Context, req *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error) {
@@ -125,16 +163,37 @@ type storageRuntimeProxy struct {
 	options []client.Option
 }
 
+type storagePrimaryProxy struct {
+	proxy   storagepb.PrimaryStoreClientProxy
+	options []client.Option
+}
+
+func (c *storagePrimaryProxy) WriteFields(ctx context.Context, req *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error) {
+	return c.proxy.WriteFields(ctx, req, c.options...)
+}
+
+func (c *storagePrimaryProxy) ReadFields(ctx context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
+	return c.proxy.ReadFields(ctx, req, c.options...)
+}
+
+func (c *storagePrimaryProxy) DeleteFields(ctx context.Context, req *storagepb.PrimaryDeleteFieldsReq) (*storagepb.PrimaryDeleteFieldsRsp, error) {
+	return c.proxy.DeleteFields(ctx, req, c.options...)
+}
+
 func (c *storageRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error) {
 	return c.proxy.GetNodeState(ctx, req, c.options...)
 }
 
 type remoteStorageSession struct {
-	transport setupssh.Client
-	metadata  storageMetadataAPI
-	auth      *storagepb.AuthInfo
-	cancel    context.CancelFunc
-	listener  net.Listener
+	transport       setupssh.Client
+	metadata        storageMetadataAPI
+	primary         storagePrimaryAPI
+	auth            *storagepb.AuthInfo
+	primaryAuth     *storagepb.AuthInfo
+	cancel          context.CancelFunc
+	listener        net.Listener
+	primaryCancel   context.CancelFunc
+	primaryListener net.Listener
 }
 
 func (s *remoteStorageSession) Close() {
@@ -144,13 +203,19 @@ func (s *remoteStorageSession) Close() {
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
+	if s.primaryListener != nil {
+		_ = s.primaryListener.Close()
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.primaryCancel != nil {
+		s.primaryCancel()
+	}
 }
 
-func newRemoteStorageSession(ctx context.Context, transport setupssh.Client, secret string) (*remoteStorageSession, error) {
-	if transport == nil || strings.TrimSpace(secret) == "" {
+func newRemoteStorageSession(ctx context.Context, transport setupssh.Client, secret, primarySecret string) (*remoteStorageSession, error) {
+	if transport == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(primarySecret) == "" {
 		return nil, errors.New("storage_verification_unavailable")
 	}
 	forwardContext, cancel := context.WithCancel(ctx)
@@ -159,14 +224,27 @@ func newRemoteStorageSession(ctx context.Context, transport setupssh.Client, sec
 		cancel()
 		return nil, errors.New("storage_not_reachable")
 	}
+	primaryForwardContext, primaryCancel := context.WithCancel(ctx)
+	primaryListener, err := transport.ForwardLocal(primaryForwardContext, storagePrimaryRemoteAddress)
+	if err != nil {
+		_ = listener.Close()
+		cancel()
+		primaryCancel()
+		return nil, errors.New("storage_primary_not_reachable")
+	}
 	target := "ip://" + listener.Addr().String()
 	options := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("http")}
+	primaryOptions := []client.Option{client.WithTarget("ip://" + primaryListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 	return &remoteStorageSession{
-		transport: transport,
-		metadata:  &storageMetadataProxy{proxy: storagepb.NewMetadataClientProxy(options...), options: options},
-		auth:      &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
-		cancel:    cancel,
-		listener:  listener,
+		transport:       transport,
+		metadata:        &storageMetadataProxy{proxy: storagepb.NewMetadataClientProxy(options...), options: options},
+		primary:         &storagePrimaryProxy{proxy: storagepb.NewPrimaryStoreClientProxy(primaryOptions...), options: primaryOptions},
+		auth:            &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		primaryAuth:     &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
+		cancel:          cancel,
+		listener:        listener,
+		primaryCancel:   primaryCancel,
+		primaryListener: primaryListener,
 	}, nil
 }
 
@@ -303,7 +381,12 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	session, err := newRemoteStorageSession(ctx, transport, secret)
+	primarySecret, err := readRemoteStoragePrimarySecret(ctx, transport)
+	if err != nil {
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	session, err := newRemoteStorageSession(ctx, transport, secret, primarySecret)
 	if err != nil {
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
@@ -325,6 +408,18 @@ case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
 printf '%s' "$value"`}, nil)
 	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
 		return "", errors.New("storage_verification_auth_unavailable")
+	}
+	return strings.TrimSpace(result.Stdout), nil
+}
+
+func readRemoteStoragePrimarySecret(ctx context.Context, transport setupssh.Client) (string, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+value=$(sed -n '1p' "` + storagePrimaryAuthFile + `" | tr -d '\r\n')
+test -n "$value"
+case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
+printf '%s' "$value"`}, nil)
+	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
+		return "", errors.New("storage_primary_auth_unavailable")
 	}
 	return strings.TrimSpace(result.Stdout), nil
 }

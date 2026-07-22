@@ -130,5 +130,18 @@ describe("storage configuration workbench", () => {
       path: "/data/datasets",
       query: { space_id: "space-a", dataset_id: "dataset-a" }
     });
+
+    await wrapper.find(".dataset-tag").trigger("keydown", { key: "Enter" });
+    await wrapper.find(".dataset-tag").trigger("keydown", { key: " " });
+    expect(mocks.push).toHaveBeenCalledTimes(3);
+    expect(wrapper.find(".dataset-tag").attributes("role")).toBe("link");
+    expect(wrapper.find(".dataset-tag").attributes("tabindex")).toBe("0");
+  });
+
+  it("preserves Dataset deep-link identifiers through the legacy route redirect", () => {
+    const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
+    const normalized = normalizeSource(routes);
+    expect(normalized).toContain('for(constkeyof["space_id","dataset_id"])');
+    expect(normalized).toContain("query[key]=to.query[key]");
   });
 });

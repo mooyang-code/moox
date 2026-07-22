@@ -49,6 +49,17 @@ func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSource
 	return &pb.UpdateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: updated}, nil
 }
 
+func (s *Service) DeleteDataSource(ctx context.Context, req *pb.DeleteDataSourceReq) (*pb.DeleteDataSourceRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDataSourceId()) == "" {
+		return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and data_source_id are required"))}, nil
+	}
+	if err := s.metadata.DeleteDataSource(ctx, req.GetSpaceId(), req.GetDataSourceId()); err != nil {
+		return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataSource")
+	return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
 func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (*pb.GetDataSourceRsp, error) {
 	item, err := s.metadata.GetDataSource(ctx, req.GetSpaceId(), req.GetDataSourceId())
 	if err != nil {
@@ -223,6 +234,17 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	return &pb.UpdateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: updated}, nil
 }
 
+func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (*pb.DeleteDatasetRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if err := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataset")
+	return &pb.DeleteDatasetRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
 func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
 	item, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
@@ -304,7 +326,13 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	if err != nil {
 		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err), Checks: checks}, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "ActivateDataset")
+	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
+		return &pb.ActivateDatasetRsp{
+			RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset activated but metadata publication is pending; retry activation")),
+			Dataset: activated,
+			Checks:  checks,
+		}, nil
+	}
 	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: activated, Checks: checks}, nil
 }
 

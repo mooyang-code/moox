@@ -181,6 +181,21 @@ func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string
 	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
 }
 
+func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
 	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }

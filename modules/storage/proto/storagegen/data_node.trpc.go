@@ -23,6 +23,8 @@ type DataNodeRuntimeService interface {
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error)
 
+	DeleteFields(ctx context.Context, req *DeleteFieldsReq) (*DeleteFieldsRsp, error)
+
 	GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error)
 
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error)
@@ -54,6 +56,24 @@ func DataNodeRuntimeService_ReadFields_Handler(svr interface{}, ctx context.Cont
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataNodeRuntimeService).ReadFields(ctx, reqbody.(*ReadFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodeRuntimeService_DeleteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFieldsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeRuntimeService).DeleteFields(ctx, reqbody.(*DeleteFieldsReq))
 	}
 
 	var rsp interface{}
@@ -114,6 +134,10 @@ var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
 			Func: DataNodeRuntimeService_ReadFields_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.DataNodeRuntime/DeleteFields",
+			Func: DataNodeRuntimeService_DeleteFields_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/GetNodeState",
 			Func: DataNodeRuntimeService_GetNodeState_Handler,
 		},
@@ -141,6 +165,9 @@ func (s *UnimplementedDataNodeRuntime) WriteFields(ctx context.Context, req *Wri
 func (s *UnimplementedDataNodeRuntime) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service DataNodeRuntime is not implemented")
 }
+func (s *UnimplementedDataNodeRuntime) DeleteFields(ctx context.Context, req *DeleteFieldsReq) (*DeleteFieldsRsp, error) {
+	return nil, errors.New("rpc DeleteFields of service DataNodeRuntime is not implemented")
+}
 func (s *UnimplementedDataNodeRuntime) GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error) {
 	return nil, errors.New("rpc GetNodeState of service DataNodeRuntime is not implemented")
 }
@@ -159,6 +186,8 @@ type DataNodeRuntimeClientProxy interface {
 	WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (rsp *WriteFieldsRsp, err error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (rsp *ReadFieldsRsp, err error)
+
+	DeleteFields(ctx context.Context, req *DeleteFieldsReq, opts ...client.Option) (rsp *DeleteFieldsRsp, err error)
 
 	GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (rsp *GetNodeStateRsp, err error)
 
@@ -208,6 +237,26 @@ func (c *DataNodeRuntimeClientProxyImpl) ReadFields(ctx context.Context, req *Re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeRuntimeClientProxyImpl) DeleteFields(ctx context.Context, req *DeleteFieldsReq, opts ...client.Option) (*DeleteFieldsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/DeleteFields")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeRuntime")
+	msg.WithCalleeMethod("DeleteFields")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

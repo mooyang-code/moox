@@ -28,6 +28,9 @@ func (*cleanupNode) WriteFields(context.Context, *pb.WriteFieldsReq) (*pb.WriteF
 func (*cleanupNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return nil, nil
 }
+func (*cleanupNode) DeleteFields(context.Context, *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
+	return nil, nil
+}
 func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return nil, nil
 }
@@ -86,6 +89,9 @@ func (r *resolverRuntime) WriteFields(context.Context, *pb.WriteFieldsReq) (*pb.
 func (r *resolverRuntime) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	r.reads++
 	return &pb.ReadFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+}
+func (*resolverRuntime) DeleteFields(context.Context, *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
+	return &pb.DeleteFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return &pb.GetNodeStateRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil

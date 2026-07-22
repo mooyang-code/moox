@@ -56,7 +56,16 @@
               <div v-if="record.datasets?.length" class="dataset-tags">
                 <a-tooltip v-for="summary in record.datasets" :key="`${summary.space_id}:${summary.dataset_id}`">
                   <template #content>Space：{{ summary.space_id }} · Dataset ID：{{ summary.dataset_id }}</template>
-                  <a-tag class="dataset-tag" size="small" color="arcoblue" @click="openDataset(summary)">
+                  <a-tag
+                    class="dataset-tag"
+                    size="small"
+                    color="arcoblue"
+                    role="link"
+                    tabindex="0"
+                    @click="openDataset(summary)"
+                    @keydown.enter.prevent="openDataset(summary)"
+                    @keydown.space.prevent="openDataset(summary)"
+                  >
                     {{ summary.name || summary.dataset_id }}
                   </a-tag>
                 </a-tooltip>

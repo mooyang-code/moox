@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
@@ -62,6 +63,30 @@ func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation
 	if err := s.refreshMetadataCache(ctx); err != nil {
 		log.ErrorContextf(ctx, "%s committed but metadata cache refresh failed: %v", operation, err)
 	}
+}
+
+// refreshMetadataCacheSynchronously gives lifecycle mutations a publication
+// point before they report success. A committed Dataset is returned alongside
+// the safe error when all bounded attempts fail; callers may retry because the
+// active+locked terminal state is idempotent.
+func (s *Service) refreshMetadataCacheSynchronously(ctx context.Context, operation string) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = s.refreshMetadataCache(ctx); err == nil {
+			return nil
+		}
+		if attempt < 2 {
+			timer := time.NewTimer(25 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	log.ErrorContextf(ctx, "%s committed but metadata cache publication is pending: %v", operation, err)
+	return err
 }
 
 var _ pb.MetadataService = (*Service)(nil)

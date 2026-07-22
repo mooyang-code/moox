@@ -107,6 +107,7 @@ type Reader interface {
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
+	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
 	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)
@@ -114,10 +115,12 @@ type Writer interface {
 	ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error)
 	FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error)
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
+	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
 	UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol) (*pb.SubjectSymbol, error)
 	RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
+	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
 	BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) (*pb.DatasetSubject, error)
 	UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
