@@ -84,9 +84,9 @@ func (s *Service) ListDataNodes(ctx context.Context, req *pb.ListDataNodesReq) (
 		page = req.GetPage()
 	}
 	// The metadata Reader intentionally keeps a status-free query surface. Fetch
-	// the complete node set before filtering so PageResult describes the filtered
-	// result rather than the unfiltered database page.
-	nodes, _, err := s.metadata.ListDataNodes(ctx, nil)
+	// every underlying page before filtering so PageResult describes the filtered
+	// result rather than the first unfiltered database page.
+	nodes, err := s.listAllDataNodes(ctx)
 	if err != nil {
 		return &pb.ListDataNodesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
@@ -134,6 +134,33 @@ func (s *Service) ListDataNodes(ctx context.Context, req *pb.ListDataNodesReq) (
 		}
 	}
 	return &pb.ListDataNodesRsp{RetInfo: retinfo.Success("success"), Items: items, PageResult: pageResult}, nil
+}
+
+func (s *Service) listAllDataNodes(ctx context.Context) ([]*pb.DataNode, error) {
+	var nodes []*pb.DataNode
+	var page *pb.Page
+	for {
+		items, result, err := s.metadata.ListDataNodes(ctx, page)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, items...)
+		if result == nil || !result.GetHasMore() {
+			return nodes, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		pageNo := result.GetPage()
+		if pageNo == ^uint32(0) {
+			return nil, errors.New("data node page overflow")
+		}
+		size := result.GetSize()
+		if size == 0 {
+			size = 1000
+		}
+		page = &pb.Page{Page: pageNo + 1, Size: size}
+	}
 }
 
 func (s *Service) DeleteDataNode(ctx context.Context, req *pb.DeleteDataNodeReq) (*pb.DeleteDataNodeRsp, error) {

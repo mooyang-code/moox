@@ -254,9 +254,7 @@ func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatas
 	if err != nil {
 		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	s.refreshMetadataCacheAfterCommit(ctx, "RebindDatasetDataNode")
 	return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
 }
 

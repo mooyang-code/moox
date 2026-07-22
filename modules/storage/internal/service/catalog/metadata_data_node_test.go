@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -16,6 +17,7 @@ type dataNodeMetadataStore struct {
 	datasets       []*pb.Dataset
 	registerCalls  int
 	datasetQueries []metadata.DatasetQuery
+	dataNodePages  []*pb.Page
 }
 
 func (s *dataNodeMetadataStore) RegisterDataNode(context.Context, string, string, string) (*pb.DataNode, error) {
@@ -23,8 +25,10 @@ func (s *dataNodeMetadataStore) RegisterDataNode(context.Context, string, string
 	return s.nodes[0], nil
 }
 
-func (s *dataNodeMetadataStore) ListDataNodes(context.Context, *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
-	return s.nodes, &pb.PageResult{Page: 1, Size: 100, Total: uint32(len(s.nodes))}, nil
+func (s *dataNodeMetadataStore) ListDataNodes(_ context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
+	s.dataNodePages = append(s.dataNodePages, page)
+	items, result := pageSlice(s.nodes, page)
+	return items, result, nil
 }
 
 func (s *dataNodeMetadataStore) GetDataNode(_ context.Context, nodeID string) (*pb.DataNode, error) {
@@ -55,6 +59,13 @@ func (s *dataNodeMetadataStore) DeleteDataNode(_ context.Context, nodeID string)
 		}
 	}
 	return nil
+}
+
+func (s *dataNodeMetadataStore) RebindDatasetDataNode(_ context.Context, spaceID, datasetID, dataNodeID string, expectedRevision uint64) (*pb.Dataset, error) {
+	return &pb.Dataset{
+		SpaceId: spaceID, DatasetId: datasetID, DataNodeId: dataNodeID,
+		Revision: expectedRevision + 1, Status: "disabled",
+	}, nil
 }
 
 func (s *dataNodeMetadataStore) ListDatasets(_ context.Context, query metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
@@ -120,6 +131,29 @@ func TestListDataNodesFiltersStatusBeforePagination(t *testing.T) {
 	require.Equal(t, uint32(1), disabled.GetPageResult().GetTotal())
 }
 
+func TestListDataNodesFetchesAllUnderlyingPagesBeforeFiltering(t *testing.T) {
+	nodes := make([]*pb.DataNode, 0, 1001)
+	for i := 0; i < 1000; i++ {
+		nodes = append(nodes, &pb.DataNode{NodeId: fmt.Sprintf("node-%04d", i), Status: "disabled"})
+	}
+	nodes = append(nodes, &pb.DataNode{NodeId: "node-1000", Status: "active"})
+	store := &dataNodeMetadataStore{nodes: nodes}
+	svc, err := NewMetadataService(store, nil, "secret")
+	require.NoError(t, err)
+
+	rsp, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{
+		Status: "active", Page: &pb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"node-1000"}, dataNodeIDs(rsp.GetItems()))
+	require.Equal(t, uint32(1), rsp.GetPageResult().GetTotal())
+	require.False(t, rsp.GetPageResult().GetHasMore())
+	require.Len(t, store.dataNodePages, 2)
+	require.Nil(t, store.dataNodePages[0])
+	require.Equal(t, &pb.Page{Page: 2, Size: 1000}, store.dataNodePages[1])
+}
+
 func dataNodeIDs(items []*pb.DataNodeListItem) []string {
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
@@ -145,6 +179,19 @@ func TestDataNodeMutationSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) 
 	deleted, err := svc.DeleteDataNode(context.Background(), &pb.DeleteDataNodeReq{NodeId: "node-a"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, deleted.GetRetInfo().GetCode())
+}
+
+func TestRebindDatasetSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
+	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{{NodeId: "node-a", Status: "active"}}}
+	svc, err := NewMetadataService(store, &metacache.Store{}, "secret")
+	require.NoError(t, err)
+
+	rsp, err := svc.RebindDatasetDataNode(context.Background(), &pb.RebindDatasetDataNodeReq{
+		SpaceId: "space-a", DatasetId: "dataset-a", DataNodeId: "node-a", ExpectedRevision: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "node-a", rsp.GetDataset().GetDataNodeId())
 }
 
 func TestRegisterDataNodeRequiresDeploymentHMAC(t *testing.T) {
