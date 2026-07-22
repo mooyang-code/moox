@@ -23,6 +23,9 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	if cfg.Archive.EventBus.Subject != "moox.storage.fields_changed.v1.>" {
 		t.Fatalf("eventbus subject = %q", cfg.Archive.EventBus.Subject)
 	}
+	if cfg.Archive.EventBus.CredentialFile != "" {
+		t.Fatalf("default eventbus credential file = %q, want empty for development", cfg.Archive.EventBus.CredentialFile)
+	}
 	want := []string{"crypto_binance", "crypto_okx", "stock_cn", "stock_us"}
 	got := cfg.SourceSpaceIDs()
 	if len(got) != len(want) {
@@ -71,5 +74,8 @@ func TestAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "subject: moox.storage.fields_changed.v1.>") {
 		t.Fatal("app config does not use the fields_changed subject")
+	}
+	if !strings.Contains(string(raw), "credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml") {
+		t.Fatal("app config does not name the archive EventBus credential file")
 	}
 }

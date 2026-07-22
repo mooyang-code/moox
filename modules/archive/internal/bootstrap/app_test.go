@@ -23,6 +23,21 @@ func TestSourceLists(t *testing.T) {
 	}
 }
 
+func TestEventBusConfigAppliesCredentialFile(t *testing.T) {
+	cfg := config.Default()
+	home := t.TempDir()
+	credentialFile := filepath.Join(home, ".config", "moox", "eventbus", "archive-eventbus.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(credentialFile), 0o700))
+	require.NoError(t, os.WriteFile(credentialFile, []byte("version: 1\nusername: archive-eventbus\ntoken: archive-secret\n"), 0o600))
+	t.Setenv("HOME", home)
+	cfg.Archive.EventBus.CredentialFile = "~/.config/moox/eventbus/archive-eventbus.yaml"
+
+	got, err := eventBusConfig(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "archive-eventbus", got.Username)
+	assert.Equal(t, "archive-secret", got.Password)
+}
+
 func testConfig() *config.Config { return config.Default() }
 
 func TestAppRunRequiresConfig(t *testing.T) {

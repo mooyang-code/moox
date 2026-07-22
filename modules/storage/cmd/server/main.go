@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
 	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
@@ -312,7 +313,11 @@ func runViewRole() error {
 		return err
 	}
 	defer stopReconciler()
-	eventClient, err := jetstream.Connect(trpc.BackgroundContext(), jetstream.ConfigFromEnv([]string{rawURL}, "storage-view"))
+	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-view")
+	if err != nil {
+		return err
+	}
+	eventClient, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
 	if err != nil {
 		return err
 	}
@@ -393,7 +398,10 @@ func runDataNodeRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for node role")
 	}
-	eventConfig := jetstream.ConfigFromEnv([]string{rawURL}, "storage-node")
+	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-node")
+	if err != nil {
+		return err
+	}
 	svc, err := datanode.NewService(datanode.Options{
 		NodeID: nodeID, AuthSecret: authSecret,
 		Pebble: pebble.Options{
@@ -427,6 +435,40 @@ func runDataNodeRole() error {
 		return err
 	}
 	return s.Serve()
+}
+
+func storageEventBusConfig(urls []string, name string) (jetstream.Config, error) {
+	cfg := jetstream.ConfigFromEnv(urls, name)
+	path, err := storageEventBusCredentialFile()
+	if err != nil {
+		return jetstream.Config{}, err
+	}
+	if path == "" {
+		return cfg, nil
+	}
+	if cfg.Credentials != "" || cfg.Username != "" {
+		return jetstream.Config{}, errors.New("storage eventbus credential file conflicts with EventBus credential environment")
+	}
+	if err := cfg.ApplyCredentialFile(path); err != nil {
+		return jetstream.Config{}, fmt.Errorf("storage eventbus credential: %w", err)
+	}
+	return cfg, nil
+}
+
+func storageEventBusCredentialFile() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE")); path != "" {
+		return jetstream.ExpandCredentialPath(path), nil
+	}
+	configPath := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if configPath == "" {
+		return "", nil
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(configPath))
+	if err := loader.LoadConfig(filepath.Base(configPath), &runtimeConfig); err != nil {
+		return "", fmt.Errorf("load storage eventbus config: %w", err)
+	}
+	return jetstream.ExpandCredentialPath(strings.TrimSpace(runtimeConfig.Storage.EventBus.CredentialFile)), nil
 }
 
 func registerRoleHealth(s *server.Server, instance string) error {

@@ -38,6 +38,7 @@ type SourceConfig struct {
 
 type EventBusConfig struct {
 	URLs            []string      `yaml:"urls"`
+	CredentialFile  string        `yaml:"credential_file"`
 	Stream          string        `yaml:"stream"`
 	Subject         string        `yaml:"subject"`
 	Durable         string        `yaml:"durable"`

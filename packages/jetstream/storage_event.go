@@ -32,11 +32,14 @@ func ValidateStorageFieldsChangedTopic(topic string) (string, string, error) {
 }
 
 // ValidateStorageFieldsChangedEnvelope validates the storage-specific
-// content and topic contract. Generic protocol and kind checks remain at the
-// consumer boundary because different consumers own those semantics.
+// content, event kind, and topic contract. Protocol validation remains at the
+// generic envelope boundary.
 func ValidateStorageFieldsChangedEnvelope(msg *messagepb.MooxMessage) (string, string, error) {
 	if msg == nil {
 		return "", "", fmt.Errorf("storage envelope is nil")
+	}
+	if msg.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
+		return "", "", fmt.Errorf("unexpected storage message kind %q", msg.GetKind())
 	}
 	if msg.GetContentType() != StorageFieldsChangedContentType {
 		return "", "", fmt.Errorf("unexpected storage content type %q", msg.GetContentType())

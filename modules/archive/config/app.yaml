@@ -9,6 +9,7 @@ archive:
     crypto_okx: {datasets: [spot_kline, swap_kline]}
   eventbus:
     urls: [nats://127.0.0.1:4222]
+    credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml
     stream: MOOX_STORAGE
     subject: moox.storage.fields_changed.v1.>
     durable: moox_archive_kline_v1

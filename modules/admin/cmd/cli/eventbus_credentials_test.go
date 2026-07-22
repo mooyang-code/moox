@@ -44,8 +44,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 11 {
-		t.Fatalf("eventbus records=%d, want 11", count)
+	if count != 12 {
+		t.Fatalf("eventbus records=%d, want 12", count)
 	}
 }
 
@@ -70,6 +70,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-metrics-consumer.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "archive-eventbus.yaml"))
 	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
 	assert.FileExists(t, strategyCredential)
 	info, err := os.Stat(strategyCredential)
@@ -86,6 +87,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"cloudnode-eventbus":           "g",
 		"factor-eventbus":              "h",
 		"strategy-eventbus":            "i",
+		"archive-eventbus":             "j",
 	})
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
@@ -107,6 +109,15 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view")
 	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view.>")
 	assert.NotContains(t, storageACL, "storage_view_rows_committed_v1")
+	archiveStart := strings.Index(yaml, "username: archive-eventbus")
+	require.NotEqual(t, -1, archiveStart)
+	archiveACL := yaml[archiveStart:]
+	assert.Contains(t, archiveACL, "password: j")
+	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.INFO.MOOX_STORAGE.moox_archive_kline_v1")
+	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v1")
+	assert.Contains(t, archiveACL, "$JS.ACK.MOOX_STORAGE.moox_archive_kline_v1.>")
+	assert.Contains(t, archiveACL, `publish: {allow: []}`)
+	assert.NotContains(t, archiveACL, "moox.storage.fields_changed.v1")
 
 	bundle, err := makeTLSBundle("203.0.113.10")
 	require.NoError(t, err)
@@ -122,12 +133,17 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	rotateArgs = append(rotateArgs, "--confirm")
 	out.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(rotateArgs, &out, &bytes.Buffer{}))
+	archiveRotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "archive-eventbus", "--confirm"}
+	out.Reset()
+	require.NoError(t, runEventBusCredentialsCommand(archiveRotateArgs, &out, &bytes.Buffer{}))
+	assert.Contains(t, out.String(), `"rotated":"archive-eventbus"`)
+	assert.NotContains(t, out.String(), "archive-secret")
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.GreaterOrEqual(t, count, int64(11))
+	assert.GreaterOrEqual(t, count, int64(12))
 }
 
 func TestEventBusCredentialsHelpers(t *testing.T) {

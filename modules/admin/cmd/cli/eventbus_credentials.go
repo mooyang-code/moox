@@ -28,8 +28,8 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-hostmetrics-consumer", "monitor-metrics-consumer", "storage-eventbus", "cloudnode-eventbus", "factor-eventbus", "strategy-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-hostmetrics-consumer": "eventbus_monitor_consumer", "monitor-metrics-consumer": "eventbus_monitor_metrics_consumer", "storage-eventbus": "eventbus_storage", "cloudnode-eventbus": "eventbus_cloudnode", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-hostmetrics-consumer", "monitor-metrics-consumer", "storage-eventbus", "archive-eventbus", "cloudnode-eventbus", "factor-eventbus", "strategy-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-hostmetrics-consumer": "eventbus_monitor_consumer", "monitor-metrics-consumer": "eventbus_monitor_metrics_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "cloudnode-eventbus": "eventbus_cloudnode", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy"}
 
 type eventbusBundle struct {
 	CA        string    `json:"ca"`
@@ -217,6 +217,7 @@ func exportEventBus(d *dao.SecretDAO, dir, publicIP string, out io.Writer) error
 		"monitor-hostmetrics-consumer": "monitor-eventbus.yaml",
 		"monitor-metrics-consumer":     "monitor-metrics-consumer.yaml",
 		"storage-eventbus":             "storage-eventbus.yaml",
+		"archive-eventbus":             "archive-eventbus.yaml",
 		"cloudnode-eventbus":           "cloudnode-eventbus.yaml",
 		"factor-eventbus":              "factor-eventbus.yaml",
 		"strategy-eventbus":            "strategy-eventbus.yaml",
@@ -271,10 +272,11 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 		"  - username: monitor-hostmetrics-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.dlq.message.rejected.v1\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_hostmetrics_ingest_v1.>\", \"_INBOX.>\"]}\n"+
 		"  - username: monitor-metrics-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.dlq.message.rejected.v1\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_metrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_metrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_metrics_ingest_v1.>\", \"$JS.API.CONSUMER.INFO.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_METRICS.monitor_hostmetrics_ingest_v1\", \"$JS.ACK.MOOX_METRICS.monitor_hostmetrics_ingest_v1.>\", \"_INBOX.>\"]}\n"+
 		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.storage.fields_changed.v1.>\"]}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view\", \"$JS.ACK.MOOX_STORAGE.storage_view.>\", \"_INBOX.>\"]}\n"+
+		"  - username: archive-eventbus\n    password: %s\n    permissions:\n      publish: {allow: []}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.moox_archive_kline_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v1\", \"$JS.ACK.MOOX_STORAGE.moox_archive_kline_v1.>\", \"_INBOX.>\"]}\n"+
 		"  - username: cloudnode-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.cloudnode.exec.v1.>\"]}\n      subscribe: {allow: [\"$JS.API.>\", \"$JS.ACK.>\", \"_INBOX.>\"]}\n"+
 		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: []}\n      subscribe: {allow: [\"$JS.API.CONSUMER.INFO.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_calc\", \"$JS.ACK.MOOX_STORAGE.factor_calc.>\", \"_INBOX.>\"]}\n"+
 		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.strategy.signal.generated.v1\", \"moox.strategy.action.accepted.v1\", \"moox.strategy.run.completed.v1\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
-		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-hostmetrics-consumer"], tokens["monitor-metrics-consumer"], tokens["storage-eventbus"], tokens["cloudnode-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"])
+		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-hostmetrics-consumer"], tokens["monitor-metrics-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["cloudnode-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"])
 }
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)

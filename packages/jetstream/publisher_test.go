@@ -16,6 +16,7 @@ func TestValidateMessageRejectsMissingRequiredFields(t *testing.T) {
 	}{
 		{name: "nil", msg: nil},
 		{name: "protocol version", msg: validTestMessage("id", "moox.test.events.v1")},
+		{name: "kind", msg: validTestMessage("id", "moox.test.events.v1")},
 		{name: "message id", msg: validTestMessage("", "moox.test.events.v1")},
 		{name: "topic", msg: validTestMessage("id", "")},
 		{name: "producer", msg: validTestMessage("id", "moox.test.events.v1")},
@@ -25,11 +26,12 @@ func TestValidateMessageRejectsMissingRequiredFields(t *testing.T) {
 		{name: "payload", msg: validTestMessage("id", "moox.test.events.v1")},
 	}
 	cases[1].msg.ProtocolVersion = 0
-	cases[4].msg.Producer = nil
-	cases[5].msg.OccurredAt = nil
-	cases[6].msg.ContentType = ""
-	cases[7].msg.MessageType = ""
-	cases[8].msg.Payload = nil
+	cases[2].msg.Kind = messagepb.MessageKind_MESSAGE_KIND_UNSPECIFIED
+	cases[5].msg.Producer = nil
+	cases[6].msg.OccurredAt = nil
+	cases[7].msg.ContentType = ""
+	cases[8].msg.MessageType = ""
+	cases[9].msg.Payload = nil
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := ValidateMessage(tc.msg, 1024); !errors.Is(err, ErrInvalidMessage) {

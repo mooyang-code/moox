@@ -28,6 +28,9 @@ func validateMessage(msg *messagepb.MooxMessage, maxPayload int, requirePublishe
 	if msg.GetProtocolVersion() != ProtocolVersion {
 		return fmt.Errorf("%w: protocol_version must be %d", ErrInvalidMessage, ProtocolVersion)
 	}
+	if msg.GetKind() == messagepb.MessageKind_MESSAGE_KIND_UNSPECIFIED {
+		return fmt.Errorf("%w: kind is required", ErrInvalidMessage)
+	}
 	if strings.TrimSpace(msg.GetMessageId()) == "" {
 		return fmt.Errorf("%w: message_id is required", ErrInvalidMessage)
 	}

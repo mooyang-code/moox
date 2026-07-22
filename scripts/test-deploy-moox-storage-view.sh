@@ -113,7 +113,7 @@ GATEWAY_ARGS=(
   --gateway-service-key-file "${TMP_ROOT}/service.key"
 )
 
-"${ROOT}/scripts/deploy-moox.sh" \
+MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" \
   --target localhost \
   --dir "${DEPLOY_DIR}" \
   --stage "${STAGE_DIR}" \
@@ -139,7 +139,7 @@ assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
 secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
-"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
+MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"
@@ -178,6 +178,10 @@ assert_order "${DEPLOY_DIR}/stop.sh" \
   'stop_service "storage-primary"'
 
 assert_file "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_file "${DEPLOY_DIR}/archive/config/app.yaml"
+assert_grep 'credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml' "${DEPLOY_DIR}/archive/config/app.yaml"
+assert_grep 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${DEPLOY_DIR}/storage-node/config/storage.yaml"
 [[ $(find "${DEPLOY_DIR}/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]] || {
   echo "storage-view must read exactly one YAML config" >&2
   exit 1

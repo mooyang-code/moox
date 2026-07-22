@@ -47,6 +47,11 @@ func TestValidateOutboxMessageAllowsOnlyMissingPublishedAt(t *testing.T) {
 	if err := ValidateOutboxMessage(msg, 1024); err == nil {
 		t.Fatal("ValidateOutboxMessage() error = nil, want payload rejection")
 	}
+	msg.Payload = []byte("payload")
+	msg.Kind = 0
+	if err := ValidateOutboxMessage(msg, 1024); err == nil {
+		t.Fatal("ValidateOutboxMessage() accepted unspecified kind")
+	}
 }
 
 func TestValidateStorageFieldsChangedEnvelope(t *testing.T) {
@@ -56,5 +61,9 @@ func TestValidateStorageFieldsChangedEnvelope(t *testing.T) {
 	spaceID, datasetID, err := ValidateStorageFieldsChangedEnvelope(msg)
 	if err != nil || spaceID != "foo" || datasetID != "bar" {
 		t.Fatalf("ValidateStorageFieldsChangedEnvelope() = %q, %q, %v", spaceID, datasetID, err)
+	}
+	msg.Kind = 0
+	if _, _, err := ValidateStorageFieldsChangedEnvelope(msg); err == nil {
+		t.Fatal("ValidateStorageFieldsChangedEnvelope() accepted unspecified kind")
 	}
 }

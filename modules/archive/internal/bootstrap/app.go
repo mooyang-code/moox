@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -87,7 +88,10 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	jsCfg := jetstream.ConfigFromEnv(a.Config.Archive.EventBus.URLs, "moox-archive")
+	jsCfg, err := eventBusConfig(a.Config)
+	if err != nil {
+		return err
+	}
 	natsClient, err := jetstream.Connect(ctx, jsCfg)
 	if err != nil {
 		return err
@@ -163,6 +167,19 @@ func (a *App) Run(ctx context.Context) error {
 		state.DirtyPartitions.Store(status.DirtyPartitions)
 	}
 	return errors.Join(firstErr, drainErr, flushErr)
+}
+
+func eventBusConfig(cfg *config.Config) (jetstream.Config, error) {
+	if cfg == nil {
+		return jetstream.Config{}, errors.New("archive config is required")
+	}
+	jsCfg := jetstream.ConfigFromEnv(cfg.Archive.EventBus.URLs, "moox-archive")
+	if path := strings.TrimSpace(cfg.Archive.EventBus.CredentialFile); path != "" {
+		if err := jsCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
+			return jetstream.Config{}, fmt.Errorf("archive eventbus credential: %w", err)
+		}
+	}
+	return jsCfg, nil
 }
 
 // RegisterHealth registers the monitor-facing endpoints on the tRPC server.
