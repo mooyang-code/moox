@@ -92,7 +92,7 @@ printf '%s\n' "$*" >>"${FAKE_SUDO_LOG}"
 [[ "${FAKE_SUDO_FAIL:-0}" != 1 ]] || exit 1
 if [[ "$1" == -n && "$2" == setcap && "$3" == cap_net_bind_service=+ep ]]; then
   printf '%s\n' "$4" >"${FAKE_CAP_STATE}"
-elif [[ "$1" == -n && "$2" == setcap && "$3" == -r && "$4" == -- ]]; then
+elif [[ "$1" == -n && "$2" == setcap && "$3" == -r ]]; then
   rm -f "${FAKE_CAP_STATE}"
 else
   exit 2
@@ -101,10 +101,27 @@ SH
 cat >"${TMP}/cap-bin/lsof" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_PORT_LOG}"
+fake_pid() {
+  for pid_state in ${FAKE_PID_STATES:-${FAKE_PID_STATE:-}}; do
+    if [[ -s "${pid_state}" ]]; then
+      cat "${pid_state}"
+      return 0
+    fi
+  done
+  return 1
+}
 if [[ "${FAKE_OCCUPY_9527:-0}" == 1 && "$*" == *TCP:9527* ]]; then
   printf '424242\n'
   exit 0
 fi
+if [[ "$*" == *"TCP:${FAKE_ADMIN_PORT}"* ]] && fake_pid; then
+  exit 0
+fi
+for managed_port in ${FAKE_MANAGED_PORTS:-}; do
+  if [[ "$*" == *"TCP:${managed_port}"* ]] && fake_pid; then
+    exit 0
+  fi
+done
 [[ -z "${REAL_LSOF:-}" ]] || exec "${REAL_LSOF}" "$@"
 SH
 chmod +x "${TMP}/cap-bin/getcap" "${TMP}/cap-bin/sudo" "${TMP}/cap-bin/lsof"
@@ -147,9 +164,20 @@ MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" MOOX_CADDY_CHECKSUMS
 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
   "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 8443
 [[ ! -e "${CAP_STATE}" ]] || fail 'unprivileged-only Caddy retained cap_net_bind_service'
-grep -Fxq -- '-n setcap -r -- '"${CAP_DEPLOY}/bin/caddy" "${SUDO_LOG}" || \
+grep -Fxq -- '-n setcap -r '"${CAP_DEPLOY}/bin/caddy" "${SUDO_LOG}" || \
   fail 'privileged-to-unprivileged transition did not narrowly remove file capabilities'
 : >"${SUDO_LOG}"
+
+# Explicit deployment edge values must win over an older persisted edge.env.
+printf 'MOOX_CADDY_PORTS=9527\\,443\nMOOX_SERVICE_HTTPS_PORT=443\n' >"${CAP_DEPLOY}/config/caddy/edge.env"
+MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT=9527 MOOX_SERVICE_HTTPS_PORT=11001 \
+MOOX_CADDY_SKIP_CA_WAIT=1 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 8443
+grep -Fxq 'MOOX_CADDY_PORTS=8443' "${CAP_DEPLOY}/config/caddy/edge.env" || \
+  fail 'explicit Caddy ports were overridden by persisted edge.env'
+grep -Fxq 'MOOX_SERVICE_HTTPS_PORT=11001' "${CAP_DEPLOY}/config/caddy/edge.env" || \
+  fail 'explicit Caddy service port was overridden by persisted edge.env'
+
 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
   "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64
 [[ ! -s "${SUDO_LOG}" ]] || fail 'capability-free nonprivileged Caddy ports unexpectedly invoked sudo'
@@ -201,6 +229,8 @@ export MOOX_CADDY_ADMIN_ENDPOINT="127.0.0.1:${ADMIN_PORT}"
 export MOOX_CADDY_ADMIN_PATH=/
 export MOOX_CADDY_SKIP_PID_EXE_CHECK=1
 export MOOX_CADDY_SKIP_CA_WAIT=1
+export FAKE_PID_STATES="${TMP}/deploy/run/caddy.pid ${TMP}/first-deploy/run/caddy.pid"
+export FAKE_MANAGED_PORTS='443 8443 9527 11001'
 MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" \
 MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
   "${HELPER}" install --deploy-dir "${TMP}/deploy" --os linux --arch amd64

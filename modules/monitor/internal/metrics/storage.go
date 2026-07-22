@@ -25,8 +25,8 @@ type AccessClient interface {
 type MetadataClient interface {
 	GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error)
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
+	GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
-	ListPrimaryStoreRoutes(context.Context, *storagepb.ListPrimaryStoreRoutesReq, ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error)
 }
 
 type StorageAdapter struct {
@@ -142,6 +142,19 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	if dataset == nil || !isActive(dataset.GetStatus()) {
 		return fmt.Errorf("metrics dataset %q is missing or inactive", a.cfg.DatasetID)
 	}
+	if !dataset.GetBindingLocked() || strings.TrimSpace(dataset.GetDataNodeId()) == "" {
+		return fmt.Errorf("metrics dataset %q must be active, binding_locked, and bound to a data node", a.cfg.DatasetID)
+	}
+	nodeRsp, err := a.metadata.GetDataNode(ctx, &storagepb.GetDataNodeReq{NodeId: dataset.GetDataNodeId()})
+	if err != nil {
+		return fmt.Errorf("get metrics data node %q: %w", dataset.GetDataNodeId(), err)
+	}
+	if err := storageOK("get metrics data node", nodeRsp.GetRetInfo()); err != nil {
+		return err
+	}
+	if nodeRsp.GetNode() == nil || !isActive(nodeRsp.GetNode().GetStatus()) {
+		return fmt.Errorf("metrics data node %q is missing or inactive", dataset.GetDataNodeId())
+	}
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("metrics dataset kind is %s, want TIME_SERIES", dataset.GetDataKind())
 	}
@@ -166,23 +179,6 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	}
 	if len(required) > 0 {
 		return fmt.Errorf("metrics dataset missing columns: %v", sortedKeys(required))
-	}
-	routesRsp, err := a.metadata.ListPrimaryStoreRoutes(ctx, &storagepb.ListPrimaryStoreRoutesReq{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, Page: &commonpb.Page{Page: 1, Size: 500}})
-	if err != nil {
-		return fmt.Errorf("list metrics routes: %w", err)
-	}
-	if err := storageOK("list metrics routes", routesRsp.GetRetInfo()); err != nil {
-		return err
-	}
-	routeOK := false
-	for _, route := range routesRsp.GetPrimaryStoreRoutes() {
-		if route.GetStatus() == "active" && route.GetDatasetId() == a.cfg.DatasetID && route.GetSubjectPattern() == "*" && route.GetHashRule() == "subject_id" {
-			routeOK = true
-			break
-		}
-	}
-	if !routeOK {
-		return errors.New("metrics dataset has no active wildcard PrimaryStore route")
 	}
 	return nil
 }

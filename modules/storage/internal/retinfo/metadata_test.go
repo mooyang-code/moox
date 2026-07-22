@@ -15,3 +15,26 @@ func TestMetadataStoreCodeMapsMissingRowsToNotFound(t *testing.T) {
 		t.Fatalf("MetadataStoreCode() = %v, want %v", got, pb.ErrorCode_NOT_FOUND)
 	}
 }
+
+func TestMetadataStoreCodeMapsDatasetLifecycleErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want pb.ErrorCode
+	}{
+		{name: "revision conflict", err: fmt.Errorf("dataset revision conflict"), want: pb.ErrorCode_CONFLICT},
+		{name: "binding locked", err: fmt.Errorf("dataset binding is locked"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "must be disabled", err: fmt.Errorf("dataset must be disabled"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "node disabled", err: fmt.Errorf("data node is disabled"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "node referenced", err: fmt.Errorf("data node still has datasets"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "immutable data node", err: fmt.Errorf("dataset data_node_id is immutable; use rebind"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "same data node", err: fmt.Errorf("dataset is already bound to this data node"), want: pb.ErrorCode_INVALID_PARAM},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MetadataStoreCode(tt.err); got != tt.want {
+				t.Fatalf("MetadataStoreCode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

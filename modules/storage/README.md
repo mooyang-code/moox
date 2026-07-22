@@ -117,7 +117,10 @@ MOOX_STORAGE_ROLE=node
 MOOX_STORAGE_ROLE=view
 ```
 
-Primary 从 Metadata Catalog 的 `PrimaryStoreNode.attributes.service_target` 路由到节点：
+Schema v5 中，Primary 只从同一份 Metadata Snapshot 解析
+`Dataset.data_node_id -> DataNode.service_target`，不读取路由表、节点 attributes
+或环境变量兜底。Dataset 创建后默认为 disabled/unlocked；Doctor 只读检查就绪，
+部署或管理员随后显式激活，激活成功后绑定永久锁定。
 
 ```text
 service_target: ip://127.0.0.1:20107

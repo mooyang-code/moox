@@ -20,16 +20,20 @@ import (
 const defaultSetupFile = "./custom.toml"
 
 type setupDeps struct {
-	load           func(string) (*setupconfig.Snapshot, error)
-	validate       func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	trustHost      func(context.Context, *setupconfig.Snapshot, string, string) error
-	deployControl  func(context.Context, *setupconfig.Snapshot) error
-	deployService  func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
-	apply          func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status         func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	login          func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
-	deployStorage  func(context.Context, *setupconfig.Snapshot, string) error
-	importMetadata func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
+	load               func(string) (*setupconfig.Snapshot, error)
+	validate           func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	validateDeployment func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
+	trustHost          func(context.Context, *setupconfig.Snapshot, string, string) error
+	deployControl      func(context.Context, *setupconfig.Snapshot) error
+	deployService      func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
+	apply              func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
+	status             func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	login              func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	deployStorage      func(context.Context, *setupconfig.Snapshot, string, bool) error
+	importMetadata     func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
+	verifyStorage      func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
+	e2eStorage         func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
+	browserE2EStorage  func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
 }
 
 func init() {
@@ -53,6 +57,9 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
 		newSetupMetadataImportCommand(deps),
+		newSetupVerifyStorageCommand(deps),
+		newSetupE2EStorageCommand(deps),
+		newSetupBrowserE2EStorageCommand(deps),
 	)
 	return cmd
 }
@@ -73,13 +80,17 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts()))
+		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts())+1)
 		for index, host := range snapshot.Manifest.Hosts() {
 			role := "other"
 			if index == 0 {
 				role = "control"
 			}
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: role})
+		}
+		if snapshot.Manifest.HasCompileHost() {
+			host := snapshot.Manifest.CompileHost
+			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: "compile"})
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
@@ -139,8 +150,12 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
-			return err
+		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost})
+		if validationErr != nil {
+			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
+				return encodeErr
+			}
+			return validationErr
 		}
 		if err := deps.deployControl(cmd.Context(), snapshot); err != nil {
 			return err
@@ -238,29 +253,39 @@ func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 
 func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 	var file, host string
+	var resetStorageData bool
 	cmd := &cobra.Command{Use: "deploy-storage", Short: "将 Storage 组件部署到用户选择的主机", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
+		storageHost, err := findSetupHost(snapshot.Manifest, host)
+		if err != nil {
 			return err
+		}
+		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost, storageHost})
+		if validationErr != nil {
+			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
+				return encodeErr
+			}
+			return validationErr
 		}
 		status, err := deps.status(cmd.Context(), snapshot)
 		if err != nil || status.State != "completed" {
 			return fmt.Errorf("setup_incomplete")
 		}
-		if err := deps.deployStorage(cmd.Context(), snapshot, host); err != nil {
+		if err := deps.deployStorage(cmd.Context(), snapshot, host, resetStorageData); err != nil {
 			return err
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
-		return writeSetupJSON(cmd, map[string]string{"host": host, "status": "ready"})
+		return writeSetupJSON(cmd, map[string]any{"host": host, "status": "ready", "reset_storage_data": resetStorageData})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
+	cmd.Flags().BoolVar(&resetStorageData, "reset-storage-data", false, "仅用于已确认的预发布 Schema v5 替换，清空旧 Storage data")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }
@@ -300,6 +325,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.validate == nil {
 		deps.validate = defaults.validate
 	}
+	if deps.validateDeployment == nil {
+		deps.validateDeployment = defaults.validateDeployment
+	}
 	if deps.trustHost == nil {
 		deps.trustHost = defaults.trustHost
 	}
@@ -324,6 +352,15 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.importMetadata == nil {
 		deps.importMetadata = defaults.importMetadata
 	}
+	if deps.verifyStorage == nil {
+		deps.verifyStorage = defaults.verifyStorage
+	}
+	if deps.e2eStorage == nil {
+		deps.e2eStorage = defaults.e2eStorage
+	}
+	if deps.browserE2EStorage == nil {
+		deps.browserE2EStorage = defaults.browserE2EStorage
+	}
 	return deps
 }
 
@@ -336,14 +373,18 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
-		validate:       defaultSetupValidate,
-		trustHost:      defaultSetupTrustHost,
-		deployControl:  defaultSetupDeploy,
-		deployService:  defaultSetupDeployService,
-		apply:          defaultSetupApply,
-		status:         defaultSetupStatus,
-		deployStorage:  defaultSetupDeployStorage,
-		importMetadata: defaultSetupImportMetadata,
+		validate:           defaultSetupValidate,
+		validateDeployment: defaultSetupValidateDeployment,
+		trustHost:          defaultSetupTrustHost,
+		deployControl:      defaultSetupDeploy,
+		deployService:      defaultSetupDeployService,
+		apply:              defaultSetupApply,
+		status:             defaultSetupStatus,
+		deployStorage:      defaultSetupDeployStorage,
+		importMetadata:     defaultSetupImportMetadata,
+		verifyStorage:      defaultSetupVerifyStorage,
+		e2eStorage:         defaultSetupE2EStorage,
+		browserE2EStorage:  defaultSetupBrowserE2EStorage,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))
@@ -351,7 +392,7 @@ func defaultSetupDeps() setupDeps {
 	}
 }
 
-func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string) error {
+func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string, resetStorageData bool) error {
 	host, err := findSetupHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
@@ -365,7 +406,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
-	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address}, setupdeploy.Dependencies{}); err != nil {
+	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
 	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
@@ -423,6 +464,10 @@ func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (
 	return setupvalidate.Run(ctx, snapshot, setupvalidate.Dependencies{Identity: identity, SSH: commandSSHChecker{}})
 }
 
+func defaultSetupValidateDeployment(ctx context.Context, snapshot *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
+	return setupvalidate.RunSSHHosts(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}}, hosts)
+}
+
 type commandSSHChecker struct{}
 
 func (commandSSHChecker) Check(ctx context.Context, host setupconfig.Host) error {
@@ -435,7 +480,7 @@ func (commandSSHChecker) Check(ctx context.Context, host setupconfig.Host) error
 }
 
 func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, name, fingerprint string) error {
-	host, err := findSetupHost(snapshot.Manifest, name)
+	host, err := findSetupTrustHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
 	}
@@ -506,6 +551,13 @@ func findSetupHost(manifest setupconfig.Manifest, name string) (setupconfig.Host
 	return setupconfig.Host{}, fmt.Errorf("setup_host_not_found")
 }
 
+func findSetupTrustHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
+	if manifest.HasCompileHost() && strings.EqualFold(manifest.CompileHost.Name, strings.TrimSpace(name)) {
+		return manifest.CompileHost, nil
+	}
+	return findSetupHost(manifest, name)
+}
+
 func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	if snapshot == nil {
 		return
@@ -514,6 +566,7 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
 	snapshot.Manifest.ControlHost.Password = ""
+	snapshot.Manifest.CompileHost.Password = ""
 	for index := range snapshot.Manifest.OtherHosts {
 		snapshot.Manifest.OtherHosts[index].Password = ""
 	}

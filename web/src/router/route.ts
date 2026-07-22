@@ -4,12 +4,16 @@ import Layout from "@/layout/index.vue";
 const collectorDataManagementPath = "/collector/data-management";
 
 function redirectCollectorDatasets(to: { query?: Record<string, unknown> }) {
+  const query: Record<string, unknown> = {
+    tab: "datasets",
+    datasetTab: to.query?.tab === "browse" ? "browse" : "definitions"
+  };
+  for (const key of ["space_id", "dataset_id"]) {
+    if (to.query?.[key] !== undefined) query[key] = to.query[key];
+  }
   return {
     path: collectorDataManagementPath,
-    query: {
-      tab: "datasets",
-      datasetTab: to.query?.tab === "browse" ? "browse" : "definitions"
-    }
+    query
   };
 }
 
@@ -278,11 +282,6 @@ export const staticRoutes = [
         name: "ops-storage",
         component: () => import("@/views/ops/storage/index.vue"),
         meta: { title: "ops-storage" }
-      },
-      {
-        path: "/ops/storage/routes",
-        redirect: { path: "/ops/storage/nodes", query: { tab: "routes" } },
-        meta: { title: "ops-storage", hide: true }
       },
       {
         path: "/ops/storage/archive",

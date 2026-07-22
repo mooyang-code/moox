@@ -26,12 +26,12 @@ func TestStorageRoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
 		t.Cleanup(func() { _ = node.Close() })
 		return node
 	}
-	nodes := map[string]pb.DataNodeService{
+	nodes := map[string]pb.DataNodeRuntimeService{
 		"space-a/shared": newNode("node-a"),
 		"space-b/shared": newNode("node-b"),
 	}
 	primary, err := primarystore.New(primarystore.Options{
-		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
+		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
 			return nodes[spaceID+"/"+datasetID], nil
 		},
 		AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {

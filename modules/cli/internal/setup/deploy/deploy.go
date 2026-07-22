@@ -27,11 +27,12 @@ const (
 )
 
 type Options struct {
-	RepositoryRoot string
-	PublicHost     string
-	BrowserPort    int
-	TargetGOOS     string
-	TargetGOARCH   string
+	RepositoryRoot   string
+	PublicHost       string
+	BrowserPort      int
+	TargetGOOS       string
+	TargetGOARCH     string
+	ResetStorageData bool
 }
 
 type Packager interface {
@@ -94,7 +95,11 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		defer cancel()
 		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteStorageArchiveNext}, nil)
 	}()
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", installStorageScript, "moox-install-storage"}, nil); err != nil {
+	reset := "0"
+	if opts.ResetStorageData {
+		reset = "1"
+	}
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", installStorageScript, "moox-install-storage", reset}, nil); err != nil {
 		return fmt.Errorf("storage_install_failed")
 	}
 	installed := true
@@ -447,6 +452,8 @@ func probeCommand(stage ReadinessStage) string {
 
 const installStorageScript = `set -eu
 install_storage() {
+  reset_storage_data="$1"
+  case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
   root="$HOME/moox"
   deploy="$root/storage"
   next="$root/storage.next"
@@ -455,7 +462,7 @@ install_storage() {
   rm -rf "$next" "$previous"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
-  if [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
   if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
@@ -467,15 +474,21 @@ install_storage() {
     return 1
   fi
 }
-install_storage
+install_storage "$1"
 `
 
 const rollbackStorageScript = `set -eu
 deploy="$HOME/moox/storage"
 previous="$HOME/moox/storage.previous"
+if [ ! -d "$previous" ]; then
+  # The installer already restored the previous deployment after an atomic
+  # start failure. A second rollback must not delete that restored deployment.
+  exit 0
+fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 rm -rf "$deploy"
-if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+mv "$previous" "$deploy"
+"$deploy/start.sh" || true
 `
 
 const finalizeStorageScript = `set -eu
@@ -511,17 +524,26 @@ install_control() {
   fi
   chmod 600 "$encryption_key"
   if [ ! -s "$next/secrets/health-auth.env" ]; then
-    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 --label health | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
+    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
     umask 077
     printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$secret" >"$next/secrets/health-auth.env"
   fi
   if [ ! -s "$next/secrets/admin-jwt.env" ]; then
-    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 --label admin-jwt | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
+    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
     umask 077
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$secret" >"$next/secrets/admin-jwt.env"
   fi
   chmod 600 "$next/secrets/"*
-  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
+  # The managed Caddy process is outside stop.sh. Stop it before moving the
+  # old deployment aside, otherwise the new path cannot adopt its listener.
+  if [ -x "$deploy/lib/caddy-managed.sh" ]; then
+    "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"
+  fi
+  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then
+    "$deploy/start.sh" || true
+    [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+    return 1
+  fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
   mv "$next" "$deploy"
   if ! MOOX_PUBLIC_HOST="$public_host" MOOX_BROWSER_HTTPS_PORT="$browser_port" MOOX_SERVICE_HTTPS_PORT=11001 \
@@ -529,14 +551,30 @@ install_control() {
     MOOX_CADDY_ARCHIVE="$deploy/lib/caddy_2.11.4_linux_${target_arch}.tar.gz" \
     "$deploy/lib/caddy-managed.sh" ensure --deploy-dir "$deploy" --os linux --arch "$target_arch" \
       --ports "$browser_port,11001" --config "$deploy/config/caddy/Caddyfile.next"; then
+    if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
+      echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
+      return 1
+    fi
     rm -rf "$deploy"
-    if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+    if [ -d "$previous" ]; then
+      mv "$previous" "$deploy"
+      "$deploy/start.sh" || true
+      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+    fi
     return 1
   fi
   if ! "$deploy/start.sh"; then
+    if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
+      echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
+      return 1
+    fi
     "$deploy/stop.sh" || true
     rm -rf "$deploy"
-    if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+    if [ -d "$previous" ]; then
+      mv "$previous" "$deploy"
+      "$deploy/start.sh" || true
+      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+    fi
     return 1
   fi
 }
@@ -545,8 +583,16 @@ install_control "$1" "$2" "$3"`
 const rollbackControlScript = `set -eu
 deploy="$HOME/moox/prod"
 previous="$HOME/moox/prod.previous"
+if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)"; then
+  echo 'managed Caddy could not be stopped; refusing destructive rollback' >&2
+  exit 1
+fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 rm -rf "$deploy"
-if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh"; fi`
+if [ -d "$previous" ]; then
+  mv "$previous" "$deploy"
+  "$deploy/start.sh"
+  [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$(uname -m)"
+fi`
 
 const finalizeControlScript = `rm -rf "$HOME/moox/prod.previous"`

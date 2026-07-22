@@ -35,7 +35,7 @@ func ServiceAuthKey(secret, appID string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-var _ pb.DataNodeService = (*Service)(nil)
+var _ pb.DataNodeRuntimeService = (*Service)(nil)
 
 func NewService(opts Options) (*Service, error) {
 	store := opts.Store
@@ -126,6 +126,22 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.Re
 		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+}
+
+func (s *Service) DeleteFields(ctx context.Context, req *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
+	if req == nil || len(req.GetKeys()) == 0 || (len(req.GetFieldIds()) == 0 && len(req.GetAttributeKeys()) == 0) {
+		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys and field_ids or attribute_keys are required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.store.DeleteFields(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys()); err != nil {
+		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.DeleteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: req.GetKeys()}, nil
 }
 
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {

@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,49 +92,10 @@ func runPrimaryRole() error {
 	if viewSecret == "" {
 		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
 	}
-	proxies := make(map[string]pb.DataNodeService)
-	var proxiesMu sync.Mutex
-	resolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
-		snapshot := metadata.RequestSnapshotFromContext(ctx)
-		if snapshot == nil {
-			snapshot = cached.Snapshot()
-		}
-		if snapshot == nil {
-			return nil, errors.New("metadata cache snapshot is unavailable")
-		}
-		dataset, err := snapshot.GetDataset(ctx, spaceID, datasetID)
-		if err != nil {
-			return nil, err
-		}
-		if dataset == nil || dataset.GetDataNodeId() == "" {
-			return nil, fmt.Errorf("dataset %s/%s has no data_node_id", spaceID, datasetID)
-		}
-		nodeID := dataset.GetDataNodeId()
-		node, err := snapshot.GetPrimaryStoreNode(ctx, nodeID)
-		if err != nil {
-			return nil, err
-		}
-		target := ""
-		if node != nil {
-			target = node.GetAttributes()["service_target"]
-			if target == "" {
-				target = node.GetEndpoint()
-			}
-		}
-		if target == "" {
-			return nil, fmt.Errorf("data node %q has no service_target", nodeID)
-		}
-		if !strings.Contains(target, "://") {
-			target = "ip://" + target
-		}
-		proxiesMu.Lock()
-		defer proxiesMu.Unlock()
-		if proxies[nodeID] == nil {
-			proxy := pb.NewDataNodeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
-			proxies[nodeID] = &dataNodeProxyAdapter{proxy: proxy}
-		}
-		return proxies[nodeID], nil
-	}
+	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
+		proxy := pb.NewDataNodeRuntimeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
+		return &dataNodeProxyAdapter{proxy: proxy}
+	})
 	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
 	if viewTarget == "" {
 		viewTarget = "ip://127.0.0.1:20103"
@@ -152,7 +116,7 @@ func runPrimaryRole() error {
 		}
 		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -195,7 +159,7 @@ func runPrimaryRole() error {
 }
 
 type datasetReader interface {
-	ListDatasets(context.Context, string, string, pb.DataKind, string, *pb.Page) ([]*pb.Dataset, *pb.PageResult, error)
+	ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 }
 
 func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, interval time.Duration) {
@@ -222,7 +186,7 @@ func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarys
 func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, now time.Time) error {
 	var result error
 	for pageNo := uint32(1); ; pageNo++ {
-		datasets, page, err := reader.ListDatasets(ctx, "", "", pb.DataKind_DATA_KIND_TIME_SERIES, "", &pb.Page{Page: pageNo, Size: 1000})
+		datasets, page, err := reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
 		if err != nil {
 			return err
 		}
@@ -376,7 +340,95 @@ func envOrDefault(name, fallback string) string {
 	return fallback
 }
 
-type dataNodeProxyAdapter struct{ proxy pb.DataNodeClientProxy }
+type dataNodeProxyKey struct {
+	NodeID        string
+	ServiceTarget string
+}
+
+func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) primarystore.NodeResolver {
+	if newProxy == nil {
+		newProxy = func(target string) pb.DataNodeRuntimeService {
+			proxy := pb.NewDataNodeRuntimeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
+			return &dataNodeProxyAdapter{proxy: proxy}
+		}
+	}
+	proxies := make(map[dataNodeProxyKey]pb.DataNodeRuntimeService)
+	var proxiesMu sync.Mutex
+	return func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
+		snapshot := metadata.RequestSnapshotFromContext(ctx)
+		if snapshot == nil && snapshotProvider != nil {
+			snapshot = snapshotProvider()
+		}
+		nodeID, target, err := resolveDataNodeFromSnapshot(snapshot, spaceID, datasetID)
+		if err != nil {
+			return nil, err
+		}
+		key := dataNodeProxyKey{NodeID: nodeID, ServiceTarget: target}
+		proxiesMu.Lock()
+		defer proxiesMu.Unlock()
+		if proxy := proxies[key]; proxy != nil {
+			return proxy, nil
+		}
+		for existing := range proxies {
+			if existing.NodeID == nodeID {
+				delete(proxies, existing)
+			}
+		}
+		proxy := newProxy(target)
+		if proxy == nil {
+			return nil, errors.New("data node proxy is unavailable")
+		}
+		proxies[key] = proxy
+		return proxy, nil
+	}
+}
+
+func resolveDataNodeFromSnapshot(snapshot metadata.RequestSnapshot, spaceID, datasetID string) (string, string, error) {
+	if snapshot == nil {
+		return "", "", errors.New("metadata cache snapshot is unavailable")
+	}
+	dataset, ok := snapshot.GetDataset(spaceID, datasetID)
+	if !ok || dataset == nil {
+		return "", "", fmt.Errorf("dataset %s/%s is not found", spaceID, datasetID)
+	}
+	if dataset.GetStatus() != "active" {
+		return "", "", fmt.Errorf("dataset %s/%s is not active", spaceID, datasetID)
+	}
+	nodeID := strings.TrimSpace(dataset.GetDataNodeId())
+	if nodeID == "" {
+		return "", "", fmt.Errorf("dataset %s/%s has no data_node_id", spaceID, datasetID)
+	}
+	node, ok := snapshot.GetDataNode(nodeID)
+	if !ok || node == nil {
+		return "", "", fmt.Errorf("data node %q is not found", nodeID)
+	}
+	if node.GetNodeId() != nodeID || node.GetStatus() != "active" {
+		return "", "", fmt.Errorf("data node %q is not active", nodeID)
+	}
+	target, err := normalizeServiceTarget(node.GetServiceTarget())
+	if err != nil {
+		return "", "", fmt.Errorf("data node %q has invalid service_target: %w", nodeID, err)
+	}
+	return nodeID, target, nil
+}
+
+func normalizeServiceTarget(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "ip" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", errors.New("service_target must be an ip://host:port address")
+	}
+	host, portText, err := net.SplitHostPort(u.Host)
+	if err != nil || host == "" {
+		return "", errors.New("service_target must include host and port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", errors.New("service_target port is invalid")
+	}
+	return "ip://" + net.JoinHostPort(host, strconv.Itoa(port)), nil
+}
+
+type dataNodeProxyAdapter struct{ proxy pb.DataNodeRuntimeClientProxy }
 type dataViewProxyAdapter struct {
 	proxy pb.DataViewClientProxy
 	auth  *pb.AuthInfo
@@ -387,6 +439,9 @@ func (a *dataNodeProxyAdapter) WriteFields(ctx context.Context, req *pb.WriteFie
 }
 func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return a.proxy.ReadFields(ctx, req)
+}
+func (a *dataNodeProxyAdapter) DeleteFields(ctx context.Context, req *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
+	return a.proxy.DeleteFields(ctx, req)
 }
 func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return a.proxy.GetNodeState(ctx, req)
@@ -451,11 +506,11 @@ func runDataNodeRole() error {
 	relay.Start(trpc.BackgroundContext())
 	defer relay.Close()
 	s := trpc.NewServer()
-	listener := s.Service("trpc.moox.storage.DataNode")
+	listener := s.Service("trpc.moox.storage.DataNodeRuntime")
 	if listener == nil {
 		return errors.New("DataNode listener is not configured")
 	}
-	pb.RegisterDataNodeService(listener, svc)
+	pb.RegisterDataNodeRuntimeService(listener, svc)
 	if err := registerRoleHealth(s, "storage-node"); err != nil {
 		return err
 	}

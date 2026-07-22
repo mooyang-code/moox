@@ -27,6 +27,18 @@ type FieldGroupCounts struct {
 	Ungrouped uint64
 }
 
+// DatasetQuery contains the server-side Dataset filters shared by the
+// persistent store, snapshot cache, and catalog aggregation paths.
+type DatasetQuery struct {
+	SpaceID      string
+	DataSourceID string
+	DataNodeID   string
+	DataNodeIDs  []string
+	Freq         string
+	DataKind     pb.DataKind
+	Page         *pb.Page
+}
+
 // SnapshotReader is the request-scoped metadata surface used by validators.
 // Implementations must expose one immutable cache generation.
 type SnapshotReader interface {
@@ -35,10 +47,11 @@ type SnapshotReader interface {
 }
 
 // RequestSnapshot is the immutable metadata generation shared by validation
-// and route resolution for one PrimaryStore request.
+// and direct Dataset -> DataNode resolution for one request.
 type RequestSnapshot interface {
-	SnapshotReader
-	GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error)
+	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
+	GetDataNode(nodeID string) (*pb.DataNode, bool)
+	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 }
 
 type requestSnapshotContextKey struct{}
@@ -72,7 +85,7 @@ type Reader interface {
 	ListSubjectSymbols(ctx context.Context, spaceID string, subjectID string, dataSourceID string, externalSymbol string, page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error)
 
 	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
-	ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error)
+	ListDatasets(ctx context.Context, query DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 	ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error)
 
 	GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error)
@@ -84,18 +97,17 @@ type Reader interface {
 	ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error)
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 
-	GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error)
-	ListPrimaryStoreNodes(ctx context.Context, page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error)
+	GetDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error)
+	ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error)
 	GetDevice(ctx context.Context, deviceID string) (*pb.Device, error)
-	ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
-	GetPrimaryStoreRoute(ctx context.Context, spaceID string, routeID string) (*pb.PrimaryStoreRoute, error)
-	ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error)
+	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 	ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error)
 }
 
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
+	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
 	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)
@@ -103,10 +115,12 @@ type Writer interface {
 	ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error)
 	FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error)
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
+	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
 	UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol) (*pb.SubjectSymbol, error)
 	RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
+	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
 	BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) (*pb.DatasetSubject, error)
 	UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
@@ -118,9 +132,12 @@ type Writer interface {
 	DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error
 	UpsertFactor(ctx context.Context, item *pb.Factor) (*pb.Factor, error)
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
-	UpsertPrimaryStoreNode(ctx context.Context, item *pb.PrimaryStoreNode) (*pb.PrimaryStoreNode, error)
+	RegisterDataNode(ctx context.Context, nodeID string, serviceTarget string, initialName string) (*pb.DataNode, error)
+	UpdateDataNode(ctx context.Context, nodeID string, name string, status string) (*pb.DataNode, error)
+	DeleteDataNode(ctx context.Context, nodeID string) error
+	RebindDatasetDataNode(ctx context.Context, spaceID string, datasetID string, dataNodeID string, expectedRevision uint64) (*pb.Dataset, error)
+	CommitDatasetActivation(ctx context.Context, spaceID string, datasetID string, expectedRevision uint64) (*pb.Dataset, error)
 	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
-	UpsertPrimaryStoreRoute(ctx context.Context, item *pb.PrimaryStoreRoute) (*pb.PrimaryStoreRoute, error)
 	RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
 }
 

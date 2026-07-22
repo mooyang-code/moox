@@ -34,6 +34,13 @@ port = 22
 username = "ubuntu"
 password = ""
 
+[compile_host]
+name = ""
+address = ""
+port = 0
+username = ""
+password = ""
+
 [[other_hosts]]
 name = "compute-1"
 address = ""
@@ -42,9 +49,12 @@ username = "ubuntu"
 password = ""
 ```
 
-Only `control_host` determines the first control-plane deployment. `other_hosts`
-are imported as available hosts, but later service placement is decided after
-Admin is working.
+Only `control_host` determines the first control-plane deployment. `compile_host`
+is optional, is used only by `scripts/build-storage-linux.sh` for native Linux
+CGO builds, and is not a service-placement target. The native builder uses the
+local SSH key/agent and the trusted host-key store; its `password` field is not
+used by the shell transport. `other_hosts` are imported as available hosts, but
+later service placement is decided after Admin is working.
 
 ## Phase 1: custom.toml And Control Initialization
 

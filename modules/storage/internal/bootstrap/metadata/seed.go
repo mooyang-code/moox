@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -23,21 +24,19 @@ type SeedOptions struct {
 
 // ImportResult 汇总各类元数据的导入数量，便于日志展示。
 type ImportResult struct {
-	Spaces             int
-	DataSources        int
-	Subjects           int
-	SubjectSymbols     int
-	Datasets           int
-	DatasetSubjects    int
-	FieldGroups        int
-	Fields             int
-	Factors            int
-	DatasetColumns     int
-	Views              int
-	ViewColumns        int
-	PrimaryStoreNodes  int
-	Devices            int
-	PrimaryStoreRoutes int
+	Spaces          int
+	DataSources     int
+	Subjects        int
+	SubjectSymbols  int
+	Datasets        int
+	DatasetSubjects int
+	FieldGroups     int
+	Fields          int
+	Factors         int
+	DatasetColumns  int
+	Views           int
+	ViewColumns     int
+	Devices         int
 }
 
 // ImportSeed 读取领域型 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
@@ -82,9 +81,12 @@ func ImportSeed(ctx context.Context, opts SeedOptions) (ImportResult, error) {
 }
 
 // importEntities 按依赖顺序写入各类元数据：父实体先于子实体。
-func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (ImportResult, error) {
+func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (ImportResult, error) {
 	var result ImportResult
 	var err error
+	if err := validateSeedDatasets(ctx, store, seed.Datasets); err != nil {
+		return result, err
+	}
 	seed, err = normalizeSeedFieldGroups(seed)
 	if err != nil {
 		return result, err
@@ -136,7 +138,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
-			Freqs: item.Freqs, Status: item.Status, Attributes: item.Attributes,
+			Freqs: item.Freqs, Status: "disabled", Attributes: item.Attributes,
 			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
@@ -223,19 +225,9 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.ViewColumns++
 	}
 
-	for _, item := range seed.PrimaryStoreNodes {
-		if _, err := store.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{
-			NodeId: item.NodeID, Name: item.Name, Endpoint: item.Endpoint, Weight: item.Weight,
-			Status: item.Status, ConfigJson: item.ConfigJSON, Attributes: item.Attributes,
-		}); err != nil {
-			return result, seedErr("storage_node", item.NodeID, err)
-		}
-		result.PrimaryStoreNodes++
-	}
-
 	for _, item := range seed.Devices {
 		if _, err := store.UpsertDevice(ctx, &pb.Device{
-			DeviceId: item.DeviceID, NodeId: item.NodeID, Name: item.Name, Engine: item.Engine,
+			DeviceId: item.DeviceID, Name: item.Name, Engine: item.Engine,
 			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("device", item.DeviceID, err)
@@ -243,18 +235,30 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 		result.Devices++
 	}
 
-	for _, item := range seed.PrimaryStoreRoutes {
-		if _, err := store.UpsertPrimaryStoreRoute(ctx, &pb.PrimaryStoreRoute{
-			SpaceId: item.SpaceID, RouteId: item.RouteID, DatasetId: item.DatasetID,
-			SubjectId: item.SubjectID, SubjectPattern: item.SubjectPattern, HashRule: item.HashRule,
-			NodeId: item.NodeID, Priority: item.Priority, Status: item.Status,
-		}); err != nil {
-			return result, seedErr("storage_route", item.RouteID, err)
-		}
-		result.PrimaryStoreRoutes++
-	}
-
 	return result, nil
+}
+
+// validateSeedDatasets performs all Dataset checks before the first write.
+// DataNodes are deployment-owned, so a seed import may reference an already
+// registered active node but must never create one implicitly.
+func validateSeedDatasets(ctx context.Context, store metadata.Reader, datasets []seedDataset) error {
+	for _, item := range datasets {
+		dataNodeID := strings.TrimSpace(item.DataNodeID)
+		if dataNodeID == "" {
+			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
+		}
+		if strings.TrimSpace(item.KeepDuration) == "" {
+			return fmt.Errorf("dataset %q keep_duration is required", item.DatasetID)
+		}
+		node, err := store.GetDataNode(ctx, dataNodeID)
+		if err != nil {
+			return seedErr("data_node", dataNodeID, err)
+		}
+		if node.GetStatus() != "active" {
+			return fmt.Errorf("data node %q must be active before metadata seed import", dataNodeID)
+		}
+	}
+	return nil
 }
 
 func normalizeSeedFieldGroups(seed seedFile) (seedFile, error) {
@@ -365,21 +369,19 @@ func parseColumnOriginType(value string) pb.ColumnOriginType {
 
 // seedFile 对应 metadata.seed.yaml 的顶层配置。
 type seedFile struct {
-	Spaces             []seedSpace             `yaml:"spaces"`
-	DataSources        []seedDataSource        `yaml:"data_sources"`
-	Subjects           []seedSubject           `yaml:"subjects"`
-	SubjectSymbols     []seedSubjectSymbol     `yaml:"subject_symbols"`
-	Datasets           []seedDataset           `yaml:"datasets"`
-	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
-	FieldGroups        []seedFieldGroup        `yaml:"field_groups"`
-	Fields             []seedField             `yaml:"fields"`
-	Factors            []seedFactor            `yaml:"factors"`
-	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
-	Views              []seedView              `yaml:"views"`
-	ViewColumns        []seedViewColumn        `yaml:"view_columns"`
-	PrimaryStoreNodes  []seedPrimaryStoreNode  `yaml:"primary_store_nodes"`
-	Devices            []seedDevice            `yaml:"devices"`
-	PrimaryStoreRoutes []seedPrimaryStoreRoute `yaml:"primary_store_routes"`
+	Spaces          []seedSpace          `yaml:"spaces"`
+	DataSources     []seedDataSource     `yaml:"data_sources"`
+	Subjects        []seedSubject        `yaml:"subjects"`
+	SubjectSymbols  []seedSubjectSymbol  `yaml:"subject_symbols"`
+	Datasets        []seedDataset        `yaml:"datasets"`
+	DatasetSubjects []seedDatasetSubject `yaml:"dataset_subjects"`
+	FieldGroups     []seedFieldGroup     `yaml:"field_groups"`
+	Fields          []seedField          `yaml:"fields"`
+	Factors         []seedFactor         `yaml:"factors"`
+	DatasetColumns  []seedDatasetColumn  `yaml:"dataset_columns"`
+	Views           []seedView           `yaml:"views"`
+	ViewColumns     []seedViewColumn     `yaml:"view_columns"`
+	Devices         []seedDevice         `yaml:"devices"`
 }
 
 // seedSpace 描述待初始化的 Space 元数据。
@@ -530,38 +532,13 @@ type seedViewColumn struct {
 	Attributes map[string]string `yaml:"attributes"`
 }
 
-// seedPrimaryStoreNode 描述待初始化的主存节点。
-type seedPrimaryStoreNode struct {
-	NodeID     string            `yaml:"node_id"`
-	Name       string            `yaml:"name"`
-	Endpoint   string            `yaml:"endpoint"`
-	Weight     uint32            `yaml:"weight"`
-	ConfigJSON string            `yaml:"config_json"`
-	Status     string            `yaml:"status"`
-	Attributes map[string]string `yaml:"attributes"`
-}
-
 // seedDevice 描述待初始化的物理存储设备。
 type seedDevice struct {
 	DeviceID   string            `yaml:"device_id"`
-	NodeID     string            `yaml:"node_id"`
 	Name       string            `yaml:"name"`
 	Engine     string            `yaml:"engine"`
 	Endpoint   string            `yaml:"endpoint"`
 	ConfigJSON string            `yaml:"config_json"`
 	Status     string            `yaml:"status"`
 	Attributes map[string]string `yaml:"attributes"`
-}
-
-// seedPrimaryStoreRoute 描述待初始化的主存路由。
-type seedPrimaryStoreRoute struct {
-	SpaceID        string `yaml:"space_id"`
-	RouteID        string `yaml:"route_id"`
-	DatasetID      string `yaml:"dataset_id"`
-	SubjectID      string `yaml:"subject_id"`
-	SubjectPattern string `yaml:"subject_pattern"`
-	HashRule       string `yaml:"hash_rule"`
-	NodeID         string `yaml:"node_id"`
-	Priority       uint32 `yaml:"priority"`
-	Status         string `yaml:"status"`
 }

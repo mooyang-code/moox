@@ -49,22 +49,18 @@ services:
     gateway_enabled: true
     scope: public
     status: active
-    description: moox-storage PrimaryStore + Metadata 服务
+    description: moox-storage DataNode + Metadata 服务
     extra_config:
       health_url: http://127.0.0.1:20210/readyz
       health_kind: readiness
       monitor_enabled: true
-      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, GetView, ListViews, UpsertViewColumn, ListViewColumns, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, BindDatasetSubject, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, CreatePrimaryStoreNode, UpdatePrimaryStoreNode, GetPrimaryStoreNode, ListPrimaryStoreNodes, CreatePrimaryStoreRoute, UpdatePrimaryStoreRoute, GetPrimaryStoreRoute, ListPrimaryStoreRoutes, RegisterArchiveFile, ListArchiveFiles]
+      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, GetView, ListViews, UpsertViewColumn, ListViewColumns, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, RebindDatasetDataNode, CheckDatasetActivation, ActivateDataset, BindDatasetSubject, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, GetDataNode, ListDataNodes, UpdateDataNode, DeleteDataNode, RegisterArchiveFile, ListArchiveFiles]
       gateway_callers: [admin-gateway, collector, factor, monitor, archive, moox-cli, storage-view]
       gateway_routes:
         - service_path: trpc.moox.storage.Metadata
           port: 20100
           gateway_methods: [ClaimViewIndexBuild, UpdateViewIndexBuild, ActivateViewIndex, FailViewIndexBuild]
           gateway_callers: [storage-view]
-        - service_path: trpc.moox.storage.PrimaryStore
-          port: 20102
-          gateway_methods: [MergeTimeSeriesRows, ReadTimeSeriesRows, MergeRecordRows, ReadRecordRows]
-          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
   - name: storage-view
     kind: storage
     deployment_mode: process

@@ -29,8 +29,6 @@ RESET_DATA=0
 TARGET_GOOS=""
 TARGET_GOARCH=""
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
-METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
-HOST_ROUTE_SEED="${MOOX_HOST_STORAGE_ROUTE_SEED:-}"
 EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 PUBLIC_HOST=""
@@ -120,6 +118,7 @@ apply_profile() {
       WITH_GATEWAY=1
       WITH_WEB_HOST=1
       WITH_STORAGE=0
+      WITH_STORAGE_NODE=0
       WITH_ARCHIVE=0
       WITH_EVENTBUS=0
       WITH_CLOUDNODE=0
@@ -130,8 +129,7 @@ apply_profile() {
       ;;
     storage)
       WITH_ADMIN=0
-      # Storage View still reaches PrimaryStore through the node Gateway.
-      # Keep this profile self-contained without adding the Admin process.
+      # Keep the storage profile self-contained without adding the Admin process.
       WITH_GATEWAY=1
       WITH_WEB_HOST=0
       WITH_STORAGE=1
@@ -292,7 +290,10 @@ generate_secret() {
     openssl rand -hex 32
     return
   fi
-  output=$("${cli}" random-secret --bytes 32)
+  if ! output=$("${cli}" random-secret --bytes 32 2>/dev/null); then
+    openssl rand -hex 32
+    return
+  fi
   secret=$(printf '%s' "${output}" | sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
   [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
   [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || fail "moox-admin-cli returned an invalid ${purpose} secret"
@@ -769,6 +770,33 @@ copy_optional_web_host() {
   fail "missing moox-web-host binary; use --no-web-host or build it without --skip-build"
 }
 
+storage_binary_sha256() {
+  local path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{print $1}'
+    return
+  fi
+  sha256sum "${path}" | awk '{print $1}'
+}
+
+write_storage_build_provenance() {
+  [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
+  local commit="unknown" dirty=true primary_hash node_hash view_hash
+  if commit_candidate=$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null) && [[ "${commit_candidate}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    commit="$(printf '%s' "${commit_candidate}" | tr '[:upper:]' '[:lower:]')"
+    dirty=false
+    if ! git -C "${ROOT}" diff --quiet --ignore-submodules -- || ! git -C "${ROOT}" diff --cached --quiet --ignore-submodules --; then
+      dirty=true
+    fi
+  fi
+  primary_hash="$(storage_binary_sha256 "${STAGE_DIR}/bin/moox-storage-primary")"
+  node_hash="$(storage_binary_sha256 "${STAGE_DIR}/bin/moox-storage-node")"
+  view_hash="$(storage_binary_sha256 "${STAGE_DIR}/bin/moox-storage-view")"
+  cat >"${STAGE_DIR}/build-provenance.json" <<EOF
+{"schema_version":1,"commit":"${commit}","dirty":${dirty},"binary_hashes":{"moox-storage-primary":"${primary_hash}","moox-storage-node":"${node_hash}","moox-storage-view":"${view_hash}"}}
+EOF
+}
+
 patch_configs() {
 	[[ -f "${STAGE_DIR}/gateway/config/trpc_go.yaml" ]] || fail "missing Gateway tRPC Timer config"
 	if [[ "${WITH_ADMIN}" -eq 1 ]]; then
@@ -884,7 +912,7 @@ PY
     "${STAGE_DIR}/storage/config/trpc_go.yaml"
   perl -0pi -e 's#log_path:\s*\./logs#log_path: ../logs/storage-view#g' "${view_conf}"
   if [[ "${WITH_STORAGE_NODE}" -eq 1 ]]; then
-    perl -0pi -e 's#(service_name:\s*)""#${1}trpc.moox.storage.DataNode#g' \
+    perl -0pi -e 's#(service_name:\s*)""#${1}trpc.moox.storage.DataNodeRuntime#g' \
       "${STAGE_DIR}/storage/config/storage.yaml" "${STAGE_DIR}/storage/config/trpc_go.yaml"
     perl -0pi -e 's#root:\s*\./var/storage#root: ../data/storage-node#g; s#pebble_path:\s*\./var/storage/pebble#pebble_path: ../data/storage-node/pebble#g; s#log_path:\s*\./logs#log_path: ../logs/storage-node#g' \
       "${STAGE_DIR}/storage-node/config/trpc_go.yaml" "${STAGE_DIR}/storage-node/config/storage.yaml"
@@ -908,6 +936,9 @@ HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${ROOT}/secrets/gateway-service.env" ]] || { echo "missing Gateway service credentials" >&2; exit 1; }
 set -a
 source "${ROOT}/secrets/health-auth.env"
+if [[ -r "${ROOT}/secrets/storage-node-auth.env" ]]; then
+  source "${ROOT}/secrets/storage-node-auth.env"
+fi
 if [[ -r "${ROOT}/secrets/cls.env" ]]; then
   source "${ROOT}/secrets/cls.env"
 fi
@@ -985,6 +1016,10 @@ fi
 if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
   echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
+fi
+if [[ "${WITH_STORAGE}" == "1" && -z "${MOOX_STORAGE_NODE_AUTH_SECRET:-}" ]]; then
+  echo "missing storage DataNode authentication secret" >&2
+  exit 1
 fi
 MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-__NODE_ID__}"
 export MOOX_GATEWAY_NODE_ID
@@ -1131,8 +1166,6 @@ MONITOR_ENV=(
 )
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
-METRICS_ROUTE_SEED="${MOOX_METRICS_STORAGE_ROUTE_SEED:-}"
-HOST_ROUTE_SEED="${MOOX_HOST_STORAGE_ROUTE_SEED:-}"
 EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
@@ -1319,24 +1352,11 @@ apply_metrics_metadata() {
     echo "skip metrics metadata for Monitor deployment without local metrics dependencies"
     return 0
   fi
-  local route_seed="${METRICS_ROUTE_SEED}"
-  if [[ -z "${route_seed}" && "${WITH_STORAGE}" == "1" ]]; then
-    route_seed="${ROOT}/examples/metadata-monitor-metrics-local-route.seed.yaml"
-  fi
-  if [[ -z "${route_seed}" ]]; then
-    echo "MOOX_METRICS_STORAGE_ROUTE_SEED is required when Monitor uses external or clustered Storage" >&2
-    return 1
-  fi
-  if [[ ! -f "${route_seed}" ]]; then
-    echo "metrics route seed not found: ${route_seed}" >&2
-    return 1
-  fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
   if [[ "${WITH_STORAGE}" == "1" ]]; then
     "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
   fi
   "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
-  "${ROOT}/bin/moox-cli" metadata apply --file "${route_seed}" --metadata-url "${METRICS_METADATA_URL}"
 }
 
 apply_host_metadata() {
@@ -1347,21 +1367,8 @@ apply_host_metadata() {
     echo "skip host metadata for Monitor deployment without local metrics dependencies"
     return 0
   fi
-  local route_seed="${HOST_ROUTE_SEED}"
-  if [[ -z "${route_seed}" && "${WITH_STORAGE}" == "1" ]]; then
-    route_seed="${ROOT}/examples/metadata-monitor-host-local-route.seed.yaml"
-  fi
-  if [[ -z "${route_seed}" ]]; then
-    echo "MOOX_HOST_STORAGE_ROUTE_SEED is required when Monitor uses external or clustered Storage" >&2
-    return 1
-  fi
-  if [[ ! -f "${route_seed}" ]]; then
-    echo "host metrics route seed not found: ${route_seed}" >&2
-    return 1
-  fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
   "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
-  "${ROOT}/bin/moox-cli" metadata apply --file "${route_seed}" --metadata-url "${METRICS_METADATA_URL}"
 }
 
 init_storage_schema() {
@@ -1373,6 +1380,53 @@ init_storage_schema() {
       --storage-conf=config/storage.yaml \
       --schema-path=schema/metadata.sql >> "${ROOT}/logs/storage/stdout.log" 2>&1
   )
+}
+
+register_storage_node() {
+  [[ "${WITH_STORAGE_NODE}" == "1" ]] || { echo "storage DataNode is required for metadata bootstrap" >&2; exit 1; }
+  echo "registering deployment-owned storage DataNode"
+  "${ROOT}/bin/moox-storage-cli" register-node \
+    --metadata-target "ip://127.0.0.1:20100" \
+    --node-id "${MOOX_STORAGE_NODE_ID:-storage-node-0}" \
+    --service-target "ip://127.0.0.1:20107" \
+    --name "${MOOX_STORAGE_NODE_NAME:-数据节点}" \
+    >>"${ROOT}/logs/storage/stdout.log" 2>&1
+}
+
+import_storage_metadata() {
+  local seed="${ROOT}/storage/config/metadata.seed.yaml"
+  [[ -f "${seed}" ]] || { echo "storage metadata seed not found: ${seed}" >&2; exit 1; }
+  echo "importing storage metadata seed after DataNode registration"
+  "${ROOT}/bin/moox-storage-cli" import-seed \
+    --storage-conf="${ROOT}/storage/config/storage.yaml" \
+    --schema-path="${ROOT}/storage/schema/metadata.sql" \
+    --seed="${seed}" \
+    >>"${ROOT}/logs/storage/stdout.log" 2>&1
+}
+
+run_storage_doctor() {
+  if [[ "${WITH_ADMIN}" != "1" || "${WITH_MONITOR}" != "1" || ! -x "${ROOT}/bin/moox-cli" ]]; then
+    echo "defer Dataset activation: control-plane Doctor is not deployed"
+    return 1
+  fi
+  local report="${ROOT}/logs/storage/doctor-bootstrap.json"
+  echo "running read-only Doctor bootstrap before Dataset activation"
+  if ! "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"; then
+    echo "defer Dataset activation: Doctor bootstrap failed"
+    return 1
+  fi
+  if ! grep -Eq '"conclusion"[[:space:]]*:[[:space:]]*"HEALTHY"' "${report}"; then
+    echo "defer Dataset activation: Doctor conclusion is not HEALTHY"
+    return 1
+  fi
+  return 0
+}
+
+activate_storage_datasets() {
+  echo "explicitly activating healthy storage Datasets"
+  "${ROOT}/bin/moox-storage-cli" activate-datasets \
+    --metadata-target "ip://127.0.0.1:20100" \
+    >>"${ROOT}/logs/storage/stdout.log" 2>&1
 }
 
 init_admin_schema() {
@@ -1511,19 +1565,28 @@ start_storage_node() {
 }
 
 start_storage() {
+  [[ "${WITH_STORAGE_NODE}" == "1" ]] || { echo "storage deployment requires a DataNode" >&2; exit 1; }
   start_storage_primary
-  if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
-    start_storage_node
-    wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
-    wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
-  fi
+  start_storage_node
+  wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
+  wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
   wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   wait_tcp 127.0.0.1 4222 "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
   wait_http http://127.0.0.1:20210/healthz "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
+  register_storage_node
+  import_storage_metadata
+}
+
+complete_storage_bootstrap() {
   start_storage_view
   wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
   wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
   wait_http http://127.0.0.1:20211/healthz "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
+  if run_storage_doctor; then
+    activate_storage_datasets
+  else
+    echo "Storage started without Dataset activation; run explicit activation after a HEALTHY Doctor result"
+  fi
 }
 
 start_admin() {
@@ -1537,9 +1600,9 @@ start_admin() {
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
-      service_seed_args+=(--with-storage-node)
+      service_seed_args+=(--with-storage-shard)
     else
-      service_seed_args+=(--disable-storage-node)
+      service_seed_args+=(--disable-storage-shard)
     fi
     "${ROOT}/bin/moox-admin-cli" "${service_seed_args[@]}" >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
         echo "Storage shard service deployment import failed" >&2
@@ -1675,6 +1738,9 @@ case "${SERVICE}" in
     if [[ "${WITH_MONITOR}" == "1" ]]; then
       start_monitor
     fi
+    if [[ "${WITH_STORAGE}" == "1" ]]; then
+      complete_storage_bootstrap
+    fi
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
       start_collector
     fi
@@ -1695,6 +1761,7 @@ case "${SERVICE}" in
     fi
     init_storage_schema
     start_storage
+    complete_storage_bootstrap
     ;;
   eventbus) start_eventbus ;;
   archive) start_archive ;;
@@ -2300,6 +2367,15 @@ prepare_stage() {
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    local storage_node_auth_secret="${MOOX_STORAGE_NODE_AUTH_SECRET:-}"
+    if [[ -z "${storage_node_auth_secret}" ]]; then
+      storage_node_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-node-auth)"
+    fi
+    [[ "${storage_node_auth_secret}" != *$'\n'* && "${storage_node_auth_secret}" != *$'\r'* ]] || \
+      fail "storage DataNode auth secret must contain exactly one line"
+    (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
+  fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
 {"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"}]}
 EOF
@@ -2338,7 +2414,7 @@ EOF
 
   copy_required_binary "moox-gateway"
   copy_required_binary "moox-gateway-cli"
-  if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
+  if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_STORAGE}" -eq 1 ]]; then
     copy_required_binary "moox-cli"
   fi
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
@@ -2381,6 +2457,7 @@ EOF
       copy_required_binary "moox-storage-node"
     fi
   fi
+  write_storage_build_provenance
   copy_optional_web_host
 
   cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
@@ -2614,6 +2691,11 @@ sync_local_stage() {
   install -m 0600 "${STAGE_DIR}/secrets/gateway-service.key" "${deploy_dir}/secrets/gateway-service.key"
   install -m 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${deploy_dir}/secrets/gateway-control.env"
   install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
+  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+    install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
+  else
+    rm -f "${deploy_dir}/secrets/storage-node-auth.env"
+  fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
   done
@@ -2676,7 +2758,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_metrics_route_seed quoted_host_route_seed quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_metrics_eventbus_url quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -2693,8 +2775,6 @@ sync_remote_stage() {
   quoted_with_admin="$(shell_quote "${WITH_ADMIN}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
-  quoted_metrics_route_seed="$(shell_quote "${METRICS_ROUTE_SEED}")"
-  quoted_host_route_seed="$(shell_quote "${HOST_ROUTE_SEED}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
   quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
   quoted_public_host="$(shell_quote "${PUBLIC_HOST}")"
@@ -2703,7 +2783,7 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_METRICS_STORAGE_ROUTE_SEED=${quoted_metrics_route_seed} MOOX_HOST_STORAGE_ROUTE_SEED=${quoted_host_route_seed} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {

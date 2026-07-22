@@ -34,7 +34,7 @@ moox-trade      -> modules/trade/schema
 | --- | --- | --- |
 | Space、用户、登录态、本地运维配置 | `moox-admin` | admin 启动建表，管理台/API 创建 |
 | 服务部署信息 | `moox-admin` | SysDeploy 启动补齐默认部署记录，再通过管理台 `/settings/service-deployments` 调整 |
-| Storage 平台拓扑和业务元数据 | `moox-storage` | `examples/*.seed.yaml` 通过 `moox-cli metadata import` 导入 |
+| Storage DataNode 注册和业务元数据 | `moox-storage` | 部署注册 DataNode；`examples/*.seed.yaml` 通过 `moox-cli metadata import` 导入直接绑定的 disabled Dataset |
 | 云账户、云节点、函数包 | `moox-cloudnode` | 管理台或 `/api/admin/cloudnode/*` API 创建 |
 | 采集规则、任务实例 | `moox-collector` | 管理台或 `/api/admin/collectmgr/*` API 创建规则，再由 collector 生成；采集执行日志由 SCF/CLS 承载 |
 | SCF 异步 JobItem、同步 invocation | `moox-cloudnode` | 由 collector/factor/trade 等业务服务通过 `/api/service/cloudnode/*` 提交 |
@@ -47,13 +47,14 @@ moox-trade      -> modules/trade/schema
 1. 启动 `moox-admin`，生成新的 `data/admin.db`。
 2. 启动 `moox-cloudnode`，生成新的 cloudnode 数据库。
 3. 启动 `moox-collector`，生成新的 collector 数据库。
-4. 启动 `storage-primary` 和 `storage-view`；需要物理分片时另外启动私网 `storage-node`。
+4. 启动 `storage-primary`、`storage-node` 和 `storage-view`。
 5. 在管理台创建演示用 Space，例如 `crypto`。
-6. 使用 `moox-cli metadata import` 导入平台拓扑和业务元数据。
-7. 在管理台或通过 cloudnode API 创建云账户、两阶段上传 collector SCF 代码包（`InitPackageUpload` → COS 直传 → `CompletePackageUpload`）、部署云节点。
-8. 在采集规则页面创建规则，由 `moox-collector` 根据 dataset subjects 生成 task instances，并提交给 `moox-cloudnode` 的 JobItem 队列。
-9. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行采集并写入 storage。
-10. 如果 View 需要历史重建，执行 ViewBuilder 的 `op=maintain` 维护流程；Archive 由独立 `modules/archive` 服务负责，不通过 Storage View rebuild。
+6. 用部署 CLI 注册 DataNode，确认 `service_target` 可达；用 `moox-cli metadata import` 导入直接绑定的 disabled Dataset。
+7. 用 Doctor 执行只读激活检查，并显式激活健康 Dataset；激活成功后绑定锁定。
+8. 在管理台或通过 cloudnode API 创建云账户、两阶段上传 collector SCF 代码包（`InitPackageUpload` → COS 直传 → `CompletePackageUpload`）、部署云节点。
+9. 在采集规则页面创建规则，由 `moox-collector` 根据 Dataset subjects 生成 task instances，并提交给 `moox-cloudnode` 的 JobItem 队列。
+10. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行采集并写入已激活 Dataset。
+11. 如果 View 需要历史重建，执行 ViewBuilder 的 `op=maintain` 维护流程；Archive 由独立 `modules/archive` 服务负责，不通过 Storage View rebuild。
 
 ## Metadata seed 导入
 
@@ -73,6 +74,19 @@ GOWORK=off go run ./cmd/moox-cli metadata import \
   --spaces crypto \
   --if-not-exists
 ```
+
+Storage metadata seed 使用 Schema v5。DataNode 不是逻辑 seed 的隐含路由；部署流程先执行：
+
+```bash
+moox-storage-cli register-node \
+  --node-id storage-node-0 \
+  --service-target ip://127.0.0.1:20107 \
+  --metadata-target ip://127.0.0.1:20100
+moox-storage-cli activate-datasets --metadata-target ip://127.0.0.1:20100
+```
+
+`activate-datasets` 只激活已经通过只读检查的 Dataset。绑定一旦锁定，不能再解绑或迁移；
+新项目不提供历史 Schema 或节点拓扑迁移。
 
 默认 seed 不静态枚举测试币种。E2E 的 prepare 阶段通过 Metadata
 `RegisterDataSubject` API 登记 `BTC-USDT`，同时创建 Binance 外部代码映射和
@@ -110,7 +124,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 删除所有运行时数据后，一个最小的端到端演示环境应按下面的边界重建：
 
 1. `moox-admin` 启动后，可以登录管理台并看到 `moox_cloudnode`、`moox_collector`、storage-primary/metadata/view 等服务部署记录。
-2. `moox-storage` 的 `storage-primary` 和 `storage-view` 进程启动后，导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space。
+2. `moox-storage` 的 `storage-primary`、`storage-node` 和 `storage-view` 进程启动后，先注册 DataNode，再导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space，并完成 Doctor 检查与显式激活。
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
 5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；规则根据 `binance_spot_kline_1h` 数据集里的 Subject 生成 task instances。
@@ -143,7 +157,7 @@ examples/metadata-quant-initial.seed.yaml --spaces crypto
 - collector 生成 task instances 且写入 `cloud_job_item_id`；
 - cloudnode JobItems 全部成功；
 - collector task instances 全部成功；
-- storage-primary 中能扫描到 `binance_spot_kline_1h` 时序 K 线数据。
+- storage-primary 经 DataNode Snapshot 路径能读取到 `binance_spot_kline_1h` 时序 K 线数据。
 
 SCF 步骤从部署目录的 `secrets/gateway-service.env` 读取节点和服务身份，将公开 CA 证书以 `MOOX_GATEWAY_CA_PEM_B64` 传入运行时，并通过独立 Gateway `127.0.0.1:11002` 访问 `/api/service/*`。任一身份或 CA 配置缺失时会在调用前失败，不会打印密钥。
 
@@ -160,7 +174,7 @@ examples/e2e/run.sh \
 
 ## 边界说明
 
-- `examples/*.seed.yaml` 只表达 Storage 元数据和存储拓扑，不直接写 admin/cloudnode/collector/trade 表。
+- `examples/*.seed.yaml` 只表达 Storage 逻辑元数据和 Dataset 的直接 `data_node_id` 绑定，不直接写 admin/cloudnode/collector/trade 表；DataNode 注册属于部署流程。
 - 云账户和真实云厂商密钥不进入 examples，需要通过管理台或 cloudnode API 重新创建。
 - 采集任务实例不是 seed 数据，应由 collector 规则和 dataset subjects 重新生成。
 - CloudNode 批量创建/部署节点返回 `batch_id`，这是控制面 `batch_change`，不是 collector `task_instance`，也不是 SCF runtime `JobItem`。

@@ -239,6 +239,10 @@ message Dataset {
   string data_node_id = 17;
   // keep_duration 是 TimeSeries Pebble 数据的保留时长；0 表示永久保存。
   string keep_duration = 18;
+  // binding_locked 表示 Dataset 首次激活后是否永久锁定 DataNode 绑定。
+  bool binding_locked = 19;
+  // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
+  uint64 revision = 20;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -377,34 +381,52 @@ message DatasetColumn {
   map<string, string> attributes = 13;
 }
 
-// PrimaryStoreNode 表示在线主存节点，即一个 PrimaryStore 服务实例或服务组入口。
-message PrimaryStoreNode {
-  // node_id 是存储节点 ID。
+// DataNode 表示一个可被 storage-primary 直接调用的数据存储节点。
+message DataNode {
+  // node_id 是部署生成的稳定节点标识。
   string node_id = 1;
-  // name 是节点名称，通常用于管理台展示。
+  // name 是管理台展示名称。
   string name = 2;
-  // endpoint 是 PrimaryStore 服务地址。
-  string endpoint = 3;
-  // weight 是路由权重。
-  uint32 weight = 4;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 5;
-  // config_json 是节点专用配置。
-  string config_json = 6;
+  // service_target 是 DataNode 内部 tRPC 地址。
+  string service_target = 3;
+  // status 表示 active 或 disabled。
+  string status = 4;
   // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 7;
+  string created_at = 5;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 8;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 9;
+  string updated_at = 6;
+}
+
+// DatasetSummary 是 DataNode 列表中携带的数据集摘要。
+message DatasetSummary {
+  string space_id = 1;
+  string dataset_id = 2;
+  string name = 3;
+  DataKind data_kind = 4;
+  string keep_duration = 5;
+  string status = 6;
+}
+
+// DataNodeListItem 是 DataNode 及其全部 Dataset 摘要的组合视图。
+message DataNodeListItem {
+  DataNode node = 1;
+  repeated DatasetSummary datasets = 2;
+}
+
+// DatasetActivationCheck 是一次 Dataset 激活自检的单项结果。
+message DatasetActivationCheck {
+  string check_id = 1;
+  bool ready = 2;
+  string summary = 3;
 }
 
 // Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
 message Device {
+  reserved 2;
+  reserved "node_id";
+
   // device_id 是设备 ID。
   string device_id = 1;
-  // node_id 是所属存储节点 ID。
-  string node_id = 2;
   // name 是设备名称，通常用于管理台展示。
   string name = 3;
   // engine 是存储引擎，例如 pebble、duckdb 或 bleve。
@@ -421,34 +443,6 @@ message Device {
   string updated_at = 9;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 10;
-}
-
-// PrimaryStoreRoute 表示在线事实主存的水平切分路由。
-message PrimaryStoreRoute {
-  // space_id 是路由所属 Space。
-  string space_id = 1;
-  // route_id 是路由规则 ID。
-  string route_id = 2;
-  // dataset_id 是数据集 ID。
-  string dataset_id = 3;
-  // subject_id 是精确匹配的数据对象 ID；为空表示不按对象精确匹配。
-  string subject_id = 4;
-  // subject_pattern 是对象匹配模式；为空表示不使用模式匹配。
-  string subject_pattern = 5;
-  // hash_rule 是水平切分哈希规则；为空表示不使用哈希切分。
-  string hash_rule = 6;
-  // node_id 是目标 PrimaryStore 节点 ID。
-  string node_id = 7;
-  // priority 是路由优先级，数值越小优先级越高。
-  uint32 priority = 8;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 9;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 10;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 11;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 12;
 }
 
 // ArchiveFile 表示从 Pebble 主存归档出来的 Parquet 事实文件。
@@ -515,6 +509,17 @@ message UpdateSpaceRsp {
   common.RetInfo ret_info = 1;
   // space 是更新后的使用空间元数据。
   Space space = 2;
+}
+
+// DeleteSpaceReq 表示删除一个使用空间及其级联元数据。
+message DeleteSpaceReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+}
+
+// DeleteSpaceRsp 表示删除使用空间的结果。
+message DeleteSpaceRsp {
+  common.RetInfo ret_info = 1;
 }
 
 // GetSpaceReq 表示获取使用空间的请求。
@@ -695,6 +700,18 @@ message UpdateDataSourceRsp {
   common.RetInfo ret_info = 1;
   // data_source 是更新后的数据来源元数据。
   DataSource data_source = 2;
+}
+
+// DeleteDataSourceReq 表示删除一个没有数据集引用的数据来源。
+message DeleteDataSourceReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string data_source_id = 3;
+}
+
+// DeleteDataSourceRsp 表示删除数据来源的结果。
+message DeleteDataSourceRsp {
+  common.RetInfo ret_info = 1;
 }
 
 // GetDataSourceReq 表示获取数据来源的请求。
@@ -903,6 +920,18 @@ message UpdateDatasetRsp {
   Dataset dataset = 2;
 }
 
+// DeleteDatasetReq 表示删除一个临时数据集及其依赖行。
+message DeleteDatasetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+// DeleteDatasetRsp 表示删除数据集的结果。
+message DeleteDatasetRsp {
+  common.RetInfo ret_info = 1;
+}
+
 // GetDatasetReq 表示获取数据集的请求。
 message GetDatasetReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -935,6 +964,8 @@ message ListDatasetsReq {
   string freq = 5;
   // page 是分页参数。
   common.Page page = 6;
+  // data_node_id 是可选 DataNode 过滤条件。
+  string data_node_id = 7;
 }
 
 // ListDatasetsRsp 表示列出数据集的响应。
@@ -1259,70 +1290,101 @@ message ListDatasetColumnsRsp {
   common.PageResult page_result = 3;
 }
 
-// CreatePrimaryStoreNodeReq 表示创建存储节点的请求。
-message CreatePrimaryStoreNodeReq {
-  // auth_info 是调用方身份和链路追踪信息。
+// RegisterDataNodeReq 表示部署流程注册或刷新 DataNode。
+message RegisterDataNodeReq {
   common.AuthInfo auth_info = 1;
-  // node 是待创建的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  string node_id = 2;
+  string service_target = 3;
+  string initial_name = 4;
 }
 
-// CreatePrimaryStoreNodeRsp 表示创建存储节点的响应。
-message CreatePrimaryStoreNodeRsp {
-  // ret_info 是接口返回状态。
+message RegisterDataNodeRsp {
   common.RetInfo ret_info = 1;
-  // node 是创建后的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  DataNode node = 2;
 }
 
-// UpdatePrimaryStoreNodeReq 表示更新存储节点的请求。
-message UpdatePrimaryStoreNodeReq {
-  // auth_info 是调用方身份和链路追踪信息。
+// UpdateDataNodeReq 表示管理员更新 DataNode 的可编辑字段。
+message UpdateDataNodeReq {
   common.AuthInfo auth_info = 1;
-  // node 是更新后的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  string node_id = 2;
+  string name = 3;
+  string status = 4;
 }
 
-// UpdatePrimaryStoreNodeRsp 表示更新存储节点的响应。
-message UpdatePrimaryStoreNodeRsp {
-  // ret_info 是接口返回状态。
+message UpdateDataNodeRsp {
   common.RetInfo ret_info = 1;
-  // node 是更新后的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  DataNode node = 2;
 }
 
-// GetPrimaryStoreNodeReq 表示获取存储节点的请求。
-message GetPrimaryStoreNodeReq {
-  // auth_info 是调用方身份和链路追踪信息。
+message GetDataNodeReq {
   common.AuthInfo auth_info = 1;
-  // node_id 是存储节点 ID。
   string node_id = 2;
 }
 
-// GetPrimaryStoreNodeRsp 表示获取存储节点的响应。
-message GetPrimaryStoreNodeRsp {
-  // ret_info 是接口返回状态。
+message GetDataNodeRsp {
   common.RetInfo ret_info = 1;
-  // node 是存储节点元数据。
-  PrimaryStoreNode node = 2;
+  DataNode node = 2;
 }
 
-// ListPrimaryStoreNodesReq 表示列出存储节点的请求。
-message ListPrimaryStoreNodesReq {
-  // auth_info 是调用方身份和链路追踪信息。
+message ListDataNodesReq {
   common.AuthInfo auth_info = 1;
-  // page 是分页参数。
-  common.Page page = 2;
+  string status = 2;
+  common.Page page = 3;
 }
 
-// ListPrimaryStoreNodesRsp 表示列出存储节点的响应。
-message ListPrimaryStoreNodesRsp {
-  // ret_info 是接口返回状态。
+message ListDataNodesRsp {
   common.RetInfo ret_info = 1;
-  // nodes 是存储节点列表。
-  repeated PrimaryStoreNode nodes = 2;
-  // page_result 是分页结果。
+  repeated DataNodeListItem items = 2;
   common.PageResult page_result = 3;
+}
+
+message DeleteDataNodeReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+}
+
+message DeleteDataNodeRsp {
+  common.RetInfo ret_info = 1;
+  DataNode node = 2;
+}
+
+message RebindDatasetDataNodeReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string data_node_id = 4;
+  uint64 expected_revision = 5;
+}
+
+message RebindDatasetDataNodeRsp {
+  common.RetInfo ret_info = 1;
+  Dataset dataset = 2;
+}
+
+message CheckDatasetActivationReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+message CheckDatasetActivationRsp {
+  common.RetInfo ret_info = 1;
+  uint64 dataset_revision = 2;
+  repeated DatasetActivationCheck checks = 3;
+  bool ready = 4;
+}
+
+message ActivateDatasetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  uint64 expected_revision = 4;
+}
+
+message ActivateDatasetRsp {
+  common.RetInfo ret_info = 1;
+  Dataset dataset = 2;
+  repeated DatasetActivationCheck checks = 3;
 }
 
 // CreateDeviceReq 表示创建设备的请求。
@@ -1377,8 +1439,8 @@ message GetDeviceRsp {
 message ListDevicesReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
-  // node_id 是可选存储节点 ID 过滤条件。
-  string node_id = 2;
+  reserved 2;
+  reserved "node_id";
   // engine 是可选存储引擎过滤条件。
   string engine = 3;
   // page 是分页参数。
@@ -1391,82 +1453,6 @@ message ListDevicesRsp {
   common.RetInfo ret_info = 1;
   // devices 是设备列表。
   repeated Device devices = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
-// CreatePrimaryStoreRouteReq 表示创建存储路由的请求。
-message CreatePrimaryStoreRouteReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // primary_store_route 是待创建的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// CreatePrimaryStoreRouteRsp 表示创建存储路由的响应。
-message CreatePrimaryStoreRouteRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_route 是创建后的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// UpdatePrimaryStoreRouteReq 表示更新存储路由的请求。
-message UpdatePrimaryStoreRouteReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // primary_store_route 是更新后的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// UpdatePrimaryStoreRouteRsp 表示更新存储路由的响应。
-message UpdatePrimaryStoreRouteRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_route 是更新后的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// GetPrimaryStoreRouteReq 表示获取存储路由的请求。
-message GetPrimaryStoreRouteReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // route_id 是路由规则 ID。
-  string route_id = 3;
-}
-
-// GetPrimaryStoreRouteRsp 表示获取存储路由的响应。
-message GetPrimaryStoreRouteRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_route 是存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// ListPrimaryStoreRoutesReq 表示列出存储路由的请求。
-message ListPrimaryStoreRoutesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // dataset_id 是可选数据集 ID 过滤条件。
-  string dataset_id = 3;
-  // subject_id 是可选数据对象 ID 过滤条件。
-  string subject_id = 4;
-  // node_id 是可选存储节点 ID 过滤条件。
-  string node_id = 5;
-  // page 是分页参数。
-  common.Page page = 6;
-}
-
-// ListPrimaryStoreRoutesRsp 表示列出存储路由的响应。
-message ListPrimaryStoreRoutesRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_routes 是存储路由列表。
-  repeated PrimaryStoreRoute primary_store_routes = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
 }
@@ -1597,6 +1583,8 @@ service Metadata {
   rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
   // 更新使用空间。
   rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
+  // 删除使用空间及其级联元数据。
+  rpc DeleteSpace(DeleteSpaceReq) returns (DeleteSpaceRsp);
   // 按 ID 获取使用空间。
   rpc GetSpace(GetSpaceReq) returns (GetSpaceRsp);
   // 列出使用空间。
@@ -1627,6 +1615,8 @@ service Metadata {
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
   // 更新数据来源。
   rpc UpdateDataSource(UpdateDataSourceReq) returns (UpdateDataSourceRsp);
+  // 删除数据来源。
+  rpc DeleteDataSource(DeleteDataSourceReq) returns (DeleteDataSourceRsp);
   // 按 ID 获取数据来源。
   rpc GetDataSource(GetDataSourceReq) returns (GetDataSourceRsp);
   // 列出数据来源。
@@ -1649,10 +1639,18 @@ service Metadata {
   rpc CreateDataset(CreateDatasetReq) returns (CreateDatasetRsp);
   // 更新数据集。
   rpc UpdateDataset(UpdateDatasetReq) returns (UpdateDatasetRsp);
+  // 删除数据集。
+  rpc DeleteDataset(DeleteDatasetReq) returns (DeleteDatasetRsp);
   // 按 ID 获取数据集。
   rpc GetDataset(GetDatasetReq) returns (GetDatasetRsp);
   // 列出数据集。
   rpc ListDatasets(ListDatasetsReq) returns (ListDatasetsRsp);
+  // 更换尚未激活 Dataset 的 DataNode 绑定。
+  rpc RebindDatasetDataNode(RebindDatasetDataNodeReq) returns (RebindDatasetDataNodeRsp);
+  // 只读检查 Dataset 是否满足激活条件。
+  rpc CheckDatasetActivation(CheckDatasetActivationReq) returns (CheckDatasetActivationRsp);
+  // 使用 revision CAS 激活 Dataset。
+  rpc ActivateDataset(ActivateDatasetReq) returns (ActivateDatasetRsp);
   // 为 Dataset 绑定 Subject。
   rpc BindDatasetSubject(BindDatasetSubjectReq) returns (BindDatasetSubjectRsp);
   // 列出 Dataset 覆盖的 Subject。
@@ -1694,14 +1692,16 @@ service Metadata {
   // 列出数据集列。
   rpc ListDatasetColumns(ListDatasetColumnsReq) returns (ListDatasetColumnsRsp);
 
-  // 创建存储节点。
-  rpc CreatePrimaryStoreNode(CreatePrimaryStoreNodeReq) returns (CreatePrimaryStoreNodeRsp);
-  // 更新存储节点。
-  rpc UpdatePrimaryStoreNode(UpdatePrimaryStoreNodeReq) returns (UpdatePrimaryStoreNodeRsp);
-  // 按 ID 获取存储节点。
-  rpc GetPrimaryStoreNode(GetPrimaryStoreNodeReq) returns (GetPrimaryStoreNodeRsp);
-  // 列出存储节点。
-  rpc ListPrimaryStoreNodes(ListPrimaryStoreNodesReq) returns (ListPrimaryStoreNodesRsp);
+  // 注册或刷新 DataNode。
+  rpc RegisterDataNode(RegisterDataNodeReq) returns (RegisterDataNodeRsp);
+  // 更新 DataNode 名称和状态。
+  rpc UpdateDataNode(UpdateDataNodeReq) returns (UpdateDataNodeRsp);
+  // 按 ID 获取 DataNode。
+  rpc GetDataNode(GetDataNodeReq) returns (GetDataNodeRsp);
+  // 分页列出 DataNode 及其 Dataset 摘要。
+  rpc ListDataNodes(ListDataNodesReq) returns (ListDataNodesRsp);
+  // 删除满足约束的 DataNode。
+  rpc DeleteDataNode(DeleteDataNodeReq) returns (DeleteDataNodeRsp);
 
   // 创建设备。
   rpc CreateDevice(CreateDeviceReq) returns (CreateDeviceRsp);
@@ -1711,15 +1711,6 @@ service Metadata {
   rpc GetDevice(GetDeviceReq) returns (GetDeviceRsp);
   // 列出设备。
   rpc ListDevices(ListDevicesReq) returns (ListDevicesRsp);
-
-  // 创建在线主存路由。
-  rpc CreatePrimaryStoreRoute(CreatePrimaryStoreRouteReq) returns (CreatePrimaryStoreRouteRsp);
-  // 更新在线主存路由。
-  rpc UpdatePrimaryStoreRoute(UpdatePrimaryStoreRouteReq) returns (UpdatePrimaryStoreRouteRsp);
-  // 按 ID 获取在线主存路由。
-  rpc GetPrimaryStoreRoute(GetPrimaryStoreRouteReq) returns (GetPrimaryStoreRouteRsp);
-  // 列出在线主存路由。
-  rpc ListPrimaryStoreRoutes(ListPrimaryStoreRoutesReq) returns (ListPrimaryStoreRoutesRsp);
 
   // 登记 Parquet 归档文件。
   rpc RegisterArchiveFile(RegisterArchiveFileReq) returns (RegisterArchiveFileRsp);

@@ -36,12 +36,16 @@ export const useSpaceStore = defineStore(
       setSelectedSpaceIdCache(spaceId);
     }
 
+    function hasSpace(spaceId: string) {
+      return Boolean(spaceId) && spaces.value.some(item => item.space_id === spaceId);
+    }
+
     function requireSpaceId() {
       if (!selectedSpaceId.value) throw new Error("请先选择空间");
       return selectedSpaceId.value;
     }
 
-    return { spaces, selectedSpaceId, selectedSpace, loading, loadSpaces, setSelectedSpace, requireSpaceId };
+    return { spaces, selectedSpaceId, selectedSpace, loading, loadSpaces, setSelectedSpace, hasSpace, requireSpaceId };
   },
   { persist: true }
 );

@@ -23,6 +23,8 @@ CLI，不再是占位模块。
 
 给版本打 Tag 并推送后，GitHub Actions 和 CNB 会分别创建 Release 并上传同一组跨平台归档；对应配置是 `.github/workflows/release.yml` 和 `.cnb.yml`。本地只构建不发布时可运行 `VERSION=v0.1.0 make release-matrix`，也可用 `RELEASE_PLATFORMS=linux/amd64,windows/amd64` 缩小矩阵。跨平台构建默认对 Storage 使用 no-CGO fallback；具备目标平台 C 工具链时可显式设置 `STORAGE_CGO_ENABLED=1`。
 
+macOS 不直接交叉编译启用 DuckDB CGO 的 Storage Linux 二进制。配置根目录 `custom.toml` 的 `[compile_host]` 后，运行 `make build-storage-linux`，脚本会通过 `moox-cli setup hosts` 获取脱敏主机信息，同步源码到该 Linux 主机并在那里使用原生 Go、GCC/G++ 编译；不会同步 `custom.toml`。
+
 部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
 
 提交前统一运行 `make verify`。它会检查模块和 package 依赖边界、tRPC Context、gofmt、Prettier 与零 warning ESLint，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway/Strategy 部署和 Caddy 契约检查；所有格式与 lint 门禁都是只读检查，不在 CI 中执行 `--fix` 或 `--write`。
@@ -47,8 +49,8 @@ JetStream 运行态数据。部署启动顺序为 EventBus -> Storage -> Metadat
 每个服务的本地 timer 每 30 秒主动上报 Prometheus registry 快照到 EventBus，
 Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指标阈值告警。
 系统不部署 Prometheus Server、Pushgateway，也不提供手工监控 target API。
-外部或多机 Storage 部署需要设置 `MOOX_METRICS_STORAGE_ROUTE_SEED`；单机部署
-默认使用 `examples/metadata-monitor-metrics-local-route.seed.yaml`。详见
+Storage 部署先由部署流程注册 DataNode，再导入直接包含 `data_node_id` 的逻辑
+metadata seed；Dataset 默认 disabled，必须完成只读激活检查后显式激活。详见
 [`docs/运维/MooX-EventBus运维.md`](docs/运维/MooX-EventBus运维.md) 和
 [`docs/运维/MooX指标监控.md`](docs/运维/MooX指标监控.md)。
 

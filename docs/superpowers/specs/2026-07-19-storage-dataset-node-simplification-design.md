@@ -2,7 +2,9 @@
 
 ## 状态与优先级
 
-本设计已于 2026-07-19 完成讨论确认。它是 Storage 当前实现的目标事实源，取代此前关于 DataShard、多 Consumer、Pebble 行级 Merge、不可变整行、字段级删除、Snapshot Scan、Sequence Progress、Dataset 迁移和通用 Schema 演进的设计。
+本设计已于 2026-07-19 完成讨论确认，仍作为字段级存储、Dataset 单归属和 View 物化的基础设计。
+其中关于 DataNode/节点管理、Dataset 激活、绑定锁定和部署流程的内容已被 2026-07-22
+《Storage DataNode 管理模型收敛设计》取代；不要从本文恢复节点管理或拓扑管理方案。
 
 DataNode 管理、Dataset 激活和绑定锁定规则已由《Storage DataNode 管理模型收敛设计》（2026-07-22）修订；两份文档冲突时，以 2026-07-22 设计为准。
 

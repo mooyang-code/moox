@@ -19,6 +19,8 @@ type MetadataClient interface {
 	CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
 	UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
 	GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
+	CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
+	ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
 	UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 }
 
@@ -36,14 +38,6 @@ type datasetSubjectLister interface {
 
 type datasetSubjectBinder interface {
 	BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error)
-}
-
-type primaryStoreRouteLister interface {
-	ListPrimaryStoreRoutes(ctx context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error)
-}
-
-type primaryStoreRouteCreator interface {
-	CreatePrimaryStoreRoute(ctx context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error)
 }
 
 // MetadataSync mirrors local factor definitions into Storage Metadata.
@@ -75,11 +69,23 @@ func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, so
 			return err
 		}
 	}
-	dataSourceID := s.sourceDataSourceID(ctx, spaceID, sourceDataset)
-	if err := s.createDataset(ctx, spaceID, sourceDataset, targetDataset, dataSourceID, freq); err != nil {
-		return err
+	source, err := s.getDataset(ctx, spaceID, sourceDataset)
+	if err != nil {
+		return fmt.Errorf("load source dataset %s/%s: %w", spaceID, sourceDataset, err)
 	}
-	if err := s.copyPrimaryStoreRoutes(ctx, spaceID, sourceDataset, targetDataset); err != nil {
+	dataSourceID := source.GetDataSourceId()
+	if strings.TrimSpace(dataSourceID) == "" {
+		dataSourceID = DataSourceIDFromDataset(sourceDataset)
+	}
+	if strings.TrimSpace(source.GetDataNodeId()) == "" || strings.TrimSpace(source.GetKeepDuration()) == "" {
+		return fmt.Errorf("source dataset %s/%s must define data_node_id and keep_duration", spaceID, sourceDataset)
+	}
+	if existing, found, err := s.findDataset(ctx, spaceID, targetDataset); err != nil {
+		return err
+	} else if found && existing.GetStatus() == "active" && existing.GetBindingLocked() {
+		return nil
+	}
+	if err := s.createDataset(ctx, spaceID, sourceDataset, targetDataset, dataSourceID, source, freq); err != nil {
 		return err
 	}
 	if err := s.copyDatasetSubjects(ctx, spaceID, sourceDataset, targetDataset); err != nil {
@@ -97,75 +103,46 @@ func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, so
 			}
 		}
 	}
-	return nil
-}
-
-func (s *MetadataSync) copyPrimaryStoreRoutes(ctx context.Context, spaceID string, sourceDataset string, targetDataset string) error {
-	lister, ok := s.client.(primaryStoreRouteLister)
-	if !ok {
+	target, err := s.getDataset(ctx, spaceID, targetDataset)
+	if err != nil {
+		return fmt.Errorf("load target dataset %s/%s after sync: %w", spaceID, targetDataset, err)
+	}
+	if target.GetStatus() == "active" && target.GetBindingLocked() {
 		return nil
 	}
-	creator, ok := s.client.(primaryStoreRouteCreator)
-	if !ok {
+	checkRsp, err := s.client.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{
+		AuthInfo:  s.auth,
+		SpaceId:   spaceID,
+		DatasetId: targetDataset,
+	})
+	if err != nil {
+		return fmt.Errorf("check dataset activation %s/%s: %w", spaceID, targetDataset, err)
+	}
+	if !retOK(checkRsp.GetRetInfo()) {
+		return retInfoError("CheckDatasetActivation", checkRsp.GetRetInfo())
+	}
+	if !checkRsp.GetReady() {
+		return activationNotReadyError(spaceID, targetDataset, checkRsp.GetChecks())
+	}
+	activateRsp, err := s.client.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{
+		AuthInfo:         s.auth,
+		SpaceId:          spaceID,
+		DatasetId:        targetDataset,
+		ExpectedRevision: checkRsp.GetDatasetRevision(),
+	})
+	if err != nil {
+		return fmt.Errorf("activate dataset %s/%s: %w", spaceID, targetDataset, err)
+	}
+	if retOK(activateRsp.GetRetInfo()) {
 		return nil
 	}
-	const pageSize uint32 = 500
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := lister.ListPrimaryStoreRoutes(ctx, &storagepb.ListPrimaryStoreRoutesReq{
-			AuthInfo:  s.auth,
-			SpaceId:   spaceID,
-			DatasetId: sourceDataset,
-			Page:      &commonpb.Page{Page: pageNo, Size: pageSize},
-		})
-		if err != nil {
-			return err
-		}
-		if !retOK(rsp.GetRetInfo()) {
-			return retInfoError("ListPrimaryStoreRoutes", rsp.GetRetInfo())
-		}
-		for _, route := range rsp.GetPrimaryStoreRoutes() {
-			if strings.TrimSpace(route.GetNodeId()) == "" {
-				continue
-			}
-			if err := s.createTargetRoute(ctx, creator, spaceID, targetDataset, route); err != nil {
-				return err
-			}
-		}
-		page := rsp.GetPageResult()
-		if page == nil || !page.GetHasMore() || len(rsp.GetPrimaryStoreRoutes()) == 0 {
+	if isConflictRet(activateRsp.GetRetInfo()) {
+		latest, latestErr := s.getDataset(ctx, spaceID, targetDataset)
+		if latestErr == nil && latest.GetStatus() == "active" && latest.GetBindingLocked() {
 			return nil
 		}
 	}
-}
-
-func (s *MetadataSync) createTargetRoute(ctx context.Context, creator primaryStoreRouteCreator, spaceID string, targetDataset string, source *storagepb.PrimaryStoreRoute) error {
-	status := strings.TrimSpace(source.GetStatus())
-	if status == "" {
-		status = "active"
-	}
-	req := &storagepb.CreatePrimaryStoreRouteReq{
-		AuthInfo: s.auth,
-		PrimaryStoreRoute: &storagepb.PrimaryStoreRoute{
-			SpaceId:        spaceID,
-			RouteId:        targetRouteID(targetDataset, source),
-			DatasetId:      targetDataset,
-			SubjectId:      source.GetSubjectId(),
-			SubjectPattern: source.GetSubjectPattern(),
-			HashRule:       source.GetHashRule(),
-			NodeId:         source.GetNodeId(),
-			Priority:       source.GetPriority(),
-			Status:         status,
-			Attributes:     cloneStringMap(source.GetAttributes()),
-		},
-	}
-	rsp, err := creator.CreatePrimaryStoreRoute(ctx, req)
-	if err != nil {
-		return err
-	}
-	if retOK(rsp.GetRetInfo()) || isDuplicateRet(rsp.GetRetInfo()) || isRefreshInProgressRet(rsp.GetRetInfo()) {
-		return nil
-	}
-	return retInfoError("CreatePrimaryStoreRoute", rsp.GetRetInfo())
+	return retInfoError("ActivateDataset", activateRsp.GetRetInfo())
 }
 
 func (s *MetadataSync) copyDatasetSubjects(ctx context.Context, spaceID string, sourceDataset string, targetDataset string) error {
@@ -238,20 +215,6 @@ func (s *MetadataSync) bindDatasetSubject(ctx context.Context, binder datasetSub
 	return retInfoError("BindDatasetSubject", rsp.GetRetInfo())
 }
 
-func targetRouteID(targetDataset string, source *storagepb.PrimaryStoreRoute) string {
-	parts := []string{"route", targetDataset, source.GetSubjectId(), source.GetSubjectPattern(), source.GetNodeId()}
-	base := safeID(strings.Join(parts, "-"))
-	if base == "" || base == "route" {
-		base = safeID("route-" + targetDataset)
-	}
-	if len(base) <= 80 {
-		return base
-	}
-	sum := sha1.Sum([]byte(base))
-	suffix := fmt.Sprintf("-%x", sum[:3])
-	return strings.TrimRight(base[:80-len(suffix)], "-") + suffix
-}
-
 func safeID(raw string) string {
 	var b strings.Builder
 	lastDash := false
@@ -299,7 +262,7 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 	return retInfoError("CreateFactor", rsp.GetRetInfo())
 }
 
-func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, sourceDataset string, datasetID string, dataSourceID string, freq string) error {
+func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, sourceDataset string, datasetID string, dataSourceID string, source *storagepb.Dataset, freq string) error {
 	exists, err := s.ensureExistingFactorDataset(ctx, spaceID, datasetID, sourceDataset, freq)
 	if err != nil {
 		return err
@@ -317,7 +280,9 @@ func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, source
 			Description:  fmt.Sprintf("Factor result dataset for %s", sourceDataset),
 			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs:        []string{freq},
-			Status:       "active",
+			Status:       "disabled",
+			DataNodeId:   source.GetDataNodeId(),
+			KeepDuration: source.GetKeepDuration(),
 			Attributes:   factorResultDatasetAttributes(sourceDataset, freq),
 		},
 	}
@@ -478,12 +443,22 @@ func (s *MetadataSync) confirmColumnExists(ctx context.Context, spaceID string, 
 	return fmt.Errorf("dataset column %s/%s/%s not found after duplicate response", spaceID, datasetID, columnName)
 }
 
-func (s *MetadataSync) sourceDataSourceID(ctx context.Context, spaceID string, sourceDataset string) string {
-	rsp, err := s.client.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: sourceDataset})
-	if err == nil && rsp != nil && retOK(rsp.GetRetInfo()) && rsp.GetDataset().GetDataSourceId() != "" {
-		return rsp.GetDataset().GetDataSourceId()
+func activationNotReadyError(spaceID, datasetID string, checks []*storagepb.DatasetActivationCheck) error {
+	failed := make([]string, 0, len(checks))
+	for _, check := range checks {
+		if check == nil || check.GetReady() {
+			continue
+		}
+		summary := strings.TrimSpace(check.GetSummary())
+		if summary == "" {
+			summary = "not ready"
+		}
+		failed = append(failed, fmt.Sprintf("%s: %s", check.GetCheckId(), summary))
 	}
-	return DataSourceIDFromDataset(sourceDataset)
+	if len(failed) == 0 {
+		failed = append(failed, "metadata activation checks are not ready")
+	}
+	return fmt.Errorf("dataset %s/%s activation readiness failed: %s", spaceID, datasetID, strings.Join(failed, "; "))
 }
 
 func factorParams(raw string) ([]int, error) {
@@ -597,6 +572,10 @@ func isRefreshInProgressRet(ret *commonpb.RetInfo) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(ret.GetMsg()), "refresh already in progress")
+}
+
+func isConflictRet(ret *commonpb.RetInfo) bool {
+	return ret != nil && ret.GetCode() == commonpb.ErrorCode_CONFLICT
 }
 
 func retInfoError(op string, ret *commonpb.RetInfo) error {

@@ -27,7 +27,7 @@ datasets:
     data_node_id: storage-node-0
     keep_duration: 4320h
     freqs: ["30s"]
-    status: active
+    status: disabled
 
 views:
   - {space_id: moox_system, view_id: moox_service_metrics_view, name: 服务指标视图, primary_dataset_id: moox_service_metrics, dataset_ids: [moox_service_metrics], grain_keys: [subject_id, freq, data_time], engine: duckdb, keep_duration: 4320h, status: active}

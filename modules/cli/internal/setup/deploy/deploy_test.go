@@ -67,6 +67,121 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
 }
 
+func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Storage(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64", ResetStorageData: true,
+	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events}})
+	require.NoError(t, err)
+	var install []string
+	for _, command := range transport.commands {
+		if len(command) >= 5 && strings.Contains(command[2], "install_storage") {
+			install = command
+		}
+	}
+	require.NotEmpty(t, install)
+	require.Equal(t, "1", install[len(install)-1], "reset is a bounded positional flag, not shell text")
+}
+
+func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "storage")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "old.db"), []byte("old"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "auth.env"), []byte("secret"), 0o600))
+	archiveDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "data"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "data", "new.db"), []byte("new"), 0o600))
+	start := filepath.Join(archiveDir, "start.sh")
+	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	command := exec.Command("tar", "-C", archiveDir, "-czf", archive, ".")
+	require.NoError(t, command.Run())
+	previousArchive := remoteStorageArchiveNext
+	defer os.Remove(previousArchive)
+	require.NoError(t, copyFileForTest(archive, previousArchive))
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	_, err = os.Stat(filepath.Join(deploy, "data", "old.db"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+	require.Equal(t, "secret", string(requireFile(t, filepath.Join(deploy, "secrets", "auth.env"))))
+}
+
+func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "storage")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "old.db"), []byte("old"), 0o600))
+	archiveDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "data"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "data", "new.db"), []byte("new"), 0o600))
+	start := filepath.Join(archiveDir, "start.sh")
+	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
+	previousArchive := remoteStorageArchiveNext
+	defer os.Remove(previousArchive)
+	require.NoError(t, copyFileForTest(archive, previousArchive))
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.FileExists(t, filepath.Join(deploy, "data", "old.db"))
+	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+}
+
+func TestStorageRollsBackAfterReadinessFailure(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Storage(context.Background(), transport, Options{RepositoryRoot: t.TempDir(), PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64"}, Dependencies{
+		Packager: &fakePackager{path: archive, events: &events},
+		Probe:    &fakeProbe{events: &events, failAt: StoragePrimaryReady},
+	})
+	require.EqualError(t, err, "storage_deploy_not_ready")
+	require.Contains(t, events, "rollback_storage")
+	require.Equal(t, "cleanup", events[len(events)-1])
+}
+
+func TestStorageRollbackDoesNotDeleteDeploymentWhenInstallerAlreadyRestoredPrevious(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "storage")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	marker := filepath.Join(home, "restored")
+	start := filepath.Join(deploy, "start.sh")
+	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nprintf restored >\""+marker+"\"\n"), 0o700))
+	command := exec.Command("bash", "-c", rollbackStorageScript)
+	command.Env = append(os.Environ(), "HOME="+home)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.FileExists(t, start)
+	require.NoFileExists(t, marker)
+}
+
+func copyFileForTest(source, destination string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
 func TestControlCleansRemoteArchiveAfterFailure(t *testing.T) {
 	t.Parallel()
 	archive := filepath.Join(t.TempDir(), "control.tar.gz")
@@ -113,6 +228,11 @@ func TestFinalizeResponseLossNeverRollsBackHealthyDeployment(t *testing.T) {
 }
 
 func TestRemoteInstallerScriptsParse(t *testing.T) {
+	require.NotContains(t, installControlScript, "--label", "moox-admin-cli random-secret does not support labels")
+	require.Contains(t, installControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "atomic control replacement must stop managed Caddy before changing deploy paths")
+	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "control rollback must stop the active Caddy before restoring the previous path")
+	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy"`, "control rollback must restart Caddy after restoring the previous path")
+	require.NotContains(t, rollbackControlScript, `caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)" || true`, "control rollback must not ignore a Caddy stop failure")
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
 		"install-storage": installStorageScript, "rollback-storage": rollbackStorageScript, "finalize-storage": finalizeStorageScript,
@@ -209,6 +329,8 @@ func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setu
 		}
 	} else if len(argv) >= 3 && strings.Contains(argv[2], "stop.sh") && strings.Contains(argv[2], "prod.previous") {
 		*f.events = append(*f.events, "rollback")
+	} else if len(argv) >= 3 && strings.Contains(argv[2], "stop.sh") && strings.Contains(argv[2], "storage.previous") {
+		*f.events = append(*f.events, "rollback_storage")
 	} else if len(argv) > 0 && argv[0] == "rm" {
 		*f.events = append(*f.events, "cleanup")
 	}

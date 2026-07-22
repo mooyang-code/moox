@@ -38,12 +38,24 @@ BIN="${DEPLOY_DIR}/bin/caddy"; CONFIG="${DEPLOY_DIR}/config/caddy/Caddyfile"; PI
 ENV_FILE="${DEPLOY_DIR}/config/caddy/edge.env"
 ACTIVATION_ROLLBACK="${DEPLOY_DIR}/config/caddy/.activation.rollback"
 BIN_ROLLBACK_CHANGED="${BIN}.rollback.changed"
+# Deployment activation passes public edge values explicitly. Preserve those
+# caller values while loading an older edge.env, so a stale service port cannot
+# silently turn 11001 back into a privileged port such as 443.
+EXPLICIT_PUBLIC_HOST_SET=${MOOX_PUBLIC_HOST+x}
+EXPLICIT_PUBLIC_HOST=${MOOX_PUBLIC_HOST-}
+EXPLICIT_BROWSER_PORT_SET=${MOOX_BROWSER_HTTPS_PORT+x}
+EXPLICIT_BROWSER_PORT=${MOOX_BROWSER_HTTPS_PORT-}
+EXPLICIT_SERVICE_PORT_SET=${MOOX_SERVICE_HTTPS_PORT+x}
+EXPLICIT_SERVICE_PORT=${MOOX_SERVICE_HTTPS_PORT-}
 if [[ -s "${ENV_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
 fi
+if [[ -n "${EXPLICIT_PUBLIC_HOST_SET}" ]]; then MOOX_PUBLIC_HOST=${EXPLICIT_PUBLIC_HOST}; export MOOX_PUBLIC_HOST; fi
+if [[ -n "${EXPLICIT_BROWSER_PORT_SET}" ]]; then MOOX_BROWSER_HTTPS_PORT=${EXPLICIT_BROWSER_PORT}; export MOOX_BROWSER_HTTPS_PORT; fi
+if [[ -n "${EXPLICIT_SERVICE_PORT_SET}" ]]; then MOOX_SERVICE_HTTPS_PORT=${EXPLICIT_SERVICE_PORT}; export MOOX_SERVICE_HTTPS_PORT; fi
 if [[ "${PORTS_SET}" -eq 0 && -n "${MOOX_CADDY_PORTS:-}" ]]; then
   PORTS="${MOOX_CADDY_PORTS}"
 fi
@@ -83,7 +95,7 @@ reconcile_bind_capability() {
   if ! requires_privileged_port; then
     [[ -z "${capabilities}" ]] && return 0
     command -v sudo >/dev/null 2>&1 || fail 'removing stale Caddy capabilities requires passwordless sudo for setcap -r'
-    sudo -n setcap -r -- "${BIN}" || \
+    sudo -n setcap -r "${BIN}" || \
       fail 'could not remove stale Caddy capabilities with sudo -n setcap -r'
     [[ -z "$(file_capabilities)" ]] || fail 'Caddy capability removal validation failed after sudo -n setcap -r'
     log "removed file capabilities from ${BIN} for unprivileged-only ports"
@@ -168,20 +180,79 @@ managed_process() {
   fi
   [[ "${command}" == "${BIN} run --config ${CONFIG} --adapter caddyfile" ]]
 }
-pid_owned() {
+recorded_managed_process() {
   [[ -s "${PIDFILE}" ]] || return 1
   local pid
   pid=$(cat "${PIDFILE}")
   managed_process "${pid}"
 }
+pid_owns_any_listener() {
+  local pid="$1" port owners admin_port
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    owners=$(port_pids "${port}")
+    [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] && return 0
+  done
+  admin_port=${ADMIN_ENDPOINT##*:}
+  owners=$(port_pids "${admin_port}")
+  [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]]
+}
+pid_owned() {
+  recorded_managed_process || return 1
+  local pid port owners
+  pid=$(cat "${PIDFILE}")
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    owners=$(port_pids "${port}")
+    [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] || return 1
+  done
+  return 0
+}
 clean_stale_pid() { [[ ! -e "${PIDFILE}" ]] || pid_owned || { log 'removing stale or mismatched PID file without signaling it'; rm -f "${PIDFILE}"; }; }
-stop_recorded_pid() {
-  local pid
-  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+terminate_managed_pid() {
+  local pid="$1"
   if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
     kill "${pid}" 2>/dev/null || true
     for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+      for _ in $(seq 1 10); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+    fi
   fi
+  if process_running "${pid}"; then
+    fail "managed Caddy did not stop"
+  fi
+}
+process_running() {
+  local pid="$1" state
+  [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null || return 1
+  state=$(ps -p "${pid}" -o stat= 2>/dev/null || true)
+  [[ "${state}" != *Z* ]]
+}
+stop_recorded_pid() {
+  local pid
+  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+  terminate_managed_pid "${pid}"
+  rm -f "${PIDFILE}"
+}
+stop_managed_process() {
+  local pid
+  if ! pid_owned; then
+    adopt_managed_process || true
+  fi
+  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+  if [[ -z "${pid}" ]]; then
+    return 0
+  fi
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && ! kill -0 "${pid}" 2>/dev/null; then
+    rm -f "${PIDFILE}"
+    return 0
+  fi
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]] || ! recorded_managed_process || ! pid_owns_any_listener "${pid}"; then
+    rm -f "${PIDFILE}"
+    fail 'managed Caddy PID file is stale or does not own a configured listener'
+  fi
+  terminate_managed_pid "${pid}"
   rm -f "${PIDFILE}"
 }
 restore_runtime_after_failure() {
@@ -319,7 +390,7 @@ validate_ports
 
 case "${COMMAND}" in
   install) snapshot_file "${BIN}"; install_binary; reconcile_bind_capability;;
-  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; reconcile_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
+  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; if recorded_managed_process && ! pid_owned; then fail "managed PID does not own a configured edge or admin listener"; fi; clean_stale_pid; reconcile_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
@@ -358,9 +429,7 @@ case "${COMMAND}" in
     ;;
   start|reload) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; start_caddy;;
   stop)
-    clean_stale_pid
-    if pid_owned; then pid=$(cat "${PIDFILE}"); kill "${pid}"; for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done; fi
-    rm -f "${PIDFILE}";;
+    stop_managed_process;;
   rollback)
     clean_stale_pid
     if [[ -e "${ACTIVATION_ROLLBACK}" ]]; then
@@ -382,8 +451,7 @@ case "${COMMAND}" in
     else
       if pid_owned; then
         pid=$(cat "${PIDFILE}")
-        kill "${pid}" 2>/dev/null || true
-        for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+        terminate_managed_pid "${pid}"
       fi
       rm -f "${PIDFILE}"
       rm -f "${CONFIG}.candidate" "${ENV_FILE}.candidate"

@@ -23,6 +23,8 @@ type PrimaryStoreService interface {
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error)
 
+	DeleteFields(ctx context.Context, req *PrimaryDeleteFieldsReq) (*PrimaryDeleteFieldsRsp, error)
+
 	MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq) (*MergeTimeSeriesRowsRsp, error)
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
@@ -58,6 +60,24 @@ func PrimaryStoreService_ReadFields_Handler(svr interface{}, ctx context.Context
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).ReadFields(ctx, reqbody.(*PrimaryReadFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_DeleteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryDeleteFieldsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).DeleteFields(ctx, reqbody.(*PrimaryDeleteFieldsReq))
 	}
 
 	var rsp interface{}
@@ -154,6 +174,10 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_ReadFields_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/DeleteFields",
+			Func: PrimaryStoreService_DeleteFields_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/MergeTimeSeriesRows",
 			Func: PrimaryStoreService_MergeTimeSeriesRows_Handler,
 		},
@@ -189,6 +213,9 @@ func (s *UnimplementedPrimaryStore) WriteFields(ctx context.Context, req *Primar
 func (s *UnimplementedPrimaryStore) ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) DeleteFields(ctx context.Context, req *PrimaryDeleteFieldsReq) (*PrimaryDeleteFieldsRsp, error) {
+	return nil, errors.New("rpc DeleteFields of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq) (*MergeTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc MergeTimeSeriesRows of service PrimaryStore is not implemented")
 }
@@ -213,6 +240,8 @@ type PrimaryStoreClientProxy interface {
 	WriteFields(ctx context.Context, req *PrimaryWriteFieldsReq, opts ...client.Option) (rsp *PrimaryWriteFieldsRsp, err error)
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (rsp *PrimaryReadFieldsRsp, err error)
+
+	DeleteFields(ctx context.Context, req *PrimaryDeleteFieldsReq, opts ...client.Option) (rsp *PrimaryDeleteFieldsRsp, err error)
 
 	MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq, opts ...client.Option) (rsp *MergeTimeSeriesRowsRsp, err error)
 
@@ -266,6 +295,26 @@ func (c *PrimaryStoreClientProxyImpl) ReadFields(ctx context.Context, req *Prima
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryReadFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) DeleteFields(ctx context.Context, req *PrimaryDeleteFieldsReq, opts ...client.Option) (*PrimaryDeleteFieldsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/DeleteFields")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("DeleteFields")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryDeleteFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

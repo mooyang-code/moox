@@ -22,6 +22,15 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(msg, "revision conflict"):
+		return pb.ErrorCode_CONFLICT
+	case strings.Contains(msg, "binding is locked"),
+		strings.Contains(msg, "data_node_id is immutable"),
+		strings.Contains(msg, "already bound to this data node"),
+		strings.Contains(msg, "must be disabled"),
+		strings.Contains(msg, "data node is disabled"),
+		strings.Contains(msg, "data node still has datasets"):
+		return pb.ErrorCode_INVALID_PARAM
 	case strings.Contains(msg, "not found"),
 		strings.Contains(msg, "不存在"):
 		return pb.ErrorCode_NOT_FOUND

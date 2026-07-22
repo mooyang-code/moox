@@ -52,6 +52,17 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	return &pb.UpdateSpaceRsp{RetInfo: retinfo.Success("success"), Space: updated}, nil
 }
 
+func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.DeleteSpaceRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" {
+		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
+	}
+	if err := s.metadata.DeleteSpace(ctx, req.GetSpaceId()); err != nil {
+		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteSpace")
+	return &pb.DeleteSpaceRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
 func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
 	space, err := s.metadata.GetSpace(ctx, req.GetSpaceId())
 	if err != nil {

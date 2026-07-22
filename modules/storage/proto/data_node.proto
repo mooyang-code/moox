@@ -34,6 +34,19 @@ message ReadFieldsRsp {
   repeated RowKey existing_keys = 3;
 }
 
+message DeleteFieldsReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  repeated RowKey keys = 3;
+  repeated string field_ids = 4;
+  repeated string attribute_keys = 5;
+}
+
+message DeleteFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowKey keys = 2;
+}
+
 message GetNodeStateReq {
   string node_id = 1;
   common.AuthInfo auth_info = 2;
@@ -58,9 +71,11 @@ message CleanupExpiredBucketsRsp {
   uint64 deleted_buckets = 2;
 }
 
-service DataNode {
+// DataNodeRuntime is the storage RPC surface; DataNode is reserved for the metadata entity.
+service DataNodeRuntime {
   rpc WriteFields(WriteFieldsReq) returns (WriteFieldsRsp);
   rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
+  rpc DeleteFields(DeleteFieldsReq) returns (DeleteFieldsRsp);
   rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
   rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
 }

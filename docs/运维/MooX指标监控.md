@@ -31,18 +31,20 @@ moox-cli metadata apply --file examples/platform-local.seed.yaml \
   --metadata-url http://127.0.0.1:20200
 moox-cli metadata apply --file examples/metadata-monitor-metrics.seed.yaml \
   --metadata-url http://127.0.0.1:20200
-moox-cli metadata apply --file examples/metadata-monitor-metrics-local-route.seed.yaml \
-  --metadata-url http://127.0.0.1:20200
 ```
 
-`metadata apply` 是 create-or-verify：缺失资源按依赖顺序创建，已有资源只有在类型、频率、字段、路由等契约兼容时才报告 unchanged；不兼容会终止 Monitor 启动而不是覆盖数据。单机 Storage 使用内置 local route seed。外部或多机 Storage 必须设置：
+`metadata apply` 是 create-or-verify：缺失资源按依赖顺序创建，已有资源只有在类型、频率、字段和直接
+DataNode 绑定契约兼容时才报告 unchanged；不兼容会终止 Monitor 启动而不是覆盖数据。部署流程
+负责注册 DataNode。Dataset 初始为 disabled，Doctor 只读检查激活条件，部署或管理员随后显式
+激活，激活成功后绑定不可变。外部或多机 Storage 只需提供 Metadata 地址：
 
 ```bash
 export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
-export MOOX_METRICS_STORAGE_ROUTE_SEED=/etc/moox/metadata/metrics-route-prod.yaml
 ```
 
-外部 Storage 不得应用 `platform-local.seed.yaml`。路由 seed 应为每个 PrimaryStore 节点声明同优先级的 `subject_id` 通配路由；series_id 直接作为 subject_id，不为每条动态时序创建 Subject。
+外部 Storage 不得应用 `platform-local.seed.yaml`。每个指标 Dataset 在 seed 中声明
+`data_node_id` 和 `keep_duration`，`series_id` 直接作为 `subject_id`，不为每条动态时序创建
+独立元数据对象。
 
 ## Topic、payload 和生产者配置
 
@@ -78,10 +80,10 @@ Counter 保留绝对值，RATE/INCREASE 在 Monitor 使用按时间排序的历�
 | 现象 | 检查 |
 | --- | --- |
 | 所有服务无最新值 | `moox-eventbus /readyz`、`MOOX_METRICS` consumer pending、服务 reporter error counter |
-| Monitor 启动但没有 ingest | `monitor` 日志中的 metadata schema status；确认 Space/Dataset/columns/route 已通过 `metadata apply` |
+| Monitor 启动但没有 ingest | `monitor` 日志中的 metadata schema status；确认 Space/Dataset/columns/DataNode 绑定已通过 `metadata apply` 并完成激活 |
 | 单个服务 stale | 使用 health HMAC 请求服务 `/metrics`、检查 timer 日志、`MOOX_BOOT_ID`、EventBus 连接和 producer 注册 |
 | DLQ 增长 | `moox.dlq.message.rejected.v1` consumer、原始 message_id、rejection_reason；修复 schema 或 producer 后重新发布新 message_id |
-| 看板历史缺口 | Storage Dataset/DataNode 路由、WriteFields 错误、series_id 与 Attribute 身份是否完整 |
+| 看板历史缺口 | Storage Dataset/DataNode 状态、`service_target`、WriteFields 错误、series_id 与 Attribute 身份是否完整 |
 
 Malformed envelope、gzip bomb、未知 producer、错误 content type 和不兼容 snapshot 不会影响 Monitor 原有 HTTP/TCP 可用性检查；这些消息写入 DLQ 并终止原 delivery。重复 message_id 在 SQLite dedupe 后 ACK，不重复写入 latest。
 

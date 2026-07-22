@@ -46,7 +46,7 @@ func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "spot_kline", DataSourceID: "binance",
-			Name: "Spot Kline", DataKind: "TIME_SERIES", Freqs: []string{"1m"},
+			Name: "Spot Kline", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"},
 		}},
 	}
 	calls, err := buildMetadataImportCalls(seed)

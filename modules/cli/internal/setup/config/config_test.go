@@ -61,6 +61,23 @@ password = "compute-password"
 	assert.Equal(t, 22, snapshot.Manifest.OtherHosts[0].Port)
 }
 
+func TestLoadOptionalCompileHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[compile_host]
+name = "compile"
+address = "192.0.2.20"
+username = "builder"
+`
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.HasCompileHost())
+	assert.Equal(t, "compile", snapshot.Manifest.CompileHost.Name)
+	assert.Equal(t, 22, snapshot.Manifest.CompileHost.Port)
+	assert.Len(t, snapshot.Manifest.Hosts(), 1)
+}
+
 func TestLoadRejectsInvalidManifest(t *testing.T) {
 	tests := []struct {
 		name string
@@ -72,6 +89,13 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "missing secret id", body: strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), want: "tencent_cloud.secret_id"},
 		{name: "missing secret key", body: strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), want: "tencent_cloud.secret_key"},
 		{name: "missing host address", body: strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), want: "control_host.address"},
+		{name: "missing compile host address", body: validManifest + `
+[compile_host]
+name = "compile"
+address = ""
+username = "builder"
+password = "password"
+`, want: "compile_host.address"},
 		{name: "unknown field", body: validManifest + "unexpected = true\n", want: "unknown field"},
 		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "control_host.port"},
 		{

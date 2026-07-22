@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -22,6 +23,10 @@ func (n *recordingNode) WriteFields(ctx context.Context, req *pb.WriteFieldsReq)
 
 func (n *recordingNode) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return n.read(ctx, req)
+}
+
+func (n *recordingNode) DeleteFields(context.Context, *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
+	return &pb.DeleteFieldsRsp{RetInfo: successRetInfo()}, nil
 }
 
 func (n *recordingNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -74,7 +79,7 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 		},
 	}
 	svc, err := New(Options{
-		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeService, error) {
+		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
 			resolved = append(resolved, spaceID+"/"+datasetID)
 			return node, nil
 		},
@@ -133,6 +138,47 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 		if row.GetKey().GetRecord().GetRecordId() != keys[i].GetRecord().GetRecordId() {
 			t.Fatalf("row %d=%v want=%v", i, row.GetKey(), keys[i])
 		}
+	}
+}
+
+func TestPrimaryReadFieldsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
+	provider := &mutableSnapshotProvider{current: &testRequestSnapshot{generation: "generation-a"}}
+	var generations []string
+	node := &recordingNode{
+		write: func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+			return &pb.WriteFieldsRsp{RetInfo: successRetInfo()}, nil
+		},
+		read: func(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			snapshot, ok := metadata.RequestSnapshotFromContext(ctx).(*testRequestSnapshot)
+			if !ok || snapshot == nil {
+				t.Fatalf("request snapshot missing for %s", req.GetDatasetId())
+			}
+			generations = append(generations, snapshot.generation)
+			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
+		},
+	}
+	svc, err := New(Options{
+		Node:     node,
+		Snapshot: provider.RequestSnapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := func(dataset, record string) *pb.RowKey {
+		return &pb.RowKey{SpaceId: "space", DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}}
+	}
+	rsp, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		Keys:     []*pb.RowKey{key("dataset-a", "a"), key("dataset-b", "b")},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("read rsp=%v err=%v", rsp, err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("snapshot provider calls=%d want 1", provider.calls)
+	}
+	if !reflect.DeepEqual(generations, []string{"generation-a", "generation-a"}) {
+		t.Fatalf("generations=%v", generations)
 	}
 }
 
@@ -210,4 +256,32 @@ func TestPrimaryReadFieldsReturnsResolvedLatestRecordVersion(t *testing.T) {
 
 func successRetInfo() *pb.RetInfo {
 	return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}
+}
+
+type mutableSnapshotProvider struct {
+	current metadata.RequestSnapshot
+	calls   int
+}
+
+func (p *mutableSnapshotProvider) RequestSnapshot() metadata.RequestSnapshot {
+	p.calls++
+	snapshot := p.current
+	p.current = &testRequestSnapshot{generation: "generation-b"}
+	return snapshot
+}
+
+type testRequestSnapshot struct {
+	generation string
+}
+
+func (*testRequestSnapshot) GetDataset(string, string) (*pb.Dataset, bool) {
+	return nil, false
+}
+
+func (*testRequestSnapshot) GetDataNode(string) (*pb.DataNode, bool) {
+	return nil, false
+}
+
+func (*testRequestSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
 }

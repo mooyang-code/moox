@@ -41,26 +41,57 @@ func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies)
 	if snapshot == nil || deps.Identity == nil || deps.SSH == nil {
 		return result, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		result.Checks = append(result.Checks, Check{Name: "config", Status: "invalid", Code: "config_changed"})
-		return result, fmt.Errorf("%w: config_changed", ErrValidationFailed)
+	result, err := configResult(snapshot)
+	if err != nil {
+		return result, err
 	}
-	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
 
 	if _, err := deps.Identity.GetCallerIdentity(ctx); err != nil {
 		result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "invalid", Code: "tencent_auth_failed"})
 		return result, fmt.Errorf("%w: tencent_auth_failed", ErrValidationFailed)
 	}
 	result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "valid"})
+	return appendHostChecks(ctx, snapshot, deps.SSH, result, snapshot.Manifest.Hosts())
+}
 
+// RunSSH validates the immutable setup snapshot and all configured SSH hosts
+// without contacting Tencent Cloud. It is kept as the full-manifest variant
+// for callers such as the setup validation command.
+func RunSSH(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies) (Result, error) {
+	if snapshot == nil {
+		return Result{}, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
+	}
+	return RunSSHHosts(ctx, snapshot, deps, snapshot.Manifest.Hosts())
+}
+
+// RunSSHHosts validates only the supplied deployment targets. Deployment
+// commands should not be blocked by an unrelated host in the manifest.
+func RunSSHHosts(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies, hosts []setupconfig.Host) (Result, error) {
+	if snapshot == nil || deps.SSH == nil {
+		return Result{}, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
+	}
+	result, err := configResult(snapshot)
+	if err != nil {
+		return result, err
+	}
+	return appendHostChecks(ctx, snapshot, deps.SSH, result, hosts)
+}
+
+func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
+	result := Result{}
+	if err := snapshot.VerifyUnchanged(); err != nil {
+		result.Checks = append(result.Checks, Check{Name: "config", Status: "invalid", Code: "config_changed"})
+		return result, fmt.Errorf("%w: config_changed", ErrValidationFailed)
+	}
+	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
+	return result, nil
+}
+
+func appendHostChecks(ctx context.Context, snapshot *setupconfig.Snapshot, checker SSHChecker, result Result, hosts []setupconfig.Host) (Result, error) {
+	hostChecks := checkHosts(ctx, checker, uniqueHosts(hosts))
+	result.Checks = append(result.Checks, hostChecks...)
 	failed := false
-	control := hostCheck(ctx, deps.SSH, snapshot.Manifest.ControlHost)
-	result.Checks = append(result.Checks, control)
-	failed = failed || control.Status != "valid"
-
-	otherChecks := checkOtherHosts(ctx, deps.SSH, snapshot.Manifest.OtherHosts)
-	result.Checks = append(result.Checks, otherChecks...)
-	for _, check := range otherChecks {
+	for _, check := range hostChecks {
 		failed = failed || check.Status != "valid"
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -72,7 +103,21 @@ func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies)
 	return result, nil
 }
 
-func checkOtherHosts(ctx context.Context, checker SSHChecker, hosts []setupconfig.Host) []Check {
+func uniqueHosts(hosts []setupconfig.Host) []setupconfig.Host {
+	result := make([]setupconfig.Host, 0, len(hosts))
+	seen := make(map[string]struct{}, len(hosts))
+	for _, host := range hosts {
+		key := strings.ToLower(strings.TrimSpace(host.Name))
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, host)
+	}
+	return result
+}
+
+func checkHosts(ctx context.Context, checker SSHChecker, hosts []setupconfig.Host) []Check {
 	checks := make([]Check, len(hosts))
 	if len(hosts) == 0 {
 		return checks

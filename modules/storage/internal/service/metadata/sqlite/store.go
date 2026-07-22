@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	_ "modernc.org/sqlite"
 )
+
+var _ coremetadata.Store = (*Store)(nil)
 
 type readSnapshotContextKey struct{}
 
@@ -121,7 +124,7 @@ func (s *Store) InitSchema(ctx context.Context) error {
 
 // ValidateSchemaVersion checks the persisted metadata schema without creating
 // or altering tables. Storage processes fail fast when the database is not the
-// supported v4 schema; users must handle incompatible upgrades explicitly.
+// supported v5 schema; users must handle incompatible upgrades explicitly.
 func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is not open")
@@ -139,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "4"
+const metadataSchemaVersion = "5"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int

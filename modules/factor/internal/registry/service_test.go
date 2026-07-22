@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,8 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -140,18 +143,6 @@ func TestMetadataSyncOrderAndPayload(t *testing.T) {
 			{SubjectId: "BTC-USDT", SubjectRole: "normal", Status: "active", Attributes: map[string]string{"market": "spot"}},
 			{SubjectId: "ETH-USDT", SubjectRole: "normal", Status: "active"},
 		}},
-		sourceRoutes: map[string][]*storagepb.PrimaryStoreRoute{"binance_spot_kline": {
-			{
-				SpaceId:        "crypto",
-				DatasetId:      "binance_spot_kline",
-				SubjectPattern: "*",
-				HashRule:       "subject_id",
-				NodeId:         "local",
-				Priority:       100,
-				Status:         "active",
-				Attributes:     map[string]string{"shard": "hot"},
-			},
-		}},
 	}
 	syncer := NewMetadataSync(client, nil)
 	factors := []domain.FactorDef{
@@ -172,19 +163,28 @@ func TestMetadataSyncOrderAndPayload(t *testing.T) {
 	want := []string{
 		"CreateFactor:bias",
 		"CreateDataset:binance_spot_factor",
-		"ListPrimaryStoreRoutes:binance_spot_kline",
-		"CreatePrimaryStoreRoute:binance_spot_factor/*",
 		"ListDatasetSubjects:binance_spot_kline",
 		"BindDatasetSubject:binance_spot_factor/BTC-USDT",
 		"BindDatasetSubject:binance_spot_factor/ETH-USDT",
 		"UpsertDatasetColumn:Bias_20",
 		"UpsertDatasetColumn:Bias_96",
+		"CheckDatasetActivation:binance_spot_factor",
+		"ActivateDataset:binance_spot_factor/1",
 	}
 	if !reflect.DeepEqual(client.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", client.calls, want)
 	}
 	if got := client.datasetReqs[0].GetDataset().GetDataSourceId(); got != "binance" {
 		t.Fatalf("data source id = %q", got)
+	}
+	if got := client.datasetReqs[0].GetDataset().GetDataNodeId(); got != "storage-node-0" {
+		t.Fatalf("data node id = %q", got)
+	}
+	if got := client.datasetReqs[0].GetDataset().GetKeepDuration(); got != "30d" {
+		t.Fatalf("keep duration = %q", got)
+	}
+	if got := client.datasetReqs[0].GetDataset().GetStatus(); got != "disabled" {
+		t.Fatalf("dataset status = %q, want disabled before activation", got)
 	}
 	if got := client.factorReqs[0].GetFactor().GetStatus(); got != "active" {
 		t.Fatalf("factor metadata status = %q, want active", got)
@@ -207,15 +207,6 @@ func TestMetadataSyncOrderAndPayload(t *testing.T) {
 	}
 	if datasetAttrs["source_freq"] != "1m" {
 		t.Fatalf("source_freq = %q, want 1m", datasetAttrs["source_freq"])
-	}
-	if len(client.routeReqs) != 1 {
-		t.Fatalf("route calls = %d, want 1", len(client.routeReqs))
-	}
-	if got := client.routeReqs[0].GetPrimaryStoreRoute(); got.GetDatasetId() != "binance_spot_factor" || got.GetSubjectPattern() != "*" || got.GetNodeId() != "local" {
-		t.Fatalf("route payload = %+v", got)
-	}
-	if got := client.routeReqs[0].GetPrimaryStoreRoute().GetAttributes()["shard"]; got != "hot" {
-		t.Fatalf("route attributes were not copied: %+v", client.routeReqs[0].GetPrimaryStoreRoute().GetAttributes())
 	}
 	for i, req := range client.bindReqs {
 		got := req.GetDatasetSubject()
@@ -305,6 +296,43 @@ func TestMetadataSyncUsesSourceDatasetDataSourceID(t *testing.T) {
 	if got := client.datasetReqs[0].GetDataset().GetDataSourceId(); got != "eastmoney" {
 		t.Fatalf("data source id = %q", got)
 	}
+}
+
+func TestMetadataSyncReadinessFailureLeavesTargetDisabled(t *testing.T) {
+	ready := false
+	client := &recordingMetadataClient{
+		sourceDatasets: map[string]string{"binance_spot_kline": "binance"},
+		checkReady:     &ready,
+	}
+	syncer := NewMetadataSync(client, nil)
+	err := syncer.SyncResultDataset(context.Background(), "crypto", "binance_spot_kline", "1m", []domain.FactorDef{{
+		FactorID: "bias", Name: "Bias", ParamsJSON: "[20]", Status: domain.FactorStatusEnabled,
+	}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "activation readiness failed")
+	assert.NotContains(t, strings.Join(client.calls, ","), "ActivateDataset:")
+	target := client.storedDatasets["binance_spot_factor"]
+	require.NotNil(t, target)
+	assert.Equal(t, "disabled", target.GetStatus())
+	assert.False(t, target.GetBindingLocked())
+}
+
+func TestMetadataSyncActiveLockedTargetRetryIsIdempotent(t *testing.T) {
+	client := &recordingMetadataClient{
+		sourceDatasets: map[string]string{"binance_spot_kline": "binance"},
+		storedDatasets: map[string]*storagepb.Dataset{
+			"binance_spot_factor": {
+				SpaceId: "crypto", DatasetId: "binance_spot_factor", DataNodeId: "storage-node-0", KeepDuration: "30d",
+				Status: "active", BindingLocked: true, Revision: 9,
+			},
+		},
+	}
+	syncer := NewMetadataSync(client, nil)
+	require.NoError(t, syncer.SyncResultDataset(context.Background(), "crypto", "binance_spot_kline", "1m", []domain.FactorDef{{
+		FactorID: "bias", Name: "Bias", ParamsJSON: "[20]", Status: domain.FactorStatusEnabled,
+	}}))
+	assert.NotContains(t, strings.Join(client.calls, ","), "CheckDatasetActivation:")
+	assert.NotContains(t, strings.Join(client.calls, ","), "ActivateDataset:")
 }
 
 func TestMetadataSyncBackfillsFactorDatasetAttributionOnDuplicate(t *testing.T) {
@@ -446,10 +474,7 @@ func TestMetadataSyncTreatsConcurrentRouteRefreshAsBound(t *testing.T) {
 	client := &recordingMetadataClient{
 		sourceDatasets: map[string]string{"binance_spot_kline": "binance"},
 		sourceSubjects: map[string][]string{"binance_spot_kline": []string{"BTC-USDT"}},
-		sourceRoutes: map[string][]*storagepb.PrimaryStoreRoute{"binance_spot_kline": {
-			{SpaceId: "crypto", DatasetId: "binance_spot_kline", SubjectPattern: "*", NodeId: "local", Priority: 100, Status: "active"},
-		}},
-		bindRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "snapshotcache: refresh already in progress"},
+		bindRet:        &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "snapshotcache: refresh already in progress"},
 	}
 	syncer := NewMetadataSync(client, nil)
 	factors := []domain.FactorDef{{
@@ -494,9 +519,10 @@ func TestMetadataSyncTreatsConcurrentMetadataRefreshAsApplied(t *testing.T) {
 	want := []string{
 		"CreateFactor:bias",
 		"CreateDataset:binance_spot_factor",
-		"ListPrimaryStoreRoutes:binance_spot_kline",
 		"ListDatasetSubjects:binance_spot_kline",
 		"UpsertDatasetColumn:Bias_20",
+		"CheckDatasetActivation:binance_spot_factor",
+		"ActivateDataset:binance_spot_factor/1",
 	}
 	if !reflect.DeepEqual(client.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", client.calls, want)
@@ -509,18 +535,20 @@ type recordingMetadataClient struct {
 	storedDatasets     map[string]*storagepb.Dataset
 	sourceSubjects     map[string][]string
 	sourceSubjectItems map[string][]*storagepb.DatasetSubject
-	sourceRoutes       map[string][]*storagepb.PrimaryStoreRoute
 	factorRet          *commonpb.RetInfo
 	datasetRet         *commonpb.RetInfo
 	updateDatasetRet   *commonpb.RetInfo
 	columnRet          *commonpb.RetInfo
 	bindRet            *commonpb.RetInfo
+	checkRet           *commonpb.RetInfo
+	checkReady         *bool
+	checkRevision      uint64
+	activateRet        *commonpb.RetInfo
 	factorReqs         []*storagepb.CreateFactorReq
 	datasetReqs        []*storagepb.CreateDatasetReq
 	updateDatasetReqs  []*storagepb.UpdateDatasetReq
 	columnReqs         []*storagepb.UpsertDatasetColumnReq
 	bindReqs           []*storagepb.BindDatasetSubjectReq
-	routeReqs          []*storagepb.CreatePrimaryStoreRouteReq
 }
 
 func (c *recordingMetadataClient) CreateFactor(_ context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
@@ -540,6 +568,15 @@ func (c *recordingMetadataClient) CreateDataset(_ context.Context, req *storagep
 	if ret == nil {
 		ret = successRet()
 	}
+	if c.storedDatasets == nil {
+		c.storedDatasets = map[string]*storagepb.Dataset{}
+	}
+	copied := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
+	copied.Attributes = cloneStringMap(req.GetDataset().GetAttributes())
+	if copied.Revision == 0 {
+		copied.Revision = 1
+	}
+	c.storedDatasets[req.GetDataset().GetDatasetId()] = copied
 	return &storagepb.CreateDatasetRsp{RetInfo: ret, Dataset: req.GetDataset()}, nil
 }
 
@@ -606,16 +643,37 @@ func (c *recordingMetadataClient) BindDatasetSubject(_ context.Context, req *sto
 	return &storagepb.BindDatasetSubjectRsp{RetInfo: ret, DatasetSubject: item}, nil
 }
 
-func (c *recordingMetadataClient) ListPrimaryStoreRoutes(_ context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
-	c.calls = append(c.calls, "ListPrimaryStoreRoutes:"+req.GetDatasetId())
-	return &storagepb.ListPrimaryStoreRoutesRsp{RetInfo: successRet(), PrimaryStoreRoutes: c.sourceRoutes[req.GetDatasetId()]}, nil
+func (c *recordingMetadataClient) CheckDatasetActivation(_ context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
+	c.calls = append(c.calls, "CheckDatasetActivation:"+req.GetDatasetId())
+	ret := c.checkRet
+	if ret == nil {
+		ret = successRet()
+	}
+	ready := true
+	if c.checkReady != nil {
+		ready = *c.checkReady
+	}
+	revision := c.checkRevision
+	if revision == 0 && c.storedDatasets[req.GetDatasetId()] != nil {
+		revision = c.storedDatasets[req.GetDatasetId()].GetRevision()
+	}
+	return &storagepb.CheckDatasetActivationRsp{RetInfo: ret, DatasetRevision: revision, Ready: ready}, nil
 }
 
-func (c *recordingMetadataClient) CreatePrimaryStoreRoute(_ context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error) {
-	route := req.GetPrimaryStoreRoute()
-	c.calls = append(c.calls, "CreatePrimaryStoreRoute:"+route.GetDatasetId()+"/"+route.GetSubjectPattern())
-	c.routeReqs = append(c.routeReqs, req)
-	return &storagepb.CreatePrimaryStoreRouteRsp{RetInfo: successRet(), PrimaryStoreRoute: route}, nil
+func (c *recordingMetadataClient) ActivateDataset(_ context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
+	c.calls = append(c.calls, fmt.Sprintf("ActivateDataset:%s/%d", req.GetDatasetId(), req.GetExpectedRevision()))
+	ret := c.activateRet
+	if ret == nil {
+		ret = successRet()
+	}
+	if ret.GetCode() == commonpb.ErrorCode_SUCCESS {
+		if dataset := c.storedDatasets[req.GetDatasetId()]; dataset != nil {
+			dataset.Status = "active"
+			dataset.BindingLocked = true
+			dataset.Revision = req.GetExpectedRevision() + 1
+		}
+	}
+	return &storagepb.ActivateDatasetRsp{RetInfo: ret, Dataset: c.storedDatasets[req.GetDatasetId()]}, nil
 }
 
 func (c *recordingMetadataClient) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
@@ -639,6 +697,10 @@ func (c *recordingMetadataClient) GetDataset(_ context.Context, req *storagepb.G
 			SpaceId:      req.GetSpaceId(),
 			DatasetId:    req.GetDatasetId(),
 			DataSourceId: dataSourceID,
+			DataNodeId:   "storage-node-0",
+			KeepDuration: "30d",
+			Status:       "active",
+			Revision:     1,
 		},
 	}, nil
 }

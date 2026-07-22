@@ -1,10 +1,14 @@
-.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-storage-boundary test-storage-consistency release release-matrix deploy test test-go test-web test-release verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract e2e-storage-datanode-management proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
 
 build-gateway:
 	./scripts/build.sh gateway
+
+build-storage-linux:
+	./scripts/build.sh cli
+	bash scripts/build-storage-linux.sh
 
 check-boundaries: check-module-boundaries check-package-boundaries
 
@@ -19,6 +23,15 @@ test-storage-boundary:
 
 test-storage-consistency:
 	bash scripts/test-storage-consistency-contract.sh
+
+test-storage-datanode-management-contract:
+	bash scripts/test-storage-datanode-management-contract.sh
+
+test-build-storage-linux-contract:
+	bash scripts/test-build-storage-linux-contract.sh
+
+e2e-storage-datanode-management:
+	bash scripts/e2e/storage-datanode-management.sh
 
 check-format:
 	./scripts/check-gofmt.sh
@@ -55,7 +68,13 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
+proto-check:
+	$(MAKE) proto
+	@test -z "$$(git status --porcelain)"
+
+verify-pr: proto-check test-storage-datanode-management-contract test-build-storage-linux-contract
+
+verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 

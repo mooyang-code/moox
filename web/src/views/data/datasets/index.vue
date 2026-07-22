@@ -3,9 +3,22 @@
     <div class="moox-inner">
       <div class="page-head">
         <div class="page-head__title">
-          <slot name="page-title">
-            <h2>{{ props.pageTitle }}</h2>
-          </slot>
+          <h2>{{ props.pageTitle }}</h2>
+          <a-tooltip
+            v-model:popup-visible="bindingInfoVisible"
+            content="数据集必须绑定一个 DataNode；首次激活后绑定永久锁定。激活前才可以更换 DataNode，系统不做数据迁移。
+"
+          >
+            <button
+              class="title-info"
+              type="button"
+              aria-label="数据集绑定规则说明"
+              @focus="bindingInfoVisible = true"
+              @blur="bindingInfoVisible = false"
+            >
+              <icon-info-circle />
+            </button>
+          </a-tooltip>
         </div>
         <a-space>
           <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
@@ -33,6 +46,11 @@
           <a-table-column title="数据集ID" data-index="dataset_id" :width="180" />
           <a-table-column title="中文名" data-index="name" :width="180" />
           <a-table-column title="数据源" data-index="data_source_id" :width="150" />
+          <a-table-column title="DataNode" :width="180">
+            <template #cell="{ record }">
+              <span>{{ dataNodeLabel(record.data_node_id) }}</span>
+            </template>
+          </a-table-column>
           <a-table-column title="数据形态" :width="130">
             <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
           </a-table-column>
@@ -44,14 +62,24 @@
               <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
             </template>
           </a-table-column>
+          <a-table-column title="修订/绑定" :width="130">
+            <template #cell="{ record }">
+              <span>r{{ record.revision ?? "-" }}</span>
+              <a-tag v-if="record.binding_locked" size="small" color="blue" class="lock-tag">已锁定</a-tag>
+            </template>
+          </a-table-column>
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="210" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="360" align="center" :fixed="'right'">
             <template #cell="{ record }">
-              <a-space>
+              <a-space wrap>
                 <a-button size="mini" type="text" @click="openManage(record)">列/对象</a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                <a-button v-if="canActivate(record)" size="mini" type="text" status="success" @click="openActivation(record)">
+                  激活
+                </a-button>
+                <a-button v-if="canRebind(record)" size="mini" type="text" @click="openRebind(record)">更换节点</a-button>
               </a-space>
             </template>
           </a-table-column>
@@ -59,7 +87,7 @@
       </a-table>
     </div>
 
-    <a-modal v-model:visible="visible" width="760px" :title="modalTitle" @ok="submit">
+    <a-modal v-model:visible="visible" data-testid="create-dataset-modal" width="760px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
         <a-form-item field="dataset_id" label="数据集ID" required>
           <a-input v-model="form.dataset_id" :disabled="editing" placeholder="例如 kline" />
@@ -85,16 +113,101 @@
         <a-form-item field="freqsText" label="频率">
           <a-input-tag v-model="freqTags" allow-clear placeholder="例如 1m、1h、1d" />
         </a-form-item>
-        <a-form-item field="status" label="状态">
-          <a-select v-model="form.status">
-            <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+        <a-form-item field="keep_duration" label="保留时长" required>
+          <a-input v-model="form.keep_duration" placeholder="0 表示永久保存，例如 24h" />
+        </a-form-item>
+        <a-form-item v-if="!editing" field="data_node_id" label="DataNode" required>
+          <a-select v-model="form.data_node_id" allow-search placeholder="选择 active DataNode">
+            <a-option v-for="node in activeDataNodes" :key="node.node_id" :value="node.node_id">
+              {{ node.name || node.node_id }} ({{ node.node_id }})
+            </a-option>
           </a-select>
         </a-form-item>
+        <a-descriptions v-if="editing" :column="{ xs: 1, sm: 2 }" bordered>
+          <a-descriptions-item label="当前 DataNode">{{ dataNodeLabel(form.data_node_id) }}</a-descriptions-item>
+          <a-descriptions-item label="状态">{{ form.status }}</a-descriptions-item>
+          <a-descriptions-item label="revision">{{ form.revision || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="绑定状态">{{ lockLabel(form.binding_locked) }}</a-descriptions-item>
+        </a-descriptions>
       </a-form>
     </a-modal>
 
+    <a-modal
+      v-model:visible="activationVisible"
+      data-testid="dataset-activation-modal"
+      width="720px"
+      :title="`激活数据集：${activationDataset?.dataset_id || ''}`"
+      :ok-button-props="{ disabled: !activationReady || activationLoading }"
+      @ok="confirmActivation"
+    >
+      <a-alert v-if="activationError" type="error" show-icon>{{ activationError }}</a-alert>
+      <a-alert v-else-if="activationCheck && !activationCheck.ready" type="warning" show-icon>
+        自检未通过，修复所有失败项后才能激活。
+      </a-alert>
+      <a-spin :loading="activationLoading" class="activation-checks">
+        <a-empty v-if="!activationCheck && !activationLoading" description="正在准备激活自检" />
+        <div v-for="item in activationCheck?.checks || []" :key="item.check_id" class="check-row">
+          <div class="check-row__status">
+            <icon-check-circle-fill v-if="item.ready" class="check-row__ok" />
+            <icon-close-circle-fill v-else class="check-row__fail" />
+          </div>
+          <div class="check-row__body">
+            <strong>{{ item.check_id }}</strong>
+            <span>{{ item.summary }}</span>
+          </div>
+        </div>
+      </a-spin>
+    </a-modal>
+
+    <a-modal
+      v-model:visible="rebindVisible"
+      data-testid="dataset-rebind-modal"
+      width="560px"
+      title="更换 Dataset DataNode"
+      :ok-button-props="{ disabled: !rebindNodeId || rebindLoading }"
+      @ok="confirmRebind"
+    >
+      <a-alert v-if="rebindDataset?.binding_locked" type="info" show-icon>
+        Dataset 首次激活后绑定永久锁定，不能更换 DataNode，也不会发生数据迁移。
+      </a-alert>
+      <a-form v-else auto-label-width>
+        <a-form-item label="当前 DataNode">{{ dataNodeLabel(rebindDataset?.data_node_id) }}</a-form-item>
+        <a-form-item label="目标 DataNode" required>
+          <a-select v-model="rebindNodeId" allow-search placeholder="选择 active DataNode">
+            <a-option v-for="node in rebindNodes" :key="node.node_id" :value="node.node_id">
+              {{ node.name || node.node_id }} ({{ node.node_id }})
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="revision">{{ rebindDataset?.revision ?? "-" }}</a-form-item>
+        <a-alert v-if="!rebindNodes.length" type="warning" show-icon>没有可用的其他 active DataNode。</a-alert>
+      </a-form>
+      <a-alert v-if="rebindError" type="error" show-icon>{{ rebindError }}</a-alert>
+    </a-modal>
+
     <a-drawer v-model:visible="manageVisible" width="920px" :footer="false">
-      <template #title>数据集配置：{{ activeDataset?.dataset_id }}</template>
+      <template #title>
+        <div class="manage-title">
+          <span>数据集配置：{{ activeDataset?.dataset_id }}</span>
+          <a-space>
+            <a-button
+              v-if="activeDataset && canActivate(activeDataset)"
+              size="mini"
+              type="text"
+              status="success"
+              @click="openActivation(activeDataset)"
+            >
+              激活
+            </a-button>
+            <a-button v-if="activeDataset && canRebind(activeDataset)" size="mini" type="text" @click="openRebind(activeDataset)">
+              更换节点
+            </a-button>
+          </a-space>
+        </div>
+      </template>
+      <a-alert v-if="activeDataset?.binding_locked" type="info" show-icon>
+        当前 Dataset 已锁定 DataNode 绑定。锁定后不支持更换节点，系统不会迁移已有数据。
+      </a-alert>
       <a-tabs default-active-key="columns">
         <a-tab-pane key="columns" title="列定义">
           <DatasetColumnPanel :space-id="selectedSpaceId" :dataset-id="activeDataset?.dataset_id || ''" />
@@ -110,8 +223,18 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createDataset, listDatasets, listDataSources, updateDataset } from "@/api/storage/metadata";
-import type { DataSource, Dataset } from "@/api/storage/types";
+import { useRoute, useRouter } from "vue-router";
+import {
+  activateDataset,
+  checkDatasetActivation,
+  createDataset,
+  listDataNodes,
+  listDataSources,
+  listDatasets,
+  rebindDatasetDataNode,
+  updateDataset
+} from "@/api/storage/metadata";
+import type { DataNode, DataSource, Dataset, DatasetActivationCheck, DatasetMutation } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import DatasetColumnPanel from "./components/dataset-column-panel.vue";
 import DatasetSubjectPanel from "./components/dataset-subject-panel.vue";
@@ -124,7 +247,6 @@ import {
   optionLabel,
   splitList,
   statusColor,
-  statusOptions,
   validateChineseDisplayName,
   validateLowerSnakeId
 } from "@/views/data/shared/metadata-utils";
@@ -160,6 +282,8 @@ const props = withDefaults(
 
 type DatasetForm = Dataset & { freqsText?: string };
 
+const route = useRoute();
+const router = useRouter();
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<Dataset[]>([]);
@@ -176,7 +300,10 @@ const hasAttributionFilter = computed(() =>
   Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned)
 );
 const dataSources = ref<DataSource[]>([]);
+const dataNodes = ref<DataNode[]>([]);
+const activeDataNodes = computed(() => dataNodes.value.filter(item => item.status === "active"));
 const loading = ref(false);
+const initialized = ref(false);
 const visible = ref(false);
 const editing = ref(false);
 const manageVisible = ref(false);
@@ -192,7 +319,11 @@ const form = reactive<DatasetForm>({
   data_kind: "DATA_KIND_TIME_SERIES",
   freqs: [],
   freqsText: "",
-  status: "active",
+  status: "disabled",
+  data_node_id: "",
+  keep_duration: "",
+  binding_locked: false,
+  revision: 0,
   attributes: {}
 });
 
@@ -204,6 +335,48 @@ const freqTags = computed({
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑数据集" : "新增数据集"));
+const bindingInfoVisible = ref(false);
+const activationVisible = ref(false);
+const activationDataset = ref<Dataset>();
+const activationCheck = ref<{ dataset_revision: number | string; checks: DatasetActivationCheck[]; ready: boolean }>();
+const activationLoading = ref(false);
+const activationError = ref("");
+const activationReady = computed(() => Boolean(activationCheck.value?.ready));
+const rebindVisible = ref(false);
+const rebindDataset = ref<Dataset>();
+const rebindNodeId = ref("");
+const rebindLoading = ref(false);
+const rebindError = ref("");
+const rebindNodes = computed(() => activeDataNodes.value.filter(item => item.node_id !== rebindDataset.value?.data_node_id));
+
+function queryValue(value: unknown) {
+  return typeof value === "string" ? value : Array.isArray(value) ? String(value[0] || "") : "";
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  const response = (error as { response?: { data?: { ret_info?: { msg?: string } } } } | undefined)?.response;
+  return response?.data?.ret_info?.msg || fallback;
+}
+
+function dataNodeLabel(nodeId?: string) {
+  if (!nodeId) return "-";
+  const node = dataNodes.value.find(item => item.node_id === nodeId);
+  return node ? `${node.name || node.node_id} (${node.node_id})` : nodeId;
+}
+
+function lockLabel(locked?: boolean) {
+  return locked ? "已锁定，不能更换" : "未锁定，激活前可更换";
+}
+
+function canActivate(dataset: Dataset) {
+  return dataset.status === "disabled";
+}
+
+function canRebind(dataset: Dataset) {
+  return dataset.status === "disabled" && !dataset.binding_locked;
+}
 
 async function loadDataSources() {
   if (!selectedSpaceId.value) {
@@ -214,28 +387,16 @@ async function loadDataSources() {
   dataSources.value = rsp.data_sources || [];
 }
 
-async function load() {
-  if (!selectedSpaceId.value) {
-    rows.value = [];
-    return;
-  }
-  loading.value = true;
-  try {
-    await loadDataSources();
-    if (hasAttributionFilter.value) {
-      rows.value = await listAllDatasets(selectedSpaceId.value);
-      pagination.total = visibleRows.value.length;
-      return;
+async function loadDataNodes() {
+  const nodes: DataNode[] = [];
+  for (let pageNo = 1; ; pageNo += 1) {
+    const rsp = await listDataNodes({ page: { page: pageNo, size: 500 } });
+    for (const item of rsp.items || []) {
+      if (item.node) nodes.push(item.node);
     }
-    const rsp = await listDatasets({
-      space_id: selectedSpaceId.value,
-      page: { page: pagination.current, size: pagination.pageSize }
-    });
-    rows.value = rsp.datasets || [];
-    applyPageResult(pagination, rsp.page_result);
-  } finally {
-    loading.value = false;
+    if (!rsp.page_result?.has_more || (rsp.items || []).length === 0) break;
   }
+  dataNodes.value = nodes;
 }
 
 async function listAllDatasets(spaceId: string) {
@@ -244,10 +405,52 @@ async function listAllDatasets(spaceId: string) {
   for (let pageNo = 1; ; pageNo += 1) {
     const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
     datasets.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
-      return datasets;
-    }
+    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) return datasets;
   }
+}
+
+async function load() {
+  if (!selectedSpaceId.value) {
+    rows.value = [];
+    return;
+  }
+  loading.value = true;
+  try {
+    await Promise.all([loadDataSources(), loadDataNodes()]);
+    const deepLinkDatasetId = queryValue(route.query.dataset_id);
+    if (deepLinkDatasetId) {
+      rows.value = await listAllDatasets(selectedSpaceId.value);
+      pagination.current = 1;
+      pagination.total = rows.value.length;
+    } else if (hasAttributionFilter.value) {
+      rows.value = await listAllDatasets(selectedSpaceId.value);
+      pagination.total = visibleRows.value.length;
+    } else {
+      const rsp = await listDatasets({
+        space_id: selectedSpaceId.value,
+        page: { page: pagination.current, size: pagination.pageSize }
+      });
+      rows.value = rsp.datasets || [];
+      applyPageResult(pagination, rsp.page_result);
+    }
+    await consumeDeepLink();
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function consumeDeepLink() {
+  const datasetId = queryValue(route.query.dataset_id);
+  if (!datasetId) return;
+  const requestedSpaceId = queryValue(route.query.space_id);
+  if (requestedSpaceId && !spaceStore.hasSpace(requestedSpaceId)) return;
+  const target = rows.value.find(item => item.dataset_id === datasetId);
+  if (!target) return;
+  openManage(target);
+  const query = { ...route.query };
+  delete query.space_id;
+  delete query.dataset_id;
+  await router.replace({ query });
 }
 
 function resetForm() {
@@ -260,7 +463,11 @@ function resetForm() {
     data_kind: "DATA_KIND_TIME_SERIES",
     freqs: [],
     freqsText: "",
-    status: "active",
+    status: "disabled",
+    data_node_id: "",
+    keep_duration: "",
+    binding_locked: false,
+    revision: 0,
     attributes: {}
   });
 }
@@ -276,7 +483,11 @@ function openEdit(record: Dataset) {
   Object.assign(form, {
     ...record,
     freqs: record.freqs || [],
-    freqsText: joinList(record.freqs)
+    freqsText: joinList(record.freqs),
+    keep_duration: record.keep_duration || "0",
+    data_node_id: record.data_node_id || "",
+    binding_locked: Boolean(record.binding_locked),
+    revision: record.revision || 0
   });
   visible.value = true;
 }
@@ -286,10 +497,40 @@ function openManage(record: Dataset) {
   manageVisible.value = true;
 }
 
+function buildDatasetPayload(spaceId: string): Dataset | DatasetMutation {
+  const common = {
+    space_id: spaceId,
+    dataset_id: form.dataset_id,
+    data_source_id: form.data_source_id,
+    name: form.name,
+    description: form.description,
+    data_kind: form.data_kind,
+    freqs: splitList(form.freqs),
+    keep_duration: form.keep_duration.trim(),
+    attributes: mergeDatasetAttribution(form.attributes, {
+      ownerModule: props.ownerModule,
+      datasetRole: props.datasetRole,
+      managedBy: props.managedBy
+    })
+  };
+  if (editing.value) {
+    return form.status === "disabled" ? { ...common, status: "disabled" } : common;
+  }
+  return { ...common, data_node_id: form.data_node_id, status: "disabled" };
+}
+
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
   if (!form.dataset_id || !form.data_source_id || !form.name || !form.data_kind) {
     Message.warning("请补全数据集ID、数据源、中文名和数据形态");
+    return;
+  }
+  if (!editing.value && !form.data_node_id) {
+    Message.warning("请选择 active DataNode");
+    return;
+  }
+  if (!form.keep_duration.trim()) {
+    Message.warning("请填写保留时长，0 表示永久保存");
     return;
   }
   const nameError = validateChineseDisplayName(form.name);
@@ -302,44 +543,124 @@ async function submit() {
     Message.warning(`数据集${idError}`);
     return;
   }
-  const payload: Dataset = {
-    space_id: spaceId,
-    dataset_id: form.dataset_id,
-    data_source_id: form.data_source_id,
-    name: form.name,
-    description: form.description,
-    data_kind: form.data_kind,
-    freqs: splitList(form.freqs),
-    status: form.status,
-    attributes: mergeDatasetAttribution(form.attributes, {
-      ownerModule: props.ownerModule,
-      datasetRole: props.datasetRole,
-      managedBy: props.managedBy
-    })
-  };
+  const payload = buildDatasetPayload(spaceId);
   if (editing.value) await updateDataset(payload);
-  else await createDataset(payload);
+  else await createDataset(payload as Dataset);
   Message.success("数据集已保存");
   visible.value = false;
   await load();
 }
 
+function replaceRow(dataset: Dataset) {
+  const index = rows.value.findIndex(item => item.dataset_id === dataset.dataset_id);
+  if (index >= 0) rows.value.splice(index, 1, dataset);
+  if (activeDataset.value?.dataset_id === dataset.dataset_id) activeDataset.value = dataset;
+}
+
+async function openActivation(record: Dataset) {
+  activationDataset.value = record;
+  activationCheck.value = undefined;
+  activationError.value = "";
+  activationVisible.value = true;
+  await runActivationCheck();
+}
+
+async function runActivationCheck() {
+  if (!activationDataset.value) return;
+  activationLoading.value = true;
+  activationError.value = "";
+  try {
+    const rsp = await checkDatasetActivation({
+      space_id: activationDataset.value.space_id,
+      dataset_id: activationDataset.value.dataset_id
+    });
+    activationCheck.value = {
+      dataset_revision: rsp.dataset_revision,
+      checks: rsp.checks || [],
+      ready: Boolean(rsp.ready)
+    };
+  } catch (error) {
+    activationError.value = errorMessage(error, "Dataset 激活自检失败");
+  } finally {
+    activationLoading.value = false;
+  }
+}
+
+async function confirmActivation() {
+  if (!activationDataset.value || !activationCheck.value?.ready) return;
+  activationLoading.value = true;
+  activationError.value = "";
+  try {
+    const rsp = await activateDataset({
+      space_id: activationDataset.value.space_id,
+      dataset_id: activationDataset.value.dataset_id,
+      expected_revision: activationCheck.value.dataset_revision
+    });
+    if (rsp.dataset) replaceRow(rsp.dataset);
+    activationVisible.value = false;
+    Message.success("数据集已激活，DataNode 绑定已锁定");
+  } catch (error) {
+    activationError.value = errorMessage(error, "Dataset 激活失败");
+  } finally {
+    activationLoading.value = false;
+  }
+}
+
+function openRebind(record: Dataset) {
+  if (!canRebind(record)) return;
+  rebindDataset.value = record;
+  rebindNodeId.value = rebindNodes.value[0]?.node_id || "";
+  rebindError.value = "";
+  rebindVisible.value = true;
+}
+
+async function confirmRebind() {
+  if (!rebindDataset.value || !rebindNodeId.value || !canRebind(rebindDataset.value)) return;
+  rebindLoading.value = true;
+  rebindError.value = "";
+  try {
+    const rsp = await rebindDatasetDataNode({
+      space_id: rebindDataset.value.space_id,
+      dataset_id: rebindDataset.value.dataset_id,
+      data_node_id: rebindNodeId.value,
+      expected_revision: rebindDataset.value.revision ?? 0
+    });
+    if (rsp.dataset) replaceRow(rsp.dataset);
+    rebindVisible.value = false;
+    Message.success("Dataset DataNode 已更换");
+  } catch (error) {
+    rebindError.value = errorMessage(error, "Dataset DataNode 更换失败");
+  } finally {
+    rebindLoading.value = false;
+  }
+}
+
 function onPageChange(page: number) {
   pagination.current = page;
-  load();
+  void load();
 }
 
 function onPageSizeChange(pageSize: number) {
   pagination.current = 1;
   pagination.pageSize = pageSize;
-  load();
+  void load();
 }
 
 watch(selectedSpaceId, () => {
+  if (!initialized.value) return;
   pagination.current = 1;
-  load();
+  void load();
 });
-onMounted(load);
+
+onMounted(async () => {
+  await spaceStore.loadSpaces();
+  const requestedSpaceId = queryValue(route.query.space_id);
+  if (requestedSpaceId && spaceStore.hasSpace(requestedSpaceId)) {
+    spaceStore.setSelectedSpace(requestedSpaceId);
+  }
+  await load();
+  initialized.value = true;
+});
 </script>
 
 <style scoped>
@@ -347,6 +668,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--moox-space-2);
   margin-bottom: var(--moox-space-2);
 }
 
@@ -354,11 +676,99 @@ onMounted(load);
   display: flex;
   align-items: center;
   min-width: 0;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .page-head h2 {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+
+.title-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--color-text-3);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: help;
+}
+
+.title-info:focus-visible {
+  outline: 2px solid rgb(var(--primary-6));
+  outline-offset: 2px;
+}
+
+.lock-tag {
+  margin-left: 6px;
+}
+
+.manage-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.check-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border-2);
+}
+
+.check-row:last-child {
+  border-bottom: 0;
+}
+
+.check-row__status {
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.check-row__ok {
+  color: rgb(var(--green-6));
+}
+
+.check-row__fail {
+  color: rgb(var(--red-6));
+}
+
+.check-row__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.check-row__body span {
+  overflow-wrap: anywhere;
+  color: var(--color-text-2);
+}
+
+@media (max-width: 600px) {
+  .page-head {
+    align-items: flex-start;
+  }
+
+  .page-head__title {
+    flex: 1 1 100%;
+  }
+
+  .page-head > :last-child {
+    flex: 0 0 auto;
+  }
+
+  .manage-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

@@ -301,6 +301,14 @@ func (c *metadataClientAdapter) GetDataset(ctx context.Context, req *storagepb.G
 	return c.client.GetDataset(ctx, req)
 }
 
+func (c *metadataClientAdapter) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
+	return c.client.CheckDatasetActivation(ctx, req)
+}
+
+func (c *metadataClientAdapter) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
+	return c.client.ActivateDataset(ctx, req)
+}
+
 func (c *metadataClientAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
 	return c.client.ListDatasetColumns(ctx, req)
 }
@@ -311,14 +319,6 @@ func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *st
 
 func (c *metadataClientAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
 	return c.client.BindDatasetSubject(ctx, req)
-}
-
-func (c *metadataClientAdapter) ListPrimaryStoreRoutes(ctx context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
-	return c.client.ListPrimaryStoreRoutes(ctx, req)
-}
-
-func (c *metadataClientAdapter) CreatePrimaryStoreRoute(ctx context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error) {
-	return c.client.CreatePrimaryStoreRoute(ctx, req)
 }
 
 type realtimeLoopDeps struct {

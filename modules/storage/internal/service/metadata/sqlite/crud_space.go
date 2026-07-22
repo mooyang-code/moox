@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 
@@ -37,6 +38,21 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
 	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
+}
+
+func (s *Store) DeleteSpace(ctx context.Context, spaceID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM t_spaces WHERE c_space_id = ?`, spaceID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
@@ -93,6 +109,21 @@ func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.
 
 func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error) {
 	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
+}
+
+func (s *Store) DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, spaceID, dataSourceID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string, market string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {

@@ -167,10 +167,16 @@ export interface Dataset {
   data_kind: DataKind;
   freqs?: string[];
   status: string;
+  data_node_id?: string;
+  keep_duration: string;
+  binding_locked?: boolean;
+  revision?: number | string;
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
 }
+
+export type DatasetMutation = Omit<Dataset, "status" | "data_node_id" | "binding_locked" | "revision"> & { status?: string };
 
 export interface DatasetSubject {
   space_id: string;
@@ -313,31 +319,33 @@ export interface ResultColumn {
   origin_id?: string;
 }
 
-export interface PrimaryStoreNode {
+export interface DataNode {
   node_id: string;
   name: string;
-  endpoint: string;
-  weight?: number;
+  service_target: string;
   status: string;
-  config_json?: string;
   created_at?: string;
   updated_at?: string;
-  attributes?: Record<string, string>;
 }
 
-export interface PrimaryStoreRoute {
+export interface DatasetSummary {
   space_id: string;
-  route_id: string;
   dataset_id: string;
-  subject_id?: string;
-  subject_pattern?: string;
-  hash_rule?: string;
-  node_id: string;
-  priority?: number;
+  name: string;
+  data_kind: DataKind;
+  keep_duration: string;
   status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
+}
+
+export interface DataNodeListItem {
+  node: DataNode;
+  datasets: DatasetSummary[];
+}
+
+export interface DatasetActivationCheck {
+  check_id: string;
+  ready: boolean;
+  summary: string;
 }
 
 export interface ArchiveFile {
