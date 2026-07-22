@@ -8,10 +8,24 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
 	nats "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
+
+const (
+	storageFieldsChangedTopicPrefix = "moox.storage.fields_changed.v1."
+	storageFieldsChangedMessageType = "moox.storage.fields_changed.v1"
+	storageFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
+)
+
+func isStorageFieldsChangedEnvelope(message *messagepb.MooxMessage) bool {
+	return message != nil &&
+		strings.HasPrefix(message.GetTopic(), storageFieldsChangedTopicPrefix) &&
+		message.GetMessageType() == storageFieldsChangedMessageType &&
+		message.GetContentType() == storageFieldsChangedContentType
+}
 
 type NATSConfig struct {
 	URLs           []string
@@ -98,7 +112,7 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 		}
 		for _, delivery := range deliveries {
 			event := &storagepb.DatasetFieldsChanged{}
-			if delivery.Message.GetMessageType() != "moox.storage.fields_changed.v1" || !strings.HasPrefix(delivery.Message.GetContentType(), "application/x-protobuf") {
+			if !isStorageFieldsChangedEnvelope(delivery.Message) {
 				_ = delivery.Term(ctx)
 				continue
 			}

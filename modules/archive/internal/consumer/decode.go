@@ -14,6 +14,12 @@ import (
 type Decision uint8
 
 const (
+	storageFieldsChangedTopicPrefix = "moox.storage.fields_changed.v1."
+	storageFieldsChangedMessageType = "moox.storage.fields_changed.v1"
+	storageFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
+)
+
+const (
 	DecisionArchive Decision = iota + 1
 	DecisionIgnore
 	DecisionReject
@@ -41,8 +47,8 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if message.GetProtocolVersion() != 1 || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unsupported message protocol or kind")
 	}
-	if !strings.HasPrefix(message.GetTopic(), "moox.storage.fields_changed.v1.") || message.GetMessageType() != "moox.storage.fields_changed.v1" {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected topic or content type")
+	if !strings.HasPrefix(message.GetTopic(), storageFieldsChangedTopicPrefix) || message.GetMessageType() != storageFieldsChangedMessageType || message.GetContentType() != storageFieldsChangedContentType {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected topic, content type, or message type")
 	}
 	if strings.TrimSpace(message.GetMessageId()) == "" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message_id is required")

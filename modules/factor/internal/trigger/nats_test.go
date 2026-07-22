@@ -6,7 +6,38 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
+	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
 )
+
+func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
+	base := &messagepb.MooxMessage{
+		Topic:       "moox.storage.fields_changed.v1.mzxw6.mjqxe",
+		MessageType: "moox.storage.fields_changed.v1",
+		ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged",
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*messagepb.MooxMessage)
+		wantOK bool
+	}{
+		{name: "exact content type", wantOK: true},
+		{name: "bare protobuf content type", mutate: func(message *messagepb.MooxMessage) { message.ContentType = "application/x-protobuf" }},
+		{name: "wrong protobuf message", mutate: func(message *messagepb.MooxMessage) {
+			message.ContentType = "application/x-protobuf; message=other.Message"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := proto.Clone(base).(*messagepb.MooxMessage)
+			if test.mutate != nil {
+				test.mutate(message)
+			}
+			if got := isStorageFieldsChangedEnvelope(message); got != test.wantOK {
+				t.Fatalf("isStorageFieldsChangedEnvelope() = %t, want %t", got, test.wantOK)
+			}
+		})
+	}
+}
 
 func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 	symbols := testkit.Symbols(500)

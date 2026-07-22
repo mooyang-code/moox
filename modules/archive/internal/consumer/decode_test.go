@@ -45,9 +45,22 @@ func TestDecoderIgnoresUnknownSource(t *testing.T) {
 	}
 }
 
+func TestDecoderRejectsWrongStorageContentType(t *testing.T) {
+	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
+	event := &storagepb.DatasetFieldsChanged{SpaceId: "crypto_binance", DatasetId: "spot_kline"}
+	payload, _ := proto.Marshal(event)
+	message := fixtureEnvelope(payload, "m4")
+	message.ContentType = "application/x-protobuf"
+
+	batch, decision, err := decoder.Decode(message)
+	if err == nil || decision != DecisionReject || len(batch.Rows) != 0 {
+		t.Fatalf("Decode() = %#v, %d, %v, want content-type rejection", batch, decision, err)
+	}
+}
+
 func fixtureEnvelope(payload []byte, messageID string) *messagepb.MooxMessage {
 	now := timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: messageID, Topic: "moox.storage.fields_changed.v1.YI", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-test", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"}
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: messageID, Topic: "moox.storage.fields_changed.v1.YI", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-test", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"}
 }
 
 func TestParseTime(t *testing.T) {
