@@ -1,12 +1,99 @@
 package trigger
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestLiveConsumerContractUsesOnlyRegistryDurable(t *testing.T) {
+	valid := NATSConfig{Stream: LiveStream, Consumer: LiveDurable, FetchMaxWait: time.Second}
+	if err := ValidateLiveConsumerConfig(valid); err != nil {
+		t.Fatalf("valid live consumer config rejected: %v", err)
+	}
+
+	for name, cfg := range map[string]NATSConfig{
+		"different stream":  {Stream: "MOOX_STORAGE_REPLAY", Consumer: LiveDurable},
+		"different durable": {Stream: LiveStream, Consumer: "factor_replay"},
+		"empty stream":      {Consumer: LiveDurable},
+		"empty durable":     {Stream: LiveStream},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateLiveConsumerConfig(cfg); !errors.Is(err, ErrInvalidLiveConsumer) {
+				t.Fatalf("ValidateLiveConsumerConfig() error = %v, want ErrInvalidLiveConsumer", err)
+			}
+		})
+	}
+}
+
+func TestLiveConsumerBindRefDoesNotChooseDeliveryPolicy(t *testing.T) {
+	ref, err := liveConsumerBindRef(NATSConfig{Stream: LiveStream, Consumer: LiveDurable, FetchMaxWait: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("liveConsumerBindRef() error = %v", err)
+	}
+	if ref.Stream != LiveStream || ref.Durable != LiveDurable || ref.FetchMaxWait != 2*time.Second {
+		t.Fatalf("live consumer bind ref = %+v", ref)
+	}
+}
+
+func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
+	base := &messagepb.MooxMessage{
+		ProtocolVersion: jetstream.ProtocolVersion,
+		MessageId:       "storage-mzxw6-1",
+		Topic:           "moox.storage.fields_changed.v1.mzxw6.mjqxe",
+		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
+		Producer:        &messagepb.Producer{ServiceName: "storage-node", InstanceId: "foo", NodeId: "foo"},
+		OccurredAt:      timestamppb.New(time.Now().UTC()),
+		PublishedAt:     timestamppb.New(time.Now().UTC()),
+		ContentType:     jetstream.StorageFieldsChangedContentType,
+		MessageType:     jetstream.StorageFieldsChangedMessageType,
+		Payload:         []byte("payload"),
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*messagepb.MooxMessage)
+		wantOK bool
+	}{
+		{name: "exact content type", wantOK: true},
+		{name: "bare protobuf content type", mutate: func(message *messagepb.MooxMessage) { message.ContentType = "application/x-protobuf" }},
+		{name: "wrong protobuf message", mutate: func(message *messagepb.MooxMessage) {
+			message.ContentType = "application/x-protobuf; message=other.Message"
+		}},
+		{name: "wrong message type", mutate: func(message *messagepb.MooxMessage) { message.MessageType = "moox.storage.other.v1" }},
+		{name: "one topic token", mutate: func(message *messagepb.MooxMessage) { message.Topic = "moox.storage.fields_changed.v1.mzxw6" }},
+		{name: "wildcard topic", mutate: func(message *messagepb.MooxMessage) { message.Topic = "moox.storage.fields_changed.v1.mzxw6.>" }},
+		{name: "wrong protocol", mutate: func(message *messagepb.MooxMessage) { message.ProtocolVersion = 99 }},
+		{name: "wrong kind", mutate: func(message *messagepb.MooxMessage) { message.Kind = messagepb.MessageKind_MESSAGE_KIND_COMMAND }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := proto.Clone(base).(*messagepb.MooxMessage)
+			if test.mutate != nil {
+				test.mutate(message)
+			}
+			if got := isStorageFieldsChangedEnvelope(message); got != test.wantOK {
+				t.Fatalf("isStorageFieldsChangedEnvelope() = %t, want %t", got, test.wantOK)
+			}
+		})
+	}
+}
+
+func TestStorageFieldsChangedPayloadMatchesSubject(t *testing.T) {
+	message := &messagepb.MooxMessage{Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", ProtocolVersion: jetstream.ProtocolVersion, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType}
+	if !storageFieldsChangedPayloadMatches(message, &storagepb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "bar"}) {
+		t.Fatal("valid subject/payload was rejected")
+	}
+	if storageFieldsChangedPayloadMatches(message, &storagepb.DatasetFieldsChanged{SpaceId: "other", DatasetId: "bar"}) {
+		t.Fatal("mismatched space was accepted")
+	}
+}
 
 func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 	symbols := testkit.Symbols(500)

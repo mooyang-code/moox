@@ -224,7 +224,7 @@ func (s *Service) query(ctx context.Context, id string, keys []*pb.RowKey, field
 	return rows, nil
 }
 
-// StartEventConsumer binds the single storage_view durable and applies field
+// StartEventConsumer binds the configured managed durable and applies field
 // events to prepared indexes. It deliberately uses one Fetch(1) loop; the
 
 func queryErrorCode(err error) pb.ErrorCode {

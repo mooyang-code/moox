@@ -36,7 +36,8 @@ alert:
 metrics:
   enabled: true
   eventbus_url: nats://127.0.0.1:4222
-  eventbus_credential_file: ~/.config/moox/monitor/eventbus.yaml
+  eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml
+  host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml
   pipeline_config_path: ../config/monitor-pipelines.yaml
   stream: MOOX_METRICS
   topic: moox.metrics.snapshot.reported.v1

@@ -2,13 +2,10 @@ package consumer
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
-	"github.com/nats-io/nats.go"
 )
 
 type PullConsumer interface {
@@ -17,54 +14,26 @@ type PullConsumer interface {
 }
 
 type Runner struct {
-	consumer PullConsumer
-	handler  *Handler
-	batch    int
+	shared *jetstream.Runner
+	batch  int
 }
 
 func NewRunner(consumer PullConsumer, handler *Handler, batch int) *Runner {
 	if batch <= 0 {
 		batch = 1
 	}
-	return &Runner{consumer: consumer, handler: handler, batch: batch}
+	return &Runner{shared: jetstream.NewRunner(consumer, decisionHandler{handler: handler}, jetstream.RunnerConfig{BatchSize: batch}), batch: batch}
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	for ctx.Err() == nil {
-		deliveries, err := r.consumer.Fetch(ctx, r.batch)
-		if err != nil && len(deliveries) == 0 {
-			if errors.Is(err, nats.ErrTimeout) {
-				continue
-			}
-			return fmt.Errorf("fetch archive deliveries: %w", err)
-		}
-		retryBatch := false
-		for i, delivery := range deliveries {
-			if handleErr := r.handler.Handle(ctx, deliveryAdapter{delivery}); handleErr != nil {
-				var retry *RetryScheduledError
-				if errors.As(handleErr, &retry) {
-					for _, remaining := range deliveries[i+1:] {
-						_ = remaining.Nak(ctx, retry.Delay)
-					}
-					if err := sleepContext(ctx, retry.Delay); err != nil {
-						return err
-					}
-					retryBatch = true
-					break
-				}
-				return handleErr
-			}
-		}
-		if retryBatch {
-			continue
-		}
-		if err != nil && !errors.Is(err, jetstream.ErrDecode) {
-			return fmt.Errorf("fetch archive deliveries: %w", err)
-		}
+	if r == nil || r.shared == nil {
+		return jetstream.ErrInvalidConsumer
 	}
-	return ctx.Err()
+	return r.shared.Run(ctx)
 }
 
+// Kept for callers of the old archive runner helper; retry pacing now belongs
+// to JetStream's NAK delay and is not used by the shared transport loop.
 func sleepContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -90,3 +59,12 @@ func (d deliveryAdapter) Subject() string        { return d.Delivery.Subject }
 func (d deliveryAdapter) StreamSequence() uint64 { return d.Delivery.StreamSeq }
 func (d deliveryAdapter) DeliveryCount() uint64  { return d.Delivery.DeliveryCount }
 func (d deliveryAdapter) DecodeError() error     { return d.Delivery.DecodeError }
+
+type decisionHandler struct{ handler *Handler }
+
+func (h decisionHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	if h.handler == nil || delivery == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
+	}
+	return h.handler.HandleDecision(ctx, deliveryAdapter{delivery})
+}

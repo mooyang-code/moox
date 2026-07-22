@@ -23,6 +23,21 @@ func TestSourceLists(t *testing.T) {
 	}
 }
 
+func TestEventBusConfigAppliesCredentialFile(t *testing.T) {
+	cfg := config.Default()
+	home := t.TempDir()
+	credentialFile := filepath.Join(home, ".config", "moox", "eventbus", "archive-eventbus.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(credentialFile), 0o700))
+	require.NoError(t, os.WriteFile(credentialFile, []byte("version: 1\nusername: archive-eventbus\ntoken: archive-secret\n"), 0o600))
+	t.Setenv("HOME", home)
+	cfg.Archive.EventBus.CredentialFile = "~/.config/moox/eventbus/archive-eventbus.yaml"
+
+	got, err := eventBusConfig(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "archive-eventbus", got.Username)
+	assert.Equal(t, "archive-secret", got.Password)
+}
+
 func testConfig() *config.Config { return config.Default() }
 
 func TestAppRunRequiresConfig(t *testing.T) {
@@ -51,12 +66,13 @@ func TestAppRunBecomesReadyWithEmbeddedNATS(t *testing.T) {
 	t.Cleanup(func() { nc.Close() })
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.Archive.EventBus.Stream, Subjects: []string{cfg.Archive.EventBus.Subject}, Storage: nats.FileStorage})
+	const storageSubject = "moox.storage.fields_changed.v1.>"
+	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.Archive.EventBus.Stream, Subjects: []string{storageSubject}, Storage: nats.FileStorage})
 	require.NoError(t, err)
 	_, err = js.AddConsumer(cfg.Archive.EventBus.Stream, &nats.ConsumerConfig{
 		Name: cfg.Archive.EventBus.Durable, Durable: cfg.Archive.EventBus.Durable,
-		FilterSubject: cfg.Archive.EventBus.Subject, AckPolicy: nats.AckExplicitPolicy,
-		AckWait: cfg.Archive.EventBus.AckWait, MaxDeliver: -1, MaxAckPending: cfg.Archive.EventBus.MaxAckPending,
+		FilterSubject: storageSubject, AckPolicy: nats.AckExplicitPolicy,
+		AckWait: 5 * time.Minute, MaxDeliver: -1, MaxAckPending: 256,
 	})
 	require.NoError(t, err)
 
@@ -112,7 +128,6 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	cfg.Archive.StorageRPC.HMACKeyFile = keyFile
 	cfg.Archive.EventBus.URLs = []string{natsURL}
 	cfg.Archive.EventBus.Stream = fmt.Sprintf("MOOX_STORAGE_%d", time.Now().UnixNano())
-	cfg.Archive.EventBus.Subject = "moox.storage.rows_committed.time_series.v1.>"
 	cfg.Archive.EventBus.Durable = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second
 	cfg.Archive.COS.Enabled = false

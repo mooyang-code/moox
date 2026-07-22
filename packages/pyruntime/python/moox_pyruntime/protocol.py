@@ -2,8 +2,10 @@
 
 Go's ``protocol.Frame`` uses the following wire layout (big endian):
 ``MX`` magic, one-byte message type, uint32 JSON metadata length, metadata,
-uint64 payload length, payload. Factor and strategy workers should import this
-module instead of maintaining subtly different copies of the framing code.
+uint64 payload length, payload. Factor workers that opt into this library
+should import this module instead of maintaining a subtly different framing
+copy. Other business modules keep their own runtime entry points unless they
+explicitly adopt this contract.
 """
 
 from __future__ import annotations

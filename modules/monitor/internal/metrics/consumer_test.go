@@ -2,15 +2,24 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 	"gorm.io/gorm"
 )
+
+func TestHandleDeliveryAppliesTermAndReturnsBusinessError(t *testing.T) {
+	err := (&Consumer{}).HandleDelivery(context.Background(), nil)
+	if err == nil || !errors.Is(err, jetstream.ErrInvalidDelivery) || err.Error() == "empty metric delivery" {
+		t.Fatalf("HandleDelivery() error = %v, want business and transport errors", err)
+	}
+}
 
 func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))

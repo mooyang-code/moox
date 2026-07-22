@@ -88,6 +88,18 @@ instance:
 	}
 }
 
+func TestMonitorConfigKeepsExplicitEmptyEventBusCredentials(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	cfg, err := Load(writeConfig(t, "metrics:\n  eventbus_credential_file: \"\"\n  host_eventbus_credential_file: \"\"\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Metrics.EventBusCredentialFile != "" || cfg.Metrics.HostEventBusCredentialFile != "" {
+		t.Fatalf("explicit empty eventbus credentials were replaced: %q, %q", cfg.Metrics.EventBusCredentialFile, cfg.Metrics.HostEventBusCredentialFile)
+	}
+}
+
 func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-hk-177")
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "monitor-key")
@@ -138,6 +150,12 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
+	if !strings.Contains(text, "eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml") || !strings.Contains(text, "host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml") {
+		t.Fatal("monitor app config must keep separate hostmetrics and metrics credentials")
+	}
+	if strings.Contains(text, "~/.config/moox/monitor/eventbus.yaml") {
+		t.Fatal("monitor app config contains the retired shared credential path")
+	}
 	for _, oldKey := range []string{"reload_interval_seconds", "pull_interval_seconds"} {
 		if strings.Contains(text, oldKey) {
 			t.Fatalf("app config still contains %q", oldKey)

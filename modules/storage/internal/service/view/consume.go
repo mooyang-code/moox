@@ -3,35 +3,158 @@ package view
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client) (func(), error) {
+// EventConsumerOptions controls the client-side dispatch policy. MaxAckPending
+// is intentionally not sent to JetStream: the eventbus topology owns it and
+// this value is only useful for validating a local fetch configuration.
+type EventConsumerOptions struct {
+	Stream        string
+	Durable       string
+	AckWaitMS     int
+	FetchBatch    int
+	MaxWorkers    int
+	MaxAckPending int
+	Ordering      string
+	ErrorReporter jetstream.ErrorReporter
+	Metrics       *observability.ViewMetrics
+}
+
+func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
+	if strings.TrimSpace(o.Stream) == "" {
+		o.Stream = "MOOX_STORAGE"
+	}
+	if strings.TrimSpace(o.Durable) == "" {
+		o.Durable = "storage_view"
+	}
+	if o.AckWaitMS == 0 {
+		o.AckWaitMS = 120000
+	}
+	if o.FetchBatch == 0 {
+		o.FetchBatch = 8
+	}
+	if o.MaxWorkers == 0 {
+		o.MaxWorkers = 4
+	}
+	o.Stream = strings.TrimSpace(o.Stream)
+	o.Durable = strings.TrimSpace(o.Durable)
+	if strings.TrimSpace(o.Ordering) == "" {
+		o.Ordering = "subject"
+	}
+	o.Ordering = strings.ToLower(strings.TrimSpace(o.Ordering))
+	if o.FetchBatch < 1 {
+		return o, errors.New("storage view fetch_batch must be positive")
+	}
+	if o.MaxWorkers < 1 {
+		return o, errors.New("storage view max_workers must be positive")
+	}
+	if o.Ordering != "subject" {
+		return o, fmt.Errorf("storage view ordering %q is unsupported", o.Ordering)
+	}
+	if o.MaxAckPending < 0 {
+		return o, errors.New("storage view max_ack_pending must not be negative")
+	}
+	if o.AckWaitMS < 1 {
+		return o, errors.New("storage view ack_wait_ms must be positive")
+	}
+	if o.MaxAckPending > 0 && o.FetchBatch > o.MaxAckPending {
+		return o, fmt.Errorf("storage view fetch_batch %d exceeds max_ack_pending %d", o.FetchBatch, o.MaxAckPending)
+	}
+	return o, nil
+}
+
+func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client, configured ...EventConsumerOptions) (func(), error) {
+	if s == nil {
+		return nil, errors.New("storage view service is nil")
+	}
 	if client == nil {
 		return nil, errors.New("eventbus client is required")
 	}
-	consumer, err := client.EnsurePullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: eventconsumer.DatasetFieldsChangedSubjectPrefix + ".>", AckWait: 120 * time.Second, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: time.Second})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts := EventConsumerOptions{}
+	if len(configured) > 0 {
+		opts = configured[0]
+	}
+	var err error
+	if opts, err = opts.withDefaults(); err != nil {
+		return nil, err
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = s.metrics
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = observability.DefaultViewMetrics
+	}
+	s.metrics = opts.Metrics
+	reporter := opts.ErrorReporter
+	if reporter == nil {
+		reporter = jetstream.ErrorReporterFunc(func(err error) {
+			log.Printf("storage view event consumer error: %v", err)
+		})
+	}
+	consumer, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{
+		Stream: opts.Stream, Durable: opts.Durable, FetchMaxWait: time.Second, DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		return nil, err
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
+	dispatcher := newSubjectLaneDispatcher(loopCtx, opts.MaxWorkers, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+		return s.processDelivery(ctx, delivery, heartbeat)
+	}, reporter, laneMetricsHooks{
+		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
+			return newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(time.Duration(opts.AckWaitMS)*time.Millisecond), opts.Metrics)
+		},
+		onSubmit: func(delivery *jetstream.Delivery) {
+			opts.Metrics.ObserveLaneSubmit()
+			opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
+		},
+		onStart: func(*jetstream.Delivery) { opts.Metrics.IncLaneActive() },
+		onFinish: func(delivery *jetstream.Delivery) {
+			opts.Metrics.DecLaneActive()
+			opts.Metrics.AddConsumerLagMessages(-1)
+			opts.Metrics.CompletePendingDelivery(delivery, time.Now().UTC())
+		},
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer consumer.Close()
+		defer dispatcher.Close()
 		for loopCtx.Err() == nil {
-			deliveries, fetchErr := consumer.Fetch(loopCtx, 1)
+			deliveries, fetchErr := consumer.Fetch(loopCtx, opts.FetchBatch)
+			opts.Metrics.AddConsumerLagMessages(int64(len(deliveries)))
+			for _, delivery := range deliveries {
+				opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
+				if err := dispatcher.Dispatch(delivery); err != nil {
+					opts.Metrics.AddConsumerLagMessages(-1)
+					opts.Metrics.CompletePendingDelivery(delivery, time.Now().UTC())
+					if loopCtx.Err() == nil {
+						reporter.Report(fmt.Errorf("dispatch storage view delivery: %w", err))
+					}
+				}
+			}
 			if fetchErr != nil {
 				if loopCtx.Err() != nil {
 					return
+				}
+				if !errors.Is(fetchErr, nats.ErrTimeout) {
+					reporter.Report(fmt.Errorf("fetch storage view deliveries: %w", fetchErr))
 				}
 				timer := time.NewTimer(250 * time.Millisecond)
 				select {
@@ -44,91 +167,143 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				}
 				continue
 			}
-			for _, delivery := range deliveries {
-				s.processDelivery(loopCtx, delivery)
-			}
 		}
 	}()
 	return func() { cancel(); <-done }, nil
 }
 
-func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) {
+func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
+	if s == nil {
+		return errors.New("storage view service is nil")
+	}
+	if delivery == nil {
+		return errors.New("storage view delivery is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	started := time.Now()
+	metrics := s.metrics
+	if metrics == nil {
+		metrics = observability.DefaultViewMetrics
+	}
+	defer metrics.ObserveDeliveryDuration(time.Since(started))
+	if delivery != nil && delivery.DeliveryCount > 1 {
+		metrics.IncRedelivery()
+	}
 	s.liveWork.Add(1)
 	defer s.liveWork.Add(-1)
-	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
-		if ctx.Err() == nil {
-			log.Printf("storage view delivery gate failed: %v", err)
-		}
-		return
+	heartbeat := (*deliveryHeartbeat)(nil)
+	if len(queued) > 0 {
+		heartbeat = queued[0]
 	}
-	defer s.releaseLiveGate()
+	if heartbeat == nil {
+		heartbeat = newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(120*time.Second), metrics)
+	}
+	defer func() { heartbeat.stop() }()
+	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
+		return errors.Join(err, heartbeat.err())
+	}
+	defer s.releaseLiveDelivery()
 	for ctx.Err() == nil {
 		err := s.applyDelivery(ctx, delivery)
 		if err == nil {
-			if ackErr := delivery.Ack(ctx); ackErr != nil {
-				log.Printf("storage view delivery ack failed: %v", ackErr)
+			// Applying a projection is deliberately separate from ACK retry:
+			// an ACK transport failure must never repeat an already successful
+			// index write.
+			for ctx.Err() == nil {
+				if ackErr := delivery.Ack(ctx); ackErr == nil {
+					metrics.ObserveDelivery("ack", "success")
+					return heartbeat.err()
+				} else {
+					log.Printf("storage view delivery ack failed: %v", ackErr)
+					metrics.IncAckError()
+					metrics.ObserveDelivery("ack", "error")
+					heartbeat.report(ackErr)
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
 			}
-			return
+			return ctx.Err()
 		}
 		if isPermanentDeliveryError(err) {
-			if termErr := delivery.Term(ctx); termErr != nil {
-				log.Printf("storage view delivery term failed after permanent error %v: %v", err, termErr)
+			for ctx.Err() == nil {
+				if termErr := delivery.Term(ctx); termErr == nil {
+					metrics.ObserveDelivery("term", "success")
+					return heartbeat.err()
+				} else {
+					log.Printf("storage view delivery term failed after permanent error %v: %v", err, termErr)
+					metrics.IncAckError()
+					metrics.ObserveDelivery("term", "error")
+					heartbeat.report(termErr)
+					if errors.Is(termErr, jetstream.ErrInvalidDelivery) || errors.Is(termErr, jetstream.ErrClosed) {
+						return errors.Join(err, termErr, heartbeat.err())
+					}
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
 			}
-			return
+			return ctx.Err()
 		}
 		// Keep the delivery pending while retrying. NAK would release
 		// MaxAckPending and allow a later event to overtake it.
 		if progressErr := delivery.InProgress(ctx); progressErr != nil {
 			log.Printf("storage view delivery progress failed after %v: %v", err, progressErr)
+			metrics.IncInProgressError()
+			metrics.ObserveDelivery("in_progress", "error")
+			heartbeat.report(progressErr)
+		} else {
+			metrics.ObserveDelivery("in_progress", "success")
 		}
-		timer := time.NewTimer(time.Second)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+		if !sleepDeliveryRetry(ctx, time.Second) {
+			return ctx.Err()
 		}
+	}
+	return ctx.Err()
+}
+
+func sleepDeliveryRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
 func (s *Service) initLiveGate() {
 	s.liveGateOnce.Do(func() {
-		s.liveGate = make(chan struct{}, 1)
-		s.liveGate <- struct{}{}
+		s.liveGate = newLiveLeaseGate()
 	})
 }
 
 func (s *Service) acquireBackfill(ctx context.Context) error {
 	s.initLiveGate()
-	select {
-	case <-s.liveGate:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return s.liveGate.acquireWrite(ctx)
 }
 
 func (s *Service) acquireLiveDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
 	s.initLiveGate()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.liveGate:
-			return nil
-		case <-ticker.C:
-			if delivery != nil {
-				_ = delivery.InProgress(ctx)
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	return s.liveGate.acquireRead(ctx, delivery)
 }
 
+func (s *Service) releaseLiveDelivery() {
+	s.initLiveGate()
+	s.liveGate.releaseRead()
+}
+
+func (s *Service) releaseBackfill() {
+	s.initLiveGate()
+	s.liveGate.releaseWrite()
+}
+
+// releaseLiveGate remains as a compatibility shim for old live callers.
 func (s *Service) releaseLiveGate() {
-	s.liveGate <- struct{}{}
+	s.releaseLiveDelivery()
 }
 
 func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
@@ -138,9 +313,16 @@ func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Deliver
 		}
 		return permanentDeliveryError{errors.New("storage event delivery is empty")}
 	}
-	spaceID, datasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
+	spaceID, datasetID, err := jetstream.ValidateStorageFieldsChangedEnvelope(delivery.Message)
 	if err != nil {
 		return permanentDeliveryError{err}
+	}
+	subjectSpaceID, subjectDatasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
+	if err != nil {
+		return permanentDeliveryError{err}
+	}
+	if subjectSpaceID != spaceID || subjectDatasetID != datasetID {
+		return permanentDeliveryError{errors.New("storage delivery subject and envelope topic mismatch")}
 	}
 	event := &pb.DatasetFieldsChanged{}
 	if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
@@ -456,4 +638,376 @@ type permanentDeliveryError struct{ error }
 func isPermanentDeliveryError(err error) bool {
 	var target permanentDeliveryError
 	return errors.As(err, &target)
+}
+
+type laneHandler func(context.Context, *jetstream.Delivery, *deliveryHeartbeat) error
+
+type laneMetricsHooks struct {
+	newHeartbeat func(context.Context, *jetstream.Delivery) *deliveryHeartbeat
+	onSubmit     func(*jetstream.Delivery)
+	onStart      func(*jetstream.Delivery)
+	onFinish     func(*jetstream.Delivery)
+}
+
+type subjectLane struct {
+	subject string
+	queue   []*laneDelivery
+	running bool
+}
+
+type laneDelivery struct {
+	delivery  *jetstream.Delivery
+	heartbeat *deliveryHeartbeat
+}
+
+// subjectLaneDispatcher is a scheduler rather than a plain worker pool: a
+// lane is queued at most once, so one subject cannot have two active handlers.
+type subjectLaneDispatcher struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
+	maxWorkers int
+	handler    laneHandler
+	reporter   jetstream.ErrorReporter
+	hooks      laneMetricsHooks
+	ready      chan *subjectLane
+	lanes      map[string]*subjectLane
+	mu         sync.Mutex
+	closed     bool
+	wg         sync.WaitGroup
+}
+
+func newSubjectLaneDispatcher(parent context.Context, maxWorkers int, handler laneHandler, reporter jetstream.ErrorReporter, hooks ...laneMetricsHooks) *subjectLaneDispatcher {
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
+	ctx, cancel := context.WithCancel(parent)
+	var metricsHooks laneMetricsHooks
+	if len(hooks) > 0 {
+		metricsHooks = hooks[0]
+	}
+	d := &subjectLaneDispatcher{
+		ctx: ctx, cancel: cancel, maxWorkers: maxWorkers, handler: handler, reporter: reporter,
+		hooks: metricsHooks,
+		ready: make(chan *subjectLane, maxWorkers), lanes: make(map[string]*subjectLane),
+	}
+	d.wg.Add(maxWorkers)
+	for i := 0; i < maxWorkers; i++ {
+		go d.worker()
+	}
+	return d
+}
+
+func (d *subjectLaneDispatcher) Dispatch(delivery *jetstream.Delivery) error {
+	if d == nil || delivery == nil {
+		return errors.New("storage view lane delivery is nil")
+	}
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return errors.New("storage view lane dispatcher is closed")
+	}
+	lane := d.lanes[delivery.Subject]
+	if lane == nil {
+		lane = &subjectLane{subject: delivery.Subject}
+		d.lanes[delivery.Subject] = lane
+	}
+	var heartbeat *deliveryHeartbeat
+	if d.hooks.newHeartbeat != nil {
+		heartbeat = d.hooks.newHeartbeat(d.ctx, delivery)
+	}
+	lane.queue = append(lane.queue, &laneDelivery{delivery: delivery, heartbeat: heartbeat})
+	start := !lane.running
+	if start {
+		lane.running = true
+	}
+	d.mu.Unlock()
+	if d.hooks.onSubmit != nil {
+		d.hooks.onSubmit(delivery)
+	}
+	if start {
+		select {
+		case d.ready <- lane:
+		case <-d.ctx.Done():
+			return d.ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (d *subjectLaneDispatcher) worker() {
+	defer d.wg.Done()
+	for {
+		select {
+		case lane := <-d.ready:
+			if lane == nil {
+				continue
+			}
+			item, ok := d.next(lane)
+			if !ok {
+				continue
+			}
+			delivery := item.delivery
+			if d.hooks.onStart != nil {
+				d.hooks.onStart(delivery)
+			}
+			if d.handler != nil {
+				if err := d.handler(d.ctx, delivery, item.heartbeat); err != nil && d.ctx.Err() == nil && d.reporter != nil {
+					d.reporter.Report(fmt.Errorf("storage view subject %q delivery failed: %w", lane.subject, err))
+				}
+			}
+			if item.heartbeat != nil {
+				item.heartbeat.stop()
+			}
+			if d.hooks.onFinish != nil {
+				d.hooks.onFinish(delivery)
+			}
+			d.finish(lane)
+		case <-d.ctx.Done():
+			return
+		}
+	}
+}
+
+func (d *subjectLaneDispatcher) next(lane *subjectLane) (*laneDelivery, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(lane.queue) == 0 {
+		lane.running = false
+		delete(d.lanes, lane.subject)
+		return nil, false
+	}
+	delivery := lane.queue[0]
+	lane.queue = lane.queue[1:]
+	return delivery, true
+}
+
+func (d *subjectLaneDispatcher) finish(lane *subjectLane) {
+	d.mu.Lock()
+	if len(lane.queue) == 0 {
+		lane.running = false
+		delete(d.lanes, lane.subject)
+		d.mu.Unlock()
+		return
+	}
+	d.mu.Unlock()
+	select {
+	case d.ready <- lane:
+	default:
+		// Never let all workers block trying to requeue while ready already
+		// contains other lanes. The helper exits with the dispatcher.
+		go d.enqueue(lane)
+	}
+}
+
+func (d *subjectLaneDispatcher) enqueue(lane *subjectLane) {
+	select {
+	case d.ready <- lane:
+	case <-d.ctx.Done():
+	}
+}
+
+func (d *subjectLaneDispatcher) Close() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	var queued []*deliveryHeartbeat
+	if !d.closed {
+		d.closed = true
+		d.cancel()
+		for _, lane := range d.lanes {
+			for _, item := range lane.queue {
+				if item != nil && item.heartbeat != nil {
+					queued = append(queued, item.heartbeat)
+				}
+			}
+			lane.queue = nil
+		}
+	}
+	d.mu.Unlock()
+	for _, heartbeat := range queued {
+		heartbeat.stop()
+	}
+	d.wg.Wait()
+}
+
+type deliveryHeartbeat struct {
+	stopOnce sync.Once
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	mu       sync.Mutex
+	errs     []error
+	metrics  *observability.ViewMetrics
+}
+
+func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, interval time.Duration, metrics ...*observability.ViewMetrics) *deliveryHeartbeat {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var metricSink *observability.ViewMetrics
+	if len(metrics) > 0 {
+		metricSink = metrics[0]
+	}
+	h := &deliveryHeartbeat{stopCh: make(chan struct{}), doneCh: make(chan struct{}), metrics: metricSink}
+	if delivery == nil || interval <= 0 {
+		close(h.doneCh)
+		return h
+	}
+	go func() {
+		defer close(h.doneCh)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if ctx.Err() != nil {
+					return
+				}
+				if err := delivery.InProgress(ctx); err != nil {
+					log.Printf("storage view delivery in-progress failed: %v", err)
+					if h.metrics != nil {
+						h.metrics.IncInProgressError()
+						h.metrics.ObserveDelivery("in_progress", "error")
+					}
+					h.report(fmt.Errorf("storage view delivery in-progress: %w", err))
+				} else {
+					if h.metrics != nil {
+						h.metrics.ObserveDelivery("in_progress", "success")
+					}
+				}
+			case <-h.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return h
+}
+
+func deliveryHeartbeatInterval(ackWait time.Duration) time.Duration {
+	if ackWait <= 0 {
+		ackWait = 120 * time.Second
+	}
+	interval := ackWait / 3
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	if interval < time.Second {
+		interval = time.Second
+	}
+	return interval
+}
+
+func (h *deliveryHeartbeat) report(err error) {
+	if h == nil || err == nil {
+		return
+	}
+	h.mu.Lock()
+	h.errs = append(h.errs, err)
+	h.mu.Unlock()
+}
+
+func (h *deliveryHeartbeat) err() error {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return errors.Join(h.errs...)
+}
+
+func (h *deliveryHeartbeat) stop() {
+	if h == nil {
+		return
+	}
+	h.stopOnce.Do(func() { close(h.stopCh) })
+	<-h.doneCh
+}
+
+// liveLeaseGate gives backfill writer priority. Once a writer is waiting,
+// new real-time reads stop entering and the writer waits for readers to drain.
+type liveLeaseGate struct {
+	mu             sync.Mutex
+	readers        int
+	writer         bool
+	waitingWriters int
+	notify         chan struct{}
+}
+
+func newLiveLeaseGate() *liveLeaseGate {
+	return &liveLeaseGate{notify: make(chan struct{})}
+}
+
+func (g *liveLeaseGate) acquireRead(ctx context.Context, _ *jetstream.Delivery) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		g.mu.Lock()
+		if !g.writer && g.waitingWriters == 0 {
+			g.readers++
+			g.mu.Unlock()
+			return nil
+		}
+		notify := g.notify
+		g.mu.Unlock()
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (g *liveLeaseGate) releaseRead() {
+	g.mu.Lock()
+	if g.readers > 0 {
+		g.readers--
+	}
+	if g.readers == 0 {
+		g.signalLocked()
+	}
+	g.mu.Unlock()
+}
+
+func (g *liveLeaseGate) acquireWrite(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	g.mu.Lock()
+	g.waitingWriters++
+	g.mu.Unlock()
+	for {
+		g.mu.Lock()
+		if !g.writer && g.readers == 0 {
+			g.writer = true
+			g.waitingWriters--
+			g.mu.Unlock()
+			return nil
+		}
+		notify := g.notify
+		g.mu.Unlock()
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			g.mu.Lock()
+			g.waitingWriters--
+			g.signalLocked()
+			g.mu.Unlock()
+			return ctx.Err()
+		}
+	}
+}
+
+func (g *liveLeaseGate) releaseWrite() {
+	g.mu.Lock()
+	g.writer = false
+	g.signalLocked()
+	g.mu.Unlock()
+}
+
+func (g *liveLeaseGate) signalLocked() {
+	close(g.notify)
+	g.notify = make(chan struct{})
 }

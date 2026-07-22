@@ -20,18 +20,22 @@ type DatasetPublisher struct {
 }
 
 func (p *DatasetPublisher) PublishMessage(ctx context.Context, data []byte) error {
+	_, err := p.PublishMessageWithAck(ctx, data)
+	return err
+}
+
+func (p *DatasetPublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
 	if p == nil || p.client == nil {
-		return errors.New("storage eventbus client is nil")
+		return nil, errors.New("storage eventbus client is nil")
 	}
 	msg := &messagepb.MooxMessage{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		return err
+		return nil, err
 	}
 	if msg.GetTopic() == "" || msg.GetMessageId() == "" {
-		return errors.New("dataset event envelope is incomplete")
+		return nil, errors.New("dataset event envelope is incomplete")
 	}
-	_, err := p.client.Publish(ctx, msg)
-	return err
+	return p.client.Publish(ctx, msg)
 }
 
 func NewDatasetPublisher(client *jetstream.Client, producerID string) *DatasetPublisher {
@@ -67,8 +71,8 @@ func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.DatasetFieldsC
 		SpaceId:         event.GetSpaceId(),
 		OccurredAt:      now,
 		PublishedAt:     now,
-		ContentType:     "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged",
-		MessageType:     "moox.storage.fields_changed.v1",
+		ContentType:     jetstream.StorageFieldsChangedContentType,
+		MessageType:     jetstream.StorageFieldsChangedMessageType,
 		Payload:         payload,
 		Attributes:      map[string]string{"dataset_id": event.GetDatasetId()},
 	}

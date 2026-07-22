@@ -32,6 +32,25 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	t.Fatal("archive durable consumer missing")
 }
 
+func TestDefaultMonitorConsumersMatchRuntimeContracts(t *testing.T) {
+	cfg := Default()
+	want := map[string]string{
+		"monitor_hostmetrics_ingest_v1": "moox.metrics.host.reported.v1",
+		"monitor_metrics_ingest_v1":     "moox.metrics.snapshot.reported.v1",
+	}
+	for _, consumer := range cfg.Consumers {
+		if topic, ok := want[consumer.Durable]; ok {
+			if consumer.FilterSubject != topic || consumer.AckWait != time.Minute || consumer.MaxAckPending != 256 || consumer.MaxDeliver != 3 {
+				t.Fatalf("monitor consumer %q = %#v", consumer.Durable, consumer)
+			}
+			delete(want, consumer.Durable)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing monitor consumers: %#v", want)
+	}
+}
+
 func TestRepositoryConfigLoads(t *testing.T) {
 	if _, err := Load("../../config/app.yaml"); err != nil {
 		t.Fatal(err)
@@ -145,4 +164,16 @@ func TestValidateConsumerTemplate(t *testing.T) {
 	bad := template
 	bad.Stream = "missing"
 	require.Error(t, validateConsumerTemplate(&bad, cfg))
+}
+
+func TestDefaultStorageViewConsumerAllowsParallelLanes(t *testing.T) {
+	for _, consumer := range Default().Consumers {
+		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "storage_view" {
+			if consumer.MaxAckPending != 8 {
+				t.Fatalf("storage_view max_ack_pending = %d, want 8", consumer.MaxAckPending)
+			}
+			return
+		}
+	}
+	t.Fatal("storage_view durable consumer missing")
 }

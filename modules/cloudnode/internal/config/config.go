@@ -152,6 +152,7 @@ func Default() *Config {
 			Enabled:        true,
 			URLs:           []string{"nats://127.0.0.1:4222"},
 			NATSURL:        "nats://127.0.0.1:4222",
+			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
 			SubjectPrefix:  "moox.cloudnode",
 			ExecStream:     "MOOX_CLOUDNODE_EXEC",
 			AckWaitMillis:  int64(12 * time.Minute / time.Millisecond),

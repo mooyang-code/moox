@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -129,18 +130,15 @@ func registerMetricsReporter(s *server.Server) {
 func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn, error) {
 	opts := []nats.Option{nats.Name("moox-eventbus-control"), nats.RetryOnFailedConnect(true), nats.MaxReconnects(-1), nats.ReconnectBufSize(-1), nats.Timeout(5 * time.Second)}
 	username, password, caFile := cfg.Broker.Auth.Username, cfg.Broker.Auth.Password, cfg.Broker.TLS.CAFile
-	if cfg.InternalClient.TLSCAFile != "" {
-		caFile = cfg.InternalClient.TLSCAFile
-	}
 	if cfg.InternalClient.CredentialFile != "" {
 		credentials, err := readInternalCredentials(cfg.InternalClient.CredentialFile)
 		if err != nil {
 			return nil, err
 		}
 		username, password = credentials.Username, credentials.Password
-		if credentials.CAFile != "" {
-			caFile = credentials.CAFile
-		}
+		caFile = internalClientCAFile(cfg.InternalClient.TLSCAFile, credentials.CAFile, caFile)
+	} else if cfg.InternalClient.TLSCAFile != "" {
+		caFile = cfg.InternalClient.TLSCAFile
 	}
 	if username != "" || password != "" {
 		opts = append(opts, nats.UserInfo(username, password))
@@ -152,6 +150,18 @@ func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn
 		opts = append(opts, nats.Secure())
 	}
 	return nats.Connect(rawURL, opts...)
+}
+
+func internalClientCAFile(configuredCAFile, credentialCAFile, fallbackCAFile string) string {
+	if strings.TrimSpace(configuredCAFile) != "" {
+		// Deployments inject the absolute CA explicitly so it wins over the
+		// relative path retained in the credential bundle.
+		return configuredCAFile
+	}
+	if strings.TrimSpace(credentialCAFile) != "" {
+		return credentialCAFile
+	}
+	return fallbackCAFile
 }
 
 type internalCredentials struct {
@@ -183,6 +193,10 @@ func readInternalCredentials(path string) (internalCredentials, error) {
 	}
 	if credentials.Username == "" || credentials.Password == "" {
 		return internalCredentials{}, fmt.Errorf("internal client credentials require username and token/password")
+	}
+	credentials.CAFile = strings.TrimSpace(credentials.CAFile)
+	if credentials.CAFile != "" && !filepath.IsAbs(credentials.CAFile) {
+		credentials.CAFile = filepath.Join(filepath.Dir(path), credentials.CAFile)
 	}
 	return credentials, nil
 }

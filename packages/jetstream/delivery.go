@@ -25,11 +25,18 @@ type Delivery struct {
 	RawData      []byte
 	RawMessageID string
 
-	msg    *nats.Msg
-	client *Client
+	msg        *nats.Msg
+	client     *Client
+	ackFn      func(context.Context) error
+	nakFn      func(context.Context, time.Duration) error
+	termFn     func(context.Context) error
+	progressFn func(context.Context) error
 }
 
 func (d *Delivery) Ack(ctx context.Context) error {
+	if d != nil && d.ackFn != nil {
+		return d.ackFn(ctx)
+	}
 	if d != nil && d.msg == nil && d.client != nil {
 		return d.client.AckToken(ctx, d.PersistentToken)
 	}
@@ -37,6 +44,9 @@ func (d *Delivery) Ack(ctx context.Context) error {
 }
 
 func (d *Delivery) Nak(ctx context.Context, delay time.Duration) error {
+	if d != nil && d.nakFn != nil {
+		return d.nakFn(ctx, delay)
+	}
 	if d != nil && d.msg == nil && d.client != nil {
 		return d.client.NakToken(ctx, d.PersistentToken, delay)
 	}
@@ -49,6 +59,9 @@ func (d *Delivery) Nak(ctx context.Context, delay time.Duration) error {
 }
 
 func (d *Delivery) InProgress(ctx context.Context) error {
+	if d != nil && d.progressFn != nil {
+		return d.progressFn(ctx)
+	}
 	if d != nil && d.msg == nil && d.client != nil {
 		return d.client.InProgressToken(ctx, d.PersistentToken)
 	}
@@ -56,6 +69,9 @@ func (d *Delivery) InProgress(ctx context.Context) error {
 }
 
 func (d *Delivery) Term(ctx context.Context) error {
+	if d != nil && d.termFn != nil {
+		return d.termFn(ctx)
+	}
 	if d != nil && d.msg == nil && d.client != nil {
 		return d.client.TermToken(ctx, d.PersistentToken)
 	}

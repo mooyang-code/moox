@@ -2,7 +2,7 @@
 
 ## 设计结论
 
-MooX 为 Factor 和 Strategy 提供一套共享的 Python 进程运行底座。Go 是宿主、调度者和业务事实源；Python 是常驻、单任务串行、可终止并可重建的计算进程。
+`packages/pyruntime` 是可复用的 Python worker 协议/基础库。当前 Strategy 代码确实导入其中的可复用组件，但 Strategy 保持自己的 worker 入口、业务 codec 和状态事务语义；不要把“Factor 是本次 Streaming 唯一纳入/支持的 Python runtime”误写成“Strategy 不使用该库”。Go 是宿主、调度者和业务事实源；Python 是常驻、单任务串行、可终止并可重建的计算进程。
 
 共享运行时负责：
 
@@ -13,18 +13,18 @@ MooX 为 Factor 和 Strategy 提供一套共享的 Python 进程运行底座。G
 - stdout/stderr 捕获、结构化日志和错误分类。
 - worker 轮换、资源限制、指标和确定性测试。
 
-Factor 和 Strategy 只共享运行设施，不共享业务协议：
+Factor 的业务适配使用该库，但不与其他业务模块共享业务协议：
 
 | 模块 | Python 入口 | 状态 | 输出 |
 | --- | --- | --- | --- |
 | Factor | `signal()` / `signal_multi_params()` | 无业务状态 | 因子列尾部值 |
-| Strategy | `run(context, data, params, state)` | 显式 `state/next_state` | `action + TargetWeights` |
+| Strategy | 独立 worker 入口 | 显式 `state/next_state` | `action + TargetWeights` |
 
 V1 使用本机 worker 池。远程 Python worker、容器沙箱和多租户资源隔离不属于本设计的首期范围。
 
 ## 当前实现状态
 
-共享运行时已经落在 `packages/pyruntime`，Factor 和 Strategy 通过 Go API 接入。
+通用能力已经落在 `packages/pyruntime`，Factor 通过 Go API 接入并由本次 Streaming 运行时负责支持；Strategy 可复用其中的协议/进程/传输组件，但现有独立业务运行路径不因本设计而改变。Strategy 迁移边界是业务 codec、state CAS、调度和事务语义仍需单独设计与验证，本次不合并两条入口。
 当前能力包括：
 
 1. `process` 提供常驻 worker、任务超时、状态检查和 supervisor 重建；`pool` 提供并行 worker 选择。
@@ -32,7 +32,7 @@ V1 使用本机 worker 池。远程 Python worker、容器沙箱和多租户资�
 3. `transport` 提供 JSON、标准 Arrow IPC stream 和 Arrow IPC file 编解码；Arrow 类型白名单覆盖数值、bool、string、UTC 毫秒时间和 null。
 4. `snapshot.Store.AcquireArrow` 使用临时文件、fsync、原子 rename 和引用计数；`Store.Open` 通过只读 mmap + `ipc.NewMappedFileReader` 打开共享快照。
 5. `python/moox_pyruntime` 提供 Python 侧 frame、Arrow stream 和 mmap helper；pyarrow 未安装时仍可运行 JSON-only worker。
-6. `moduleregistry` 负责源码 hash 和版本化物化。Factor/Strategy 的业务 codec、调度和事务语义仍由各自模块负责。
+6. `moduleregistry` 负责源码 hash 和版本化物化。Factor 的业务 codec、调度和事务语义仍由 Factor 负责；Strategy 保持自己的业务 codec、调度和事务语义。
 
 当前明确的边界：Arrow/mmap 已在共享运行时和端到端测试中可用，但业务模块需要在 worker HELLO 协商通过后才选择 Arrow；未协商或小数据任务应使用 JSON。快照句柄必须在所有 mmap reader 关闭后再 Release。
 
@@ -40,12 +40,12 @@ V1 使用本机 worker 池。远程 Python worker、容器沙箱和多租户资�
 
 ### 目标
 
-1. Factor 与 Strategy 使用相同的进程管理、帧协议、数据编码和日志设施。
+1. Factor 使用统一的进程管理、帧协议、数据编码和日志设施；不把 Python runtime 依赖扩散到其他业务服务。
 2. 同一输入快照只读取和编码一次，可供多个 worker 并行计算。
 3. worker 崩溃、超时或内存超限后可自动恢复，不污染业务状态。
 4. 每次运行固定源码、Python 环境、输入快照和协议版本，可审计并可复现。
 5. 小任务保持低延迟，大任务避免重复序列化和全量内存复制。
-6. 模块级接口保持简单，Factor 和 Strategy 无需理解进程管理细节。
+6. Factor 的模块级接口保持简单，无需理解进程管理细节；Strategy 继续遵循自己的接口。
 
 ### 非目标
 
@@ -86,7 +86,6 @@ modules/strategy/pyworker/           # strategy 入口调用与 SDK
 ```mermaid
 flowchart TB
   Factor["Factor scheduler"] --> Runtime["pyruntime pool"]
-  Strategy["Strategy scheduler"] --> Runtime
 
   Runtime --> Supervisor["worker supervisor"]
   Runtime --> Snapshots["snapshot store"]
@@ -105,7 +104,6 @@ flowchart TB
   W2 --> Results
   WN --> Results
   Results --> FactorWrite["Factor unified writeback"]
-  Results --> StrategyCommit["Strategy state and target commit"]
 ```
 
 ## worker 状态机

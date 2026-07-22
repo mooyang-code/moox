@@ -84,9 +84,23 @@ tar -C "${TMP_ROOT}/unpacked-shard" -xzf "${SHARD_ARCHIVE}"
 [[ -f "${TMP_ROOT}/unpacked-shard/storage-node/config/storage.yaml" ]]
 grep -q 'port: 20107' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"
 grep -q 'node_id: storage-node-0' "${TMP_ROOT}/unpacked-shard/storage-node/config/storage.yaml"
+grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage-node/config/storage.yaml"
+grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
 grep -q 'default_services+=(storage-node)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
 grep -q 'service_name: trpc.moox.storage.DataNode' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
 grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'stop_service "storage-node"' "${TMP_ROOT}/unpacked-shard/stop.sh"
+
+TLS_ARCHIVE="${TMP_ROOT}/storage-tls.tar.gz"
+MOOX_EVENTBUS_ENABLE_TLS=1 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+  --profile storage --with-storage-node --package-only --archive "${TLS_ARCHIVE}" \
+  --target localhost --dir "${TMP_ROOT}/deploy-tls" --stage "${TMP_ROOT}/stage-tls" \
+  --goos linux --goarch amd64 --skip-build --node-id storage \
+  --gateway-control-url http://127.0.0.1:11000 >/dev/null
+mkdir "${TMP_ROOT}/unpacked-tls"
+tar -C "${TMP_ROOT}/unpacked-tls" -xzf "${TLS_ARCHIVE}"
+grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage/config/storage.yaml"
+grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage-view/config/trpc_go.yaml"
+grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage-node/config/storage.yaml"
 
 echo 'storage deployment profile contract passed'

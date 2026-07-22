@@ -840,15 +840,17 @@ PY
   fi
 
   if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+    [[ "${WITH_ARCHIVE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml#' "${STAGE_DIR}/archive/config/app.yaml"
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
-    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
+    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml#; s#host_eventbus_credential_file:\s*.*#host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
   else
+    [[ "${WITH_ARCHIVE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/archive/config/app.yaml"
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/strategy/config/app.yaml"
-    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
+    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#eventbus_credential_file:\s*.*#eventbus_credential_file: ""#; s#host_eventbus_credential_file:\s*.*#host_eventbus_credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
   fi
 
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
@@ -1228,6 +1230,38 @@ wait_http() {
   return 1
 }
 
+wait_eventbus_storage_view_topology() {
+  if [[ "${WITH_EVENTBUS}" != "1" ]]; then
+    echo "eventbus is external; skip local storage_view topology preflight"
+    return 0
+  fi
+  local attempts="${MOOX_WAIT_EVENTBUS_TOPOLOGY_SECONDS:-60}"
+  local metrics_url="http://127.0.0.1:11419/metrics"
+  [[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "MOOX_WAIT_EVENTBUS_TOPOLOGY_SECONDS must be a positive integer" >&2
+    return 1
+  }
+  local response_file
+  response_file="$(mktemp "${TMPDIR:-/tmp}/moox-eventbus-topology.XXXXXX")"
+  echo "waiting for EventBus storage_view durable topology"
+  for _ in $(seq 1 "${attempts}"); do
+    if curl --fail --silent --max-time 2 \
+      -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" \
+      "http://127.0.0.1:11419/readyz" >/dev/null 2>&1 && \
+      curl --fail --silent --max-time 2 \
+      -H "X-Moox-Health-Auth: $(sign_health_request GET /metrics)" \
+      --output "${response_file}" "${metrics_url}" >/dev/null 2>&1 && \
+      grep -Fq 'moox_eventbus_consumer_pending{stream="MOOX_STORAGE",consumer="storage_view"}' "${response_file}"; then
+      rm -f "${response_file}"
+      return 0
+    fi
+    sleep 1
+  done
+  rm -f "${response_file}"
+  echo "EventBus storage_view durable topology not ready after ${attempts}s" >&2
+  return 1
+}
+
 sign_health_request() {
   local method="$1" path="$2" timestamp nonce body_hash canonical signature
   path="/${path#/}"
@@ -1436,6 +1470,7 @@ start_storage_primary() {
 }
 
 start_storage_view() {
+  wait_eventbus_storage_view_topology
   gateway_service_env_for storage-view
   start_service "storage-view" "${ROOT}/storage-view" \
     env "${CALLER_GATEWAY_SERVICE_ENV[@]}" \

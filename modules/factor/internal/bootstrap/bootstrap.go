@@ -2,9 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -124,7 +126,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 factor binding 快照失败: %v", err)
 		return nil, err
 	}
-	eventBatcher := trigger.NewEventBatcher(time.Duration(cfg.Scheduler.EventBatchWindowMS)*time.Millisecond, bindings)
+	eventBatcher := trigger.NewDurableEventBatcher(time.Duration(cfg.Scheduler.EventBatchWindowMS)*time.Millisecond, bindings, dbm)
+	if err := eventBatcher.Replay(ctx); err != nil {
+		log.ErrorContextf(ctx, "恢复 factor event inbox 失败: %v", err)
+		return nil, err
+	}
 	if cfg.NATS.URL == "" {
 		log.WarnContextf(ctx, "factor nats.url is empty, realtime trigger startup skipped")
 	} else {
@@ -133,7 +139,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			URL:            cfg.NATS.URL,
 			Stream:         cfg.NATS.Stream,
 			Consumer:       cfg.NATS.Consumer,
-			Subject:        cfg.NATS.Subject,
+			FetchMaxWait:   cfg.NATS.FetchMaxWait,
 			CredentialFile: cfg.NATS.CredentialFile,
 		}, eventBatcher)
 		if err := consumer.Start(ctx); err != nil {
@@ -374,17 +380,41 @@ func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {
 }
 
 func drainEventBatch(ctx context.Context, deps realtimeLoopDeps) {
-	for _, task := range deps.eventBatcher.Flush(time.Now()) {
+	tasks, err := deps.eventBatcher.FlushPending(ctx, time.Now())
+	if err != nil {
+		log.WarnContextf(ctx, "flush factor event inbox 失败: %v", err)
+		return
+	}
+	for _, task := range tasks {
 		schedTask, err := buildSchedulerTask(ctx, deps.factors, deps.factorsDir, task)
 		if err != nil {
 			log.WarnContextf(ctx, "构造 factor 调度任务失败: %v", err)
-			continue
+			if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+				log.WarnContextf(ctx, "恢复失败的 factor event inbox 失败: %v", restoreErr)
+			}
+			return
 		}
 		if err := syncTaskMetadata(ctx, deps.meta, schedTask, deps.factors); err != nil {
 			log.WarnContextf(ctx, "同步 factor metadata 失败: %v", err)
-			continue
+			if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+				log.WarnContextf(ctx, "恢复失败的 factor event inbox 失败: %v", restoreErr)
+			}
+			return
 		}
-		deps.scheduler.Enqueue(ctx, schedTask)
+		if err := deps.scheduler.EnqueueChecked(ctx, schedTask); err != nil {
+			log.WarnContextf(ctx, "factor 调度任务入队失败: %v", err)
+			if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+				log.WarnContextf(ctx, "恢复失败的 factor event inbox 失败: %v", restoreErr)
+			}
+			return
+		}
+	}
+	if err := deps.eventBatcher.CommitPending(ctx, tasks...); err != nil {
+		log.WarnContextf(ctx, "提交已入队的 factor event inbox 失败: %v", err)
+		if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+			log.WarnContextf(ctx, "恢复待提交的 factor event inbox 失败: %v", restoreErr)
+		}
+		return
 	}
 }
 
@@ -426,7 +456,7 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 	}
 	return scheduler.Task{
 		FactorTask: engine.FactorTask{
-			TaskID:        fmt.Sprintf("ft-%d", time.Now().UnixNano()),
+			TaskID:        deterministicTaskID(task),
 			Kind:          domain.FactorKindTimeseries,
 			SpaceID:       task.SpaceID,
 			SourceDataset: task.SourceDataset,
@@ -440,6 +470,38 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 		TriggerType: "event",
 		FactorIDs:   append([]string(nil), task.FactorIDs...),
 	}, nil
+}
+
+// deterministicTaskID makes replay and JetStream redelivery converge on the
+// same logical scheduler task. The scheduler itself remains an in-memory
+// queue, so this is a durable at-least-once boundary with deterministic task
+// identity, not a cross-process exactly-once guarantee.
+func deterministicTaskID(task trigger.Task) string {
+	factorIDs := append([]string(nil), task.FactorIDs...)
+	sort.Strings(factorIDs)
+	pendingIDs := append([]string(nil), task.PendingEventIDs...)
+	sort.Strings(pendingIDs)
+	h := sha256.New()
+	write := func(value string) {
+		_, _ = h.Write([]byte(fmt.Sprintf("%d:%s;", len(value), value)))
+	}
+	for _, value := range []string{
+		task.SpaceID,
+		task.SourceDataset,
+		task.TargetDataset,
+		task.SubjectID,
+		task.Freq,
+		task.BarTime.UTC().Format(time.RFC3339Nano),
+	} {
+		write(value)
+	}
+	for _, factorID := range factorIDs {
+		write("factor:" + factorID)
+	}
+	for _, messageID := range pendingIDs {
+		write("message:" + messageID)
+	}
+	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
 }
 
 func syncTaskMetadata(ctx context.Context, meta *registry.MetadataSync, task scheduler.Task, repo *store.FactorRepository) error {

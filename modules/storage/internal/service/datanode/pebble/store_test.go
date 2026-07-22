@@ -132,8 +132,8 @@ func TestWriteRejectsEventLargerThanPublisherLimitBeforeCommit(t *testing.T) {
 	defer store.Close()
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
 	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}}}
-	if _, err := store.WriteFieldsEvent(context.Background(), []*pb.RowFieldUpsert{row}, func(string, string, []*pb.RowFieldUpsert) ([]byte, error) {
-		return make([]byte, 64), nil
+	if _, err := store.WriteFieldsEvent(context.Background(), []*pb.RowFieldUpsert{row}, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return BuildDatasetFieldsChangedMessage("node-1", spaceID, datasetID, rows)
 	}); err == nil {
 		t.Fatal("expected oversized event to be rejected")
 	}

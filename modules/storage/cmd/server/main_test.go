@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,5 +46,60 @@ func TestCleanupDatasetsUsesSpaceAndKeepDuration(t *testing.T) {
 	if node.request == nil || node.request.GetSpaceId() != "space" || node.request.GetDatasetId() != "prices" ||
 		node.request.GetBeforeBucketStart() != "2026-07-18T00:00:00.000000000Z" {
 		t.Fatalf("request=%v", node.request)
+	}
+}
+
+func TestStorageEventBusConfigLoadsCredentialFromExplicitEnv(t *testing.T) {
+	credentialFile := filepath.Join(t.TempDir(), "storage-eventbus.yaml")
+	if err := os.WriteFile(credentialFile, []byte("version: 1\nusername: storage-eventbus\ntoken: storage-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", credentialFile)
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+
+	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "storage-eventbus" || got.Password != "storage-secret" {
+		t.Fatalf("credential config = username %q/password %q", got.Username, got.Password)
+	}
+}
+
+func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
+	dir := t.TempDir()
+	credentialFile := filepath.Join(dir, "storage-eventbus.yaml")
+	if err := os.WriteFile(credentialFile, []byte("version: 1\nusername: storage-eventbus\ntoken: storage-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(dir, "storage.yaml")
+	if err := os.WriteFile(configFile, []byte("storage:\n  eventbus:\n    credential_file: "+credentialFile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
+	t.Setenv("MOOX_STORAGE_CONFIG", configFile)
+
+	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "storage-eventbus" || got.Password != "storage-secret" {
+		t.Fatalf("credential config = username %q/password %q", got.Username, got.Password)
+	}
+}
+
+func TestStorageViewConsumerOptionsUseConfiguredTopology(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "storage.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    stream_name: MOOX_STORAGE_CUSTOM\n    consumer_name: storage_view_custom\n    max_ack_pending: 8\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    ordering: subject\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	opts, err := storageViewConsumerOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Stream != "MOOX_STORAGE_CUSTOM" || opts.Durable != "storage_view_custom" || opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 8 {
+		t.Fatalf("consumer options = %+v", opts)
 	}
 }

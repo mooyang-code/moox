@@ -49,10 +49,8 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *
 		for ctx.Err() == nil {
 			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
 			jc := jetstream.ConfigFromEnv(urls, "moox-monitor-hostmetrics")
-			if path := strings.TrimSpace(cfg.Metrics.EventBusCredentialFile); path != "" {
-				if raw, err := jetstream.LoadCredentialFile(jetstream.ExpandCredentialPath(path)); err == nil {
-					jc.Username, jc.Password, jc.TLSCAFile = raw.Username, raw.Password, raw.CAFile
-				} else {
+			if path := strings.TrimSpace(cfg.Metrics.HostEventBusCredentialFile); path != "" {
+				if err := jc.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
 					log.WarnContextf(ctx, "host metrics credential unavailable: %v", err)
 					waitHostMetrics(ctx)
 					continue

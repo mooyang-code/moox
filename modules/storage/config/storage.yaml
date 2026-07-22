@@ -13,7 +13,7 @@ storage:
     urls:
       - nats://127.0.0.1:4222
     nats_url: nats://127.0.0.1:4222
-    credential_file: ~/.config/moox/storage/eventbus.yaml
+    credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage.fields_changed.v1
     consumer_name: storage_view
@@ -21,7 +21,7 @@ storage:
     max_msgs: 500000
     max_bytes: 268435456
     max_in_flight: 1
-    max_ack_pending: 1
+    max_ack_pending: 8
     ack_wait_ms: 120000
     max_deliver: -1
   primary:
@@ -47,7 +47,9 @@ storage:
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
-    max_workers: 2
+    fetch_batch: 8
+    max_workers: 4
+    ordering: subject
     maintenance:
       enabled: true
       owner_id: ""

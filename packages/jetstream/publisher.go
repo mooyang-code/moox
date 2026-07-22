@@ -19,7 +19,7 @@ type publishOptions struct {
 // PublishOption changes transport metadata without changing the message contract.
 type PublishOption func(*publishOptions)
 
-// WithOrderingKey asks NATS consumers and operators to retain an ordering hint.
+// WithOrderingKey attaches an ordering hint; it does not make PublishBatch ordered.
 func WithOrderingKey(key string) PublishOption {
 	return func(opts *publishOptions) {
 		opts.orderingKey = strings.TrimSpace(key)
@@ -80,15 +80,28 @@ func (c *Client) Publish(ctx context.Context, msg *messagepb.MooxMessage, opts .
 	return &PublishAck{Stream: ack.Stream, Sequence: ack.Sequence, Duplicate: ack.Duplicate}, nil
 }
 
-// PublishBatch issues one independent JetStream publication per message and preserves input order.
+// PublishBatch starts one independent JetStream publication per message and
+// waits for each individual result. results[i] always belongs to messages[i].
+// Bounded concurrency makes broker publication and acknowledgement completion
+// order unspecified; this method does not guarantee JetStream sequence order,
+// especially across different subjects or targets. Callers must not use it to
+// impose cross-instrument ordering.
 func (c *Client) PublishBatch(ctx context.Context, messages []*messagepb.MooxMessage, opts ...PublishOption) []PublishResult {
+	batchConcurrency := 0
+	if c != nil {
+		batchConcurrency = c.cfg.BatchConcurrency
+	}
+	return publishBatch(ctx, messages, opts, batchConcurrency, c.Publish)
+}
+
+func publishBatch(ctx context.Context, messages []*messagepb.MooxMessage, opts []PublishOption, batchConcurrency int, publish func(context.Context, *messagepb.MooxMessage, ...PublishOption) (*PublishAck, error)) []PublishResult {
 	results := make([]PublishResult, len(messages))
 	if len(messages) == 0 {
 		return results
 	}
 	concurrency := 64
-	if c != nil && c.cfg.BatchConcurrency > 0 {
-		concurrency = c.cfg.BatchConcurrency
+	if batchConcurrency > 0 {
+		concurrency = batchConcurrency
 	}
 	if concurrency > maxBatchConcurrency {
 		concurrency = maxBatchConcurrency
@@ -103,7 +116,7 @@ func (c *Client) PublishBatch(ctx context.Context, messages []*messagepb.MooxMes
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				results[index].Ack, results[index].Err = c.Publish(ctx, messages[index], opts...)
+				results[index].Ack, results[index].Err = publish(ctx, messages[index], opts...)
 			}
 		}()
 	}

@@ -113,7 +113,7 @@ GATEWAY_ARGS=(
   --gateway-service-key-file "${TMP_ROOT}/service.key"
 )
 
-"${ROOT}/scripts/deploy-moox.sh" \
+MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" \
   --target localhost \
   --dir "${DEPLOY_DIR}" \
   --stage "${STAGE_DIR}" \
@@ -139,7 +139,7 @@ assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
 secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
-"${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
+MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"
@@ -162,7 +162,33 @@ assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthchec
 assert_grep 'start_storage_process "storage-primary" "moox-storage-primary"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
+assert_grep 'wait_eventbus_storage_view_topology' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
+if ! awk '
+  /^start_storage_view\(\) \{/ { in_view=1 }
+  in_view && /wait_eventbus_storage_view_topology/ { checked=1 }
+  in_view && /start_service "storage-view"/ { exit !checked }
+' "${DEPLOY_DIR}/start.sh"; then
+  echo "storage-view must preflight EventBus topology before starting" >&2
+  exit 1
+fi
+topology_block="$(sed -n '/^wait_eventbus_storage_view_topology() {/,/^}/p' "${DEPLOY_DIR}/start.sh")"
+grep -Fq '[[ "${attempts}" =~ ^[1-9][0-9]*$ ]]' <<<"${topology_block}" || {
+  echo "storage-view topology preflight must validate a positive wait duration" >&2
+  exit 1
+}
+grep -Fq 'mktemp "${TMPDIR:-/tmp}/moox-eventbus-topology.XXXXXX"' <<<"${topology_block}" || {
+  echo "storage-view topology preflight must use a temporary response file" >&2
+  exit 1
+}
+grep -Fq -- '--output "${response_file}"' <<<"${topology_block}" || {
+  echo "storage-view topology preflight must save the metrics response" >&2
+  exit 1
+}
+if grep -Eq '\|[[:space:]]*grep' <<<"${topology_block}"; then
+  echo "storage-view topology preflight must not pipe curl into grep" >&2
+  exit 1
+fi
 assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 if grep -Eq 'storage-view-(index|builder|query)|storage\.view_(index|builder|query)\.yaml' "${DEPLOY_DIR}/start.sh"; then
@@ -178,6 +204,10 @@ assert_order "${DEPLOY_DIR}/stop.sh" \
   'stop_service "storage-primary"'
 
 assert_file "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_file "${DEPLOY_DIR}/archive/config/app.yaml"
+assert_grep 'credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml' "${DEPLOY_DIR}/archive/config/app.yaml"
+assert_grep 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${DEPLOY_DIR}/storage-node/config/storage.yaml"
 [[ $(find "${DEPLOY_DIR}/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]] || {
   echo "storage-view must read exactly one YAML config" >&2
   exit 1

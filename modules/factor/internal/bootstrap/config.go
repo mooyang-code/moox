@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
@@ -46,12 +47,12 @@ type StorageConfig struct {
 
 // NATSConfig describes the Storage event stream subscription.
 type NATSConfig struct {
-	URLs           []string `yaml:"urls"`
-	URL            string   `yaml:"url"`
-	Stream         string   `yaml:"stream"`
-	Consumer       string   `yaml:"consumer"`
-	Subject        string   `yaml:"subject"`
-	CredentialFile string   `yaml:"credential_file"`
+	URLs           []string      `yaml:"urls"`
+	URL            string        `yaml:"url"`
+	Stream         string        `yaml:"stream"`
+	Consumer       string        `yaml:"consumer"`
+	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
+	CredentialFile string        `yaml:"credential_file"`
 }
 
 // EngineConfig describes the local Python factor engine.
@@ -108,6 +109,9 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
+	if err := trigger.ValidateLiveConsumerConfig(trigger.NATSConfig{Stream: cfg.NATS.Stream, Consumer: cfg.NATS.Consumer}); err != nil {
+		return nil, fmt.Errorf("nats realtime consumer: %w", err)
+	}
 	if err := cfg.validateStorageTargets(); err != nil {
 		return nil, err
 	}
@@ -130,11 +134,11 @@ func Default() *Config {
 			GatewayTarget: "ip://127.0.0.1:11003",
 		},
 		NATS: NATSConfig{
-			URLs:     []string{"nats://127.0.0.1:4222"},
-			URL:      "nats://127.0.0.1:4222",
-			Stream:   "MOOX_STORAGE",
-			Consumer: "factor_calc",
-			Subject:  "moox.storage.rows_committed.time_series.v1.>",
+			URLs:         []string{"nats://127.0.0.1:4222"},
+			URL:          "nats://127.0.0.1:4222",
+			Stream:       trigger.LiveStream,
+			Consumer:     trigger.LiveDurable,
+			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
 			PythonBin:           "python3",
@@ -196,13 +200,13 @@ func (c *Config) applyDefaults() {
 		c.NATS.URLs = []string{c.NATS.URL}
 	}
 	if c.NATS.Stream == "" {
-		c.NATS.Stream = "MOOX_STORAGE"
+		c.NATS.Stream = trigger.LiveStream
 	}
 	if c.NATS.Consumer == "" {
-		c.NATS.Consumer = "factor_calc"
+		c.NATS.Consumer = trigger.LiveDurable
 	}
-	if c.NATS.Subject == "" {
-		c.NATS.Subject = "moox.storage.rows_committed.time_series.v1.>"
+	if c.NATS.FetchMaxWait == 0 {
+		c.NATS.FetchMaxWait = time.Second
 	}
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"

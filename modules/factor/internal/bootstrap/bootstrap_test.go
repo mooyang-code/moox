@@ -88,13 +88,14 @@ func TestBuildSchedulerTask_AndSyncMetadata(t *testing.T) {
 	}))
 
 	task, err := buildSchedulerTask(context.Background(), repo, t.TempDir(), trigger.Task{
-		SpaceID:       "crypto",
-		SourceDataset: "kline",
-		TargetDataset: "kline_factor",
-		SubjectID:     "BTC",
-		Freq:          "1m",
-		BarTime:       time.Unix(1, 0).UTC(),
-		FactorIDs:     []string{"bias"},
+		SpaceID:         "crypto",
+		SourceDataset:   "kline",
+		TargetDataset:   "kline_factor",
+		SubjectID:       "BTC",
+		Freq:            "1m",
+		BarTime:         time.Unix(1, 0).UTC(),
+		FactorIDs:       []string{"bias"},
+		PendingEventIDs: []string{"message-1"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "crypto", task.SpaceID)
@@ -102,6 +103,31 @@ func TestBuildSchedulerTask_AndSyncMetadata(t *testing.T) {
 	require.Len(t, task.Factors, 1)
 	assert.Equal(t, []int{20}, task.Factors[0].Params)
 	assert.Equal(t, "event", task.TriggerType)
+	replayed, err := buildSchedulerTask(context.Background(), repo, t.TempDir(), trigger.Task{
+		SpaceID:         "crypto",
+		SourceDataset:   "kline",
+		TargetDataset:   "kline_factor",
+		SubjectID:       "BTC",
+		Freq:            "1m",
+		BarTime:         time.Unix(1, 0).UTC(),
+		FactorIDs:       []string{"bias"},
+		PendingEventIDs: []string{"message-1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, task.TaskID, replayed.TaskID)
+
+	differentEvent, err := buildSchedulerTask(context.Background(), repo, t.TempDir(), trigger.Task{
+		SpaceID:         "crypto",
+		SourceDataset:   "kline",
+		TargetDataset:   "kline_factor",
+		SubjectID:       "BTC",
+		Freq:            "1m",
+		BarTime:         time.Unix(1, 0).UTC(),
+		FactorIDs:       []string{"bias"},
+		PendingEventIDs: []string{"message-2"},
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, task.TaskID, differentEvent.TaskID)
 
 	_, err = buildSchedulerTask(context.Background(), repo, t.TempDir(), trigger.Task{
 		FactorIDs: []string{"missing"},

@@ -49,14 +49,22 @@ func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
 	if cfg.Storage.EventBus.MaxInFlight != 128 {
 		t.Fatalf("EventBus.MaxInFlight = %d, want 128", cfg.Storage.EventBus.MaxInFlight)
 	}
-	if cfg.Storage.EventBus.MaxAckPending != 128 {
-		t.Fatalf("EventBus.MaxAckPending = %d, want 128", cfg.Storage.EventBus.MaxAckPending)
+	if cfg.Storage.EventBus.MaxAckPending != 8 {
+		t.Fatalf("EventBus.MaxAckPending = %d, want 8", cfg.Storage.EventBus.MaxAckPending)
 	}
 	if cfg.Storage.EventBus.AckWaitMS != 120000 {
 		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
 	}
 	if cfg.Storage.EventBus.MaxDeliver != -1 {
 		t.Fatalf("EventBus.MaxDeliver = %d, want -1", cfg.Storage.EventBus.MaxDeliver)
+	}
+}
+
+func TestStorageViewConsumerDefaults(t *testing.T) {
+	var cfg RuntimeConfig
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.FetchBatch != 8 || cfg.Storage.View.MaxWorkers != 4 || cfg.Storage.View.Ordering != "subject" {
+		t.Fatalf("view consumer defaults = %+v", cfg.Storage.View)
 	}
 }
 
@@ -180,6 +188,9 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 			}
 			if !cfg.Storage.HasRole(tt.wantRole) {
 				t.Fatalf("roles = %v, want %s", cfg.Storage.Roles, tt.wantRole)
+			}
+			if cfg.Storage.EventBus.CredentialFile != "~/.config/moox/eventbus/storage-eventbus.yaml" {
+				t.Fatalf("EventBus.CredentialFile = %q", cfg.Storage.EventBus.CredentialFile)
 			}
 			if cfg.Storage.Health.Addr != tt.wantHealth {
 				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)

@@ -34,8 +34,8 @@ func (f *fakePullConsumer) Close() error {
 	return nil
 }
 
-func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
-	msg := fixtureEnvelope(nil, "m1")
+func TestRunnerStopsNormallyOnCancel(t *testing.T) {
+	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
 	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic()}
 	consumer := &fakePullConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}},
@@ -51,13 +51,11 @@ func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
 	runner := NewRunner(consumer, handler, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := runner.Run(ctx)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, runner.Run(ctx))
 }
 
 func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {
-	msg := fixtureEnvelope(nil, "m1")
+	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
 	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic(), DeliveryCount: 2}
 	consumer := &fakePullConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}, {}},
@@ -85,7 +83,7 @@ func TestSleepContext(t *testing.T) {
 }
 
 func TestDeliveryAdapter(t *testing.T) {
-	msg := fixtureEnvelope(nil, "mid-1")
+	msg := fixtureEnvelope(nil, "mid-1", "crypto_binance", "spot_kline")
 	d := deliveryAdapter{Delivery: &jetstream.Delivery{
 		Message: msg, RawData: []byte("raw"), Subject: "topic", StreamSeq: 9, DeliveryCount: 3,
 	}}

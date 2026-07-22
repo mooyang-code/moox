@@ -48,6 +48,30 @@ func TestQueueSupersedesPendingTaskByNewerBarTime(t *testing.T) {
 	}
 }
 
+func TestEnqueueCheckedIsIdempotentForAcceptedTaskID(t *testing.T) {
+	ctx := context.Background()
+	exec := &fakeExecutor{}
+	svc := NewService(Config{Workers: 1, MaxRetry: 1}, &fakeStorage{}, exec)
+	task := taskAt(time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC))
+
+	if err := svc.EnqueueChecked(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnqueueChecked(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if exec.calls != 1 {
+		t.Fatalf("executor calls = %d, want one execution for one TaskID", exec.calls)
+	}
+}
+
 func TestQueueKeepsDifferentTargetDatasetsSeparate(t *testing.T) {
 	ctx := context.Background()
 	logs := captureRunLogs(t)

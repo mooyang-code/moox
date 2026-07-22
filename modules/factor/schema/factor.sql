@@ -45,6 +45,20 @@ ON t_factor_bindings(c_factor_id, c_space_id, c_source_dataset, c_freq);
 CREATE INDEX IF NOT EXISTS idx_factor_bindings_source
 ON t_factor_bindings(c_space_id, c_source_dataset, c_freq, c_status);
 
+CREATE TABLE IF NOT EXISTS t_factor_event_inbox (
+    c_message_id TEXT PRIMARY KEY,
+    c_payload BLOB NOT NULL,
+    c_received_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_factor_event_inbox_received
+ON t_factor_event_inbox(c_received_at, c_message_id);
+
+CREATE TABLE IF NOT EXISTS t_factor_event_processed (
+    c_message_id TEXT PRIMARY KEY,
+    c_processed_at DATETIME NOT NULL
+);
+
 CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime AFTER UPDATE ON t_factor_defs
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN

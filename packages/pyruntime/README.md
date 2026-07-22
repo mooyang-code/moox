@@ -1,9 +1,13 @@
 # MooX Python Runtime
 
-`packages/pyruntime` is the Go host runtime shared by Factor and Strategy.
-Business modules provide their own task/result codec; this package owns worker
-processes, `moox.py/v1` frames, Arrow transport, immutable source publishing and
-shared snapshots.
+`packages/pyruntime` is a reusable Go library for worker processes,
+`moox.py/v1` frames, Arrow transport, immutable source publishing and shared
+snapshots; business modules still provide their own task/result codec. The
+current Strategy code imports reusable pieces from this package, but keeps its
+own worker entry point, business codec and state transaction semantics. Factor
+is the only Python runtime included and supported by this Streaming delivery;
+this does not claim that Strategy has no package dependency or imply a
+Strategy migration.
 
 ## Data API
 

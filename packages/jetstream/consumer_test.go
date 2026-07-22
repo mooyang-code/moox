@@ -154,6 +154,69 @@ func TestBindPullConsumerNeverCreates(t *testing.T) {
 	_ = bound.Close()
 }
 
+func TestBindManagedPullConsumerUsesServerConfiguration(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	serverCfg := &nats.ConsumerConfig{
+		Name:          "managed-worker",
+		Durable:       "managed-worker",
+		FilterSubject: "moox.test.server.>",
+		AckPolicy:     nats.AckExplicitPolicy,
+		AckWait:       250 * time.Millisecond,
+		MaxDeliver:    7,
+		MaxAckPending: 3,
+		DeliverPolicy: nats.DeliverNewPolicy,
+	}
+	if _, err := client.js.AddConsumer("TEST", serverCfg); err != nil {
+		t.Fatalf("AddConsumer() error = %v", err)
+	}
+
+	bound, err := client.BindManagedPullConsumer(context.Background(), ConsumerBindRef{
+		Stream: "TEST", Durable: "managed-worker", FetchMaxWait: 37 * time.Millisecond, DeliverDecodeErrors: true,
+	})
+	if err != nil {
+		t.Fatalf("BindManagedPullConsumer() error = %v", err)
+	}
+	defer bound.Close()
+
+	if bound.cfg.FilterSubject != serverCfg.FilterSubject || bound.cfg.AckWait != serverCfg.AckWait ||
+		bound.cfg.MaxDeliver != serverCfg.MaxDeliver || bound.cfg.MaxAckPending != serverCfg.MaxAckPending ||
+		bound.cfg.DeliverPolicy != serverCfg.DeliverPolicy {
+		t.Fatalf("bound config = %+v, want server config %+v", bound.cfg, serverCfg)
+	}
+	if bound.cfg.FetchMaxWait != 37*time.Millisecond || !bound.cfg.DeliverDecodeErrors {
+		t.Fatalf("client overrides were not applied: %+v", bound.cfg)
+	}
+	after, err := client.js.ConsumerInfo("TEST", "managed-worker")
+	if err != nil {
+		t.Fatalf("ConsumerInfo() after bind error = %v", err)
+	}
+	if after.Config.FilterSubject != serverCfg.FilterSubject || after.Config.AckWait != serverCfg.AckWait ||
+		after.Config.MaxDeliver != serverCfg.MaxDeliver || after.Config.MaxAckPending != serverCfg.MaxAckPending ||
+		after.Config.DeliverPolicy != serverCfg.DeliverPolicy {
+		t.Fatalf("server config changed after managed bind: %+v", after.Config)
+	}
+}
+
+func TestBindManagedPullConsumerNeverCreates(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+
+	_, err := client.BindManagedPullConsumer(context.Background(), ConsumerBindRef{Stream: "TEST", Durable: "missing-managed"})
+	if !errors.Is(err, ErrConsumerNotFound) {
+		t.Fatalf("BindManagedPullConsumer() error = %v, want ErrConsumerNotFound", err)
+	}
+	if _, err := client.js.ConsumerInfo("TEST", "missing-managed"); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("missing consumer was created: %v", err)
+	}
+}
+
 func TestDeliveryOperationsRequireContext(t *testing.T) {
 	var d *Delivery
 	for name, fn := range map[string]func(context.Context) error{

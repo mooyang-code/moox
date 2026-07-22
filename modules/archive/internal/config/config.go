@@ -38,13 +38,11 @@ type SourceConfig struct {
 
 type EventBusConfig struct {
 	URLs            []string      `yaml:"urls"`
+	CredentialFile  string        `yaml:"credential_file"`
 	Stream          string        `yaml:"stream"`
-	Subject         string        `yaml:"subject"`
 	Durable         string        `yaml:"durable"`
 	FetchBatch      int           `yaml:"fetch_batch"`
 	FetchMaxWait    time.Duration `yaml:"fetch_max_wait"`
-	AckWait         time.Duration `yaml:"ack_wait"`
-	MaxAckPending   int           `yaml:"max_ack_pending"`
 	DedupeRetention time.Duration `yaml:"dedupe_retention"`
 }
 
@@ -89,9 +87,8 @@ func Default() *Config {
 			},
 			EventBus: EventBusConfig{
 				URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_STORAGE",
-				Subject: "moox.storage.rows_committed.time_series.v1.>", Durable: "moox_archive_kline_v1",
-				FetchBatch: 128, FetchMaxWait: time.Second, AckWait: 5 * time.Minute,
-				MaxAckPending: 256, DedupeRetention: 168 * time.Hour,
+				Durable: "moox_archive_kline_v1", FetchBatch: 128, FetchMaxWait: time.Second,
+				DedupeRetention: 168 * time.Hour,
 			},
 			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
 			StorageRPC:  StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "archive"},
@@ -137,9 +134,6 @@ func (c *Config) applyDefaults() {
 	if c.Archive.EventBus.Stream == "" {
 		c.Archive.EventBus.Stream = d.Archive.EventBus.Stream
 	}
-	if c.Archive.EventBus.Subject == "" {
-		c.Archive.EventBus.Subject = d.Archive.EventBus.Subject
-	}
 	if c.Archive.EventBus.Durable == "" {
 		c.Archive.EventBus.Durable = d.Archive.EventBus.Durable
 	}
@@ -148,12 +142,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Archive.EventBus.FetchMaxWait == 0 {
 		c.Archive.EventBus.FetchMaxWait = d.Archive.EventBus.FetchMaxWait
-	}
-	if c.Archive.EventBus.AckWait == 0 {
-		c.Archive.EventBus.AckWait = d.Archive.EventBus.AckWait
-	}
-	if c.Archive.EventBus.MaxAckPending == 0 {
-		c.Archive.EventBus.MaxAckPending = d.Archive.EventBus.MaxAckPending
 	}
 	if c.Archive.EventBus.DedupeRetention == 0 {
 		c.Archive.EventBus.DedupeRetention = d.Archive.EventBus.DedupeRetention
@@ -242,7 +230,7 @@ func (c *Config) Validate() error {
 	if !durablePattern.MatchString(e.Durable) {
 		return fmt.Errorf("invalid archive eventbus durable %q", e.Durable)
 	}
-	if e.Stream == "" || e.Subject == "" || e.FetchBatch <= 0 || e.FetchMaxWait <= 0 || e.AckWait <= 0 || e.MaxAckPending <= 0 {
+	if e.Stream == "" || e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
 		return fmt.Errorf("archive eventbus settings are invalid")
 	}
 	if e.DedupeRetention < 168*time.Hour {

@@ -2,6 +2,14 @@
 
 因子计算模块。`moox-factor` 是独立 tRPC 服务进程，负责后续因子定义管理、事件触发计算、Python worker 执行和 Storage 结果写回。
 
+实时 Storage 触发器只绑定 EventBus registry 预声明的 `MOOX_STORAGE/factor_calc` durable，并通过 managed bind 使用服务端的 filter、ACK、DeliverPolicy 和投递限制；这些策略不在 Factor 配置中重复声明。
+
+`factor_calc` 的 live DeliverPolicy 当前由 EventBus registry 管理，Factor 客户端不会偷偷改成 `DeliverAll` 或从历史消息开始。需要 replay 时，必须显式创建并使用独立 durable，或使用离线的 `run-once`/补算入口；不得修改或复用 live durable 来承载历史重放。
+
+实时 delivery 在 ACK 前先写入 Factor SQLite 的 `t_factor_event_inbox`；进程重启会 replay 未 flush 的 inbox，窗口 flush 后才删除对应记录。这个本地 pending inbox 是 live durable 之外的恢复边界，不替代 `MOOX_STORAGE/factor_calc`，也不把 replay 伪装成 live durable。
+
+调度器当前仍是进程内内存队列：inbox claim、稳定任务 ID 和 writeback 幂等共同提供 durable at-least-once 语义，并让 replay/redelivery 收敛到同一逻辑任务；这不是跨进程 exactly-once。若需要跨进程执行恢复，应另行引入持久化 scheduler/outbox，不在本次修复范围内。
+
 ## 现状
 
 ```bash
