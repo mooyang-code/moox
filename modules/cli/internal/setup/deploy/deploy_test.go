@@ -229,6 +229,7 @@ func TestFinalizeResponseLossNeverRollsBackHealthyDeployment(t *testing.T) {
 
 func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.NotContains(t, installControlScript, "--label", "moox-admin-cli random-secret does not support labels")
+	require.Contains(t, installControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "atomic control replacement must stop managed Caddy before changing deploy paths")
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
 		"install-storage": installStorageScript, "rollback-storage": rollbackStorageScript, "finalize-storage": finalizeStorageScript,

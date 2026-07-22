@@ -534,6 +534,11 @@ install_control() {
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$secret" >"$next/secrets/admin-jwt.env"
   fi
   chmod 600 "$next/secrets/"*
+  # The managed Caddy process is outside stop.sh. Stop it before moving the
+  # old deployment aside, otherwise the new path cannot adopt its listener.
+  if [ -x "$deploy/lib/caddy-managed.sh" ]; then
+    "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"
+  fi
   if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
   mv "$next" "$deploy"
