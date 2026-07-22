@@ -103,6 +103,28 @@ func TestEngineConclusionAndRoots(t *testing.T) {
 	}
 }
 
+func TestEngineOptionalUnknownDoesNotMaskDownstreamFailure(t *testing.T) {
+	t.Parallel()
+
+	specs := []CheckSpec{
+		{ID: "optional-fact"},
+		{ID: "downstream", OptionalDependencies: []string{"optional-fact"}},
+	}
+	report, err := (Engine{Mode: ModeDiagnose}).Run(context.Background(), specs, RunnerFunc(func(_ context.Context, spec CheckSpec, _ []DependencyContext) CheckResult {
+		if spec.ID == "optional-fact" {
+			return CheckResult{ID: spec.ID, Status: StatusUnknown, Summary: "fact unavailable"}
+		}
+		return CheckResult{ID: spec.ID, Status: StatusFail, Summary: "real failure"}
+	}))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if report.Conclusion != ConclusionUnhealthy {
+		t.Fatalf("conclusion = %s, want %s", report.Conclusion, ConclusionUnhealthy)
+	}
+	assertStrings(t, report.RootCauseCheckIDs, []string{"downstream"})
+}
+
 func TestEngineRejectsCyclesAndUnknownDependencies(t *testing.T) {
 	t.Parallel()
 

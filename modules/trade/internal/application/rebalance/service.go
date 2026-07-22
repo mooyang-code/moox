@@ -119,7 +119,7 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 	if all {
 		status = "COMPLETED"
 		telemetry.Rebalances.WithLabelValues("completed").Inc()
-		telemetry.RecordModuleStage("rebalance", "success", time.Now())
+		telemetry.RecordModuleStage("rebalance", "success", time.Time{})
 	}
 	_ = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		residual := "{}"

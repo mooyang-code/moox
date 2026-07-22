@@ -29,6 +29,21 @@ const (
 	SnapshotTopic       = DefaultTopic
 )
 
+var (
+	reporterErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "moox_metrics_report_errors_total",
+		Help: "Metric snapshot reporting failures.",
+	}, []string{"service"})
+	reporterLastError = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "moox_metrics_report_last_error_timestamp_seconds",
+		Help: "Unix timestamp of the last metric snapshot reporting failure.",
+	}, []string{"service"})
+)
+
+func init() {
+	prometheus.MustRegister(reporterErrors, reporterLastError)
+}
+
 type Publisher interface {
 	Publish(context.Context, *messagepb.MooxMessage, ...jetstream.PublishOption) (*jetstream.PublishAck, error)
 }
@@ -123,6 +138,8 @@ func (h *Handler) reportError(ctx context.Context, err error) error {
 	if err != nil {
 		h.errorCount.Add(1)
 		h.lastError.Store(err.Error())
+		reporterErrors.WithLabelValues(h.cfg.ServiceName).Inc()
+		reporterLastError.WithLabelValues(h.cfg.ServiceName).Set(float64(time.Now().Unix()))
 		log.WarnContextf(ctx, "metrics snapshot report failed for %s: %v", h.cfg.ServiceName, err)
 	}
 	return err

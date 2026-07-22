@@ -69,7 +69,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
 					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
 					SeedPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.SeedPath), PipelinePath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.PipelinePath),
-					CheckIDs: checks, Client: client, Prober: prober,
+					CheckIDs: checks, Client: client, MonitorClient: client, Prober: prober,
 				})
 			case "diagnose":
 				pipelines, loadErr := report.LoadPipelineAllowlist(resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.PipelinePath))

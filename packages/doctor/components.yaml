@@ -69,7 +69,7 @@ components:
     outputs: [durable subscriptions]
     dependencies: []
     transport: reporter
-    functional_observability: active
+    functional_observability: not_applicable
     health_path: /readyz
     config_paths: [eventbus/config/app.yaml, eventbus/config/trpc_go.yaml]
     writable_paths: [data/eventbus]
@@ -99,7 +99,7 @@ components:
     outputs: [proxied service responses]
     dependencies: [eventbus]
     transport: reporter
-    functional_observability: active
+    functional_observability: not_applicable
     health_path: /readyz
     config_paths: [gateway/config/app.yaml, gateway/config/trpc_go.yaml]
     writable_paths: [data/gateway]

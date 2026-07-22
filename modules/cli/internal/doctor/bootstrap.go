@@ -14,6 +14,7 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
 	"gopkg.in/yaml.v3"
@@ -23,10 +24,15 @@ type DeploymentClient interface {
 	ListDeployments(context.Context, string) ([]*adminpb.ServiceDeployment, error)
 }
 
+type DoctorContextClient interface {
+	GetDoctorContext(context.Context, *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error)
+}
+
 type BootstrapOptions struct {
 	NodeID, LocalNodeID, ReleaseRoot, SeedPath, PipelinePath string
 	CheckIDs                                                 []string
 	Client                                                   DeploymentClient
+	MonitorClient                                            DoctorContextClient
 	Prober                                                   HTTPProber
 	Now                                                      func() time.Time
 	ProbeWritable                                            func(context.Context, string, string) error
@@ -34,14 +40,17 @@ type BootstrapOptions struct {
 }
 
 type bootstrapRunner struct {
-	options     BootstrapOptions
-	manifest    core.Manifest
-	deployments map[string]*adminpb.ServiceDeployment
-	loadErr     error
-	seedNames   map[string]bool
-	seedErr     error
-	pipelineErr error
-	pipelines   report.PipelineConfig
+	options      BootstrapOptions
+	manifest     core.Manifest
+	deployments  map[string]*adminpb.ServiceDeployment
+	loadErr      error
+	seedServices map[string]seedService
+	seedErr      error
+	pipelineErr  error
+	pipelines    report.PipelineConfig
+	manifestErr  error
+	delivery     *monitorpb.GetDoctorContextRsp
+	deliveryErr  error
 }
 
 func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, error) {
@@ -56,6 +65,18 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		return core.Report{}, err
 	}
 	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]*adminpb.ServiceDeployment{}}
+	if options.ReleaseRoot == "" {
+		runner.manifestErr = fmt.Errorf("release root is required")
+	} else {
+		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "doctor", "components.yaml"))
+		runner.manifestErr = manifestErr
+		if manifestErr == nil && releaseManifest.Checksum != manifest.Checksum {
+			runner.manifestErr = fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", releaseManifest.Checksum, manifest.Checksum)
+		}
+		if runner.manifestErr == nil {
+			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "doctor", "components.yaml.sha256"), manifest.Checksum)
+		}
+	}
 	if options.Client == nil {
 		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
 	} else {
@@ -67,12 +88,15 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 			}
 		}
 	}
-	runner.seedNames, runner.seedErr = loadSeedNames(options.SeedPath)
+	runner.seedServices, runner.seedErr = loadSeedServices(options.SeedPath)
 	runner.pipelines, runner.pipelineErr = report.LoadPipelineAllowlist(options.PipelinePath)
 	specs := bootstrapSpecs(manifest, options.NodeID)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
 		return core.Report{}, err
+	}
+	if options.MonitorClient != nil && hasCheck(specs, "monitor.metrics_delivery") {
+		runner.delivery, runner.deliveryErr = options.MonitorClient.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, PipelineIds: pipelineIDs(runner.pipelines)})
 	}
 	report, err := (core.Engine{Mode: core.ModeBootstrap, Now: options.Now}).Run(ctx, specs, core.RunnerFunc(runner.run))
 	if err != nil {
@@ -81,6 +105,15 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	report.RunID = newRunID()
 	report.ManifestChecksum = manifest.Checksum
 	return report, nil
+}
+
+func hasCheck(specs []core.CheckSpec, id string) bool {
+	for _, spec := range specs {
+		if spec.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
@@ -115,21 +148,28 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	result := core.CheckResult{ID: spec.ID}
 	switch spec.ID {
 	case "bootstrap.release_contract":
-		if r.seedErr != nil || r.pipelineErr != nil {
-			contractErr := r.seedErr
-			if contractErr == nil {
-				contractErr = r.pipelineErr
-			}
+		contractErr := r.manifestErr
+		if contractErr == nil {
+			contractErr = r.seedErr
+		}
+		if contractErr == nil {
+			contractErr = r.pipelineErr
+		}
+		if contractErr != nil {
 			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "apply_service_deployments_seed")
 		}
-		return checkResult(spec.ID, core.StatusPass, "embedded Manifest, deployment seed, and pipeline allowlist are available", nil)
+		if err := validateSeedAgainstManifest(r.manifest, r.seedServices); err != nil {
+			return checkResult(spec.ID, core.StatusFail, "deployment seed does not match the Manifest", err, "apply_service_deployments_seed")
+		}
+		return checkResult(spec.ID, core.StatusPass, "release Manifest, checksum, deployment seed, and pipeline allowlist are available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
 			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "apply_service_deployments_seed")
 		}
 		missing := []string{}
 		for _, component := range r.manifest.Components {
-			if component.RequiredInDefaultProfile && (r.deployments[component.ServiceName] == nil || !r.seedNames[component.ServiceName]) {
+			seed, seeded := r.seedServices[component.ServiceName]
+			if component.RequiredInDefaultProfile && (r.deployments[component.ServiceName] == nil || !seeded || seed.Status != "active" || seed.DeploymentMode != "process") {
 				missing = append(missing, component.ServiceName)
 			}
 		}
@@ -139,7 +179,24 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		return checkResult(spec.ID, core.StatusPass, "deployment inventory matches the V1 Manifest", nil)
 	}
 	if spec.ID == "monitor.metrics_delivery" {
-		return checkResult(spec.ID, core.StatusPass, "EventBus and Monitor health dependencies passed", nil)
+		if r.deliveryErr != nil || r.delivery == nil {
+			err := r.deliveryErr
+			if err == nil {
+				err = fmt.Errorf("Monitor delivery context was not requested")
+			}
+			return checkResult(spec.ID, core.StatusUnknown, "Reporter delivery cannot be confirmed without a bounded Monitor context", err, "run_bootstrap")
+		}
+		for _, observation := range append(append([]*monitorpb.DoctorObservation{}, r.delivery.GetReporterObservations()...), r.delivery.GetMissingObservations()...) {
+			if observation.GetComponentId() == "moox_monitor" && (observation.GetConflict() || observation.GetStatus() == "FAIL" || observation.GetStale()) {
+				return checkResult(spec.ID, core.StatusFail, "Monitor Reporter delivery fact is stale or conflicting", nil, "verify_eventbus_credentials")
+			}
+		}
+		for _, observation := range r.delivery.GetReporterObservations() {
+			if observation.GetComponentId() == "moox_monitor" && observation.GetStatus() == "FRESH" && !observation.GetStale() {
+				return checkResult(spec.ID, core.StatusPass, "Monitor Reporter delivery fact is current", nil)
+			}
+		}
+		return checkResult(spec.ID, core.StatusUnknown, "Monitor Reporter delivery fact is missing", nil, "verify_eventbus_credentials")
 	}
 	component, kind, ok := r.componentForCheck(spec.ID)
 	if !ok {
@@ -208,7 +265,10 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		}
 		return checkResult(spec.ID, core.StatusWarn, "service PID is not active; verify the configured service manager", nil, "restart_service_manually")
 	case "reporter_coverage":
-		if component.FunctionalObservability == core.FunctionalObservabilityDeferred {
+		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
+			if component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
+				return checkResult(spec.ID, core.StatusSkipped, "functional_observability_not_applicable", nil)
+			}
 			return checkResult(spec.ID, core.StatusSkipped, "storage_observability_deferred", nil)
 		}
 		if component.Transport != core.TransportReporter {
@@ -221,9 +281,43 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if len(probe.Body) == 0 {
 			return checkResult(spec.ID, core.StatusFail, "Reporter metrics endpoint is empty", nil, "verify_eventbus_credentials")
 		}
+		if reporterHasRecentFailure(probe.Body, probe.ObservedAt) {
+			return checkResult(spec.ID, core.StatusFail, "Reporter has recorded delivery failures", nil, "verify_eventbus_credentials")
+		}
 		return checkResult(spec.ID, core.StatusPass, "Reporter endpoint is readable", nil)
 	}
 	return result
+}
+
+func reporterHasRecentFailure(body []byte, now time.Time) bool {
+	var total, lastError float64
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "moox_metrics_report_errors_total"), strings.HasPrefix(line, "moox_module_metrics_errors_total"):
+			if value > total {
+				total = value
+			}
+		case strings.HasPrefix(line, "moox_metrics_report_last_error_timestamp_seconds"), strings.HasPrefix(line, "moox_module_metrics_last_error_timestamp_seconds"):
+			if value > lastError {
+				lastError = value
+			}
+		}
+	}
+	if total <= 0 {
+		return false
+	}
+	if lastError == 0 {
+		return true
+	}
+	return now.Sub(time.Unix(int64(lastError), 0).UTC()) <= 2*time.Minute
 }
 
 func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, bool) {
@@ -244,7 +338,13 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 	return core.Component{}, "", false
 }
 
-func loadSeedNames(path string) (map[string]bool, error) {
+type seedService struct {
+	Name           string `yaml:"name"`
+	DeploymentMode string `yaml:"deployment_mode"`
+	Status         string `yaml:"status"`
+}
+
+func loadSeedServices(path string) (map[string]seedService, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -253,19 +353,56 @@ func loadSeedNames(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("deployment seed exceeds 2 MiB")
 	}
 	var seed struct {
-		Services []struct {
-			Name string `yaml:"name"`
-		} `yaml:"services"`
+		Version  int           `yaml:"version"`
+		Services []seedService `yaml:"services"`
 	}
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	if err := decoder.Decode(&seed); err != nil {
 		return nil, err
 	}
-	names := map[string]bool{}
-	for _, service := range seed.Services {
-		names[service.Name] = true
+	if seed.Version != 1 {
+		return nil, fmt.Errorf("unsupported deployment seed version %d", seed.Version)
 	}
-	return names, nil
+	services := map[string]seedService{}
+	for _, service := range seed.Services {
+		if service.Name == "" {
+			return nil, fmt.Errorf("deployment seed contains an empty service name")
+		}
+		if _, exists := services[service.Name]; exists {
+			return nil, fmt.Errorf("deployment seed contains duplicate service %q", service.Name)
+		}
+		services[service.Name] = service
+	}
+	return services, nil
+}
+
+func validateSeedAgainstManifest(manifest core.Manifest, services map[string]seedService) error {
+	known := make(map[string]bool, len(manifest.Components))
+	for _, component := range manifest.Components {
+		known[component.ServiceName] = true
+		seed, ok := services[component.ServiceName]
+		if component.RequiredInDefaultProfile && (!ok || seed.DeploymentMode != "process" || seed.Status != "active") {
+			return fmt.Errorf("required service %q must be an active process in the deployment seed", component.ServiceName)
+		}
+	}
+	for name, service := range services {
+		if service.Status == "active" && service.DeploymentMode == "process" && !known[name] {
+			return fmt.Errorf("active process %q is missing from the Manifest", name)
+		}
+	}
+	return nil
+}
+
+func validateManifestChecksumFile(path, want string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read doctor manifest checksum: %w", err)
+	}
+	value := strings.TrimSpace(string(raw))
+	if value != want && value != strings.TrimPrefix(want, "sha256:") {
+		return fmt.Errorf("doctor manifest checksum file contains %q, want %s", value, want)
+	}
+	return nil
 }
 
 func healthURL(deployment *adminpb.ServiceDeployment, path string) string {

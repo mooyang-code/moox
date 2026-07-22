@@ -26,28 +26,43 @@ type StorageReader struct {
 	cfg    monconfig.HostStorageConfig
 }
 
+// ForecastHistoryLimit covers seven days of one-minute samples plus a small
+// boundary margin. It is deliberately independent from the RPC default page
+// limit so Doctor can make a daily forecast without silently seeing only the
+// last few hours.
+const ForecastHistoryLimit = 7*24*60 + 8
+
+const maxHistoryPageSize = 500
+
 func NewStorageReader(access hostStorageRead, cfg monconfig.HostStorageConfig) *StorageReader {
 	return &StorageReader{access: access, cfg: cfg}
 }
 
 func (r *StorageReader) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
+	return r.HistoryAt(ctx, agentID, start, end, time.Now().UTC(), limit)
+}
+
+func (r *StorageReader) HistoryAt(ctx context.Context, agentID string, start, end, now time.Time, limit int) ([]HistoryPoint, error) {
 	if r == nil || r.access == nil {
 		return nil, fmt.Errorf("host storage reader is not initialized")
 	}
 	if agentID == "" {
 		return nil, fmt.Errorf("agent id is required")
 	}
-	if limit <= 0 || limit > r.cfg.ReadLimit {
+	if limit <= 0 {
 		limit = r.cfg.ReadLimit
 	}
 	if limit <= 0 {
-		limit = 500
+		limit = maxHistoryPageSize
+	}
+	if limit > ForecastHistoryLimit {
+		limit = ForecastHistoryLimit
 	}
 	if end.Before(start) {
 		return nil, fmt.Errorf("history end precedes start")
 	}
 	requestedStart, requestedEnd := start, end
-	now := time.Now().UTC()
+	now = now.UTC()
 	windowStart := now.Add(-7 * 24 * time.Hour)
 	if end.After(now) {
 		end = now
@@ -105,13 +120,17 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 		return nil, nil
 	}
 	rows := make([]*storagepb.TimeSeriesRow, 0)
+	pageSize := limit
+	if pageSize > maxHistoryPageSize {
+		pageSize = maxHistoryPageSize
+	}
 	cursor := ""
-	for pageNo := 1; pageNo <= 100; pageNo++ {
+	for pageNo := 1; pageNo <= (ForecastHistoryLimit/maxHistoryPageSize)+2; pageNo++ {
 		rsp, err := r.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			Keys:      []*storagepb.TimeSeriesKey{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
 			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
 			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
-			Page:      &commonpb.Page{Page: 1, Size: uint32(limit), Cursor: cursor},
+			Page:      &commonpb.Page{Page: 1, Size: uint32(pageSize), Cursor: cursor},
 		}, client.WithFilter(trpcretry.ReadOnly()))
 		if err != nil {
 			return nil, fmt.Errorf("read host dataset %q: %w", dataset, err)
@@ -128,7 +147,7 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 			break
 		}
 		cursor = page.GetNextCursor()
-		if pageNo == 100 {
+		if pageNo == (ForecastHistoryLimit/maxHistoryPageSize)+2 {
 			return nil, fmt.Errorf("host dataset %q exceeds bounded history scan", dataset)
 		}
 	}

@@ -82,6 +82,7 @@ func (s *Store) SetStorageReady(ready func() bool) {
 		s.ready = ready
 	}
 }
+
 func (s *Store) StorageReady() bool { return s != nil && (s.ready == nil || s.ready()) }
 
 // EnsureSchema is retained as a no-op during the deployment migration. Host
@@ -318,6 +319,21 @@ func (s *Store) History(ctx context.Context, agentID string, start, end time.Tim
 	}
 	// History now belongs to Storage. A missing reader is a degraded startup
 	// state; return an empty result rather than reading removed SQLite tables.
+	return []HistoryPoint{}, nil
+}
+
+func (s *Store) HistoryAt(ctx context.Context, agentID string, start, end, now time.Time, limit int) ([]HistoryPoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s != nil && s.reader != nil {
+		if reader, ok := s.reader.(interface {
+			HistoryAt(context.Context, string, time.Time, time.Time, time.Time, int) ([]HistoryPoint, error)
+		}); ok {
+			return reader.HistoryAt(ctx, agentID, start, end, now, limit)
+		}
+		return s.reader.History(ctx, agentID, start, end, limit)
+	}
 	return []HistoryPoint{}, nil
 }
 

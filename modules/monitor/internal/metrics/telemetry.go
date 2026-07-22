@@ -30,11 +30,16 @@ func recordIngest(result string, observed time.Time) {
 	now := time.Now().UTC()
 	ingestTotal.WithLabelValues(result).Inc()
 	_ = report.ObserveModuleRun("monitor", "ingest", result, "monitor-metrics", now)
+	if !observed.IsZero() {
+		_ = report.ObserveModuleInputWatermark("monitor", "ingest", "monitor-metrics", observed)
+	}
 	if result == "success" {
 		ingestLastSuccess.Set(float64(now.Unix()))
 		if !observed.IsZero() && !observed.After(now) {
 			ingestLatency.Observe(now.Sub(observed).Seconds())
 		}
-		_ = report.ObserveModuleWatermark("monitor", "ingest", "monitor-metrics", observed)
+		if !observed.IsZero() {
+			_ = report.ObserveModuleWatermark("monitor", "ingest", "monitor-metrics", observed)
+		}
 	}
 }

@@ -114,7 +114,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
-	registerMetricsReporter(nil)
+	registerMetricsReporter(nil, nil)
 	assert.NoError(t, registerHealth(nil, nil, rt, nil))
 }
 

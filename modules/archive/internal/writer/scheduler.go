@@ -37,6 +37,10 @@ func (s Scheduler) MaterializeOnce(ctx context.Context) error {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	inputAt, _ := s.Writer.LatestInputTime(ctx, pendingRows)
+	if !inputAt.IsZero() {
+		_ = report.ObserveModuleInputWatermark("archive", "materialize", "archive-materialize", inputAt)
+	}
 	writeErr := s.Writer.WriteDirty(ctx, pendingRows)
 	_, pruneErr := s.Writer.PruneMessageReceipts(ctx, now.Add(-retention))
 	err := errors.Join(writeErr, pruneErr)
@@ -45,8 +49,8 @@ func (s Scheduler) MaterializeOnce(ctx context.Context) error {
 		result = "error"
 	}
 	_ = report.ObserveModuleRun("archive", "materialize", result, "archive-materialize", now)
-	if err == nil {
-		_ = report.ObserveModuleWatermark("archive", "materialize", "archive-materialize", now)
+	if err == nil && !inputAt.IsZero() {
+		_ = report.ObserveModuleWatermark("archive", "materialize", "archive-materialize", inputAt)
 	}
 	return err
 }

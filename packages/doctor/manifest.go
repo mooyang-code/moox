@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 
@@ -71,16 +72,33 @@ var allowedRecoveryActions = map[string]bool{
 var embeddedManifest []byte
 
 func LoadEmbeddedManifest() (Manifest, error) {
-	decoder := yaml.NewDecoder(bytes.NewReader(embeddedManifest))
+	return loadManifest(embeddedManifest, "embedded doctor manifest")
+}
+
+// LoadManifestFile validates the release copy of the manifest and computes its
+// checksum from the exact bytes on disk.
+func LoadManifestFile(filename string) (Manifest, error) {
+	raw, err := os.ReadFile(filename)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("read doctor manifest: %w", err)
+	}
+	if len(raw) > 2<<20 {
+		return Manifest{}, fmt.Errorf("doctor manifest exceeds 2 MiB")
+	}
+	return loadManifest(raw, filename)
+}
+
+func loadManifest(raw []byte, source string) (Manifest, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	var manifest Manifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, fmt.Errorf("decode embedded doctor manifest: %w", err)
+		return Manifest{}, fmt.Errorf("decode %s: %w", source, err)
 	}
-	sum := sha256.Sum256(embeddedManifest)
+	sum := sha256.Sum256(raw)
 	manifest.Checksum = "sha256:" + hex.EncodeToString(sum[:])
 	if err := manifest.Validate(); err != nil {
-		return Manifest{}, fmt.Errorf("validate embedded doctor manifest: %w", err)
+		return Manifest{}, fmt.Errorf("validate %s: %w", source, err)
 	}
 	return manifest, nil
 }

@@ -195,7 +195,6 @@ func (s *Service) submitJobItemsWithActiveKV(ctx context.Context, req *pb.Submit
 				}
 				now := time.Now().UTC()
 				_ = report.ObserveModuleRun("cloudnode", "dispatch", "success", "cloudnode-jobs", now)
-				_ = report.ObserveModuleWatermark("cloudnode", "dispatch", "cloudnode-jobs", now)
 			}
 		}
 		switch ack.GetStatus() {

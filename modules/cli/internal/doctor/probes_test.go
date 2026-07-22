@@ -24,6 +24,26 @@ func TestHTTPProberRejectsPathsAndOversizedResponses(t *testing.T) {
 	require.ErrorContains(t, err, "exceeds")
 }
 
+func TestHTTPProberRejectsRedirectsAndNonLocalHosts(t *testing.T) {
+	prober := HTTPProber{Auth: HealthAuth{AccessKey: "monitor", SecretKey: "secret"}}
+	_, err := prober.Get(context.Background(), "http://example.com/healthz")
+	require.ErrorContains(t, err, "host")
+
+	targetCalls := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetCalls++
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/healthz", http.StatusFound)
+	}))
+	defer redirect.Close()
+	_, err = prober.Get(context.Background(), redirect.URL+"/healthz")
+	require.ErrorContains(t, err, "redirect")
+	require.Zero(t, targetCalls)
+}
+
 func TestProbeWritablePathAlwaysCleansUp(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "data", "factor")

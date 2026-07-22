@@ -31,8 +31,11 @@ func init() {
 
 func RecordModuleStage(stage, result string, watermark time.Time) {
 	_ = report.ObserveModuleRun("trade", stage, result, "trade-rebalance", time.Now())
-	if result == "success" && !watermark.IsZero() {
-		_ = report.ObserveModuleWatermark("trade", stage, "trade-rebalance", watermark)
+	if !watermark.IsZero() {
+		_ = report.ObserveModuleInputWatermark("trade", stage, "trade-rebalance", watermark)
+		if result == "success" {
+			_ = report.ObserveModuleWatermark("trade", stage, "trade-rebalance", watermark)
+		}
 	}
 }
 

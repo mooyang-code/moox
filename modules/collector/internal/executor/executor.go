@@ -86,7 +86,9 @@ func buildCollectHandler(
 		log.InfoContextf(ctx, "采集成功: taskID=%s, interval=%s", task.TaskID, task.Interval)
 		now := time.Now().UTC()
 		_ = mooxreport.ObserveModuleRun("collector", "collect", "success", "collector-market-data", now)
-		_ = mooxreport.ObserveModuleWatermark("collector", "collect", "collector-market-data", now)
+		// The Collector interface currently reports only terminal status. Do not
+		// use execution time as a business output watermark; a source-closed
+		// timestamp must be supplied by the source contract before this is wired.
 
 		// 定时任务场景：上报成功状态
 		if reportStatus != nil {

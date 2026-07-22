@@ -64,6 +64,27 @@ func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 	require.Empty(t, got.Watermarks)
 }
 
+func TestBuilderDoesNotRequireReporterIdentityForNotApplicableComponent(t *testing.T) {
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	repos := mgr.Repositories()
+	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "eventbus", IntervalSeconds: 30, Enabled: true}))
+	require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: "eventbus-result", CheckID: "eventbus", Status: domain.CheckStatusOK, Success: true, BodyExcerpt: `{}`, CheckedAt: now}))
+	builder := Builder{
+		Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{ServiceName: "eventbus", NodeId: "node-a", Status: "active"}}},
+		Checks:      repos.Checks,
+		Results:     repos.Results,
+		Now:         func() time.Time { return now },
+	}
+	got, err := builder.Build(context.Background(), "node-a", []string{"eventbus"}, nil)
+	require.NoError(t, err)
+	require.Len(t, got.HealthObservations, 1)
+	require.False(t, got.HealthObservations[0].Conflict)
+}
+
 func TestBuilderRejectsUnknownSelections(t *testing.T) {
 	builder := Builder{Deployments: deploymentSourceStub{}, Pipelines: report.PipelineConfig{Version: 1}}
 	_, err := builder.Build(context.Background(), "", []string{"not-a-component"}, nil)

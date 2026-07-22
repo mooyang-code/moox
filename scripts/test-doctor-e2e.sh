@@ -21,6 +21,7 @@ for component in manifest["components"]:
     service = services[component["service_name"]]
     if component.get("required_in_default_profile", False):
         assert service["status"] == "active", component["component_id"]
+        assert service["deployment_mode"] == "process", component["component_id"]
     if service["status"] == "active":
         assert component.get("required_in_default_profile", False), component["component_id"]
 PY
@@ -30,4 +31,4 @@ if git -C "${ROOT}" diff --name-only HEAD -- modules/storage | grep -q .; then
   exit 1
 fi
 
-echo "doctor deployment-contract and fault-injection E2E passed"
+echo "doctor focused Go tests and deployment contract checks passed"

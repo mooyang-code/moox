@@ -16,6 +16,13 @@ type e2eContextClient struct {
 	rsp *monitorpb.GetDoctorContextRsp
 }
 
+func embeddedManifestChecksum(t *testing.T) string {
+	t.Helper()
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
+	return manifest.Checksum
+}
+
 func (c e2eContextClient) GetDoctorContext(context.Context, *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
 	return c.rsp, nil
 }
@@ -38,7 +45,7 @@ func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing
 			reporters = append(reporters, &monitorpb.DoctorObservation{Kind: "reporter", ComponentId: component.GetComponentId(), Status: "FRESH"})
 		}
 	}
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: "sha256:test", ExpectedComponents: components, HealthObservations: health, ReporterObservations: reporters, MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor", Status: "MISSING"}}}
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: components, HealthObservations: health, ReporterObservations: reporters, MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor", Status: "MISSING"}}}
 	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{
 		NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:moox_factor@node-a"}, Client: e2eContextClient{rsp: snapshot},
 		Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}},
@@ -53,7 +60,7 @@ func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing
 }
 
 func TestDoctorDiagnoseFailsClosedOnIdentityConflict(t *testing.T) {
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: "sha256:test", ExpectedComponents: []*monitorpb.DoctorExpectedComponent{
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{
 		{ComponentId: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
 		{ComponentId: "moox_monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
 		{ComponentId: "moox_factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
@@ -74,7 +81,7 @@ func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
 	}))
 	defer server.Close()
 	snapshot := &monitorpb.GetDoctorContextRsp{
-		ManifestChecksum:    "sha256:test",
+		ManifestChecksum:    embeddedManifestChecksum(t),
 		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor", ServiceName: "moox_factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"}},
 		MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor", Status: "FAIL", Stale: true, AgeSeconds: 121, IntervalSeconds: 30}},
 	}

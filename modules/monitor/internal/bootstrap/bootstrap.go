@@ -139,7 +139,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
-	registerMetricsReporter(s)
+	registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err

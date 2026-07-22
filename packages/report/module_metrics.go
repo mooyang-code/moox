@@ -27,9 +27,11 @@ type ModuleMetrics struct {
 	lastError        *prometheus.GaugeVec
 	backlog          *prometheus.GaugeVec
 	watermark        *prometheus.GaugeVec
+	inputWatermark   *prometheus.GaugeVec
 	mu               sync.Mutex
 	series           map[string]bool
 	watermarks       map[string]float64
+	inputWatermarks  map[string]float64
 	maxSeries        int
 }
 
@@ -37,6 +39,27 @@ var defaultModuleMetrics = struct {
 	sync.Mutex
 	items map[string]*ModuleMetrics
 }{items: map[string]*ModuleMetrics{}}
+
+var moduleMetricErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "moox_module_metrics_errors_total",
+	Help: "Rejected module metric observations, grouped by operation.",
+}, []string{"module", "operation"})
+var moduleMetricLastError = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "moox_module_metrics_last_error_timestamp_seconds",
+	Help: "Unix timestamp of the latest rejected module metric observation.",
+}, []string{"module"})
+
+func init() {
+	prometheus.MustRegister(moduleMetricErrors, moduleMetricLastError)
+}
+
+func recordModuleMetricError(module, operation string, err error) error {
+	if err != nil && allowedModules[module] {
+		moduleMetricErrors.WithLabelValues(module, operation).Inc()
+		moduleMetricLastError.WithLabelValues(module).Set(float64(time.Now().UTC().Unix()))
+	}
+	return err
+}
 
 func DefaultModuleMetrics(module string) (*ModuleMetrics, error) {
 	defaultModuleMetrics.Lock()
@@ -62,25 +85,36 @@ func DefaultModuleMetrics(module string) (*ModuleMetrics, error) {
 func ObserveModuleRun(module, stage, result, pipeline string, at time.Time) error {
 	metrics, err := DefaultModuleMetrics(module)
 	if err != nil {
-		return err
+		return recordModuleMetricError(module, "run", err)
 	}
-	return metrics.RecordRun(stage, result, pipeline, at)
+	return recordModuleMetricError(module, "run", metrics.RecordRun(stage, result, pipeline, at))
 }
 
 func ObserveModuleWatermark(module, stage, pipeline string, at time.Time) error {
 	metrics, err := DefaultModuleMetrics(module)
 	if err != nil {
-		return err
+		return recordModuleMetricError(module, "watermark", err)
 	}
-	return metrics.AdvanceWatermark(stage, pipeline, at)
+	return recordModuleMetricError(module, "watermark", metrics.AdvanceWatermark(stage, pipeline, at))
+}
+
+// ObserveModuleInputWatermark records the latest business timestamp accepted
+// by a pipeline. It is intentionally separate from last-success and output
+// watermark metrics so Doctor never infers input progress from execution time.
+func ObserveModuleInputWatermark(module, stage, pipeline string, at time.Time) error {
+	metrics, err := DefaultModuleMetrics(module)
+	if err != nil {
+		return recordModuleMetricError(module, "input_watermark", err)
+	}
+	return recordModuleMetricError(module, "input_watermark", metrics.AdvanceInputWatermark(stage, pipeline, at))
 }
 
 func ObserveModuleBacklog(module, stage, pipeline string, value float64) error {
 	metrics, err := DefaultModuleMetrics(module)
 	if err != nil {
-		return err
+		return recordModuleMetricError(module, "backlog", err)
 	}
-	return metrics.SetBacklog(stage, pipeline, value)
+	return recordModuleMetricError(module, "backlog", metrics.SetBacklog(stage, pipeline, value))
 }
 
 func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines []string) (*ModuleMetrics, error) {
@@ -102,14 +136,15 @@ func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines
 		allowed[pipeline] = true
 	}
 	m := &ModuleMetrics{
-		module: module, allowedPipelines: allowed, series: map[string]bool{}, watermarks: map[string]float64{}, maxSeries: MaxModuleMetricSeries,
-		runs:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_module_runs_total", Help: "Completed module stage runs."}, []string{"module", "stage", "result", "pipeline"}),
-		lastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_last_success_timestamp_seconds", Help: "Last successful module stage completion."}, []string{"module", "stage", "pipeline"}),
-		lastError:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_last_error_timestamp_seconds", Help: "Last failed module stage completion."}, []string{"module", "stage", "pipeline"}),
-		backlog:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_backlog", Help: "Bounded module stage backlog."}, []string{"module", "stage", "pipeline"}),
-		watermark:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_watermark_timestamp_seconds", Help: "Monotonic authoritative output watermark."}, []string{"module", "stage", "pipeline"}),
+		module: module, allowedPipelines: allowed, series: map[string]bool{}, watermarks: map[string]float64{}, inputWatermarks: map[string]float64{}, maxSeries: MaxModuleMetricSeries,
+		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_module_runs_total", Help: "Completed module stage runs."}, []string{"module", "stage", "result", "pipeline"}),
+		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_last_success_timestamp_seconds", Help: "Last successful module stage completion."}, []string{"module", "stage", "pipeline"}),
+		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_last_error_timestamp_seconds", Help: "Last failed module stage completion."}, []string{"module", "stage", "pipeline"}),
+		backlog:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_backlog", Help: "Bounded module stage backlog."}, []string{"module", "stage", "pipeline"}),
+		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_business_watermark_timestamp_seconds", Help: "Monotonic authoritative business output watermark."}, []string{"module", "stage", "pipeline"}),
+		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_input_watermark_timestamp_seconds", Help: "Monotonic business timestamp accepted as pipeline input."}, []string{"module", "stage", "pipeline"}),
 	}
-	for _, collector := range []prometheus.Collector{m.runs, m.lastSuccess, m.lastError, m.backlog, m.watermark} {
+	for _, collector := range []prometheus.Collector{m.runs, m.lastSuccess, m.lastError, m.backlog, m.watermark, m.inputWatermark} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register module metrics: %w", err)
 		}
@@ -174,6 +209,28 @@ func (m *ModuleMetrics) AdvanceWatermark(stage, pipeline string, value time.Time
 	}
 	m.watermarks[key] = seconds
 	m.watermark.WithLabelValues(m.module, stage, pipeline).Set(seconds)
+	return nil
+}
+
+func (m *ModuleMetrics) AdvanceInputWatermark(stage, pipeline string, value time.Time) error {
+	if err := m.validate(stage, "success", pipeline); err != nil {
+		return err
+	}
+	if value.IsZero() {
+		return fmt.Errorf("input watermark is required")
+	}
+	seconds := float64(value.UTC().Unix())
+	key := stage + "\x00" + pipeline
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if previous, ok := m.inputWatermarks[key]; ok && seconds < previous {
+		return fmt.Errorf("input watermark regression for %s/%s: %v < %v", stage, pipeline, seconds, previous)
+	}
+	if err := m.claimLocked("input_watermark", stage, "", pipeline); err != nil {
+		return err
+	}
+	m.inputWatermarks[key] = seconds
+	m.inputWatermark.WithLabelValues(m.module, stage, pipeline).Set(seconds)
 	return nil
 }
 

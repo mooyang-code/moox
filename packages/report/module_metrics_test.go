@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestModuleMetricsRejectsTwoHundredFiftySeventhSeries(t *testing.T) {
@@ -60,6 +61,12 @@ func TestModuleMetricsRejectsUnknownLabelsAndWatermarkRegression(t *testing.T) {
 	if err := m.AdvanceWatermark("collect", "market-data", watermark.Add(-time.Second)); err == nil {
 		t.Fatal("watermark regression was accepted")
 	}
+	if err := m.AdvanceInputWatermark("collect", "market-data", watermark); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AdvanceInputWatermark("collect", "market-data", watermark.Add(-time.Second)); err == nil {
+		t.Fatal("input watermark regression was accepted")
+	}
 }
 
 func TestModuleMetricsEnforcesSeriesLimit(t *testing.T) {
@@ -73,5 +80,16 @@ func TestModuleMetricsEnforcesSeriesLimit(t *testing.T) {
 	}
 	if err := m.RecordRun("ingest", "success", "metrics", time.Now()); err == nil {
 		t.Fatal("series limit was not enforced")
+	}
+}
+
+func TestModuleMetricErrorsAreExposed(t *testing.T) {
+	before := testutil.ToFloat64(moduleMetricErrors.WithLabelValues("factor", "run"))
+	err := recordModuleMetricError("factor", "run", fmt.Errorf("series limit exceeded"))
+	if err == nil {
+		t.Fatal("expected metric error")
+	}
+	if got := testutil.ToFloat64(moduleMetricErrors.WithLabelValues("factor", "run")); got != before+1 {
+		t.Fatalf("metric error counter = %v, want %v", got, before+1)
 	}
 }

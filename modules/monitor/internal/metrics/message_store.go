@@ -97,6 +97,12 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 			if latest.ID != 0 && !sample.ObservedAt.After(latest.ObservedAt) {
 				continue
 			}
+			if latest.ID != 0 && monotonicMetric(sample.MetricName) && sample.Value < latest.Value {
+				// Reporter processes may restart with their in-memory watermark
+				// maps empty. Keep the durable latest value instead of allowing a
+				// stale business watermark to move backwards under a newer scrape.
+				continue
+			}
 			latest.ServiceName, latest.InstanceID, latest.MetricName, latest.MetricType, latest.LabelsJSON = sample.ServiceName, sample.InstanceID, sample.MetricName, sample.MetricType, sample.LabelsJSON
 			latest.Value, latest.ObservedAt, latest.IntervalSeconds, latest.MessageID, latest.ProducerNodeID, latest.ProducerVersion = sample.Value, sample.ObservedAt, int(sample.Interval/time.Second), sample.MessageID, sample.ProducerNodeID, sample.ProducerVersion
 			if latest.ID == 0 {
@@ -113,6 +119,15 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 		return false, fmt.Errorf("commit metrics ingest: %w", err)
 	}
 	return duplicate, nil
+}
+
+func monotonicMetric(name string) bool {
+	return name == "moox_business_watermark_timestamp_seconds" ||
+		name == "moox_module_watermark_timestamp_seconds" ||
+		name == "moox_module_input_watermark_timestamp_seconds" ||
+		name == "moox_module_metrics_errors_total" ||
+		name == "moox_module_metrics_last_error_timestamp_seconds" ||
+		name == "moox_module_last_error_timestamp_seconds"
 }
 
 func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (int64, error) {

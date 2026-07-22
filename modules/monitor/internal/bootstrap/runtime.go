@@ -15,19 +15,33 @@ import (
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
 type Runtime struct {
-	StartedAt          time.Time
-	cancel             context.CancelFunc
-	workers            sync.WaitGroup
-	closeOnce          sync.Once
-	closeErr           error
-	Store              *store.Store
-	Repositories       *store.Repositories
-	MetricStores       *monmetrics.Stores
-	HostRuleCache      *hostmetrics.RuleCache
-	Scheduler          *scheduler.Scheduler
-	MetricScheduler    *monmetrics.RuleScheduler
-	MetricsIngestReady atomic.Bool
-	metricsIngestError atomic.Value
+	StartedAt            time.Time
+	cancel               context.CancelFunc
+	workers              sync.WaitGroup
+	closeOnce            sync.Once
+	closeErr             error
+	Store                *store.Store
+	Repositories         *store.Repositories
+	MetricStores         *monmetrics.Stores
+	HostRuleCache        *hostmetrics.RuleCache
+	Scheduler            *scheduler.Scheduler
+	MetricScheduler      *monmetrics.RuleScheduler
+	MetricsIngestReady   atomic.Bool
+	MetricsReporterReady atomic.Bool
+	metricsIngestError   atomic.Value
+	metricsReporterError atomic.Value
+}
+
+func (r *Runtime) setMetricsReporterState(ready bool, err error) {
+	if r == nil {
+		return
+	}
+	r.MetricsReporterReady.Store(ready)
+	message := ""
+	if err != nil {
+		message = sanitizedMetricsError(err)
+	}
+	r.metricsReporterError.Store(message)
 }
 
 func (r *Runtime) setMetricsIngestState(ready bool, err error) {
@@ -47,6 +61,14 @@ func (r *Runtime) metricsIngestErrorMessage() string {
 		return ""
 	}
 	message, _ := r.metricsIngestError.Load().(string)
+	return message
+}
+
+func (r *Runtime) metricsReporterErrorMessage() string {
+	if r == nil {
+		return ""
+	}
+	message, _ := r.metricsReporterError.Load().(string)
 	return message
 }
 

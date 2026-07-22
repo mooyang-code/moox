@@ -36,9 +36,10 @@ func observeStrategyCommit(task domain.Task, err error) {
 		result = "error"
 	}
 	_ = report.ObserveModuleRun("strategy", "target_commit", result, "strategy-targets", time.Now())
-	if err == nil {
-		watermark, parseErr := time.Parse(time.RFC3339Nano, task.TriggerBarTime)
-		if parseErr == nil {
+	watermark, parseErr := time.Parse(time.RFC3339Nano, task.TriggerBarTime)
+	if parseErr == nil {
+		_ = report.ObserveModuleInputWatermark("strategy", "target_commit", "strategy-targets", watermark)
+		if err == nil {
 			_ = report.ObserveModuleWatermark("strategy", "target_commit", "strategy-targets", watermark)
 		}
 	}

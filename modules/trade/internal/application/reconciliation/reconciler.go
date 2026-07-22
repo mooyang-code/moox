@@ -26,9 +26,9 @@ func (r Reconciler) Order(ctx context.Context, space, id string) (store.OrderRec
 		if err != nil {
 			result = "error"
 		}
-		telemetry.RecordModuleStage("reconcile", result, time.Now())
+		telemetry.RecordModuleStage("reconcile", result, time.Time{})
 		return resolved, err
 	}
-	telemetry.RecordModuleStage("reconcile", "success", time.Now())
+	telemetry.RecordModuleStage("reconcile", "success", time.Time{})
 	return v, nil
 }

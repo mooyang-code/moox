@@ -215,18 +215,18 @@ func runOne(parent context.Context, spec CheckSpec, dependencies []DependencyCon
 }
 
 func finalizeReport(report *Report, specs []CheckSpec, results map[string]CheckResult) {
-	dependencies := make(map[string][]string, len(specs))
+	requiredDependencies := make(map[string][]string, len(specs))
 	for _, spec := range specs {
-		dependencies[spec.ID] = append(append([]string{}, spec.RequiredDependencies...), spec.OptionalDependencies...)
+		requiredDependencies[spec.ID] = append([]string{}, spec.RequiredDependencies...)
 	}
 	for _, result := range report.Checks {
 		switch result.Status {
 		case StatusFail:
-			if !hasAncestorStatus(result.ID, dependencies, results, StatusFail, StatusUnknown) {
+			if !hasAncestorStatus(result.ID, requiredDependencies, results, StatusFail, StatusUnknown) {
 				report.RootCauseCheckIDs = append(report.RootCauseCheckIDs, result.ID)
 			}
 		case StatusUnknown:
-			if !hasAncestorStatus(result.ID, dependencies, results, StatusUnknown) {
+			if !hasAncestorStatus(result.ID, requiredDependencies, results, StatusUnknown) {
 				report.BlockingCheckIDs = append(report.BlockingCheckIDs, result.ID)
 			}
 		}

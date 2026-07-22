@@ -4,7 +4,7 @@ pipelines:
     module: cloudnode
     space_id: moox_system
     input_dataset: job_items
-    output_dataset: dispatched_jobs
+    output_dataset: job_results
     lag_tolerance: 5m
     enabled: true
     crosses_storage_deferred: false

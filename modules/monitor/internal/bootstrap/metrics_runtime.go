@@ -16,21 +16,36 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMetricsReporter(s *server.Server) {
+func registerMetricsReporter(s *server.Server, runtime *Runtime) {
 	if s == nil {
+		if runtime != nil {
+			runtime.setMetricsReporterState(false, fmt.Errorf("monitor server is unavailable"))
+		}
 		return
 	}
 	h, err := report.NewHandler(report.DefaultConfig("moox_monitor"))
 	if err != nil {
+		if runtime != nil {
+			runtime.setMetricsReporterState(false, err)
+		}
 		log.WarnContextf(trpc.BackgroundContext(), "monitor metrics reporter disabled: %v", err)
 		return
 	}
 	service := s.Service("trpc.moox.monitor.metrics.timer")
 	if service == nil {
+		if runtime != nil {
+			runtime.setMetricsReporterState(false, fmt.Errorf("metrics timer service is not configured"))
+		}
 		log.Warn("monitor metrics timer service is not configured, skip register")
 		return
 	}
-	timer.RegisterHandlerService(service, h.Handle)
+	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+		err := h.Handle(ctx)
+		if runtime != nil {
+			runtime.setMetricsReporterState(err == nil, err)
+		}
+		return err
+	})
 }
 
 func maxInt(a, b int) int {

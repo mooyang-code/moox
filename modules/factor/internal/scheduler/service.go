@@ -297,13 +297,18 @@ func (s *Service) popNext() (queueItem, bool) {
 }
 
 func (s *Service) executeWithRetry(ctx context.Context, task Task) error {
+	if !task.BarTime.IsZero() {
+		_ = report.ObserveModuleInputWatermark("factor", "calculate", "factor-calculation", task.BarTime)
+	}
 	var lastErr error
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
 		elapsed, err := s.executeOnce(ctx, task)
 		if err == nil {
 			_ = s.record(ctx, task, domain.RunStatusSucceeded, "", elapsed, nil)
 			_ = report.ObserveModuleRun("factor", "calculate", "success", "factor-calculation", time.Now())
-			_ = report.ObserveModuleWatermark("factor", "calculate", "factor-calculation", task.BarTime)
+			if !task.BarTime.IsZero() {
+				_ = report.ObserveModuleWatermark("factor", "calculate", "factor-calculation", task.BarTime)
+			}
 			return nil
 		}
 		lastErr = err

@@ -189,6 +189,32 @@ func (w *Writer) WriteDirty(ctx context.Context, limit int) error {
 	}
 }
 
+// LatestInputTime returns the newest business timestamp still waiting in the
+// journal. Scheduler telemetry uses it for both pipeline input and the
+// materialized output watermark instead of using the wall clock.
+func (w *Writer) LatestInputTime(ctx context.Context, limit int) (time.Time, error) {
+	if w == nil || w.journal == nil {
+		return time.Time{}, fmt.Errorf("archive journal is required")
+	}
+	states, err := w.journal.DirtyPartitions(ctx, limit)
+	if err != nil {
+		return time.Time{}, err
+	}
+	latest := time.Time{}
+	for _, state := range states {
+		pending, err := w.journal.Pending(ctx, state.Key, state.HighWaterSeq)
+		if err != nil {
+			return time.Time{}, err
+		}
+		for _, item := range pending {
+			if item.Patch.DataTime.After(latest) {
+				latest = item.Patch.DataTime
+			}
+		}
+	}
+	return latest.UTC(), nil
+}
+
 func (w *Writer) PruneMessageReceipts(ctx context.Context, before time.Time) (uint64, error) {
 	return w.journal.PruneMessageReceipts(ctx, before)
 }
