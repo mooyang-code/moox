@@ -1,4 +1,4 @@
-.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-storage-boundary test-storage-consistency test-storage-datanode-management-contract proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-storage-boundary test-storage-consistency test-storage-datanode-management-contract e2e-storage-datanode-management proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -22,6 +22,9 @@ test-storage-consistency:
 
 test-storage-datanode-management-contract:
 	bash scripts/test-storage-datanode-management-contract.sh
+
+e2e-storage-datanode-management:
+	bash scripts/e2e/storage-datanode-management.sh
 
 check-format:
 	./scripts/check-gofmt.sh
