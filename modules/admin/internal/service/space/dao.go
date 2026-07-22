@@ -78,6 +78,31 @@ func (d *DAO) UpdateSpace(ctx context.Context, item *Space) error {
 	return nil
 }
 
+// DeleteSpace permanently removes an isolated management Space and its members.
+func (d *DAO) DeleteSpace(ctx context.Context, spaceID string) error {
+	if strings.TrimSpace(spaceID) == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	tx := d.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Exec("DELETE FROM t_space_members WHERE c_space_id = ?", spaceID).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	result := tx.Exec("DELETE FROM t_spaces WHERE c_space_id = ? AND c_is_deleted = ?", spaceID, softdelete.IsDeletedFalse)
+	if result.Error != nil {
+		tx.Rollback()
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		tx.Rollback()
+		return fmt.Errorf("space not found: %s", spaceID)
+	}
+	return tx.Commit().Error
+}
+
 // ListSpaces 按 owner/status 分页查询有效 Space。
 func (d *DAO) ListSpaces(ctx context.Context, owner string, status string, offset int, limit int) ([]Space, int64, error) {
 	query := d.db.WithContext(ctx).Model(&Space{}).Where("c_is_deleted = ?", softdelete.IsDeletedFalse)

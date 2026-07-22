@@ -1539,15 +1539,15 @@ start_storage() {
 }
 
 complete_storage_bootstrap() {
+  start_storage_view
+  wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
+  wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
+  wait_http http://127.0.0.1:20211/healthz "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
   if run_storage_doctor; then
     activate_storage_datasets
   else
     echo "Storage started without Dataset activation; run explicit activation after a HEALTHY Doctor result"
   fi
-  start_storage_view
-  wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
-  wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
-  wait_http http://127.0.0.1:20211/healthz "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
 }
 
 start_admin() {

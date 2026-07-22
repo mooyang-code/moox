@@ -23,6 +23,8 @@ type SpaceMgrService interface {
 
 	UpdateSpace(ctx context.Context, req *UpdateSpaceReq) (*UpdateSpaceRsp, error)
 
+	DeleteSpace(ctx context.Context, req *DeleteSpaceReq) (*DeleteSpaceRsp, error)
+
 	ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error)
 
 	ListSpaceMembers(ctx context.Context, req *ListSpaceMembersReq) (*ListSpaceMembersRsp, error)
@@ -54,6 +56,24 @@ func SpaceMgrService_UpdateSpace_Handler(svr interface{}, ctx context.Context, f
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(SpaceMgrService).UpdateSpace(ctx, reqbody.(*UpdateSpaceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SpaceMgrService_DeleteSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteSpaceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SpaceMgrService).DeleteSpace(ctx, reqbody.(*DeleteSpaceReq))
 	}
 
 	var rsp interface{}
@@ -114,6 +134,10 @@ var SpaceMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: SpaceMgrService_UpdateSpace_Handler,
 		},
 		{
+			Name: "/trpc.moox.admin.SpaceMgr/DeleteSpace",
+			Func: SpaceMgrService_DeleteSpace_Handler,
+		},
+		{
 			Name: "/trpc.moox.admin.SpaceMgr/ListSpaces",
 			Func: SpaceMgrService_ListSpaces_Handler,
 		},
@@ -141,6 +165,9 @@ func (s *UnimplementedSpaceMgr) CreateSpace(ctx context.Context, req *CreateSpac
 func (s *UnimplementedSpaceMgr) UpdateSpace(ctx context.Context, req *UpdateSpaceReq) (*UpdateSpaceRsp, error) {
 	return nil, errors.New("rpc UpdateSpace of service SpaceMgr is not implemented")
 }
+func (s *UnimplementedSpaceMgr) DeleteSpace(ctx context.Context, req *DeleteSpaceReq) (*DeleteSpaceRsp, error) {
+	return nil, errors.New("rpc DeleteSpace of service SpaceMgr is not implemented")
+}
 func (s *UnimplementedSpaceMgr) ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error) {
 	return nil, errors.New("rpc ListSpaces of service SpaceMgr is not implemented")
 }
@@ -159,6 +186,8 @@ type SpaceMgrClientProxy interface {
 	CreateSpace(ctx context.Context, req *CreateSpaceReq, opts ...client.Option) (rsp *CreateSpaceRsp, err error)
 
 	UpdateSpace(ctx context.Context, req *UpdateSpaceReq, opts ...client.Option) (rsp *UpdateSpaceRsp, err error)
+
+	DeleteSpace(ctx context.Context, req *DeleteSpaceReq, opts ...client.Option) (rsp *DeleteSpaceRsp, err error)
 
 	ListSpaces(ctx context.Context, req *ListSpacesReq, opts ...client.Option) (rsp *ListSpacesRsp, err error)
 
@@ -208,6 +237,26 @@ func (c *SpaceMgrClientProxyImpl) UpdateSpace(ctx context.Context, req *UpdateSp
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateSpaceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SpaceMgrClientProxyImpl) DeleteSpace(ctx context.Context, req *DeleteSpaceReq, opts ...client.Option) (*DeleteSpaceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.admin.SpaceMgr/DeleteSpace")
+	msg.WithCalleeServiceName(SpaceMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("admin")
+	msg.WithCalleeService("SpaceMgr")
+	msg.WithCalleeMethod("DeleteSpace")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteSpaceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

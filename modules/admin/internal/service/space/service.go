@@ -78,6 +78,16 @@ func (s *service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	}, nil
 }
 
+func (s *service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.DeleteSpaceRsp, error) {
+	if req == nil || req.GetSpaceId() == "" {
+		return nil, fmt.Errorf("space_id is required")
+	}
+	if err := s.dao.DeleteSpace(ctx, req.GetSpaceId()); err != nil {
+		return nil, err
+	}
+	return &pb.DeleteSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}}, nil
+}
+
 func (s *service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
 	pageNo, offset, limit := normalizePage(req.GetPage())
 	rows, total, err := s.dao.ListSpaces(ctx, req.GetOwner(), req.GetStatus(), offset, limit)
