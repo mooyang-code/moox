@@ -186,9 +186,10 @@ assert_order "${DEPLOY_DIR}/start.sh" \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
   '^  import_storage_metadata$' \
-  '^  run_storage_doctor$' \
-  '^  activate_storage_datasets$' \
-  '^  start_storage_view$'
+  '^  start_storage_view$' \
+  'wait_http http://127\.0\.0\.1:20211/healthz' \
+  '^  if run_storage_doctor; then$' \
+  '^    activate_storage_datasets$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${DEPLOY_DIR}/start.sh")"
 grep -q 'doctor bootstrap --format json' <<<"${doctor_body}"
 if grep -q 'activate-datasets' <<<"${doctor_body}"; then
