@@ -1565,9 +1565,9 @@ start_admin() {
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
-      service_seed_args+=(--with-storage-node)
+      service_seed_args+=(--with-storage-shard)
     else
-      service_seed_args+=(--disable-storage-node)
+      service_seed_args+=(--disable-storage-shard)
     fi
     "${ROOT}/bin/moox-admin-cli" "${service_seed_args[@]}" >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
         echo "Storage shard service deployment import failed" >&2

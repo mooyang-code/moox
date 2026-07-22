@@ -71,5 +71,7 @@ done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
 [[ ! -e "${TMP_ROOT}/unpacked/storage" ]]
 [[ ! -e "${TMP_ROOT}/unpacked/cloudnode" ]]
+grep -Fq -- '--disable-storage-shard' "${TMP_ROOT}/unpacked/start.sh"
+! grep -Fq -- '--disable-storage-node' "${TMP_ROOT}/unpacked/start.sh"
 
 echo 'control deployment profile contract passed'
