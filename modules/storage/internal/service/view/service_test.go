@@ -14,6 +14,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -121,6 +122,58 @@ func TestMalformedDeliveryIsPermanent(t *testing.T) {
 	if !isPermanentDeliveryError(err) {
 		t.Fatalf("decode err=%v", err)
 	}
+}
+
+func TestApplyDeliveryRejectsInvalidStorageEnvelope(t *testing.T) {
+	base := validStorageDeliveryMessage(t)
+	tests := []struct {
+		name   string
+		mutate func(*messagepb.MooxMessage, *jetstream.Delivery)
+	}{
+		{name: "kind", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
+			message.Kind = messagepb.MessageKind_MESSAGE_KIND_COMMAND
+		}},
+		{name: "content type", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
+			message.ContentType = "application/x-protobuf; message=other.Message"
+		}},
+		{name: "message type", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
+			message.MessageType = "moox.storage.other.v1"
+		}},
+		{name: "subject and topic mismatch", mutate: func(_ *messagepb.MooxMessage, delivery *jetstream.Delivery) {
+			delivery.Subject = "moox.storage.fields_changed.v1.mzxw6.b3RoZXI"
+		}},
+		{name: "payload identity mismatch", mutate: func(message *messagepb.MooxMessage, _ *jetstream.Delivery) {
+			message.Payload, _ = proto.Marshal(&pb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "other"})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message := proto.Clone(base).(*messagepb.MooxMessage)
+			delivery := &jetstream.Delivery{Subject: base.Topic, Message: message}
+			test.mutate(message, delivery)
+			if err := svcForDeliveryTest(t).applyDelivery(context.Background(), delivery); !isPermanentDeliveryError(err) {
+				t.Fatalf("applyDelivery() error = %v, want permanent error", err)
+			}
+		})
+	}
+}
+
+func validStorageDeliveryMessage(t *testing.T) *messagepb.MooxMessage {
+	t.Helper()
+	payload, err := proto.Marshal(&pb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType, Payload: payload}
+}
+
+func svcForDeliveryTest(t *testing.T) *Service {
+	t.Helper()
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
 }
 
 func TestProcessDeliveryBalancesLiveWork(t *testing.T) {

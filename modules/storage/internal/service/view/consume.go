@@ -138,9 +138,16 @@ func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Deliver
 		}
 		return permanentDeliveryError{errors.New("storage event delivery is empty")}
 	}
-	spaceID, datasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
+	spaceID, datasetID, err := jetstream.ValidateStorageFieldsChangedEnvelope(delivery.Message)
 	if err != nil {
 		return permanentDeliveryError{err}
+	}
+	subjectSpaceID, subjectDatasetID, err := eventconsumer.ParseDatasetFieldsChangedSubject("", delivery.Subject)
+	if err != nil {
+		return permanentDeliveryError{err}
+	}
+	if subjectSpaceID != spaceID || subjectDatasetID != datasetID {
+		return permanentDeliveryError{errors.New("storage delivery subject and envelope topic mismatch")}
 	}
 	event := &pb.DatasetFieldsChanged{}
 	if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {

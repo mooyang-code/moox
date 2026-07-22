@@ -187,6 +187,17 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			if err != nil {
 				return nil, err
 			}
+			envelope := &messagepb.MooxMessage{}
+			if err := proto.Unmarshal(payload, envelope); err != nil {
+				return nil, fmt.Errorf("unmarshal fields_changed event for %s/%s: %w", group.spaceID, group.datasetID, err)
+			}
+			eventSpaceID, eventDatasetID, err := validateStorageFieldsChangedOutboxEnvelope(envelope)
+			if err != nil {
+				return nil, fmt.Errorf("validate fields_changed event for %s/%s: %w", group.spaceID, group.datasetID, err)
+			}
+			if eventSpaceID != group.spaceID || eventDatasetID != group.datasetID {
+				return nil, fmt.Errorf("fields_changed event identity %s/%s does not match write group %s/%s", eventSpaceID, eventDatasetID, group.spaceID, group.datasetID)
+			}
 			id := nextID
 			payload, err = BindOutboxID(payload, s.nodeID, id)
 			if err != nil {

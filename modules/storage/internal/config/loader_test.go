@@ -181,6 +181,9 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 			if !cfg.Storage.HasRole(tt.wantRole) {
 				t.Fatalf("roles = %v, want %s", cfg.Storage.Roles, tt.wantRole)
 			}
+			if cfg.Storage.EventBus.CredentialFile != "~/.config/moox/eventbus/storage-eventbus.yaml" {
+				t.Fatalf("EventBus.CredentialFile = %q", cfg.Storage.EventBus.CredentialFile)
+			}
 			if cfg.Storage.Health.Addr != tt.wantHealth {
 				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)
 			}

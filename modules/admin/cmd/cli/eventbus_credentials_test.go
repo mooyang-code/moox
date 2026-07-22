@@ -92,32 +92,52 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "moox.metrics.snapshot.reported.v1")
-	metricsPublisherACL := yaml[strings.Index(yaml, "username: metrics-publisher"):strings.Index(yaml, "username: monitor-hostmetrics-consumer")]
+	metricsPublisherACL := eventBusACLBlock(yaml, "metrics-publisher")
 	assert.NotContains(t, metricsPublisherACL, "$JS.API.>")
+	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(metricsPublisherACL, "subscribe:"))
 	assert.Contains(t, yaml, "moox.strategy.signal.generated.v1")
 	assert.Contains(t, yaml, "moox.strategy.action.accepted.v1")
 	assert.Contains(t, yaml, "moox.strategy.run.completed.v1")
-	strategyACL := yaml[strings.Index(yaml, "username: strategy-eventbus"):]
+	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
 	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
-	storageStart := strings.Index(yaml, "username: storage-eventbus")
-	storageEnd := strings.Index(yaml, "username: cloudnode-eventbus")
-	storageACL := yaml[storageStart:storageEnd]
+	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
 	assert.Contains(t, storageACL, "moox.storage.fields_changed.v1.>")
 	assert.NotContains(t, storageACL, "moox.storage.rows_committed")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view.>")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view")
 	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view.>")
+	assert.Contains(t, storageACL, `subscribe: {allow: ["_INBOX.>"]}`)
+	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.API")
+	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.ACK")
 	assert.NotContains(t, storageACL, "storage_view_rows_committed_v1")
-	archiveStart := strings.Index(yaml, "username: archive-eventbus")
-	require.NotEqual(t, -1, archiveStart)
-	archiveACL := yaml[archiveStart:]
+	archiveACL := eventBusACLBlock(yaml, "archive-eventbus")
 	assert.Contains(t, archiveACL, "password: j")
 	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.INFO.MOOX_STORAGE.moox_archive_kline_v1")
 	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v1")
 	assert.Contains(t, archiveACL, "$JS.ACK.MOOX_STORAGE.moox_archive_kline_v1.>")
-	assert.Contains(t, archiveACL, `publish: {allow: []}`)
+	assert.Contains(t, archiveACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	assert.NotContains(t, archiveACL, "moox.storage.fields_changed.v1")
+	assert.NotContains(t, aclLine(archiveACL, "subscribe:"), "$JS.API")
+	assert.NotContains(t, aclLine(archiveACL, "subscribe:"), "$JS.ACK")
+	cloudnodeACL := eventBusACLBlock(yaml, "cloudnode-eventbus")
+	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>")
+	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.CREATE.MOOX_CLOUDNODE_EXEC.>")
+	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>")
+	assert.Contains(t, cloudnodeACL, "$JS.ACK.MOOX_CLOUDNODE_EXEC.>")
+	assert.Contains(t, cloudnodeACL, "$JS.API.STREAM.INFO.KV_MOOX_CLOUDNODE_JOB_ACTIVE")
+	assert.Contains(t, cloudnodeACL, "$JS.API.STREAM.MSG.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE")
+	assert.Contains(t, cloudnodeACL, "$KV.MOOX_CLOUDNODE_JOB_ACTIVE.>")
+	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.API`)
+	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.ACK`)
+	assert.Contains(t, cloudnodeACL, `subscribe: {allow: ["_INBOX.>"]}`)
+	for _, role := range eventBusRoles {
+		acl := eventBusACLBlock(yaml, role)
+		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
+		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")
+		assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
+	}
 
 	bundle, err := makeTLSBundle("203.0.113.10")
 	require.NoError(t, err)
@@ -144,6 +164,30 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
 	assert.GreaterOrEqual(t, count, int64(12))
+}
+
+func eventBusACLBlock(yaml, username string) string {
+	start := strings.Index(yaml, "  - username: "+username)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(yaml[start+1:], "  - username: ")
+	if end < 0 {
+		return yaml[start:]
+	}
+	return yaml[start : start+1+end]
+}
+
+func aclLine(block, prefix string) string {
+	start := strings.Index(block, prefix)
+	if start < 0 {
+		return ""
+	}
+	end := strings.IndexByte(block[start:], '\n')
+	if end < 0 {
+		return block[start:]
+	}
+	return block[start : start+end]
 }
 
 func TestEventBusCredentialsHelpers(t *testing.T) {

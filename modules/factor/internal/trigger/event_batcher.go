@@ -57,7 +57,7 @@ func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding) {
 	d.bindings = append([]domain.FactorBinding(nil), bindings...)
 }
 
-// Ingest adds one Storage rows_changed event into fixed-window buckets.
+// Ingest adds one Storage fields_changed event into fixed-window buckets.
 func (d *EventBatcher) Ingest(event *storagepb.DatasetFieldsChanged, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

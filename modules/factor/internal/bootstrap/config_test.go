@@ -51,6 +51,9 @@ func TestCheckedInConfigUsesEventBatchWindow(t *testing.T) {
 	if cfg.NATS.Subject != "moox.storage.fields_changed.v1.>" {
 		t.Fatalf("checked-in nats subject = %q", cfg.NATS.Subject)
 	}
+	if cfg.NATS.CredentialFile != "~/.config/moox/eventbus/factor-eventbus.yaml" {
+		t.Fatalf("checked-in credential file = %q", cfg.NATS.CredentialFile)
+	}
 }
 
 func TestLoadHonorsCustomEventBatchWindow(t *testing.T) {
