@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
@@ -108,6 +109,9 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
+	if err := trigger.ValidateLiveConsumerConfig(trigger.NATSConfig{Stream: cfg.NATS.Stream, Consumer: cfg.NATS.Consumer}); err != nil {
+		return nil, fmt.Errorf("nats realtime consumer: %w", err)
+	}
 	if err := cfg.validateStorageTargets(); err != nil {
 		return nil, err
 	}
@@ -132,8 +136,8 @@ func Default() *Config {
 		NATS: NATSConfig{
 			URLs:         []string{"nats://127.0.0.1:4222"},
 			URL:          "nats://127.0.0.1:4222",
-			Stream:       "MOOX_STORAGE",
-			Consumer:     "factor_calc",
+			Stream:       trigger.LiveStream,
+			Consumer:     trigger.LiveDurable,
 			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
@@ -196,10 +200,10 @@ func (c *Config) applyDefaults() {
 		c.NATS.URLs = []string{c.NATS.URL}
 	}
 	if c.NATS.Stream == "" {
-		c.NATS.Stream = "MOOX_STORAGE"
+		c.NATS.Stream = trigger.LiveStream
 	}
 	if c.NATS.Consumer == "" {
-		c.NATS.Consumer = "factor_calc"
+		c.NATS.Consumer = trigger.LiveDurable
 	}
 	if c.NATS.FetchMaxWait == 0 {
 		c.NATS.FetchMaxWait = time.Second

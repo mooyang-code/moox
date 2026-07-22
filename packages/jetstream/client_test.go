@@ -231,7 +231,7 @@ func TestFetchReturnsDecodedDeliveriesWhenLaterMessageIsMalformed(t *testing.T) 
 	}
 }
 
-func TestPublishBatchPreservesOrderAndPartialFailures(t *testing.T) {
+func TestPublishBatchReturnsResultsByInputIndex(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()
 	client := connectTestClient(t, url)
@@ -246,7 +246,7 @@ func TestPublishBatchPreservesOrderAndPartialFailures(t *testing.T) {
 	if len(results) != 3 {
 		t.Fatalf("PublishBatch() len = %d, want 3", len(results))
 	}
-	if results[0].Err != nil || results[0].Ack == nil {
+	if results[0].Err != nil || results[0].Ack == nil || results[0].Ack.Sequence != 1 {
 		t.Fatalf("first batch result = %+v", results[0])
 	}
 	if results[1].Err == nil || results[2].Err == nil {

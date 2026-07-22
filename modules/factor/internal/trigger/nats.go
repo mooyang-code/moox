@@ -44,6 +44,36 @@ type NATSConfig struct {
 	CredentialFile string
 }
 
+const (
+	// LiveStream and LiveDurable are owned by the EventBus topology registry.
+	// Factor realtime must not turn these names into a configurable replay path.
+	LiveStream  = "MOOX_STORAGE"
+	LiveDurable = "factor_calc"
+)
+
+var ErrInvalidLiveConsumer = errors.New("factor: invalid live consumer contract")
+
+// ValidateLiveConsumerConfig keeps the realtime trigger on the EventBus-owned
+// live durable. Replay uses a separate durable or an offline entry point.
+func ValidateLiveConsumerConfig(cfg NATSConfig) error {
+	if strings.TrimSpace(cfg.Stream) != LiveStream || strings.TrimSpace(cfg.Consumer) != LiveDurable {
+		return fmt.Errorf("%w: realtime must bind %s/%s, got %q/%q", ErrInvalidLiveConsumer, LiveStream, LiveDurable, cfg.Stream, cfg.Consumer)
+	}
+	return nil
+}
+
+func liveConsumerBindRef(cfg NATSConfig) (jetstream.ConsumerBindRef, error) {
+	if err := ValidateLiveConsumerConfig(cfg); err != nil {
+		return jetstream.ConsumerBindRef{}, err
+	}
+	return jetstream.ConsumerBindRef{
+		Stream:              LiveStream,
+		Durable:             LiveDurable,
+		FetchMaxWait:        cfg.FetchMaxWait,
+		DeliverDecodeErrors: true,
+	}, nil
+}
+
 type NATSConsumer struct {
 	cfg          NATSConfig
 	eventBatcher *EventBatcher
@@ -64,6 +94,10 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
+	consumerRef, err := liveConsumerBindRef(c.cfg)
+	if err != nil {
+		return err
+	}
 	urls := append([]string(nil), c.cfg.URLs...)
 	if len(urls) == 0 && strings.TrimSpace(c.cfg.URL) != "" {
 		urls = []string{c.cfg.URL}
@@ -78,7 +112,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consumer, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: c.cfg.Stream, Durable: c.cfg.Consumer, FetchMaxWait: c.cfg.FetchMaxWait, DeliverDecodeErrors: true})
+	consumer, err := client.BindManagedPullConsumer(ctx, consumerRef)
 	if err != nil {
 		_ = client.Close()
 		return err

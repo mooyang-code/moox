@@ -17,6 +17,9 @@ func TestDefaultFactorConfig(t *testing.T) {
 	if cfg.NATS.Stream != "MOOX_STORAGE" {
 		t.Fatalf("nats stream = %q", cfg.NATS.Stream)
 	}
+	if cfg.NATS.Consumer != "factor_calc" {
+		t.Fatalf("nats consumer = %q", cfg.NATS.Consumer)
+	}
 	if cfg.NATS.FetchMaxWait != time.Second {
 		t.Fatalf("nats fetch max wait = %s", cfg.NATS.FetchMaxWait)
 	}
@@ -28,6 +31,17 @@ func TestDefaultFactorConfig(t *testing.T) {
 	}
 	if cfg.Scheduler.EventBatchWindowMS != 2000 {
 		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
+	}
+}
+
+func TestLoadRejectsNonFactorRealtimeConsumer(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+nats:
+  stream: MOOX_STORAGE_REPLAY
+  consumer: factor_replay
+`))
+	if err == nil {
+		t.Fatal("Load() error = nil, want live consumer contract rejection")
 	}
 }
 

@@ -17,6 +17,8 @@ nats:
     - nats://127.0.0.1:4222
   url: nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml
+  # Live trigger identity is fixed by the EventBus registry. Replay uses a
+  # separate durable or the offline run-once/recalc entry point.
   stream: MOOX_STORAGE
   consumer: factor_calc
   fetch_max_wait: 1s

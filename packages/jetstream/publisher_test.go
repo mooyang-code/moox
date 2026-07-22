@@ -3,11 +3,58 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/nats-io/nats.go"
 )
+
+func TestPublishBatchRunsIndependentMessagesConcurrently(t *testing.T) {
+	messages := make([]*messagepb.MooxMessage, 4)
+	for i := range messages {
+		messages[i] = validTestMessage(fmt.Sprintf("concurrent-%d", i), "moox.test.events.v1")
+	}
+	started := make(chan string, len(messages))
+	release := make(chan struct{})
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	updateMax := func(value int32) {
+		for current := maxActive.Load(); value > current && !maxActive.CompareAndSwap(current, value); current = maxActive.Load() {
+		}
+	}
+	publish := func(_ context.Context, message *messagepb.MooxMessage, _ ...PublishOption) (*PublishAck, error) {
+		current := active.Add(1)
+		updateMax(current)
+		started <- message.GetMessageId()
+		<-release
+		active.Add(-1)
+		return &PublishAck{Sequence: uint64(current)}, nil
+	}
+
+	done := make(chan []PublishResult, 1)
+	go func() { done <- publishBatch(context.Background(), messages, nil, 4, publish) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("PublishBatch did not start independent messages concurrently")
+		}
+	}
+	close(release)
+	results := <-done
+	if maxActive.Load() < 2 {
+		t.Fatalf("max concurrent publications = %d, want at least 2", maxActive.Load())
+	}
+	for i, result := range results {
+		if result.Err != nil || result.Ack == nil {
+			t.Fatalf("result[%d] = %+v, want successful independent publication", i, result)
+		}
+	}
+}
 
 func TestValidateMessageRejectsMissingRequiredFields(t *testing.T) {
 	cases := []struct {

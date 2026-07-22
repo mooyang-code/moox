@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +13,36 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestLiveConsumerContractUsesOnlyRegistryDurable(t *testing.T) {
+	valid := NATSConfig{Stream: LiveStream, Consumer: LiveDurable, FetchMaxWait: time.Second}
+	if err := ValidateLiveConsumerConfig(valid); err != nil {
+		t.Fatalf("valid live consumer config rejected: %v", err)
+	}
+
+	for name, cfg := range map[string]NATSConfig{
+		"different stream":  {Stream: "MOOX_STORAGE_REPLAY", Consumer: LiveDurable},
+		"different durable": {Stream: LiveStream, Consumer: "factor_replay"},
+		"empty stream":      {Consumer: LiveDurable},
+		"empty durable":     {Stream: LiveStream},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateLiveConsumerConfig(cfg); !errors.Is(err, ErrInvalidLiveConsumer) {
+				t.Fatalf("ValidateLiveConsumerConfig() error = %v, want ErrInvalidLiveConsumer", err)
+			}
+		})
+	}
+}
+
+func TestLiveConsumerBindRefDoesNotChooseDeliveryPolicy(t *testing.T) {
+	ref, err := liveConsumerBindRef(NATSConfig{Stream: LiveStream, Consumer: LiveDurable, FetchMaxWait: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("liveConsumerBindRef() error = %v", err)
+	}
+	if ref.Stream != LiveStream || ref.Durable != LiveDurable || ref.FetchMaxWait != 2*time.Second {
+		t.Fatalf("live consumer bind ref = %+v", ref)
+	}
+}
 
 func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
 	base := &messagepb.MooxMessage{
