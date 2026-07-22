@@ -19,7 +19,7 @@ nats:
   credential_file: ~/.config/moox/factor/eventbus.yaml
   stream: MOOX_STORAGE
   consumer: factor_calc
-  subject: moox.storage.rows_committed.time_series.v1.>
+  subject: moox.storage.fields_changed.v1.>
 
 engine:
   python_bin: python3

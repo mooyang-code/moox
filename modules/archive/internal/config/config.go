@@ -89,7 +89,7 @@ func Default() *Config {
 			},
 			EventBus: EventBusConfig{
 				URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_STORAGE",
-				Subject: "moox.storage.rows_committed.time_series.v1.>", Durable: "moox_archive_kline_v1",
+				Subject: "moox.storage.fields_changed.v1.>", Durable: "moox_archive_kline_v1",
 				FetchBatch: 128, FetchMaxWait: time.Second, AckWait: 5 * time.Minute,
 				MaxAckPending: 256, DedupeRetention: 168 * time.Hour,
 			},

@@ -16,6 +16,9 @@ func TestDefaultFactorConfig(t *testing.T) {
 	if cfg.NATS.Stream != "MOOX_STORAGE" {
 		t.Fatalf("nats stream = %q", cfg.NATS.Stream)
 	}
+	if cfg.NATS.Subject != "moox.storage.fields_changed.v1.>" {
+		t.Fatalf("nats subject = %q", cfg.NATS.Subject)
+	}
 	if cfg.Engine.Workers <= 0 {
 		t.Fatalf("engine workers = %d, want > 0", cfg.Engine.Workers)
 	}
@@ -44,6 +47,9 @@ func TestCheckedInConfigUsesEventBatchWindow(t *testing.T) {
 	}
 	if cfg.Scheduler.EventBatchWindowMS != 2000 {
 		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
+	}
+	if cfg.NATS.Subject != "moox.storage.fields_changed.v1.>" {
+		t.Fatalf("checked-in nats subject = %q", cfg.NATS.Subject)
 	}
 }
 

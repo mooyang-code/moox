@@ -134,7 +134,7 @@ func Default() *Config {
 			URL:      "nats://127.0.0.1:4222",
 			Stream:   "MOOX_STORAGE",
 			Consumer: "factor_calc",
-			Subject:  "moox.storage.rows_committed.time_series.v1.>",
+			Subject:  "moox.storage.fields_changed.v1.>",
 		},
 		Engine: EngineConfig{
 			PythonBin:           "python3",
@@ -202,7 +202,7 @@ func (c *Config) applyDefaults() {
 		c.NATS.Consumer = "factor_calc"
 	}
 	if c.NATS.Subject == "" {
-		c.NATS.Subject = "moox.storage.rows_committed.time_series.v1.>"
+		c.NATS.Subject = "moox.storage.fields_changed.v1.>"
 	}
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"

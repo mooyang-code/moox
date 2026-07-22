@@ -98,6 +98,15 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	strategyACL := yaml[strings.Index(yaml, "username: strategy-eventbus"):]
 	assert.NotContains(t, strategyACL, "$JS.API.>")
 	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
+	storageStart := strings.Index(yaml, "username: storage-eventbus")
+	storageEnd := strings.Index(yaml, "username: cloudnode-eventbus")
+	storageACL := yaml[storageStart:storageEnd]
+	assert.Contains(t, storageACL, "moox.storage.fields_changed.v1.>")
+	assert.NotContains(t, storageACL, "moox.storage.rows_committed")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view")
+	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view.>")
+	assert.NotContains(t, storageACL, "storage_view_rows_committed_v1")
 
 	bundle, err := makeTLSBundle("203.0.113.10")
 	require.NoError(t, err)

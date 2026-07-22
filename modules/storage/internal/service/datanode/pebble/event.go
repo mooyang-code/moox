@@ -13,7 +13,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const datasetFieldsChangedType = "trpc.moox.storage.DatasetFieldsChanged"
+const datasetFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
+const datasetFieldsChangedMessageType = "moox.storage.fields_changed.v1"
 
 // BuildDatasetFieldsChangedMessage creates the durable message persisted by a
 // field write. It intentionally carries no sequence or source-node progress.
@@ -39,8 +40,8 @@ func BuildDatasetFieldsChangedMessage(nodeID string, spaceID, datasetID string, 
 		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
 		SpaceId:         spaceID,
 		OccurredAt:      timestamppb.New(time.Now().UTC()),
-		ContentType:     "application/protobuf",
-		MessageType:     datasetFieldsChangedType,
+		ContentType:     datasetFieldsChangedContentType,
+		MessageType:     datasetFieldsChangedMessageType,
 		Payload:         payload,
 		Producer:        &messagepb.Producer{ServiceName: "storage-node", NodeId: nodeID},
 	}

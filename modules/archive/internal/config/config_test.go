@@ -20,6 +20,9 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	if cfg.Archive.DeviceID != "parquet-local" || cfg.Health.Addr != "127.0.0.1:11416" {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
+	if cfg.Archive.EventBus.Subject != "moox.storage.fields_changed.v1.>" {
+		t.Fatalf("eventbus subject = %q", cfg.Archive.EventBus.Subject)
+	}
 	want := []string{"crypto_binance", "crypto_okx", "stock_cn", "stock_us"}
 	got := cfg.SourceSpaceIDs()
 	if len(got) != len(want) {
@@ -65,5 +68,8 @@ func TestAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 		if strings.Contains(string(raw), oldKey) {
 			t.Fatalf("app config still contains %q", oldKey)
 		}
+	}
+	if !strings.Contains(string(raw), "subject: moox.storage.fields_changed.v1.>") {
+		t.Fatal("app config does not use the fields_changed subject")
 	}
 }
