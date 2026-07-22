@@ -82,7 +82,9 @@ type StorageView struct {
 	IndexServiceName        string                 `yaml:"index_service_name"`
 	BatchSize               int                    `yaml:"batch_size"`
 	BatchWaitMS             int                    `yaml:"batch_wait_ms"`
+	FetchBatch              int                    `yaml:"fetch_batch"`
 	MaxWorkers              int                    `yaml:"max_workers"`
+	Ordering                string                 `yaml:"ordering"`
 	Maintenance             StorageViewMaintenance `yaml:"maintenance"`
 	StorageRPC              StorageRPCConfig       `yaml:"storage_rpc"`
 }
@@ -272,7 +274,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.EventBus.MaxInFlight = 128
 	}
 	if c.EventBus.MaxAckPending == 0 {
-		c.EventBus.MaxAckPending = 128
+		c.EventBus.MaxAckPending = 8
 	}
 	if c.EventBus.AckWaitMS == 0 {
 		c.EventBus.AckWaitMS = 120000
@@ -335,10 +337,14 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.BatchWaitMS <= 0 {
 		c.View.BatchWaitMS = 200
 	}
+	if c.View.FetchBatch <= 0 {
+		c.View.FetchBatch = 8
+	}
 	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 1
-	} else if c.View.MaxWorkers > 1 {
-		c.View.MaxWorkers = 1
+		c.View.MaxWorkers = 4
+	}
+	if c.View.Ordering == "" {
+		c.View.Ordering = "subject"
 	}
 	if c.View.Maintenance.Enabled == nil {
 		enabled := true

@@ -164,7 +164,7 @@ consumers:
     deliver_policy: all
     replay_policy: instant
     ack_wait: 120s
-    max_ack_pending: 1
+    max_ack_pending: 8
     max_deliver: -1
   - stream: MOOX_STORAGE
     durable: factor_calc

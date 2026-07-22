@@ -35,7 +35,7 @@ type Service struct {
 	byData       map[datasetRef]map[string]struct{}
 	liveWork     atomic.Int64
 	liveGateOnce sync.Once
-	liveGate     chan struct{}
+	liveGate     *liveLeaseGate
 }
 
 type datasetRef struct{ spaceID, datasetID string }

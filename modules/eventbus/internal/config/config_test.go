@@ -165,3 +165,15 @@ func TestValidateConsumerTemplate(t *testing.T) {
 	bad.Stream = "missing"
 	require.Error(t, validateConsumerTemplate(&bad, cfg))
 }
+
+func TestDefaultStorageViewConsumerAllowsParallelLanes(t *testing.T) {
+	for _, consumer := range Default().Consumers {
+		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "storage_view" {
+			if consumer.MaxAckPending != 8 {
+				t.Fatalf("storage_view max_ack_pending = %d, want 8", consumer.MaxAckPending)
+			}
+			return
+		}
+	}
+	t.Fatal("storage_view durable consumer missing")
+}

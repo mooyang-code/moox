@@ -21,7 +21,7 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 	if err := s.acquireBackfill(ctx); err != nil {
 		return err
 	}
-	defer s.releaseLiveGate()
+	defer s.releaseBackfill()
 	if batchSize <= 0 {
 		batchSize = 100
 	}

@@ -322,7 +322,11 @@ func runViewRole() error {
 		return err
 	}
 	defer eventClient.Close()
-	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient)
+	consumerOptions, err := storageViewConsumerOptions()
+	if err != nil {
+		return err
+	}
+	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, consumerOptions)
 	if err != nil {
 		return err
 	}
@@ -342,6 +346,24 @@ func runViewRole() error {
 		return err
 	}
 	return s.Serve()
+}
+
+func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return viewservice.EventConsumerOptions{}, nil
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
+	}
+	return viewservice.EventConsumerOptions{
+		FetchBatch:    runtimeConfig.Storage.View.FetchBatch,
+		MaxWorkers:    runtimeConfig.Storage.View.MaxWorkers,
+		MaxAckPending: runtimeConfig.Storage.EventBus.MaxAckPending,
+		Ordering:      runtimeConfig.Storage.View.Ordering,
+	}, nil
 }
 
 func envOrDefault(name, fallback string) string {
