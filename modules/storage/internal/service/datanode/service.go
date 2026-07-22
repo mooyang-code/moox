@@ -35,7 +35,7 @@ func ServiceAuthKey(secret, appID string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-var _ pb.DataNodeService = (*Service)(nil)
+var _ pb.DataNodeRuntimeService = (*Service)(nil)
 
 func NewService(opts Options) (*Service, error) {
 	store := opts.Store

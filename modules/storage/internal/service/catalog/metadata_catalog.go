@@ -258,6 +258,54 @@ func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatas
 	return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
 }
 
+func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+	}
+	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
+	return &pb.CheckDatasetActivationRsp{
+		RetInfo:         retinfo.Success("success"),
+		DatasetRevision: dataset.GetRevision(),
+		Checks:          checks,
+		Ready:           activationReady(checks),
+	}, nil
+}
+
+func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetReq) (*pb.ActivateDatasetRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || req.GetExpectedRevision() == 0 {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and expected_revision are required"))}, nil
+	}
+	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+	}
+	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
+	if !activationReady(checks) {
+		return &pb.ActivateDatasetRsp{
+			RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("Dataset activation checks failed")),
+			Checks:  checks,
+		}, nil
+	}
+	// An active, locked Dataset is the successful terminal state. Do not use
+	// the caller's stale revision to reject an idempotent retry and do not write.
+	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: dataset, Checks: checks}, nil
+	}
+	if dataset.GetRevision() != req.GetExpectedRevision() {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, errors.New("dataset revision conflict")), Checks: checks}, nil
+	}
+	activated, err := s.metadata.CommitDatasetActivation(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetExpectedRevision())
+	if err != nil {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err), Checks: checks}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "ActivateDataset")
+	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: activated, Checks: checks}, nil
+}
+
 func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSubjectReq) (*pb.BindDatasetSubjectRsp, error) {
 	item := req.GetDatasetSubject()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetSubjectId() == "" {
