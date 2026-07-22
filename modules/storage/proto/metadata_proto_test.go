@@ -93,6 +93,25 @@ func TestMetadataProtoCleanBreakContract(t *testing.T) {
 
 	if device := file.Messages().ByName("Device"); device.Fields().ByName("node_id") != nil {
 		t.Fatal("Device.node_id must be removed")
+	} else {
+		if !device.ReservedRanges().Has(2) {
+			t.Fatal("Device must reserve field number 2")
+		}
+		if !device.ReservedNames().Has("node_id") {
+			t.Fatal("Device must reserve field name node_id")
+		}
+	}
+}
+
+func TestDataNodeRuntimeProtoContract(t *testing.T) {
+	service := storagepb.File_data_node_proto.Services().ByName("DataNodeRuntime")
+	if service == nil {
+		t.Fatal("DataNodeRuntime service is missing")
+	}
+	for _, methodName := range []protoreflect.Name{"WriteFields", "ReadFields", "GetNodeState", "CleanupExpiredBuckets"} {
+		if service.Methods().ByName(methodName) == nil {
+			t.Fatalf("DataNodeRuntime RPC %q is missing", methodName)
+		}
 	}
 }
 
