@@ -105,6 +105,10 @@ if [[ "${FAKE_OCCUPY_9527:-0}" == 1 && "$*" == *TCP:9527* ]]; then
   printf '424242\n'
   exit 0
 fi
+if [[ -n "${FAKE_PID_STATE:-}" && -s "${FAKE_PID_STATE}" && "$*" == *"TCP:${FAKE_ADMIN_PORT}"* ]]; then
+  cat "${FAKE_PID_STATE}"
+  exit 0
+fi
 [[ -z "${REAL_LSOF:-}" ]] || exec "${REAL_LSOF}" "$@"
 SH
 chmod +x "${TMP}/cap-bin/getcap" "${TMP}/cap-bin/sudo" "${TMP}/cap-bin/lsof"
@@ -212,6 +216,7 @@ export MOOX_CADDY_ADMIN_ENDPOINT="127.0.0.1:${ADMIN_PORT}"
 export MOOX_CADDY_ADMIN_PATH=/
 export MOOX_CADDY_SKIP_PID_EXE_CHECK=1
 export MOOX_CADDY_SKIP_CA_WAIT=1
+export FAKE_PID_STATE="${TMP}/deploy/run/caddy.pid"
 MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" \
 MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
   "${HELPER}" install --deploy-dir "${TMP}/deploy" --os linux --arch amd64

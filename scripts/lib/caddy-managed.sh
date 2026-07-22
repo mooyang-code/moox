@@ -180,11 +180,25 @@ managed_process() {
   fi
   [[ "${command}" == "${BIN} run --config ${CONFIG} --adapter caddyfile" ]]
 }
-pid_owned() {
+recorded_managed_process() {
   [[ -s "${PIDFILE}" ]] || return 1
   local pid
   pid=$(cat "${PIDFILE}")
   managed_process "${pid}"
+}
+pid_owned() {
+  recorded_managed_process || return 1
+  local pid port owners admin_port
+  pid=$(cat "${PIDFILE}")
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    owners=$(port_pids "${port}")
+    [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] && return 0
+  done
+  admin_port=${ADMIN_ENDPOINT##*:}
+  owners=$(port_pids "${admin_port}")
+  [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] && return 0
+  return 1
 }
 clean_stale_pid() { [[ ! -e "${PIDFILE}" ]] || pid_owned || { log 'removing stale or mismatched PID file without signaling it'; rm -f "${PIDFILE}"; }; }
 stop_recorded_pid() {
@@ -193,7 +207,12 @@ stop_recorded_pid() {
   if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
     kill "${pid}" 2>/dev/null || true
     for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+      for _ in $(seq 1 10); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+    fi
   fi
+  kill -0 "${pid}" 2>/dev/null && fail "managed Caddy did not stop"
   rm -f "${PIDFILE}"
 }
 stop_managed_process() {
@@ -343,7 +362,7 @@ validate_ports
 
 case "${COMMAND}" in
   install) snapshot_file "${BIN}"; install_binary; reconcile_bind_capability;;
-  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; clean_stale_pid; reconcile_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
+  check) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; if recorded_managed_process && ! pid_owned; then fail "managed PID does not own a configured edge or admin listener"; fi; clean_stale_pid; reconcile_bind_capability; validate; check_ports; [[ ! -s "${PIDFILE}" ]] || admin_healthy || fail "managed admin endpoint is unhealthy or owned by another PID";;
   ensure)
     mkdir -p "${DEPLOY_DIR}/config/caddy" "${DEPLOY_DIR}/data/caddy" "${DEPLOY_DIR}/run"
     [[ -z "${CONFIG_SOURCE}" ]] || cp "${CONFIG_SOURCE}" "${CONFIG}.candidate"
