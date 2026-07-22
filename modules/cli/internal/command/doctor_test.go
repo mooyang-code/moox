@@ -29,3 +29,12 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 	require.Equal(t, 2, doctorExitCode(core.ConclusionUnhealthy))
 	require.Equal(t, 3, doctorExitCode(core.ConclusionInconclusive))
 }
+
+func TestStorageMetadataClientUsesReadOnlySignedIdentity(t *testing.T) {
+	client := newSignedStorageMetadataClient("http://127.0.0.1:20200", "storage-secret")
+	signed, ok := client.(*signedStorageMetadataClient)
+	require.True(t, ok)
+	require.Equal(t, "storage-metadata", signed.auth.GetAppId())
+	require.Len(t, signed.auth.GetAppKey(), 64)
+	require.NotNil(t, signed.proxy)
+}

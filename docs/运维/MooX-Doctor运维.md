@@ -6,7 +6,7 @@ Doctor V1 是 `moox-cli` 中由用户手工触发的只读诊断能力，不是�
 
 发布前运行 `bash scripts/test-doctor-e2e.sh`，复验部署清单、身份注入、Storage 零修改边界、上下文限制和故障注入用例。默认 seed 只把部署脚本实际编排的进程标为 active；Trade 和 HostAgent 保留在清单中，但在单独部署前为 disabled。
 
-Storage 正在独立重构。V1 仍检查其 SysDeploy inventory 和已有 `/healthz`、`/readyz`、Reporter 事实，但新增功能水位以及穿过 Storage 的 pipeline 一律输出 `SKIPPED(storage_observability_deferred)`，不得解释为通过。
+Storage 正在独立重构。V1 仍检查其 SysDeploy inventory 和已有 `/healthz`、`/readyz`、Reporter 事实，并启用固定 Check `bootstrap.storage_dataset_activation`：它使用现有 Metadata 配置和 Storage service HMAC，只读取 disabled Dataset 并调用 `CheckDatasetActivation`，不调用 `ActivateDataset`。Metadata endpoint 使用既有 `MOOX_METADATA_URL`（未设置时为本机 `http://127.0.0.1:20200`），服务身份使用 `MOOX_STORAGE_NODE_AUTH_SECRET` 计算 `storage-metadata` AppKey。所有 disabled Dataset 都 ready 才是 `HEALTHY`；ready 检查失败显示 `DEGRADED`，Metadata 不可达显示 `UNKNOWN/INCONCLUSIVE`。每次最多输出 16 条 Dataset Observation，超出部分只显示省略数量；Space/Dataset 排序固定，响应正文、地址、密钥和原始失败详情会被摘要化。更广泛的 Storage 功能水位以及穿过 Storage 的 pipeline 仍一律输出 `SKIPPED(storage_observability_deferred)`，不得解释为通过。
 
 ## 命令
 
@@ -25,6 +25,14 @@ cd /home/ubuntu/moox/prod
 
 也可使用 `--format text|markdown`，或用可重复的 `--check <id>` 只执行指定 Check 及其依赖。`bootstrap` 拒绝非本机 `--node`；远程节点应通过已有 SSH 运维入口登录后执行。V1 不提供 `full/get/list/cancel/rerun`。
 
+只查看 Dataset 激活准备度时，可显式运行：
+
+```bash
+./bin/moox-cli doctor bootstrap --check bootstrap.storage_dataset_activation --format json
+```
+
+该命令只生成观测报告，不改变 Dataset 的 `status` 或 `revision`。部署初始化在 Doctor 总结为 `HEALTHY` 后，必须由独立的部署激活流程显式调用 `ActivateDataset`；普通 `doctor bootstrap` 和 `doctor diagnose` 都不承担恢复或激活职责。
+
 退出码固定为：`0=HEALTHY`、`1=DEGRADED`、`2=UNHEALTHY`、`3=INCONCLUSIVE/调用错误`。JSON 是唯一 canonical report；text 和 Markdown 只渲染同一份报告。
 
 ## 安全和限额
@@ -33,6 +41,7 @@ cd /home/ubuntu/moox/prod
 - 单次直读超时 5 秒、响应上限 1 MiB；正文不进入报告，只记录摘要和 SHA-256。
 - Context 最多 64 个组件、32 个 pipeline、每类 128 条 Observation、100 条告警、2 MiB 响应。
 - Doctor 最多执行 256 个 Check，功能指标固定白名单且最多 256 条 series。
+- Storage Dataset 激活观测使用固定 3 秒 Check 超时，最多报告 16 条 Observation，并以摘要记录省略数量。
 - 路径检查只能在 Manifest 声明的 release-relative writable path 创建 `.moox-doctor-probe-*`，无论成功、失败、超时或取消都会删除。
 - CLI 只输出建议，不执行恢复命令，也不写业务事实。
 

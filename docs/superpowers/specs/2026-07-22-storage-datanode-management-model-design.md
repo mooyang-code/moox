@@ -247,11 +247,11 @@ Info 图标必须支持鼠标悬停、键盘聚焦和无障碍名称。Tooltip �
 
 ## Doctor 与自检边界
 
-现有 `doctor bootstrap|diagnose` 默认保持只读，不因一次普通诊断命令修改 Dataset 状态。Doctor Runner 只调用 `CheckDatasetActivation` 并把结果记录为 Observation，不直接调用 `ActivateDataset`。
+现有 `doctor bootstrap|diagnose` 默认保持只读，不因一次普通诊断命令修改 Dataset 状态。固定 Check ID `bootstrap.storage_dataset_activation` 在 Doctor V1 中启用：Runner 只调用 `ListDatasets` 和 `CheckDatasetActivation`，把 disabled Dataset 的 readiness 结果记录为有界 Observation，不直接调用 `ActivateDataset`。每次最多保留 16 条 Observation，超出部分只保留省略数量摘要；Space/Dataset 按稳定顺序输出，响应正文、服务地址、认证信息和原始检查摘要不得进入报告。
 
 初始化或部署编排在 Doctor bootstrap 总结为 HEALTHY 后，显式调用 `ActivateDataset`。这一步必须在部署日志中记录 Dataset ID、检查摘要、激活结果和 Metadata revision。若用户只运行 Doctor 诊断，不会触发激活。
 
-Storage readiness 检查从现有 deferred 状态升级为 active 时，应复用固定 Check ID 和有界超时，不允许任意脚本、动态检查 DSL 或自动修复动作。激活是用户启动的初始化流程中的显式状态转换，不属于 Doctor 自动修复。
+Storage Dataset readiness 检查从现有 deferred 状态升级为 active 时，应复用固定 Check ID 和有界超时，不允许任意脚本、动态检查 DSL 或自动修复动作。所有 disabled Dataset readiness 通过才可得出 `HEALTHY`；已确认的失败检查输出 `DEGRADED`，Metadata 不可达输出 `UNKNOWN/INCONCLUSIVE`。更广泛的 Storage 功能观测仍保持 deferred。激活是用户启动的初始化流程中的显式状态转换，不属于 Doctor 自动修复。
 
 ## 清理范围
 

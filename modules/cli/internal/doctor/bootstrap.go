@@ -27,6 +27,7 @@ type BootstrapOptions struct {
 	NodeID, LocalNodeID, ReleaseRoot, SeedPath, PipelinePath string
 	CheckIDs                                                 []string
 	Client                                                   DeploymentClient
+	StorageActivation                                        StorageActivationClient
 	Prober                                                   HTTPProber
 	Now                                                      func() time.Time
 	ProbeWritable                                            func(context.Context, string, string) error
@@ -84,7 +85,11 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 }
 
 func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
-	specs := []core.CheckSpec{{ID: "bootstrap.release_contract"}, {ID: "bootstrap.inventory", RequiredDependencies: []string{"bootstrap.release_contract"}}}
+	specs := []core.CheckSpec{
+		{ID: "bootstrap.release_contract"},
+		{ID: "bootstrap.inventory", RequiredDependencies: []string{"bootstrap.release_contract"}},
+		{ID: storageDatasetActivationCheckID, Timeout: storageActivationCheckTimeout},
+	}
 	healthChecks := map[string]string{}
 	for _, component := range manifest.Components {
 		scope := component.ComponentID + "@" + nodeID
@@ -140,6 +145,9 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	}
 	if spec.ID == "monitor.metrics_delivery" {
 		return checkResult(spec.ID, core.StatusPass, "EventBus and Monitor health dependencies passed", nil)
+	}
+	if spec.ID == storageDatasetActivationCheckID {
+		return r.runStorageDatasetActivation(ctx, spec)
 	}
 	component, kind, ok := r.componentForCheck(spec.ID)
 	if !ok {
