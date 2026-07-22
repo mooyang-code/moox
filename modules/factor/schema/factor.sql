@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS t_factor_event_inbox (
 CREATE INDEX IF NOT EXISTS idx_factor_event_inbox_received
 ON t_factor_event_inbox(c_received_at, c_message_id);
 
+CREATE TABLE IF NOT EXISTS t_factor_event_processed (
+    c_message_id TEXT PRIMARY KEY,
+    c_processed_at DATETIME NOT NULL
+);
+
 CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime AFTER UPDATE ON t_factor_defs
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN

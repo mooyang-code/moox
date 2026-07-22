@@ -25,7 +25,7 @@ func TestSubjectLaneDifferentSubjectsRunInParallel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	aStarted, bStarted, releaseA := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	d := newSubjectLaneDispatcher(ctx, 2, func(_ context.Context, delivery *jetstream.Delivery) error {
+	d := newSubjectLaneDispatcher(ctx, 2, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
 		if delivery.Subject == "A" {
 			close(aStarted)
 			<-releaseA
@@ -60,7 +60,7 @@ func TestSubjectLanePreservesFetchOrder(t *testing.T) {
 	firstStarted, releaseFirst, secondDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var mu sync.Mutex
 	var order []string
-	d := newSubjectLaneDispatcher(ctx, 4, func(_ context.Context, delivery *jetstream.Delivery) error {
+	d := newSubjectLaneDispatcher(ctx, 4, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
 		if delivery.RawMessageID == "first" {
 			close(firstStarted)
 			<-releaseFirst
@@ -107,7 +107,7 @@ func TestSubjectLaneRetryKeepsLaneBlockedButOtherSubjectRuns(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	aFailed, retryA, aSecond, bStarted := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
-	d := newSubjectLaneDispatcher(ctx, 2, func(_ context.Context, delivery *jetstream.Delivery) error {
+	d := newSubjectLaneDispatcher(ctx, 2, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
 		switch delivery.RawMessageID {
 		case "a1":
 			close(aFailed)
@@ -146,6 +146,64 @@ func TestSubjectLaneRetryKeepsLaneBlockedButOtherSubjectRuns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("same subject did not resume")
 	}
+}
+
+func TestSubjectLaneStartsHeartbeatWhenDeliveryIsQueuedAndStopsItOnClose(t *testing.T) {
+	ctx := context.Background()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	queuedHeartbeat := make(chan *deliveryHeartbeat, 2)
+	d := newSubjectLaneDispatcher(ctx, 1, func(handlerCtx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+		if delivery.RawMessageID == "first" {
+			close(firstStarted)
+			select {
+			case <-releaseFirst:
+			case <-handlerCtx.Done():
+			}
+		}
+		if delivery.RawMessageID == "second" {
+			t.Fatalf("queued delivery started before first finished")
+		}
+		if heartbeat == nil {
+			t.Fatal("handler did not receive queued heartbeat")
+		}
+		return nil
+	}, nil, laneMetricsHooks{
+		newHeartbeat: func(context.Context, *jetstream.Delivery) *deliveryHeartbeat {
+			h := &deliveryHeartbeat{stopCh: make(chan struct{}), doneCh: make(chan struct{})}
+			go func() {
+				<-h.stopCh
+				close(h.doneCh)
+			}()
+			queuedHeartbeat <- h
+			return h
+		},
+	})
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "same", RawMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	<-queuedHeartbeat // the first delivery also starts its heartbeat at dispatch.
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first delivery did not start")
+	}
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "same", RawMessageID: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	var heartbeat *deliveryHeartbeat
+	select {
+	case heartbeat = <-queuedHeartbeat:
+	case <-time.After(time.Second):
+		t.Fatal("queued delivery did not start its heartbeat")
+	}
+	d.Close()
+	select {
+	case <-heartbeat.doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("queued heartbeat was not stopped on dispatcher close")
+	}
+	close(releaseFirst)
 }
 
 func TestBackfillWriterWaitsForLiveAndBlocksNewLive(t *testing.T) {

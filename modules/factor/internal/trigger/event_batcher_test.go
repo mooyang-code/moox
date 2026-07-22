@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,7 +12,9 @@ import (
 )
 
 type pendingStoreFake struct {
-	rows map[string]pendingStoreRow
+	rows      map[string]pendingStoreRow
+	processed map[string]struct{}
+	commitErr error
 }
 
 type pendingStoreRow struct {
@@ -29,6 +32,11 @@ func (s *pendingStoreFake) PutPendingEvent(_ context.Context, id string, event *
 	return nil
 }
 
+func (s *pendingStoreFake) IsProcessedEvent(_ context.Context, id string) (bool, error) {
+	_, ok := s.processed[id]
+	return ok, nil
+}
+
 func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.DatasetFieldsChanged, time.Time) error) error {
 	for id, row := range s.rows {
 		if err := visit(id, proto.Clone(row.event).(*storagepb.DatasetFieldsChanged), row.receivedAt); err != nil {
@@ -38,8 +46,15 @@ func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(strin
 	return nil
 }
 
-func (s *pendingStoreFake) DeletePendingEvents(_ context.Context, ids []string) error {
+func (s *pendingStoreFake) CommitPendingEvents(_ context.Context, ids []string) error {
+	if s.commitErr != nil {
+		return s.commitErr
+	}
+	if s.processed == nil {
+		s.processed = map[string]struct{}{}
+	}
 	for _, id := range ids {
+		s.processed[id] = struct{}{}
 		delete(s.rows, id)
 	}
 	return nil
@@ -65,8 +80,63 @@ func TestDurableEventBatcherPersistsAndReplaysBeforeFlush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 || len(inbox.rows) != 0 {
-		t.Fatalf("tasks=%+v pending=%d, want one task and empty inbox", tasks, len(inbox.rows))
+	if len(tasks) != 1 || len(inbox.rows) != 1 {
+		t.Fatalf("tasks=%+v pending=%d, want one task and retained inbox", tasks, len(inbox.rows))
+	}
+	if err := restarted.CommitPending(context.Background(), tasks...); err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.rows) != 0 || len(inbox.processed) != 1 {
+		t.Fatalf("pending=%d processed=%d, want committed event", len(inbox.rows), len(inbox.processed))
+	}
+}
+
+func TestDurableEventBatcherRestoresPendingWhenCommitFails(t *testing.T) {
+	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	inbox := &pendingStoreFake{commitErr: errors.New("delete failed")}
+	d := NewDurableEventBatcher(2*time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")}, inbox)
+	if err := d.IngestMessage(context.Background(), "message-1", event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now), now); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := d.FlushPending(context.Background(), now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CommitPending(context.Background(), tasks...); !errors.Is(err, inbox.commitErr) {
+		t.Fatalf("commit error = %v, want %v", err, inbox.commitErr)
+	}
+	if err := d.RestorePending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := d.FlushPending(context.Background(), now.Add(6*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != 1 || len(restored[0].PendingEventIDs) != 1 {
+		t.Fatalf("restored tasks = %+v, want pending event restored", restored)
+	}
+}
+
+func TestDurableEventBatcherSkipsProcessedRedelivery(t *testing.T) {
+	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	inbox := &pendingStoreFake{}
+	d := NewDurableEventBatcher(2*time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")}, inbox)
+	e := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	if err := d.IngestMessage(context.Background(), "message-1", e, now); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := d.FlushPending(context.Background(), now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CommitPending(context.Background(), tasks...); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.IngestMessage(context.Background(), "message-1", e, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if tasks, err := d.FlushPending(context.Background(), now.Add(6*time.Second)); err != nil || len(tasks) != 0 {
+		t.Fatalf("redelivery tasks=%+v err=%v, want no task", tasks, err)
 	}
 }
 

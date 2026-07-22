@@ -380,20 +380,39 @@ func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {
 func drainEventBatch(ctx context.Context, deps realtimeLoopDeps) {
 	tasks, err := deps.eventBatcher.FlushPending(ctx, time.Now())
 	if err != nil {
-		log.WarnContextf(ctx, "删除已 flush 的 factor event inbox 失败: %v", err)
+		log.WarnContextf(ctx, "flush factor event inbox 失败: %v", err)
 		return
 	}
 	for _, task := range tasks {
 		schedTask, err := buildSchedulerTask(ctx, deps.factors, deps.factorsDir, task)
 		if err != nil {
 			log.WarnContextf(ctx, "构造 factor 调度任务失败: %v", err)
-			continue
+			if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+				log.WarnContextf(ctx, "恢复失败的 factor event inbox 失败: %v", restoreErr)
+			}
+			return
 		}
 		if err := syncTaskMetadata(ctx, deps.meta, schedTask, deps.factors); err != nil {
 			log.WarnContextf(ctx, "同步 factor metadata 失败: %v", err)
-			continue
+			if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+				log.WarnContextf(ctx, "恢复失败的 factor event inbox 失败: %v", restoreErr)
+			}
+			return
 		}
-		deps.scheduler.Enqueue(ctx, schedTask)
+		if err := deps.scheduler.EnqueueChecked(ctx, schedTask); err != nil {
+			log.WarnContextf(ctx, "factor 调度任务入队失败: %v", err)
+			if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+				log.WarnContextf(ctx, "恢复失败的 factor event inbox 失败: %v", restoreErr)
+			}
+			return
+		}
+	}
+	if err := deps.eventBatcher.CommitPending(ctx, tasks...); err != nil {
+		log.WarnContextf(ctx, "提交已入队的 factor event inbox 失败: %v", err)
+		if restoreErr := deps.eventBatcher.RestorePending(ctx); restoreErr != nil {
+			log.WarnContextf(ctx, "恢复待提交的 factor event inbox 失败: %v", restoreErr)
+		}
+		return
 	}
 }
 

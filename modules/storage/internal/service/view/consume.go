@@ -107,9 +107,12 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		return nil, err
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
-	dispatcher := newSubjectLaneDispatcher(loopCtx, opts.MaxWorkers, func(ctx context.Context, delivery *jetstream.Delivery) error {
-		return s.processDelivery(ctx, delivery)
+	dispatcher := newSubjectLaneDispatcher(loopCtx, opts.MaxWorkers, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+		return s.processDelivery(ctx, delivery, heartbeat)
 	}, reporter, laneMetricsHooks{
+		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
+			return newDeliveryHeartbeat(ctx, delivery, 30*time.Second, opts.Metrics)
+		},
 		onSubmit: func(delivery *jetstream.Delivery) {
 			opts.Metrics.ObserveLaneSubmit()
 			opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
@@ -162,7 +165,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	return func() { cancel(); <-done }, nil
 }
 
-func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
 	if s == nil {
 		return errors.New("storage view service is nil")
 	}
@@ -183,7 +186,13 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 	}
 	s.liveWork.Add(1)
 	defer s.liveWork.Add(-1)
-	heartbeat := newDeliveryHeartbeat(ctx, delivery, 30*time.Second, metrics)
+	heartbeat := (*deliveryHeartbeat)(nil)
+	if len(queued) > 0 {
+		heartbeat = queued[0]
+	}
+	if heartbeat == nil {
+		heartbeat = newDeliveryHeartbeat(ctx, delivery, 30*time.Second, metrics)
+	}
 	defer func() { heartbeat.stop() }()
 	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
 		return errors.Join(err, heartbeat.err())
@@ -621,18 +630,24 @@ func isPermanentDeliveryError(err error) bool {
 	return errors.As(err, &target)
 }
 
-type laneHandler func(context.Context, *jetstream.Delivery) error
+type laneHandler func(context.Context, *jetstream.Delivery, *deliveryHeartbeat) error
 
 type laneMetricsHooks struct {
-	onSubmit func(*jetstream.Delivery)
-	onStart  func(*jetstream.Delivery)
-	onFinish func(*jetstream.Delivery)
+	newHeartbeat func(context.Context, *jetstream.Delivery) *deliveryHeartbeat
+	onSubmit     func(*jetstream.Delivery)
+	onStart      func(*jetstream.Delivery)
+	onFinish     func(*jetstream.Delivery)
 }
 
 type subjectLane struct {
 	subject string
-	queue   []*jetstream.Delivery
+	queue   []*laneDelivery
 	running bool
+}
+
+type laneDelivery struct {
+	delivery  *jetstream.Delivery
+	heartbeat *deliveryHeartbeat
 }
 
 // subjectLaneDispatcher is a scheduler rather than a plain worker pool: a
@@ -686,7 +701,11 @@ func (d *subjectLaneDispatcher) Dispatch(delivery *jetstream.Delivery) error {
 		lane = &subjectLane{subject: delivery.Subject}
 		d.lanes[delivery.Subject] = lane
 	}
-	lane.queue = append(lane.queue, delivery)
+	var heartbeat *deliveryHeartbeat
+	if d.hooks.newHeartbeat != nil {
+		heartbeat = d.hooks.newHeartbeat(d.ctx, delivery)
+	}
+	lane.queue = append(lane.queue, &laneDelivery{delivery: delivery, heartbeat: heartbeat})
 	start := !lane.running
 	if start {
 		lane.running = true
@@ -713,15 +732,16 @@ func (d *subjectLaneDispatcher) worker() {
 			if lane == nil {
 				continue
 			}
-			delivery, ok := d.next(lane)
+			item, ok := d.next(lane)
 			if !ok {
 				continue
 			}
+			delivery := item.delivery
 			if d.hooks.onStart != nil {
 				d.hooks.onStart(delivery)
 			}
 			if d.handler != nil {
-				if err := d.handler(d.ctx, delivery); err != nil && d.ctx.Err() == nil && d.reporter != nil {
+				if err := d.handler(d.ctx, delivery, item.heartbeat); err != nil && d.ctx.Err() == nil && d.reporter != nil {
 					d.reporter.Report(fmt.Errorf("storage view subject %q delivery failed: %w", lane.subject, err))
 				}
 			}
@@ -735,7 +755,7 @@ func (d *subjectLaneDispatcher) worker() {
 	}
 }
 
-func (d *subjectLaneDispatcher) next(lane *subjectLane) (*jetstream.Delivery, bool) {
+func (d *subjectLaneDispatcher) next(lane *subjectLane) (*laneDelivery, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(lane.queue) == 0 {
@@ -778,11 +798,23 @@ func (d *subjectLaneDispatcher) Close() {
 		return
 	}
 	d.mu.Lock()
+	var queued []*deliveryHeartbeat
 	if !d.closed {
 		d.closed = true
 		d.cancel()
+		for _, lane := range d.lanes {
+			for _, item := range lane.queue {
+				if item != nil && item.heartbeat != nil {
+					queued = append(queued, item.heartbeat)
+				}
+			}
+			lane.queue = nil
+		}
 	}
 	d.mu.Unlock()
+	for _, heartbeat := range queued {
+		heartbeat.stop()
+	}
 	d.wg.Wait()
 }
 

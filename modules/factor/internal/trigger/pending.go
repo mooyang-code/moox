@@ -11,6 +11,7 @@ import (
 // Factor's in-memory event windows.
 type PendingEventStore interface {
 	PutPendingEvent(context.Context, string, *storagepb.DatasetFieldsChanged, time.Time) error
+	IsProcessedEvent(context.Context, string) (bool, error)
 	LoadPendingEvents(context.Context, func(string, *storagepb.DatasetFieldsChanged, time.Time) error) error
-	DeletePendingEvents(context.Context, []string) error
+	CommitPendingEvents(context.Context, []string) error
 }

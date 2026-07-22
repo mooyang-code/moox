@@ -87,7 +87,18 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 }
 
 // Enqueue adds a task, replacing older pending work for the same subject scope.
+// It is kept as a compatibility wrapper for RPC/runtime callers that use the
+// fire-and-forget scheduler interface.
 func (s *Service) Enqueue(ctx context.Context, task Task) {
+	_ = s.EnqueueChecked(ctx, task)
+}
+
+// EnqueueChecked is the durable trigger boundary: callers must not commit an
+// event inbox until this method confirms that the task was accepted.
+func (s *Service) EnqueueChecked(ctx context.Context, task Task) error {
+	if s == nil {
+		return errors.New("scheduler is nil")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := keyOf(task)
@@ -103,11 +114,11 @@ func (s *Service) Enqueue(ctx context.Context, task Task) {
 			case signal <- struct{}{}:
 			default:
 			}
-			return
+			return nil
 		}
 		s.supersedeCount.Add(1)
 		_ = s.record(ctx, task, domain.RunStatusSuperseded, "older than pending task", 0, nil)
-		return
+		return nil
 	}
 	s.pending[key] = task
 	shard := HashSubject(task.SubjectID, s.cfg.Workers)
@@ -117,6 +128,7 @@ func (s *Service) Enqueue(ctx context.Context, task Task) {
 	case signal <- struct{}{}:
 	default:
 	}
+	return nil
 }
 
 // Start launches one FIFO consumer for each subject shard. Drain remains the
