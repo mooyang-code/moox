@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	_ "modernc.org/sqlite"
 )
+
+var _ coremetadata.Store = (*Store)(nil)
 
 type readSnapshotContextKey struct{}
 

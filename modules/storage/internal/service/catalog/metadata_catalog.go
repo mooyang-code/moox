@@ -231,11 +231,33 @@ func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.Ge
 }
 
 func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
-	items, page, err := s.metadata.ListDatasets(ctx, req.GetSpaceId(), req.GetDataSourceId(), req.GetDataKind(), req.GetFreq(), req.GetPage())
+	query := coremetadata.DatasetQuery{
+		SpaceID:      req.GetSpaceId(),
+		DataSourceID: req.GetDataSourceId(),
+		DataNodeID:   req.GetDataNodeId(),
+		DataKind:     req.GetDataKind(),
+		Freq:         req.GetFreq(),
+		Page:         req.GetPage(),
+	}
+	items, page, err := s.metadata.ListDatasets(ctx, query)
 	if err != nil {
 		return &pb.ListDatasetsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDatasetsRsp{RetInfo: retinfo.Success("success"), Datasets: items, PageResult: page}, nil
+}
+
+func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatasetDataNodeReq) (*pb.RebindDatasetDataNodeRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || strings.TrimSpace(req.GetDataNodeId()) == "" || req.GetExpectedRevision() == 0 {
+		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, data_node_id and expected_revision are required"))}, nil
+	}
+	dataset, err := s.metadata.RebindDatasetDataNode(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetDataNodeId(), req.GetExpectedRevision())
+	if err != nil {
+		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
 }
 
 func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSubjectReq) (*pb.BindDatasetSubjectRsp, error) {

@@ -21,27 +21,25 @@ const (
 	indexKind               = "kind"
 	indexPrimary            = "primary"
 	indexDataset            = "dataset"
-	indexNode               = "node"
 	indexViewPrimaryDataset = "view_primary_dataset"
 )
 
 const (
-	kindSpace             = "space"
-	kindView              = "view"
-	kindViewColumn        = "view_column"
-	kindDataSource        = "data_source"
-	kindSubject           = "subject"
-	kindSubjectSymbol     = "subject_symbol"
-	kindDataset           = "dataset"
-	kindDatasetSubject    = "dataset_subject"
-	kindFieldGroup        = "field_group"
-	kindField             = "field"
-	kindFactor            = "factor"
-	kindDatasetColumn     = "dataset_column"
-	kindPrimaryStoreNode  = "storage_node"
-	kindDevice            = "device"
-	kindPrimaryStoreRoute = "storage_route"
-	kindArchiveFile       = "archive_file"
+	kindSpace          = "space"
+	kindView           = "view"
+	kindViewColumn     = "view_column"
+	kindDataSource     = "data_source"
+	kindSubject        = "subject"
+	kindSubjectSymbol  = "subject_symbol"
+	kindDataset        = "dataset"
+	kindDatasetSubject = "dataset_subject"
+	kindFieldGroup     = "field_group"
+	kindField          = "field"
+	kindFactor         = "factor"
+	kindDatasetColumn  = "dataset_column"
+	kindDataNode       = "data_node"
+	kindDevice         = "device"
+	kindArchiveFile    = "archive_file"
 )
 
 // Options 保存元数据缓存包装器配置。
@@ -81,10 +79,11 @@ type entry struct {
 	Freqs          []string `json:"freqs,omitempty"`
 	KeepDuration   string   `json:"keep_duration,omitempty"`
 	DataNodeID     string   `json:"data_node_id,omitempty"`
+	BindingLocked  bool     `json:"binding_locked,omitempty"`
+	Revision       uint64   `json:"revision,omitempty"`
 	ViewID         string   `json:"view_id,omitempty"`
 	ValueType      int32    `json:"value_type,omitempty"`
 	Algorithm      string   `json:"algorithm,omitempty"`
-	NodeID         string   `json:"node_id,omitempty"`
 	Engine         string   `json:"engine,omitempty"`
 	Payload        []byte   `json:"payload"`
 }
@@ -116,7 +115,9 @@ func (s *Store) Snapshot() *MetadataSnapshot {
 
 func (s *Store) SnapshotReader() metadata.SnapshotReader { return s.Snapshot() }
 
-func (s *Store) RequestSnapshot() metadata.RequestSnapshot { return s.Snapshot() }
+func (s *Store) RequestSnapshot() metadata.RequestSnapshot {
+	return &requestSnapshot{snapshot: s.Snapshot()}
+}
 
 var _ metadata.Reader = (*Store)(nil)
 
@@ -142,12 +143,6 @@ func New(ctx context.Context, base metadata.Reader, opts Options) (*Store, error
 					return nil
 				}
 				return []string{item.Kind, item.SpaceID, item.DatasetID}
-			}},
-			{Name: indexNode, Key: func(item entry) []string {
-				if item.NodeID == "" {
-					return nil
-				}
-				return []string{item.Kind, item.NodeID}
 			}},
 			{Name: indexViewPrimaryDataset, Key: func(item entry) []string {
 				if item.Kind != kindView || item.DatasetID == "" {
@@ -208,8 +203,31 @@ func (s *MetadataSnapshot) ListDatasetColumns(ctx context.Context, spaceID strin
 	return pageItems(items, page)
 }
 
-func (s *MetadataSnapshot) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
-	return snapshotGetProto(s, ctx, kindPrimaryStoreNode, "", nodeID, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
+type requestSnapshot struct{ snapshot *MetadataSnapshot }
+
+func (s *requestSnapshot) GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool) {
+	if s == nil || s.snapshot == nil {
+		return nil, false
+	}
+	item, err := s.snapshot.GetDataset(context.Background(), spaceID, datasetID)
+	return item, err == nil
+}
+
+func (s *requestSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
+	if s == nil || s.snapshot == nil {
+		return nil, false
+	}
+	item, err := s.snapshot.getDataNode(context.Background(), nodeID)
+	return item, err == nil
+}
+
+func (s *MetadataSnapshot) getDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error) {
+	return snapshotGetProto(s, ctx, kindDataNode, "", nodeID, func() *pb.DataNode { return &pb.DataNode{} })
+}
+
+func (s *MetadataSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
+	item, err := s.getDataNode(context.Background(), nodeID)
+	return item, err == nil
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
@@ -356,28 +374,27 @@ func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID 
 	return getProto(s, ctx, kindDatasetColumn, spaceID, compositeID(datasetID, columnName), func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }
 
-// GetDataNode is the concise DataNode name used by the new storage write path.
-// The underlying metadata wire type remains PrimaryStoreNode for the control plane.
-func (s *Store) GetDataNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
-	return s.GetPrimaryStoreNode(ctx, nodeID)
-}
-
-// ListDataNodes is the concise alias used by routing code.
-func (s *Store) ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
-	return s.ListPrimaryStoreNodes(ctx, page)
-}
-
-func (s *Store) ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
+func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	items, err := decodeEntries(s.list(kindDataset, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(dataSourceID == "" || item.DataSourceID == dataSourceID) &&
-			(dataKind == pb.DataKind_DATA_KIND_UNSPECIFIED || item.DataKind == int32(dataKind)) &&
-			(freq == "" || containsString(item.Freqs, freq))
+		if query.SpaceID != "" && item.SpaceID != query.SpaceID {
+			return false
+		}
+		if query.DataSourceID != "" && item.DataSourceID != query.DataSourceID {
+			return false
+		}
+		if query.DataNodeID != "" && item.DataNodeID != query.DataNodeID {
+			return false
+		}
+		if len(query.DataNodeIDs) > 0 && !containsString(query.DataNodeIDs, item.DataNodeID) {
+			return false
+		}
+		return (query.DataKind == pb.DataKind_DATA_KIND_UNSPECIFIED || item.DataKind == int32(query.DataKind)) &&
+			(query.Freq == "" || containsString(item.Freqs, query.Freq))
 	}), func() *pb.Dataset { return &pb.Dataset{} })
 	if err != nil {
 		return nil, nil, err
 	}
-	return pageItems(items, page)
+	return pageItems(items, query.Page)
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
@@ -530,12 +547,12 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 	return pageItems(items, page)
 }
 
-func (s *Store) GetPrimaryStoreNode(ctx context.Context, nodeID string) (*pb.PrimaryStoreNode, error) {
-	return getProto(s, ctx, kindPrimaryStoreNode, "", nodeID, func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
+func (s *Store) GetDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error) {
+	return getProto(s, ctx, kindDataNode, "", nodeID, func() *pb.DataNode { return &pb.DataNode{} })
 }
 
-func (s *Store) ListPrimaryStoreNodes(ctx context.Context, page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindPrimaryStoreNode, nil), func() *pb.PrimaryStoreNode { return &pb.PrimaryStoreNode{} })
+func (s *Store) ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
+	items, err := decodeEntries(s.list(kindDataNode, nil), func() *pb.DataNode { return &pb.DataNode{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -546,57 +563,9 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*pb.Device, err
 	return getProto(s, ctx, kindDevice, "", deviceID, func() *pb.Device { return &pb.Device{} })
 }
 
-func (s *Store) ListDevices(ctx context.Context, nodeID string, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	var raw []entry
-	if nodeID != "" {
-		raw = s.listByIndex(indexNode, kindDevice, nodeID)
-		if engine != "" {
-			filtered := make([]entry, 0, len(raw))
-			for _, item := range raw {
-				if item.Engine == engine {
-					filtered = append(filtered, item)
-				}
-			}
-			raw = filtered
-		}
-	} else {
-		raw = s.list(kindDevice, func(item entry) bool {
-			return engine == "" || item.Engine == engine
-		})
-	}
+func (s *Store) ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
+	raw := s.list(kindDevice, func(item entry) bool { return engine == "" || item.Engine == engine })
 	items, err := decodeEntries(raw, func() *pb.Device { return &pb.Device{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
-func (s *Store) GetPrimaryStoreRoute(ctx context.Context, spaceID string, routeID string) (*pb.PrimaryStoreRoute, error) {
-	return getProto(s, ctx, kindPrimaryStoreRoute, spaceID, routeID, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
-}
-
-func (s *Store) ListPrimaryStoreRoutes(ctx context.Context, spaceID string, datasetID string, subjectID string, nodeID string, page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
-	var raw []entry
-	if spaceID != "" && datasetID != "" {
-		raw = s.listByIndex(indexDataset, kindPrimaryStoreRoute, spaceID, datasetID)
-		if subjectID != "" || nodeID != "" {
-			filtered := make([]entry, 0, len(raw))
-			for _, item := range raw {
-				if (subjectID == "" || item.SubjectID == subjectID) && (nodeID == "" || item.NodeID == nodeID) {
-					filtered = append(filtered, item)
-				}
-			}
-			raw = filtered
-		}
-	} else {
-		raw = s.list(kindPrimaryStoreRoute, func(item entry) bool {
-			return (spaceID == "" || item.SpaceID == spaceID) &&
-				(datasetID == "" || item.DatasetID == datasetID) &&
-				(subjectID == "" || item.SubjectID == subjectID) &&
-				(nodeID == "" || item.NodeID == nodeID)
-		})
-	}
-	items, err := decodeEntries(raw, func() *pb.PrimaryStoreRoute { return &pb.PrimaryStoreRoute{} })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -744,13 +713,10 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchViewColumns(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchPrimaryStoreNodes(ctx, out); err != nil {
+	if out, err = s.fetchDataNodes(ctx, out); err != nil {
 		return nil, err
 	}
 	if out, err = s.fetchDevices(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchPrimaryStoreRoutes(ctx, out); err != nil {
 		return nil, err
 	}
 	return s.fetchArchiveFiles(ctx, out)
@@ -822,13 +788,13 @@ func (s *Store) fetchSubjectSymbols(ctx context.Context, out []entry) ([]entry, 
 
 func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
-		return s.base.ListDatasets(ctx, "", "", pb.DataKind_DATA_KIND_UNSPECIFIED, "", page)
+		return s.base.ListDatasets(ctx, metadata.DatasetQuery{Page: page})
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -948,15 +914,15 @@ func (s *Store) fetchViewColumns(ctx context.Context, out []entry) ([]entry, err
 	return out, nil
 }
 
-func (s *Store) fetchPrimaryStoreNodes(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
-		return s.base.ListPrimaryStoreNodes(ctx, page)
+func (s *Store) fetchDataNodes(ctx context.Context, out []entry) ([]entry, error) {
+	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
+		return s.base.ListDataNodes(ctx, page)
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindPrimaryStoreNode, ID: item.GetNodeId(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataNode, ID: item.GetNodeId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -966,29 +932,13 @@ func (s *Store) fetchPrimaryStoreNodes(ctx context.Context, out []entry) ([]entr
 
 func (s *Store) fetchDevices(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-		return s.base.ListDevices(ctx, "", "", page)
+		return s.base.ListDevices(ctx, "", page)
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDevice, ID: item.GetDeviceId(), NodeID: item.GetNodeId(), Engine: item.GetEngine(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchPrimaryStoreRoutes(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
-		return s.base.ListPrimaryStoreRoutes(ctx, "", "", "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindPrimaryStoreRoute, SpaceID: item.GetSpaceId(), ID: item.GetRouteId(), DatasetID: item.GetDatasetId(), SubjectID: item.GetSubjectId(), NodeID: item.GetNodeId(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDevice, ID: item.GetDeviceId(), Engine: item.GetEngine(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

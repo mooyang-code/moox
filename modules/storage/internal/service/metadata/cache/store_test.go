@@ -60,7 +60,7 @@ func (stubMetadataReader) ListSubjectSymbols(context.Context, string, string, st
 func (stubMetadataReader) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
 	return nil, nil
 }
-func (stubMetadataReader) ListDatasets(context.Context, string, string, pb.DataKind, string, *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
+func (stubMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 func (stubMetadataReader) ListDatasetSubjects(context.Context, string, string, string, *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
@@ -90,22 +90,16 @@ func (stubMetadataReader) ListFactors(context.Context, string, string, *pb.Page)
 func (stubMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (stubMetadataReader) GetPrimaryStoreNode(context.Context, string) (*pb.PrimaryStoreNode, error) {
+func (stubMetadataReader) GetDataNode(context.Context, string) (*pb.DataNode, error) {
 	return nil, nil
 }
-func (stubMetadataReader) ListPrimaryStoreNodes(context.Context, *pb.Page) ([]*pb.PrimaryStoreNode, *pb.PageResult, error) {
+func (stubMetadataReader) ListDataNodes(context.Context, *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 func (stubMetadataReader) GetDevice(context.Context, string) (*pb.Device, error) {
 	return nil, nil
 }
-func (stubMetadataReader) ListDevices(context.Context, string, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return nil, nil, nil
-}
-func (stubMetadataReader) GetPrimaryStoreRoute(context.Context, string, string) (*pb.PrimaryStoreRoute, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListPrimaryStoreRoutes(context.Context, string, string, string, string, *pb.Page) ([]*pb.PrimaryStoreRoute, *pb.PageResult, error) {
+func (stubMetadataReader) ListDevices(context.Context, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 func (stubMetadataReader) ListArchiveFiles(context.Context, string, string, *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
@@ -155,4 +149,52 @@ func TestStore_ListSpaces_ShouldFilterByOwner(t *testing.T) {
 	assert.Equal(t, "crypto", spaces[0].GetSpaceId())
 	require.NotNil(t, page)
 	assert.False(t, page.GetHasMore())
+}
+
+type dataNodeMetadataReader struct {
+	stubMetadataReader
+	nodeCalls    int
+	datasetCalls int
+}
+
+func (r *dataNodeMetadataReader) ListDataNodes(context.Context, *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
+	r.nodeCalls++
+	return []*pb.DataNode{{NodeId: "node-a", Name: "Node A", Status: "active"}}, &pb.PageResult{Page: 1, Size: 1000, Total: 1}, nil
+}
+
+func (r *dataNodeMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+	r.datasetCalls++
+	return []*pb.Dataset{{
+		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
+		Name: "Dataset", Status: "active", BindingLocked: true, Revision: 7,
+	}}, &pb.PageResult{Page: 1, Size: 1000, Total: 1}, nil
+}
+
+func TestStore_CachePreservesDataNodeAndDatasetLifecycleFields(t *testing.T) {
+	reader := &dataNodeMetadataReader{}
+	store, err := New(context.Background(), reader, Options{
+		RefreshInterval:    RefreshDisabled,
+		InitialLoadTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	node, err := store.GetDataNode(context.Background(), "node-a")
+	require.NoError(t, err)
+	assert.Equal(t, "node-a", node.GetNodeId())
+	dataset, err := store.GetDataset(context.Background(), "space", "dataset")
+	require.NoError(t, err)
+	assert.True(t, dataset.GetBindingLocked())
+	assert.Equal(t, uint64(7), dataset.GetRevision())
+	assert.Equal(t, 1, reader.nodeCalls)
+	assert.Equal(t, 1, reader.datasetCalls)
+
+	snapshot := store.RequestSnapshot()
+	got, ok := snapshot.GetDataset("space", "dataset")
+	assert.True(t, ok)
+	assert.True(t, got.GetBindingLocked())
+	assert.Equal(t, uint64(7), got.GetRevision())
+	gotNode, ok := snapshot.GetDataNode("node-a")
+	assert.True(t, ok)
+	assert.Equal(t, "node-a", gotNode.GetNodeId())
 }

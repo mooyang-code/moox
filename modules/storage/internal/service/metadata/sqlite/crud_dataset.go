@@ -185,17 +185,9 @@ func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID 
 	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }
 
-type DatasetQuery struct {
-	SpaceID      string
-	DataSourceID string
-	DataNodeID   string
-	DataNodeIDs  []string
-	Freq         string
-	DataKind     pb.DataKind
-	Page         *pb.Page
-}
+type DatasetQuery = coremetadata.DatasetQuery
 
-func (s *Store) ListDatasets(ctx context.Context, query DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+func (s *Store) ListDatasets(ctx context.Context, query coremetadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	where := []string{"1 = 1"}
 	args := make([]any, 0, 12+len(query.DataNodeIDs))
 	if spaceID := strings.TrimSpace(query.SpaceID); spaceID != "" {

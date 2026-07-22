@@ -10,63 +10,9 @@ import (
 	"github.com/rs/xid"
 )
 
-// 本文件聚合主存储节点、设备、路由及归档文件相关的元数据 CRUD 入口。
-
-func (s *Service) CreatePrimaryStoreNode(ctx context.Context, req *pb.CreatePrimaryStoreNodeReq) (*pb.CreatePrimaryStoreNodeRsp, error) {
-	s.topologyMu.Lock()
-	defer s.topologyMu.Unlock()
-	item := req.GetNode()
-	if item == nil || (item.GetNodeId() == "" && item.GetName() == "") {
-		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id or name is required"))}, nil
-	}
-	if item.NodeId == "" {
-		item.NodeId = defaultID(item.GetName(), "node")
-	}
-	if item.Name == "" {
-		item.Name = item.GetNodeId()
-	}
-	created, err := s.metadata.UpsertPrimaryStoreNode(ctx, item)
-	if err != nil {
-		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.CreatePrimaryStoreNodeRsp{RetInfo: retinfo.Success("success"), Node: created}, nil
-}
-
-func (s *Service) UpdatePrimaryStoreNode(ctx context.Context, req *pb.UpdatePrimaryStoreNodeReq) (*pb.UpdatePrimaryStoreNodeRsp, error) {
-	s.topologyMu.Lock()
-	defer s.topologyMu.Unlock()
-	updated, err := s.metadata.UpsertPrimaryStoreNode(ctx, req.GetNode())
-	if err != nil {
-		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.UpdatePrimaryStoreNodeRsp{RetInfo: retinfo.Success("success"), Node: updated}, nil
-}
-
-func (s *Service) GetPrimaryStoreNode(ctx context.Context, req *pb.GetPrimaryStoreNodeReq) (*pb.GetPrimaryStoreNodeRsp, error) {
-	item, err := s.metadata.GetPrimaryStoreNode(ctx, req.GetNodeId())
-	if err != nil {
-		return &pb.GetPrimaryStoreNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.GetPrimaryStoreNodeRsp{RetInfo: retinfo.Success("success"), Node: item}, nil
-}
-
-func (s *Service) ListPrimaryStoreNodes(ctx context.Context, req *pb.ListPrimaryStoreNodesReq) (*pb.ListPrimaryStoreNodesRsp, error) {
-	items, page, err := s.metadata.ListPrimaryStoreNodes(ctx, req.GetPage())
-	if err != nil {
-		return &pb.ListPrimaryStoreNodesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.ListPrimaryStoreNodesRsp{RetInfo: retinfo.Success("success"), Nodes: items, PageResult: page}, nil
-}
+// 本文件聚合设备及归档文件相关的元数据 CRUD 入口。
 
 func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*pb.CreateDeviceRsp, error) {
-	s.topologyMu.Lock()
-	defer s.topologyMu.Unlock()
 	item := req.GetDevice()
 	if item == nil || (item.GetDeviceId() == "" && item.GetName() == "") {
 		return &pb.CreateDeviceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("device_id or name is required"))}, nil
@@ -88,8 +34,6 @@ func (s *Service) CreateDevice(ctx context.Context, req *pb.CreateDeviceReq) (*p
 }
 
 func (s *Service) UpdateDevice(ctx context.Context, req *pb.UpdateDeviceReq) (*pb.UpdateDeviceRsp, error) {
-	s.topologyMu.Lock()
-	defer s.topologyMu.Unlock()
 	updated, err := s.metadata.UpsertDevice(ctx, req.GetDevice())
 	if err != nil {
 		return &pb.UpdateDeviceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -109,60 +53,11 @@ func (s *Service) GetDevice(ctx context.Context, req *pb.GetDeviceReq) (*pb.GetD
 }
 
 func (s *Service) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (*pb.ListDevicesRsp, error) {
-	items, page, err := s.metadata.ListDevices(ctx, req.GetNodeId(), req.GetEngine(), req.GetPage())
+	items, page, err := s.metadata.ListDevices(ctx, req.GetEngine(), req.GetPage())
 	if err != nil {
 		return &pb.ListDevicesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDevicesRsp{RetInfo: retinfo.Success("success"), Devices: items, PageResult: page}, nil
-}
-
-func (s *Service) CreatePrimaryStoreRoute(ctx context.Context, req *pb.CreatePrimaryStoreRouteReq) (*pb.CreatePrimaryStoreRouteRsp, error) {
-	s.topologyMu.Lock()
-	defer s.topologyMu.Unlock()
-	item := req.GetPrimaryStoreRoute()
-	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetNodeId() == "" {
-		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and node_id are required"))}, nil
-	}
-	if item.RouteId == "" {
-		item.RouteId = defaultID(strings.Join([]string{item.GetSpaceId(), item.GetDatasetId(), item.GetSubjectId(), item.GetNodeId()}, "-"), "route")
-	}
-	created, err := s.metadata.UpsertPrimaryStoreRoute(ctx, item)
-	if err != nil {
-		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreatePrimaryStoreRouteRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.CreatePrimaryStoreRouteRsp{RetInfo: retinfo.Success("success"), PrimaryStoreRoute: created}, nil
-}
-
-func (s *Service) UpdatePrimaryStoreRoute(ctx context.Context, req *pb.UpdatePrimaryStoreRouteReq) (*pb.UpdatePrimaryStoreRouteRsp, error) {
-	s.topologyMu.Lock()
-	defer s.topologyMu.Unlock()
-	updated, err := s.metadata.UpsertPrimaryStoreRoute(ctx, req.GetPrimaryStoreRoute())
-	if err != nil {
-		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.UpdatePrimaryStoreRouteRsp{RetInfo: retinfo.Success("success"), PrimaryStoreRoute: updated}, nil
-}
-
-func (s *Service) GetPrimaryStoreRoute(ctx context.Context, req *pb.GetPrimaryStoreRouteReq) (*pb.GetPrimaryStoreRouteRsp, error) {
-	item, err := s.metadata.GetPrimaryStoreRoute(ctx, req.GetSpaceId(), req.GetRouteId())
-	if err != nil {
-		return &pb.GetPrimaryStoreRouteRsp{RetInfo: retinfo.Error(pb.ErrorCode_ROUTE_NOT_FOUND, err)}, nil
-	}
-	return &pb.GetPrimaryStoreRouteRsp{RetInfo: retinfo.Success("success"), PrimaryStoreRoute: item}, nil
-}
-
-func (s *Service) ListPrimaryStoreRoutes(ctx context.Context, req *pb.ListPrimaryStoreRoutesReq) (*pb.ListPrimaryStoreRoutesRsp, error) {
-	items, page, err := s.metadata.ListPrimaryStoreRoutes(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetNodeId(), req.GetPage())
-	if err != nil {
-		return &pb.ListPrimaryStoreRoutesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.ListPrimaryStoreRoutesRsp{RetInfo: retinfo.Success("success"), PrimaryStoreRoutes: items, PageResult: page}, nil
 }
 
 func (s *Service) RegisterArchiveFile(ctx context.Context, req *pb.RegisterArchiveFileReq) (*pb.RegisterArchiveFileRsp, error) {

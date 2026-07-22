@@ -3,7 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
-	"sync"
+	"os"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
@@ -12,16 +12,24 @@ import (
 )
 
 type Service struct {
-	metadata      metadata.Store
-	metadataCache *metacache.Store
-	topologyMu    sync.Mutex
+	pb.UnimplementedMetadata
+	metadata       metadata.Store
+	metadataCache  *metacache.Store
+	nodeAuthSecret string
 }
 
-func NewMetadataService(store metadata.Store, cache *metacache.Store) (*Service, error) {
+func NewMetadataService(store metadata.Store, cache *metacache.Store, authSecret ...string) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	return &Service{metadata: store, metadataCache: cache}, nil
+	secret := ""
+	if len(authSecret) > 0 {
+		secret = authSecret[0]
+	}
+	if secret == "" {
+		secret = os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
+	}
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret}, nil
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {
