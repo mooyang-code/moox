@@ -209,7 +209,7 @@ func (s *requestSnapshot) GetDataset(spaceID string, datasetID string) (*pb.Data
 	if s == nil || s.snapshot == nil {
 		return nil, false
 	}
-	item, err := s.snapshot.GetDataset(context.Background(), spaceID, datasetID)
+	item, err := s.snapshot.GetDataset(trpc.BackgroundContext(), spaceID, datasetID)
 	return item, err == nil
 }
 
@@ -217,7 +217,7 @@ func (s *requestSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
 	if s == nil || s.snapshot == nil {
 		return nil, false
 	}
-	item, err := s.snapshot.getDataNode(context.Background(), nodeID)
+	item, err := s.snapshot.getDataNode(trpc.BackgroundContext(), nodeID)
 	return item, err == nil
 }
 
@@ -225,7 +225,7 @@ func (s *requestSnapshot) ListDatasetColumns(spaceID string, datasetID string, p
 	if s == nil || s.snapshot == nil {
 		return nil, nil, errors.New("metadata snapshot is unavailable")
 	}
-	return s.snapshot.ListDatasetColumns(context.Background(), spaceID, datasetID, page)
+	return s.snapshot.ListDatasetColumns(trpc.BackgroundContext(), spaceID, datasetID, page)
 }
 
 func (s *MetadataSnapshot) getDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error) {
@@ -233,7 +233,7 @@ func (s *MetadataSnapshot) getDataNode(ctx context.Context, nodeID string) (*pb.
 }
 
 func (s *MetadataSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
-	item, err := s.getDataNode(context.Background(), nodeID)
+	item, err := s.getDataNode(trpc.BackgroundContext(), nodeID)
 	return item, err == nil
 }
 

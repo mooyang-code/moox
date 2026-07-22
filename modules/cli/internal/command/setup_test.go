@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -138,6 +139,9 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 	reset := true
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, fmt.Errorf("full validation must not run")
+		},
 		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
 			for _, host := range hosts {
 				validatedHosts = append(validatedHosts, host.Name)

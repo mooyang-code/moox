@@ -50,7 +50,7 @@ func (tx *immediateTx) Rollback() error {
 	if tx == nil || tx.closed {
 		return nil
 	}
-	_, err := tx.conn.ExecContext(context.Background(), "ROLLBACK")
+	_, err := tx.conn.ExecContext(tx.ctx, "ROLLBACK")
 	closeErr := tx.close()
 	if err != nil {
 		return err
