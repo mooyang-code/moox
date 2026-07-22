@@ -524,12 +524,12 @@ install_control() {
   fi
   chmod 600 "$encryption_key"
   if [ ! -s "$next/secrets/health-auth.env" ]; then
-    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 --label health | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
+    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
     umask 077
     printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$secret" >"$next/secrets/health-auth.env"
   fi
   if [ ! -s "$next/secrets/admin-jwt.env" ]; then
-    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 --label admin-jwt | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
+    secret=$("$next/bin/moox-admin-cli" random-secret --bytes 32 | sed -n 's/.*"secret":"\([^"]*\)".*/\1/p')
     umask 077
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$secret" >"$next/secrets/admin-jwt.env"
   fi
