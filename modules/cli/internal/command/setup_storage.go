@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -25,6 +27,7 @@ import (
 const (
 	storageMetadataRemoteAddress = "127.0.0.1:20200"
 	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
+	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
 	storageAuthFile              = "$HOME/moox/storage/secrets/storage-node-auth.env"
 	storagePrimaryAuthFile       = "$HOME/moox/storage/secrets/gateway-storage-primary.key"
@@ -68,6 +71,14 @@ type storageBrowserResult struct {
 	Mobile  string `json:"mobile"`
 }
 
+type storageBrowserFixture struct {
+	Namespace   string `json:"namespace"`
+	SpaceID     string `json:"space_id"`
+	SourceID    string `json:"data_source_id"`
+	DatasetID   string `json:"dataset_id"`
+	DatasetName string `json:"dataset_name"`
+}
+
 type storageBuildProvenance struct {
 	SchemaVersion int               `json:"schema_version"`
 	Commit        string            `json:"commit"`
@@ -93,6 +104,24 @@ type storageMetadataAPI interface {
 	ListDataNodes(context.Context, *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
 	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
+}
+
+type storageAdminSpaceAPI interface {
+	CreateSpace(context.Context, *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error)
+	UpdateSpace(context.Context, *adminpb.UpdateSpaceReq) (*adminpb.UpdateSpaceRsp, error)
+}
+
+type storageAdminSpaceProxy struct {
+	proxy   adminpb.SpaceMgrClientProxy
+	options []client.Option
+}
+
+func (c *storageAdminSpaceProxy) CreateSpace(ctx context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
+	return c.proxy.CreateSpace(ctx, req, c.options...)
+}
+
+func (c *storageAdminSpaceProxy) UpdateSpace(ctx context.Context, req *adminpb.UpdateSpaceReq) (*adminpb.UpdateSpaceRsp, error) {
+	return c.proxy.UpdateSpace(ctx, req, c.options...)
 }
 
 type storagePrimaryAPI interface {
@@ -941,6 +970,103 @@ func validateStorageNamespace(namespace string) error {
 	return nil
 }
 
+func newStorageBrowserNamespace() string {
+	suffix := strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+	if len(suffix) > 8 {
+		suffix = suffix[len(suffix)-8:]
+	}
+	return "br" + suffix
+}
+
+func mustMarshalStorageBrowserFixture(fixture storageBrowserFixture) string {
+	raw, err := json.Marshal(fixture)
+	if err != nil {
+		panic("storage browser fixture is not marshalable")
+	}
+	return string(raw)
+}
+
+func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSession, adminSpaces storageAdminSpaceAPI) (fixture storageBrowserFixture, cleanup func() error, returnErr error) {
+	if session == nil || session.metadata == nil || adminSpaces == nil {
+		return storageBrowserFixture{}, nil, errors.New("browser_e2e_fixture_unavailable")
+	}
+	namespace := newStorageBrowserNamespace()
+	spaceID := namespace + "_space"
+	sourceID := namespace + "_source"
+	datasetID := namespace + "_dataset"
+	fixture = storageBrowserFixture{Namespace: namespace, SpaceID: spaceID, SourceID: sourceID, DatasetID: datasetID, DatasetName: "浏览器验证集"}
+	var adminSpace *adminpb.Space
+	var storageSpace *storagepb.Space
+	var source *storagepb.DataSource
+	var dataset *storagepb.Dataset
+	cleanup = func() error {
+		var first error
+		if err := cleanupStorageLifecycle(ctx, session, storageSpace, source, []*storagepb.Dataset{dataset}, nil, nil); err != nil {
+			first = err
+		}
+		if adminSpace != nil {
+			response, err := adminSpaces.UpdateSpace(ctx, &adminpb.UpdateSpaceReq{Space: &adminpb.Space{
+				SpaceId: adminSpace.GetSpaceId(), Name: adminSpace.GetName(), Owner: adminSpace.GetOwner(), Status: "disabled",
+			}})
+			if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+				if first == nil {
+					first = errors.New("browser_e2e_admin_space_cleanup_failed")
+				}
+			}
+		}
+		return first
+	}
+	defer func() {
+		if returnErr != nil && cleanup != nil {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				returnErr = errors.New("browser_e2e_fixture_cleanup_failed")
+			}
+		}
+	}()
+
+	adminResponse, err := adminSpaces.CreateSpace(ctx, &adminpb.CreateSpaceReq{Space: &adminpb.Space{
+		SpaceId: spaceID, Name: "浏览器隔离空间", Owner: "storage-e2e", Status: "active",
+	}})
+	if err != nil || adminResponse == nil || adminResponse.GetRetInfo() == nil || adminResponse.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || adminResponse.GetSpace() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_admin_space_create_failed")
+	}
+	adminSpace = adminResponse.GetSpace()
+	storageSpace = &storagepb.Space{SpaceId: spaceID, Name: "浏览器隔离空间", Owner: "storage-e2e", Status: "active"}
+	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: storageSpace})
+	if err != nil || spaceResponse == nil || spaceResponse.GetRetInfo() == nil || spaceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || spaceResponse.GetSpace() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_storage_space_create_failed")
+	}
+	storageSpace = spaceResponse.GetSpace()
+	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "浏览器隔离来源", Kind: "e2e", Status: "active"}
+	sourceResponse, err := session.metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{AuthInfo: session.auth, DataSource: source})
+	if err != nil || sourceResponse == nil || sourceResponse.GetRetInfo() == nil || sourceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || sourceResponse.GetDataSource() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_data_source_create_failed")
+	}
+	source = sourceResponse.GetDataSource()
+	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: fixture.DatasetName, DataKind: storagepb.DataKind_DATA_KIND_RECORD, KeepDuration: "0", Status: "disabled", DataNodeId: storageDeploymentNodeID}
+	items, err := listAllStorageDataNodes(ctx, session.metadata, session.auth)
+	if err != nil {
+		return fixture, cleanup, errors.New("browser_e2e_data_node_list_failed")
+	}
+	node, err := selectDeploymentDataNode(items)
+	if err != nil {
+		return fixture, cleanup, err
+	}
+	dataset.DataNodeId = node.GetNodeId()
+	datasetResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: dataset})
+	if err != nil || datasetResponse == nil || datasetResponse.GetRetInfo() == nil || datasetResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || datasetResponse.GetDataset() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_dataset_create_failed")
+	}
+	dataset = datasetResponse.GetDataset()
+	columnResponse, err := session.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: session.auth, Column: &storagepb.DatasetColumn{
+		SpaceId: spaceID, DatasetId: datasetID, ColumnName: "value", OriginId: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active",
+	}})
+	if err != nil || columnResponse == nil || columnResponse.GetRetInfo() == nil || columnResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return fixture, cleanup, errors.New("browser_e2e_dataset_column_create_failed")
+	}
+	return fixture, cleanup, nil
+}
+
 func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, repoRoot string) (storageBrowserResult, error) {
 	if snapshot == nil || strings.TrimSpace(repoRoot) == "" {
 		return storageBrowserResult{}, errors.New("browser_e2e_invalid")
@@ -949,21 +1075,48 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 	if err != nil {
 		return storageBrowserResult{}, err
 	}
-	transport, err := dialSetupHost(ctx, host)
+	_, storageTransport, storageSession, _, err := openRemoteStorage(ctx, snapshot, name)
 	if err != nil {
 		return storageBrowserResult{}, err
 	}
-	defer transport.Close()
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+	defer storageTransport.Close()
+	defer storageSession.Close()
+	controlTransport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
+	}
+	defer controlTransport.Close()
+	if _, err := controlTransport.Run(ctx, []string{"sh", "-lc", `set -eu
 "$HOME/moox/prod/status.sh" admin >/dev/null
 "$HOME/moox/prod/status.sh" gateway >/dev/null
 "$HOME/moox/prod/status.sh" web-host >/dev/null
 curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
+	adminListener, err := controlTransport.ForwardLocal(ctx, adminSpaceRemoteAddress)
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
+	}
+	defer adminListener.Close()
+	adminOptions := []client.Option{client.WithTarget("ip://" + adminListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("http")}
+	adminSpaces := &storageAdminSpaceProxy{proxy: adminpb.NewSpaceMgrClientProxy(adminOptions...), options: adminOptions}
+	fixture, cleanup, err := createStorageBrowserFixture(ctx, storageSession, adminSpaces)
+	if err != nil {
+		return storageBrowserResult{}, err
+	}
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				// Cleanup errors are returned by the caller below; this defer is only a
+				// last-resort guard for early command failures.
+				_ = cleanupErr
+			}
+		}
+	}()
 	forwardContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	listener, err := transport.ForwardLocal(forwardContext, storageBrowserRemoteAddress)
+	listener, err := controlTransport.ForwardLocal(forwardContext, storageBrowserRemoteAddress)
 	if err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_unreachable")
 	}
@@ -978,6 +1131,7 @@ curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
 	command.Env = append(os.Environ(),
 		"MOOX_REMOTE_PLAYWRIGHT=1",
 		"MOOX_REMOTE_BASE_URL="+baseURL,
+		"MOOX_REMOTE_STORAGE_FIXTURE="+mustMarshalStorageBrowserFixture(fixture),
 		"MOOX_REMOTE_TRACE=off",
 		"MOOX_REMOTE_VIDEO=off",
 	)
@@ -993,8 +1147,13 @@ curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
 	encodeErr := json.NewEncoder(stdin).Encode(credentials)
 	_ = stdin.Close()
 	waitErr := command.Wait()
+	cleanupErr := cleanup()
+	cleaned = true
 	if encodeErr != nil || waitErr != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_failed")
+	}
+	if cleanupErr != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_cleanup_failed")
 	}
 	return storageBrowserResult{Status: "passed", Desktop: "passed", Mobile: "passed"}, nil
 }

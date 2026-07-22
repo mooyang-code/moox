@@ -30,6 +30,8 @@ required_files=(
   modules/storage/internal/service/primarystore/service.go
   modules/storage/cmd/cli/main.go
   modules/cli/internal/doctor/storage_activation.go
+  modules/cli/internal/command/setup_storage.go
+  web/tests/storage-datanode-management.remote.e2e.spec.ts
   web/src/views/ops/storage/nodes.vue
   web/src/views/data/datasets/index.vue
 )
@@ -79,6 +81,8 @@ require_regex modules/storage/cmd/cli/main.go 'RegisterDataNode' 'deployment reg
 require_regex modules/cli/internal/doctor/storage_activation.go 'CheckDatasetActivation' 'read-only Doctor activation check'
 require_regex web/src/views/ops/storage/nodes.vue 'DataNode|data_node' 'DataNode management UI'
 require_regex web/src/views/data/datasets/index.vue 'activateDataset|rebindDatasetDataNode|data_node_id' 'Dataset activation and binding UI'
+require_regex modules/cli/internal/command/setup_storage.go 'createStorageBrowserFixture|MOOX_REMOTE_STORAGE_FIXTURE|browser_e2e_cleanup_failed' 'isolated remote browser fixture lifecycle'
+require_regex web/tests/storage-datanode-management.remote.e2e.spec.ts 'MOOX_REMOTE_STORAGE_FIXTURE|ActivateDataset|remote fixture Dataset must be listed' 'remote browser lifecycle assertions'
 
 forbidden_matches="$(rg -n -i --no-heading "${scan_globs[@]}" \
   -e 'primarystorenode' \

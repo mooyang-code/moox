@@ -2,12 +2,38 @@ import { expect, test, type Page } from "@playwright/test";
 
 test.skip(process.env.MOOX_REMOTE_PLAYWRIGHT !== "1", "remote-only Storage browser verification");
 
+test.describe.configure({ mode: "serial" });
+
+type BrowserFixture = {
+  namespace: string;
+  space_id: string;
+  data_source_id: string;
+  dataset_id: string;
+  dataset_name: string;
+};
+
 type RpcBody = {
   ret_info?: { code?: number | string; msg?: string };
   items?: Array<{ node?: { node_id?: string }; datasets?: Array<{ dataset_id?: string; name?: string }> }>;
   spaces?: Array<{ space_id?: string }>;
-  datasets?: Array<{ dataset_id?: string; status?: string; binding_locked?: boolean }>;
+  datasets?: Array<{ dataset_id?: string; status?: string; binding_locked?: boolean; name?: string }>;
+  dataset?: { dataset_id?: string; status?: string; binding_locked?: boolean };
 };
+
+function browserFixture(): BrowserFixture {
+  const raw = process.env.MOOX_REMOTE_STORAGE_FIXTURE;
+  if (!raw) throw new Error("remote_storage_fixture_missing");
+  let fixture: BrowserFixture;
+  try {
+    fixture = JSON.parse(raw) as BrowserFixture;
+  } catch {
+    throw new Error("remote_storage_fixture_invalid");
+  }
+  for (const key of ["namespace", "space_id", "data_source_id", "dataset_id", "dataset_name"] as const) {
+    if (!fixture[key]) throw new Error(`remote_storage_fixture_${key}_missing`);
+  }
+  return fixture;
+}
 
 function waitForMethod(page: Page, method: string, service = "storage") {
   return page
@@ -62,17 +88,17 @@ async function openDataNodePage(page: Page, query: string) {
   return body;
 }
 
-async function openDatasetPage(page: Page) {
+async function openDatasetPage(page: Page, fixture: BrowserFixture) {
   const spacesResponse = waitForMethod(page, "ListSpaces", "space");
   const nodesResponse = waitForMethod(page, "ListDataNodes");
   const datasetsResponse = waitForMethod(page, "ListDatasets");
-  await page.goto("/#/data/datasets");
+  await page.goto(`/#/data/datasets?space_id=${encodeURIComponent(fixture.space_id)}`);
   const [spaces, nodes, datasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
   await expect(page.getByRole("heading", { name: "数据集" })).toBeVisible();
   await expect(page.getByText("数据集ID", { exact: true })).toBeVisible();
-  expect(spaces.spaces?.length || 0, "deployed Storage must expose a business Space").toBeGreaterThan(0);
+  expect(spaces.spaces?.some(item => item.space_id === fixture.space_id), "browser fixture Space must be listed by Admin").toBeTruthy();
   expect(nodes.items?.length || 0, "Dataset page must resolve DataNodes").toBeGreaterThan(0);
-  expect(datasets.datasets?.length || 0, "deployed Storage must expose a Dataset").toBeGreaterThan(0);
+  expect(datasets.datasets?.some(item => item.dataset_id === fixture.dataset_id), "browser fixture Dataset must be listed").toBeTruthy();
   await expectInfoTooltip(page, "数据集绑定规则说明", "数据集必须绑定一个 DataNode");
   return datasets;
 }
@@ -83,6 +109,7 @@ function firstDatasetRow(page: Page, datasetId: string) {
 
 test("remote desktop covers DataNode details and Dataset lifecycle UI", async ({ page }) => {
   await login(page);
+  const fixture = browserFixture();
   const nodeBody = await openDataNodePage(page, "unknown");
   await expectInfoTooltip(page, "数据节点说明", "Dataset 直接绑定 DataNode");
 
@@ -100,29 +127,36 @@ test("remote desktop covers DataNode details and Dataset lifecycle UI", async ({
   await expect(detailDrawer.getByRole("heading", { name: "Dataset" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  const datasets = await openDatasetPage(page);
-  const firstDataset = datasets.datasets?.[0];
-  if (!firstDataset?.dataset_id) throw new Error("remote_dataset_id_missing");
-  const datasetRow = firstDatasetRow(page, firstDataset.dataset_id);
+  await openDatasetPage(page, fixture);
+  const datasetRow = firstDatasetRow(page, fixture.dataset_id);
   await expect(datasetRow).toBeVisible();
+  await expect(datasetRow).toContainText(fixture.dataset_name);
   await datasetRow.getByRole("button", { name: "列/对象" }).click();
-  await expect(page.getByText(`数据集配置：${firstDataset.dataset_id}`, { exact: true })).toBeVisible();
+  await expect(page.getByText(`数据集配置：${fixture.dataset_id}`, { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  const disabledDataset = datasets.datasets?.find(item => item.status === "disabled" && item.dataset_id);
-  expect(disabledDataset?.dataset_id, "remote UI must expose a disabled Dataset for activation verification").toBeTruthy();
-  const activationRow = firstDatasetRow(page, disabledDataset?.dataset_id || "");
+  const activationRow = firstDatasetRow(page, fixture.dataset_id);
   const checkResponse = waitForMethod(page, "CheckDatasetActivation");
   await activationRow.getByRole("button", { name: "激活" }).click();
   await expect(page.getByTestId("dataset-activation-modal")).toBeVisible();
-  await checkResponse;
+  const checkBody = await checkResponse;
+  expect(checkBody.ret_info?.code).toBe(0);
   await expect(page.getByTestId("dataset-activation-modal").getByText("dataset_state", { exact: true })).toBeVisible();
+  const activateResponse = waitForMethod(page, "ActivateDataset");
+  await page.getByTestId("dataset-activation-modal").getByRole("button", { name: "确定" }).click();
+  const activateBody = await activateResponse;
+  expect(activateBody.dataset?.dataset_id).toBe(fixture.dataset_id);
+  expect(activateBody.dataset?.status).toBe("active");
+  expect(activateBody.dataset?.binding_locked).toBeTruthy();
+  await expect(page.getByTestId("dataset-activation-modal")).toBeHidden();
+  await expect(activationRow).toContainText("active");
   await page.keyboard.press("Escape");
 });
 
 test("remote mobile keeps DataNode and Dataset workflows inside the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
+  const fixture = browserFixture();
 
   await openDataNodePage(page, "routes");
   await expectInfoTooltip(page, "数据节点说明", "Dataset 直接绑定 DataNode");
@@ -138,25 +172,14 @@ test("remote mobile keeps DataNode and Dataset workflows inside the viewport", a
   expect(drawerBox?.width || 0).toBeLessThanOrEqual(391);
   await page.keyboard.press("Escape");
 
-  const datasets = await openDatasetPage(page);
-  const firstDataset = datasets.datasets?.[0];
-  if (!firstDataset?.dataset_id) throw new Error("remote_dataset_id_missing");
-  const datasetRow = firstDatasetRow(page, firstDataset.dataset_id);
+  await openDatasetPage(page, fixture);
+  const datasetRow = firstDatasetRow(page, fixture.dataset_id);
   await datasetRow.getByRole("button", { name: "列/对象" }).click();
-  await expect(page.getByText(`数据集配置：${firstDataset.dataset_id}`, { exact: true })).toBeVisible();
-  const manageBox = await page.locator(".arco-drawer").filter({ hasText: firstDataset.dataset_id }).boundingBox();
+  await expect(page.getByText(`数据集配置：${fixture.dataset_id}`, { exact: true })).toBeVisible();
+  const manageBox = await page.locator(".arco-drawer").filter({ hasText: fixture.dataset_id }).boundingBox();
   expect(manageBox?.width || 0).toBeLessThanOrEqual(391);
   await page.keyboard.press("Escape");
 
-  const disabledDataset = datasets.datasets?.find(item => item.status === "disabled" && item.dataset_id);
-  expect(disabledDataset?.dataset_id, "remote UI must expose a disabled Dataset for activation verification").toBeTruthy();
-  const activationRow = firstDatasetRow(page, disabledDataset?.dataset_id || "");
-  const checkResponse = waitForMethod(page, "CheckDatasetActivation");
-  await activationRow.getByRole("button", { name: "激活" }).click();
-  const activationModal = page.getByTestId("dataset-activation-modal");
-  await expect(activationModal).toBeVisible();
-  await checkResponse;
-  const activationBox = await activationModal.boundingBox();
-  expect(activationBox?.width || 0).toBeLessThanOrEqual(391);
-  await page.keyboard.press("Escape");
+  await expect(datasetRow).toContainText("active");
+  await expect(datasetRow).toContainText("已锁定");
 });

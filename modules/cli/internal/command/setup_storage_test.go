@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
@@ -145,6 +146,26 @@ func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 	require.NotContains(t, string(mustJSON(t, result)), "row-value")
 }
 
+func TestStorageBrowserFixtureCreatesAndCleansIsolatedAdminAndMetadataRows(t *testing.T) {
+	t.Parallel()
+	metadata := &fakeStorageMetadataAPI{}
+	admin := &fakeStorageAdminSpaceAPI{}
+	session := &remoteStorageSession{
+		metadata: metadata,
+		auth:     &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: "signed"},
+	}
+	fixture, cleanup, err := createStorageBrowserFixture(context.Background(), session, admin)
+	require.NoError(t, err)
+	require.Equal(t, fixture.SpaceID, fixture.Namespace+"_space")
+	require.Equal(t, fixture.DatasetID, fixture.Namespace+"_dataset")
+	require.Equal(t, fixture.DatasetName, "浏览器验证集")
+	require.NoError(t, cleanup())
+	require.Equal(t, []string{fixture.DatasetID}, metadata.deletedDatasets)
+	require.Equal(t, []string{fixture.SourceID}, metadata.deletedSources)
+	require.Equal(t, []string{fixture.SpaceID}, metadata.deletedSpaces)
+	require.Equal(t, []string{fixture.SpaceID}, admin.disabledSpaces)
+}
+
 func TestValidateStorageBuildProvenanceRequiresExactRemoteArtifacts(t *testing.T) {
 	t.Parallel()
 	commit := "0123456789abcdef0123456789abcdef01234567"
@@ -213,6 +234,21 @@ type fakeStorageMetadataAPI struct {
 	deletedNodes        []string
 	temporaryNode       *storagepb.DataNode
 	temporaryReferenced bool
+}
+
+type fakeStorageAdminSpaceAPI struct {
+	disabledSpaces []string
+}
+
+func (f *fakeStorageAdminSpaceAPI) CreateSpace(_ context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
+	return &adminpb.CreateSpaceRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS}, Space: req.GetSpace()}, nil
+}
+
+func (f *fakeStorageAdminSpaceAPI) UpdateSpace(_ context.Context, req *adminpb.UpdateSpaceReq) (*adminpb.UpdateSpaceRsp, error) {
+	if req.GetSpace().GetStatus() == "disabled" {
+		f.disabledSpaces = append(f.disabledSpaces, req.GetSpace().GetSpaceId())
+	}
+	return &adminpb.UpdateSpaceRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS}, Space: req.GetSpace()}, nil
 }
 
 func (f *fakeStorageMetadataAPI) remember(auth *storagepb.AuthInfo) { f.auths = append(f.auths, auth) }
