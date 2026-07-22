@@ -350,11 +350,17 @@ type fakeStoragePrimaryAPI struct {
 	auth    *storagepb.AuthInfo
 	row     *storagepb.RowFieldUpsert
 	deleted bool
+	writes  int
 }
 
 func (f *fakeStoragePrimaryAPI) WriteFields(_ context.Context, req *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error) {
 	f.auth = req.GetAuthInfo()
 	f.row = req.GetRows()[0]
+	if f.writes == 0 {
+		f.writes++
+		return &storagepb.PrimaryWriteFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+	}
+	f.writes++
 	return &storagepb.PrimaryWriteFieldsRsp{RetInfo: storageOK(), Keys: []*storagepb.RowKey{f.row.GetKey()}}, nil
 }
 
