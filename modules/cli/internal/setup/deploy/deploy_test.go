@@ -232,6 +232,7 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.Contains(t, installControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "atomic control replacement must stop managed Caddy before changing deploy paths")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "control rollback must stop the active Caddy before restoring the previous path")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy"`, "control rollback must restart Caddy after restoring the previous path")
+	require.NotContains(t, rollbackControlScript, `caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)" || true`, "control rollback must not ignore a Caddy stop failure")
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
 		"install-storage": installStorageScript, "rollback-storage": rollbackStorageScript, "finalize-storage": finalizeStorageScript,

@@ -551,7 +551,10 @@ install_control() {
     MOOX_CADDY_ARCHIVE="$deploy/lib/caddy_2.11.4_linux_${target_arch}.tar.gz" \
     "$deploy/lib/caddy-managed.sh" ensure --deploy-dir "$deploy" --os linux --arch "$target_arch" \
       --ports "$browser_port,11001" --config "$deploy/config/caddy/Caddyfile.next"; then
-    [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+    if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
+      echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
+      return 1
+    fi
     rm -rf "$deploy"
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
@@ -561,7 +564,10 @@ install_control() {
     return 1
   fi
   if ! "$deploy/start.sh"; then
-    [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+    if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
+      echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
+      return 1
+    fi
     "$deploy/stop.sh" || true
     rm -rf "$deploy"
     if [ -d "$previous" ]; then
@@ -577,7 +583,10 @@ install_control "$1" "$2" "$3"`
 const rollbackControlScript = `set -eu
 deploy="$HOME/moox/prod"
 previous="$HOME/moox/prod.previous"
-if [ -x "$deploy/lib/caddy-managed.sh" ]; then "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)" || true; fi
+if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)"; then
+  echo 'managed Caddy could not be stopped; refusing destructive rollback' >&2
+  exit 1
+fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 rm -rf "$deploy"
 if [ -d "$previous" ]; then
