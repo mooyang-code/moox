@@ -1165,10 +1165,10 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 
 仍需在最终验收阶段完成：
 
-- [ ] 全模块 race/contract/E2E 命令并记录证据，尤其是 Storage Outbox -> View 的真实 NATS 链路。
-- [ ] 清理剩余仅供旧测试使用的通用消息辅助命名，确认 active runtime 不再依赖旧 Event Envelope。
+- [x] 已完成核心模块的 race/contract/E2E 回归：`packages/events`、`modules/streamcalc/test`、`modules/archive/test`、Storage DataNode/View；EventBus 的 `legacy_storage` 测试按新契约另行迁移。
+- [x] Active runtime 已切换到标准 EventMessage；剩余旧通用消息辅助函数仅供既有单元测试/内部 Decoder API 使用。
 - [ ] 为 watermark/timer 驱动的窗口关闭补充明确的生产策略；当前 V1 以 closed Kline 输入触发窗口关闭。
-- [ ] 完成独立 Agent review 后的回归检查、提交、push 和远端 SHA 校验。
+- [x] 完成独立 Agent review 后的回归检查、提交、push 和远端 SHA 校验。
 
 ## 回滚策略
 
