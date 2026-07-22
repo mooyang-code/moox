@@ -6,15 +6,24 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
 	base := &messagepb.MooxMessage{
-		Topic:       "moox.storage.fields_changed.v1.mzxw6.mjqxe",
-		MessageType: "moox.storage.fields_changed.v1",
-		ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged",
+		ProtocolVersion: jetstream.ProtocolVersion,
+		MessageId:       "storage-mzxw6-1",
+		Topic:           "moox.storage.fields_changed.v1.mzxw6.mjqxe",
+		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
+		Producer:        &messagepb.Producer{ServiceName: "storage-node", InstanceId: "foo", NodeId: "foo"},
+		OccurredAt:      timestamppb.New(time.Now().UTC()),
+		PublishedAt:     timestamppb.New(time.Now().UTC()),
+		ContentType:     "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged",
+		MessageType:     "moox.storage.fields_changed.v1",
+		Payload:         []byte("payload"),
 	}
 	for _, test := range []struct {
 		name   string

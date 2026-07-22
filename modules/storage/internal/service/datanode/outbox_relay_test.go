@@ -30,11 +30,15 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	_, err = store.WriteFieldsEvent(context.Background(), rows, func(_, _ string, _ []*pb.RowFieldUpsert) ([]byte, error) { return []byte("event"), nil })
+	_, err = store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetFieldsChangedMessage("node", spaceID, datasetID, rows)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.WriteFieldsEvent(context.Background(), rows, func(_, _ string, _ []*pb.RowFieldUpsert) ([]byte, error) { return []byte("event-2"), nil })
+	_, err = store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetFieldsChangedMessage("node", spaceID, datasetID, rows)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +51,7 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
-	if err != nil || len(entries) != 1 || string(entries[0].Data) != "event-2" {
+	if err != nil || len(entries) != 1 || entries[0].ID != 2 {
 		t.Fatalf("remaining outbox=%v err=%v", entries, err)
 	}
 	publisher.failAt = 0
