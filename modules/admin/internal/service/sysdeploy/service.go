@@ -100,7 +100,6 @@ func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListSe
 		RetInfo:     retOK(),
 		Deployments: modelsToPB(rows),
 		PageResult:  makePageResult(pageNo, limit, total),
-		Warnings:    storageTopologyWarnings(""),
 	}, nil
 }
 
@@ -116,7 +115,7 @@ func (s *ServiceImpl) GetServiceDeployment(ctx context.Context, req *pb.GetServi
 		log.ErrorContextf(ctx, "[SysDeploy] GetServiceDeployment failed: %v", err)
 		return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询服务部署信息失败")}, nil
 	}
-	return &pb.GetServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row), Warnings: storageTopologyWarnings(row.ServiceName)}, nil
+	return &pb.GetServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row)}, nil
 }
 
 func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.CreateServiceDeploymentReq) (*pb.CreateServiceDeploymentRsp, error) {
@@ -138,7 +137,7 @@ func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.Creat
 		}
 		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
-	return &pb.CreateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(item), Warnings: storageTopologyWarnings(item.ServiceName)}, nil
+	return &pb.CreateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(item)}, nil
 }
 
 func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.UpdateServiceDeploymentReq) (*pb.UpdateServiceDeploymentRsp, error) {
@@ -169,7 +168,7 @@ func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.Updat
 	if err != nil {
 		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "保存后读取失败")}, nil
 	}
-	return &pb.UpdateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row), Warnings: storageTopologyWarnings(serviceName)}, nil
+	return &pb.UpdateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row)}, nil
 }
 
 func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.DeleteServiceDeploymentReq) (*pb.DeleteServiceDeploymentRsp, error) {
@@ -189,7 +188,7 @@ func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.Delet
 		}
 		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
-	return &pb.DeleteServiceDeploymentRsp{RetInfo: retOK(), Warnings: storageTopologyWarnings(serviceName)}, nil
+	return &pb.DeleteServiceDeploymentRsp{RetInfo: retOK()}, nil
 }
 
 func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.ListActiveServiceDeploymentsReq) (*pb.ListActiveServiceDeploymentsRsp, error) {

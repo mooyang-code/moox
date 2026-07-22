@@ -153,11 +153,11 @@ func TestMetadataClientAdapter_DelegatesCalls(t *testing.T) {
 	_, _ = adapter.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{})
 	_, _ = adapter.GetFactor(ctx, &storagepb.GetFactorReq{})
 	_, _ = adapter.GetDataset(ctx, &storagepb.GetDatasetReq{})
+	_, _ = adapter.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{})
+	_, _ = adapter.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{})
 	_, _ = adapter.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{})
 	_, _ = adapter.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{})
 	_, _ = adapter.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{})
-	_, _ = adapter.ListPrimaryStoreRoutes(ctx, &storagepb.ListPrimaryStoreRoutesReq{})
-	_, _ = adapter.CreatePrimaryStoreRoute(ctx, &storagepb.CreatePrimaryStoreRouteReq{})
 }
 
 func TestListEnabledBindings_EmptyStore(t *testing.T) {

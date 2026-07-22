@@ -19,14 +19,14 @@ type gateMetadataFake struct {
 	space      *storagepb.Space
 	datasetErr error
 	dataset    *storagepb.Dataset
+	nodeErr    error
+	node       *storagepb.DataNode
 	columnsErr error
 	columns    []*storagepb.DatasetColumn
-	routesErr  error
-	routes     []*storagepb.PrimaryStoreRoute
 	spaceRet   *commonpb.RetInfo
 	datasetRet *commonpb.RetInfo
+	nodeRet    *commonpb.RetInfo
 	columnsRet *commonpb.RetInfo
-	routesRet  *commonpb.RetInfo
 }
 
 func (f *gateMetadataFake) GetSpace(_ context.Context, _ *storagepb.GetSpaceReq, _ ...client.Option) (*storagepb.GetSpaceRsp, error) {
@@ -62,15 +62,15 @@ func (f *gateMetadataFake) ListDatasetColumns(_ context.Context, _ *storagepb.Li
 	return &storagepb.ListDatasetColumnsRsp{RetInfo: ret, Columns: f.columns}, nil
 }
 
-func (f *gateMetadataFake) ListPrimaryStoreRoutes(_ context.Context, _ *storagepb.ListPrimaryStoreRoutesReq, _ ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
-	if f.routesErr != nil {
-		return nil, f.routesErr
+func (f *gateMetadataFake) GetDataNode(_ context.Context, _ *storagepb.GetDataNodeReq, _ ...client.Option) (*storagepb.GetDataNodeRsp, error) {
+	if f.nodeErr != nil {
+		return nil, f.nodeErr
 	}
-	ret := f.routesRet
+	ret := f.nodeRet
 	if ret == nil {
 		ret = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
 	}
-	return &storagepb.ListPrimaryStoreRoutesRsp{RetInfo: ret, PrimaryStoreRoutes: f.routes}, nil
+	return &storagepb.GetDataNodeRsp{RetInfo: ret, Node: f.node}, nil
 }
 
 func hostGateCfg() monconfig.HostStorageConfig {
@@ -140,15 +140,11 @@ func validGateFake(cfg monconfig.HostStorageConfig) *gateMetadataFake {
 		cfg.DiskDatasetID:       diskColumns(),
 		cfg.NetworkDatasetID:    networkColumns(),
 	}
-	routes := make([]*storagepb.PrimaryStoreRoute, 0, 4)
-	for _, dataset := range []string{cfg.ResourceDatasetID, cfg.FilesystemDatasetID, cfg.DiskDatasetID, cfg.NetworkDatasetID} {
-		routes = append(routes, &storagepb.PrimaryStoreRoute{DatasetId: dataset, SubjectPattern: "*", Status: "active"})
-	}
 	return &gateMetadataFake{
 		space:   &storagepb.Space{SpaceId: cfg.SpaceID, Status: "active"},
-		dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}},
+		dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}},
+		node:    &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"},
 		columns: append(append(append(cols[cfg.ResourceDatasetID], cols[cfg.FilesystemDatasetID]...), cols[cfg.DiskDatasetID]...), cols[cfg.NetworkDatasetID]...),
-		routes:  routes,
 	}
 }
 
@@ -221,15 +217,21 @@ func TestStorageGatePropagatesMetadataFailures(t *testing.T) {
 		gate := NewStorageGate(fake, cfg)
 		require.Error(t, gate.Validate(ctx))
 	})
-	t.Run("routes_error", func(t *testing.T) {
+	t.Run("data_node_error", func(t *testing.T) {
 		fake := validGateFake(cfg)
-		fake.routesErr = errors.New("routes down")
+		fake.nodeErr = errors.New("data node down")
 		gate := NewStorageGate(fake, cfg)
 		require.Error(t, gate.Validate(ctx))
 	})
-	t.Run("no_wildcard_route", func(t *testing.T) {
+	t.Run("disabled_data_node", func(t *testing.T) {
 		fake := validGateFake(cfg)
-		fake.routes = []*storagepb.PrimaryStoreRoute{{DatasetId: cfg.ResourceDatasetID, SubjectPattern: "agent-*", Status: "active"}}
+		fake.node = &storagepb.DataNode{NodeId: "storage-node-0", Status: "disabled"}
+		gate := NewStorageGate(fake, cfg)
+		require.Error(t, gate.Validate(ctx))
+	})
+	t.Run("unlocked_dataset", func(t *testing.T) {
+		fake := validGateFake(cfg)
+		fake.dataset.BindingLocked = false
 		gate := NewStorageGate(fake, cfg)
 		require.Error(t, gate.Validate(ctx))
 	})

@@ -104,7 +104,8 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		t.Fatalf("storage-primary endpoint = %d/%s, want 20200/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
 	}
 	var storageExtra struct {
-		GatewayRoutes []struct {
+		GatewayMethods []string `json:"gateway_methods"`
+		GatewayRoutes  []struct {
 			ServicePath    string   `json:"service_path"`
 			Port           int32    `json:"port"`
 			GatewayMethods []string `json:"gateway_methods"`
@@ -113,6 +114,16 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(byName["storage-primary"].ExtraConfig), &storageExtra); err != nil {
 		t.Fatalf("unmarshal storage-primary extra_config: %v", err)
+	}
+	for _, method := range []string{"GetDataNode", "ListDataNodes", "UpdateDataNode", "DeleteDataNode", "CheckDatasetActivation", "ActivateDataset", "RebindDatasetDataNode"} {
+		if !containsString(storageExtra.GatewayMethods, method) {
+			t.Fatalf("storage-primary gateway methods missing %s: %v", method, storageExtra.GatewayMethods)
+		}
+	}
+	for _, method := range []string{"RegisterDataNode", "CreatePrimaryStoreNode", "ListPrimaryStoreNodes", "CreatePrimaryStoreRoute", "ListPrimaryStoreRoutes"} {
+		if containsString(storageExtra.GatewayMethods, method) {
+			t.Fatalf("storage-primary gateway methods must not include %s: %v", method, storageExtra.GatewayMethods)
+		}
 	}
 	var metadataRoute *struct {
 		ServicePath    string   `json:"service_path"`
@@ -145,6 +156,15 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["trade_account"].ExtraConfig) != "" {
 		t.Fatalf("trade_account should not default to local health_url: %s", byName["trade_account"].ExtraConfig)
 	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGatewayRoutesMonitorAliasToIndependentService(t *testing.T) {

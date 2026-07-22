@@ -13,10 +13,12 @@ import (
 )
 
 type fakeMetadata struct {
-	columns []*storagepb.DatasetColumn
-	routes  []*storagepb.PrimaryStoreRoute
-	dataset *storagepb.Dataset
-	space   *storagepb.Space
+	columns   []*storagepb.DatasetColumn
+	dataset   *storagepb.Dataset
+	node      *storagepb.DataNode
+	space     *storagepb.Space
+	nodeErr   error
+	nodeCalls int
 }
 
 func (f *fakeMetadata) GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error) {
@@ -25,11 +27,15 @@ func (f *fakeMetadata) GetSpace(context.Context, *storagepb.GetSpaceReq, ...clie
 func (f *fakeMetadata) GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error) {
 	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Dataset: f.dataset}, nil
 }
+func (f *fakeMetadata) GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error) {
+	f.nodeCalls++
+	if f.nodeErr != nil {
+		return nil, f.nodeErr
+	}
+	return &storagepb.GetDataNodeRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Node: f.node}, nil
+}
 func (f *fakeMetadata) ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
 	return &storagepb.ListDatasetColumnsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Columns: f.columns}, nil
-}
-func (f *fakeMetadata) ListPrimaryStoreRoutes(context.Context, *storagepb.ListPrimaryStoreRoutesReq, ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
-	return &storagepb.ListPrimaryStoreRoutesRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, PrimaryStoreRoutes: f.routes}, nil
 }
 
 type fakeAccess struct {
@@ -50,7 +56,7 @@ func metricsStorageConfig() monconfig.MetricsStorageConfig {
 	return monconfig.MetricsStorageConfig{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", WriteBatchSize: 1}
 }
 func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "moox_system", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "moox_system", DatasetId: "moox_service_metrics", Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, routes: []*storagepb.PrimaryStoreRoute{{SpaceId: "moox_system", DatasetId: "moox_service_metrics", SubjectPattern: "*", HashRule: "subject_id", Status: "active"}}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "moox_system", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "moox_system", DatasetId: "moox_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -96,12 +102,27 @@ func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 		t.Fatalf("query key=%+v, want series subject", key)
 	}
 }
-func TestStorageAdapterRejectsMissingRoute(t *testing.T) {
+func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
 	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}}
 	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
 	if err := adapter.ValidateSchema(context.Background()); err == nil {
-		t.Fatal("expected missing columns/route error")
+		t.Fatal("expected missing binding error")
 	}
+}
+
+func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "moox_system", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	for _, c := range []struct {
+		name     string
+		typ      storagepb.FieldValueType
+		originID string
+		required bool
+	}{{"value", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "monitor_metric_value", true}, {"labels_json", storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, "monitor_metric_labels", true}, {"producer_node_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "monitor_metric_producer_node_id", false}, {"producer_version", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "monitor_metric_producer_version", false}, {"message_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "monitor_metric_message_id", true}} {
+		f.columns = append(f.columns, &storagepb.DatasetColumn{ColumnName: c.name, ValueType: c.typ, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: c.originID, Required: c.required, Status: "active"})
+	}
+	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
+	require.NoError(t, adapter.ValidateSchema(context.Background()))
+	assert.Equal(t, 1, f.nodeCalls)
 }
 
 func TestNormalizeTarget(t *testing.T) {

@@ -224,6 +224,14 @@ func (m metadataAdapter) GetDataset(ctx context.Context, req *storagepb.GetDatas
 	return m.proxy.GetDataset(ctx, req)
 }
 
+func (m metadataAdapter) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
+	return m.proxy.CheckDatasetActivation(ctx, req)
+}
+
+func (m metadataAdapter) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
+	return m.proxy.ActivateDataset(ctx, req)
+}
+
 func (m metadataAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
 	return m.proxy.ListDatasetColumns(ctx, req)
 }
@@ -234,12 +242,4 @@ func (m metadataAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb
 
 func (m metadataAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
 	return m.proxy.BindDatasetSubject(ctx, req)
-}
-
-func (m metadataAdapter) ListPrimaryStoreRoutes(ctx context.Context, req *storagepb.ListPrimaryStoreRoutesReq) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
-	return m.proxy.ListPrimaryStoreRoutes(ctx, req)
-}
-
-func (m metadataAdapter) CreatePrimaryStoreRoute(ctx context.Context, req *storagepb.CreatePrimaryStoreRouteReq) (*storagepb.CreatePrimaryStoreRouteRsp, error) {
-	return m.proxy.CreatePrimaryStoreRoute(ctx, req)
 }

@@ -16,8 +16,8 @@ import (
 type hostStorageMetadata interface {
 	GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error)
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
+	GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
-	ListPrimaryStoreRoutes(context.Context, *storagepb.ListPrimaryStoreRoutesReq, ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error)
 }
 
 type SchemaStatus struct {
@@ -62,13 +62,28 @@ func (g *StorageGate) Validate(ctx context.Context) error {
 		if callErr != nil {
 			return g.setStatus(fmt.Errorf("get host dataset %q: %w", dataset, callErr))
 		}
-		if err := checkRet(item.GetRetInfo()); err != nil || item.GetDataset() == nil || !strings.EqualFold(item.GetDataset().GetStatus(), "active") {
+		datasetMetadata := item.GetDataset()
+		if err := checkRet(item.GetRetInfo()); err != nil || datasetMetadata == nil || !strings.EqualFold(datasetMetadata.GetStatus(), "active") {
 			if err == nil {
 				err = fmt.Errorf("dataset %q is missing or inactive", dataset)
 			}
 			return g.setStatus(err)
 		}
-		if item.GetDataset().GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES || !containsFreq(item.GetDataset().GetFreqs(), g.cfg.Frequency) {
+		if !datasetMetadata.GetBindingLocked() || strings.TrimSpace(datasetMetadata.GetDataNodeId()) == "" {
+			return g.setStatus(fmt.Errorf("dataset %q must be active, binding_locked, and bound to a data node", dataset))
+		}
+		dataNodeRsp, callErr := g.metadata.GetDataNode(ctx, &storagepb.GetDataNodeReq{NodeId: datasetMetadata.GetDataNodeId()})
+		if callErr != nil {
+			return g.setStatus(fmt.Errorf("get host data node %q: %w", datasetMetadata.GetDataNodeId(), callErr))
+		}
+		dataNode := dataNodeRsp.GetNode()
+		if err := checkRet(dataNodeRsp.GetRetInfo()); err != nil || dataNode == nil || !strings.EqualFold(dataNode.GetStatus(), "active") {
+			if err == nil {
+				err = fmt.Errorf("data node %q is missing or inactive", datasetMetadata.GetDataNodeId())
+			}
+			return g.setStatus(err)
+		}
+		if datasetMetadata.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES || !containsFreq(datasetMetadata.GetFreqs(), g.cfg.Frequency) {
 			return g.setStatus(fmt.Errorf("dataset %q does not support time-series frequency %q", dataset, g.cfg.Frequency))
 		}
 		columns, callErr := g.metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: g.cfg.SpaceID, DatasetId: dataset, Page: &commonpb.Page{Page: 1, Size: 100}})
@@ -80,23 +95,6 @@ func (g *StorageGate) Validate(ctx context.Context) error {
 				err = fmt.Errorf("dataset %q is missing writer columns", dataset)
 			}
 			return g.setStatus(err)
-		}
-		routes, callErr := g.metadata.ListPrimaryStoreRoutes(ctx, &storagepb.ListPrimaryStoreRoutesReq{SpaceId: g.cfg.SpaceID, DatasetId: dataset, Page: &commonpb.Page{Page: 1, Size: 100}})
-		if callErr != nil {
-			return g.setStatus(fmt.Errorf("list host routes %q: %w", dataset, callErr))
-		}
-		if err := checkRet(routes.GetRetInfo()); err != nil {
-			return g.setStatus(err)
-		}
-		found := false
-		for _, route := range routes.GetPrimaryStoreRoutes() {
-			if route.GetDatasetId() == dataset && route.GetSubjectPattern() == "*" && strings.EqualFold(route.GetStatus(), "active") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return g.setStatus(fmt.Errorf("dataset %q has no active wildcard route", dataset))
 		}
 	}
 	return g.setStatus(nil)
