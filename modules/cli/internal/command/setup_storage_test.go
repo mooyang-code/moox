@@ -343,6 +343,9 @@ func (f *fakeStorageMetadataAPI) CheckDatasetActivation(_ context.Context, req *
 }
 func (f *fakeStorageMetadataAPI) ActivateDataset(_ context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
+	if req.GetExpectedRevision() != 7 {
+		return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_CONFLICT}}, nil
+	}
 	return &storagepb.ActivateDatasetRsp{RetInfo: storageOK(), Dataset: &storagepb.Dataset{DatasetId: req.GetDatasetId(), Status: "active", BindingLocked: true, Revision: req.GetExpectedRevision() + 1}}, nil
 }
 
