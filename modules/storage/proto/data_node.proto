@@ -58,7 +58,8 @@ message CleanupExpiredBucketsRsp {
   uint64 deleted_buckets = 2;
 }
 
-service DataNode {
+// DataNodeRuntime is the storage RPC surface; DataNode is reserved for the metadata entity.
+service DataNodeRuntime {
   rpc WriteFields(WriteFieldsReq) returns (WriteFieldsRsp);
   rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
   rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);

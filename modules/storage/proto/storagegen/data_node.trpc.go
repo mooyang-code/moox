@@ -17,8 +17,8 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
-// DataNodeService defines service.
-type DataNodeService interface {
+// DataNodeRuntimeService defines service.
+type DataNodeRuntimeService interface {
 	WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error)
@@ -28,14 +28,14 @@ type DataNodeService interface {
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error)
 }
 
-func DataNodeService_WriteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_WriteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &WriteFieldsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).WriteFields(ctx, reqbody.(*WriteFieldsReq))
+		return svr.(DataNodeRuntimeService).WriteFields(ctx, reqbody.(*WriteFieldsReq))
 	}
 
 	var rsp interface{}
@@ -46,14 +46,14 @@ func DataNodeService_WriteFields_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
-func DataNodeService_ReadFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_ReadFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadFieldsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).ReadFields(ctx, reqbody.(*ReadFieldsReq))
+		return svr.(DataNodeRuntimeService).ReadFields(ctx, reqbody.(*ReadFieldsReq))
 	}
 
 	var rsp interface{}
@@ -64,14 +64,14 @@ func DataNodeService_ReadFields_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
-func DataNodeService_GetNodeState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_GetNodeState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetNodeStateReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).GetNodeState(ctx, reqbody.(*GetNodeStateReq))
+		return svr.(DataNodeRuntimeService).GetNodeState(ctx, reqbody.(*GetNodeStateReq))
 	}
 
 	var rsp interface{}
@@ -82,14 +82,14 @@ func DataNodeService_GetNodeState_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
-func DataNodeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &CleanupExpiredBucketsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).CleanupExpiredBuckets(ctx, reqbody.(*CleanupExpiredBucketsReq))
+		return svr.(DataNodeRuntimeService).CleanupExpiredBuckets(ctx, reqbody.(*CleanupExpiredBucketsReq))
 	}
 
 	var rsp interface{}
@@ -100,52 +100,52 @@ func DataNodeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-// DataNodeServer_ServiceDesc descriptor for server.RegisterService.
-var DataNodeServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.storage.DataNode",
-	HandlerType: ((*DataNodeService)(nil)),
+// DataNodeRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodeRuntime",
+	HandlerType: ((*DataNodeRuntimeService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.DataNode/WriteFields",
-			Func: DataNodeService_WriteFields_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/WriteFields",
+			Func: DataNodeRuntimeService_WriteFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNode/ReadFields",
-			Func: DataNodeService_ReadFields_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/ReadFields",
+			Func: DataNodeRuntimeService_ReadFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNode/GetNodeState",
-			Func: DataNodeService_GetNodeState_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/GetNodeState",
+			Func: DataNodeRuntimeService_GetNodeState_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNode/CleanupExpiredBuckets",
-			Func: DataNodeService_CleanupExpiredBuckets_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/CleanupExpiredBuckets",
+			Func: DataNodeRuntimeService_CleanupExpiredBuckets_Handler,
 		},
 	},
 }
 
-// RegisterDataNodeService registers service.
-func RegisterDataNodeService(s server.Service, svr DataNodeService) {
-	if err := s.Register(&DataNodeServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("DataNode register error:%v", err))
+// RegisterDataNodeRuntimeService registers service.
+func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService) {
+	if err := s.Register(&DataNodeRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodeRuntime register error:%v", err))
 	}
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
-type UnimplementedDataNode struct{}
+type UnimplementedDataNodeRuntime struct{}
 
-func (s *UnimplementedDataNode) WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error) {
-	return nil, errors.New("rpc WriteFields of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error) {
+	return nil, errors.New("rpc WriteFields of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNode) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
-	return nil, errors.New("rpc ReadFields of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
+	return nil, errors.New("rpc ReadFields of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNode) GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error) {
-	return nil, errors.New("rpc GetNodeState of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error) {
+	return nil, errors.New("rpc GetNodeState of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNode) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error) {
-	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error) {
+	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNodeRuntime is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -154,8 +154,8 @@ func (s *UnimplementedDataNode) CleanupExpiredBuckets(ctx context.Context, req *
 
 // START ======================================= Client Service Definition ======================================= START
 
-// DataNodeClientProxy defines service client proxy
-type DataNodeClientProxy interface {
+// DataNodeRuntimeClientProxy defines service client proxy
+type DataNodeRuntimeClientProxy interface {
 	WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (rsp *WriteFieldsRsp, err error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (rsp *ReadFieldsRsp, err error)
@@ -165,23 +165,23 @@ type DataNodeClientProxy interface {
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (rsp *CleanupExpiredBucketsRsp, err error)
 }
 
-type DataNodeClientProxyImpl struct {
+type DataNodeRuntimeClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewDataNodeClientProxy = func(opts ...client.Option) DataNodeClientProxy {
-	return &DataNodeClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewDataNodeRuntimeClientProxy = func(opts ...client.Option) DataNodeRuntimeClientProxy {
+	return &DataNodeRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *DataNodeClientProxyImpl) WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (*WriteFieldsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (*WriteFieldsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/WriteFields")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/WriteFields")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("WriteFields")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -194,14 +194,14 @@ func (c *DataNodeClientProxyImpl) WriteFields(ctx context.Context, req *WriteFie
 	return rsp, nil
 }
 
-func (c *DataNodeClientProxyImpl) ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (*ReadFieldsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (*ReadFieldsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/ReadFields")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/ReadFields")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("ReadFields")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -214,14 +214,14 @@ func (c *DataNodeClientProxyImpl) ReadFields(ctx context.Context, req *ReadField
 	return rsp, nil
 }
 
-func (c *DataNodeClientProxyImpl) GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (*GetNodeStateRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (*GetNodeStateRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/GetNodeState")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/GetNodeState")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("GetNodeState")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -234,14 +234,14 @@ func (c *DataNodeClientProxyImpl) GetNodeState(ctx context.Context, req *GetNode
 	return rsp, nil
 }
 
-func (c *DataNodeClientProxyImpl) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (*CleanupExpiredBucketsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (*CleanupExpiredBucketsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/CleanupExpiredBuckets")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/CleanupExpiredBuckets")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("CleanupExpiredBuckets")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
