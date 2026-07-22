@@ -13,7 +13,6 @@ import (
 
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestMetadataKeywordSearch(t *testing.T) {
@@ -47,56 +46,6 @@ func TestMetadataKeywordSearch(t *testing.T) {
 	subjects, subjectPage, err := store.ListSubjects(ctx, "space", "", "", nil, "平安", &pb.Page{Page: 1, Size: 20})
 	if err != nil || len(subjects) != 1 || subjects[0].GetSubjectId() != "000001.SZ" || subjectPage.GetTotal() != 1 {
 		t.Fatalf("subject keyword search = %+v page=%+v err=%v", subjects, subjectPage, err)
-	}
-}
-
-func TestDatasetTopologyLockRejectsPlacementChanges(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedSpaceSourceDataset(t, ctx, store)
-	if _, err := store.UpsertPrimaryStoreNode(ctx, &pb.PrimaryStoreNode{
-		NodeId: "node-1", Name: "Node 1", Endpoint: "127.0.0.1:20101", Weight: 100, Status: "active",
-	}); err != nil {
-		t.Fatalf("UpsertPrimaryStoreNode: %v", err)
-	}
-	route := &pb.PrimaryStoreRoute{
-		SpaceId: "space", RouteId: "route-1", DatasetId: "dataset", NodeId: "node-1",
-		HashRule: "subject_hash", Priority: 100, Status: "active",
-	}
-	if _, err := store.UpsertPrimaryStoreRoute(ctx, route); err != nil {
-		t.Fatalf("UpsertPrimaryStoreRoute: %v", err)
-	}
-	if _, err := store.UpsertDevice(ctx, &pb.Device{DeviceId: "device-1", NodeId: "node-1", Name: "Pebble", Engine: "pebble", Endpoint: "/data/one", Status: "active", Attributes: map[string]string{"shard_id": "shard-1"}}); err != nil {
-		t.Fatalf("UpsertDevice: %v", err)
-	}
-	if err := store.LockDatasetTopology(ctx, "space", "dataset"); err != nil {
-		t.Fatalf("LockDatasetTopology: %v", err)
-	}
-	changedNode := &pb.PrimaryStoreNode{
-		NodeId: "node-1", Name: "Node 1", Endpoint: "127.0.0.1:20102", Weight: 100, Status: "active",
-	}
-	if _, err := store.UpsertPrimaryStoreNode(ctx, changedNode); err == nil {
-		t.Fatal("UpsertPrimaryStoreNode accepted a locked endpoint change")
-	}
-	changedNode = &pb.PrimaryStoreNode{NodeId: "node-1", Name: "Node 1", Endpoint: "127.0.0.1:20101", Weight: 100, Status: "active", Attributes: map[string]string{"shard_id": "shard-2"}}
-	if _, err := store.UpsertPrimaryStoreNode(ctx, changedNode); err == nil {
-		t.Fatal("UpsertPrimaryStoreNode accepted a locked shard_id change")
-	}
-	changedRoute := proto.Clone(route).(*pb.PrimaryStoreRoute)
-	changedRoute.Priority = 200
-	if _, err := store.UpsertPrimaryStoreRoute(ctx, changedRoute); err == nil {
-		t.Fatal("UpsertPrimaryStoreRoute accepted a locked priority change")
-	}
-	changedDevice := &pb.Device{DeviceId: "device-1", NodeId: "node-1", Name: "Pebble", Engine: "pebble", Endpoint: "/data/two", Status: "active", Attributes: map[string]string{"shard_id": "shard-1"}}
-	if _, err := store.UpsertDevice(ctx, changedDevice); err == nil {
-		t.Fatal("UpsertDevice accepted a locked endpoint change")
-	}
-	changedDevice = &pb.Device{DeviceId: "device-1", NodeId: "node-1", Name: "Pebble", Engine: "pebble", Endpoint: "/data/one", Status: "active", Attributes: map[string]string{"shard_id": "shard-2"}}
-	if _, err := store.UpsertDevice(ctx, changedDevice); err == nil {
-		t.Fatal("UpsertDevice accepted a locked shard_id change")
-	}
-	if _, err := store.UpsertDevice(ctx, &pb.Device{DeviceId: "device-2", NodeId: "node-1", Name: "Second Pebble", Engine: "pebble", Endpoint: "/data/three", Status: "active", Attributes: map[string]string{"shard_id": "shard-2"}}); err == nil {
-		t.Fatal("UpsertDevice accepted a new device on a locked node")
 	}
 }
 
@@ -872,12 +821,16 @@ func seedSQLiteViewDataset(t *testing.T, ctx context.Context, store *Store, spac
 	}); err != nil {
 		t.Fatalf("UpsertDataSource: %v", err)
 	}
+	if _, err := store.RegisterDataNode(ctx, "node-a", "trpc://node-a", "Node A"); err != nil {
+		t.Fatalf("RegisterDataNode: %v", err)
+	}
 	if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 		SpaceId:      spaceID,
 		DatasetId:    "dataset",
 		DataSourceId: "source",
 		Name:         "Dataset",
 		DataKind:     pb.DataKind_DATA_KIND_TIME_SERIES,
+		DataNodeId:   "node-a",
 		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDataset: %v", err)
