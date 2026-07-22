@@ -209,10 +209,12 @@ write_storage_release_manifest() {
   else
     digest="$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')"
   fi
+  local version_lower
+  version_lower="$(printf '%s' "${VERSION}" | tr '[:upper:]' '[:lower:]')"
   mkdir -p "${ROOT}/artifacts"
   {
     printf 'schema_version=1\ncommit=%s\narchive=release/%s\narchive_sha256=%s\n' \
-      "${VERSION,,}" "$(basename "${ARCHIVE}")" "${digest}"
+      "${version_lower}" "$(basename "${ARCHIVE}")" "${digest}"
     for binary in moox-storage-primary moox-storage-node moox-storage-view; do
       local path
       case "${binary}" in
