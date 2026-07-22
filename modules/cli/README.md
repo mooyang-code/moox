@@ -79,6 +79,41 @@ moox-cli setup metadata-import \
 位置。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
 自然语言理解由 MooX Skill 负责，CLI 始终接收明确的主机名和稳定 Space ID。
 
+### Storage Schema v5 验证
+
+Schema v5 替换尚未上线的旧 Storage 数据时，只有在用户明确确认预发布环境后才允许
+使用 `--reset-storage-data`：
+
+```bash
+moox-cli setup deploy-storage \
+  --file ./custom.toml \
+  --host compute \
+  --reset-storage-data
+```
+
+该选项默认关闭，并会清除远端 `~/moox/storage/data` 后重新初始化 Storage；远端
+`secrets/` 保留。它不是生产迁移或日常重部署选项，也不会修改 `custom.toml`。
+
+部署完成后可以使用三条边界明确的验证命令：
+
+```bash
+moox-cli setup verify-storage --file ./custom.toml --host compute
+moox-cli setup e2e-storage --file ./custom.toml --host compute --namespace codex-storage
+moox-cli setup browser-e2e-storage --file ./custom.toml --host compute --repo-root .
+```
+
+`verify-storage` 通过 CLI 管理的 SSH 隧道检查组件就绪、Schema v5、二进制哈希、
+签名 DataNode 身份以及 Dataset 汇总，并只输出脱敏的状态、ID、数量和版本信息。
+`e2e-storage` 使用调用方提供的短命名空间创建禁用 Dataset，执行激活自检和 revision
+激活，再通过支持的接口清理临时 Space、DataSource 和 Dataset；即使断言失败也会报告
+清理结果。命名空间必须是安全的短标识符。
+
+`browser-e2e-storage` 只启动远端 Storage 管理台 Playwright 用例，覆盖桌面和 390px
+移动视口的 DataNode/Dataset 页面、详情、Info 提示和激活自检。登录材料由 setup CLI
+通过子进程 stdin 传给 global setup，只在验证进程内存中使用；不会出现在 argv、日志、
+临时文件、截图、trace、video 或 Playwright `storageState` 中。三个命令都要求显式
+指定 Storage 主机，`custom.toml` 只能由 setup CLI 读取且始终保持不变。
+
 ## 构建
 
 ```bash
@@ -108,10 +143,10 @@ go run ./cmd/moox-cli --help
 
 ```yaml
 moox:
-  auth_target: "127.0.0.1:11100"   # admin Auth HTTP 端口
+  auth_target: "127.0.0.1:11100" # admin Auth HTTP 端口
 
 storage:
-  target: "127.0.0.1:20102"        # Storage Access tRPC；HTTP 元数据一般为 :20200
+  target: "127.0.0.1:20102" # Storage Access tRPC；HTTP 元数据一般为 :20200
 ```
 
 经网关访问时使用 `:11000`；直连服务时使用各进程 HTTP/tRPC 端口（见各模块 README）。
@@ -132,11 +167,10 @@ moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml 
 moox-cli metadata apply \
   --file ../../examples/metadata-monitor-metrics.seed.yaml \
   --metadata-url http://127.0.0.1:20200
-moox-storage-cli register-node \
-  --node-id storage-node-0 \
-  --service-target ip://127.0.0.1:20107 \
-  --metadata-target ip://127.0.0.1:20100
 ```
+
+DataNode 的注册和 `service_target` 由 `setup deploy-storage` 的部署流程完成；元数据
+seed 只声明 Dataset 的直接绑定，不再单独维护节点或路由 seed。
 
 ### 历史 CSV 导入
 

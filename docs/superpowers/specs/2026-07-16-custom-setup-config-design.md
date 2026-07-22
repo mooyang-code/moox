@@ -220,8 +220,45 @@ For a non-empty selection, `setup metadata-import` first verifies that control
 setup is complete, then connects to the explicitly named Storage host and
 forwards its loopback Metadata API through SSH. Filtering retains the complete
 dependency closure for each selected Space, including its data sources,
-datasets, views, fields, columns, subjects, routes, and shared global storage
+datasets, views, fields, columns, subjects, and shared global storage
 resources. Unknown or duplicate Space selections fail before any import call.
+
+### Storage Schema v5 Reset And Verification
+
+Storage deployment is a clean-break Schema v5 replacement for this pre-release
+project. `deploy-storage` keeps `--reset-storage-data` false by default. The
+operator must explicitly confirm a pre-production reset before using it; the
+option is not a production migration mechanism or a normal redeploy shortcut.
+When enabled, the remote installer removes only the Storage data directory and
+recreates it from the current package. The remote Storage `secrets/` directory
+is preserved, and the CLI never writes or deletes `custom.toml`.
+
+After deployment, the setup CLI provides three explicit verification boundaries:
+
+```text
+setup verify-storage --file ./custom.toml --host <storage-host>
+setup e2e-storage --file ./custom.toml --host <storage-host> --namespace <short-id>
+setup browser-e2e-storage --file ./custom.toml --host <storage-host> --repo-root <repo>
+```
+
+`verify-storage` is read-only. It uses the setup SSH tunnel and signed service
+requests to report only component readiness, exact commit, binary hashes,
+Schema version, DataNode identity/status, counts, and the absence of route RPCs.
+`e2e-storage` uses a caller-supplied namespace, creates a disabled temporary
+Space/DataSource/Dataset, checks and activates it with revision CAS, verifies
+the metadata lifecycle through supported APIs, and cleans up the temporary
+resources even after an assertion failure. Its JSON contains only sanitized
+IDs, check IDs, revisions, statuses, and cleanup state.
+
+`browser-e2e-storage` runs the remote Playwright spec against the named Admin
+UI and covers DataNode and Dataset workflows at desktop and 390px mobile
+viewports. The setup process sends `base_url`, username, and password through
+the child process stdin to `remote-auth-global-setup.ts`; credentials remain
+in memory for the run and are never placed in argv, logs, artifacts, or
+browser storage. Remote mode registers only the remote project, disables
+trace/video, leaves `storageState` unset, and does not start a local web server.
+The browser spec uses the deployed API rather than synthetic fixtures and does
+not perform destructive Dataset or DataNode mutations.
 
 ## Admin Setup Service
 
@@ -364,6 +401,10 @@ The Skill must:
     `setup metadata-import` with the selected Storage host and Space IDs.
 14. Keep `custom.toml` initialization and metadata import as visibly separate
     steps. Never write deployment placement or metadata choices into the file.
+15. Treat `--reset-storage-data` as an explicit pre-production-only action;
+    never infer it from a Schema mismatch or retry it silently.
+16. Run `verify-storage`, `e2e-storage`, and `browser-e2e-storage` only through
+    the setup CLI. Keep their JSON sanitized and do not persist browser state.
 
 ## Tests And Acceptance
 

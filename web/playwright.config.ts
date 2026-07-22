@@ -1,18 +1,25 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices } from "@playwright/test";
+
+const remote = process.env.MOOX_REMOTE_PLAYWRIGHT === "1";
 
 export default defineConfig({
-  testDir: './tests',
+  testDir: "./tests",
   timeout: 30_000,
-  globalSetup: process.env.MOOX_REMOTE_PLAYWRIGHT === '1' ? './tests/remote-auth-global-setup.ts' : undefined,
+  globalSetup: remote ? "./tests/remote-auth-global-setup.ts" : undefined,
   use: {
-    baseURL: process.env.MOOX_REMOTE_BASE_URL || 'http://127.0.0.1:9527',
-    trace: process.env.MOOX_REMOTE_PLAYWRIGHT === '1' ? 'off' : 'retain-on-failure',
-    video: process.env.MOOX_REMOTE_PLAYWRIGHT === '1' ? 'off' : 'on-first-retry',
+    baseURL: process.env.MOOX_REMOTE_BASE_URL || "http://127.0.0.1:9527",
+    trace: remote ? "off" : "retain-on-failure",
+    video: remote ? "off" : "on-first-retry",
     storageState: undefined
   },
-  webServer:
-    process.env.MOOX_REMOTE_PLAYWRIGHT === '1'
-      ? undefined
-      : { command: 'pnpm dev --host 127.0.0.1', url: 'http://127.0.0.1:9527', reuseExistingServer: true },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  webServer: remote
+    ? undefined
+    : { command: "pnpm dev --host 127.0.0.1", url: "http://127.0.0.1:9527", reuseExistingServer: true },
+  projects: [
+    {
+      name: "chromium",
+      testMatch: remote ? /storage-datanode-management\.remote\.e2e\.spec\.ts/ : undefined,
+      use: { ...devices["Desktop Chrome"] }
+    }
+  ]
 });
