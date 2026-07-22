@@ -31,9 +31,11 @@ func TestPrimaryDataNodeViewFlow(t *testing.T) {
 	nodeA, nodeB := newNode("node-a"), newNode("node-b")
 	defer nodeA.Close()
 	defer nodeB.Close()
-	nodes := map[string]pb.DataNodeService{"prices": nodeA, "factors": nodeB}
+	nodes := map[string]pb.DataNodeRuntimeService{"prices": nodeA, "factors": nodeB}
 	primary, err := primarystore.New(primarystore.Options{
-		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeService, error) { return nodes[dataset], nil },
+		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeRuntimeService, error) {
+			return nodes[dataset], nil
+		},
 		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
 			clone := proto.Clone(in).(*pb.AuthInfo)
 			clone.AppKey = datanode.ServiceAuthKey(secret, clone.AppId)

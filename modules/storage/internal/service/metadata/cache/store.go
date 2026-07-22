@@ -221,6 +221,13 @@ func (s *requestSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
 	return item, err == nil
 }
 
+func (s *requestSnapshot) ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	if s == nil || s.snapshot == nil {
+		return nil, nil, errors.New("metadata snapshot is unavailable")
+	}
+	return s.snapshot.ListDatasetColumns(context.Background(), spaceID, datasetID, page)
+}
+
 func (s *MetadataSnapshot) getDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error) {
 	return snapshotGetProto(s, ctx, kindDataNode, "", nodeID, func() *pb.DataNode { return &pb.DataNode{} })
 }

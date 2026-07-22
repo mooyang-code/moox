@@ -15,7 +15,7 @@ import (
 type Validator interface {
 	ValidateRow(context.Context, *pb.RowFieldUpsert) error
 }
-type NodeResolver func(context.Context, string, string) (pb.DataNodeService, error)
+type NodeResolver func(context.Context, string, string) (pb.DataNodeRuntimeService, error)
 type ViewResolver func(context.Context, string, string) (pb.DataViewService, string, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
@@ -30,7 +30,7 @@ type Service struct {
 }
 
 type Options struct {
-	Node       pb.DataNodeService
+	Node       pb.DataNodeRuntimeService
 	Resolver   NodeResolver
 	Validator  Validator
 	AuthSigner AuthSigner
@@ -41,10 +41,10 @@ type Options struct {
 func New(opts Options) (*Service, error) {
 	resolve := opts.Resolver
 	if resolve == nil && opts.Node != nil {
-		resolve = func(context.Context, string, string) (pb.DataNodeService, error) { return opts.Node, nil }
+		resolve = func(context.Context, string, string) (pb.DataNodeRuntimeService, error) { return opts.Node, nil }
 	}
 	if resolve == nil {
-		return nil, errors.New("primary store node resolver is required")
+		return nil, errors.New("data node resolver is required")
 	}
 	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer, view: opts.View}, nil
 }

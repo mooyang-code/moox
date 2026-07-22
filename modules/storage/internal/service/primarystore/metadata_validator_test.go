@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -47,5 +48,66 @@ func TestMetadataValidatorReadsAllDatasetColumnPages(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+type snapshotOnlyMetadataReader struct {
+	snapshot metadata.RequestSnapshot
+}
+
+func (*snapshotOnlyMetadataReader) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	panic("persistent metadata store accessed")
+}
+
+func (*snapshotOnlyMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	panic("persistent metadata store accessed")
+}
+
+func (r *snapshotOnlyMetadataReader) RequestSnapshot() metadata.RequestSnapshot {
+	return r.snapshot
+}
+
+type validatorSnapshot struct{}
+
+func (validatorSnapshot) GetDataset(string, string) (*pb.Dataset, bool) {
+	return &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}, true
+}
+
+func (validatorSnapshot) GetDataNode(string) (*pb.DataNode, bool) {
+	return &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:20107"}, true
+}
+
+func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return []*pb.DatasetColumn{{ColumnName: "value", OriginId: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}}, &pb.PageResult{Page: 1, Size: 1000}, nil
+}
+
+func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
+	var writes, reads int
+	node := &recordingNode{
+		write: func(_ context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+			writes++
+			return &pb.WriteFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
+		},
+		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			reads++
+			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
+		},
+	}
+	validator := NewMetadataValidator(&snapshotOnlyMetadataReader{snapshot: validatorSnapshot{}})
+	svc, err := New(Options{Node: node, Validator: validator})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
+	write, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller"},
+		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
+	})
+	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || writes != 1 {
+		t.Fatalf("write=%v err=%v writes=%d", write, err, writes)
+	}
+	read, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}})
+	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || reads != 1 {
+		t.Fatalf("read=%v err=%v reads=%d", read, err, reads)
 	}
 }

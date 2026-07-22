@@ -43,7 +43,7 @@ func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFiel
 // share one immutable metadata view for the whole write.
 func (v *MetadataValidator) snapshotReader(ctx context.Context) metadataReader {
 	if snapshot := metadata.RequestSnapshotFromContext(ctx); snapshot != nil {
-		return snapshot
+		return requestSnapshotReader{snapshot: snapshot}
 	}
 	if provider, ok := v.reader.(interface {
 		SnapshotReader() metadata.SnapshotReader
@@ -53,6 +53,30 @@ func (v *MetadataValidator) snapshotReader(ctx context.Context) metadataReader {
 		}
 	}
 	return v.reader
+}
+
+// requestSnapshotReader keeps validation on the same immutable generation as
+// routing. It deliberately has no access to the persistent metadata Store.
+type requestSnapshotReader struct {
+	snapshot metadata.RequestSnapshot
+}
+
+func (r requestSnapshotReader) GetDataset(_ context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
+	if r.snapshot == nil {
+		return nil, fmt.Errorf("metadata snapshot is unavailable")
+	}
+	item, ok := r.snapshot.GetDataset(spaceID, datasetID)
+	if !ok {
+		return nil, fmt.Errorf("dataset %q is not found", datasetID)
+	}
+	return item, nil
+}
+
+func (r requestSnapshotReader) ListDatasetColumns(_ context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	if r.snapshot == nil {
+		return nil, nil, fmt.Errorf("metadata snapshot is unavailable")
+	}
+	return r.snapshot.ListDatasetColumns(spaceID, datasetID, page)
 }
 
 func (v *MetadataValidator) RequestSnapshot() metadata.RequestSnapshot {

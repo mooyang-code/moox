@@ -51,6 +51,7 @@ type SnapshotReader interface {
 type RequestSnapshot interface {
 	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
 	GetDataNode(nodeID string) (*pb.DataNode, bool)
+	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 }
 
 type requestSnapshotContextKey struct{}
