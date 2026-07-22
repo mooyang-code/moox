@@ -186,10 +186,8 @@ recorded_managed_process() {
   pid=$(cat "${PIDFILE}")
   managed_process "${pid}"
 }
-pid_owned() {
-  recorded_managed_process || return 1
-  local pid port owners admin_port
-  pid=$(cat "${PIDFILE}")
+pid_owns_any_listener() {
+  local pid="$1" port owners admin_port
   IFS=, read -ra ports <<<"${PORTS}"
   for port in "${ports[@]}"; do
     owners=$(port_pids "${port}")
@@ -197,8 +195,18 @@ pid_owned() {
   done
   admin_port=${ADMIN_ENDPOINT##*:}
   owners=$(port_pids "${admin_port}")
-  [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] && return 0
-  return 1
+  [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]]
+}
+pid_owned() {
+  recorded_managed_process || return 1
+  local pid port owners
+  pid=$(cat "${PIDFILE}")
+  IFS=, read -ra ports <<<"${PORTS}"
+  for port in "${ports[@]}"; do
+    owners=$(port_pids "${port}")
+    [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] || return 1
+  done
+  return 0
 }
 clean_stale_pid() { [[ ! -e "${PIDFILE}" ]] || pid_owned || { log 'removing stale or mismatched PID file without signaling it'; rm -f "${PIDFILE}"; }; }
 stop_recorded_pid() {
@@ -221,7 +229,18 @@ stop_managed_process() {
     adopt_managed_process || true
   fi
   pid=$(cat "${PIDFILE}" 2>/dev/null || true)
-  if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
+  if [[ -z "${pid}" ]]; then
+    return 0
+  fi
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && ! kill -0 "${pid}" 2>/dev/null; then
+    rm -f "${PIDFILE}"
+    return 0
+  fi
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]] || ! recorded_managed_process || ! pid_owns_any_listener "${pid}"; then
+    rm -f "${PIDFILE}"
+    fail 'managed Caddy PID file is stale or does not own a configured listener'
+  fi
+  if kill -0 "${pid}" 2>/dev/null; then
     kill "${pid}" 2>/dev/null || true
     for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
   fi

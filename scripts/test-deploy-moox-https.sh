@@ -101,14 +101,27 @@ SH
 cat >"${TMP}/cap-bin/lsof" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_PORT_LOG}"
+fake_pid() {
+  for pid_state in ${FAKE_PID_STATES:-${FAKE_PID_STATE:-}}; do
+    if [[ -s "${pid_state}" ]]; then
+      cat "${pid_state}"
+      return 0
+    fi
+  done
+  return 1
+}
 if [[ "${FAKE_OCCUPY_9527:-0}" == 1 && "$*" == *TCP:9527* ]]; then
   printf '424242\n'
   exit 0
 fi
-if [[ -n "${FAKE_PID_STATE:-}" && -s "${FAKE_PID_STATE}" && "$*" == *"TCP:${FAKE_ADMIN_PORT}"* ]]; then
-  cat "${FAKE_PID_STATE}"
+if [[ "$*" == *"TCP:${FAKE_ADMIN_PORT}"* ]] && fake_pid; then
   exit 0
 fi
+for managed_port in ${FAKE_MANAGED_PORTS:-}; do
+  if [[ "$*" == *"TCP:${managed_port}"* ]] && fake_pid; then
+    exit 0
+  fi
+done
 [[ -z "${REAL_LSOF:-}" ]] || exec "${REAL_LSOF}" "$@"
 SH
 chmod +x "${TMP}/cap-bin/getcap" "${TMP}/cap-bin/sudo" "${TMP}/cap-bin/lsof"
@@ -216,7 +229,8 @@ export MOOX_CADDY_ADMIN_ENDPOINT="127.0.0.1:${ADMIN_PORT}"
 export MOOX_CADDY_ADMIN_PATH=/
 export MOOX_CADDY_SKIP_PID_EXE_CHECK=1
 export MOOX_CADDY_SKIP_CA_WAIT=1
-export FAKE_PID_STATE="${TMP}/deploy/run/caddy.pid"
+export FAKE_PID_STATES="${TMP}/deploy/run/caddy.pid ${TMP}/first-deploy/run/caddy.pid"
+export FAKE_MANAGED_PORTS='443 8443 9527 11001'
 MOOX_CADDY_ARCHIVE="${TMP}/caddy_2.11.4_linux_amd64.tar.gz" \
 MOOX_CADDY_CHECKSUMS="${TMP}/checksums.txt" \
   "${HELPER}" install --deploy-dir "${TMP}/deploy" --os linux --arch amd64
