@@ -162,7 +162,16 @@ assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthchec
 assert_grep 'start_storage_process "storage-primary" "moox-storage-primary"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
+assert_grep 'wait_eventbus_storage_view_topology' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
+if ! awk '
+  /^start_storage_view\(\) \{/ { in_view=1 }
+  in_view && /wait_eventbus_storage_view_topology/ { checked=1 }
+  in_view && /start_service "storage-view"/ { exit !checked }
+' "${DEPLOY_DIR}/start.sh"; then
+  echo "storage-view must preflight EventBus topology before starting" >&2
+  exit 1
+fi
 assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 if grep -Eq 'storage-view-(index|builder|query)|storage\.view_(index|builder|query)\.yaml' "${DEPLOY_DIR}/start.sh"; then

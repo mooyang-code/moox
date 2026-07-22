@@ -1230,6 +1230,29 @@ wait_http() {
   return 1
 }
 
+wait_eventbus_storage_view_topology() {
+  if [[ "${WITH_EVENTBUS}" != "1" ]]; then
+    echo "eventbus is external; skip local storage_view topology preflight"
+    return 0
+  fi
+  local attempts="${MOOX_WAIT_EVENTBUS_TOPOLOGY_SECONDS:-60}"
+  local metrics_url="http://127.0.0.1:11419/metrics"
+  echo "waiting for EventBus storage_view durable topology"
+  for _ in $(seq 1 "${attempts}"); do
+    if curl --fail --silent --max-time 2 \
+      -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" \
+      "http://127.0.0.1:11419/readyz" >/dev/null 2>&1 && \
+      curl --fail --silent --max-time 2 \
+      -H "X-Moox-Health-Auth: $(sign_health_request GET /metrics)" \
+      "${metrics_url}" | grep -Fq 'moox_eventbus_consumer_pending{stream="MOOX_STORAGE",consumer="storage_view"}'; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "EventBus storage_view durable topology not ready after ${attempts}s" >&2
+  return 1
+}
+
 sign_health_request() {
   local method="$1" path="$2" timestamp nonce body_hash canonical signature
   path="/${path#/}"
@@ -1438,6 +1461,7 @@ start_storage_primary() {
 }
 
 start_storage_view() {
+  wait_eventbus_storage_view_topology
   gateway_service_env_for storage-view
   start_service "storage-view" "${ROOT}/storage-view" \
     env "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
