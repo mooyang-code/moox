@@ -196,6 +196,18 @@ stop_recorded_pid() {
   fi
   rm -f "${PIDFILE}"
 }
+stop_managed_process() {
+  local pid
+  if ! pid_owned; then
+    adopt_managed_process || true
+  fi
+  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+  fi
+  rm -f "${PIDFILE}"
+}
 restore_runtime_after_failure() {
   local previous_pid="$1"
   if [[ "${previous_pid}" =~ ^[0-9]+$ ]] && kill -0 "${previous_pid}" 2>/dev/null && [[ -x "${BIN}" && -s "${CONFIG}" ]]; then
@@ -370,9 +382,7 @@ case "${COMMAND}" in
     ;;
   start|reload) version_ok || fail "managed Caddy is missing or not ${CADDY_VERSION}"; start_caddy;;
   stop)
-    clean_stale_pid
-    if pid_owned; then pid=$(cat "${PIDFILE}"); kill "${pid}"; for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done; fi
-    rm -f "${PIDFILE}";;
+    stop_managed_process;;
   rollback)
     clean_stale_pid
     if [[ -e "${ACTIVATION_ROLLBACK}" ]]; then
