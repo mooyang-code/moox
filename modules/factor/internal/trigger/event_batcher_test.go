@@ -1,12 +1,74 @@
 package trigger
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
+
+type pendingStoreFake struct {
+	rows map[string]pendingStoreRow
+}
+
+type pendingStoreRow struct {
+	event      *storagepb.DatasetFieldsChanged
+	receivedAt time.Time
+}
+
+func (s *pendingStoreFake) PutPendingEvent(_ context.Context, id string, event *storagepb.DatasetFieldsChanged, at time.Time) error {
+	if s.rows == nil {
+		s.rows = map[string]pendingStoreRow{}
+	}
+	if _, ok := s.rows[id]; !ok {
+		s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.DatasetFieldsChanged), receivedAt: at}
+	}
+	return nil
+}
+
+func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.DatasetFieldsChanged, time.Time) error) error {
+	for id, row := range s.rows {
+		if err := visit(id, proto.Clone(row.event).(*storagepb.DatasetFieldsChanged), row.receivedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *pendingStoreFake) DeletePendingEvents(_ context.Context, ids []string) error {
+	for _, id := range ids {
+		delete(s.rows, id)
+	}
+	return nil
+}
+
+func TestDurableEventBatcherPersistsAndReplaysBeforeFlush(t *testing.T) {
+	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	bindings := []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")}
+	inbox := &pendingStoreFake{}
+	e := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	first := NewDurableEventBatcher(2*time.Second, bindings, inbox)
+	if err := first.IngestMessage(context.Background(), "message-1", e, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.rows) != 1 {
+		t.Fatalf("pending rows = %d, want 1", len(inbox.rows))
+	}
+	restarted := NewDurableEventBatcher(2*time.Second, bindings, inbox)
+	if err := restarted.Replay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := restarted.FlushPending(context.Background(), now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || len(inbox.rows) != 0 {
+		t.Fatalf("tasks=%+v pending=%d, want one task and empty inbox", tasks, len(inbox.rows))
+	}
+}
 
 func TestEventBatcherDropsNonBoundAndResultDatasets(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)

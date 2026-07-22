@@ -20,7 +20,7 @@ type ViewMetrics struct {
 	redeliveryTotal prometheus.Counter
 
 	consumerLagMessages         prometheus.Gauge
-	oldestPendingEventAge       prometheus.Gauge
+	oldestPendingEventAge       prometheus.GaugeFunc
 	deliveryDuration            prometheus.Histogram
 	ackErrorsTotal              prometheus.Counter
 	inProgressErrorsTotal       prometheus.Counter
@@ -86,10 +86,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_lag_messages",
 			Help: "Storage view deliveries fetched but not finished.",
 		}),
-		oldestPendingEventAge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
-			Help: "Age of the oldest pending Storage view delivery.",
-		}),
 		deliveryDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "delivery_duration_seconds",
 			Help: "Storage view delivery processing duration.",
@@ -124,6 +120,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		}),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 	}
+	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
+		Help: "Age of the oldest pending Storage view delivery.",
+	}, func() float64 { return metrics.currentOldestPendingAge(time.Now().UTC()).Seconds() })
 	var err error
 	if metrics.deriveTotal, err = registerOrReuse(registerer, metrics.deriveTotal); err != nil {
 		return nil, err
@@ -285,18 +285,35 @@ func (m *ViewMetrics) CompletePendingDelivery(delivery *jetstream.Delivery, now 
 }
 
 func (m *ViewMetrics) updateOldestPendingLocked(now time.Time) {
+	age := m.oldestPendingAgeLocked(now)
+	m.oldestPendingAgeSnapshot.Store(age.Nanoseconds())
+}
+
+func (m *ViewMetrics) currentOldestPendingAge(now time.Time) time.Duration {
+	if m == nil {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	age := m.oldestPendingAgeLocked(now)
+	m.oldestPendingAgeSnapshot.Store(age.Nanoseconds())
+	return age
+}
+
+func (m *ViewMetrics) oldestPendingAgeLocked(now time.Time) time.Duration {
 	oldest := time.Time{}
 	for _, eventAt := range m.pendingDeliveries {
 		if oldest.IsZero() || eventAt.Before(oldest) {
 			oldest = eventAt
 		}
 	}
-	age := time.Duration(0)
-	if !oldest.IsZero() && now.After(oldest) {
-		age = now.Sub(oldest)
+	if oldest.IsZero() || !now.After(oldest) {
+		return 0
 	}
-	m.oldestPendingEventAge.Set(age.Seconds())
-	m.oldestPendingAgeSnapshot.Store(age.Nanoseconds())
+	return now.Sub(oldest)
 }
 
 func (m *ViewMetrics) IncLaneActive() {
@@ -371,12 +388,13 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 	if m == nil {
 		return ViewMetricsSnapshot{}
 	}
+	oldestPendingAge := m.currentOldestPendingAge(time.Now().UTC())
 	return ViewMetricsSnapshot{
 		ConsumerLagMessages:         m.consumerLagSnapshot.Load(),
 		LaneActive:                  m.laneActiveSnapshot.Load(),
 		OutboxPendingEntries:        m.outboxPendingSnapshot.Load(),
 		OutboxOldestAge:             time.Duration(m.outboxOldestAgeSnapshot.Load()),
-		OldestPendingAge:            time.Duration(m.oldestPendingAgeSnapshot.Load()),
+		OldestPendingAge:            oldestPendingAge,
 		AckErrorsTotal:              m.ackErrorsSnapshot.Load(),
 		InProgressErrorsTotal:       m.inProgressErrorsSnapshot.Load(),
 		OutboxPublishErrorsTotal:    m.outboxPublishErrorsSnapshot.Load(),

@@ -137,6 +137,62 @@ func TestRunnerReportsHandlerAndTransportErrors(t *testing.T) {
 	}
 }
 
+func TestRunnerRetryStopsBatchAndNaksRemainingWithSameDelay(t *testing.T) {
+	var actions []string
+	var delays []time.Duration
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := runnerDelivery(&actions, nil)
+	second := runnerDelivery(&actions, nil)
+	third := runnerDelivery(&actions, nil)
+	first.nakFn = func(_ context.Context, _ time.Duration) error {
+		actions = append(actions, "nak")
+		cancel()
+		return nil
+	}
+	second.nakFn = func(_ context.Context, delay time.Duration) error {
+		actions = append(actions, "second-nak")
+		delays = append(delays, delay)
+		return nil
+	}
+	third.nakFn = func(_ context.Context, delay time.Duration) error {
+		actions = append(actions, "third-nak")
+		delays = append(delays, delay)
+		return nil
+	}
+	consumer := &runnerFakeConsumer{batches: [][]*Delivery{{first, second, third}}}
+	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
+		if delivery == first {
+			return HandlerResult{Decision: RETRY, Delay: 3 * time.Second}
+		}
+		return HandlerResult{Decision: ACK}
+	})
+	if err := NewRunner(consumer, handler, RunnerConfig{}).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := actions; len(got) != 3 || got[0] != "nak" || got[1] != "second-nak" || got[2] != "third-nak" {
+		t.Fatalf("actions = %v, want current and remaining NAKs", got)
+	}
+	if len(delays) != 2 || delays[0] != 3*time.Second || delays[1] != 3*time.Second {
+		t.Fatalf("remaining delays = %v, want 3s", delays)
+	}
+}
+
+func TestRunnerAggregatesRemainingNAKErrors(t *testing.T) {
+	firstErr := errors.New("first nak failed")
+	secondErr := errors.New("second nak failed")
+	var actions []string
+	first := runnerDelivery(&actions, map[string]error{"nak": firstErr})
+	second := runnerDelivery(&actions, map[string]error{"nak": secondErr})
+	consumer := &runnerFakeConsumer{batches: [][]*Delivery{{first, second}}}
+	err := NewRunner(consumer, DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
+		return HandlerResult{Decision: RETRY, Delay: time.Second}
+	}), RunnerConfig{}).Run(context.Background())
+	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("Run() error = %v, want both NAK errors", err)
+	}
+}
+
 func TestRunnerProcessesDeliveriesWithDecodeError(t *testing.T) {
 	var actions []string
 	ctx, cancel := context.WithCancel(context.Background())

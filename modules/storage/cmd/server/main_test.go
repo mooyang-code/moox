@@ -87,3 +87,19 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 		t.Fatalf("credential config = username %q/password %q", got.Username, got.Password)
 	}
 }
+
+func TestStorageViewConsumerOptionsUseConfiguredTopology(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "storage.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    stream_name: MOOX_STORAGE_CUSTOM\n    consumer_name: storage_view_custom\n    max_ack_pending: 8\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    ordering: subject\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	opts, err := storageViewConsumerOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Stream != "MOOX_STORAGE_CUSTOM" || opts.Durable != "storage_view_custom" || opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 8 {
+		t.Fatalf("consumer options = %+v", opts)
+	}
+}

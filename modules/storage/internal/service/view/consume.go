@@ -22,6 +22,8 @@ import (
 // is intentionally not sent to JetStream: the eventbus topology owns it and
 // this value is only useful for validating a local fetch configuration.
 type EventConsumerOptions struct {
+	Stream        string
+	Durable       string
 	FetchBatch    int
 	MaxWorkers    int
 	MaxAckPending int
@@ -31,12 +33,20 @@ type EventConsumerOptions struct {
 }
 
 func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
+	if strings.TrimSpace(o.Stream) == "" {
+		o.Stream = "MOOX_STORAGE"
+	}
+	if strings.TrimSpace(o.Durable) == "" {
+		o.Durable = "storage_view"
+	}
 	if o.FetchBatch == 0 {
 		o.FetchBatch = 8
 	}
 	if o.MaxWorkers == 0 {
 		o.MaxWorkers = 4
 	}
+	o.Stream = strings.TrimSpace(o.Stream)
+	o.Durable = strings.TrimSpace(o.Durable)
 	if strings.TrimSpace(o.Ordering) == "" {
 		o.Ordering = "subject"
 	}
@@ -60,8 +70,14 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 }
 
 func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client, configured ...EventConsumerOptions) (func(), error) {
+	if s == nil {
+		return nil, errors.New("storage view service is nil")
+	}
 	if client == nil {
 		return nil, errors.New("eventbus client is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	opts := EventConsumerOptions{}
 	if len(configured) > 0 {
@@ -85,7 +101,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		})
 	}
 	consumer, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{
-		Stream: "MOOX_STORAGE", Durable: "storage_view", FetchMaxWait: time.Second, DeliverDecodeErrors: true,
+		Stream: opts.Stream, Durable: opts.Durable, FetchMaxWait: time.Second, DeliverDecodeErrors: true,
 	})
 	if err != nil {
 		return nil, err
@@ -147,6 +163,15 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 }
 
 func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	if s == nil {
+		return errors.New("storage view service is nil")
+	}
+	if delivery == nil {
+		return errors.New("storage view delivery is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	started := time.Now()
 	metrics := s.metrics
 	if metrics == nil {
@@ -167,18 +192,24 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 	for ctx.Err() == nil {
 		err := s.applyDelivery(ctx, delivery)
 		if err == nil {
-			if ackErr := delivery.Ack(ctx); ackErr != nil {
-				log.Printf("storage view delivery ack failed: %v", ackErr)
-				metrics.IncAckError()
-				metrics.ObserveDelivery("ack", "error")
-				heartbeat.report(ackErr)
+			// Applying a projection is deliberately separate from ACK retry:
+			// an ACK transport failure must never repeat an already successful
+			// index write.
+			for ctx.Err() == nil {
+				if ackErr := delivery.Ack(ctx); ackErr == nil {
+					metrics.ObserveDelivery("ack", "success")
+					return heartbeat.err()
+				} else {
+					log.Printf("storage view delivery ack failed: %v", ackErr)
+					metrics.IncAckError()
+					metrics.ObserveDelivery("ack", "error")
+					heartbeat.report(ackErr)
+				}
 				if !sleepDeliveryRetry(ctx, time.Second) {
 					return ctx.Err()
 				}
-				continue
 			}
-			metrics.ObserveDelivery("ack", "success")
-			return heartbeat.err()
+			return ctx.Err()
 		}
 		if isPermanentDeliveryError(err) {
 			for ctx.Err() == nil {
@@ -765,6 +796,9 @@ type deliveryHeartbeat struct {
 }
 
 func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, interval time.Duration, metrics ...*observability.ViewMetrics) *deliveryHeartbeat {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var metricSink *observability.ViewMetrics
 	if len(metrics) > 0 {
 		metricSink = metrics[0]
@@ -786,11 +820,15 @@ func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, int
 				}
 				if err := delivery.InProgress(ctx); err != nil {
 					log.Printf("storage view delivery in-progress failed: %v", err)
-					h.metrics.IncInProgressError()
-					h.metrics.ObserveDelivery("in_progress", "error")
+					if h.metrics != nil {
+						h.metrics.IncInProgressError()
+						h.metrics.ObserveDelivery("in_progress", "error")
+					}
 					h.report(fmt.Errorf("storage view delivery in-progress: %w", err))
 				} else {
-					h.metrics.ObserveDelivery("in_progress", "success")
+					if h.metrics != nil {
+						h.metrics.ObserveDelivery("in_progress", "success")
+					}
 				}
 			case <-h.stopCh:
 				return

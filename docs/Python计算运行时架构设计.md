@@ -2,7 +2,7 @@
 
 ## 设计结论
 
-`packages/pyruntime` 是可复用的 Python worker 基础库；在本项目当前业务边界中，Factor 是唯一使用它的 Python runtime 入口。Go 是宿主、调度者和业务事实源；Python 是常驻、单任务串行、可终止并可重建的计算进程。Strategy 保留现有独立的 Python worker/业务运行时实现，本边界不要求迁移或删除 Strategy 代码。
+`packages/pyruntime` 是可复用的 Python worker 协议/基础库。当前 Strategy 代码确实导入其中的可复用组件，但 Strategy 保持自己的 worker 入口、业务 codec 和状态事务语义；不要把“Factor 是本次 Streaming 唯一纳入/支持的 Python runtime”误写成“Strategy 不使用该库”。Go 是宿主、调度者和业务事实源；Python 是常驻、单任务串行、可终止并可重建的计算进程。
 
 共享运行时负责：
 
@@ -24,7 +24,7 @@ V1 使用本机 worker 池。远程 Python worker、容器沙箱和多租户资�
 
 ## 当前实现状态
 
-通用能力已经落在 `packages/pyruntime`，Factor 通过 Go API 接入；Strategy 的现有独立运行路径不因本设计而改变。
+通用能力已经落在 `packages/pyruntime`，Factor 通过 Go API 接入并由本次 Streaming 运行时负责支持；Strategy 可复用其中的协议/进程/传输组件，但现有独立业务运行路径不因本设计而改变。Strategy 迁移边界是业务 codec、state CAS、调度和事务语义仍需单独设计与验证，本次不合并两条入口。
 当前能力包括：
 
 1. `process` 提供常驻 worker、任务超时、状态检查和 supervisor 重建；`pool` 提供并行 worker 选择。

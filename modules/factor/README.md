@@ -6,6 +6,8 @@
 
 `factor_calc` 的 live DeliverPolicy 当前由 EventBus registry 管理，Factor 客户端不会偷偷改成 `DeliverAll` 或从历史消息开始。需要 replay 时，必须显式创建并使用独立 durable，或使用离线的 `run-once`/补算入口；不得修改或复用 live durable 来承载历史重放。
 
+实时 delivery 在 ACK 前先写入 Factor SQLite 的 `t_factor_event_inbox`；进程重启会 replay 未 flush 的 inbox，窗口 flush 后才删除对应记录。这个本地 pending inbox 是 live durable 之外的恢复边界，不替代 `MOOX_STORAGE/factor_calc`，也不把 replay 伪装成 live durable。
+
 ## 现状
 
 ```bash

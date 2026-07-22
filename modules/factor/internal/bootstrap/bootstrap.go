@@ -124,7 +124,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 factor binding 快照失败: %v", err)
 		return nil, err
 	}
-	eventBatcher := trigger.NewEventBatcher(time.Duration(cfg.Scheduler.EventBatchWindowMS)*time.Millisecond, bindings)
+	eventBatcher := trigger.NewDurableEventBatcher(time.Duration(cfg.Scheduler.EventBatchWindowMS)*time.Millisecond, bindings, dbm)
+	if err := eventBatcher.Replay(ctx); err != nil {
+		log.ErrorContextf(ctx, "恢复 factor event inbox 失败: %v", err)
+		return nil, err
+	}
 	if cfg.NATS.URL == "" {
 		log.WarnContextf(ctx, "factor nats.url is empty, realtime trigger startup skipped")
 	} else {
@@ -374,7 +378,12 @@ func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {
 }
 
 func drainEventBatch(ctx context.Context, deps realtimeLoopDeps) {
-	for _, task := range deps.eventBatcher.Flush(time.Now()) {
+	tasks, err := deps.eventBatcher.FlushPending(ctx, time.Now())
+	if err != nil {
+		log.WarnContextf(ctx, "删除已 flush 的 factor event inbox 失败: %v", err)
+		return
+	}
+	for _, task := range tasks {
 		schedTask, err := buildSchedulerTask(ctx, deps.factors, deps.factorsDir, task)
 		if err != nil {
 			log.WarnContextf(ctx, "构造 factor 调度任务失败: %v", err)

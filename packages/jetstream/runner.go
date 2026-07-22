@@ -72,6 +72,28 @@ type Runner struct {
 	cfg      RunnerConfig
 }
 
+// ApplyHandlerResult performs the transport action selected by a handler.
+// Keeping this separate lets direct callers use the same ACK/NAK/TERM
+// contract as Runner without duplicating the action switch.
+func ApplyHandlerResult(ctx context.Context, delivery *Delivery, result HandlerResult) error {
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	if delivery == nil {
+		return ErrInvalidDelivery
+	}
+	switch result.Decision {
+	case ACK:
+		return delivery.Ack(ctx)
+	case RETRY:
+		return delivery.Nak(ctx, result.Delay)
+	case TERM:
+		return delivery.Term(ctx)
+	default:
+		return fmt.Errorf("invalid handler decision %d", result.Decision)
+	}
+}
+
 func NewRunner(consumer PullConsumerAPI, handler DeliveryHandler, cfg RunnerConfig) *Runner {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 1
@@ -109,12 +131,26 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 
 		var batchErr error
-		for _, delivery := range deliveries {
+		for index, delivery := range deliveries {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if err := r.handle(ctx, delivery); err != nil {
+			result, err := r.handle(ctx, delivery)
+			if err != nil {
 				batchErr = errors.Join(batchErr, err)
+			}
+			if result.Decision == RETRY {
+				// A retry keeps the current subject lane blocked. NAK the rest of
+				// this fetch with the same delay instead of allowing later events
+				// to overtake the failed delivery.
+				for _, pending := range deliveries[index+1:] {
+					actionErr := ApplyHandlerResult(ctx, pending, HandlerResult{Decision: RETRY, Delay: result.Delay})
+					if actionErr != nil {
+						r.report(actionErr)
+						batchErr = errors.Join(batchErr, actionErr)
+					}
+				}
+				break
 			}
 		}
 		if ctx.Err() != nil {
@@ -133,7 +169,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 }
 
-func (r *Runner) handle(ctx context.Context, delivery *Delivery) error {
+func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult, error) {
 	stopHeartbeat := make(chan struct{})
 	heartbeatErrs := make(chan error, 1)
 	var heartbeatWG sync.WaitGroup
@@ -162,29 +198,19 @@ func (r *Runner) handle(ctx context.Context, delivery *Delivery) error {
 
 heartbeatDone:
 	if ctx.Err() != nil {
-		return nil
+		return result, nil
 	}
 	if delivery == nil {
 		err := ErrInvalidDelivery
 		r.report(err)
-		return errors.Join(allErr, err)
+		return result, errors.Join(allErr, err)
 	}
-	var actionErr error
-	switch result.Decision {
-	case ACK:
-		actionErr = delivery.Ack(ctx)
-	case RETRY:
-		actionErr = delivery.Nak(ctx, result.Delay)
-	case TERM:
-		actionErr = delivery.Term(ctx)
-	default:
-		actionErr = fmt.Errorf("invalid handler decision %d", result.Decision)
-	}
+	actionErr := ApplyHandlerResult(ctx, delivery, result)
 	if actionErr != nil {
 		r.report(actionErr)
 		allErr = errors.Join(allErr, actionErr)
 	}
-	return allErr
+	return result, allErr
 }
 
 func (r *Runner) heartbeat(ctx context.Context, delivery *Delivery, stop <-chan struct{}, errs chan<- error, wg *sync.WaitGroup) {

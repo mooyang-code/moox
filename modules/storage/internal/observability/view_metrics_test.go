@@ -93,3 +93,28 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	}
 	assert.Empty(t, wantNames)
 }
+
+func TestOldestPendingEventAgeGrowsOnScrapeWithoutNewEvents(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewViewMetrics(registry)
+	require.NoError(t, err)
+	delivery := &jetstream.Delivery{Message: &messagepb.MooxMessage{OccurredAt: timestamppb.New(time.Now().Add(-50 * time.Millisecond))}}
+	metrics.ObservePendingDelivery(delivery, time.Now())
+	first := gatherGauge(t, registry, "moox_storage_view_oldest_pending_event_age_seconds")
+	time.Sleep(25 * time.Millisecond)
+	second := gatherGauge(t, registry, "moox_storage_view_oldest_pending_event_age_seconds")
+	assert.Greater(t, second, first)
+}
+
+func gatherGauge(t *testing.T, registry *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() == name && len(family.GetMetric()) > 0 {
+			return family.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+	t.Fatalf("metric %q not found", name)
+	return 0
+}

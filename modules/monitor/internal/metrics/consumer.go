@@ -311,7 +311,8 @@ func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) error {
-	return c.Handle(ctx, d).Err
+	result := c.Handle(ctx, d)
+	return errors.Join(result.Err, jetstream.ApplyHandlerResult(ctx, d, result))
 }
 
 func (c *Consumer) retry(err error) jetstream.HandlerResult {

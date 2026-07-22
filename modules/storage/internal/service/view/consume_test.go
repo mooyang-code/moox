@@ -16,7 +16,7 @@ func TestEventConsumerOptionsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.FetchBatch != 8 || opts.MaxWorkers != 4 || opts.Ordering != "subject" {
+	if opts.Stream != "MOOX_STORAGE" || opts.Durable != "storage_view" || opts.FetchBatch != 8 || opts.MaxWorkers != 4 || opts.Ordering != "subject" {
 		t.Fatalf("options = %+v", opts)
 	}
 }

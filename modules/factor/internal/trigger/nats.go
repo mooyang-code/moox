@@ -161,7 +161,7 @@ func (c *NATSConsumer) recordError(err error) {
 
 type storageEventHandler struct{ eventBatcher *EventBatcher }
 
-func (h storageEventHandler) Handle(_ context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 	if delivery == nil || delivery.Message == nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
@@ -174,7 +174,15 @@ func (h storageEventHandler) Handle(_ context.Context, delivery *jetstream.Deliv
 		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
 	if h.eventBatcher != nil {
-		h.eventBatcher.Ingest(event, time.Now().UTC())
+		messageID := delivery.RawMessageID
+		if messageID == "" {
+			messageID = delivery.Message.GetMessageId()
+		}
+		if err := h.eventBatcher.IngestMessage(ctx, messageID, event, time.Now().UTC()); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+		}
+	} else {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: errors.New("factor event batcher is unavailable")}
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
