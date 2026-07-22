@@ -38,12 +38,24 @@ BIN="${DEPLOY_DIR}/bin/caddy"; CONFIG="${DEPLOY_DIR}/config/caddy/Caddyfile"; PI
 ENV_FILE="${DEPLOY_DIR}/config/caddy/edge.env"
 ACTIVATION_ROLLBACK="${DEPLOY_DIR}/config/caddy/.activation.rollback"
 BIN_ROLLBACK_CHANGED="${BIN}.rollback.changed"
+# Deployment activation passes public edge values explicitly. Preserve those
+# caller values while loading an older edge.env, so a stale service port cannot
+# silently turn 11001 back into a privileged port such as 443.
+EXPLICIT_PUBLIC_HOST_SET=${MOOX_PUBLIC_HOST+x}
+EXPLICIT_PUBLIC_HOST=${MOOX_PUBLIC_HOST-}
+EXPLICIT_BROWSER_PORT_SET=${MOOX_BROWSER_HTTPS_PORT+x}
+EXPLICIT_BROWSER_PORT=${MOOX_BROWSER_HTTPS_PORT-}
+EXPLICIT_SERVICE_PORT_SET=${MOOX_SERVICE_HTTPS_PORT+x}
+EXPLICIT_SERVICE_PORT=${MOOX_SERVICE_HTTPS_PORT-}
 if [[ -s "${ENV_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
 fi
+if [[ -n "${EXPLICIT_PUBLIC_HOST_SET}" ]]; then MOOX_PUBLIC_HOST=${EXPLICIT_PUBLIC_HOST}; export MOOX_PUBLIC_HOST; fi
+if [[ -n "${EXPLICIT_BROWSER_PORT_SET}" ]]; then MOOX_BROWSER_HTTPS_PORT=${EXPLICIT_BROWSER_PORT}; export MOOX_BROWSER_HTTPS_PORT; fi
+if [[ -n "${EXPLICIT_SERVICE_PORT_SET}" ]]; then MOOX_SERVICE_HTTPS_PORT=${EXPLICIT_SERVICE_PORT}; export MOOX_SERVICE_HTTPS_PORT; fi
 if [[ "${PORTS_SET}" -eq 0 && -n "${MOOX_CADDY_PORTS:-}" ]]; then
   PORTS="${MOOX_CADDY_PORTS}"
 fi
@@ -83,7 +95,7 @@ reconcile_bind_capability() {
   if ! requires_privileged_port; then
     [[ -z "${capabilities}" ]] && return 0
     command -v sudo >/dev/null 2>&1 || fail 'removing stale Caddy capabilities requires passwordless sudo for setcap -r'
-    sudo -n setcap -r -- "${BIN}" || \
+    sudo -n setcap -r "${BIN}" || \
       fail 'could not remove stale Caddy capabilities with sudo -n setcap -r'
     [[ -z "$(file_capabilities)" ]] || fail 'Caddy capability removal validation failed after sudo -n setcap -r'
     log "removed file capabilities from ${BIN} for unprivileged-only ports"
