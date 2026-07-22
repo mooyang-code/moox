@@ -176,8 +176,11 @@ func datasetActivationStateReady(dataset *pb.Dataset) bool {
 }
 
 func validateDatasetActivationSchema(dataset *pb.Dataset) error {
-	if strings.TrimSpace(dataset.GetSpaceId()) == "" || strings.TrimSpace(dataset.GetDataSourceId()) == "" || strings.TrimSpace(dataset.GetName()) == "" {
+	if strings.TrimSpace(dataset.GetSpaceId()) == "" || strings.TrimSpace(dataset.GetDataSourceId()) == "" {
 		return errors.New("required Dataset fields are missing")
+	}
+	if err := validateChineseDisplayName("dataset name", dataset.GetName()); err != nil {
+		return err
 	}
 	if err := validateDatasetID(dataset.GetDatasetId()); err != nil {
 		return err

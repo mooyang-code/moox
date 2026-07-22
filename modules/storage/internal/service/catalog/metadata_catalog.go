@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -264,7 +265,7 @@ func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatas
 	}
 	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
-		return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		return &pb.CheckDatasetActivationRsp{RetInfo: datasetReadRetInfo(err)}, nil
 	}
 	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
 	return &pb.CheckDatasetActivationRsp{
@@ -281,7 +282,13 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	}
 	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		return &pb.ActivateDatasetRsp{RetInfo: datasetReadRetInfo(err)}, nil
+	}
+	// An active, locked Dataset is the successful terminal state. Return it
+	// before readiness checks so retries remain idempotent even when the node
+	// is temporarily disabled or unreachable.
+	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
 	}
 	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
 	if !activationReady(checks) {
@@ -289,11 +296,6 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 			RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("Dataset activation checks failed")),
 			Checks:  checks,
 		}, nil
-	}
-	// An active, locked Dataset is the successful terminal state. Do not use
-	// the caller's stale revision to reject an idempotent retry and do not write.
-	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: dataset, Checks: checks}, nil
 	}
 	if dataset.GetRevision() != req.GetExpectedRevision() {
 		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, errors.New("dataset revision conflict")), Checks: checks}, nil
@@ -304,6 +306,17 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "ActivateDataset")
 	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: activated, Checks: checks}, nil
+}
+
+func datasetReadRetInfo(err error) *pb.RetInfo {
+	if errors.Is(err, sql.ErrNoRows) {
+		return retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("Dataset not found"))
+	}
+	code := retinfo.MetadataStoreCode(err)
+	if code == pb.ErrorCode_NOT_FOUND {
+		code = pb.ErrorCode_INNER_ERR
+	}
+	return retinfo.Error(code, errors.New("Dataset metadata could not be read"))
 }
 
 func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSubjectReq) (*pb.BindDatasetSubjectRsp, error) {

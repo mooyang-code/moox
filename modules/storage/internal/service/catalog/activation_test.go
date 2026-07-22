@@ -132,6 +132,17 @@ func TestDatasetActivationCheckerBoundsTimeout(t *testing.T) {
 	require.Equal(t, activationCheckIDs, checkIDs(checks))
 }
 
+func TestDatasetActivationSchemaValidatesChineseName(t *testing.T) {
+	dataset := newActivationReader("disabled", "ip://127.0.0.1:19090").dataset
+	dataset.Name = "dataset"
+
+	checks := newActivationChecker(newActivationReader("disabled", "ip://127.0.0.1:19090"), &fakeNodeStateChecker{rsp: readyNodeState("node-a")}, "secret").checks(context.Background(), dataset)
+	schemaCheck := checkByID(checks, "dataset_schema")
+	require.NotNil(t, schemaCheck)
+	require.False(t, schemaCheck.GetReady())
+	require.Contains(t, schemaCheck.GetSummary(), "invalid")
+}
+
 func checkIDs(checks []*pb.DatasetActivationCheck) []string {
 	ids := make([]string, 0, len(checks))
 	for _, check := range checks {

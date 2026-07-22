@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -14,6 +16,7 @@ type activationMetadataStore struct {
 	metadata.Store
 	dataset      *pb.Dataset
 	node         *pb.DataNode
+	datasetErr   error
 	commitCalls  int
 	commitErr    error
 	lastExpected uint64
@@ -21,8 +24,11 @@ type activationMetadataStore struct {
 }
 
 func (s *activationMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	if s.datasetErr != nil {
+		return nil, s.datasetErr
+	}
 	if s.dataset == nil {
-		return nil, errors.New("dataset not found")
+		return nil, sql.ErrNoRows
 	}
 	return s.dataset, nil
 }
@@ -107,14 +113,43 @@ func TestActivateDatasetActiveLockedRetryIgnoresStaleRevision(t *testing.T) {
 	dataset.BindingLocked = true
 	dataset.Revision = 11
 	runtime := &fakeNodeStateChecker{rsp: readyNodeState("node-a")}
-	svc, store := newActivationService(t, dataset, &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:19090"}, runtime)
+	svc, store := newActivationService(t, dataset, &pb.DataNode{NodeId: "node-a", Status: "disabled", ServiceTarget: "ip://127.0.0.1:19090"}, runtime)
 
 	rsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 1})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, uint64(11), rsp.GetDataset().GetRevision())
 	require.Zero(t, store.commitCalls)
-	require.Equal(t, 1, runtime.calls, "idempotent retry still reruns readiness")
+	require.Zero(t, runtime.calls, "idempotent retry must not rerun readiness")
+}
+
+func TestDatasetActivationReadErrorsAreSafeAndDistinguishedFromMissing(t *testing.T) {
+	internalErr := errors.New("sqlite: secret=do-not-leak")
+	svc, _ := newActivationService(t, newActivationReader("disabled", "ip://127.0.0.1:19090").dataset, &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:19090"}, &fakeNodeStateChecker{rsp: readyNodeState("node-a")})
+	store := svc.metadata.(*activationMetadataStore)
+	store.datasetErr = fmt.Errorf("wrapped metadata read: %w", internalErr)
+
+	checkRsp, err := svc.CheckDatasetActivation(context.Background(), &pb.CheckDatasetActivationReq{SpaceId: "space-a", DatasetId: "dataset_a"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, checkRsp.GetRetInfo().GetCode())
+	require.Equal(t, "Dataset metadata could not be read", checkRsp.GetRetInfo().GetMsg())
+	require.NotContains(t, checkRsp.GetRetInfo().GetMsg(), "secret")
+
+	activateRsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, activateRsp.GetRetInfo().GetCode())
+	require.Equal(t, "Dataset metadata could not be read", activateRsp.GetRetInfo().GetMsg())
+
+	store.datasetErr = fmt.Errorf("wrapped missing Dataset: %w", sql.ErrNoRows)
+	missingRsp, err := svc.CheckDatasetActivation(context.Background(), &pb.CheckDatasetActivationReq{SpaceId: "space-a", DatasetId: "dataset_a"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_DATASET_NOT_FOUND, missingRsp.GetRetInfo().GetCode())
+	require.Equal(t, "Dataset not found", missingRsp.GetRetInfo().GetMsg())
+
+	activateMissingRsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_DATASET_NOT_FOUND, activateMissingRsp.GetRetInfo().GetCode())
+	require.Equal(t, "Dataset not found", activateMissingRsp.GetRetInfo().GetMsg())
 }
 
 func TestActivateDatasetLockedDisabledCanReactivate(t *testing.T) {
