@@ -22,6 +22,7 @@ import (
 )
 
 func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
+	storageSubject := "moox.storage.fields_changed.v1.>"
 	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -39,11 +40,11 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.fields_changed.v1.*"}, Storage: nats.FileStorage})
+	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{storageSubject}, Storage: nats.FileStorage})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "archive-e2e", Durable: "archive-e2e", FilterSubject: "moox.storage.fields_changed.v1.*", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: -1})
+	_, err = js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "archive-e2e", Durable: "archive-e2e", FilterSubject: storageSubject, AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: -1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	pull, err := client.BindPullConsumer(context.Background(), jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "archive-e2e", FilterSubject: "moox.storage.fields_changed.v1.*", AckWait: time.Second, FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true})
+	pull, err := client.BindPullConsumer(context.Background(), jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "archive-e2e", FilterSubject: storageSubject, AckWait: time.Second, FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 			t.Fatal(err)
 		}
 		now := timestamppb.Now()
-		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: "moox.storage.fields_changed.v1.YI", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"})
+		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: storageEventTopic(t, event.GetSpaceId(), event.GetDatasetId()), Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,6 +104,19 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("archive files were not materialized")
+}
+
+func storageEventTopic(t *testing.T, spaceID, datasetID string) string {
+	t.Helper()
+	spaceToken, err := jetstream.EncodeSubjectToken(spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	datasetToken, err := jetstream.EncodeSubjectToken(datasetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("moox.storage.fields_changed.v1.%s.%s", spaceToken, datasetToken)
 }
 
 func parseFloat(t *testing.T, value string) float64 {

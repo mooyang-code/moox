@@ -11,9 +11,11 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/broker"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -35,12 +37,12 @@ func TestPersistentRestartAndDeliverySemantics(t *testing.T) {
 	if _, err := kv.Create("job-1", []byte("active")); err != nil {
 		t.Fatalf("KV Create() error = %v", err)
 	}
-	consumerCfg := jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "e2e-restart", FilterSubject: "moox.storage.>", AckWait: 200 * time.Millisecond, MaxDeliver: 5, MaxAckPending: 8, FetchMaxWait: time.Second}
+	consumerCfg := jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "e2e-restart", FilterSubject: "moox.storage.fields_changed.v1.>", AckWait: 200 * time.Millisecond, MaxDeliver: 5, MaxAckPending: 8, FetchMaxWait: time.Second}
 	consumer, err := client.NewPullConsumer(ctx, consumerCfg)
 	if err != nil {
 		t.Fatalf("NewPullConsumer() error = %v", err)
 	}
-	msg := testMessage("e2e-storage-1", "moox.storage.time_series.rows_committed.v1", []byte("row"))
+	msg := storageTestMessage("e2e-storage-1", storageEventPayload())
 	ack, err := client.Publish(ctx, msg)
 	if err != nil || ack == nil || ack.Stream != "MOOX_STORAGE" {
 		t.Fatalf("Publish() ack=%+v err=%v", ack, err)
@@ -273,6 +275,19 @@ func fetchEventually(ctx context.Context, consumer *jetstream.PullConsumer, batc
 func testMessage(id, topic string, payload []byte) *messagepb.MooxMessage {
 	now := timestamppb.Now()
 	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.eventbus.payload.v1", Payload: payload}
+}
+
+func storageTestMessage(id string, payload []byte) *messagepb.MooxMessage {
+	now := timestamppb.Now()
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload}
+}
+
+func storageEventPayload() []byte {
+	payload, err := proto.Marshal(&storagepb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "bar"})
+	if err != nil {
+		panic(err)
+	}
+	return payload
 }
 
 func freePort(t *testing.T) int {

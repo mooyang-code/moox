@@ -1,8 +1,10 @@
 package consumer
 
 import (
+	"fmt"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,7 +62,16 @@ func TestDecoderRejectsWrongStorageContentType(t *testing.T) {
 
 func fixtureEnvelope(payload []byte, messageID string) *messagepb.MooxMessage {
 	now := timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: messageID, Topic: "moox.storage.fields_changed.v1.YI", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-test", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"}
+	spaceToken, err := jetstream.EncodeSubjectToken("crypto_binance")
+	if err != nil {
+		panic(err)
+	}
+	datasetToken, err := jetstream.EncodeSubjectToken("spot_kline")
+	if err != nil {
+		panic(err)
+	}
+	topic := fmt.Sprintf("moox.storage.fields_changed.v1.%s.%s", spaceToken, datasetToken)
+	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: messageID, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-test", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"}
 }
 
 func TestParseTime(t *testing.T) {
