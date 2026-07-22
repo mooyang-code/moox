@@ -480,9 +480,15 @@ install_storage "$1"
 const rollbackStorageScript = `set -eu
 deploy="$HOME/moox/storage"
 previous="$HOME/moox/storage.previous"
+if [ ! -d "$previous" ]; then
+  # The installer already restored the previous deployment after an atomic
+  # start failure. A second rollback must not delete that restored deployment.
+  exit 0
+fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 rm -rf "$deploy"
-if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+mv "$previous" "$deploy"
+"$deploy/start.sh" || true
 `
 
 const finalizeStorageScript = `set -eu

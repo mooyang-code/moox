@@ -31,6 +31,7 @@ const (
 	storageRemoteProvenanceFile  = "$HOME/moox/storage/build-provenance.json"
 	storageLocalProvenanceFile   = "release/deploy-stage/moox/build-provenance.json"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
+	storageDeploymentNodeID      = "storage-node-0"
 )
 
 type storageVerifyResult struct {
@@ -454,6 +455,10 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
+	currentCommit, err := readCurrentGitCommit(root)
+	if err != nil || localProvenance.Commit != currentCommit {
+		return storageVerifyResult{}, errors.New("storage_provenance_stale")
+	}
 	remoteProvenance, err := readRemoteStorageBuildProvenance(ctx, transport)
 	if err != nil {
 		return storageVerifyResult{}, err
@@ -487,12 +492,10 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 			continue
 		}
 		datasetCount += len(item.GetDatasets())
-		if selected == nil && item.GetNode() != nil && item.GetNode().GetStatus() == "active" {
-			selected = item.GetNode()
-		}
 	}
-	if selected == nil {
-		return storageVerifyResult{}, errors.New("storage_verification_failed")
+	selected, err = selectDeploymentDataNode(items)
+	if err != nil {
+		return storageVerifyResult{}, err
 	}
 	runtime, closeRuntime, err := session.runtime(ctx, selected)
 	if err != nil {
@@ -525,6 +528,32 @@ func readLocalStorageBuildProvenance(root string) (storageBuildProvenance, error
 		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
 	}
 	return decodeStorageBuildProvenance(raw)
+}
+
+func readCurrentGitCommit(root string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", errors.New("storage_provenance_unavailable")
+	}
+	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	commit := strings.TrimSpace(string(output))
+	if err != nil || !validStorageCommit(commit) {
+		return "", errors.New("storage_provenance_unavailable")
+	}
+	return strings.ToLower(commit), nil
+}
+
+func selectDeploymentDataNode(items []*storagepb.DataNodeListItem) (*storagepb.DataNode, error) {
+	for _, item := range items {
+		if item == nil || item.GetNode() == nil || item.GetNode().GetNodeId() != storageDeploymentNodeID {
+			continue
+		}
+		node := item.GetNode()
+		if node.GetStatus() != "active" || strings.TrimSpace(node.GetServiceTarget()) == "" {
+			return nil, errors.New("storage_deployment_node_unavailable")
+		}
+		return node, nil
+	}
+	return nil, errors.New("storage_deployment_node_missing")
 }
 
 func readRemoteStorageBuildProvenance(ctx context.Context, transport setupssh.Client) (storageBuildProvenance, error) {
@@ -736,15 +765,9 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	if err != nil {
 		return result, errors.New("storage_e2e_metadata_unavailable")
 	}
-	var deployedNode *storagepb.DataNode
-	for _, item := range items {
-		if item != nil && item.GetNode() != nil && item.GetNode().GetStatus() == "active" {
-			deployedNode = item.GetNode()
-			break
-		}
-	}
-	if deployedNode == nil || strings.TrimSpace(deployedNode.GetServiceTarget()) == "" {
-		return result, errors.New("storage_e2e_node_unavailable")
+	deployedNode, err := selectDeploymentDataNode(items)
+	if err != nil {
+		return result, err
 	}
 	temporaryResponse, err := session.metadata.RegisterDataNode(ctx, &storagepb.RegisterDataNodeReq{
 		AuthInfo: session.nodeAuth, NodeId: temporaryNodeID, ServiceTarget: deployedNode.GetServiceTarget(), InitialName: "E2E 临时节点",

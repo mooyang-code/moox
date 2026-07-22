@@ -152,6 +152,21 @@ func TestStorageRollsBackAfterReadinessFailure(t *testing.T) {
 	require.Equal(t, "cleanup", events[len(events)-1])
 }
 
+func TestStorageRollbackDoesNotDeleteDeploymentWhenInstallerAlreadyRestoredPrevious(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "storage")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	marker := filepath.Join(home, "restored")
+	start := filepath.Join(deploy, "start.sh")
+	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nprintf restored >\""+marker+"\"\n"), 0o700))
+	command := exec.Command("bash", "-c", rollbackStorageScript)
+	command.Env = append(os.Environ(), "HOME="+home)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.FileExists(t, start)
+	require.NoFileExists(t, marker)
+}
+
 func copyFileForTest(source, destination string) error {
 	in, err := os.Open(source)
 	if err != nil {

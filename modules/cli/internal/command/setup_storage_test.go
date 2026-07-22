@@ -170,6 +170,23 @@ func TestValidateStorageBuildProvenanceRequiresExactRemoteArtifacts(t *testing.T
 	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch")
 }
 
+func TestSelectDeploymentDataNodeDoesNotUseAnUnrelatedActiveNode(t *testing.T) {
+	items := []*storagepb.DataNodeListItem{
+		{Node: &storagepb.DataNode{NodeId: "old-node", Status: "active", ServiceTarget: "ip://127.0.0.1:20107"}},
+		{Node: &storagepb.DataNode{NodeId: storageDeploymentNodeID, Status: "active", ServiceTarget: "ip://127.0.0.1:20108"}},
+	}
+	node, err := selectDeploymentDataNode(items)
+	require.NoError(t, err)
+	require.Equal(t, storageDeploymentNodeID, node.GetNodeId())
+	_, err = selectDeploymentDataNode(items[:1])
+	require.EqualError(t, err, "storage_deployment_node_missing")
+}
+
+func TestReadCurrentGitCommitRejectsNonRepository(t *testing.T) {
+	_, err := readCurrentGitCommit(t.TempDir())
+	require.EqualError(t, err, "storage_provenance_unavailable")
+}
+
 func TestStorageBrowserEndpointUsesDiscoveredControlHost(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
@@ -271,11 +288,11 @@ func (f *fakeStorageMetadataAPI) UpdateDataNode(_ context.Context, req *storagep
 }
 func (f *fakeStorageMetadataAPI) ListDataNodes(_ context.Context, req *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error) {
 	f.remember(req.GetAuthInfo())
-	return &storagepb.ListDataNodesRsp{RetInfo: storageOK(), Items: []*storagepb.DataNodeListItem{{Node: &storagepb.DataNode{NodeId: "node-1", Name: "部署节点", ServiceTarget: "ip://127.0.0.1:20107", Status: "active"}}}, PageResult: &storagepb.PageResult{}}, nil
+	return &storagepb.ListDataNodesRsp{RetInfo: storageOK(), Items: []*storagepb.DataNodeListItem{{Node: &storagepb.DataNode{NodeId: storageDeploymentNodeID, Name: "部署节点", ServiceTarget: "ip://127.0.0.1:20107", Status: "active"}}}, PageResult: &storagepb.PageResult{}}, nil
 }
 func (f *fakeStorageMetadataAPI) DeleteDataNode(_ context.Context, req *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error) {
 	f.remember(req.GetAuthInfo())
-	if req.GetNodeId() == "node-1" {
+	if req.GetNodeId() == storageDeploymentNodeID {
 		return &storagepb.DeleteDataNodeRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
 	}
 	if f.temporaryNode == nil || f.temporaryNode.GetStatus() != "disabled" || f.temporaryReferenced {
