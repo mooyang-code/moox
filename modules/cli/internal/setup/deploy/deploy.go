@@ -27,11 +27,12 @@ const (
 )
 
 type Options struct {
-	RepositoryRoot string
-	PublicHost     string
-	BrowserPort    int
-	TargetGOOS     string
-	TargetGOARCH   string
+	RepositoryRoot   string
+	PublicHost       string
+	BrowserPort      int
+	TargetGOOS       string
+	TargetGOARCH     string
+	ResetStorageData bool
 }
 
 type Packager interface {
@@ -94,7 +95,11 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		defer cancel()
 		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteStorageArchiveNext}, nil)
 	}()
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", installStorageScript, "moox-install-storage"}, nil); err != nil {
+	reset := "0"
+	if opts.ResetStorageData {
+		reset = "1"
+	}
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", installStorageScript, "moox-install-storage", reset}, nil); err != nil {
 		return fmt.Errorf("storage_install_failed")
 	}
 	installed := true
@@ -447,6 +452,8 @@ func probeCommand(stage ReadinessStage) string {
 
 const installStorageScript = `set -eu
 install_storage() {
+  reset_storage_data="$1"
+  case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
   root="$HOME/moox"
   deploy="$root/storage"
   next="$root/storage.next"
@@ -455,7 +462,7 @@ install_storage() {
   rm -rf "$next" "$previous"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
-  if [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
   if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
@@ -467,7 +474,7 @@ install_storage() {
     return 1
   fi
 }
-install_storage
+install_storage "$1"
 `
 
 const rollbackStorageScript = `set -eu
