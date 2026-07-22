@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -36,6 +37,7 @@ type Service struct {
 	liveWork     atomic.Int64
 	liveGateOnce sync.Once
 	liveGate     *liveLeaseGate
+	metrics      *observability.ViewMetrics
 }
 
 type datasetRef struct{ spaceID, datasetID string }
@@ -73,8 +75,22 @@ func New(root, authSecret string) (*Service, error) {
 		indexView:    make(map[string]viewRef),
 		authSecret:   authSecret,
 		byData:       make(map[datasetRef]map[string]struct{}),
+		metrics:      observability.DefaultViewMetrics,
 	}
 	return service, nil
+}
+
+// SetMetrics replaces the aggregate view metrics sink. It is intended for
+// tests or a process that supplies a dedicated registerer, before consumption
+// starts.
+func (s *Service) SetMetrics(metrics *observability.ViewMetrics) {
+	if s == nil {
+		return
+	}
+	if metrics == nil {
+		metrics = observability.DefaultViewMetrics
+	}
+	s.metrics = metrics
 }
 
 func (s *Service) HasEngine(name string) bool {

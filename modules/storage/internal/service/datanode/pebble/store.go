@@ -39,6 +39,11 @@ type OutboxEntry struct {
 	CreatedAt time.Time
 }
 
+type OutboxStats struct {
+	Pending       int
+	OldestEventAt time.Time
+}
+
 type Store struct {
 	db             *cpebble.DB
 	writeOptions   *cpebble.WriteOptions
@@ -546,6 +551,42 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 		result = append(result, &OutboxEntry{ID: id, Data: append([]byte(nil), iter.Value()...)})
 	}
 	return result, iter.Error()
+}
+
+// OutboxStats scans the durable outbox so the relay can report the full
+// pending count rather than only its publish batch. Timestamp decode errors do
+// not change relay behavior; PrepareOutboxPublication remains the authoritative
+// validation path for the next attempted entry.
+func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
+	if err := ctx.Err(); err != nil {
+		return OutboxStats{}, err
+	}
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: []byte(outboxPrefix + "\xff")})
+	if err != nil {
+		return OutboxStats{}, err
+	}
+	defer iter.Close()
+	stats := OutboxStats{}
+	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return OutboxStats{}, err
+		}
+		stats.Pending++
+		message := &messagepb.MooxMessage{}
+		if err := proto.Unmarshal(iter.Value(), message); err != nil {
+			continue
+		}
+		var eventAt time.Time
+		if occurred := message.GetOccurredAt(); occurred != nil && occurred.CheckValid() == nil {
+			eventAt = occurred.AsTime()
+		} else if published := message.GetPublishedAt(); published != nil && published.CheckValid() == nil {
+			eventAt = published.AsTime()
+		}
+		if !eventAt.IsZero() && (stats.OldestEventAt.IsZero() || eventAt.Before(stats.OldestEventAt)) {
+			stats.OldestEventAt = eventAt
+		}
+	}
+	return stats, iter.Error()
 }
 
 func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -26,6 +27,7 @@ type EventConsumerOptions struct {
 	MaxAckPending int
 	Ordering      string
 	ErrorReporter jetstream.ErrorReporter
+	Metrics       *observability.ViewMetrics
 }
 
 func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
@@ -69,6 +71,13 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts, err = opts.withDefaults(); err != nil {
 		return nil, err
 	}
+	if opts.Metrics == nil {
+		opts.Metrics = s.metrics
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = observability.DefaultViewMetrics
+	}
+	s.metrics = opts.Metrics
 	reporter := opts.ErrorReporter
 	if reporter == nil {
 		reporter = jetstream.ErrorReporterFunc(func(err error) {
@@ -84,7 +93,18 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	loopCtx, cancel := context.WithCancel(ctx)
 	dispatcher := newSubjectLaneDispatcher(loopCtx, opts.MaxWorkers, func(ctx context.Context, delivery *jetstream.Delivery) error {
 		return s.processDelivery(ctx, delivery)
-	}, reporter)
+	}, reporter, laneMetricsHooks{
+		onSubmit: func(delivery *jetstream.Delivery) {
+			opts.Metrics.ObserveLaneSubmit()
+			opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
+		},
+		onStart: func(*jetstream.Delivery) { opts.Metrics.IncLaneActive() },
+		onFinish: func(delivery *jetstream.Delivery) {
+			opts.Metrics.DecLaneActive()
+			opts.Metrics.AddConsumerLagMessages(-1)
+			opts.Metrics.CompletePendingDelivery(delivery, time.Now().UTC())
+		},
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -92,9 +112,15 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		defer dispatcher.Close()
 		for loopCtx.Err() == nil {
 			deliveries, fetchErr := consumer.Fetch(loopCtx, opts.FetchBatch)
+			opts.Metrics.AddConsumerLagMessages(int64(len(deliveries)))
 			for _, delivery := range deliveries {
-				if err := dispatcher.Dispatch(delivery); err != nil && loopCtx.Err() == nil {
-					reporter.Report(fmt.Errorf("dispatch storage view delivery: %w", err))
+				opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
+				if err := dispatcher.Dispatch(delivery); err != nil {
+					opts.Metrics.AddConsumerLagMessages(-1)
+					opts.Metrics.CompletePendingDelivery(delivery, time.Now().UTC())
+					if loopCtx.Err() == nil {
+						reporter.Report(fmt.Errorf("dispatch storage view delivery: %w", err))
+					}
 				}
 			}
 			if fetchErr != nil {
@@ -121,9 +147,18 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 }
 
 func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	started := time.Now()
+	metrics := s.metrics
+	if metrics == nil {
+		metrics = observability.DefaultViewMetrics
+	}
+	defer metrics.ObserveDeliveryDuration(time.Since(started))
+	if delivery != nil && delivery.DeliveryCount > 1 {
+		metrics.IncRedelivery()
+	}
 	s.liveWork.Add(1)
 	defer s.liveWork.Add(-1)
-	heartbeat := newDeliveryHeartbeat(ctx, delivery, 30*time.Second)
+	heartbeat := newDeliveryHeartbeat(ctx, delivery, 30*time.Second, metrics)
 	defer func() { heartbeat.stop() }()
 	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
 		return errors.Join(err, heartbeat.err())
@@ -134,20 +169,26 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 		if err == nil {
 			if ackErr := delivery.Ack(ctx); ackErr != nil {
 				log.Printf("storage view delivery ack failed: %v", ackErr)
+				metrics.IncAckError()
+				metrics.ObserveDelivery("ack", "error")
 				heartbeat.report(ackErr)
 				if !sleepDeliveryRetry(ctx, time.Second) {
 					return ctx.Err()
 				}
 				continue
 			}
+			metrics.ObserveDelivery("ack", "success")
 			return heartbeat.err()
 		}
 		if isPermanentDeliveryError(err) {
 			for ctx.Err() == nil {
 				if termErr := delivery.Term(ctx); termErr == nil {
+					metrics.ObserveDelivery("term", "success")
 					return heartbeat.err()
 				} else {
 					log.Printf("storage view delivery term failed after permanent error %v: %v", err, termErr)
+					metrics.IncAckError()
+					metrics.ObserveDelivery("term", "error")
 					heartbeat.report(termErr)
 				}
 				if !sleepDeliveryRetry(ctx, time.Second) {
@@ -160,7 +201,11 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 		// MaxAckPending and allow a later event to overtake it.
 		if progressErr := delivery.InProgress(ctx); progressErr != nil {
 			log.Printf("storage view delivery progress failed after %v: %v", err, progressErr)
+			metrics.IncInProgressError()
+			metrics.ObserveDelivery("in_progress", "error")
 			heartbeat.report(progressErr)
+		} else {
+			metrics.ObserveDelivery("in_progress", "success")
 		}
 		if !sleepDeliveryRetry(ctx, time.Second) {
 			return ctx.Err()
@@ -547,6 +592,12 @@ func isPermanentDeliveryError(err error) bool {
 
 type laneHandler func(context.Context, *jetstream.Delivery) error
 
+type laneMetricsHooks struct {
+	onSubmit func(*jetstream.Delivery)
+	onStart  func(*jetstream.Delivery)
+	onFinish func(*jetstream.Delivery)
+}
+
 type subjectLane struct {
 	subject string
 	queue   []*jetstream.Delivery
@@ -561,6 +612,7 @@ type subjectLaneDispatcher struct {
 	maxWorkers int
 	handler    laneHandler
 	reporter   jetstream.ErrorReporter
+	hooks      laneMetricsHooks
 	ready      chan *subjectLane
 	lanes      map[string]*subjectLane
 	mu         sync.Mutex
@@ -568,13 +620,18 @@ type subjectLaneDispatcher struct {
 	wg         sync.WaitGroup
 }
 
-func newSubjectLaneDispatcher(parent context.Context, maxWorkers int, handler laneHandler, reporter jetstream.ErrorReporter) *subjectLaneDispatcher {
+func newSubjectLaneDispatcher(parent context.Context, maxWorkers int, handler laneHandler, reporter jetstream.ErrorReporter, hooks ...laneMetricsHooks) *subjectLaneDispatcher {
 	if maxWorkers < 1 {
 		maxWorkers = 1
 	}
 	ctx, cancel := context.WithCancel(parent)
+	var metricsHooks laneMetricsHooks
+	if len(hooks) > 0 {
+		metricsHooks = hooks[0]
+	}
 	d := &subjectLaneDispatcher{
 		ctx: ctx, cancel: cancel, maxWorkers: maxWorkers, handler: handler, reporter: reporter,
+		hooks: metricsHooks,
 		ready: make(chan *subjectLane, maxWorkers), lanes: make(map[string]*subjectLane),
 	}
 	d.wg.Add(maxWorkers)
@@ -604,6 +661,9 @@ func (d *subjectLaneDispatcher) Dispatch(delivery *jetstream.Delivery) error {
 		lane.running = true
 	}
 	d.mu.Unlock()
+	if d.hooks.onSubmit != nil {
+		d.hooks.onSubmit(delivery)
+	}
 	if start {
 		select {
 		case d.ready <- lane:
@@ -626,10 +686,16 @@ func (d *subjectLaneDispatcher) worker() {
 			if !ok {
 				continue
 			}
+			if d.hooks.onStart != nil {
+				d.hooks.onStart(delivery)
+			}
 			if d.handler != nil {
 				if err := d.handler(d.ctx, delivery); err != nil && d.ctx.Err() == nil && d.reporter != nil {
 					d.reporter.Report(fmt.Errorf("storage view subject %q delivery failed: %w", lane.subject, err))
 				}
+			}
+			if d.hooks.onFinish != nil {
+				d.hooks.onFinish(delivery)
 			}
 			d.finish(lane)
 		case <-d.ctx.Done():
@@ -695,10 +761,15 @@ type deliveryHeartbeat struct {
 	doneCh   chan struct{}
 	mu       sync.Mutex
 	errs     []error
+	metrics  *observability.ViewMetrics
 }
 
-func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, interval time.Duration) *deliveryHeartbeat {
-	h := &deliveryHeartbeat{stopCh: make(chan struct{}), doneCh: make(chan struct{})}
+func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, interval time.Duration, metrics ...*observability.ViewMetrics) *deliveryHeartbeat {
+	var metricSink *observability.ViewMetrics
+	if len(metrics) > 0 {
+		metricSink = metrics[0]
+	}
+	h := &deliveryHeartbeat{stopCh: make(chan struct{}), doneCh: make(chan struct{}), metrics: metricSink}
 	if delivery == nil || interval <= 0 {
 		close(h.doneCh)
 		return h
@@ -715,7 +786,11 @@ func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, int
 				}
 				if err := delivery.InProgress(ctx); err != nil {
 					log.Printf("storage view delivery in-progress failed: %v", err)
+					h.metrics.IncInProgressError()
+					h.metrics.ObserveDelivery("in_progress", "error")
 					h.report(fmt.Errorf("storage view delivery in-progress: %w", err))
+				} else {
+					h.metrics.ObserveDelivery("in_progress", "success")
 				}
 			case <-h.stopCh:
 				return

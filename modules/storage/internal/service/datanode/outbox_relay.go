@@ -6,16 +6,27 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
 type Publisher interface {
 	PublishMessage(context.Context, []byte) error
 }
 
+// PublishAckPublisher is optional so existing publishers and tests can keep
+// the small Publisher contract. JetStream-backed publishers can expose its
+// duplicate acknowledgement without making duplicate state part of storage's
+// required publisher interface.
+type PublishAckPublisher interface {
+	PublishMessageWithAck(context.Context, []byte) (*jetstream.PublishAck, error)
+}
+
 type OutboxRelayOptions struct {
 	PollInterval time.Duration
 	BatchSize    int
+	Metrics      *observability.ViewMetrics
 }
 
 // OutboxRelay is intentionally single-threaded. A publish failure stops the
@@ -25,6 +36,7 @@ type OutboxRelay struct {
 	store     *pebble.Store
 	publisher Publisher
 	options   OutboxRelayOptions
+	metrics   *observability.ViewMetrics
 	stop      chan struct{}
 	done      chan struct{}
 	started   chan struct{}
@@ -42,7 +54,10 @@ func NewOutboxRelay(store *pebble.Store, publisher Publisher, opts OutboxRelayOp
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = 100
 	}
-	return &OutboxRelay{store: store, publisher: publisher, options: opts, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}, nil
+	if opts.Metrics == nil {
+		opts.Metrics = observability.DefaultViewMetrics
+	}
+	return &OutboxRelay{store: store, publisher: publisher, options: opts, metrics: opts.Metrics, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}, nil
 }
 
 func (r *OutboxRelay) Start(ctx context.Context) {
@@ -90,6 +105,10 @@ func (r *OutboxRelay) Close() {
 func (r *OutboxRelay) Flush(ctx context.Context) error { return r.flush(ctx) }
 
 func (r *OutboxRelay) flush(ctx context.Context) error {
+	if err := r.observeOutboxStats(ctx); err != nil {
+		return err
+	}
+	var err error
 	entries, err := r.store.ListOutbox(ctx, 0, r.options.BatchSize)
 	if err != nil {
 		return err
@@ -103,16 +122,47 @@ func (r *OutboxRelay) flush(ctx context.Context) error {
 		if err != nil {
 			if len(confirmed) > 0 {
 				_ = r.store.DeleteOutbox(ctx, confirmed)
+				_ = r.observeOutboxStats(ctx)
 			}
 			return err
 		}
-		if err := r.publisher.PublishMessage(ctx, data); err != nil {
+		ack, err := r.publish(ctx, data)
+		if err != nil {
+			r.metrics.IncOutboxPublishError()
 			if len(confirmed) > 0 {
 				_ = r.store.DeleteOutbox(ctx, confirmed)
+				_ = r.observeOutboxStats(ctx)
 			}
 			return err
+		}
+		if ack != nil && ack.Duplicate {
+			r.metrics.IncOutboxDuplicatePublish()
 		}
 		confirmed = append(confirmed, entry.ID)
 	}
-	return r.store.DeleteOutbox(ctx, confirmed)
+	err = r.store.DeleteOutbox(ctx, confirmed)
+	if err == nil {
+		_ = r.observeOutboxStats(ctx)
+	}
+	return err
+}
+
+func (r *OutboxRelay) observeOutboxStats(ctx context.Context) error {
+	stats, err := r.store.OutboxStats(ctx)
+	if err != nil {
+		return err
+	}
+	oldestAge := time.Duration(0)
+	if !stats.OldestEventAt.IsZero() {
+		oldestAge = time.Since(stats.OldestEventAt)
+	}
+	r.metrics.SetOutboxSnapshot(stats.Pending, oldestAge)
+	return nil
+}
+
+func (r *OutboxRelay) publish(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
+	if publisher, ok := r.publisher.(PublishAckPublisher); ok {
+		return publisher.PublishMessageWithAck(ctx, data)
+	}
+	return nil, r.publisher.PublishMessage(ctx, data)
 }
