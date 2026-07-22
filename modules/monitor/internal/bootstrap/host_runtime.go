@@ -49,7 +49,7 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *
 		for ctx.Err() == nil {
 			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
 			jc := jetstream.ConfigFromEnv(urls, "moox-monitor-hostmetrics")
-			if path := strings.TrimSpace(cfg.Metrics.EventBusCredentialFile); path != "" {
+			if path := strings.TrimSpace(cfg.Metrics.HostEventBusCredentialFile); path != "" {
 				if raw, err := jetstream.LoadCredentialFile(jetstream.ExpandCredentialPath(path)); err == nil {
 					jc.Username, jc.Password, jc.TLSCAFile = raw.Username, raw.Password, raw.CAFile
 				} else {

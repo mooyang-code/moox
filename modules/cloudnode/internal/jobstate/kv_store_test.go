@@ -176,6 +176,8 @@ func newTestKVStore(t *testing.T, ttl time.Duration) *KVStore {
 	t.Helper()
 	port := freeTCPPort(t)
 	cfg := config.Default().JetStream
+	// The in-process NATS fixture has no EventBus credential file.
+	cfg.CredentialFile = ""
 	cfg.NATSURL = "nats://127.0.0.1:" + port
 	cfg.Embedded = config.EmbeddedJetStreamConfig{
 		Enabled:          true,

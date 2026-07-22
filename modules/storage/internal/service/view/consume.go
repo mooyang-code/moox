@@ -18,7 +18,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if client == nil {
 		return nil, errors.New("eventbus client is required")
 	}
-	consumer, err := client.EnsurePullConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: eventconsumer.DatasetFieldsChangedSubjectPrefix + ".>", AckWait: 120 * time.Second, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: time.Second})
+	consumer, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: eventconsumer.DatasetFieldsChangedSubjectPrefix + ".>", AckWait: 120 * time.Second, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: time.Second})
 	if err != nil {
 		return nil, err
 	}

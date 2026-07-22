@@ -69,6 +69,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "server.pem"))
 	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "monitor-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-metrics-consumer.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "archive-eventbus.yaml"))
 	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
@@ -92,6 +93,20 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "moox.metrics.snapshot.reported.v1")
+	for role, password := range map[string]string{
+		"eventbus-internal-admin":      "a",
+		"hostagent-publisher":          "b",
+		"metrics-publisher":            "c",
+		"monitor-hostmetrics-consumer": "d",
+		"monitor-metrics-consumer":     "e",
+		"storage-eventbus":             "f",
+		"cloudnode-eventbus":           "g",
+		"factor-eventbus":              "h",
+		"archive-eventbus":             "j",
+		"strategy-eventbus":            "i",
+	} {
+		assert.Contains(t, eventBusACLBlock(yaml, role), "password: "+password)
+	}
 	metricsPublisherACL := eventBusACLBlock(yaml, "metrics-publisher")
 	assert.NotContains(t, metricsPublisherACL, "$JS.API.>")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(metricsPublisherACL, "subscribe:"))
@@ -105,7 +120,8 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, storageACL, "moox.storage.fields_changed.v1.>")
 	assert.NotContains(t, storageACL, "moox.storage.rows_committed")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view.>")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view\"")
+	assert.NotContains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view.>")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view")
 	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view.>")
 	assert.Contains(t, storageACL, `subscribe: {allow: ["_INBOX.>"]}`)
@@ -128,7 +144,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, cloudnodeACL, "$JS.ACK.MOOX_CLOUDNODE_EXEC.>")
 	assert.Contains(t, cloudnodeACL, "$JS.API.STREAM.INFO.KV_MOOX_CLOUDNODE_JOB_ACTIVE")
 	assert.Contains(t, cloudnodeACL, "$JS.API.STREAM.MSG.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE")
+	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.CREATE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>")
 	assert.Contains(t, cloudnodeACL, "$KV.MOOX_CLOUDNODE_JOB_ACTIVE.>")
+	assert.NotContains(t, cloudnodeACL, "$JS.API.>")
+	assert.NotContains(t, cloudnodeACL, "$JS.ACK.>")
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.API`)
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.ACK`)
 	assert.Contains(t, cloudnodeACL, `subscribe: {allow: ["_INBOX.>"]}`)

@@ -120,7 +120,7 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	if cfg.MaxAckPending <= 0 {
 		cfg.MaxAckPending = 256
 	}
-	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait, DeliverDecodeErrors: true})
+	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: 3, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait, DeliverDecodeErrors: true})
 	if err != nil {
 		return nil, err
 	}

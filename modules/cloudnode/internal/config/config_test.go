@@ -83,6 +83,13 @@ func TestDefaultJobItemActiveKVAndHistoryConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultJetStreamCredentialPath(t *testing.T) {
+	cfg := Default()
+	if got := cfg.JetStream.CredentialFile; got != "~/.config/moox/eventbus/cloudnode-eventbus.yaml" {
+		t.Fatalf("credential file = %q", got)
+	}
+}
+
 func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_CLOUDNODE_DB_PATH", "./override/cloudnode.db")
 	t.Setenv("MOOX_CLOUDNODE_HEALTH_ADDR", "127.0.0.1:16011")

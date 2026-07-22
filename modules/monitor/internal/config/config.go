@@ -68,20 +68,21 @@ type AlertConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled                bool                 `yaml:"enabled"`
-	EventBusURL            string               `yaml:"eventbus_url"`
-	EventBusCredentialFile string               `yaml:"eventbus_credential_file"`
-	PipelineConfigPath     string               `yaml:"pipeline_config_path"`
-	Stream                 string               `yaml:"stream"`
-	Topic                  string               `yaml:"topic"`
-	Consumer               string               `yaml:"consumer"`
-	FetchBatchSize         int                  `yaml:"fetch_batch_size"`
-	FetchMaxWait           time.Duration        `yaml:"fetch_max_wait"`
-	AckWait                time.Duration        `yaml:"ack_wait"`
-	MaxAckPending          int                  `yaml:"max_ack_pending"`
-	NoDataIntervals        int                  `yaml:"no_data_intervals"`
-	Storage                MetricsStorageConfig `yaml:"storage"`
-	HostStorage            HostStorageConfig    `yaml:"host_storage"`
+	Enabled                    bool                 `yaml:"enabled"`
+	EventBusURL                string               `yaml:"eventbus_url"`
+	EventBusCredentialFile     string               `yaml:"eventbus_credential_file"`
+	HostEventBusCredentialFile string               `yaml:"host_eventbus_credential_file"`
+	PipelineConfigPath         string               `yaml:"pipeline_config_path"`
+	Stream                     string               `yaml:"stream"`
+	Topic                      string               `yaml:"topic"`
+	Consumer                   string               `yaml:"consumer"`
+	FetchBatchSize             int                  `yaml:"fetch_batch_size"`
+	FetchMaxWait               time.Duration        `yaml:"fetch_max_wait"`
+	AckWait                    time.Duration        `yaml:"ack_wait"`
+	MaxAckPending              int                  `yaml:"max_ack_pending"`
+	NoDataIntervals            int                  `yaml:"no_data_intervals"`
+	Storage                    MetricsStorageConfig `yaml:"storage"`
+	HostStorage                HostStorageConfig    `yaml:"host_storage"`
 }
 type MetricsStorageConfig struct {
 	GatewayTarget              string        `yaml:"gateway_target"`
