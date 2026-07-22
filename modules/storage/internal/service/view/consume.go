@@ -237,6 +237,9 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 					metrics.IncAckError()
 					metrics.ObserveDelivery("term", "error")
 					heartbeat.report(termErr)
+					if errors.Is(termErr, jetstream.ErrInvalidDelivery) || errors.Is(termErr, jetstream.ErrClosed) {
+						return errors.Join(err, termErr, heartbeat.err())
+					}
 				}
 				if !sleepDeliveryRetry(ctx, time.Second) {
 					return ctx.Err()
@@ -751,6 +754,9 @@ func (d *subjectLaneDispatcher) worker() {
 				if err := d.handler(d.ctx, delivery, item.heartbeat); err != nil && d.ctx.Err() == nil && d.reporter != nil {
 					d.reporter.Report(fmt.Errorf("storage view subject %q delivery failed: %w", lane.subject, err))
 				}
+			}
+			if item.heartbeat != nil {
+				item.heartbeat.stop()
 			}
 			if d.hooks.onFinish != nil {
 				d.hooks.onFinish(delivery)

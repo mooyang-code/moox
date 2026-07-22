@@ -46,6 +46,7 @@ type Service struct {
 	mu                sync.Mutex
 	queues            [][]queueItem
 	pending           map[taskKey]Task
+	acceptedTaskIDs   map[string]struct{}
 	supersedeCount    atomic.Int64
 	writebackFailures atomic.Int64
 	snapshotStore     *storageio.SnapshotStore
@@ -75,6 +76,7 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 		exec:    exec,
 		queues:  make([][]queueItem, cfg.Workers),
 		pending: map[taskKey]Task{},
+		acceptedTaskIDs: map[string]struct{}{},
 		wake:    make([]chan struct{}, cfg.Workers),
 	}
 	if cfg.SnapshotDir != "" {
@@ -107,6 +109,17 @@ func (s *Service) EnqueueChecked(ctx context.Context, task Task) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Event-triggered Factor tasks use a stable TaskID. Remember accepted IDs
+	// so a failed inbox commit can be retried without re-enqueueing the same
+	// logical task in this scheduler process.
+	if task.TriggerType == "event" && task.TaskID != "" {
+		if _, ok := s.acceptedTaskIDs[task.TaskID]; ok {
+			return nil
+		}
+	}
 	key := keyOf(task)
 	if old, ok := s.pending[key]; ok {
 		if task.BarTime.After(old.BarTime) || task.BarTime.Equal(old.BarTime) {
@@ -125,6 +138,9 @@ func (s *Service) EnqueueChecked(ctx context.Context, task Task) error {
 		s.supersedeCount.Add(1)
 		_ = s.record(ctx, task, domain.RunStatusSuperseded, "older than pending task", 0, nil)
 		return nil
+	}
+	if task.TriggerType == "event" && task.TaskID != "" {
+		s.acceptedTaskIDs[task.TaskID] = struct{}{}
 	}
 	s.pending[key] = task
 	shard := HashSubject(task.SubjectID, s.cfg.Workers)
