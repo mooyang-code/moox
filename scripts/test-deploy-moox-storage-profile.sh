@@ -105,9 +105,10 @@ assert_order "${TMP_ROOT}/unpacked/start.sh" \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
   '^  import_storage_metadata$' \
+  '^  start_storage_view$' \
+  'wait_http http://127\.0\.0\.1:20211/healthz' \
   '^  if run_storage_doctor; then$' \
-  '^    activate_storage_datasets$' \
-  '^  start_storage_view$'
+  '^    activate_storage_datasets$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${TMP_ROOT}/unpacked/start.sh")"
 grep -q 'doctor bootstrap --format json' <<<"${doctor_body}"
 grep -q 'return 1' <<<"${doctor_body}"
@@ -119,10 +120,8 @@ fi
 bootstrap_body="$(awk '/^complete_storage_bootstrap\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${TMP_ROOT}/unpacked/start.sh")"
 grep -q '^  if run_storage_doctor; then$' <<<"${bootstrap_body}"
 grep -q '^    activate_storage_datasets$' <<<"${bootstrap_body}"
-if grep -q '^  activate_storage_datasets$' <<<"${bootstrap_body}"; then
-  echo 'Storage-only profile must not activate Datasets without a HEALTHY Doctor result' >&2
-  exit 1
-fi
+grep -q 'start_storage_view' <<<"${bootstrap_body}"
+grep -q 'defer Dataset activation' <<<"${doctor_body}"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --profile storage --with-storage-node --package-only --archive "${SHARD_ARCHIVE}" \

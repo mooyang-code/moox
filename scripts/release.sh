@@ -199,4 +199,35 @@ cp "${ROOT}/deploy/caddy/Caddyfile.no-admin" "${RELEASE_ROOT}/config/caddy/Caddy
 chmod +x "${RELEASE_ROOT}/lib/caddy-managed.sh"
 
 tar -C "${ROOT}/release" -czf "${ARCHIVE}" "$(basename "${RELEASE_ROOT}")"
+
+write_storage_release_manifest() {
+  [[ "${OS}" == "linux" && "${ARCH}" == "amd64" ]] || return 0
+  [[ "${VERSION}" =~ ^[0-9a-fA-F]{40}$ ]] || return 0
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
+  else
+    digest="$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')"
+  fi
+  mkdir -p "${ROOT}/artifacts"
+  {
+    printf 'schema_version=1\ncommit=%s\narchive=release/%s\narchive_sha256=%s\n' \
+      "${VERSION,,}" "$(basename "${ARCHIVE}")" "${digest}"
+    for binary in moox-storage-primary moox-storage-node moox-storage-view; do
+      local path
+      case "${binary}" in
+        moox-storage-primary) path="${RELEASE_ROOT}/storage-primary/bin/${binary}" ;;
+        moox-storage-node) path="${ROOT}/bin/${binary}" ;;
+        moox-storage-view) path="${RELEASE_ROOT}/storage-view/bin/${binary}" ;;
+      esac
+      if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s=%s\n' "${binary}" "$(sha256sum "${path}" | awk '{print $1}')"
+      else
+        printf '%s=%s\n' "${binary}" "$(shasum -a 256 "${path}" | awk '{print $1}')"
+      fi
+    done
+  } >"${ROOT}/artifacts/storage-datanode-release-sha256.txt"
+}
+
+write_storage_release_manifest
 echo "==> release package: ${ARCHIVE}"
