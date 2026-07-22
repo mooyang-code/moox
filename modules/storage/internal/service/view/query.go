@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -82,7 +83,10 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	for _, row := range rows {
 		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields()})
 	}
-	stats, _ := engine.Stat(ctx, indexID)
+	stats, statsErr := engine.Stat(ctx, indexID)
+	if statsErr != nil {
+		log.Printf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
+	}
 	complete := runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
 	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: stats.IndexedFrom, ServedIndexedTo: stats.IndexedTo, Complete: complete}, nil
 }

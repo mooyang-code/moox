@@ -51,7 +51,7 @@ func (s *Service) MergeRecordRows(ctx context.Context, req *pb.MergeRecordRowsRe
 	}
 	keys := make([]*pb.RecordKey, 0, len(rsp.GetKeys()))
 	for _, key := range rsp.GetKeys() {
-		keys = append(keys, legacyRecordKey(key))
+		keys = append(keys, recordKeyFromRowKey(key))
 	}
 	return &pb.MergeRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Keys: keys}, nil
 }
@@ -85,7 +85,7 @@ func recordRowKey(key *pb.RecordKey) *pb.RowKey {
 	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: key.GetRecordId(), Version: key.GetVersion()}}}
 }
 
-func legacyRecordKey(key *pb.RowKey) *pb.RecordKey {
+func recordKeyFromRowKey(key *pb.RowKey) *pb.RecordKey {
 	if key == nil || key.GetRecord() == nil {
 		return nil
 	}

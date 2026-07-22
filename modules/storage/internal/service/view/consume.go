@@ -174,6 +174,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 		runtime.mu.Lock()
 		if err := s.applyEventToIndex(ctx, runtime.active, datasetID, rows); err != nil {
+			log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, runtime.active, datasetID, err)
 			runtime.mu.Unlock()
 			return err
 		}

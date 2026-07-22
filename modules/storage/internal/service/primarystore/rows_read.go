@@ -10,8 +10,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// These bounded adapters preserve the public PrimaryStore row contract while
-// exact reads use the new field API and range reads use the registered View.
+// These RPC handlers preserve the public PrimaryStore row contract while
+// exact reads use the field API and range reads use the registered View.
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	if req == nil || len(req.GetKeys()) == 0 {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
@@ -36,7 +36,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	}
 	rows := make([]*pb.TimeSeriesRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
-		rows = append(rows, &pb.TimeSeriesRow{Key: legacyTimeSeriesKey(row.GetKey()), Fields: row.GetFields(), Columns: legacyColumns(row.GetFields())})
+		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields(), Columns: columnsFromFields(row.GetFields())})
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
 }
@@ -65,7 +65,7 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	}
 	rows := make([]*pb.RecordRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
-		rows = append(rows, &pb.RecordRow{Key: legacyRecordKey(row.GetKey()), Fields: row.GetFields(), Columns: legacyColumns(row.GetFields())})
+		rows = append(rows, &pb.RecordRow{Key: recordKeyFromRowKey(row.GetKey()), Fields: row.GetFields(), Columns: columnsFromFields(row.GetFields())})
 	}
 	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
 }
@@ -92,7 +92,7 @@ func (s *Service) readTimeSeriesView(ctx context.Context, req *pb.ReadTimeSeries
 			continue
 		}
 		clone := proto.Clone(row).(*pb.TimeSeriesRow)
-		clone.Columns = legacyColumns(clone.GetFields())
+		clone.Columns = columnsFromFields(clone.GetFields())
 		rows = append(rows, clone)
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult()}, nil
@@ -120,13 +120,13 @@ func (s *Service) readRecordView(ctx context.Context, req *pb.ReadRecordRowsReq)
 			continue
 		}
 		clone := proto.Clone(row).(*pb.RecordRow)
-		clone.Columns = legacyColumns(clone.GetFields())
+		clone.Columns = columnsFromFields(clone.GetFields())
 		rows = append(rows, clone)
 	}
 	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult()}, nil
 }
 
-func legacyColumns(fields []*pb.FieldValue) []*pb.ColumnValue {
+func columnsFromFields(fields []*pb.FieldValue) []*pb.ColumnValue {
 	out := make([]*pb.ColumnValue, 0, len(fields))
 	for _, field := range fields {
 		if field == nil {
@@ -173,7 +173,7 @@ func recordDataset(keys []*pb.RecordKey) (string, string, error) {
 	return spaceID, datasetID, nil
 }
 
-func legacyTimeSeriesKey(key *pb.RowKey) *pb.TimeSeriesKey {
+func timeSeriesKeyFromRowKey(key *pb.RowKey) *pb.TimeSeriesKey {
 	if key == nil || key.GetTimeSeries() == nil {
 		return nil
 	}
