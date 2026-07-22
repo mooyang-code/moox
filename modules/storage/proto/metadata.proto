@@ -1404,8 +1404,8 @@ message GetDeviceRsp {
 message ListDevicesReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
-  // node_id 是可选存储节点 ID 过滤条件。
-  string node_id = 2;
+  reserved 2;
+  reserved "node_id";
   // engine 是可选存储引擎过滤条件。
   string engine = 3;
   // page 是分页参数。

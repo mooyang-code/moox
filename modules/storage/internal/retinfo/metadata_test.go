@@ -27,6 +27,8 @@ func TestMetadataStoreCodeMapsDatasetLifecycleErrors(t *testing.T) {
 		{name: "must be disabled", err: fmt.Errorf("dataset must be disabled"), want: pb.ErrorCode_INVALID_PARAM},
 		{name: "node disabled", err: fmt.Errorf("data node is disabled"), want: pb.ErrorCode_INVALID_PARAM},
 		{name: "node referenced", err: fmt.Errorf("data node still has datasets"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "immutable data node", err: fmt.Errorf("dataset data_node_id is immutable; use rebind"), want: pb.ErrorCode_INVALID_PARAM},
+		{name: "same data node", err: fmt.Errorf("dataset is already bound to this data node"), want: pb.ErrorCode_INVALID_PARAM},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

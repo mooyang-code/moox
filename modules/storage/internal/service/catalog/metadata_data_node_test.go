@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +25,36 @@ func (s *dataNodeMetadataStore) RegisterDataNode(context.Context, string, string
 
 func (s *dataNodeMetadataStore) ListDataNodes(context.Context, *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
 	return s.nodes, &pb.PageResult{Page: 1, Size: 100, Total: uint32(len(s.nodes))}, nil
+}
+
+func (s *dataNodeMetadataStore) GetDataNode(_ context.Context, nodeID string) (*pb.DataNode, error) {
+	for _, node := range s.nodes {
+		if node.GetNodeId() == nodeID {
+			return node, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *dataNodeMetadataStore) UpdateDataNode(_ context.Context, nodeID, name, status string) (*pb.DataNode, error) {
+	for _, node := range s.nodes {
+		if node.GetNodeId() == nodeID {
+			node.Name = name
+			node.Status = status
+			return node, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *dataNodeMetadataStore) DeleteDataNode(_ context.Context, nodeID string) error {
+	for i, node := range s.nodes {
+		if node.GetNodeId() == nodeID {
+			s.nodes = append(s.nodes[:i], s.nodes[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func (s *dataNodeMetadataStore) ListDatasets(_ context.Context, query metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
@@ -54,6 +85,66 @@ func TestListDataNodesAggregatesDatasetsWithOneUnpaginatedQuery(t *testing.T) {
 	query := store.datasetQueries[0]
 	require.Nil(t, query.Page)
 	require.ElementsMatch(t, []string{"node-a", "node-b"}, query.DataNodeIDs)
+}
+
+func TestListDataNodesFiltersStatusBeforePagination(t *testing.T) {
+	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{
+		{NodeId: "node-a", Name: "A", Status: "active"},
+		{NodeId: "node-b", Name: "B", Status: "disabled"},
+		{NodeId: "node-c", Name: "C", Status: "active"},
+	}}
+	svc, err := NewMetadataService(store, nil, "secret")
+	require.NoError(t, err)
+
+	pageOne, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{
+		Status: "active", Page: &pb.Page{Page: 1, Size: 1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, pageOne.GetRetInfo().GetCode())
+	require.Equal(t, []string{"node-a"}, dataNodeIDs(pageOne.GetItems()))
+	require.Equal(t, uint32(2), pageOne.GetPageResult().GetTotal())
+	require.True(t, pageOne.GetPageResult().GetHasMore())
+
+	pageTwo, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{
+		Status: "active", Page: &pb.Page{Page: 2, Size: 1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"node-c"}, dataNodeIDs(pageTwo.GetItems()))
+	require.False(t, pageTwo.GetPageResult().GetHasMore())
+
+	disabled, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{
+		Status: "disabled", Page: &pb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"node-b"}, dataNodeIDs(disabled.GetItems()))
+	require.Equal(t, uint32(1), disabled.GetPageResult().GetTotal())
+}
+
+func dataNodeIDs(items []*pb.DataNodeListItem) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.GetNode().GetNodeId())
+	}
+	return ids
+}
+
+func TestDataNodeMutationSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
+	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{{NodeId: "node-a", Name: "A", Status: "active"}}}
+	// An uninitialized cache represents a refresh failure without requiring a
+	// second metadata implementation just for this post-commit behavior.
+	svc, err := NewMetadataService(store, &metacache.Store{}, "secret")
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateDataNode(context.Background(), &pb.UpdateDataNodeReq{
+		NodeId: "node-a", Name: "A2", Status: "disabled",
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode())
+	require.Equal(t, "A2", updated.GetNode().GetName())
+
+	deleted, err := svc.DeleteDataNode(context.Background(), &pb.DeleteDataNodeReq{NodeId: "node-a"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, deleted.GetRetInfo().GetCode())
 }
 
 func TestRegisterDataNodeRequiresDeploymentHMAC(t *testing.T) {

@@ -101,6 +101,16 @@ func TestMetadataProtoCleanBreakContract(t *testing.T) {
 			t.Fatal("Device must reserve field name node_id")
 		}
 	}
+	listDevicesReq := file.Messages().ByName("ListDevicesReq")
+	if listDevicesReq.Fields().ByName("node_id") != nil {
+		t.Fatal("ListDevicesReq.node_id must be removed")
+	}
+	if !listDevicesReq.ReservedRanges().Has(2) {
+		t.Fatal("ListDevicesReq must reserve field number 2")
+	}
+	if !listDevicesReq.ReservedNames().Has("node_id") {
+		t.Fatal("ListDevicesReq must reserve field name node_id")
+	}
 }
 
 func TestDataNodeRuntimeProtoContract(t *testing.T) {

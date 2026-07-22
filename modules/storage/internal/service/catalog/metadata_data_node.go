@@ -61,9 +61,7 @@ func (s *Service) UpdateDataNode(ctx context.Context, req *pb.UpdateDataNodeReq)
 	if err != nil {
 		return &pb.UpdateDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	s.refreshMetadataCacheAfterCommit(ctx, "UpdateDataNode")
 	return &pb.UpdateDataNodeRsp{RetInfo: retinfo.Success("success"), Node: node}, nil
 }
 
@@ -79,14 +77,27 @@ func (s *Service) GetDataNode(ctx context.Context, req *pb.GetDataNodeReq) (*pb.
 }
 
 func (s *Service) ListDataNodes(ctx context.Context, req *pb.ListDataNodesReq) (*pb.ListDataNodesRsp, error) {
+	var requestedStatus string
 	var page *pb.Page
 	if req != nil {
+		requestedStatus = strings.TrimSpace(req.GetStatus())
 		page = req.GetPage()
 	}
-	nodes, pageResult, err := s.metadata.ListDataNodes(ctx, page)
+	// The metadata Reader intentionally keeps a status-free query surface. Fetch
+	// the complete node set before filtering so PageResult describes the filtered
+	// result rather than the unfiltered database page.
+	nodes, _, err := s.metadata.ListDataNodes(ctx, nil)
 	if err != nil {
 		return &pb.ListDataNodesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	filtered := make([]*pb.DataNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node == nil || (requestedStatus != "" && node.GetStatus() != requestedStatus) {
+			continue
+		}
+		filtered = append(filtered, node)
+	}
+	nodes, pageResult := pageSlice(filtered, page)
 	items := make([]*pb.DataNodeListItem, 0, len(nodes))
 	nodeIDs := make([]string, 0, len(nodes))
 	byNodeID := make(map[string]*pb.DataNodeListItem, len(nodes))
@@ -136,8 +147,6 @@ func (s *Service) DeleteDataNode(ctx context.Context, req *pb.DeleteDataNodeReq)
 	if err := s.metadata.DeleteDataNode(ctx, req.GetNodeId()); err != nil {
 		return &pb.DeleteDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.DeleteDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataNode")
 	return &pb.DeleteDataNodeRsp{RetInfo: retinfo.Success("success"), Node: node}, nil
 }

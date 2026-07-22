@@ -235,7 +235,7 @@ func importEntities(ctx context.Context, store metadata.Writer, seed seedFile) (
 
 	for _, item := range seed.Devices {
 		if _, err := store.UpsertDevice(ctx, &pb.Device{
-			DeviceId: item.DeviceID, NodeId: item.NodeID, Name: item.Name, Engine: item.Engine,
+			DeviceId: item.DeviceID, Name: item.Name, Engine: item.Engine,
 			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("device", item.DeviceID, err)
