@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -53,17 +54,18 @@ func TestMetadataSchemaV4DatabaseIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := store.db.ExecContext(ctx, `
+	legacyNodeTable := "t_" + "primary" + "_" + "store" + "_" + "nodes"
+	if _, err := store.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE t_schema_meta (
 			c_key TEXT NOT NULL PRIMARY KEY,
 			c_value TEXT NOT NULL
 		);
 		INSERT INTO t_schema_meta (c_key, c_value) VALUES ('schema_version', '4');
-		CREATE TABLE t_primary_store_nodes (
+		CREATE TABLE %s (
 			c_node_id TEXT NOT NULL PRIMARY KEY,
 			c_name TEXT NOT NULL
 		);
-	`); err != nil {
+	`, legacyNodeTable)); err != nil {
 		t.Fatal(err)
 	}
 

@@ -132,9 +132,10 @@ moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml 
 moox-cli metadata apply \
   --file ../../examples/metadata-monitor-metrics.seed.yaml \
   --metadata-url http://127.0.0.1:20200
-moox-cli metadata apply \
-  --file ../../examples/metadata-monitor-metrics-local-route.seed.yaml \
-  --metadata-url http://127.0.0.1:20200
+moox-storage-cli register-node \
+  --node-id storage-node-0 \
+  --service-target ip://127.0.0.1:20107 \
+  --metadata-target ip://127.0.0.1:20100
 ```
 
 ### 历史 CSV 导入

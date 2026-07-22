@@ -47,8 +47,8 @@ JetStream 运行态数据。部署启动顺序为 EventBus -> Storage -> Metadat
 每个服务的本地 timer 每 30 秒主动上报 Prometheus registry 快照到 EventBus，
 Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指标阈值告警。
 系统不部署 Prometheus Server、Pushgateway，也不提供手工监控 target API。
-外部或多机 Storage 部署需要设置 `MOOX_METRICS_STORAGE_ROUTE_SEED`；单机部署
-默认使用 `examples/metadata-monitor-metrics-local-route.seed.yaml`。详见
+Storage 部署先由部署流程注册 DataNode，再导入直接包含 `data_node_id` 的逻辑
+metadata seed；Dataset 默认 disabled，必须完成只读激活检查后显式激活。详见
 [`docs/运维/MooX-EventBus运维.md`](docs/运维/MooX-EventBus运维.md) 和
 [`docs/运维/MooX指标监控.md`](docs/运维/MooX指标监控.md)。
 

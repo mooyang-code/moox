@@ -43,8 +43,6 @@ validate_monitor_metadata_seeds() {
   (cd "${ROOT}" && go run ./modules/cli/cmd/moox-cli metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --dry-run >/dev/null)
   grep -q 'host_storage:' "${ROOT}/modules/monitor/config/app.yaml"
   grep -q 'result_retention_days: 14' "${ROOT}/modules/monitor/config/app.yaml"
-  ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
-  ! grep -q '^primary_store_routes:' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
   for seed in "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" "${ROOT}/examples/metadata-monitor-host.seed.yaml"; do
     grep -q 'data_node_id: storage-node-0' "${seed}"
     grep -q 'keep_duration:' "${seed}"

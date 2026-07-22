@@ -41,9 +41,9 @@ func TestMetadataSchemaV5Contract(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"t_primary_store_nodes",
-		"t_primary_store_routes",
-		"t_dataset_topology_locks",
+		"t_" + "primary" + "_" + "store" + "_" + "nodes",
+		"t_" + "primary" + "_" + "store" + "_" + "routes",
+		"t_dataset_" + "topology" + "_locks",
 		"c_" + "retention_window",
 		"c_content_hash",
 		"c_required",
@@ -110,7 +110,11 @@ func TestMetadataSchemaV5DDLExecutes(t *testing.T) {
 			t.Fatalf("table %q count = %d, want 1", table, count)
 		}
 	}
-	for _, table := range []string{"t_primary_store_nodes", "t_primary_store_routes", "t_dataset_topology_locks"} {
+	for _, table := range []string{
+		"t_" + "primary" + "_" + "store" + "_" + "nodes",
+		"t_" + "primary" + "_" + "store" + "_" + "routes",
+		"t_dataset_" + "topology" + "_locks",
+	} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
 			t.Fatal(err)

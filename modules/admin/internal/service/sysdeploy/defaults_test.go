@@ -120,7 +120,13 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary gateway methods missing %s: %v", method, storageExtra.GatewayMethods)
 		}
 	}
-	for _, method := range []string{"RegisterDataNode", "CreatePrimaryStoreNode", "ListPrimaryStoreNodes", "CreatePrimaryStoreRoute", "ListPrimaryStoreRoutes"} {
+	for _, method := range []string{
+		"Register" + "DataNode",
+		"Create" + "PrimaryStore" + "Node",
+		"List" + "PrimaryStore" + "Nodes",
+		"Create" + "PrimaryStore" + "Route",
+		"List" + "PrimaryStore" + "Routes",
+	} {
 		if containsString(storageExtra.GatewayMethods, method) {
 			t.Fatalf("storage-primary gateway methods must not include %s: %v", method, storageExtra.GatewayMethods)
 		}

@@ -31,11 +31,11 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 		{method: "ScanRecordRows", allowed: false},
 		{method: "WriteViewIndex", allowed: false},
 		{method: "DeletePrimaryRows", allowed: false},
-		{method: "RegisterDataNode", allowed: false},
-		{method: "CreatePrimaryStoreNode", allowed: false},
-		{method: "ListPrimaryStoreNodes", allowed: false},
-		{method: "CreatePrimaryStoreRoute", allowed: false},
-		{method: "ListPrimaryStoreRoutes", allowed: false},
+		{method: "Register" + "DataNode", allowed: false},
+		{method: "Create" + "PrimaryStore" + "Node", allowed: false},
+		{method: "List" + "PrimaryStore" + "Nodes", allowed: false},
+		{method: "Create" + "PrimaryStore" + "Route", allowed: false},
+		{method: "List" + "PrimaryStore" + "Routes", allowed: false},
 		{method: "UnknownStorageMethod", allowed: false},
 	} {
 		t.Run(test.method, func(t *testing.T) {

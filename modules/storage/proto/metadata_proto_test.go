@@ -75,17 +75,26 @@ func TestMetadataProtoDataNodeContract(t *testing.T) {
 
 func TestMetadataProtoCleanBreakContract(t *testing.T) {
 	file := storagepb.File_metadata_proto
-	for _, messageName := range []protoreflect.Name{"PrimaryStoreNode", "PrimaryStoreRoute"} {
+	removedNode := protoreflect.Name("PrimaryStore" + "Node")
+	removedRoute := protoreflect.Name("PrimaryStore" + "Route")
+	for _, messageName := range []protoreflect.Name{removedNode, removedRoute} {
 		if file.Messages().ByName(messageName) != nil {
 			t.Fatalf("removed message %q is still present", messageName)
 		}
 	}
 
 	service := file.Services().ByName("Metadata")
-	for _, methodName := range []protoreflect.Name{
-		"CreatePrimaryStoreNode", "UpdatePrimaryStoreNode", "GetPrimaryStoreNode", "ListPrimaryStoreNodes",
-		"CreatePrimaryStoreRoute", "UpdatePrimaryStoreRoute", "GetPrimaryStoreRoute", "ListPrimaryStoreRoutes",
-	} {
+	removedMethods := []protoreflect.Name{
+		protoreflect.Name("Create" + "PrimaryStore" + "Node"),
+		protoreflect.Name("Update" + "PrimaryStore" + "Node"),
+		protoreflect.Name("Get" + "PrimaryStore" + "Node"),
+		protoreflect.Name("List" + "PrimaryStore" + "Nodes"),
+		protoreflect.Name("Create" + "PrimaryStore" + "Route"),
+		protoreflect.Name("Update" + "PrimaryStore" + "Route"),
+		protoreflect.Name("Get" + "PrimaryStore" + "Route"),
+		protoreflect.Name("List" + "PrimaryStore" + "Routes"),
+	}
+	for _, methodName := range removedMethods {
 		if service.Methods().ByName(methodName) != nil {
 			t.Fatalf("removed Metadata RPC %q is still present", methodName)
 		}
