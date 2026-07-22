@@ -279,7 +279,7 @@ func testMessage(id, topic string, payload []byte) *messagepb.MooxMessage {
 
 func storageTestMessage(id string, payload []byte) *messagepb.MooxMessage {
 	now := timestamppb.Now()
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload}
+	return &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "e2e", InstanceId: "e2e-1", BootId: "boot-1"}, OccurredAt: now, PublishedAt: now, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType, Payload: payload, SpaceId: "foo"}
 }
 
 func storageEventPayload() []byte {

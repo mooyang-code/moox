@@ -99,7 +99,14 @@ func (r *OutboxRelay) flush(ctx context.Context) error {
 	}
 	confirmed := make([]uint64, 0, len(entries))
 	for _, entry := range entries {
-		if err := r.publisher.PublishMessage(ctx, entry.Data); err != nil {
+		data, err := r.store.PrepareOutboxPublication(ctx, entry.ID, time.Now().UTC())
+		if err != nil {
+			if len(confirmed) > 0 {
+				_ = r.store.DeleteOutbox(ctx, confirmed)
+			}
+			return err
+		}
+		if err := r.publisher.PublishMessage(ctx, data); err != nil {
 			if len(confirmed) > 0 {
 				_ = r.store.DeleteOutbox(ctx, confirmed)
 			}

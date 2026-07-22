@@ -11,6 +11,17 @@ import (
 )
 
 func ValidateMessage(msg *messagepb.MooxMessage, maxPayload int) error {
+	return validateMessage(msg, maxPayload, true)
+}
+
+// ValidateOutboxMessage validates an envelope before the relay assigns its
+// first publication timestamp. PublishedAt may be absent, but every other
+// field required by ValidateMessage must already be durable in the outbox.
+func ValidateOutboxMessage(msg *messagepb.MooxMessage, maxPayload int) error {
+	return validateMessage(msg, maxPayload, false)
+}
+
+func validateMessage(msg *messagepb.MooxMessage, maxPayload int, requirePublishedAt bool) error {
 	if msg == nil {
 		return fmt.Errorf("%w: message is nil", ErrInvalidMessage)
 	}
@@ -26,14 +37,19 @@ func ValidateMessage(msg *messagepb.MooxMessage, maxPayload int) error {
 	if msg.GetProducer() == nil || strings.TrimSpace(msg.GetProducer().GetServiceName()) == "" || strings.TrimSpace(msg.GetProducer().GetInstanceId()) == "" {
 		return fmt.Errorf("%w: producer service_name and instance_id are required", ErrInvalidMessage)
 	}
-	if msg.GetOccurredAt() == nil || msg.GetPublishedAt() == nil {
-		return fmt.Errorf("%w: occurred_at and published_at are required", ErrInvalidMessage)
+	if msg.GetOccurredAt() == nil {
+		return fmt.Errorf("%w: occurred_at is required", ErrInvalidMessage)
 	}
 	if err := msg.GetOccurredAt().CheckValid(); err != nil {
 		return fmt.Errorf("%w: occurred_at: %v", ErrInvalidMessage, err)
 	}
-	if err := msg.GetPublishedAt().CheckValid(); err != nil {
-		return fmt.Errorf("%w: published_at: %v", ErrInvalidMessage, err)
+	if requirePublishedAt && msg.GetPublishedAt() == nil {
+		return fmt.Errorf("%w: published_at is required", ErrInvalidMessage)
+	}
+	if msg.GetPublishedAt() != nil {
+		if err := msg.GetPublishedAt().CheckValid(); err != nil {
+			return fmt.Errorf("%w: published_at: %v", ErrInvalidMessage, err)
+		}
 	}
 	if strings.TrimSpace(msg.GetContentType()) == "" {
 		return fmt.Errorf("%w: content_type is required", ErrInvalidMessage)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
@@ -21,8 +22,8 @@ func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
 		Producer:        &messagepb.Producer{ServiceName: "storage-node", InstanceId: "foo", NodeId: "foo"},
 		OccurredAt:      timestamppb.New(time.Now().UTC()),
 		PublishedAt:     timestamppb.New(time.Now().UTC()),
-		ContentType:     "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged",
-		MessageType:     "moox.storage.fields_changed.v1",
+		ContentType:     jetstream.StorageFieldsChangedContentType,
+		MessageType:     jetstream.StorageFieldsChangedMessageType,
 		Payload:         []byte("payload"),
 	}
 	for _, test := range []struct {
@@ -35,6 +36,11 @@ func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
 		{name: "wrong protobuf message", mutate: func(message *messagepb.MooxMessage) {
 			message.ContentType = "application/x-protobuf; message=other.Message"
 		}},
+		{name: "wrong message type", mutate: func(message *messagepb.MooxMessage) { message.MessageType = "moox.storage.other.v1" }},
+		{name: "one topic token", mutate: func(message *messagepb.MooxMessage) { message.Topic = "moox.storage.fields_changed.v1.mzxw6" }},
+		{name: "wildcard topic", mutate: func(message *messagepb.MooxMessage) { message.Topic = "moox.storage.fields_changed.v1.mzxw6.>" }},
+		{name: "wrong protocol", mutate: func(message *messagepb.MooxMessage) { message.ProtocolVersion = 99 }},
+		{name: "wrong kind", mutate: func(message *messagepb.MooxMessage) { message.Kind = messagepb.MessageKind_MESSAGE_KIND_COMMAND }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			message := proto.Clone(base).(*messagepb.MooxMessage)
@@ -45,6 +51,16 @@ func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
 				t.Fatalf("isStorageFieldsChangedEnvelope() = %t, want %t", got, test.wantOK)
 			}
 		})
+	}
+}
+
+func TestStorageFieldsChangedPayloadMatchesSubject(t *testing.T) {
+	message := &messagepb.MooxMessage{Topic: "moox.storage.fields_changed.v1.mzxw6.mjqxe", ProtocolVersion: jetstream.ProtocolVersion, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType}
+	if !storageFieldsChangedPayloadMatches(message, &storagepb.DatasetFieldsChanged{SpaceId: "foo", DatasetId: "bar"}) {
+		t.Fatal("valid subject/payload was rejected")
+	}
+	if storageFieldsChangedPayloadMatches(message, &storagepb.DatasetFieldsChanged{SpaceId: "other", DatasetId: "bar"}) {
+		t.Fatal("mismatched space was accepted")
 	}
 }
 

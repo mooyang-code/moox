@@ -80,7 +80,7 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 			t.Fatal(err)
 		}
 		now := timestamppb.Now()
-		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: id, Topic: storageEventTopic(t, event.GetSpaceId(), event.GetDatasetId()), Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged", MessageType: "moox.storage.fields_changed.v1", Payload: payload, SpaceId: "crypto_binance"})
+		_, err = client.Publish(context.Background(), &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: id, Topic: storageEventTopic(t, event.GetSpaceId(), event.GetDatasetId()), Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: "archive-e2e", InstanceId: "test"}, OccurredAt: now, PublishedAt: now, ContentType: jetstream.StorageFieldsChangedContentType, MessageType: jetstream.StorageFieldsChangedMessageType, Payload: payload, SpaceId: event.GetSpaceId()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +116,7 @@ func storageEventTopic(t *testing.T, spaceID, datasetID string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fmt.Sprintf("moox.storage.fields_changed.v1.%s.%s", spaceToken, datasetToken)
+	return fmt.Sprintf("%s%s.%s", jetstream.StorageFieldsChangedTopicPrefix, spaceToken, datasetToken)
 }
 
 func parseFloat(t *testing.T, value string) float64 {

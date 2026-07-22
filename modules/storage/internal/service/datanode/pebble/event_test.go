@@ -1,6 +1,9 @@
 package pebble
 
 import (
+	"bytes"
+	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,8 +27,8 @@ func TestBuildDatasetFieldsChangedMessageUsesFieldsChangedEnvelopeContract(t *te
 	if err := proto.Unmarshal(data, message); err != nil {
 		t.Fatal(err)
 	}
-	if err := jetstream.ValidateMessage(message, 1024); err != nil {
-		t.Fatalf("ValidateMessage() error = %v", err)
+	if err := jetstream.ValidateOutboxMessage(message, 1024); err != nil {
+		t.Fatalf("ValidateOutboxMessage() error = %v", err)
 	}
 	if message.GetTopic() != "moox.storage.fields_changed.v1.mzxw6.mjqxe" {
 		t.Fatalf("topic = %q, want fields_changed subject with encoded space and dataset", message.GetTopic())
@@ -39,13 +42,13 @@ func TestBuildDatasetFieldsChangedMessageUsesFieldsChangedEnvelopeContract(t *te
 	if message.GetOccurredAt() == nil || message.GetOccurredAt().CheckValid() != nil || message.GetOccurredAt().AsTime().Location() != time.UTC {
 		t.Fatalf("occurred_at = %v", message.GetOccurredAt())
 	}
-	if message.GetPublishedAt() == nil || message.GetPublishedAt().CheckValid() != nil || message.GetPublishedAt().AsTime().Location() != time.UTC {
-		t.Fatalf("published_at = %v", message.GetPublishedAt())
+	if message.GetPublishedAt() != nil {
+		t.Fatalf("published_at = %v, want unset before relay", message.GetPublishedAt())
 	}
-	if message.GetContentType() != "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged" {
+	if message.GetContentType() != jetstream.StorageFieldsChangedContentType {
 		t.Fatalf("content type = %q", message.GetContentType())
 	}
-	if message.GetMessageType() != "moox.storage.fields_changed.v1" {
+	if message.GetMessageType() != jetstream.StorageFieldsChangedMessageType {
 		t.Fatalf("message type = %q", message.GetMessageType())
 	}
 	payload := &pb.DatasetFieldsChanged{}
@@ -54,6 +57,67 @@ func TestBuildDatasetFieldsChangedMessageUsesFieldsChangedEnvelopeContract(t *te
 	}
 	if payload.GetSpaceId() != "foo" || payload.GetDatasetId() != "bar" || len(payload.GetRows()) != 1 {
 		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestPrepareOutboxPublicationCompletesAndPersistsEnvelope(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return BuildDatasetFieldsChangedMessage("foo", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.ListOutbox(context.Background(), 0, 1)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("ListOutbox() = %v, %v", before, err)
+	}
+	var beforeMessage messagepb.MooxMessage
+	if err := proto.Unmarshal(before[0].Data, &beforeMessage); err != nil {
+		t.Fatal(err)
+	}
+	if beforeMessage.GetPublishedAt() != nil {
+		t.Fatal("outbox entry has published_at before publication")
+	}
+	occurredAt := beforeMessage.GetOccurredAt()
+	payload := append([]byte(nil), beforeMessage.GetPayload()...)
+	publicationTime := time.Date(2026, 7, 22, 1, 2, 3, 4, time.UTC)
+	data, err := store.PrepareOutboxPublication(context.Background(), before[0].ID, publicationTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(data, message); err != nil {
+		t.Fatal(err)
+	}
+	if err := jetstream.ValidateMessage(message, 1024); err != nil {
+		t.Fatalf("ValidateMessage() error = %v", err)
+	}
+	if message.GetTopic() != "moox.storage.fields_changed.v1.mzxw6.mjqxe" || message.GetContentType() != jetstream.StorageFieldsChangedContentType || message.GetMessageType() != jetstream.StorageFieldsChangedMessageType || message.GetMessageId() != "storage-mzxw6-1" {
+		t.Fatalf("final envelope contract = topic %q content_type %q message_type %q message_id %q", message.GetTopic(), message.GetContentType(), message.GetMessageType(), message.GetMessageId())
+	}
+	if message.GetProducer().GetInstanceId() != "foo" {
+		t.Fatalf("producer instance_id = %q", message.GetProducer().GetInstanceId())
+	}
+	if !message.GetPublishedAt().AsTime().Equal(publicationTime) || message.GetPublishedAt().AsTime().Location() != time.UTC {
+		t.Fatalf("published_at = %v, want %v UTC", message.GetPublishedAt(), publicationTime)
+	}
+	if !proto.Equal(message.GetOccurredAt(), occurredAt) {
+		t.Fatalf("occurred_at changed: %v vs %v", message.GetOccurredAt(), occurredAt)
+	}
+	if !bytes.Equal(message.GetPayload(), payload) {
+		t.Fatal("payload changed during publication preparation")
+	}
+	second, err := store.PrepareOutboxPublication(context.Background(), before[0].ID, publicationTime.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, second) {
+		t.Fatal("retry changed persisted publication bytes")
 	}
 }
 

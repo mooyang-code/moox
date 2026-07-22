@@ -18,7 +18,7 @@ func TestHandlerAcknowledgesOnlyAfterJournalSync(t *testing.T) {
 		order = append(order, "sync")
 		return journal.AppendResult{Seq: 1}, nil
 	}}
-	delivery := &fakeDelivery{message: fixtureEnvelope(nil, "m1"), ackFn: func() error { order = append(order, "ack"); return nil }}
+	delivery := &fakeDelivery{message: fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline"), ackFn: func() error { order = append(order, "ack"); return nil }}
 	decoder := &fakeDecoder{batch: domain.EventBatch{MessageID: "m1", Rows: []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202606"}}}}, decision: DecisionArchive}
 	handler := NewHandler(decoder, store, &fakeNotifier{})
 	if err := handler.Handle(context.Background(), delivery); err != nil {
@@ -31,7 +31,7 @@ func TestHandlerAcknowledgesOnlyAfterJournalSync(t *testing.T) {
 
 func TestHandlerQuarantinesInvalidEventAndTerminates(t *testing.T) {
 	store := &fakeJournal{quarantineFn: func(journal.QuarantineRecord) error { return nil }}
-	delivery := &fakeDelivery{message: fixtureEnvelope(nil, "bad")}
+	delivery := &fakeDelivery{message: fixtureEnvelope(nil, "bad", "crypto_binance", "spot_kline")}
 	decoder := &fakeDecoder{decision: DecisionReject, decodeErr: errors.New("invalid row")}
 	handler := NewHandler(decoder, store, &fakeNotifier{})
 	if err := handler.Handle(context.Background(), delivery); err != nil {

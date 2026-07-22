@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -14,17 +15,24 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-const (
-	storageFieldsChangedTopicPrefix = "moox.storage.fields_changed.v1."
-	storageFieldsChangedMessageType = "moox.storage.fields_changed.v1"
-	storageFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
-)
-
 func isStorageFieldsChangedEnvelope(message *messagepb.MooxMessage) bool {
-	return message != nil &&
-		strings.HasPrefix(message.GetTopic(), storageFieldsChangedTopicPrefix) &&
-		message.GetMessageType() == storageFieldsChangedMessageType &&
-		message.GetContentType() == storageFieldsChangedContentType
+	_, _, err := validateStorageFieldsChangedEnvelope(message)
+	return err == nil
+}
+
+func validateStorageFieldsChangedEnvelope(message *messagepb.MooxMessage) (string, string, error) {
+	if message == nil {
+		return "", "", fmt.Errorf("storage envelope is nil")
+	}
+	if message.GetProtocolVersion() != jetstream.ProtocolVersion || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
+		return "", "", fmt.Errorf("unsupported storage message protocol or kind")
+	}
+	return jetstream.ValidateStorageFieldsChangedEnvelope(message)
+}
+
+func storageFieldsChangedPayloadMatches(message *messagepb.MooxMessage, event *storagepb.DatasetFieldsChanged) bool {
+	spaceID, datasetID, err := validateStorageFieldsChangedEnvelope(message)
+	return err == nil && event != nil && event.GetSpaceId() == spaceID && event.GetDatasetId() == datasetID
 }
 
 type NATSConfig struct {
@@ -112,11 +120,12 @@ func (c *NATSConsumer) loop(ctx context.Context) {
 		}
 		for _, delivery := range deliveries {
 			event := &storagepb.DatasetFieldsChanged{}
-			if !isStorageFieldsChangedEnvelope(delivery.Message) {
+			spaceID, datasetID, err := validateStorageFieldsChangedEnvelope(delivery.Message)
+			if err != nil {
 				_ = delivery.Term(ctx)
 				continue
 			}
-			if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil {
+			if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil || event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
 				_ = delivery.Term(ctx)
 				continue
 			}

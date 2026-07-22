@@ -35,7 +35,7 @@ func (f *fakePullConsumer) Close() error {
 }
 
 func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
-	msg := fixtureEnvelope(nil, "m1")
+	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
 	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic()}
 	consumer := &fakePullConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}},
@@ -57,7 +57,7 @@ func TestRunnerProcessesBatchAndStopsOnCancel(t *testing.T) {
 }
 
 func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {
-	msg := fixtureEnvelope(nil, "m1")
+	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
 	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic(), DeliveryCount: 2}
 	consumer := &fakePullConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}, {}},
@@ -85,7 +85,7 @@ func TestSleepContext(t *testing.T) {
 }
 
 func TestDeliveryAdapter(t *testing.T) {
-	msg := fixtureEnvelope(nil, "mid-1")
+	msg := fixtureEnvelope(nil, "mid-1", "crypto_binance", "spot_kline")
 	d := deliveryAdapter{Delivery: &jetstream.Delivery{
 		Message: msg, RawData: []byte("raw"), Subject: "topic", StreamSeq: 9, DeliveryCount: 3,
 	}}

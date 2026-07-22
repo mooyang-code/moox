@@ -7,17 +7,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
 )
 
 type Decision uint8
-
-const (
-	storageFieldsChangedTopicPrefix = "moox.storage.fields_changed.v1."
-	storageFieldsChangedMessageType = "moox.storage.fields_changed.v1"
-	storageFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
-)
 
 const (
 	DecisionArchive Decision = iota + 1
@@ -44,11 +39,12 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if message == nil {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message is nil")
 	}
-	if message.GetProtocolVersion() != 1 || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
+	if message.GetProtocolVersion() != jetstream.ProtocolVersion || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unsupported message protocol or kind")
 	}
-	if !strings.HasPrefix(message.GetTopic(), storageFieldsChangedTopicPrefix) || message.GetMessageType() != storageFieldsChangedMessageType || message.GetContentType() != storageFieldsChangedContentType {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected topic, content type, or message type")
+	spaceID, datasetID, err := jetstream.ValidateStorageFieldsChangedEnvelope(message)
+	if err != nil {
+		return domain.EventBatch{}, DecisionReject, err
 	}
 	if strings.TrimSpace(message.GetMessageId()) == "" {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message_id is required")
@@ -56,6 +52,9 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	var event storagepb.DatasetFieldsChanged
 	if err := proto.Unmarshal(message.GetPayload(), &event); err != nil {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("decode time-series event: %w", err)
+	}
+	if event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage topic and payload identity mismatch")
 	}
 	if _, ok := d.sources[event.GetSpaceId()][event.GetDatasetId()]; !ok {
 		return domain.EventBatch{}, DecisionIgnore, nil

@@ -67,8 +67,8 @@ func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.DatasetFieldsC
 		SpaceId:         event.GetSpaceId(),
 		OccurredAt:      now,
 		PublishedAt:     now,
-		ContentType:     "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged",
-		MessageType:     "moox.storage.fields_changed.v1",
+		ContentType:     jetstream.StorageFieldsChangedContentType,
+		MessageType:     jetstream.StorageFieldsChangedMessageType,
 		Payload:         payload,
 		Attributes:      map[string]string{"dataset_id": event.GetDatasetId()},
 	}

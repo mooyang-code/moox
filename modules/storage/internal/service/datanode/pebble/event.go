@@ -13,8 +13,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const datasetFieldsChangedContentType = "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
-const datasetFieldsChangedMessageType = "moox.storage.fields_changed.v1"
 const storageNodeServiceName = "storage-node"
 
 // BuildDatasetFieldsChangedMessage creates the durable message persisted by a
@@ -37,12 +35,12 @@ func BuildDatasetFieldsChangedMessage(nodeID string, spaceID, datasetID string, 
 	}
 	message := &messagepb.MooxMessage{
 		ProtocolVersion: 1,
-		Topic:           fmt.Sprintf("moox.storage.fields_changed.v1.%s.%s", spaceToken, datasetToken),
+		Topic:           fmt.Sprintf("%s%s.%s", jetstream.StorageFieldsChangedTopicPrefix, spaceToken, datasetToken),
 		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
 		SpaceId:         spaceID,
 		OccurredAt:      timestamppb.New(time.Now().UTC()),
-		ContentType:     datasetFieldsChangedContentType,
-		MessageType:     datasetFieldsChangedMessageType,
+		ContentType:     jetstream.StorageFieldsChangedContentType,
+		MessageType:     jetstream.StorageFieldsChangedMessageType,
 		Payload:         payload,
 		Producer:        &messagepb.Producer{ServiceName: storageNodeServiceName, InstanceId: nodeID, NodeId: nodeID},
 	}
@@ -68,8 +66,7 @@ func BindOutboxID(data []byte, nodeID string, outboxID uint64) ([]byte, error) {
 	msg.Producer.ServiceName = storageNodeServiceName
 	msg.Producer.InstanceId = nodeID
 	msg.Producer.NodeId = nodeID
-	msg.PublishedAt = timestamppb.New(time.Now().UTC())
-	if err := jetstream.ValidateMessage(msg, 0); err != nil {
+	if err := jetstream.ValidateOutboxMessage(msg, 0); err != nil {
 		return nil, fmt.Errorf("validate storage outbox message %d: %w", outboxID, err)
 	}
 	return proto.MarshalOptions{Deterministic: true}.Marshal(msg)

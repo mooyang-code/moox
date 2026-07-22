@@ -12,7 +12,10 @@ import (
 
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -448,6 +451,67 @@ func (s *Store) setNextOutboxID(batch *cpebble.Batch, id uint64) error {
 }
 
 func outboxKey(id uint64) string { return fmt.Sprintf("%s%020d", outboxPrefix, id) }
+
+// PrepareOutboxPublication durably assigns the first relay publication time.
+// Once assigned, the exact persisted bytes are reused for every retry.
+func (s *Store) PrepareOutboxPublication(ctx context.Context, id uint64, now time.Time) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if id == 0 {
+		return nil, errors.New("outbox id is required")
+	}
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	data, closer, err := s.db.Get([]byte(outboxKey(id)))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return nil, fmt.Errorf("outbox entry %d not found", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw := append([]byte(nil), data...)
+	if err := closer.Close(); err != nil {
+		return nil, err
+	}
+	message := &messagepb.MooxMessage{}
+	if err := proto.Unmarshal(raw, message); err != nil {
+		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
+	}
+	if message.GetPublishedAt() != nil {
+		if err := jetstream.ValidateMessage(message, 0); err != nil {
+			return nil, fmt.Errorf("validate published outbox entry %d: %w", id, err)
+		}
+		return raw, nil
+	}
+	publication := timestamppb.New(now.UTC())
+	if err := publication.CheckValid(); err != nil {
+		return nil, fmt.Errorf("published_at: %w", err)
+	}
+	message.PublishedAt = publication
+	if err := jetstream.ValidateMessage(message, 0); err != nil {
+		return nil, fmt.Errorf("validate outbox publication %d: %w", id, err)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
+	if err != nil {
+		return nil, fmt.Errorf("marshal outbox publication %d: %w", id, err)
+	}
+	if s.maxEventBytes > 0 && len(encoded) > s.maxEventBytes {
+		return nil, invalidf("event payload size %d exceeds limit %d", len(encoded), s.maxEventBytes)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set([]byte(outboxKey(id)), encoded, s.writeOptions); err != nil {
+		return nil, err
+	}
+	if err := batch.Commit(s.writeOptions); err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
 
 func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*OutboxEntry, error) {
 	if err := ctx.Err(); err != nil {
