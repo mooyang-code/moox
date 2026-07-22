@@ -122,13 +122,13 @@ func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 	require.Equal(t, "completed", result.Cleanup)
 	require.Equal(t, []string{
 		"space_created", "data_source_created", "dataset_created_disabled", "dataset_column_created",
-		"activation_checks_passed", "dataset_activated_locked", "row_written", "row_read_back",
-		"locked_rebind_rejected", "active_node_delete_rejected", "referenced_node_delete_rejected", "temporary_node_deleted",
+		"disabled_write_rejected", "activation_checks_passed", "stale_revision_rejected", "dataset_activated_locked",
+		"row_written", "row_read_back", "locked_rebind_rejected", "active_node_delete_rejected",
 	}, result.Assertions)
 	require.Equal(t, []string{"task16_constraint", "task16_dataset"}, api.deletedDatasets)
 	require.Equal(t, []string{"task16_source"}, api.deletedSources)
 	require.Equal(t, []string{"task16_space"}, api.deletedSpaces)
-	require.Equal(t, []string{"task16_node"}, api.deletedNodes)
+	require.Empty(t, api.deletedNodes)
 	require.True(t, primary.deleted)
 	for _, auth := range api.auths {
 		if auth.GetAppId() == "storage-deployer" {
