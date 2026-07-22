@@ -80,13 +80,17 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts()))
+		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts())+1)
 		for index, host := range snapshot.Manifest.Hosts() {
 			role := "other"
 			if index == 0 {
 				role = "control"
 			}
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: role})
+		}
+		if snapshot.Manifest.HasCompileHost() {
+			host := snapshot.Manifest.CompileHost
+			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: "compile"})
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
@@ -476,7 +480,7 @@ func (commandSSHChecker) Check(ctx context.Context, host setupconfig.Host) error
 }
 
 func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, name, fingerprint string) error {
-	host, err := findSetupHost(snapshot.Manifest, name)
+	host, err := findSetupTrustHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
 	}
@@ -547,6 +551,13 @@ func findSetupHost(manifest setupconfig.Manifest, name string) (setupconfig.Host
 	return setupconfig.Host{}, fmt.Errorf("setup_host_not_found")
 }
 
+func findSetupTrustHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
+	if manifest.HasCompileHost() && strings.EqualFold(manifest.CompileHost.Name, strings.TrimSpace(name)) {
+		return manifest.CompileHost, nil
+	}
+	return findSetupHost(manifest, name)
+}
+
 func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	if snapshot == nil {
 		return
@@ -555,6 +566,7 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
 	snapshot.Manifest.ControlHost.Password = ""
+	snapshot.Manifest.CompileHost.Password = ""
 	for index := range snapshot.Manifest.OtherHosts {
 		snapshot.Manifest.OtherHosts[index].Password = ""
 	}

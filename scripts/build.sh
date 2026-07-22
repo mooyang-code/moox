@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${VERSION:-dev}"
 BUILD_TIME="$(date +"%Y-%m-%d_%H:%M:%S")"
-GIT_COMMIT="$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GIT_COMMIT="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 BIN_DIR="${ROOT}/bin"
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"

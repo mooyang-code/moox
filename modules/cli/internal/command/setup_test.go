@@ -13,6 +13,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,6 +130,34 @@ func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
 	for _, secret := range []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
 		require.NotContains(t, output.String(), secret)
 	}
+}
+
+func TestSetupHostsListsCompileHostRole(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.CompileHost = setupconfig.Host{
+		Name: "compile", Address: "203.0.113.10", Port: 2222, Username: "builder", Password: "compile-password",
+	}
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"hosts", "--file", "custom.toml"})
+	require.NoError(t, cmd.Execute())
+	var result struct {
+		Hosts []setupHostChoice `json:"hosts"`
+	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.Len(t, result.Hosts, 3)
+	assert.Equal(t, setupHostChoice{Name: "compile", Address: "203.0.113.10", Port: 2222, Username: "builder", Role: "compile"}, result.Hosts[2])
+	assert.NotContains(t, output.String(), "compile-password")
+}
+
+func TestFindSetupTrustHostIncludesCompileHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.CompileHost = setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder"}
+	host, err := findSetupTrustHost(snapshot.Manifest, "compile")
+	require.NoError(t, err)
+	assert.Equal(t, "203.0.113.10", host.Address)
 }
 
 func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {

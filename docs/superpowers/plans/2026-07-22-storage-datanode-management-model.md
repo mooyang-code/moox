@@ -1220,7 +1220,7 @@ Expected: PASS. If `make verify-pr` fails outside this change, diagnose and eith
 - [ ] **Step 3: Build exact-SHA Linux amd64 binaries**
 
 ```bash
-VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh storage
+VERSION="${VERIFY_SHA}" GIT_COMMIT="${VERIFY_SHA}" ./scripts/build-storage-linux.sh
 VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh cli
 VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/release.sh
 ```

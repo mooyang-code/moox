@@ -39,6 +39,7 @@ type Manifest struct {
 	Admin        Admin        `toml:"admin"`
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	ControlHost  Host         `toml:"control_host"`
+	CompileHost  Host         `toml:"compile_host"`
 	OtherHosts   []Host       `toml:"other_hosts"`
 }
 
@@ -47,6 +48,10 @@ func (m Manifest) Hosts() []Host {
 	hosts = append(hosts, m.ControlHost)
 	hosts = append(hosts, m.OtherHosts...)
 	return hosts
+}
+
+func (m Manifest) HasCompileHost() bool {
+	return hostConfigured(m.CompileHost)
 }
 
 type Snapshot struct {
@@ -145,6 +150,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if out.ControlHost.Port == 0 {
 		out.ControlHost.Port = 22
 	}
+	if out.HasCompileHost() && out.CompileHost.Port == 0 {
+		out.CompileHost.Port = 22
+	}
 	for i := range out.OtherHosts {
 		if out.OtherHosts[i].Port == 0 {
 			out.OtherHosts[i].Port = 22
@@ -174,18 +182,33 @@ func validate(manifest *Manifest) error {
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
-	if err := validateHost("control_host", &manifest.ControlHost, names, addresses); err != nil {
+	if err := validateHost("control_host", &manifest.ControlHost, names, addresses, true); err != nil {
 		return err
 	}
+	if manifest.HasCompileHost() {
+		// The compiler may intentionally run on the control host. Keep it out
+		// of the deployment-host uniqueness sets while still validating it.
+		if err := validateHost("compile_host", &manifest.CompileHost, nil, nil, false); err != nil {
+			return err
+		}
+	}
 	for i := range manifest.OtherHosts {
-		if err := validateHost(fmt.Sprintf("other_hosts[%d]", i), &manifest.OtherHosts[i], names, addresses); err != nil {
+		if err := validateHost(fmt.Sprintf("other_hosts[%d]", i), &manifest.OtherHosts[i], names, addresses, true); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateHost(path string, host *Host, names, addresses map[string]struct{}) error {
+func hostConfigured(host Host) bool {
+	return strings.TrimSpace(host.Name) != "" ||
+		strings.TrimSpace(host.Address) != "" ||
+		host.Port != 0 ||
+		strings.TrimSpace(host.Username) != "" ||
+		host.Password != ""
+}
+
+func validateHost(path string, host *Host, names, addresses map[string]struct{}, requirePassword bool) error {
 	host.Name = strings.TrimSpace(host.Name)
 	host.Address = strings.TrimSpace(host.Address)
 	host.Username = strings.TrimSpace(host.Username)
@@ -201,18 +224,22 @@ func validateHost(path string, host *Host, names, addresses map[string]struct{})
 	if host.Username == "" {
 		return fmt.Errorf("config_invalid: %s.username is required", path)
 	}
-	if host.Password == "" {
+	if requirePassword && host.Password == "" {
 		return fmt.Errorf("config_invalid: %s.password is required", path)
 	}
-	nameKey := strings.ToLower(host.Name)
-	if _, exists := names[nameKey]; exists {
-		return fmt.Errorf("config_invalid: duplicate host name %s", host.Name)
+	if names != nil {
+		nameKey := strings.ToLower(host.Name)
+		if _, exists := names[nameKey]; exists {
+			return fmt.Errorf("config_invalid: duplicate host name %s", host.Name)
+		}
+		names[nameKey] = struct{}{}
 	}
-	names[nameKey] = struct{}{}
-	addressKey := strings.ToLower(host.Address)
-	if _, exists := addresses[addressKey]; exists {
-		return fmt.Errorf("config_invalid: duplicate host address %s", host.Address)
+	if addresses != nil {
+		addressKey := strings.ToLower(host.Address)
+		if _, exists := addresses[addressKey]; exists {
+			return fmt.Errorf("config_invalid: duplicate host address %s", host.Address)
+		}
+		addresses[addressKey] = struct{}{}
 	}
-	addresses[addressKey] = struct{}{}
 	return nil
 }
