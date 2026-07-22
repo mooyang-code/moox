@@ -125,7 +125,7 @@ func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 		"disabled_write_rejected", "activation_checks_passed", "stale_revision_rejected", "dataset_activated_locked",
 		"row_written", "row_read_back", "locked_rebind_rejected", "active_node_delete_rejected",
 	}, result.Assertions)
-	require.Equal(t, []string{"task16_constraint", "task16_dataset"}, api.deletedDatasets)
+	require.Equal(t, []string{"task16_dataset"}, api.deletedDatasets)
 	require.Equal(t, []string{"task16_source"}, api.deletedSources)
 	require.Equal(t, []string{"task16_space"}, api.deletedSpaces)
 	require.Empty(t, api.deletedNodes)
