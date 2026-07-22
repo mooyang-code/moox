@@ -209,9 +209,8 @@ pid_owned() {
   return 0
 }
 clean_stale_pid() { [[ ! -e "${PIDFILE}" ]] || pid_owned || { log 'removing stale or mismatched PID file without signaling it'; rm -f "${PIDFILE}"; }; }
-stop_recorded_pid() {
-  local pid
-  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+terminate_managed_pid() {
+  local pid="$1"
   if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
     kill "${pid}" 2>/dev/null || true
     for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
@@ -220,7 +219,20 @@ stop_recorded_pid() {
       for _ in $(seq 1 10); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
     fi
   fi
-  kill -0 "${pid}" 2>/dev/null && fail "managed Caddy did not stop"
+  if process_running "${pid}"; then
+    fail "managed Caddy did not stop"
+  fi
+}
+process_running() {
+  local pid="$1" state
+  [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null || return 1
+  state=$(ps -p "${pid}" -o stat= 2>/dev/null || true)
+  [[ "${state}" != *Z* ]]
+}
+stop_recorded_pid() {
+  local pid
+  pid=$(cat "${PIDFILE}" 2>/dev/null || true)
+  terminate_managed_pid "${pid}"
   rm -f "${PIDFILE}"
 }
 stop_managed_process() {
@@ -240,10 +252,7 @@ stop_managed_process() {
     rm -f "${PIDFILE}"
     fail 'managed Caddy PID file is stale or does not own a configured listener'
   fi
-  if kill -0 "${pid}" 2>/dev/null; then
-    kill "${pid}" 2>/dev/null || true
-    for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
-  fi
+  terminate_managed_pid "${pid}"
   rm -f "${PIDFILE}"
 }
 restore_runtime_after_failure() {
@@ -442,8 +451,7 @@ case "${COMMAND}" in
     else
       if pid_owned; then
         pid=$(cat "${PIDFILE}")
-        kill "${pid}" 2>/dev/null || true
-        for _ in $(seq 1 50); do kill -0 "${pid}" 2>/dev/null || break; sleep .1; done
+        terminate_managed_pid "${pid}"
       fi
       rm -f "${PIDFILE}"
       rm -f "${CONFIG}.candidate" "${ENV_FILE}.candidate"
