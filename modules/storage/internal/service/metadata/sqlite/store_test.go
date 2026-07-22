@@ -17,11 +17,37 @@ func TestMetadataSchemaVersionIsExact(t *testing.T) {
 	}
 }
 
+func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Options{
+		Path:       filepath.Join(t.TempDir(), "metadata.db"),
+		SchemaPath: metadataSchemaPath(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("fresh database InitSchema: %v", err)
+	}
+	if err := store.ValidateSchemaVersion(ctx); err != nil {
+		t.Fatalf("fresh database ValidateSchemaVersion: %v", err)
+	}
+	var version string
+	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != "5" {
+		t.Fatalf("fresh database schema version = %q, want 5", version)
+	}
+}
+
 func TestMetadataSchemaV4DatabaseIsRejected(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, Options{
 		Path:       filepath.Join(t.TempDir(), "metadata.db"),
-		SchemaPath: filepath.Join("..", "..", "..", "..", "schema", "metadata.sql"),
+		SchemaPath: metadataSchemaPath(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +59,10 @@ func TestMetadataSchemaV4DatabaseIsRejected(t *testing.T) {
 			c_value TEXT NOT NULL
 		);
 		INSERT INTO t_schema_meta (c_key, c_value) VALUES ('schema_version', '4');
+		CREATE TABLE t_primary_store_nodes (
+			c_node_id TEXT NOT NULL PRIMARY KEY,
+			c_name TEXT NOT NULL
+		);
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -51,4 +81,17 @@ func TestMetadataSchemaV4DatabaseIsRejected(t *testing.T) {
 	if version != "4" {
 		t.Fatalf("rejected metadata database version changed to %q", version)
 	}
+	var dataNodeTableCount int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 't_data_nodes'
+	`).Scan(&dataNodeTableCount); err != nil {
+		t.Fatal(err)
+	}
+	if dataNodeTableCount != 0 {
+		t.Fatal("v4 database ran Schema v5 DDL after version rejection")
+	}
+}
+
+func metadataSchemaPath() string {
+	return filepath.Join("..", "..", "..", "..", "schema", "metadata.sql")
 }
