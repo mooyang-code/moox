@@ -4,7 +4,7 @@
       <div class="page-head">
         <div class="title-with-info">
           <h2>数据节点</h2>
-          <a-tooltip position="right">
+          <a-tooltip v-model:popup-visible="nodeInfoVisible" position="right">
             <template #content>
               <div class="node-concepts">
                 <div>节点身份和服务目标由部署流程拥有，管理台只能修改名称和状态。</div>
@@ -13,7 +13,13 @@
                 <div>只有已禁用且没有 Dataset 的节点才能删除。</div>
               </div>
             </template>
-            <button class="info-button" type="button" aria-label="数据节点说明">
+            <button
+              class="info-button"
+              type="button"
+              aria-label="数据节点说明"
+              @focus="nodeInfoVisible = true"
+              @blur="nodeInfoVisible = false"
+            >
               <icon-info-circle />
             </button>
           </a-tooltip>
@@ -68,7 +74,11 @@
           </a-table-column>
           <a-table-column title="操作" :width="190" align="center" :fixed="'right'">
             <template #cell="{ record }">
-              <a-space class="row-actions" :size="4">
+              <a-space class="row-actions" :size="4" wrap>
+                <a-button size="mini" type="text" @click="openDetail(record)">
+                  <template #icon><icon-eye /></template>
+                  查看
+                </a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">
                   <template #icon><icon-edit /></template>
                   编辑
@@ -95,7 +105,14 @@
       </a-table>
     </div>
 
-    <a-modal v-model:visible="visible" width="620px" title="编辑数据节点" :ok-loading="submitting" @ok="submit">
+    <a-modal
+      v-model:visible="visible"
+      data-testid="data-node-edit-modal"
+      width="620px"
+      title="编辑数据节点"
+      :ok-loading="submitting"
+      @ok="submit"
+    >
       <a-form :model="form" auto-label-width>
         <a-form-item field="node_id" label="节点ID">
           <a-input :model-value="form.node_id" disabled />
@@ -104,7 +121,7 @@
           <a-input :model-value="form.service_target" disabled />
         </a-form-item>
         <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" />
+          <a-input v-model="form.name" aria-label="节点名称" placeholder="节点名称" />
         </a-form-item>
         <a-form-item field="status" label="状态" required>
           <a-select v-model="form.status">
@@ -113,6 +130,58 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <a-drawer
+      v-model:visible="detailVisible"
+      data-testid="data-node-detail-drawer"
+      width="640px"
+      title="数据节点详情"
+      :footer="false"
+    >
+      <a-descriptions v-if="detailNode" :column="{ xs: 1, sm: 2 }" bordered>
+        <a-descriptions-item label="节点ID">{{ detailNode.node.node_id }}</a-descriptions-item>
+        <a-descriptions-item label="名称">{{ detailNode.node.name || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="服务目标" :span="2">{{ detailNode.node.service_target || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="状态">
+          <a-tag size="small" :color="statusColor(detailNode.node.status)">{{ detailNode.node.status }}</a-tag>
+        </a-descriptions-item>
+        <a-descriptions-item label="更新时间">{{ formatTime(detailNode.node.updated_at) }}</a-descriptions-item>
+      </a-descriptions>
+
+      <div v-if="detailNode" class="detail-datasets">
+        <h3>Dataset</h3>
+        <a-table
+          v-if="detailNode.datasets.length"
+          row-key="dataset_id"
+          size="small"
+          :bordered="{ cell: true }"
+          :data="detailNode.datasets"
+          :pagination="false"
+          :scroll="{ x: 'max-content' }"
+        >
+          <template #columns>
+            <a-table-column title="Space" data-index="space_id" :width="120" />
+            <a-table-column title="Dataset ID" data-index="dataset_id" :width="150" />
+            <a-table-column title="名称" :width="150">
+              <template #cell="{ record }">{{ record.name || record.dataset_id }}</template>
+            </a-table-column>
+            <a-table-column title="数据类型" :width="150" data-index="data_kind" />
+            <a-table-column title="保留时长" :width="120" data-index="keep_duration" />
+            <a-table-column title="状态" :width="90">
+              <template #cell="{ record }">
+                <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" :width="100" align="center">
+              <template #cell="{ record }">
+                <a-button size="mini" type="text" @click="openDataset(record)">打开</a-button>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+        <a-empty v-else description="暂无 Dataset" />
+      </div>
+    </a-drawer>
   </div>
 </template>
 
@@ -131,6 +200,9 @@ const rows = ref<DataNodeListItem[]>([]);
 const loading = ref(false);
 const submitting = ref(false);
 const visible = ref(false);
+const nodeInfoVisible = ref(false);
+const detailVisible = ref(false);
+const detailNode = ref<DataNodeListItem>();
 const pagination = reactive(defaultPagination());
 const form = reactive({ node_id: "", name: "", service_target: "", status: "disabled" });
 
@@ -150,6 +222,11 @@ async function load() {
 function openEdit(record: DataNodeListItem) {
   Object.assign(form, record.node);
   visible.value = true;
+}
+
+function openDetail(record: DataNodeListItem) {
+  detailNode.value = record;
+  detailVisible.value = true;
 }
 
 function canDelete(record: DataNodeListItem) {
@@ -275,5 +352,14 @@ onMounted(load);
 
 .delete-trigger {
   display: inline-flex;
+}
+
+.detail-datasets {
+  margin-top: 24px;
+}
+
+.detail-datasets h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
 }
 </style>

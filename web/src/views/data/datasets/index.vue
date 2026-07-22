@@ -5,10 +5,17 @@
         <div class="page-head__title">
           <h2>{{ props.pageTitle }}</h2>
           <a-tooltip
+            v-model:popup-visible="bindingInfoVisible"
             content="数据集必须绑定一个 DataNode；首次激活后绑定永久锁定。激活前才可以更换 DataNode，系统不做数据迁移。
 "
           >
-            <button class="title-info" type="button" aria-label="数据集绑定规则说明">
+            <button
+              class="title-info"
+              type="button"
+              aria-label="数据集绑定规则说明"
+              @focus="bindingInfoVisible = true"
+              @blur="bindingInfoVisible = false"
+            >
               <icon-info-circle />
             </button>
           </a-tooltip>
@@ -80,7 +87,7 @@
       </a-table>
     </div>
 
-    <a-modal v-model:visible="visible" width="760px" :title="modalTitle" @ok="submit">
+    <a-modal v-model:visible="visible" data-testid="create-dataset-modal" width="760px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
         <a-form-item field="dataset_id" label="数据集ID" required>
           <a-input v-model="form.dataset_id" :disabled="editing" placeholder="例如 kline" />
@@ -127,6 +134,7 @@
 
     <a-modal
       v-model:visible="activationVisible"
+      data-testid="dataset-activation-modal"
       width="720px"
       :title="`激活数据集：${activationDataset?.dataset_id || ''}`"
       :ok-button-props="{ disabled: !activationReady || activationLoading }"
@@ -153,6 +161,7 @@
 
     <a-modal
       v-model:visible="rebindVisible"
+      data-testid="dataset-rebind-modal"
       width="560px"
       title="更换 Dataset DataNode"
       :ok-button-props="{ disabled: !rebindNodeId || rebindLoading }"
@@ -326,6 +335,7 @@ const freqTags = computed({
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑数据集" : "新增数据集"));
+const bindingInfoVisible = ref(false);
 const activationVisible = ref(false);
 const activationDataset = ref<Dataset>();
 const activationCheck = ref<{ dataset_revision: number | string; checks: DatasetActivationCheck[]; ready: boolean }>();

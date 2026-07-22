@@ -102,6 +102,7 @@ describe("storage configuration workbench", () => {
       global: {
         plugins: [ArcoVue],
         stubs: {
+          "icon-eye": true,
           "icon-delete": true,
           "icon-edit": true,
           "icon-info-circle": true
