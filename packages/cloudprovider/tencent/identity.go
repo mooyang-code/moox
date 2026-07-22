@@ -22,6 +22,8 @@ type identityValidator struct {
 	client *sts.Client
 }
 
+const defaultIdentityRegion = "ap-guangzhou"
+
 func NewIdentityValidator(options IdentityOptions) (cloudprovider.IdentityValidator, error) {
 	if err := options.Credentials.validate(); err != nil {
 		return nil, err
@@ -37,7 +39,7 @@ func NewIdentityValidator(options IdentityOptions) (cloudprovider.IdentityValida
 		clientProfile.HttpProfile.Endpoint = parsed.Host
 	}
 	credential := common.NewCredential(strings.TrimSpace(options.Credentials.SecretID), options.Credentials.SecretKey)
-	client, err := sts.NewClient(credential, "", clientProfile)
+	client, err := sts.NewClient(credential, defaultIdentityRegion, clientProfile)
 	if err != nil {
 		return nil, ErrRequestFailed
 	}

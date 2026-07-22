@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,7 +12,14 @@ import (
 )
 
 func TestIdentityValidatorReturnsSanitizedIdentity(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization := r.Header.Get("Authorization")
+		if authorization == "" || !strings.Contains(authorization, "secret-id") {
+			t.Errorf("Authorization does not contain the configured SecretID")
+		}
+		if got := r.Header.Get("X-TC-Region"); got != defaultIdentityRegion {
+			t.Errorf("X-TC-Region = %q, want %q", got, defaultIdentityRegion)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"Response":{"Arn":"qcs::cam::uin/10001:uin/10001","AccountId":"10001","UserId":"10001","PrincipalId":"10001","Type":"CAMUser","RequestId":"request-1"}}`))
 	}))
