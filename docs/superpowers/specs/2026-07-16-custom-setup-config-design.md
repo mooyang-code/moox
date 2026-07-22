@@ -132,7 +132,8 @@ signature or credential fragment.
 
 ### `setup deploy-control`
 
-This command runs `validate`, builds the release, and deploys only:
+This command runs deployment validation (the immutable manifest and SSH host
+checks, without Tencent Cloud STS), builds the release, and deploys only:
 
 - `moox-admin` and `moox-admin-cli`;
 - `moox-gateway` and `moox-gateway-cli`;
@@ -148,6 +149,9 @@ depends on shell `ssh`/`scp` password handling.
 The control deployment does not create the first Admin user. It waits for
 Admin readiness, setup listener readiness, Gateway readiness, Web
 readiness, and the browser HTTPS endpoint before returning success.
+Tencent Cloud identity validation is intentionally not repeated here. The
+read-only STS check belongs to `setup validate` and cloud-resource commands;
+deploying control-plane binaries itself only needs the configured SSH access.
 The remote deployment directory is fixed to `~/moox/prod` for this first-stage
 workflow. Later deployment commands may expose explicit placement options, but
 the setup manifest does not grow deployment-tuning fields.
@@ -207,6 +211,12 @@ installed under `~/moox/storage`, separate from the control deployment at
 `~/moox/prod`, so choosing the control host cannot replace Admin, Gateway, or
 Web. After readiness succeeds, the CLI updates the Storage service placement
 through the private SysDeploy endpoint on the control host.
+
+`setup deploy-storage` uses the same deployment validation as
+`deploy-control`; it does not require a Tencent Cloud STS call. Tencent
+credentials remain required for the full `setup validate` command and for
+cloud-resource operations, but are not a prerequisite for copying and
+starting Storage binaries over SSH.
 
 ### Metadata Space Selection And Import
 

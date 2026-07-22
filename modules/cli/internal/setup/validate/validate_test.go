@@ -96,6 +96,22 @@ func TestRunChecksIdentityThenHosts(t *testing.T) {
 	assert.Equal(t, []string{"control", "compute-1"}, sshChecker.calls)
 }
 
+func TestRunSSHSkipsTencentIdentityValidation(t *testing.T) {
+	snapshot := validationSnapshot(t)
+	identity := &fakeIdentity{err: fmt.Errorf("tencent credentials must not be used")}
+	sshChecker := &fakeSSHChecker{errs: map[string]error{}}
+
+	result, err := RunSSH(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
+	require.NoError(t, err)
+	assert.Equal(t, []Check{
+		{Name: "config", Status: "valid"},
+		{Name: "host:control", Status: "valid"},
+		{Name: "host:compute-1", Status: "valid"},
+	}, result.Checks)
+	assert.Zero(t, identity.calls)
+	assert.Equal(t, []string{"control", "compute-1"}, sshChecker.calls)
+}
+
 func TestRunStopsBeforeSSHWhenIdentityFails(t *testing.T) {
 	snapshot := validationSnapshot(t)
 	identity := &fakeIdentity{err: fmt.Errorf("recognizable-secret-key")}

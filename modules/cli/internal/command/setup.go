@@ -20,19 +20,20 @@ import (
 const defaultSetupFile = "./custom.toml"
 
 type setupDeps struct {
-	load              func(string) (*setupconfig.Snapshot, error)
-	validate          func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	trustHost         func(context.Context, *setupconfig.Snapshot, string, string) error
-	deployControl     func(context.Context, *setupconfig.Snapshot) error
-	deployService     func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
-	apply             func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status            func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	login             func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
-	deployStorage     func(context.Context, *setupconfig.Snapshot, string, bool) error
-	importMetadata    func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
-	verifyStorage     func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
-	e2eStorage        func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
-	browserE2EStorage func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
+	load               func(string) (*setupconfig.Snapshot, error)
+	validate           func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	validateDeployment func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	trustHost          func(context.Context, *setupconfig.Snapshot, string, string) error
+	deployControl      func(context.Context, *setupconfig.Snapshot) error
+	deployService      func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
+	apply              func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
+	status             func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	login              func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	deployStorage      func(context.Context, *setupconfig.Snapshot, string, bool) error
+	importMetadata     func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
+	verifyStorage      func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
+	e2eStorage         func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
+	browserE2EStorage  func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
 }
 
 func init() {
@@ -145,7 +146,7 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
+		if _, err := deps.validateDeployment(cmd.Context(), snapshot); err != nil {
 			return err
 		}
 		if err := deps.deployControl(cmd.Context(), snapshot); err != nil {
@@ -251,7 +252,7 @@ func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
+		if _, err := deps.validateDeployment(cmd.Context(), snapshot); err != nil {
 			return err
 		}
 		status, err := deps.status(cmd.Context(), snapshot)
@@ -308,6 +309,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.validate == nil {
 		deps.validate = defaults.validate
 	}
+	if deps.validateDeployment == nil {
+		deps.validateDeployment = deps.validate
+	}
 	if deps.trustHost == nil {
 		deps.trustHost = defaults.trustHost
 	}
@@ -353,17 +357,18 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
-		validate:          defaultSetupValidate,
-		trustHost:         defaultSetupTrustHost,
-		deployControl:     defaultSetupDeploy,
-		deployService:     defaultSetupDeployService,
-		apply:             defaultSetupApply,
-		status:            defaultSetupStatus,
-		deployStorage:     defaultSetupDeployStorage,
-		importMetadata:    defaultSetupImportMetadata,
-		verifyStorage:     defaultSetupVerifyStorage,
-		e2eStorage:        defaultSetupE2EStorage,
-		browserE2EStorage: defaultSetupBrowserE2EStorage,
+		validate:           defaultSetupValidate,
+		validateDeployment: defaultSetupValidateDeployment,
+		trustHost:          defaultSetupTrustHost,
+		deployControl:      defaultSetupDeploy,
+		deployService:      defaultSetupDeployService,
+		apply:              defaultSetupApply,
+		status:             defaultSetupStatus,
+		deployStorage:      defaultSetupDeployStorage,
+		importMetadata:     defaultSetupImportMetadata,
+		verifyStorage:      defaultSetupVerifyStorage,
+		e2eStorage:         defaultSetupE2EStorage,
+		browserE2EStorage:  defaultSetupBrowserE2EStorage,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))
@@ -441,6 +446,10 @@ func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (
 		return setupvalidate.Result{}, fmt.Errorf("tencent_auth_failed")
 	}
 	return setupvalidate.Run(ctx, snapshot, setupvalidate.Dependencies{Identity: identity, SSH: commandSSHChecker{}})
+}
+
+func defaultSetupValidateDeployment(ctx context.Context, snapshot *setupconfig.Snapshot) (setupvalidate.Result, error) {
+	return setupvalidate.RunSSH(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}})
 }
 
 type commandSSHChecker struct{}

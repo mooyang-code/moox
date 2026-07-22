@@ -41,24 +41,51 @@ func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies)
 	if snapshot == nil || deps.Identity == nil || deps.SSH == nil {
 		return result, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		result.Checks = append(result.Checks, Check{Name: "config", Status: "invalid", Code: "config_changed"})
-		return result, fmt.Errorf("%w: config_changed", ErrValidationFailed)
+	result, err := configResult(snapshot)
+	if err != nil {
+		return result, err
 	}
-	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
 
 	if _, err := deps.Identity.GetCallerIdentity(ctx); err != nil {
 		result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "invalid", Code: "tencent_auth_failed"})
 		return result, fmt.Errorf("%w: tencent_auth_failed", ErrValidationFailed)
 	}
 	result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "valid"})
+	return appendHostChecks(ctx, snapshot, deps.SSH, result)
+}
+
+// RunSSH validates the immutable setup snapshot and all configured SSH hosts
+// without contacting Tencent Cloud. Deployment commands use this narrower
+// gate; cloud credentials are checked only by Run and cloud operations.
+func RunSSH(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies) (Result, error) {
+	if snapshot == nil || deps.SSH == nil {
+		return Result{}, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
+	}
+	result, err := configResult(snapshot)
+	if err != nil {
+		return result, err
+	}
+	return appendHostChecks(ctx, snapshot, deps.SSH, result)
+}
+
+func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
+	result := Result{}
+	if err := snapshot.VerifyUnchanged(); err != nil {
+		result.Checks = append(result.Checks, Check{Name: "config", Status: "invalid", Code: "config_changed"})
+		return result, fmt.Errorf("%w: config_changed", ErrValidationFailed)
+	}
+	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
+	return result, nil
+}
+
+func appendHostChecks(ctx context.Context, snapshot *setupconfig.Snapshot, checker SSHChecker, result Result) (Result, error) {
 
 	failed := false
-	control := hostCheck(ctx, deps.SSH, snapshot.Manifest.ControlHost)
+	control := hostCheck(ctx, checker, snapshot.Manifest.ControlHost)
 	result.Checks = append(result.Checks, control)
 	failed = failed || control.Status != "valid"
 
-	otherChecks := checkOtherHosts(ctx, deps.SSH, snapshot.Manifest.OtherHosts)
+	otherChecks := checkOtherHosts(ctx, checker, snapshot.Manifest.OtherHosts)
 	result.Checks = append(result.Checks, otherChecks...)
 	for _, check := range otherChecks {
 		failed = failed || check.Status != "valid"

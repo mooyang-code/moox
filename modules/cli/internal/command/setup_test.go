@@ -20,10 +20,15 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	secrets := []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"}
 	validateCalls := 0
+	deploymentValidateCalls := 0
 	deps := setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
 		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
 			validateCalls++
+			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
+		},
+		validateDeployment: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+			deploymentValidateCalls++
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
 		trustHost:     func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
@@ -68,7 +73,8 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			require.NotContains(t, combined, "将使用默认配置")
 		})
 	}
-	require.Equal(t, 3, validateCalls, "validate, deploy-control, and apply must each validate the full manifest")
+	require.Equal(t, 2, validateCalls, "validate and apply must validate the full manifest")
+	require.Equal(t, 1, deploymentValidateCalls, "deploy-control must only validate config and SSH")
 }
 
 func TestSetupHelpListsWorkflowCommands(t *testing.T) {

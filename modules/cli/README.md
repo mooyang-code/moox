@@ -28,6 +28,12 @@ moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
 ```
 
+`setup validate` performs the full Tencent Cloud STS identity check. The
+`deploy-control` and `deploy-storage` commands only repeat immutable-config
+and SSH host validation; copying and starting MooX binaries does not require a
+Tencent Cloud API call. Tencent credentials are required when applying the
+cloud account or running other cloud-resource operations.
+
 服务发布以 ZIP 包为单位，包中包含二进制、配置和生命周期脚本。示例包目录必须至少包含
 `bin/`、`config/`、`start.sh`、`stop.sh` 和 `healthcheck.sh`，使用仓库脚本打包：
 
