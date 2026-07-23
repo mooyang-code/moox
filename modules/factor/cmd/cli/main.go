@@ -15,16 +15,24 @@ import (
 )
 
 type cliConfig struct {
-	Command       string
-	DBPath        string
-	FactorsDir    string
-	DefaultParams []int
-	SpaceID       string
-	DatasetID     string
-	SubjectID     string
-	Freq          string
-	BarTime       time.Time
-	FactorIDs     []string
+	Command           string
+	DBPath            string
+	FactorsDir        string
+	DefaultParams     []int
+	SpaceID           string
+	DatasetID         string
+	TargetDataset     string
+	SubjectID         string
+	Freq              string
+	BarTime           time.Time
+	FactorIDs         []string
+	ReplayInput       string
+	ReplayStart       time.Time
+	ReplayEnd         time.Time
+	FactorVersion     string
+	TargetRunID       string
+	TaskID            string
+	FactorSourcePaths map[string]string
 }
 
 func main() {
@@ -46,6 +54,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runImport(ctx, cfg, out)
 	case "run-once":
 		return runOnce(ctx, cfg, out)
+	case "replay":
+		return runReplay(ctx, cfg, out)
 	default:
 		return fmt.Errorf("unknown command %q", cfg.Command)
 	}
@@ -100,6 +110,27 @@ func parseArgs(args []string) (cliConfig, error) {
 			cfg.BarTime = parsed
 		}
 		cfg.FactorIDs = parseStringCSV(factors)
+	case "replay":
+		var start, end string
+		fs := newFlagSet("replay")
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
+		fs.StringVar(&cfg.ReplayInput, "input", "", "JSONL replay event file")
+		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
+		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset id")
+		fs.StringVar(&start, "start", "", "replay start time RFC3339")
+		fs.StringVar(&end, "end", "", "replay end time RFC3339")
+		fs.StringVar(&cfg.FactorVersion, "factor-version", "", "factor version")
+		fs.StringVar(&cfg.TargetRunID, "target-run-id", "", "target run id")
+		if err := fs.Parse(args[1:]); err != nil {
+			return cliConfig{}, err
+		}
+		var err error
+		if cfg.ReplayStart, err = time.Parse(time.RFC3339, start); err != nil {
+			return cliConfig{}, fmt.Errorf("parse --start: %w", err)
+		}
+		if cfg.ReplayEnd, err = time.Parse(time.RFC3339, end); err != nil {
+			return cliConfig{}, fmt.Errorf("parse --end: %w", err)
+		}
 	default:
 		return cliConfig{}, fmt.Errorf("unknown command %q", args[0])
 	}

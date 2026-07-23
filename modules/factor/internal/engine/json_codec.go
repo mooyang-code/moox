@@ -51,6 +51,8 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 	}
 	return map[string]any{
 		"id":             task.TaskID,
+		"factor_version": task.FactorVersion,
+		"target_run_id":  task.TargetRunID,
 		"snapshot_id":    task.SnapshotID,
 		"snapshot_hash":  task.SnapshotHash,
 		"snapshot_path":  task.SnapshotPath,

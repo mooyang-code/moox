@@ -182,11 +182,15 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		actionCtx := ctx
 		item := &pb.JobItem{}
 		if err := proto.Unmarshal(delivery.Message.GetPayload(), item); err != nil {
-			_ = delivery.Term(actionCtx)
+			if actionErr := delivery.Term(actionCtx); actionErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("term malformed job item: %w", actionErr))
+			}
 			continue
 		}
 		if item.GetSpaceId() != req.SpaceID || item.GetCodePackageId() != req.CodePackageID || !contains(req.SupportedJobTypes, item.GetJobType()) {
-			_ = delivery.Nak(actionCtx, time.Second)
+			if actionErr := delivery.Nak(actionCtx, time.Second); actionErr != nil {
+				return nil, fmt.Errorf("nak unsupported job item: %w", actionErr)
+			}
 			continue
 		}
 		meta := JobItemMessage{SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(), JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()), Priority: item.GetPriority(), SubmittedAt: delivery.Message.GetOccurredAt().AsTime()}

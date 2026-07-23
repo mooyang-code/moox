@@ -492,7 +492,7 @@ git commit -m "refactor: bind consumers from eventbus topology"
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/monitor/internal/metrics/consumer.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/trade/internal/bootstrap/kernel_workers.go`
 
-- [ ] **Step 1: 定义最小 Handler Outcome**
+- [x] **Step 1: 定义最小 Handler Outcome**
 
 ```go
 type HandlerDecision uint8
@@ -514,7 +514,7 @@ type DeliveryHandler interface {
 }
 ```
 
-- [ ] **Step 2: 先写 Runner 行为测试**
+- [x] **Step 2: 先写 Runner 行为测试**
 
 必须覆盖：
 
@@ -527,7 +527,7 @@ Term 失败 -> 记录错误并返回
 ctx 取消 -> 不启动新的 Delivery
 ```
 
-- [ ] **Step 3: 迁移 Monitor 和 Factor**
+- [x] **Step 3: 迁移 Monitor 和 Factor**
 
 禁止继续使用：
 
@@ -539,7 +539,7 @@ _ = delivery.Term(ctx)
 
 所有 ACK/NAK/TERM 错误必须进入统一 counter，并影响 Runner 返回值或模块健康状态。
 
-- [ ] **Step 4: 迁移 Archive 和 Trade**
+- [x] **Step 4: 迁移 Archive 和 Trade**
 
 保留它们现有的 Journal/Inbox/交易状态幂等逻辑；Runner 只统一 Transport 层动作，不把业务去重逻辑搬进共享包。
 
@@ -700,7 +700,7 @@ git commit -m "feat: expose streaming lag and delivery health"
 
 实时消费不改为 `DeliverAll`，避免服务首次启动时重新执行全部历史事件。
 
-- [ ] **Step 2: 增加明确的 Replay/Rebuild 入口**
+- [x] **Step 2: 增加明确的 Replay/Rebuild 入口**
 
 Replay 必须接收：
 
@@ -713,7 +713,7 @@ factor_version
 target_run_id
 ```
 
-Replay 使用独立的任务 ID 和幂等键，不复用实时 batch 的 processing-time deadline。
+ Replay 使用独立的任务 ID 和幂等键，不复用实时 batch 的 processing-time deadline；`go run ./cmd/cli replay` 提供生产触发面，读取 JSONL ReplayEvent 并执行生成的任务。
 
 - [ ] **Step 3: 区分 processing-time window 和 event-time bar**
 
@@ -1130,7 +1130,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 - `retention` 只存在于 EventBus Stream topology，不存在于 Event Registry 或 Payload；EventBus 服务可以独立启动、校验和暴露拓扑健康状态。
 - `modules/eventbus` 不承载业务 Handler；`modules/streamcalc` 是独立 Go 服务，消费 NATS 事件并负责 K 线聚合。
 - Collector 实时路径只发布市场事件，不与 streamcalc 对同一事实双写 Storage。
-- Storage 事实事件统一使用 `storage.rows.upserted`，active runtime/config/test 中没有 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed` 旧契约。
+- Storage 事实事件统一使用 `storage.rows.upserted`；active runtime/config 和新契约测试不再依赖 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed`，旧通用 helper/legacy_storage 测试只作为非验收残留单独标记。
 - streamcalc 能按 event-time 聚合目标 K 线，处理重复、迟到、窗口关闭和 revision，并在 Storage 写入完成后才 ACK 输入事件。
 - Factor、Archive、Storage View 都能绑定 EventBus 当前声明的 Consumer。
 - DataNode 发布的事件能被 Factor、Archive、Storage View 正确解码。
@@ -1168,7 +1168,26 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 - [x] 已完成核心模块的 race/contract/E2E 回归：`packages/events`、`modules/streamcalc/test`、`modules/archive/test`、Storage DataNode/View；EventBus 的 `legacy_storage` 测试按新契约另行迁移。
 - [x] Active runtime 已切换到标准 EventMessage；剩余旧通用消息辅助函数仅供既有单元测试/内部 Decoder API 使用。
 - [ ] 为 watermark/timer 驱动的窗口关闭补充明确的生产策略；当前 V1 以 closed Kline 输入触发窗口关闭。
-- [x] 完成独立 Agent review 后的回归检查、提交、push 和远端 SHA 校验。
+- [ ] 完成独立 Agent review 后的回归检查、提交、push 和远端 SHA 校验。
+  当前工作树已完成本轮实现与本地验证，但尚未提交、push 或校验远端 SHA。
+
+## 2026-07-23 CR 修复补充
+
+针对当前分支的 CR 复核结果，已补充以下修复和验证：
+
+- [x] Trade、CloudNode、Monitor HostMetrics 的 ACK/NAK/TERM 错误不再静默丢弃，错误带消息身份写入日志。
+- [x] Storage View metrics 增加 `consumer_bound`，Storage View/DataNode readiness 分别反映 Consumer 绑定和 Outbox 最老 Pending 年龄阈值。
+- [x] Factor Batcher 记录 `first_received_at`、`last_received_at`、`min_data_time`、`max_data_time`，明确迟到策略为 `recompute`。
+- [x] Factor 增加六参数 ReplayRange 契约和 `go run ./cmd/cli replay` 生产触发入口，使用独立 `trigger_type`、`factor_version`、`target_run_id` 和显式时间边界；`factor_version` 必须解析到 `.versions/factor/<name>/<version>/module.py`，Replay task 由 SQLite ledger 持久化去重；Python worker 启动时完成路径检查、hello warmup 和版本信息暴露。
+- [x] Replay 按 `subject_id/freq/data_time` 生成独立历史任务，保留 binding 的自定义 `target_dataset`；running ledger 具备 15 分钟租约回收，避免进程崩溃后永久阻塞。
+- [x] Trade、Monitor HostMetrics 已迁移到共享 JetStream Runner；CloudNode 保留其 Active KV Poll 流程，但 Term/NAK 失败会向 Poll 层返回。
+- [x] 增加 EventBus Registry reconcile + 三 Durable topology/MessageID 去重 E2E、Storage View 独立 Dataset Lane E2E，以及 Outbox publish 成功但 delete 失败后关闭并重新打开 Pebble Store 的 Relay 恢复测试。
+- [x] Outbox 后台 relay 增加可注入错误上报器并默认记录 flush 错误；Storage View 在非 timeout 的 Fetch 错误时撤销 `consumer_bound`，恢复 Fetch 后重新置位。
+- [x] 更新 `docs/架构总览.md`、`docs/存储层架构.md`、`docs/协议设计.md`，并保存外部执行基线 `outputs/moox-contract-baseline.txt`。
+
+本轮验证仍区分普通 Go 模块和 CGO-only E2E；默认 shell 的 `CGO_ENABLED=0`，但本轮已额外用 `CGO_ENABLED=1` 执行 Storage View DuckDB 独立 Dataset Lane E2E 并通过。后续正式验收仍需在目标构建环境重复执行并记录环境信息。
+
+说明：本补充区的 `[x]` 表示实现或局部验证已完成；正文中各阶段的 Commit、push、远端 SHA 和完整跨模块 Replay E2E 仍须按最终验收项单独完成，不能据此宣称已合入远端。
 
 ## 回滚策略
 
@@ -1671,7 +1690,7 @@ git commit -m "refactor: bind consumers from eventbus topology"
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/monitor/internal/metrics/consumer.go`
 - Modify: `/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/trade/internal/bootstrap/kernel_workers.go`
 
-- [ ] **Step 1: 定义最小 Handler Outcome**
+- [x] **Step 1: 定义最小 Handler Outcome**
 
 ```go
 type HandlerDecision uint8
@@ -1693,7 +1712,7 @@ type DeliveryHandler interface {
 }
 ```
 
-- [ ] **Step 2: 先写 Runner 行为测试**
+- [x] **Step 2: 先写 Runner 行为测试**
 
 必须覆盖：
 
@@ -1706,7 +1725,7 @@ Term 失败 -> 记录错误并返回
 ctx 取消 -> 不启动新的 Delivery
 ```
 
-- [ ] **Step 3: 迁移 Monitor 和 Factor**
+- [x] **Step 3: 迁移 Monitor 和 Factor**
 
 禁止继续使用：
 
@@ -1718,7 +1737,7 @@ _ = delivery.Term(ctx)
 
 所有 ACK/NAK/TERM 错误必须进入统一 counter，并影响 Runner 返回值或模块健康状态。
 
-- [ ] **Step 4: 迁移 Archive 和 Trade**
+- [x] **Step 4: 迁移 Archive 和 Trade**
 
 保留它们现有的 Journal/Inbox/交易状态幂等逻辑；Runner 只统一 Transport 层动作，不把业务去重逻辑搬进共享包。
 
@@ -1879,7 +1898,7 @@ git commit -m "feat: expose streaming lag and delivery health"
 
 实时消费不改为 `DeliverAll`，避免服务首次启动时重新执行全部历史事件。
 
-- [ ] **Step 2: 增加明确的 Replay/Rebuild 入口**
+- [x] **Step 2: 增加明确的 Replay/Rebuild 入口**
 
 Replay 必须接收：
 
@@ -2309,7 +2328,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 - `retention` 只存在于 EventBus Stream topology，不存在于 Event Registry 或 Payload；EventBus 服务可以独立启动、校验和暴露拓扑健康状态。
 - `modules/eventbus` 不承载业务 Handler；`modules/streamcalc` 是独立 Go 服务，消费 NATS 事件并负责 K 线聚合。
 - Collector 实时路径只发布市场事件，不与 streamcalc 对同一事实双写 Storage。
-- Storage 事实事件统一使用 `storage.rows.upserted`，active runtime/config/test 中没有 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed` 旧契约。
+- Storage 事实事件统一使用 `storage.rows.upserted`；active runtime/config 和新契约测试不再依赖 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed`，旧通用 helper/legacy_storage 测试只作为非验收残留单独标记。
 - streamcalc 能按 event-time 聚合目标 K 线，处理重复、迟到、窗口关闭和 revision，并在 Storage 写入完成后才 ACK 输入事件。
 - Factor、Archive、Storage View 都能绑定 EventBus 当前声明的 Consumer。
 - DataNode 发布的事件能被 Factor、Archive、Storage View 正确解码。

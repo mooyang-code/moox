@@ -16,17 +16,33 @@ import (
 
 // Task is an event-batched scheduler request.
 type Task struct {
-	SpaceID       string
-	SourceDataset string
-	TargetDataset string
-	SubjectID     string
-	Freq          string
-	BarTime       time.Time
-	FactorIDs     []string
+	SpaceID         string
+	SourceDataset   string
+	TargetDataset   string
+	SubjectID       string
+	Freq            string
+	BarTime         time.Time
+	FirstReceivedAt time.Time
+	LastReceivedAt  time.Time
+	MinDataTime     time.Time
+	MaxDataTime     time.Time
+	LateDataPolicy  string
+	LateData        bool
+	TriggerType     string
+	FactorVersion   string
+	TargetRunID     string
+	FactorIDs       []string
 	// PendingEventIDs are the durable inbox records covered by this task. They
 	// are committed only after the scheduler accepts the task.
 	PendingEventIDs []string
 }
+
+const LateDataPolicyRecompute = "recompute"
+
+const (
+	closedBucketRetention = 24 * time.Hour
+	maxClosedBuckets      = 4096
+)
 
 // EventBatcher groups Storage row-update messages into fixed-window per-symbol task requests.
 type EventBatcher struct {
@@ -34,6 +50,7 @@ type EventBatcher struct {
 	window   time.Duration
 	bindings []domain.FactorBinding
 	buckets  map[bucketKey]*bucket
+	closed   map[bucketKey]closedBucket
 	inbox    PendingEventStore
 }
 
@@ -52,9 +69,14 @@ type bucket struct {
 	messageIDs map[string]struct{}
 }
 
+type closedBucket struct {
+	dataTime time.Time
+	closedAt time.Time
+}
+
 // NewEventBatcher creates an event batcher with an initial binding snapshot.
 func NewEventBatcher(window time.Duration, bindings []domain.FactorBinding) *EventBatcher {
-	return &EventBatcher{window: window, bindings: append([]domain.FactorBinding(nil), bindings...), buckets: map[bucketKey]*bucket{}}
+	return &EventBatcher{window: window, bindings: append([]domain.FactorBinding(nil), bindings...), buckets: map[bucketKey]*bucket{}, closed: map[bucketKey]closedBucket{}}
 }
 
 func NewDurableEventBatcher(window time.Duration, bindings []domain.FactorBinding, inbox PendingEventStore) *EventBatcher {
@@ -97,11 +119,19 @@ func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, even
 }
 
 func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.RowsUpserted, now time.Time) bool {
+	return d.ingestMemoryWithDeadline(messageID, event, now, now)
+}
+
+// ingestMemoryWithDeadline keeps event reception metadata separate from the
+// processing boundary used to close a bucket. Replay uses this to flush a
+// bounded range even when the source event was received much later.
+func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storagepb.RowsUpserted, receivedAt, processingAt time.Time) bool {
 	if d == nil || event == nil {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.pruneClosedLocked(processingAt)
 	matched := false
 	for _, row := range event.GetRows() {
 		if row == nil || row.GetKey() == nil {
@@ -135,22 +165,44 @@ func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.RowsUpser
 			}
 			b := d.buckets[bkey]
 			if b == nil {
+				late := false
+				if closedAt, ok := d.closed[bkey]; ok && !dataTime.After(closedAt.dataTime) {
+					late = true
+				}
 				b = &bucket{
 					task: Task{
-						SpaceID:       key.GetSpaceId(),
-						SourceDataset: key.GetDatasetId(),
-						TargetDataset: targetDataset,
-						SubjectID:     key.GetSubjectId(),
-						Freq:          key.GetFreq(),
-						BarTime:       dataTime.UTC(),
+						SpaceID:         key.GetSpaceId(),
+						SourceDataset:   key.GetDatasetId(),
+						TargetDataset:   targetDataset,
+						SubjectID:       key.GetSubjectId(),
+						Freq:            key.GetFreq(),
+						BarTime:         dataTime.UTC(),
+						FirstReceivedAt: receivedAt.UTC(),
+						LastReceivedAt:  receivedAt.UTC(),
+						MinDataTime:     dataTime.UTC(),
+						MaxDataTime:     dataTime.UTC(),
+						LateDataPolicy:  LateDataPolicyRecompute,
+						LateData:        late,
 					},
-					deadline: now.Add(d.window),
+					deadline: processingAt.Add(d.window),
 					factors:  map[string]struct{}{}, messageIDs: map[string]struct{}{},
 				}
 				d.buckets[bkey] = b
 			}
 			if dataTime.After(b.task.BarTime) {
 				b.task.BarTime = dataTime.UTC()
+			}
+			if receivedAt.Before(b.task.FirstReceivedAt) {
+				b.task.FirstReceivedAt = receivedAt.UTC()
+			}
+			if receivedAt.After(b.task.LastReceivedAt) {
+				b.task.LastReceivedAt = receivedAt.UTC()
+			}
+			if dataTime.Before(b.task.MinDataTime) {
+				b.task.MinDataTime = dataTime.UTC()
+			}
+			if dataTime.After(b.task.MaxDataTime) {
+				b.task.MaxDataTime = dataTime.UTC()
 			}
 			b.factors[binding.FactorID] = struct{}{}
 			if messageID != "" {
@@ -209,9 +261,34 @@ func (d *EventBatcher) FlushPending(ctx context.Context, now time.Time) ([]Task,
 		tasks = append(tasks, b.task)
 	}
 	for _, key := range keys {
+		if maxDataTime := d.buckets[key].task.MaxDataTime; !maxDataTime.IsZero() {
+			d.closed[key] = closedBucket{dataTime: maxDataTime, closedAt: now.UTC()}
+		}
 		delete(d.buckets, key)
 	}
 	return tasks, nil
+}
+
+func (d *EventBatcher) pruneClosedLocked(now time.Time) {
+	if len(d.closed) == 0 {
+		return
+	}
+	cutoff := now.UTC().Add(-closedBucketRetention)
+	for key, closed := range d.closed {
+		if closed.closedAt.Before(cutoff) {
+			delete(d.closed, key)
+		}
+	}
+	for len(d.closed) > maxClosedBuckets {
+		var oldestKey bucketKey
+		var oldest time.Time
+		for key, closed := range d.closed {
+			if oldest.IsZero() || closed.closedAt.Before(oldest) {
+				oldestKey, oldest = key, closed.closedAt
+			}
+		}
+		delete(d.closed, oldestKey)
+	}
 }
 
 // CommitPending records the message IDs as processed and removes their inbox

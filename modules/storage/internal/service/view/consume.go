@@ -33,6 +33,9 @@ type EventConsumerOptions struct {
 	Ordering      string
 	ErrorReporter jetstream.ErrorReporter
 	Metrics       *observability.ViewMetrics
+	// BeforeProcess is an optional test/diagnostic hook. Production callers
+	// leave it nil; it runs inside the subject lane before projection work.
+	BeforeProcess func(context.Context, *jetstream.Delivery) error
 }
 
 func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
@@ -115,8 +118,14 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if err != nil {
 		return nil, err
 	}
+	opts.Metrics.SetConsumerBound(true)
 	loopCtx, cancel := context.WithCancel(ctx)
 	dispatcher := newSubjectLaneDispatcher(loopCtx, opts.MaxWorkers, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+		if opts.BeforeProcess != nil {
+			if err := opts.BeforeProcess(ctx, delivery); err != nil {
+				return err
+			}
+		}
 		return s.processDelivery(ctx, delivery, heartbeat)
 	}, reporter, laneMetricsHooks{
 		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
@@ -136,6 +145,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer opts.Metrics.SetConsumerBound(false)
 		defer consumer.Close()
 		defer dispatcher.Close()
 		for loopCtx.Err() == nil {
@@ -156,6 +166,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 					return
 				}
 				if !errors.Is(fetchErr, nats.ErrTimeout) {
+					opts.Metrics.SetConsumerBound(false)
 					reporter.Report(fmt.Errorf("fetch storage view deliveries: %w", fetchErr))
 				}
 				timer := time.NewTimer(250 * time.Millisecond)
@@ -169,6 +180,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				}
 				continue
 			}
+			opts.Metrics.SetConsumerBound(true)
 		}
 	}()
 	return func() { cancel(); <-done }, nil

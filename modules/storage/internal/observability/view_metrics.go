@@ -20,6 +20,7 @@ type ViewMetrics struct {
 	redeliveryTotal prometheus.Counter
 
 	consumerLagMessages         prometheus.Gauge
+	consumerBound               prometheus.Gauge
 	oldestPendingEventAge       prometheus.GaugeFunc
 	deliveryDuration            prometheus.Histogram
 	ackErrorsTotal              prometheus.Counter
@@ -30,6 +31,10 @@ type ViewMetrics struct {
 	outboxPublishErrorsTotal    prometheus.Counter
 	outboxDuplicatePublish      prometheus.Counter
 	consumerLagSnapshot         atomic.Int64
+	consumerBoundSnapshot       atomic.Bool
+	outboxObservedSnapshot      atomic.Bool
+	outboxDynamicAge            atomic.Bool
+	outboxOldestEventAt         atomic.Int64
 	laneActiveSnapshot          atomic.Int64
 	outboxPendingSnapshot       atomic.Int64
 	outboxOldestAgeSnapshot     atomic.Int64
@@ -47,8 +52,10 @@ type ViewMetrics struct {
 // identity fields.
 type ViewMetricsSnapshot struct {
 	ConsumerLagMessages         int64
+	ConsumerBound               bool
 	LaneActive                  int64
 	OutboxPendingEntries        int64
+	OutboxObserved              bool
 	OutboxOldestAge             time.Duration
 	OldestPendingAge            time.Duration
 	AckErrorsTotal              int64
@@ -85,6 +92,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		consumerLagMessages: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_lag_messages",
 			Help: "Storage view deliveries fetched but not finished.",
+		}),
+		consumerBound: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_bound",
+			Help: "Whether the Storage view durable consumer is currently bound.",
 		}),
 		deliveryDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "delivery_duration_seconds",
@@ -143,6 +154,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.consumerLagMessages, err = registerOrReuse(registerer, metrics.consumerLagMessages); err != nil {
 		return nil, err
 	}
+	if metrics.consumerBound, err = registerOrReuse(registerer, metrics.consumerBound); err != nil {
+		return nil, err
+	}
 	if metrics.oldestPendingEventAge, err = registerOrReuse(registerer, metrics.oldestPendingEventAge); err != nil {
 		return nil, err
 	}
@@ -171,6 +185,18 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	return metrics, nil
+}
+
+func (m *ViewMetrics) SetConsumerBound(bound bool) {
+	if m == nil {
+		return
+	}
+	m.consumerBoundSnapshot.Store(bound)
+	if bound {
+		m.consumerBound.Set(1)
+	} else {
+		m.consumerBound.Set(0)
+	}
 }
 
 func registerOrReuse[T prometheus.Collector](registerer prometheus.Registerer, collector T) (T, error) {
@@ -364,10 +390,60 @@ func (m *ViewMetrics) SetOutboxSnapshot(pending int, oldestAge time.Duration) {
 	if oldestAge < 0 {
 		oldestAge = 0
 	}
+	// Keep this compatibility helper's age stable for deterministic unit tests.
+	// The relay uses SetOutboxSnapshotAt so readiness can age without another poll.
+	m.outboxObservedSnapshot.Store(true)
+	m.outboxDynamicAge.Store(false)
+	m.outboxOldestEventAt.Store(0)
 	m.outboxPendingEntries.Set(float64(pending))
 	m.outboxOldestAge.Set(oldestAge.Seconds())
 	m.outboxPendingSnapshot.Store(int64(pending))
 	m.outboxOldestAgeSnapshot.Store(oldestAge.Nanoseconds())
+}
+
+// SetOutboxSnapshotAt records the source timestamp of the oldest pending
+// entry. Health checks can then observe an increasing age even if the relay
+// stops polling after the entry was first observed.
+func (m *ViewMetrics) SetOutboxSnapshotAt(pending int, oldestEventAt time.Time) {
+	if m == nil {
+		return
+	}
+	if pending < 0 {
+		pending = 0
+	}
+	if pending == 0 || oldestEventAt.IsZero() {
+		oldestEventAt = time.Time{}
+	}
+	m.outboxObservedSnapshot.Store(true)
+	m.outboxDynamicAge.Store(true)
+	if oldestEventAt.IsZero() {
+		m.outboxOldestEventAt.Store(0)
+	} else {
+		m.outboxOldestEventAt.Store(oldestEventAt.UTC().UnixNano())
+	}
+	age := m.currentOutboxOldestAge(time.Now().UTC())
+	m.outboxPendingEntries.Set(float64(pending))
+	m.outboxOldestAge.Set(age.Seconds())
+	m.outboxPendingSnapshot.Store(int64(pending))
+	m.outboxOldestAgeSnapshot.Store(age.Nanoseconds())
+}
+
+func (m *ViewMetrics) currentOutboxOldestAge(now time.Time) time.Duration {
+	if m == nil {
+		return 0
+	}
+	if !m.outboxDynamicAge.Load() {
+		return time.Duration(m.outboxOldestAgeSnapshot.Load())
+	}
+	nanos := m.outboxOldestEventAt.Load()
+	if nanos <= 0 {
+		return 0
+	}
+	oldest := time.Unix(0, nanos)
+	if !now.After(oldest) {
+		return 0
+	}
+	return now.Sub(oldest)
 }
 
 func (m *ViewMetrics) IncOutboxPublishError() {
@@ -388,12 +464,18 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 	if m == nil {
 		return ViewMetricsSnapshot{}
 	}
-	oldestPendingAge := m.currentOldestPendingAge(time.Now().UTC())
+	now := time.Now().UTC()
+	oldestPendingAge := m.currentOldestPendingAge(now)
+	oldestOutboxAge := m.currentOutboxOldestAge(now)
+	m.outboxOldestAge.Set(oldestOutboxAge.Seconds())
+	m.outboxOldestAgeSnapshot.Store(oldestOutboxAge.Nanoseconds())
 	return ViewMetricsSnapshot{
 		ConsumerLagMessages:         m.consumerLagSnapshot.Load(),
+		ConsumerBound:               m.consumerBoundSnapshot.Load(),
 		LaneActive:                  m.laneActiveSnapshot.Load(),
 		OutboxPendingEntries:        m.outboxPendingSnapshot.Load(),
-		OutboxOldestAge:             time.Duration(m.outboxOldestAgeSnapshot.Load()),
+		OutboxObserved:              m.outboxObservedSnapshot.Load(),
+		OutboxOldestAge:             oldestOutboxAge,
 		OldestPendingAge:            oldestPendingAge,
 		AckErrorsTotal:              m.ackErrorsSnapshot.Load(),
 		InProgressErrorsTotal:       m.inProgressErrorsSnapshot.Load(),

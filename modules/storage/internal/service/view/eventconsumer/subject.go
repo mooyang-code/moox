@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-const RowsUpsertedSubjectPrefix = "moox.storage.rows_upserted.v1"
+const RowsUpsertedSubjectPrefix = "moox.storage.rows.upserted.v1"
 
 func RowsUpsertedSubject(prefix, spaceID, datasetID string) (string, error) {
 	if strings.TrimSpace(prefix) == "" {

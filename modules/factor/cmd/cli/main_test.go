@@ -69,6 +69,23 @@ func TestParseRunOnceArgs(t *testing.T) {
 	}
 }
 
+func TestParseReplayArgs(t *testing.T) {
+	cfg, err := parseArgs([]string{
+		"replay", "--input", "events.jsonl", "--space", "crypto", "--dataset", "bars",
+		"--start", "2026-07-06T09:00:00Z", "--end", "2026-07-06T10:00:00Z",
+		"--factor-version", "factor-v7", "--target-run-id", "run-42",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if cfg.Command != "replay" || cfg.ReplayInput != "events.jsonl" || cfg.SpaceID != "crypto" || cfg.DatasetID != "bars" || cfg.FactorVersion != "factor-v7" || cfg.TargetRunID != "run-42" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if cfg.ReplayStart.IsZero() || cfg.ReplayEnd.IsZero() || !cfg.ReplayStart.Before(cfg.ReplayEnd) {
+		t.Fatalf("replay range = %s..%s", cfg.ReplayStart, cfg.ReplayEnd)
+	}
+}
+
 func TestFilterFactorsKeepsOnlyRequestedIDs(t *testing.T) {
 	factors := []domain.FactorDef{
 		{FactorID: "bias"},
@@ -106,6 +123,17 @@ func TestBuildTaskUsesMaxLookbackAndSourcePaths(t *testing.T) {
 	}
 	task := buildTask(cfg, factors)
 	if task.LookbackBars != 96 || len(task.Factors) != 2 || task.Factors[0].SourcePath != "/tmp/factors/bias.py" {
+		t.Fatalf("buildTask() = %+v", task)
+	}
+}
+
+func TestBuildTaskUsesExplicitTargetDatasetAndReplaySourcePath(t *testing.T) {
+	cfg := cliConfig{
+		SpaceID: "crypto", DatasetID: "kline", TargetDataset: "custom_factor", SubjectID: "BTC", Freq: "1m",
+		FactorsDir: "/tmp/factors", FactorSourcePaths: map[string]string{"bias": "/tmp/versions/bias.py"}, BarTime: time.Unix(0, 0).UTC(),
+	}
+	task := buildTask(cfg, []domain.FactorDef{{FactorID: "bias", Name: "bias", ParamsJSON: "[]"}})
+	if task.TargetDataset != "custom_factor" || task.Factors[0].SourcePath != "/tmp/versions/bias.py" {
 		t.Fatalf("buildTask() = %+v", task)
 	}
 }

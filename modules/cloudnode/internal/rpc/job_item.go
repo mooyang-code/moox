@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -239,16 +240,22 @@ func (s *Service) pollJobItemsWithActiveKV(ctx context.Context, req *pb.PollJobI
 		if errors.Is(err, jobstate.ErrNotFound) {
 			log.WarnContextf(ctx, "cloudnode_job_orphan space_id=%s job_item_id=%s stream_seq=%d action=term",
 				delivery.Message.SpaceID, delivery.Message.JobItemID, delivery.StreamSeq)
-			_ = s.executionQueue.Term(ctx, delivery.AckSubject)
+			if actionErr := deliveryActionError(ctx, delivery, "term", s.executionQueue.Term(ctx, delivery.AckSubject)); actionErr != nil {
+				return nil, actionErr
+			}
 			continue
 		}
 		if err != nil {
-			_ = s.executionQueue.Nak(ctx, delivery.AckSubject, time.Second)
+			if actionErr := deliveryActionError(ctx, delivery, "nak", s.executionQueue.Nak(ctx, delivery.AckSubject, time.Second)); actionErr != nil {
+				return nil, errors.Join(err, actionErr)
+			}
 			return nil, err
 		}
 		if state.IsTerminal() || state.Status == jobstate.StatusCanceled {
 			s.writeTerminalHistory(ctx, *state)
-			_ = s.executionQueue.Term(ctx, delivery.AckSubject)
+			if actionErr := deliveryActionError(ctx, delivery, "term", s.executionQueue.Term(ctx, delivery.AckSubject)); actionErr != nil {
+				return nil, actionErr
+			}
 			continue
 		}
 		ok, running, err := s.jobState.TryMarkRunning(ctx, jobstate.RunningRequest{
@@ -259,22 +266,36 @@ func (s *Service) pollJobItemsWithActiveKV(ctx context.Context, req *pb.PollJobI
 			StreamSeq:  delivery.StreamSeq,
 		})
 		if err != nil {
-			_ = s.executionQueue.Nak(ctx, delivery.AckSubject, time.Second)
+			if actionErr := deliveryActionError(ctx, delivery, "nak", s.executionQueue.Nak(ctx, delivery.AckSubject, time.Second)); actionErr != nil {
+				return nil, errors.Join(err, actionErr)
+			}
 			return nil, err
 		}
 		if !ok {
 			latest, getErr := s.jobState.Get(ctx, delivery.Message.SpaceID, delivery.Message.JobItemID)
 			if getErr == nil && latest.IsTerminal() {
 				s.writeTerminalHistory(ctx, *latest)
-				_ = s.executionQueue.Term(ctx, delivery.AckSubject)
+				if actionErr := deliveryActionError(ctx, delivery, "term", s.executionQueue.Term(ctx, delivery.AckSubject)); actionErr != nil {
+					return nil, actionErr
+				}
 				continue
 			}
-			_ = s.executionQueue.Nak(ctx, delivery.AckSubject, time.Second)
+			if actionErr := deliveryActionError(ctx, delivery, "nak", s.executionQueue.Nak(ctx, delivery.AckSubject, time.Second)); actionErr != nil {
+				return nil, actionErr
+			}
 			continue
 		}
 		out = append(out, delivery.Message.ToPolledJobItem(running.AttemptNo))
 	}
 	return out, nil
+}
+
+func deliveryActionError(ctx context.Context, delivery jobqueue.Delivery, action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	log.WarnContextf(ctx, "cloudnode delivery %s failed space_id=%s job_item_id=%s stream_seq=%d: %v", action, delivery.Message.SpaceID, delivery.Message.JobItemID, delivery.StreamSeq, err)
+	return fmt.Errorf("cloudnode delivery %s failed for job_item_id=%s: %w", action, delivery.Message.JobItemID, err)
 }
 
 func (s *Service) reportJobItemStatusWithActiveKV(ctx context.Context, req *pb.ReportJobItemStatusReq) error {

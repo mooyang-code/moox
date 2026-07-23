@@ -55,6 +55,7 @@ type StdioWorker struct {
 	in    io.WriteCloser
 	out   io.ReadCloser
 	state State
+	hello protocol.Hello
 	mu    sync.Mutex
 	logs  chan LogRecord
 }
@@ -124,6 +125,7 @@ func NewStdioWorker(ctx context.Context, cfg Config) (*StdioWorker, error) {
 		return nil, err
 	}
 	w.state = StateReady
+	w.hello = hello
 	return w, nil
 }
 
@@ -231,6 +233,11 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 	}
 }
 func (w *StdioWorker) State() State { w.mu.Lock(); defer w.mu.Unlock(); return w.state }
+func (w *StdioWorker) Hello() protocol.Hello {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.hello
+}
 func (w *StdioWorker) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

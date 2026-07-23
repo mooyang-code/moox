@@ -252,12 +252,6 @@ func TestRunnerInProgressHeartbeat(t *testing.T) {
 	}
 }
 
-type DeliveryHandlerFunc func(context.Context, *Delivery) HandlerResult
-
-func (f DeliveryHandlerFunc) Handle(ctx context.Context, delivery *Delivery) HandlerResult {
-	return f(ctx, delivery)
-}
-
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

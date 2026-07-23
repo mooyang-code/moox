@@ -231,7 +231,11 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, sched *sche
 func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
-		workerReady := runtimeExec != nil && runtimeExec.Status().Workers > 0
+		workerStatus := engine.WorkerPoolStatus{}
+		if runtimeExec != nil {
+			workerStatus = runtimeExec.Status()
+		}
+		workerReady := workerStatus.Ready && workerStatus.Workers > 0
 		schedulerReady := sched != nil
 		ready := databaseReady && workerReady && schedulerReady
 		state.SetReady(ready)
@@ -239,6 +243,9 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Servic
 		rsp.Details = map[string]any{
 			"database":        databaseReady,
 			"worker_ready":    workerReady,
+			"worker_version":  workerStatus.WorkerVersion,
+			"python_version":  workerStatus.PythonVersion,
+			"arrow_available": workerStatus.ArrowAvailable,
 			"scheduler_ready": schedulerReady,
 			"role":            cfg.Instance.Role,
 			"worker_count":    cfg.Engine.Workers,
@@ -457,6 +464,8 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 	return scheduler.Task{
 		FactorTask: engine.FactorTask{
 			TaskID:        deterministicTaskID(task),
+			FactorVersion: task.FactorVersion,
+			TargetRunID:   task.TargetRunID,
 			Kind:          domain.FactorKindTimeseries,
 			SpaceID:       task.SpaceID,
 			SourceDataset: task.SourceDataset,
@@ -467,8 +476,13 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 			LookbackBars:  lookback,
 			Factors:       specs,
 		},
-		TriggerType: "event",
-		FactorIDs:   append([]string(nil), task.FactorIDs...),
+		TriggerType: func() string {
+			if task.TriggerType != "" {
+				return task.TriggerType
+			}
+			return "event"
+		}(),
+		FactorIDs: append([]string(nil), task.FactorIDs...),
 	}, nil
 }
 
@@ -486,6 +500,9 @@ func deterministicTaskID(task trigger.Task) string {
 		_, _ = h.Write([]byte(fmt.Sprintf("%d:%s;", len(value), value)))
 	}
 	for _, value := range []string{
+		task.TriggerType,
+		task.FactorVersion,
+		task.TargetRunID,
 		task.SpaceID,
 		task.SourceDataset,
 		task.TargetDataset,

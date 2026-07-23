@@ -3,29 +3,78 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
 	"github.com/mooyang-code/moox/packages/pyruntime/pool"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/pyruntime/protocol"
-	"os/exec"
 )
 
 type RuntimePoolExecutor struct {
 	workers int
 	pool    *pool.Pool
 	arrow   bool
+	hello   protocol.Hello
 }
 
 func NewRuntimePoolExecutor(ctx context.Context, workers int, cfg process.Config) (*RuntimePoolExecutor, error) {
-	_ = ctx
 	if workers < 1 {
 		workers = 1
 	}
-	p := pool.New(workers, func(start context.Context) (process.Worker, error) { return process.NewStdioWorker(start, cfg) })
-	arrow := false
-	if cfg.PythonBin != "" {
-		arrow = exec.Command(cfg.PythonBin, "-c", "import pyarrow").Run() == nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return &RuntimePoolExecutor{workers: workers, pool: p, arrow: arrow}, nil
+	if cfg.PythonBin == "" {
+		cfg.PythonBin = "python3"
+	}
+	if err := validateRuntimeConfig(cfg); err != nil {
+		return nil, err
+	}
+	p := pool.New(workers, func(start context.Context) (process.Worker, error) { return process.NewStdioWorker(start, cfg) })
+	hello, err := p.Warmup(ctx)
+	if err != nil {
+		_ = p.Close()
+		return nil, err
+	}
+	arrow := false
+	arrow = exec.Command(cfg.PythonBin, "-c", "import pyarrow").Run() == nil
+	return &RuntimePoolExecutor{workers: workers, pool: p, arrow: arrow, hello: hello}, nil
+}
+
+func validateRuntimeConfig(cfg process.Config) error {
+	if _, err := exec.LookPath(cfg.PythonBin); err != nil {
+		return fmt.Errorf("factor python_bin %q is not executable: %w", cfg.PythonBin, err)
+	}
+	workerPath := filepath.Clean(cfg.WorkerPath)
+	if workerPath == "." || workerPath == "" {
+		return errors.New("factor python worker path is required")
+	}
+	if info, err := os.Stat(workerPath); err != nil || !info.Mode().IsRegular() {
+		if err == nil {
+			err = errors.New("not a regular file")
+		}
+		return fmt.Errorf("factor python worker path %q is invalid: %w", workerPath, err)
+	}
+	for _, flag := range []string{"--factors-dir", "--sections-dir"} {
+		for i := 0; i+1 < len(cfg.Args); i++ {
+			if cfg.Args[i] != flag {
+				continue
+			}
+			info, err := os.Stat(cfg.Args[i+1])
+			if err != nil || !info.IsDir() {
+				if err == nil {
+					err = errors.New("not a directory")
+				}
+				return fmt.Errorf("factor %s %q is invalid: %w", strings.TrimPrefix(flag, "--"), cfg.Args[i+1], err)
+			}
+		}
+	}
+	return nil
 }
 func (e *RuntimePoolExecutor) Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error) {
 	prepared := *task
@@ -87,7 +136,7 @@ func (e *RuntimePoolExecutor) Status() WorkerPoolStatus {
 	if e == nil {
 		return WorkerPoolStatus{}
 	}
-	return WorkerPoolStatus{Workers: e.workers}
+	return WorkerPoolStatus{Workers: e.workers, Ready: e.hello.WorkerVersion != "" && e.pool.Ready(), WorkerVersion: e.hello.WorkerVersion, PythonVersion: e.hello.PythonVersion, RuntimeEnvHash: e.hello.RuntimeEnvHash, ArrowAvailable: e.arrow}
 }
 func (e *RuntimePoolExecutor) Close() error {
 	if e == nil || e.pool == nil {

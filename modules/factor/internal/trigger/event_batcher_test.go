@@ -210,6 +210,21 @@ func TestEventBatcherGroupsByScopeAtMaxDataTime(t *testing.T) {
 	}
 }
 
+func TestEventBatcherMarksDataOlderThanClosedWindowAsLateRecompute(t *testing.T) {
+	start := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")})
+	batcher.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", start), start)
+	first := batcher.Flush(start.Add(time.Second))
+	if len(first) != 1 || first[0].LateData {
+		t.Fatalf("first task=%+v", first)
+	}
+	batcher.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", start.Add(-time.Minute)), start.Add(2*time.Second))
+	late := batcher.Flush(start.Add(3 * time.Second))
+	if len(late) != 1 || !late[0].LateData || late[0].LateDataPolicy != LateDataPolicyRecompute {
+		t.Fatalf("late task=%+v", late)
+	}
+}
+
 func TestEventBatcherHonorsIncludeModeSubjects(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 	d := NewEventBatcher(2*time.Second, []domain.FactorBinding{

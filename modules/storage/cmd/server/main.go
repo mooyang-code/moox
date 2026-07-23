@@ -17,6 +17,7 @@ import (
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -556,6 +557,7 @@ func registerRoleHealth(s *server.Server, instance string) error {
 		return errors.New("storage health server is unavailable")
 	}
 	state := storagehealth.New("storage", instance, "", "")
+	state.SnapshotFunc = storagehealth.SnapshotForRole(instance, observability.DefaultViewMetrics)
 	state.SetReady(true)
 	if err := storagehealth.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
 		return fmt.Errorf("register storage health: %w", err)

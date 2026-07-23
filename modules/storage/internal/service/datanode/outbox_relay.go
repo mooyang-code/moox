@@ -3,6 +3,8 @@ package datanode
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -27,6 +29,10 @@ type OutboxRelayOptions struct {
 	PollInterval time.Duration
 	BatchSize    int
 	Metrics      *observability.ViewMetrics
+	// DeleteOutbox is injectable for recovery tests. Production uses Pebble's
+	// delete operation, while tests can force a publish/delete split.
+	DeleteOutbox  func(context.Context, []uint64) error
+	ErrorReporter func(error)
 }
 
 // OutboxRelay is intentionally single-threaded. A publish failure stops the
@@ -57,6 +63,9 @@ func NewOutboxRelay(store *pebble.Store, publisher Publisher, opts OutboxRelayOp
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
 	}
+	if opts.DeleteOutbox == nil {
+		opts.DeleteOutbox = store.DeleteOutbox
+	}
 	return &OutboxRelay{store: store, publisher: publisher, options: opts, metrics: opts.Metrics, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}, nil
 }
 
@@ -69,6 +78,7 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 			defer ticker.Stop()
 			for {
 				if err := r.flush(ctx); err != nil {
+					r.report(err)
 					// Keep the failed entry for the next poll. There is no skip path.
 					select {
 					case <-time.After(r.options.PollInterval):
@@ -88,6 +98,17 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 			}
 		}()
 	})
+}
+
+func (r *OutboxRelay) report(err error) {
+	if err == nil {
+		return
+	}
+	if r.options.ErrorReporter != nil {
+		r.options.ErrorReporter(err)
+		return
+	}
+	log.Printf("storage outbox relay flush failed: %v", err)
 }
 
 func (r *OutboxRelay) Close() {
@@ -121,8 +142,7 @@ func (r *OutboxRelay) flush(ctx context.Context) error {
 		data, err := r.store.PrepareOutboxPublication(ctx, entry.ID, time.Now().UTC())
 		if err != nil {
 			if len(confirmed) > 0 {
-				_ = r.store.DeleteOutbox(ctx, confirmed)
-				_ = r.observeOutboxStats(ctx)
+				err = errors.Join(err, r.cleanupConfirmed(ctx, confirmed))
 			}
 			return err
 		}
@@ -130,8 +150,7 @@ func (r *OutboxRelay) flush(ctx context.Context) error {
 		if err != nil {
 			r.metrics.IncOutboxPublishError()
 			if len(confirmed) > 0 {
-				_ = r.store.DeleteOutbox(ctx, confirmed)
-				_ = r.observeOutboxStats(ctx)
+				err = errors.Join(err, r.cleanupConfirmed(ctx, confirmed))
 			}
 			return err
 		}
@@ -140,11 +159,25 @@ func (r *OutboxRelay) flush(ctx context.Context) error {
 		}
 		confirmed = append(confirmed, entry.ID)
 	}
-	err = r.store.DeleteOutbox(ctx, confirmed)
+	err = r.options.DeleteOutbox(ctx, confirmed)
 	if err == nil {
-		_ = r.observeOutboxStats(ctx)
+		err = r.observeOutboxStats(ctx)
 	}
 	return err
+}
+
+func (r *OutboxRelay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var result error
+	if err := r.options.DeleteOutbox(ctx, ids); err != nil {
+		result = errors.Join(result, fmt.Errorf("delete confirmed outbox entries: %w", err))
+	}
+	if err := r.observeOutboxStats(ctx); err != nil {
+		result = errors.Join(result, fmt.Errorf("observe outbox after partial cleanup: %w", err))
+	}
+	return result
 }
 
 func (r *OutboxRelay) observeOutboxStats(ctx context.Context) error {
@@ -152,11 +185,7 @@ func (r *OutboxRelay) observeOutboxStats(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	oldestAge := time.Duration(0)
-	if !stats.OldestEventAt.IsZero() {
-		oldestAge = time.Since(stats.OldestEventAt)
-	}
-	r.metrics.SetOutboxSnapshot(stats.Pending, oldestAge)
+	r.metrics.SetOutboxSnapshotAt(stats.Pending, stats.OldestEventAt)
 	return nil
 }
 

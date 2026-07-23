@@ -33,6 +33,34 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err := db.ApplySchema(factorschema.AllSQL()); err != nil {
 		return fmt.Errorf("apply factor schema: %w", err)
 	}
+	replayClaimed := false
+	if cfg.TargetRunID != "" && cfg.TaskID != "" {
+		claimed, completed, err := db.ClaimReplayTask(ctx, cfg.TaskID, cfg.TargetRunID)
+		if err != nil {
+			return fmt.Errorf("claim replay task: %w", err)
+		}
+		if !claimed {
+			if completed {
+				return json.NewEncoder(out).Encode(map[string]any{"ok": true, "skipped": true, "task_id": cfg.TaskID, "target_run_id": cfg.TargetRunID})
+			}
+			return fmt.Errorf("replay task %s is already running", cfg.TaskID)
+		}
+		replayClaimed = true
+		defer func() {
+			if replayClaimed {
+				_ = db.MarkReplayTask(context.Background(), cfg.TaskID, store.ReplayTaskFailed, "execution did not complete")
+			}
+		}()
+	}
+	markReplaySucceeded := func() error {
+		if replayClaimed {
+			if err := db.MarkReplayTask(ctx, cfg.TaskID, store.ReplayTaskSucceeded, ""); err != nil {
+				return err
+			}
+			replayClaimed = false
+		}
+		return nil
+	}
 
 	factorRepo := db.Factors()
 	factors, err := factorRepo.ListEnabledTimeseries(ctx)
@@ -95,6 +123,9 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	logRunOnce(ctx, task, domain.RunStatusSucceeded, "", result.ElapsedMS)
+	if err := markReplaySucceeded(); err != nil {
+		return fmt.Errorf("mark replay task succeeded: %w", err)
+	}
 	return json.NewEncoder(out).Encode(runOncePayload(task, domain.RunStatusSucceeded, len(factors), result.ElapsedMS))
 }
 
@@ -103,11 +134,18 @@ func buildTask(cfg cliConfig, factors []domain.FactorDef) *engine.FactorTask {
 	lookback := 0
 	for _, factor := range factors {
 		params := mustParseParams(factor.ParamsJSON)
+		sourcePath := factor.SourcePath
+		if override, ok := cfg.FactorSourcePaths[factor.FactorID]; ok {
+			sourcePath = override
+		}
+		if sourcePath == "" {
+			sourcePath = filepath.Join(cfg.FactorsDir, factor.Name+".py")
+		}
 		specs = append(specs, engine.FactorSpec{
 			FactorID:      factor.FactorID,
 			Name:          factor.Name,
 			SourceHash:    factor.SourceHash,
-			SourcePath:    filepath.Join(cfg.FactorsDir, factor.Name+".py"),
+			SourcePath:    sourcePath,
 			EstimatedMS:   int64(factor.AvgRuntimeMS),
 			Params:        params,
 			WritebackBars: factor.WritebackBars,
@@ -117,12 +155,23 @@ func buildTask(cfg cliConfig, factors []domain.FactorDef) *engine.FactorTask {
 			lookback = factor.LookbackBars
 		}
 	}
+	targetDataset := cfg.TargetDataset
+	if targetDataset == "" {
+		targetDataset = registry.ResultDataset(cfg.DatasetID)
+	}
 	return &engine.FactorTask{
-		TaskID:        fmt.Sprintf("manual-%d", time.Now().UnixNano()),
+		TaskID: func() string {
+			if cfg.TaskID != "" {
+				return cfg.TaskID
+			}
+			return fmt.Sprintf("manual-%d", time.Now().UnixNano())
+		}(),
+		FactorVersion: cfg.FactorVersion,
+		TargetRunID:   cfg.TargetRunID,
 		Kind:          "timeseries",
 		SpaceID:       cfg.SpaceID,
 		SourceDataset: cfg.DatasetID,
-		TargetDataset: registry.ResultDataset(cfg.DatasetID),
+		TargetDataset: targetDataset,
 		SubjectID:     cfg.SubjectID,
 		Freq:          cfg.Freq,
 		BarTime:       cfg.BarTime,

@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -402,6 +403,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 	if c == nil || c.pull == nil || c.store == nil {
 		return errors.New("host metrics consumer is not initialized")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
 		if !c.store.StorageReady() {
 			select {
@@ -411,19 +415,18 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		ds, err := c.pull.Fetch(ctx, 64)
-		for _, d := range ds {
-			c.handleDelivery(ctx, d)
-		}
-		if err != nil {
-			if isIdleFetchError(err) {
-				continue
-			}
-			if errors.Is(err, context.Canceled) || errors.Is(err, jetstream.ErrClosed) {
-				return nil
-			}
+		runner := jetstream.NewRunner(c.pull, c, jetstream.RunnerConfig{
+			BatchSize: 64,
+			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+				if ctx.Err() == nil {
+					log.WarnContextf(ctx, "monitor host metrics delivery failed: %v", err)
+				}
+			}),
+		})
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			return err
 		}
+		return nil
 	}
 }
 
@@ -431,28 +434,31 @@ func isIdleFetchError(err error) bool {
 	return errors.Is(err, nats.ErrTimeout)
 }
 
-func (c *Consumer) handleDelivery(ctx context.Context, d *jetstream.Delivery) {
+func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.HandlerResult {
 	if d == nil {
-		return
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("host metrics delivery is nil")}
 	}
 	metric, err := ValidateMessage(d.Message)
 	if err != nil {
 		if c.dlq != nil {
 			if publishErr := c.dlq.Publish(ctx, rejectionMessage(d, err.Error())); publishErr != nil {
-				_ = d.Nak(ctx, retryDelay(d.DeliveryCount))
-				return
+				return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(d.DeliveryCount), Err: errors.Join(err, fmt.Errorf("publish host metrics DLQ: %w", publishErr))}
 			}
 		}
-		_ = d.Term(ctx)
-		return
+		log.WarnContextf(ctx, "monitor host metric rejected message_id=%s: %v", d.RawMessageID, err)
+		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
 	if err := c.store.persist(ctx, d, metric); err != nil {
 		// Storage is transient from the consumer's perspective. NAK lets
 		// JetStream redeliver up to the durable consumer's MaxDeliver=3.
-		_ = d.Nak(ctx, retryDelay(d.DeliveryCount))
-		return
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(d.DeliveryCount), Err: err}
 	}
-	_ = d.Ack(ctx)
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+func (c *Consumer) handleDelivery(ctx context.Context, d *jetstream.Delivery) error {
+	result := c.Handle(ctx, d)
+	return errors.Join(result.Err, jetstream.ApplyHandlerResult(ctx, d, result))
 }
 
 func retryDelay(deliveryCount uint64) time.Duration {

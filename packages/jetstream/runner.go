@@ -39,6 +39,12 @@ type DeliveryHandler interface {
 	Handle(context.Context, *Delivery) HandlerResult
 }
 
+type DeliveryHandlerFunc func(context.Context, *Delivery) HandlerResult
+
+func (f DeliveryHandlerFunc) Handle(ctx context.Context, delivery *Delivery) HandlerResult {
+	return f(ctx, delivery)
+}
+
 // PullConsumerAPI is the fetch/close surface required by Runner. PullConsumer
 // implements it, while small fakes can be used by module tests.
 type PullConsumerAPI interface {

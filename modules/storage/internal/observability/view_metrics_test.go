@@ -40,6 +40,7 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 
 	delivery := &jetstream.Delivery{Message: &messagepb.MooxMessage{OccurredAt: timestamppb.New(time.Now().Add(-2 * time.Second))}}
 	metrics.AddConsumerLagMessages(1)
+	metrics.SetConsumerBound(true)
 	metrics.ObservePendingDelivery(delivery, time.Now())
 	metrics.ObserveLaneSubmit()
 	metrics.IncLaneActive()
@@ -53,6 +54,7 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 
 	snapshot := metrics.Snapshot()
 	assert.Equal(t, int64(1), snapshot.ConsumerLagMessages)
+	assert.True(t, snapshot.ConsumerBound)
 	assert.Equal(t, int64(1), snapshot.LaneActive)
 	assert.Equal(t, int64(3), snapshot.OutboxPendingEntries)
 	assert.Equal(t, 4*time.Second, snapshot.OutboxOldestAge)
@@ -65,7 +67,9 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.DecLaneActive()
 	metrics.CompletePendingDelivery(delivery, time.Now())
 	metrics.AddConsumerLagMessages(-1)
+	metrics.SetConsumerBound(false)
 	assert.Equal(t, int64(0), metrics.Snapshot().ConsumerLagMessages)
+	assert.False(t, metrics.Snapshot().ConsumerBound)
 	assert.Equal(t, int64(0), metrics.Snapshot().LaneActive)
 	assert.Equal(t, time.Duration(0), metrics.Snapshot().OldestPendingAge)
 
@@ -92,6 +96,15 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 		}
 	}
 	assert.Empty(t, wantNames)
+}
+
+func TestViewMetricsAgesOutboxFromOldestEventTimestamp(t *testing.T) {
+	metrics, err := NewViewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	metrics.SetOutboxSnapshotAt(1, time.Now().UTC().Add(-6*time.Minute))
+	snapshot := metrics.Snapshot()
+	assert.True(t, snapshot.OutboxObserved)
+	assert.GreaterOrEqual(t, snapshot.OutboxOldestAge, 6*time.Minute)
 }
 
 func TestOldestPendingEventAgeGrowsOnScrapeWithoutNewEvents(t *testing.T) {

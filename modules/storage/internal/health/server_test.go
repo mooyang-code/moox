@@ -1,12 +1,14 @@
 package health
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,4 +43,41 @@ func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
 	require.Equal(t, 200, rec.Code)
 	assert.True(t, strings.Contains(rec.Body.String(), "# HELP") || strings.Contains(rec.Body.String(), "# TYPE"))
 	assert.Contains(t, rec.Body.String(), "moox_storage_outbox_pending_entries 2")
+}
+
+func TestSnapshotForRole_ViewRequiresBoundConsumer(t *testing.T) {
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	state := New("storage", "storage-view", "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = SnapshotForRole("storage-view", metrics)
+
+	metrics.SetConsumerBound(false)
+	assert.False(t, state.Snapshot(context.Background()).Ready)
+	metrics.SetConsumerBound(true)
+	assert.True(t, state.Snapshot(context.Background()).Ready)
+}
+
+func TestSnapshotForRole_NodeRejectsOldOutbox(t *testing.T) {
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	state := New("storage", "storage-node", "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = SnapshotForRole("storage-node", metrics)
+
+	metrics.SetOutboxSnapshot(1, 6*time.Minute)
+	rsp := state.Snapshot(context.Background())
+	assert.False(t, rsp.Ready)
+	assert.Equal(t, false, rsp.Details["outbox_draining"])
+	metrics.SetOutboxSnapshot(0, 0)
+	assert.True(t, state.Snapshot(context.Background()).Ready)
+}
+
+func TestSnapshotForRoleWithOptionsUsesConfiguredThreshold(t *testing.T) {
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	state := New("storage", InstanceStorageNode, "", "")
+	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageNode, metrics, RoleOptions{OldestPendingThreshold: time.Second})
+	metrics.SetOutboxSnapshot(1, 2*time.Second)
+	assert.False(t, state.Snapshot(context.Background()).Ready)
 }

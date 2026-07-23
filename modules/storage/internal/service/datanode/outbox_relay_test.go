@@ -44,6 +44,17 @@ func (p *duplicatePublisher) PublishMessageWithAck(ctx context.Context, data []b
 	return &jetstream.PublishAck{Duplicate: true}, nil
 }
 
+type retryDuplicatePublisher struct {
+	testPublisher
+}
+
+func (p *retryDuplicatePublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
+	if err := p.PublishMessage(ctx, data); err != nil {
+		return nil, err
+	}
+	return &jetstream.PublishAck{Duplicate: p.calls > 1}, nil
+}
+
 func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
 	if err != nil {
@@ -137,5 +148,72 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 	expected := "# HELP moox_storage_outbox_duplicate_publish_total Storage outbox publishes acknowledged as duplicates.\n# TYPE moox_storage_outbox_duplicate_publish_total counter\nmoox_storage_outbox_duplicate_publish_total 1\n"
 	if err := testutil.GatherAndCompare(registry, strings.NewReader(expected), "moox_storage_outbox_duplicate_publish_total"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "db")
+	store, err := pebble.Open(pebble.Options{Path: storePath, NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &retryDuplicatePublisher{}
+	deleteErr := errors.New("simulated outbox delete failure")
+	firstDelete := true
+	firstMetrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstStore := store
+	firstRelay, err := NewOutboxRelay(firstStore, publisher, OutboxRelayOptions{Metrics: firstMetrics, DeleteOutbox: func(ctx context.Context, ids []uint64) error {
+		if firstDelete {
+			firstDelete = false
+			return deleteErr
+		}
+		return firstStore.DeleteOutbox(ctx, ids)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRelay.Flush(context.Background()); !errors.Is(err, deleteErr) {
+		t.Fatalf("first flush error=%v, want delete failure", err)
+	}
+	entries, err := firstStore.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("outbox after failed delete=%v err=%v", entries, err)
+	}
+
+	if err := firstStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = pebble.Open(pebble.Options{Path: storePath, NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	secondMetrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRelay, err := NewOutboxRelay(store, publisher, OutboxRelayOptions{Metrics: secondMetrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secondRelay.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outbox after restart=%v err=%v", entries, err)
+	}
+	if publisher.calls != 2 || secondMetrics.Snapshot().OutboxDuplicatePublishTotal != 1 {
+		t.Fatalf("calls=%d duplicate_metrics=%d, want one replay duplicate", publisher.calls, secondMetrics.Snapshot().OutboxDuplicatePublishTotal)
 	}
 }

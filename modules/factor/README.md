@@ -23,6 +23,9 @@ go run ./cmd/server
 go run ./cmd/cli init --db ./data/factor/factor.db
 go run ./cmd/cli import --db ./data/factor/factor.db --factors-dir ./factors --default-params 20,96
 go run ./cmd/cli run-once --space crypto --dataset binance_spot_kline --subject BTC-USDT --freq 1m --bar-time 2026-07-06T09:15:00Z
+# JSONL 每行：{"message_id":"...","received_at":"...","event":{...RowsUpserted protojson...}}
+go run ./cmd/cli replay --db ./data/factor/factor.db --factors-dir ./factors --input ./replay.jsonl --space crypto --dataset binance_spot_kline --start 2026-07-06T09:00:00Z --end 2026-07-06T10:00:00Z --factor-version <immutable-source-hash> --target-run-id run-42
+# factor_version 必须对应 factors/.versions/factor/<factor-name>/<version>/module.py。
 ```
 
 ## 目录结构

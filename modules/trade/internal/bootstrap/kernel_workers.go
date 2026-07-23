@@ -164,123 +164,95 @@ func advanceActiveRebalances(ctx context.Context, s *store.Store, e *command.Eng
 }
 
 func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	var pull *jetstream.PullConsumer
-	for ctx.Err() == nil {
-		if pull == nil {
-			p, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ProgressDurable, FilterSubject: "moox.trade.fill.received.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy})
-			if err != nil {
-				log.WarnContextf(ctx, "bind trade progress consumer: %v", err)
-				time.Sleep(time.Second)
-				continue
-			}
-			pull = p
+	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ProgressDurable, FilterSubject: "moox.trade.fill.received.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 16, "progress", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+		if err := advanceActiveRebalances(ctx, s, e); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
-		deliveries, err := pull.Fetch(ctx, 16)
-		if err != nil {
-			if err == nats.ErrTimeout {
-				continue
-			}
-			log.WarnContextf(ctx, "fetch trade progress: %v", err)
-			time.Sleep(time.Second)
-			continue
+		if delivery == nil || delivery.Message == nil {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
 		}
-		for _, delivery := range deliveries {
-			if err := advanceActiveRebalances(ctx, s, e); err != nil {
-				_ = delivery.Nak(ctx, time.Second)
-				continue
-			}
-			if _, err := s.RecordInbox(ctx, cfg.ProgressDurable, delivery.Message.MessageId, delivery.Message.Topic); err != nil {
-				_ = delivery.Nak(ctx, time.Second)
-				continue
-			}
-			_ = delivery.Ack(ctx)
+		if _, err := s.RecordInbox(ctx, cfg.ProgressDurable, delivery.Message.MessageId, delivery.Message.Topic); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
-	}
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	})
 }
 
 func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	var pull *jetstream.PullConsumer
-	for ctx.Err() == nil {
-		if pull == nil {
-			p, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ReconciliationDurable, FilterSubject: "moox.trade.reconciliation.requested.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy})
-			if err != nil {
-				log.WarnContextf(ctx, "bind trade reconciliation consumer: %v", err)
-				time.Sleep(time.Second)
-				continue
-			}
-			pull = p
+	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ReconciliationDurable, FilterSubject: "moox.trade.reconciliation.requested.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 8, "reconciliation", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+		if delivery == nil || delivery.Message == nil {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
 		}
-		deliveries, err := pull.Fetch(ctx, 8)
+		deliveryCtx := deliveryTraceContext(ctx, delivery)
+		started := time.Now()
+		var wrapped wrapperspb.BytesValue
+		var scope struct {
+			SpaceID   string `json:"space_id"`
+			AccountID string `json:"account_id"`
+			ChannelID string `json:"channel_id"`
+		}
+		err := proto.Unmarshal(delivery.Message.Payload, &wrapped)
+		if err == nil {
+			err = json.Unmarshal(wrapped.Value, &scope)
+		}
+		if err == nil && scope.SpaceID == "" {
+			err = errors.New("trade: reconciliation space is required")
+		}
+		if err == nil {
+			err = reconcileOrdersOnce(deliveryCtx, s, e, scope.SpaceID, scope.AccountID, scope.ChannelID)
+		}
+		telemetry.OperationLatency.WithLabelValues("reconcile").Observe(time.Since(started).Seconds())
 		if err != nil {
-			if err == nats.ErrTimeout {
-				continue
-			}
-			log.WarnContextf(ctx, "fetch trade reconciliation: %v", err)
-			time.Sleep(time.Second)
-			continue
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
-		for _, delivery := range deliveries {
-			deliveryCtx := deliveryTraceContext(ctx, delivery)
-			started := time.Now()
-			var wrapped wrapperspb.BytesValue
-			var scope struct {
-				SpaceID   string `json:"space_id"`
-				AccountID string `json:"account_id"`
-				ChannelID string `json:"channel_id"`
-			}
-			err := proto.Unmarshal(delivery.Message.Payload, &wrapped)
-			if err == nil {
-				err = json.Unmarshal(wrapped.Value, &scope)
-			}
-			if err == nil && scope.SpaceID == "" {
-				err = errors.New("trade: reconciliation space is required")
-			}
-			if err == nil {
-				err = reconcileOrdersOnce(deliveryCtx, s, e, scope.SpaceID, scope.AccountID, scope.ChannelID)
-			}
-			telemetry.OperationLatency.WithLabelValues("reconcile").Observe(time.Since(started).Seconds())
-			if err != nil {
-				_ = delivery.Nak(ctx, time.Second)
-				continue
-			}
-			if _, err = s.RecordInbox(deliveryCtx, cfg.ReconciliationDurable, delivery.Message.MessageId, delivery.Message.Topic); err != nil {
-				_ = delivery.Nak(ctx, time.Second)
-				continue
-			}
-			_ = delivery.Ack(ctx)
+		if _, err = s.RecordInbox(deliveryCtx, cfg.ReconciliationDurable, delivery.Message.MessageId, delivery.Message.Topic); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
-	}
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	})
 }
 
 func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	var pull *jetstream.PullConsumer
-	for ctx.Err() == nil {
-		if pull == nil {
-			p, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.RebalanceDurable, FilterSubject: "moox.trade.rebalance.requested.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy})
-			if err != nil {
-				log.WarnContextf(ctx, "bind trade rebalance consumer: %v", err)
-				time.Sleep(time.Second)
-				continue
-			}
-			pull = p
+	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.RebalanceDurable, FilterSubject: "moox.trade.rebalance.requested.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 16, "rebalance", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+		if err := handleRebalanceDelivery(ctx, delivery, s, e, cfg.RebalanceDurable); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
-		deliveries, err := pull.Fetch(ctx, 16)
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	})
+}
+
+func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jetstream.ConsumerRef, batch int, name string, handler jetstream.DeliveryHandlerFunc) {
+	for ctx.Err() == nil {
+		pull, err := client.BindPullConsumer(ctx, ref)
 		if err != nil {
-			if err == nats.ErrTimeout {
-				continue
-			}
-			log.WarnContextf(ctx, "fetch trade rebalance: %v", err)
+			log.WarnContextf(ctx, "bind trade %s consumer: %v", name, err)
 			time.Sleep(time.Second)
 			continue
 		}
-		for _, delivery := range deliveries {
-			if err := handleRebalanceDelivery(ctx, delivery, s, e, cfg.RebalanceDurable); err != nil {
-				_ = delivery.Nak(ctx, time.Second)
-				continue
-			}
-			_ = delivery.Ack(ctx)
+		runner := jetstream.NewRunner(pull, handler, jetstream.RunnerConfig{BatchSize: batch, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+			log.WarnContextf(ctx, "trade %s delivery failed: %v", name, err)
+		})})
+		err = runner.Run(ctx)
+		_ = pull.Close()
+		if ctx.Err() != nil {
+			return
 		}
+		if err != nil {
+			log.WarnContextf(ctx, "trade %s consumer stopped: %v", name, err)
+		}
+		time.Sleep(time.Second)
 	}
+}
+
+func logDeliveryActionError(ctx context.Context, delivery *jetstream.Delivery, action string, err error) {
+	if err == nil {
+		return
+	}
+	messageID := ""
+	if delivery != nil && delivery.Message != nil {
+		messageID = delivery.Message.MessageId
+	}
+	log.WarnContextf(ctx, "trade delivery %s failed message_id=%s: %v", action, messageID, err)
 }
 
 func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string) error {
@@ -367,34 +339,12 @@ func recoverOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine) e
 }
 
 func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	var pull *jetstream.PullConsumer
-	for ctx.Err() == nil {
-		if pull == nil {
-			p, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ExecutionDurable, FilterSubject: "moox.trade.execution.slice_ready.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 256, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy})
-			if err != nil {
-				log.WarnContextf(ctx, "bind trade execution consumer: %v", err)
-				time.Sleep(time.Second)
-				continue
-			}
-			pull = p
+	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ExecutionDurable, FilterSubject: "moox.trade.execution.slice_ready.v1", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 256, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 32, "execution", jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+		if err := handleExecutionDelivery(ctx, delivery, s, e, cfg.ExecutionDurable); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
-		ds, err := pull.Fetch(ctx, 32)
-		if err != nil {
-			if err == nats.ErrTimeout {
-				continue
-			}
-			log.WarnContextf(ctx, "fetch trade execution: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		for _, d := range ds {
-			if err := handleExecutionDelivery(ctx, d, s, e, cfg.ExecutionDurable); err != nil {
-				_ = d.Nak(ctx, time.Second)
-				continue
-			}
-			_ = d.Ack(ctx)
-		}
-	}
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	}))
 }
 
 func handleExecutionDelivery(ctx context.Context, d *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string) error {
