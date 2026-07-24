@@ -7,8 +7,13 @@ import (
 
 func TestHostMetricContract(t *testing.T) {
 	d := (&HostMetric{}).ProtoReflect().Descriptor()
-	if d.Fields().Len() != 1 || d.Fields().ByName("snapshot").Number() != 1 {
+	if d.Fields().Len() != 5 || d.Fields().ByName("snapshot").Number() != 5 {
 		t.Fatalf("HostMetric contract changed")
+	}
+	for name, number := range map[string]protoreflect.FieldNumber{"agent_id": 1, "hostname": 2, "boot_id": 3, "agent_version": 4} {
+		if field := d.Fields().ByName(protoreflect.Name(name)); field == nil || field.Number() != number {
+			t.Fatalf("field %s = %v, want %d", name, field, number)
+		}
 	}
 	if (&HostSnapshot{}).ProtoReflect().Descriptor().FullName() != "trpc.moox.hostagent.HostSnapshot" {
 		t.Fatalf("unexpected snapshot name")

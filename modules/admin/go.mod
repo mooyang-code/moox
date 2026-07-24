@@ -37,7 +37,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.1 // indirect
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -58,7 +57,6 @@ replace (
 	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
-	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob

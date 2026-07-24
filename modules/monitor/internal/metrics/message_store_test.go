@@ -3,7 +3,8 @@ package metrics
 import (
 	"context"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -13,7 +14,7 @@ func TestMetricMessageStoreNilGuards(t *testing.T) {
 	var store *MetricMessageStore
 	_, err := store.IsDuplicate(context.Background(), "msg")
 	require.Error(t, err)
-	_, err = store.CommitIngest(context.Background(), &messagepb.MooxMessage{MessageId: "m"}, nil)
+	_, err = store.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m"}, &metricspb.MetricReport{}, nil)
 	require.Error(t, err)
 
 	empty := NewMetricMessageStore(nil)
@@ -22,9 +23,9 @@ func TestMetricMessageStoreNilGuards(t *testing.T) {
 	require.Error(t, err)
 	_, err = empty.IsDuplicate(context.Background(), "id")
 	require.Error(t, err)
-	_, err = empty.CommitIngest(context.Background(), nil, nil)
+	_, err = empty.CommitIngest(context.Background(), nil, nil, nil)
 	require.Error(t, err)
-	_, err = empty.CommitIngest(context.Background(), &messagepb.MooxMessage{}, nil)
+	_, err = empty.CommitIngest(context.Background(), &eventpb.EventMessage{}, &metricspb.MetricReport{}, nil)
 	require.Error(t, err)
 	assert.Equal(t, empty.DedupeRetention.Hours(), float64(7*24))
 }

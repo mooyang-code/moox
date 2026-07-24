@@ -69,6 +69,59 @@ func TestInboxAndFillIdempotency(t *testing.T) {
 	}
 }
 
+func TestRecordTradingSignalIsAtomicAndIdempotent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	record := TradingSignalRecord{
+		SpaceID: "space", EventID: "event-1", SignalID: "signal-1", StrategyID: "strategy-1",
+		Symbol: "BTC-USDT", Side: "SIGNAL_SIDE_BUY", Action: "SIGNAL_ACTION_OPEN",
+		TargetPrice: "101.5", SignalTime: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), Tags: `{"source":"test"}`,
+	}
+	fresh, err := s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "moox.trading.signal.v1.space.subject", record)
+	require.NoError(t, err)
+	assert.True(t, fresh)
+	fresh, err = s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "moox.trading.signal.v1.space.subject", record)
+	require.NoError(t, err)
+	assert.False(t, fresh)
+
+	var count int64
+	require.NoError(t, s.db.Table("t_trade_signal_recommendations").Where("c_space_id=?", record.SpaceID).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+	var got struct {
+		SignalID    string `gorm:"column:c_signal_id"`
+		Action      string `gorm:"column:c_action"`
+		TargetPrice string `gorm:"column:c_target_price"`
+		Tags        string `gorm:"column:c_tags"`
+	}
+	require.NoError(t, s.db.Table("t_trade_signal_recommendations").Where("c_space_id=? AND c_signal_id=?", record.SpaceID, record.SignalID).Take(&got).Error)
+	assert.Equal(t, record.SignalID, got.SignalID)
+	assert.Equal(t, record.Action, got.Action)
+	assert.Equal(t, record.TargetPrice, got.TargetPrice)
+	assert.JSONEq(t, record.Tags, got.Tags)
+}
+
+func TestRecordTradingSignalTreatsSameSignalWithNewEventAsIdempotent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	record := TradingSignalRecord{
+		SpaceID: "space", EventID: "event-1", SignalID: "signal-1", StrategyID: "strategy-1",
+		Symbol: "BTC-USDT", Side: "SIGNAL_SIDE_BUY", Action: "SIGNAL_ACTION_OPEN",
+		SignalTime: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), Tags: `{}`,
+	}
+	fresh, err := s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "subject", record)
+	require.NoError(t, err)
+	require.True(t, fresh)
+
+	record.EventID = "event-2"
+	fresh, err = s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "subject", record)
+	require.NoError(t, err)
+	assert.True(t, fresh, "the new envelope was recorded in the inbox")
+
+	var count int64
+	require.NoError(t, s.db.Table("t_trade_signal_recommendations").Where("c_space_id=? AND c_signal_id=?", record.SpaceID, record.SignalID).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
 func TestEpochTimeAcceptsSecondsAndMilliseconds(t *testing.T) {
 	seconds := int64(1_700_000_000)
 	assert.Equal(t, seconds*1000, epochMillis(seconds))

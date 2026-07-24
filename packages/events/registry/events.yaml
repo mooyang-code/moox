@@ -1,9 +1,9 @@
 version: 1
 events:
-  - name: market.trade.received
+  - name: market.tick.received
     version: 1
-    payload: trpc.moox.market.TradeReceived
-    subject: moox.market.trade.received.v1.<space>.<subject>
+    payload: trpc.moox.market.Tick
+    subject: moox.market.tick.received.v1.<space>.<subject>
     stream: MOOX_MARKET
     partition_key: subject_id
     owner: collector
@@ -14,10 +14,101 @@ events:
     stream: MOOX_MARKET
     partition_key: subject_id
     owner: streamcalc
-  - name: storage.rows.upserted
+  - name: trading.signal
     version: 1
-    payload: trpc.moox.event.storage.RowsUpserted
-    subject: moox.storage.rows.upserted.v1.<space>.<subject>
+    payload: trpc.moox.trading.TradingSignal
+    subject: moox.trading.signal.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: strategy
+  - name: storage.dataset.rows.upserted
+    version: 1
+    payload: trpc.moox.storage.event.DatasetRowsUpserted
+    subject: moox.storage.dataset.rows.upserted.v1.<space>.<subject>
     stream: MOOX_STORAGE
     partition_key: subject_id
     owner: storage
+  - name: metrics.host.reported
+    version: 1
+    payload: trpc.moox.hostagent.HostMetric
+    subject: moox.metrics.host.reported.v1.<space>.<subject>
+    stream: MOOX_METRICS
+    partition_key: subject_id
+    owner: hostagent
+  - name: metrics.reported
+    version: 1
+    payload: trpc.moox.metrics.MetricReport
+    subject: moox.metrics.reported.v1.<space>.<subject>
+    stream: MOOX_METRICS
+    partition_key: subject_id
+    owner: monitor
+  - name: message.rejected
+    version: 1
+    payload: trpc.moox.dlq.RejectedMessage
+    subject: moox.dlq.message.rejected.v1.<space>.<subject>
+    stream: MOOX_DLQ
+    partition_key: subject_id
+    owner: eventbus
+  - name: strategy.output.accepted
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.strategy.output.accepted.v1.<space>.<subject>
+    stream: MOOX_STRATEGY
+    partition_key: subject_id
+    owner: strategy
+  - name: trade.order.intent.created
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.order.intent.created.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: trade.order.state.changed
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.order.state.changed.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: trade.execution.slice.ready
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.execution.slice.ready.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: trade.fill.received
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.fill.received.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: trade.rebalance.requested
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.rebalance.requested.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: trade.rebalance.completed
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.rebalance.completed.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: trade.reconciliation.requested
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.trade.reconciliation.requested.v1.<space>.<subject>
+    stream: MOOX_TRADE
+    partition_key: subject_id
+    owner: trade
+  - name: cloudnode.job.requested
+    version: 1
+    payload: google.protobuf.Struct
+    subject: moox.cloudnode.job.requested.v1.<space>.<subject>
+    stream: MOOX_CLOUDNODE_EXEC
+    partition_key: subject_id
+    owner: cloudnode

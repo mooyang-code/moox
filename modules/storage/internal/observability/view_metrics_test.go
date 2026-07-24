@@ -4,12 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -38,7 +39,8 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	_, err = NewViewMetrics(registry)
 	require.NoError(t, err, "re-registering the same metric names must reuse collectors")
 
-	delivery := &jetstream.Delivery{Message: &messagepb.MooxMessage{OccurredAt: timestamppb.New(time.Now().Add(-2 * time.Second))}}
+	raw, _ := proto.Marshal(&eventpb.EventMessage{OccurredAt: timestamppb.New(time.Now().Add(-2 * time.Second))})
+	delivery := &jetstream.Delivery{RawData: raw}
 	metrics.AddConsumerLagMessages(1)
 	metrics.SetConsumerBound(true)
 	metrics.ObservePendingDelivery(delivery, time.Now())
@@ -111,7 +113,8 @@ func TestOldestPendingEventAgeGrowsOnScrapeWithoutNewEvents(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)
 	require.NoError(t, err)
-	delivery := &jetstream.Delivery{Message: &messagepb.MooxMessage{OccurredAt: timestamppb.New(time.Now().Add(-50 * time.Millisecond))}}
+	raw, _ := proto.Marshal(&eventpb.EventMessage{OccurredAt: timestamppb.New(time.Now().Add(-50 * time.Millisecond))})
+	delivery := &jetstream.Delivery{RawData: raw}
 	metrics.ObservePendingDelivery(delivery, time.Now())
 	first := gatherGauge(t, registry, "moox_storage_view_oldest_pending_event_age_seconds")
 	time.Sleep(25 * time.Millisecond)

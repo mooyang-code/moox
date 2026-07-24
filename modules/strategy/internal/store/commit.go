@@ -102,6 +102,6 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 		if res.RowsAffected != 1 {
 			return ErrStateConflict
 		}
-		return tx.Table("t_strategy_outbox").Create(map[string]any{"c_message_id": task.RunID, "c_topic": "moox.strategy.action.accepted.v1", "c_payload": raw}).Error
+		return tx.Table("t_strategy_outbox").Create(map[string]any{"c_message_id": task.RunID, "c_topic": "moox.strategy.output.accepted.v1", "c_payload": raw}).Error
 	})
 }

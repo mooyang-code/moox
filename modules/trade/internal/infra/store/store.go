@@ -69,6 +69,15 @@ type FillRecord struct {
 	CreatedAt                                                                                      time.Time
 }
 
+// TradingSignalRecord is the durable recommendation fact consumed from the
+// governed TradingSignal event. It is intentionally not an order or fill.
+type TradingSignalRecord struct {
+	SpaceID, EventID, SignalID, StrategyID, Symbol, Side, Action string
+	TargetPrice, StopLossPrice, TakeProfitPrice                  string
+	SignalTime, ReceivedAt                                       time.Time
+	Tags                                                         string
+}
+
 type OrderQuery struct {
 	AccountID, ChannelID, Symbol string
 	States                       []string
@@ -630,6 +639,36 @@ func (t *Tx) UpdateOrder(v OrderRecord, expected uint64) error {
 func (t *Tx) InsertInbox(consumer, id, topic string) (bool, error) {
 	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_inbox(c_consumer,c_message_id,c_topic) VALUES(?,?,?)", consumer, id, topic)
 	return res.RowsAffected == 1, res.Error
+}
+
+func (t *Tx) InsertTradingSignal(record TradingSignalRecord) error {
+	if record.Tags == "" {
+		record.Tags = "{}"
+	}
+	if record.ReceivedAt.IsZero() {
+		record.ReceivedAt = time.Now().UTC()
+	}
+	// Signal IDs are the domain idempotency key. A producer may republish the
+	// same recommendation with a new event envelope ID, so duplicate signal
+	// rows are an idempotent success rather than a retryable database error.
+	return t.db.Exec(`INSERT OR IGNORE INTO t_trade_signal_recommendations
+ (c_space_id,c_event_id,c_signal_id,c_strategy_id,c_symbol,c_side,c_action,c_target_price,c_stop_loss_price,c_take_profit_price,c_signal_time,c_tags,c_received_at)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		record.SpaceID, record.EventID, record.SignalID, record.StrategyID, record.Symbol, record.Side, record.Action,
+		record.TargetPrice, record.StopLossPrice, record.TakeProfitPrice, record.SignalTime.UTC(), record.Tags, record.ReceivedAt.UTC()).Error
+}
+
+func (s *Store) RecordTradingSignal(ctx context.Context, consumer, messageID, topic string, record TradingSignalRecord) (bool, error) {
+	var fresh bool
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		var err error
+		fresh, err = tx.InsertInbox(consumer, messageID, topic)
+		if err != nil || !fresh {
+			return err
+		}
+		return tx.InsertTradingSignal(record)
+	})
+	return fresh, err
 }
 func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bool, error) {
 	var fresh bool

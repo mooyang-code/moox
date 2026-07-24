@@ -2,8 +2,6 @@ package hostmetrics
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -13,22 +11,20 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	Topic       = "moox.metrics.host.reported.v1"
-	ContentType = "application/x-protobuf; message=trpc.moox.hostagent.HostMetric"
-	Stream      = "MOOX_METRICS"
-	Durable     = "monitor_hostmetrics_ingest_v1"
-	SpaceID     = "moox_system"
-	DLQTopic    = "moox.dlq.message.rejected.v1"
+	Topic   = "moox.metrics.host.reported.v1.>"
+	Stream  = "MOOX_METRICS"
+	Durable = "monitor_hostmetrics_ingest_v1"
+	SpaceID = "moox_system"
 )
 
 var ErrInvalidHostMetric = errors.New("invalid host metric")
@@ -90,20 +86,20 @@ func (s *Store) StorageReady() bool { return s != nil && (s.ready == nil || s.re
 // sample tables are no longer created or read.
 func (s *Store) EnsureSchema() error { return nil }
 
-func ValidateMessage(msg *messagepb.MooxMessage) (*hostmetricpb.HostMetric, error) {
+func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error) {
 	if msg == nil {
 		return nil, errors.New("message is nil")
 	}
-	if msg.GetProtocolVersion() != 1 || msg.GetTopic() != Topic || msg.GetKind() != messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT || msg.GetContentType() != ContentType {
+	if msg.GetEventName() != events.MetricsHostReported.Name || msg.GetEventVersion() != events.MetricsHostReported.Version {
 		return nil, errors.New("host metric envelope contract mismatch")
 	}
-	if msg.GetSpaceId() != SpaceID || msg.GetSequence() != 0 {
+	if msg.GetSpaceId() != SpaceID || strings.TrimSpace(msg.GetSubjectId()) == "" {
 		return nil, errors.New("host metric space or sequence mismatch")
 	}
-	if parsed, err := uuid.Parse(msg.GetMessageId()); err != nil || parsed.Version() != 7 {
+	if parsed, err := uuid.Parse(msg.GetEventId()); err != nil || parsed.Version() != 7 {
 		return nil, errors.New("host metric message_id must be UUIDv7")
 	}
-	if msg.GetOccurredAt() == nil || msg.GetPublishedAt() == nil || !msg.GetOccurredAt().IsValid() || !msg.GetPublishedAt().IsValid() {
+	if msg.GetOccurredAt() == nil || !msg.GetOccurredAt().IsValid() {
 		return nil, errors.New("host metric timestamps are invalid")
 	}
 	now := time.Now().UTC()
@@ -111,8 +107,7 @@ func ValidateMessage(msg *messagepb.MooxMessage) (*hostmetricpb.HostMetric, erro
 	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
 		return nil, errors.New("host metric occurred_at is outside the accepted clock-skew window")
 	}
-	p := msg.GetProducer()
-	if p == nil || p.GetServiceName() != "moox-host-agent" || uuid.Validate(p.GetInstanceId()) != nil || strings.TrimSpace(p.GetNodeId()) == "" {
+	if uuid.Validate(msg.GetSubjectId()) != nil {
 		return nil, errors.New("host metric producer identity is invalid")
 	}
 	metric := new(hostmetricpb.HostMetric)
@@ -121,6 +116,9 @@ func ValidateMessage(msg *messagepb.MooxMessage) (*hostmetricpb.HostMetric, erro
 	}
 	if metric.GetSnapshot() == nil {
 		return nil, errors.New("host metric snapshot is missing")
+	}
+	if metric.GetAgentId() != msg.GetSubjectId() || metric.GetAgentId() == "" || metric.GetHostname() == "" {
+		return nil, errors.New("host metric identity is invalid")
 	}
 	if err := validateSnapshot(metric.GetSnapshot()); err != nil {
 		return nil, err
@@ -235,17 +233,21 @@ func (s *Store) Ingest(ctx context.Context, d *jetstream.Delivery) error {
 	if s == nil || d == nil {
 		return errors.New("host metric store or delivery is nil")
 	}
-	metric, err := ValidateMessage(d.Message)
+	decoded := events.DecodeDelivery(mustRegistry(), d)
+	if decoded.Err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidHostMetric, decoded.Err)
+	}
+	metric, err := ValidateMessage(decoded.Message)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidHostMetric, err)
 	}
-	if err := s.persist(ctx, d, metric); err != nil {
+	if err := s.persist(ctx, d, decoded.Message, metric); err != nil {
 		return err
 	}
 	return d.Ack(ctx)
 }
 
-func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, metric *hostmetricpb.HostMetric) error {
+func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, msg *eventpb.EventMessage, metric *hostmetricpb.HostMetric) error {
 	if s == nil {
 		return errors.New("host metric store is nil")
 	}
@@ -255,16 +257,14 @@ func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, metric *host
 	if s == nil || s.writer == nil {
 		return errors.New("host metric storage writer is not configured")
 	}
-	if d == nil || d.Message == nil || metric == nil || d.Message.GetProducer() == nil {
+	if d == nil || msg == nil || metric == nil {
 		return errors.New("host metric delivery is incomplete")
 	}
-	msg := d.Message
-	producer := msg.GetProducer()
-	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), producer.GetInstanceId(), msg.GetOccurredAt().AsTime(), msg.GetMessageId()); err != nil {
+	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), metric.GetAgentId(), msg.GetOccurredAt().AsTime(), msg.GetEventId()); err != nil {
 		return fmt.Errorf("write host metric snapshot: %w", err)
 	}
 	now := time.Now().UTC()
-	view := AgentView{AgentID: producer.GetInstanceId(), Hostname: producer.GetNodeId(), BootID: producer.GetBootId(), LastSeenAt: now.Format(time.RFC3339Nano), Snapshot: cloneSnapshot(metric.GetSnapshot())}
+	view := AgentView{AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(), LastSeenAt: now.Format(time.RFC3339Nano), Snapshot: cloneSnapshot(metric.GetSnapshot())}
 	s.mu.Lock()
 	if s.latest == nil {
 		s.latest = make(map[string]AgentView)
@@ -272,7 +272,7 @@ func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, metric *host
 	s.latest[view.AgentID] = view
 	s.mu.Unlock()
 	if s.alert != nil {
-		_ = s.alert.Evaluate(ctx, producer.GetInstanceId(), msg.GetMessageId(), metric.GetSnapshot(), msg.GetOccurredAt().AsTime())
+		_ = s.alert.Evaluate(ctx, metric.GetAgentId(), msg.GetEventId(), metric.GetSnapshot(), msg.GetOccurredAt().AsTime())
 	}
 	return nil
 }
@@ -355,7 +355,7 @@ type Consumer struct {
 // It is deliberately optional so unit tests and local memory-only runs can
 // use the same consumer without a second EventBus client.
 type DLQPublisher interface {
-	Publish(context.Context, *messagepb.MooxMessage) error
+	Publish(context.Context, *eventpb.EventMessage) error
 }
 
 type jetStreamDLQ struct{ client *jetstream.Client }
@@ -367,11 +367,19 @@ func NewDLQPublisher(client *jetstream.Client) DLQPublisher {
 	return jetStreamDLQ{client: client}
 }
 
-func (p jetStreamDLQ) Publish(ctx context.Context, msg *messagepb.MooxMessage) error {
+func (p jetStreamDLQ) Publish(ctx context.Context, msg *eventpb.EventMessage) error {
 	if p.client == nil {
 		return errors.New("host metric DLQ client is nil")
 	}
-	_, err := p.client.Publish(ctx, msg)
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	publisher, err := events.NewPublisher(p.client, registry)
+	if err != nil {
+		return err
+	}
+	_, err = publisher.PublishMessage(ctx, msg)
 	return err
 }
 
@@ -387,7 +395,7 @@ func bind(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPu
 	if client == nil || store == nil {
 		return nil, errors.New("host metrics client and store are required")
 	}
-	pull, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: Stream, Durable: Durable, FilterSubject: Topic, AckWait: 60 * time.Second, MaxDeliver: 3, MaxAckPending: 256, FetchMaxWait: time.Second})
+	pull, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: Stream, Durable: Durable, FetchMaxWait: time.Second, DeliverDecodeErrors: true})
 	if err != nil {
 		return nil, err
 	}
@@ -438,17 +446,21 @@ func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.
 	if d == nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("host metrics delivery is nil")}
 	}
-	metric, err := ValidateMessage(d.Message)
+	decoded := events.DecodeDelivery(mustRegistry(), d)
+	metric, err := ValidateMessage(decoded.Message)
+	if decoded.Err != nil {
+		err = decoded.Err
+	}
 	if err != nil {
 		if c.dlq != nil {
-			if publishErr := c.dlq.Publish(ctx, rejectionMessage(d, err.Error())); publishErr != nil {
+			if publishErr := c.dlq.Publish(ctx, rejectionEvent(d, err.Error())); publishErr != nil {
 				return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(d.DeliveryCount), Err: errors.Join(err, fmt.Errorf("publish host metrics DLQ: %w", publishErr))}
 			}
 		}
 		log.WarnContextf(ctx, "monitor host metric rejected message_id=%s: %v", d.RawMessageID, err)
 		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
-	if err := c.store.persist(ctx, d, metric); err != nil {
+	if err := c.store.persist(ctx, d, decoded.Message, metric); err != nil {
 		// Storage is transient from the consumer's perspective. NAK lets
 		// JetStream redeliver up to the durable consumer's MaxDeliver=3.
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(d.DeliveryCount), Err: err}
@@ -472,40 +484,19 @@ func retryDelay(deliveryCount uint64) time.Duration {
 	}
 }
 
-func rejectionMessage(delivery *jetstream.Delivery, reason string) *messagepb.MooxMessage {
-	now := timestamppb.Now()
-	id := "invalid-host-metric"
-	topic := ""
-	payload := []byte(nil)
-	if delivery != nil {
-		if delivery.RawMessageID != "" {
-			id = delivery.RawMessageID
-		}
-		topic = delivery.Subject
-		payload = append([]byte(nil), delivery.RawData...)
-		if delivery.Message != nil && delivery.Message.GetMessageId() != "" {
-			id = delivery.Message.GetMessageId()
-		}
+func rejectionEvent(delivery *jetstream.Delivery, reason string) *eventpb.EventMessage {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil
 	}
-	if id == "invalid-host-metric" {
-		sum := sha256.Sum256(append([]byte(topic+"\x00"), payload...))
-		id += "-" + hex.EncodeToString(sum[:8])
+	event, err := events.RejectedMessage(registry, delivery, reason, "moox-monitor", "hostmetrics")
+	if err != nil {
+		return nil
 	}
-	return &messagepb.MooxMessage{
-		ProtocolVersion: 1,
-		MessageId:       id + ".rejected",
-		Topic:           DLQTopic,
-		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
-		Producer:        &messagepb.Producer{ServiceName: "moox-monitor", InstanceId: "hostmetrics"},
-		OccurredAt:      now,
-		PublishedAt:     now,
-		ContentType:     "application/octet-stream",
-		MessageType:     "moox.monitor.rejected.v1",
-		Payload:         payload,
-		Attributes: map[string]string{
-			"rejection_reason":    reason,
-			"original_topic":      topic,
-			"original_message_id": id,
-		},
-	}
+	return event
+}
+
+func mustRegistry() *events.Registry {
+	registry, _ := events.DefaultRegistry()
+	return registry
 }

@@ -32,7 +32,7 @@ func TestEventBusManagementContract(t *testing.T) {
 			}
 		}
 	}
-	if field := (&TopicInfo{}).ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("kind")); field == nil {
-		t.Fatal("TopicInfo.kind is missing")
+	if field := (&TopicInfo{}).ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("event_name")); field == nil {
+		t.Fatal("TopicInfo.event_name is missing")
 	}
 }

@@ -35,8 +35,7 @@ func (f *fakePullConsumer) Close() error {
 }
 
 func TestRunnerStopsNormallyOnCancel(t *testing.T) {
-	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
-	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic()}
+	delivery := &jetstream.Delivery{RawMessageID: "m1", RawData: []byte("raw"), Subject: "topic"}
 	consumer := &fakePullConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}},
 		err:     nats.ErrTimeout,
@@ -55,8 +54,7 @@ func TestRunnerStopsNormallyOnCancel(t *testing.T) {
 }
 
 func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {
-	msg := fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline")
-	delivery := &jetstream.Delivery{Message: msg, RawData: []byte("raw"), Subject: msg.GetTopic(), DeliveryCount: 2}
+	delivery := &jetstream.Delivery{RawMessageID: "m1", RawData: []byte("raw"), Subject: "topic", DeliveryCount: 2}
 	consumer := &fakePullConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}, {}},
 		err:     nats.ErrTimeout,
@@ -83,11 +81,9 @@ func TestSleepContext(t *testing.T) {
 }
 
 func TestDeliveryAdapter(t *testing.T) {
-	msg := fixtureEnvelope(nil, "mid-1", "crypto_binance", "spot_kline")
 	d := deliveryAdapter{Delivery: &jetstream.Delivery{
-		Message: msg, RawData: []byte("raw"), Subject: "topic", StreamSeq: 9, DeliveryCount: 3,
+		RawMessageID: "mid-1", RawData: []byte("raw"), Subject: "topic", StreamSeq: 9, DeliveryCount: 3,
 	}}
-	assert.Equal(t, msg, d.Envelope())
 	assert.Equal(t, []byte("raw"), d.RawEnvelope())
 	assert.Equal(t, "mid-1", d.MessageID())
 	assert.Equal(t, "topic", d.Subject())

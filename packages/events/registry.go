@@ -3,12 +3,19 @@ package events
 import (
 	"embed"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 
+	"github.com/mooyang-code/moox/packages/dlqpb"
 	"github.com/mooyang-code/moox/packages/events/marketpb"
-	"github.com/mooyang-code/moox/packages/events/storagepb"
+	"github.com/mooyang-code/moox/packages/events/tradingpb"
+	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/structpb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,12 +28,31 @@ type EventType struct {
 }
 
 var (
-	MarketTradeReceived = EventType{Name: "market.trade.received", Version: 1}
-	MarketKlineClosed   = EventType{Name: "market.kline.closed", Version: 1}
-	StorageRowsUpserted = EventType{Name: "storage.rows.upserted", Version: 1}
+	TickReceived                 = EventType{Name: "market.tick.received", Version: 1}
+	MarketKlineClosed            = EventType{Name: "market.kline.closed", Version: 1}
+	TradingSignal                = EventType{Name: "trading.signal", Version: 1}
+	DatasetRowsUpserted          = EventType{Name: "storage.dataset.rows.upserted", Version: 1}
+	MetricsHostReported          = EventType{Name: "metrics.host.reported", Version: 1}
+	MetricsReported              = EventType{Name: "metrics.reported", Version: 1}
+	MessageRejected              = EventType{Name: "message.rejected", Version: 1}
+	StrategyOutputAccepted       = EventType{Name: "strategy.output.accepted", Version: 1}
+	TradeOrderIntentCreated      = EventType{Name: "trade.order.intent.created", Version: 1}
+	TradeOrderStateChanged       = EventType{Name: "trade.order.state.changed", Version: 1}
+	TradeExecutionSliceReady     = EventType{Name: "trade.execution.slice.ready", Version: 1}
+	TradeFillReceived            = EventType{Name: "trade.fill.received", Version: 1}
+	TradeRebalanceRequested      = EventType{Name: "trade.rebalance.requested", Version: 1}
+	TradeRebalanceCompleted      = EventType{Name: "trade.rebalance.completed", Version: 1}
+	TradeReconciliationRequested = EventType{Name: "trade.reconciliation.requested", Version: 1}
+	CloudJobRequested            = EventType{Name: "cloudnode.job.requested", Version: 1}
 )
 
-type EventSpec struct {
+var defaultRegistry struct {
+	once sync.Once
+	reg  *Registry
+	err  error
+}
+
+type EventSchema struct {
 	Name         string                `yaml:"name"`
 	Version      uint32                `yaml:"version"`
 	Payload      protoreflect.FullName `yaml:"payload"`
@@ -37,22 +63,26 @@ type EventSpec struct {
 }
 
 type registryFile struct {
-	Version uint32      `yaml:"version"`
-	Events  []EventSpec `yaml:"events"`
+	Version uint32        `yaml:"version"`
+	Events  []EventSchema `yaml:"events"`
 }
 
 type Registry struct {
-	byKey     map[string]EventSpec
-	payloads  map[protoreflect.FullName]func() proto.Message
-	byPayload map[protoreflect.FullName]EventSpec
+	byKey    map[string]EventSchema
+	payloads map[protoreflect.FullName]func() proto.Message
+	subjects map[string]SubjectTemplate
 }
 
 func DefaultRegistry() (*Registry, error) {
-	raw, err := defaultRegistryYAML.ReadFile("registry/events.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("read embedded event registry: %w", err)
-	}
-	return NewRegistry(raw)
+	defaultRegistry.once.Do(func() {
+		raw, err := defaultRegistryYAML.ReadFile("registry/events.yaml")
+		if err != nil {
+			defaultRegistry.err = fmt.Errorf("read embedded event registry: %w", err)
+			return
+		}
+		defaultRegistry.reg, defaultRegistry.err = NewRegistry(raw)
+	})
+	return defaultRegistry.reg, defaultRegistry.err
 }
 
 func NewRegistry(raw []byte) (*Registry, error) {
@@ -67,12 +97,12 @@ func NewRegistry(raw []byte) (*Registry, error) {
 		return nil, fmt.Errorf("event registry must contain events")
 	}
 	r := &Registry{
-		byKey:     make(map[string]EventSpec, len(file.Events)),
-		payloads:  payloadFactories(),
-		byPayload: make(map[protoreflect.FullName]EventSpec, len(file.Events)),
+		byKey:    make(map[string]EventSchema, len(file.Events)),
+		payloads: payloadFactories(),
+		subjects: make(map[string]SubjectTemplate, len(file.Events)),
 	}
 	for _, spec := range file.Events {
-		if err := validateSpec(spec); err != nil {
+		if err := validateSchema(spec); err != nil {
 			return nil, err
 		}
 		if _, ok := r.payloads[spec.Payload]; !ok {
@@ -82,16 +112,37 @@ func NewRegistry(raw []byte) (*Registry, error) {
 		if _, ok := r.byKey[key]; ok {
 			return nil, fmt.Errorf("duplicate event %s", key)
 		}
-		if existing, ok := r.byPayload[spec.Payload]; ok && existing.Name != spec.Name {
-			return nil, fmt.Errorf("payload %q is assigned to both %q and %q", spec.Payload, existing.Name, spec.Name)
-		}
 		r.byKey[key] = spec
-		r.byPayload[spec.Payload] = spec
+		template, err := NewSubjectTemplate(spec.Subject)
+		if err != nil {
+			return nil, fmt.Errorf("event %q subject: %w", spec.Name, err)
+		}
+		r.subjects[key] = template
 	}
 	return r, nil
 }
 
-func validateSpec(spec EventSpec) error {
+// Schemas returns a stable snapshot of all registered event schemas.
+// EventBus uses it to validate topology coverage without maintaining a second
+// hard-coded list of governed events.
+func (r *Registry) Schemas() []EventSchema {
+	if r == nil {
+		return nil
+	}
+	out := make([]EventSchema, 0, len(r.byKey))
+	for _, spec := range r.byKey {
+		out = append(out, spec)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Version < out[j].Version
+	})
+	return out
+}
+
+func validateSchema(spec EventSchema) error {
 	if strings.TrimSpace(spec.Name) == "" || strings.ContainsAny(spec.Name, " \t\r\n") {
 		return fmt.Errorf("event name %q is invalid", spec.Name)
 	}
@@ -118,15 +169,20 @@ func validateSpec(spec EventSpec) error {
 
 func payloadFactories() map[protoreflect.FullName]func() proto.Message {
 	return map[protoreflect.FullName]func() proto.Message{
-		"trpc.moox.market.TradeReceived": func() proto.Message { return &marketpb.TradeReceived{} },
-		"trpc.moox.market.KlineClosed":   func() proto.Message { return &marketpb.KlineClosed{} },
-		"trpc.moox.event.storage.RowsUpserted": func() proto.Message { return &storagepb.RowsUpserted{} },
+		"trpc.moox.market.Tick":                       func() proto.Message { return &marketpb.Tick{} },
+		"trpc.moox.market.KlineClosed":                func() proto.Message { return &marketpb.KlineClosed{} },
+		"trpc.moox.trading.TradingSignal":             func() proto.Message { return &tradingpb.TradingSignal{} },
+		"trpc.moox.storage.event.DatasetRowsUpserted": func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
+		"trpc.moox.hostagent.HostMetric":              func() proto.Message { return &hostmetricpb.HostMetric{} },
+		"trpc.moox.metrics.MetricReport":              func() proto.Message { return &metricspb.MetricReport{} },
+		"trpc.moox.dlq.RejectedMessage":               func() proto.Message { return &dlqpb.RejectedMessage{} },
+		"google.protobuf.Struct":                      func() proto.Message { return &structpb.Struct{} },
 	}
 }
 
-func (r *Registry) Spec(event EventType) (EventSpec, bool) {
+func (r *Registry) Schema(event EventType) (EventSchema, bool) {
 	if r == nil {
-		return EventSpec{}, false
+		return EventSchema{}, false
 	}
 	spec, ok := r.byKey[eventKey(event)]
 	return spec, ok
@@ -140,12 +196,31 @@ func (r *Registry) PayloadFactory(name protoreflect.FullName) (func() proto.Mess
 	return factory, ok
 }
 
-func (r *Registry) EventForPayload(name protoreflect.FullName) (EventSpec, bool) {
+// RenderSubject renders a registered event's subject using the cached
+// validated template.
+func (r *Registry) RenderSubject(event EventType, spaceID, subjectID string) (string, error) {
 	if r == nil {
-		return EventSpec{}, false
+		return "", fmt.Errorf("event registry is nil")
 	}
-	spec, ok := r.byPayload[name]
-	return spec, ok
+	template, ok := r.subjects[eventKey(event)]
+	if !ok {
+		return "", fmt.Errorf("event %s is not registered", eventKey(event))
+	}
+	return template.Render(spaceID, subjectID)
+}
+
+// FamilyPattern returns the governed wildcard subject for an event. Keeping
+// this derivation with the validated subject template prevents topology code
+// from having to duplicate placeholder parsing rules.
+func (r *Registry) FamilyPattern(event EventType) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("event registry is nil")
+	}
+	template, ok := r.subjects[eventKey(event)]
+	if !ok {
+		return "", fmt.Errorf("event %s is not registered", eventKey(event))
+	}
+	return template.FamilyPattern(), nil
 }
 
 func (r *Registry) Validate() error {

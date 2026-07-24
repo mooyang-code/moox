@@ -109,9 +109,11 @@ package-skill:
 
 proto:
 	$(MAKE) -C packages/commonpb all
-	$(MAKE) -C packages/messagepb all
 	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C packages/hostmetricpb all
+	$(MAKE) -C packages/dlqpb all
+	$(MAKE) -C packages/storagepb generate
+	$(MAKE) -C packages/events all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all

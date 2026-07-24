@@ -609,7 +609,7 @@ func (q *flakyPublishQueue) Publish(_ context.Context, item *pb.JobItem) (*jobqu
 	}
 	return &jobqueue.PublishResult{
 		Created:  true,
-		Subject:  "moox.cloudnode.exec.v1.jobitem.s.crypto.pkg.collector-scf.type.collect_kline",
+		Subject:  "moox.cloudnode.job.requested.v1.crypto.job-item-1",
 		Stream:   jobqueue.DefaultExecStream,
 		Sequence: uint64(q.publishes),
 	}, nil

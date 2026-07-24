@@ -9,20 +9,15 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 )
 
 type Delivery interface {
-	Envelope() *messagepb.MooxMessage
 	RawEnvelope() []byte
 	MessageID() string
 	Subject() string
 	StreamSequence() uint64
 	DeliveryCount() uint64
-	DecodeError() error
-	ContentType() string
 	Ack(context.Context) error
 	Nak(context.Context, time.Duration) error
 	InProgress(context.Context) error
@@ -30,11 +25,7 @@ type Delivery interface {
 }
 
 type DecoderAPI interface {
-	Decode(*messagepb.MooxMessage) (domain.EventBatch, Decision, error)
-}
-
-type EventDecoderAPI interface {
-	DecodeEvent([]byte, string) (domain.EventBatch, Decision, error)
+	DecodeEvent([]byte, string, string) (domain.EventBatch, Decision, error)
 }
 type Journal interface {
 	Append(context.Context, domain.EventBatch) (journal.AppendResult, error)
@@ -83,20 +74,10 @@ func (h *Handler) HandleDecision(ctx context.Context, delivery Delivery) jetstre
 	if delivery == nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("delivery is nil")}
 	}
-	if decodeErr := delivery.DecodeError(); decodeErr != nil {
-		return h.reject(ctx, delivery, decodeErr)
+	if delivery.RawEnvelope() == nil {
+		return h.reject(ctx, delivery, errors.New("archive raw event is empty"))
 	}
-	var batch domain.EventBatch
-	var decision Decision
-	var decodeErr error
-	if eventDecoder, ok := h.decoder.(EventDecoderAPI); ok && delivery.RawEnvelope() != nil && delivery.Envelope() == nil {
-		if delivery.ContentType() != events.ContentType {
-			return h.reject(ctx, delivery, fmt.Errorf("unexpected event content type %q", delivery.ContentType()))
-		}
-		batch, decision, decodeErr = eventDecoder.DecodeEvent(delivery.RawEnvelope(), delivery.Subject())
-	} else {
-		batch, decision, decodeErr = h.decoder.Decode(delivery.Envelope())
-	}
+	batch, decision, decodeErr := h.decoder.DecodeEvent(delivery.RawEnvelope(), delivery.Subject(), delivery.MessageID())
 	if decision == DecisionIgnore {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}

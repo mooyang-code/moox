@@ -61,22 +61,14 @@ func SubjectToken(raw string) string {
 	return token + "_" + hex.EncodeToString(sum[:])[:16]
 }
 
-// ExecSubject returns the exact subject used for one executable JobItem message.
-func ExecSubject(cfg NamingConfig, spaceID, codePackageID, jobType string) string {
-	prefix := subjectPrefix(cfg)
-	return prefix + ".exec.v1.jobitem.s." + SubjectToken(spaceID) +
-		".pkg." + SubjectToken(codePackageID) +
-		".type." + SubjectToken(jobType)
-}
-
 // ExecFilterSubject returns the consumer filter subject for a node and job type.
 func ExecFilterSubject(cfg NamingConfig, spaceID, codePackageID, jobType string) string {
-	return ExecSubject(cfg, spaceID, codePackageID, jobType)
+	return "moox.cloudnode.job.requested.v1.>"
 }
 
 // ExecStreamSubject returns the wildcard subject configured on the execution stream.
 func ExecStreamSubject(cfg NamingConfig) string {
-	return subjectPrefix(cfg) + ".exec.v1.>"
+	return "moox.cloudnode.>"
 }
 
 // ConsumerName returns a durable consumer name for a specific executable route.

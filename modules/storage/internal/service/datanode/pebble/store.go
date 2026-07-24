@@ -194,7 +194,7 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			if err := proto.Unmarshal(payload, newEnvelope); err != nil {
 				return nil, fmt.Errorf("unmarshal rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err)
 			}
-			if err := validateRowsUpsertedEvent(newEnvelope, ""); err != nil {
+			if err := validateDatasetRowsUpsertedEvent(newEnvelope, ""); err != nil {
 				return nil, fmt.Errorf("validate rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err)
 			}
 			if newEnvelope.GetSpaceId() != group.spaceID || newEnvelope.GetSubjectId() != group.datasetID {
@@ -532,7 +532,7 @@ func (s *Store) PrepareOutboxPublication(ctx context.Context, id uint64, now tim
 	if err := proto.Unmarshal(raw, message); err != nil {
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
-	if err := validateRowsUpsertedEvent(message, ""); err != nil {
+	if err := validateDatasetRowsUpsertedEvent(message, ""); err != nil {
 		return nil, fmt.Errorf("validate outbox event %d: %w", id, err)
 	}
 	return raw, nil

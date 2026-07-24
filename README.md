@@ -42,7 +42,7 @@ MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点�
 ## EventBus 与指标监控
 
 `moox-eventbus` 是唯一的生产 NATS JetStream 所有者。Storage、CloudNode、Factor、Strategy
-和各 tRPC 服务通过统一 `MooxMessage` 直接连接 EventBus；发布包不会携带
+和各 tRPC 服务通过统一 `EventMessage` 直接连接 EventBus；发布包不会携带
 JetStream 运行态数据。部署启动顺序为 EventBus -> Storage -> Metadata
 `metadata apply` 预检 -> Monitor -> 其他业务服务。
 

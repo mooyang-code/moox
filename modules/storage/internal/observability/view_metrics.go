@@ -7,8 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/protobuf/proto"
 )
 
 // ViewMetrics contains only low-cardinality projection and delivery metrics.
@@ -25,6 +27,7 @@ type ViewMetrics struct {
 	deliveryDuration            prometheus.Histogram
 	ackErrorsTotal              prometheus.Counter
 	inProgressErrorsTotal       prometheus.Counter
+	retryExhaustedTotal         prometheus.Counter
 	laneActive                  prometheus.Gauge
 	outboxPendingEntries        prometheus.Gauge
 	outboxOldestAge             prometheus.Gauge
@@ -41,6 +44,7 @@ type ViewMetrics struct {
 	oldestPendingAgeSnapshot    atomic.Int64
 	ackErrorsSnapshot           atomic.Int64
 	inProgressErrorsSnapshot    atomic.Int64
+	retryExhaustedSnapshot      atomic.Int64
 	outboxPublishErrorsSnapshot atomic.Int64
 	outboxDuplicateSnapshot     atomic.Int64
 	pendingMu                   sync.Mutex
@@ -60,6 +64,7 @@ type ViewMetricsSnapshot struct {
 	OldestPendingAge            time.Duration
 	AckErrorsTotal              int64
 	InProgressErrorsTotal       int64
+	RetryExhaustedTotal         int64
 	OutboxPublishErrorsTotal    int64
 	OutboxDuplicatePublishTotal int64
 }
@@ -108,6 +113,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		inProgressErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "in_progress_errors_total",
 			Help: "Storage view InProgress errors.",
+		}),
+		retryExhaustedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "retry_exhausted_total",
+			Help: "Storage view deliveries that reached the client-side retry limit.",
 		}),
 		laneActive: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "lane_active",
@@ -167,6 +176,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.inProgressErrorsTotal, err = registerOrReuse(registerer, metrics.inProgressErrorsTotal); err != nil {
+		return nil, err
+	}
+	if metrics.retryExhaustedTotal, err = registerOrReuse(registerer, metrics.retryExhaustedTotal); err != nil {
 		return nil, err
 	}
 	if metrics.laneActive, err = registerOrReuse(registerer, metrics.laneActive); err != nil {
@@ -286,10 +298,9 @@ func (m *ViewMetrics) ObservePendingDelivery(delivery *jetstream.Delivery, now t
 		now = time.Now().UTC()
 	}
 	eventAt := now
-	if delivery.Message != nil {
-		if occurred := delivery.Message.GetOccurredAt(); occurred != nil && occurred.CheckValid() == nil {
-			eventAt = occurred.AsTime()
-		}
+	message := new(eventpb.EventMessage)
+	if err := proto.Unmarshal(delivery.RawData, message); err == nil && message.GetOccurredAt() != nil && message.GetOccurredAt().CheckValid() == nil {
+		eventAt = message.GetOccurredAt().AsTime()
 	}
 	m.pendingMu.Lock()
 	m.pendingDeliveries[delivery] = eventAt
@@ -377,6 +388,13 @@ func (m *ViewMetrics) IncInProgressError() {
 	if m != nil {
 		m.inProgressErrorsTotal.Inc()
 		m.inProgressErrorsSnapshot.Add(1)
+	}
+}
+
+func (m *ViewMetrics) IncRetryExhausted() {
+	if m != nil {
+		m.retryExhaustedTotal.Inc()
+		m.retryExhaustedSnapshot.Add(1)
 	}
 }
 
@@ -479,6 +497,7 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 		OldestPendingAge:            oldestPendingAge,
 		AckErrorsTotal:              m.ackErrorsSnapshot.Load(),
 		InProgressErrorsTotal:       m.inProgressErrorsSnapshot.Load(),
+		RetryExhaustedTotal:         m.retryExhaustedSnapshot.Load(),
 		OutboxPublishErrorsTotal:    m.outboxPublishErrorsSnapshot.Load(),
 		OutboxDuplicatePublishTotal: m.outboxDuplicateSnapshot.Load(),
 	}

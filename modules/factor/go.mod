@@ -3,7 +3,6 @@ module github.com/mooyang-code/moox/modules/factor
 go 1.25.0
 
 require (
-	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
@@ -12,11 +11,13 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
+	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/transinfo-blocker v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
@@ -27,7 +28,6 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/google/go-tpm v0.9.6 // indirect
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -46,7 +46,6 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
-replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
@@ -126,3 +125,5 @@ require (
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb

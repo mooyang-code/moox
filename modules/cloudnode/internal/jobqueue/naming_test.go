@@ -7,18 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestExecSubjectUsesCloudNodePrefix(t *testing.T) {
-	cfg := NamingConfig{SubjectPrefix: "moox.cloudnode"}
-
-	got := ExecSubject(cfg, "crypto", "moox-collector_dev", "collect.kline")
-	if !strings.HasPrefix(got, "moox.cloudnode.exec.v1.jobitem.s.crypto_") || !strings.Contains(got, ".pkg.moox-collector_dev_") || !strings.Contains(got, ".type.collect_kline_") {
-		t.Fatalf("ExecSubject() = %q, want readable hashed route tokens", got)
-	}
-	if strings.HasPrefix(got, "moox.storage.") {
-		t.Fatalf("exec subject must not use storage prefix: %s", got)
-	}
-}
-
 func TestTokenBoundsLongValues(t *testing.T) {
 	raw := strings.Repeat("A", 80)
 
@@ -53,10 +41,9 @@ func TestValidateNamingRejectsStoragePrefix(t *testing.T) {
 func TestNamingHelpers_ShouldBuildSubjectsAndConsumers(t *testing.T) {
 	cfg := NamingConfig{SubjectPrefix: "moox.cloudnode"}
 	filter := ExecFilterSubject(cfg, "crypto", "pkg-a", "collect.kline")
-	assert.Contains(t, filter, "moox.cloudnode.exec.v1.jobitem.s.")
-	assert.Contains(t, filter, "collect_kline")
+	assert.Equal(t, "moox.cloudnode.job.requested.v1.>", filter)
 	stream := ExecStreamSubject(cfg)
-	assert.Equal(t, "moox.cloudnode.exec.v1.>", stream)
+	assert.Equal(t, "moox.cloudnode.>", stream)
 	name := ConsumerName("crypto", "pkg-a", "collect.kline")
 	assert.True(t, strings.HasPrefix(name, "cn_exec_"))
 }

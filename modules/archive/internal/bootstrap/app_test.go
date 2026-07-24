@@ -66,7 +66,7 @@ func TestAppRunBecomesReadyWithEmbeddedNATS(t *testing.T) {
 	t.Cleanup(func() { nc.Close() })
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	const storageSubject = "moox.storage.rows_upserted.v1.>"
+	const storageSubject = "moox.storage.dataset.rows.upserted.v1.>"
 	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.Archive.EventBus.Stream, Subjects: []string{storageSubject}, Storage: nats.FileStorage})
 	require.NoError(t, err)
 	_, err = js.AddConsumer(cfg.Archive.EventBus.Stream, &nats.ConsumerConfig{

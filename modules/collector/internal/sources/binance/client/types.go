@@ -24,6 +24,57 @@ type CandleStick struct {
 	TradeCount  int64  // 成交笔数
 }
 
+// RecentTrade is the common JSON shape returned by Binance spot and futures
+// recent-trade endpoints.
+type RecentTrade struct {
+	ID         int64  `json:"id"`
+	Price      string `json:"price"`
+	Quantity   string `json:"qty"`
+	TradeTime  int64  `json:"time"`
+	BuyerMaker bool   `json:"isBuyerMaker"`
+}
+
+func (t RecentTrade) ToTrade() (*exchange.Trade, error) {
+	price := common.NewDecimal(t.Price)
+	if _, err := price.Float64(); err != nil {
+		return nil, fmt.Errorf("trade price: %w", err)
+	}
+	quantity := common.NewDecimal(t.Quantity)
+	if _, err := quantity.Float64(); err != nil {
+		return nil, fmt.Errorf("trade quantity: %w", err)
+	}
+	if t.ID <= 0 || t.TradeTime <= 0 {
+		return nil, fmt.Errorf("trade id and time are required")
+	}
+	return &exchange.Trade{ID: t.ID, Price: price, Quantity: quantity, TradeTime: time.UnixMilli(t.TradeTime).UTC(), BuyerMaker: t.BuyerMaker}, nil
+}
+
+// AggregateTrade is the public aggregate-trade shape returned by Binance
+// spot and USD-M futures. It is the cursorable public REST source used by the
+// Tick collector when a WebSocket feed is unavailable.
+type AggregateTrade struct {
+	ID         int64  `json:"a"`
+	Price      string `json:"p"`
+	Quantity   string `json:"q"`
+	TradeTime  int64  `json:"T"`
+	BuyerMaker bool   `json:"m"`
+}
+
+func (t AggregateTrade) ToTrade() (*exchange.Trade, error) {
+	price := common.NewDecimal(t.Price)
+	if _, err := price.Float64(); err != nil {
+		return nil, fmt.Errorf("aggregate trade price: %w", err)
+	}
+	quantity := common.NewDecimal(t.Quantity)
+	if _, err := quantity.Float64(); err != nil {
+		return nil, fmt.Errorf("aggregate trade quantity: %w", err)
+	}
+	if t.ID <= 0 || t.TradeTime <= 0 {
+		return nil, fmt.Errorf("aggregate trade id and time are required")
+	}
+	return &exchange.Trade{ID: t.ID, Price: price, Quantity: quantity, TradeTime: time.UnixMilli(t.TradeTime).UTC(), BuyerMaker: t.BuyerMaker}, nil
+}
+
 // UnmarshalJSON 自定义 JSON 解析（处理数组格式）
 func (c *CandleStick) UnmarshalJSON(data []byte) error {
 	var raw []json.RawMessage

@@ -12,21 +12,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
-)
-
-const (
-	SnapshotContentType = "application/vnd.moox.metrics.snapshot+protobuf"
-	SnapshotTopic       = DefaultTopic
 )
 
 var (
@@ -45,7 +39,7 @@ func init() {
 }
 
 type Publisher interface {
-	Publish(context.Context, *messagepb.MooxMessage, ...jetstream.PublishOption) (*jetstream.PublishAck, error)
+	Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
 
 type Connector func(context.Context, Config) (Publisher, error)
@@ -106,29 +100,11 @@ func (h *Handler) Handle(ctx context.Context) error {
 	}
 	seq := h.sequence.Add(1)
 	messageID := fmt.Sprintf("%s-%020d", h.bootID, seq)
-	payload, err := proto.Marshal(snapshot)
-	if err != nil {
-		return h.reportError(ctx, fmt.Errorf("marshal metric snapshot: %w", err))
-	}
-	msg := &messagepb.MooxMessage{
-		ProtocolVersion: jetstream.ProtocolVersion,
-		MessageId:       messageID,
-		Topic:           h.cfg.Topic,
-		Kind:            messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT,
-		Producer:        &messagepb.Producer{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, Version: h.cfg.Version},
-		SpaceId:         h.cfg.SpaceID,
-		Sequence:        seq,
-		OccurredAt:      timestamppb.Now(),
-		PublishedAt:     timestamppb.Now(),
-		ContentType:     SnapshotContentType,
-		MessageType:     "moox.metrics.snapshot.reported.v1",
-		Payload:         payload,
-	}
 	client, err := h.publisher(ctx)
 	if err != nil {
 		return h.reportError(ctx, err)
 	}
-	if _, err := client.Publish(ctx, msg, jetstream.WithOrderingKey(h.cfg.ServiceName+"/"+h.cfg.InstanceID)); err != nil {
+	if _, err := client.Publish(ctx, events.MetricsReported, &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}); err != nil {
 		return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
 	}
 	return nil
@@ -260,7 +236,16 @@ func connect(ctx context.Context, cfg Config) (Publisher, error) {
 			return nil, fmt.Errorf("load metrics publisher credential: %w", err)
 		}
 	}
-	return jetstream.Connect(ctx, jsConfig)
+	client, err := jetstream.Connect(ctx, jsConfig)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return events.NewPublisher(client, registry)
 }
 
 // Keep the generated client_model import in this module-owned implementation;

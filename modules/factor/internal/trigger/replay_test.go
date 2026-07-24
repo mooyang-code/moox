@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 type replaySourceFake struct{ events []ReplayEvent }
@@ -112,7 +112,7 @@ func TestReplayRangeRejectsOutOfRangeData(t *testing.T) {
 	request := ReplayRequest{SpaceID: "crypto", DatasetID: "binance_spot_kline", StartTime: start, EndTime: start.Add(time.Minute), FactorVersion: "factor-v7", TargetRunID: "run-42"}
 	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")})
 	_, err := batcher.ReplayRange(context.Background(), request, replaySourceFake{events: []ReplayEvent{{
-		MessageID: "replay-1", Event: &storagepb.RowsUpserted{SpaceId: "crypto", DatasetId: "binance_spot_kline", Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "binance_spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: start.Add(2 * time.Minute).Format(time.RFC3339)}}}}}}, ReceivedAt: start,
+		MessageID: "replay-1", Event: &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "binance_spot_kline", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "binance_spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: start.Add(2 * time.Minute).Format(time.RFC3339)}}}}}}, ReceivedAt: start,
 	}}})
 	if err == nil {
 		t.Fatal("ReplayRange accepted data outside requested range")

@@ -15,11 +15,13 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	mocker "github.com/tencent/goom"
+	"google.golang.org/protobuf/proto"
 )
 
 func writeEventBusConfig(t *testing.T, dir string) string {
@@ -56,6 +58,15 @@ func testSnapshot() *hostmetricpb.HostSnapshot {
 type fakeSnapshotCollector struct {
 	snapshot *hostmetricpb.HostSnapshot
 	err      error
+}
+
+type fakeEventPublisher struct{ err error }
+
+func (f fakeEventPublisher) Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &jetstream.PublishAck{Stream: "MOOX", Sequence: 1}, nil
 }
 
 func (f fakeSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
@@ -174,17 +185,11 @@ func TestAgent_RunOnceGuarded_ConcurrentCall_ShouldSkip(t *testing.T) {
 }
 
 func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
 	snapshot := testSnapshot()
-
-	client := &jetstream.Client{}
-	mock.Struct(client).Method("Publish").Return(&jetstream.PublishAck{Stream: "MOOX", Sequence: 1}, nil)
 
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: snapshot}
-	a.client = client
+	a.publisher = fakeEventPublisher{}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
@@ -196,15 +201,9 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 }
 
 func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
-	client := &jetstream.Client{}
-	mock.Struct(client).Method("Publish").Return(nil, errors.New("publish failed"))
-
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.client = client
+	a.publisher = fakeEventPublisher{err: errors.New("publish failed")}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)

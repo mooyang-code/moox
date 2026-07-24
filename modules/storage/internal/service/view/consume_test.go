@@ -4,6 +4,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +17,66 @@ func TestEventConsumerOptionsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Stream != "MOOX_STORAGE" || opts.Durable != "storage_view" || opts.AckWaitMS != 120000 || opts.FetchBatch != 8 || opts.MaxWorkers != 4 || opts.Ordering != "subject" {
+	if opts.Stream != "MOOX_STORAGE" || opts.Durable != "storage_view" || opts.AckWaitMS != 120000 || opts.FetchBatch != 8 || opts.MaxWorkers != 4 || opts.MaxRetryAttempts != 10 || opts.Ordering != "subject" {
 		t.Fatalf("options = %+v", opts)
+	}
+}
+
+func TestEventConsumerOptionsRejectsNegativeRetryAttempts(t *testing.T) {
+	if _, err := (EventConsumerOptions{MaxRetryAttempts: -1}).withDefaults(); err == nil {
+		t.Fatal("negative MaxRetryAttempts was accepted")
+	}
+}
+
+func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *testing.T) {
+	svc := &Service{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var applies, progress, terms int
+	delivery := &jetstream.Delivery{
+		Subject:       "same",
+		DeliveryCount: 1,
+	}
+	deliveryProgress := func(context.Context) error { progress++; return nil }
+	deliveryTerm := func(context.Context) error { terms++; cancel(); return nil }
+	// Keep the callbacks on the delivery rather than changing DeliveryCount;
+	// this models client-side InProgress calls renewing one broker delivery.
+	err := svc.processDeliveryWithApplyAndActions(ctx, delivery, nil, 3, func(context.Context, *jetstream.Delivery, error) error { return nil }, func(context.Context, *jetstream.Delivery) error {
+		applies++
+		return errors.New("temporary projection failure")
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: deliveryProgress,
+		term:     deliveryTerm,
+	})
+	if err != nil {
+		t.Fatalf("processDeliveryWithApply() error = %v", err)
+	}
+	if applies != 3 || terms != 1 || progress != 2 {
+		t.Fatalf("applies=%d terms=%d progress=%d, want applies=3 terms=1 progress=2", applies, terms, progress)
+	}
+}
+
+func TestProcessDeliveryStopsAfterRepeatedQuarantineFailure(t *testing.T) {
+	svc := &Service{}
+	var applies, quarantineCalls, terms int
+	delivery := &jetstream.Delivery{Subject: "same", DeliveryCount: 1}
+	err := svc.processDeliveryWithApplyAndActions(context.Background(), delivery, nil, 1, func(context.Context, *jetstream.Delivery, error) error {
+		quarantineCalls++
+		return errors.New("dlq unavailable")
+	}, func(context.Context, *jetstream.Delivery) error {
+		applies++
+		return errors.New("temporary projection failure")
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: func(context.Context) error { return nil },
+		term:     func(context.Context) error { terms++; return nil },
+	})
+	if err == nil {
+		t.Fatal("processDeliveryWithApplyAndActions() error = nil, want quarantine failure")
+	}
+	if applies != 1 || quarantineCalls != maxRetryExhaustionAttempts || terms != 0 {
+		t.Fatalf("applies=%d quarantine_calls=%d terms=%d, want 1/%d/0", applies, quarantineCalls, terms, maxRetryExhaustionAttempts)
 	}
 }
 

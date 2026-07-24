@@ -7,8 +7,8 @@ require (
 	github.com/mooyang-code/moox/modules/strategy/proto/strategygen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
@@ -109,7 +109,7 @@ replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
-replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
+replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 

@@ -94,6 +94,7 @@ type EventBusConfig struct {
 	RebalanceDurable      string   `yaml:"rebalance_durable"`
 	ProgressDurable       string   `yaml:"progress_durable"`
 	ReconciliationDurable string   `yaml:"reconciliation_durable"`
+	TradingSignalDurable  string   `yaml:"trading_signal_durable"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -138,7 +139,7 @@ func DefaultConfig() *AppConfig {
 		Health: HealthConfig{
 			Addr: ":11210",
 		},
-		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_TRADE", ExecutionDurable: "trade_execution_v1", RebalanceDurable: "trade_rebalance_v1", ProgressDurable: "trade_progress_v1", ReconciliationDurable: "trade_reconciliation_v1"},
+		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_TRADE", ExecutionDurable: "trade_execution_v1", RebalanceDurable: "trade_rebalance_v1", ProgressDurable: "trade_progress_v1", ReconciliationDurable: "trade_reconciliation_v1", TradingSignalDurable: "trade_trading_signal_v1"},
 	}
 }
 
@@ -221,7 +222,7 @@ func (c *AppConfig) Validate() error {
 		if len(c.EventBus.URLs) == 0 {
 			return fmt.Errorf("eventbus urls are required")
 		}
-		if c.EventBus.Stream == "" || c.EventBus.ExecutionDurable == "" || c.EventBus.RebalanceDurable == "" || c.EventBus.ProgressDurable == "" || c.EventBus.ReconciliationDurable == "" {
+		if c.EventBus.Stream == "" || c.EventBus.ExecutionDurable == "" || c.EventBus.RebalanceDurable == "" || c.EventBus.ProgressDurable == "" || c.EventBus.ReconciliationDurable == "" || c.EventBus.TradingSignalDurable == "" {
 			return fmt.Errorf("eventbus stream and durable are required")
 		}
 	}

@@ -14,11 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -67,7 +66,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const subject = "moox.storage.rows.upserted.v1.>"
+	const subject = "moox.storage.dataset.rows.upserted.v1.>"
 	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{subject}, Storage: nats.MemoryStorage}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +92,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
 		Stream: "MOOX_STORAGE", Durable: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
-			_, datasetID, err := eventconsumer.ParseRowsUpsertedSubject(eventconsumer.RowsUpsertedSubjectPrefix, delivery.Subject)
+			_, datasetID, err := eventconsumer.ParseDatasetRowsUpsertedSubject(eventconsumer.DatasetRowsUpsertedSubjectPrefix, delivery.Subject)
 			if err != nil || datasetID != "prices_a" {
 				return nil
 			}
@@ -118,15 +117,11 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	defer stop()
 
 	for i, dataset := range []string{"prices_a", "prices_b"} {
-		rowEvent := &pb.RowsUpserted{SpaceId: "quant", DatasetId: dataset, Rows: []*pb.RowFieldUpsert{{
-			Key:    &pb.RowKey{SpaceId: "quant", DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}},
-			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(100 + i)}}}},
+		rowEvent := &storagepb.DatasetRowsUpserted{SpaceId: "quant", DatasetId: dataset, Rows: []*storagepb.RowUpsert{{
+			Key:    &storagepb.RowKey{SpaceId: "quant", DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}},
+			Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: float64(100 + i)}}}},
 		}}}
-		rows, err := proto.Marshal(rowEvent)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := publisher.Publish(ctx, events.StorageRowsUpserted, &eventstoragepb.RowsUpserted{DatasetId: dataset, Rows: rows}, events.PublishOptions{EventID: "view-concurrency-" + dataset, OccurredAt: time.Now().UTC(), SpaceID: "quant", SubjectID: dataset}); err != nil {
+		if _, err := publisher.Publish(ctx, events.DatasetRowsUpserted, rowEvent, events.PublishOptions{EventID: "view-concurrency-" + dataset, OccurredAt: time.Now().UTC(), SpaceID: "quant", SubjectID: dataset}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -8,8 +8,8 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	"github.com/mooyang-code/moox/packages/events"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -50,7 +50,7 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("consumer info %s: %v", durable, err)
 		}
-		if info.Config.FilterSubject != "moox.storage.rows.upserted.v1.>" || info.Config.MaxAckPending <= 0 {
+		if info.Config.FilterSubject != "moox.storage.dataset.rows.upserted.v1.>" || info.Config.MaxAckPending <= 0 {
 			t.Fatalf("managed consumer %s config=%+v", durable, info.Config)
 		}
 	}
@@ -79,12 +79,12 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &eventstoragepb.RowsUpserted{DatasetId: "spot_kline", Rows: []byte("rows")}
-	first, err := publisher.Publish(context.Background(), events.StorageRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "spot_kline"})
+	payload := &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "spot_kline", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
+	first, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "spot_kline"})
 	if err != nil || first == nil || first.Duplicate {
 		t.Fatalf("first publish ack=%+v err=%v", first, err)
 	}
-	second, err := publisher.Publish(context.Background(), events.StorageRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "spot_kline"})
+	second, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "spot_kline"})
 	if err != nil || second == nil || !second.Duplicate {
 		t.Fatalf("duplicate publish ack=%+v err=%v", second, err)
 	}
@@ -100,7 +100,7 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 			t.Fatalf("deliveries %s=%+v", durable, deliveries)
 		}
 		message := deliveries[0].Message
-		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.StorageRowsUpserted.Name || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
+		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
 			t.Fatalf("decoded envelope %s=%+v", durable, message)
 		}
 		if err := deliveries[0].Delivery.Ack(ctx); err != nil {

@@ -51,9 +51,17 @@ message RowFieldUpsert {
 }
 
 message RowFieldValues {
-  RowKey key = 1;
-  repeated FieldValue fields = 2;
-  map<string, TypedValue> attributes = 3;
+	RowKey key = 1;
+	repeated FieldValue fields = 2;
+	map<string, TypedValue> attributes = 3;
+}
+
+// RowsUpserted is the Storage module's local write result model. The public
+// EventBus contract is packages/storagepb.DatasetRowsUpserted.
+message RowsUpserted {
+  string space_id = 1;
+  string dataset_id = 2;
+  repeated RowFieldUpsert rows = 3;
 }
 
 // Query key views are retained as read-only query contracts. DataNode writes

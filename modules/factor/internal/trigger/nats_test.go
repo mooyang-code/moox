@@ -7,11 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestLiveConsumerContractUsesOnlyRegistryDurable(t *testing.T) {
@@ -41,57 +36,6 @@ func TestLiveConsumerBindRefDoesNotChooseDeliveryPolicy(t *testing.T) {
 	}
 	if ref.Stream != LiveStream || ref.Durable != LiveDurable || ref.FetchMaxWait != 2*time.Second {
 		t.Fatalf("live consumer bind ref = %+v", ref)
-	}
-}
-
-func TestStorageEventEnvelopeRequiresExactContract(t *testing.T) {
-	base := &messagepb.MooxMessage{
-		ProtocolVersion: jetstream.ProtocolVersion,
-		MessageId:       "storage-mzxw6-1",
-		Topic:           "moox.storage.rows_upserted.v1.mzxw6.mjqxe",
-		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
-		Producer:        &messagepb.Producer{ServiceName: "storage-node", InstanceId: "foo", NodeId: "foo"},
-		OccurredAt:      timestamppb.New(time.Now().UTC()),
-		PublishedAt:     timestamppb.New(time.Now().UTC()),
-		ContentType:     jetstream.StorageRowsUpsertedContentType,
-		MessageType:     jetstream.StorageRowsUpsertedMessageType,
-		Payload:         []byte("payload"),
-	}
-	for _, test := range []struct {
-		name   string
-		mutate func(*messagepb.MooxMessage)
-		wantOK bool
-	}{
-		{name: "exact content type", wantOK: true},
-		{name: "bare protobuf content type", mutate: func(message *messagepb.MooxMessage) { message.ContentType = "application/x-protobuf" }},
-		{name: "wrong protobuf message", mutate: func(message *messagepb.MooxMessage) {
-			message.ContentType = "application/x-protobuf; message=other.Message"
-		}},
-		{name: "wrong message type", mutate: func(message *messagepb.MooxMessage) { message.MessageType = "moox.storage.other.v1" }},
-		{name: "one topic token", mutate: func(message *messagepb.MooxMessage) { message.Topic = "moox.storage.rows_upserted.v1.mzxw6" }},
-		{name: "wildcard topic", mutate: func(message *messagepb.MooxMessage) { message.Topic = "moox.storage.rows_upserted.v1.mzxw6.>" }},
-		{name: "wrong protocol", mutate: func(message *messagepb.MooxMessage) { message.ProtocolVersion = 99 }},
-		{name: "wrong kind", mutate: func(message *messagepb.MooxMessage) { message.Kind = messagepb.MessageKind_MESSAGE_KIND_COMMAND }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			message := proto.Clone(base).(*messagepb.MooxMessage)
-			if test.mutate != nil {
-				test.mutate(message)
-			}
-			if got := isStorageRowsUpsertedEnvelope(message); got != test.wantOK {
-				t.Fatalf("isStorageRowsUpsertedEnvelope() = %t, want %t", got, test.wantOK)
-			}
-		})
-	}
-}
-
-func TestStorageRowsUpsertedPayloadMatchesSubject(t *testing.T) {
-	message := &messagepb.MooxMessage{Topic: "moox.storage.rows_upserted.v1.mzxw6.mjqxe", ProtocolVersion: jetstream.ProtocolVersion, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, ContentType: jetstream.StorageRowsUpsertedContentType, MessageType: jetstream.StorageRowsUpsertedMessageType}
-	if !storageFieldsChangedPayloadMatches(message, &storagepb.RowsUpserted{SpaceId: "foo", DatasetId: "bar"}) {
-		t.Fatal("valid subject/payload was rejected")
-	}
-	if storageFieldsChangedPayloadMatches(message, &storagepb.RowsUpserted{SpaceId: "other", DatasetId: "bar"}) {
-		t.Fatal("mismatched space was accepted")
 	}
 }
 

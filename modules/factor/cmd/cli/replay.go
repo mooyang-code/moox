@@ -18,12 +18,12 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // replayJSONEvent is the stable offline input shape for `go run ./cmd/cli replay`.
-// Each line contains one RowsUpserted protobuf in protojson form.
+// Each line contains one DatasetRowsUpserted protobuf in protojson form.
 type replayJSONEvent struct {
 	MessageID  string          `json:"message_id"`
 	ReceivedAt string          `json:"received_at"`
@@ -58,7 +58,7 @@ func (s fileReplaySource) Load(ctx context.Context, req trigger.ReplayRequest) (
 		if err != nil {
 			return nil, fmt.Errorf("parse replay received_at line %d: %w", lineNo, err)
 		}
-		event := new(storagepb.RowsUpserted)
+		event := new(storagepb.DatasetRowsUpserted)
 		if err := protojson.Unmarshal(raw.Event, event); err != nil {
 			return nil, fmt.Errorf("decode replay event line %d: %w", lineNo, err)
 		}

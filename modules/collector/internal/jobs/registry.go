@@ -10,11 +10,13 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/kline"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs/tick"
 )
 
 const (
 	JobTypeCollectKline  = "collect.kline"
 	JobTypeCollectSymbol = "collect.symbol"
+	JobTypeCollectTick   = "collect.tick"
 )
 
 // Definition describes one collector data type.
@@ -26,6 +28,7 @@ type FieldDefinition = jobdef.FieldDefinition
 var definitions = []Definition{
 	kline.Definition(JobTypeCollectKline),
 	symbol.Definition(JobTypeCollectSymbol),
+	tick.Definition(JobTypeCollectTick),
 }
 
 // ListDefinitions returns collector data type definitions in UI sort order.

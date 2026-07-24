@@ -9,7 +9,7 @@ require (
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
@@ -119,7 +119,6 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
-replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 
 replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
 
@@ -134,3 +133,5 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb

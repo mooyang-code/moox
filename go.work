@@ -29,14 +29,15 @@ use (
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/doctor
+	./packages/dlqpb
 	./packages/events
+	./packages/storagepb
 	./packages/security
 	./packages/gatewayauth
 	./packages/gatewayproxy
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
-	./packages/messagepb
 	./packages/metricspb
 	./packages/pyruntime
 	./packages/report

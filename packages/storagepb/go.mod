@@ -1,4 +1,4 @@
-module github.com/mooyang-code/moox/packages/messagepb
+module github.com/mooyang-code/moox/packages/storagepb
 
 go 1.25.0
 

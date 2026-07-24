@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package trpc.moox.storage.event;
+
+option go_package = "github.com/mooyang-code/moox/packages/storagepb;storagepb";
+
+// DatasetRowsUpserted is the public delta event for a Dataset. rows contains
+// changed rows and changed fields, not a complete Dataset snapshot.
+message DatasetRowsUpserted {
+  string space_id = 1;
+  string dataset_id = 2;
+  repeated RowUpsert rows = 3;
+}
+
+message RowUpsert {
+  RowKey key = 1;
+  repeated FieldValue fields = 2;
+  map<string, TypedValue> attributes = 3;
+}
+
+message RowKey {
+  string space_id = 1;
+  string dataset_id = 2;
+  oneof kind {
+    TimeSeriesRowKey time_series = 3;
+    RecordRowKey record = 4;
+  }
+}
+
+message TimeSeriesRowKey {
+  string subject_id = 1;
+  string freq = 2;
+  string data_time = 3;
+}
+
+message RecordRowKey {
+  string record_id = 1;
+  string version = 2;
+}
+
+message FieldValue {
+  string field_id = 1;
+  TypedValue value = 2;
+}
+
+message TypedValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+    string time_value = 5;
+    string json_value = 6;
+    bytes bytes_value = 7;
+    ValueList list_value = 8;
+    NullValue null_value = 9;
+  }
+}
+
+message ValueList {
+  repeated TypedValue values = 1;
+}
+
+enum NullValue {
+  NULL_VALUE_UNSPECIFIED = 0;
+  NULL_VALUE_NULL = 1;
+}

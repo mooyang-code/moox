@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package trpc.moox.dlq;
+
+option go_package = "github.com/mooyang-code/moox/packages/dlqpb;dlqpb";
+
+// RejectedMessage is the typed payload carried by the operational DLQ topic.
+// It stores the original bytes without interpreting the rejected business
+// message, so the quarantine contract remains independent of business events.
+message RejectedMessage {
+  string original_message_id = 1;
+  string original_topic = 2;
+  string rejection_reason = 3;
+  bytes original_payload = 4;
+  uint64 delivery_count = 5;
+}

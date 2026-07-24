@@ -73,7 +73,7 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 每个 Dataset 使用一个 Subject：
 
 ```text
-moox.storage.fields_changed.v1.<space-token>.<dataset-token>
+moox.storage.dataset.rows.upserted.v1.<space-token>.<dataset-token>
 ```
 
 Token 是可逆的小写无 Padding Base32。View 使用唯一 Durable

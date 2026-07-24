@@ -6,10 +6,10 @@ replace (
 	github.com/mooyang-code/moox/modules/storage => ./
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen => ./proto/storagegen
 	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+	github.com/mooyang-code/moox/packages/dlqpb => ../../packages/dlqpb
 	github.com/mooyang-code/moox/packages/events => ../../packages/events
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
-	github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 )
@@ -21,10 +21,11 @@ require (
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/dlqpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/snapshotcache v0.1.1
 	github.com/nats-io/nats-server/v2 v2.11.17
@@ -178,3 +179,5 @@ require (
 )
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb

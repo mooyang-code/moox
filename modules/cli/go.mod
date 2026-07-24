@@ -27,7 +27,6 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats.go v1.51.0 // indirect
@@ -105,7 +104,6 @@ replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
-replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 

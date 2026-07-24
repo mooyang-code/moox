@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package trpc.moox.trading;
+
+option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;tradingpb";
+
+import "google/protobuf/timestamp.proto";
+
+enum SignalSide {
+  SIGNAL_SIDE_UNSPECIFIED = 0;
+  SIGNAL_SIDE_BUY = 1;
+  SIGNAL_SIDE_SELL = 2;
+  SIGNAL_SIDE_HOLD = 3;
+}
+
+enum SignalAction {
+  SIGNAL_ACTION_UNSPECIFIED = 0;
+  SIGNAL_ACTION_OPEN = 1;
+  SIGNAL_ACTION_CLOSE = 2;
+  SIGNAL_ACTION_INCREASE = 3;
+  SIGNAL_ACTION_DECREASE = 4;
+}
+
+message TradingSignal {
+  string strategy_id = 1;
+  string signal_id = 2;
+  string symbol = 3;
+  SignalSide side = 4;
+  SignalAction action = 5;
+  optional double target_price = 6;
+  optional double stop_loss_price = 7;
+  optional double take_profit_price = 8;
+  google.protobuf.Timestamp signal_time = 9;
+  map<string, string> tags = 10;
+}

@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	DefaultTopic  = "moox.metrics.snapshot.reported.v1"
 	DefaultSpace  = "moox_system"
 	DefaultBusURL = "nats://127.0.0.1:4222"
 )
@@ -24,7 +23,6 @@ type Config struct {
 	Version        string
 	EventBusURL    string
 	CredentialFile string
-	Topic          string
 	SpaceID        string
 	Interval       time.Duration
 
@@ -49,7 +47,6 @@ func DefaultConfig(serviceName string) Config {
 		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
 		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
 		CredentialFile:       firstEnv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"),
-		Topic:                DefaultTopic,
 		SpaceID:              DefaultSpace,
 		Interval:             30 * time.Second,
 		MaxUncompressedBytes: 4 * 1024 * 1024,
@@ -80,9 +77,6 @@ func DefaultConfig(serviceName string) Config {
 	if c.EventBusURL == "" {
 		c.EventBusURL = DefaultBusURL
 	}
-	if c.Topic == "" {
-		c.Topic = DefaultTopic
-	}
 	if c.SpaceID == "" {
 		c.SpaceID = DefaultSpace
 	}
@@ -111,9 +105,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.CredentialFile == "" {
 		c.CredentialFile = d.CredentialFile
-	}
-	if c.Topic == "" {
-		c.Topic = d.Topic
 	}
 	if c.SpaceID == "" {
 		c.SpaceID = d.SpaceID

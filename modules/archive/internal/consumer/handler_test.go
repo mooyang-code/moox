@@ -3,13 +3,12 @@ package consumer
 import (
 	"context"
 	"errors"
-	"github.com/mooyang-code/moox/modules/archive/internal/domain"
-	"github.com/mooyang-code/moox/modules/archive/internal/journal"
-	"github.com/mooyang-code/moox/packages/messagepb"
-	"github.com/stretchr/testify/assert"
-	"reflect"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/archive/internal/domain"
+	"github.com/mooyang-code/moox/modules/archive/internal/journal"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHandlerAcknowledgesOnlyAfterJournalSync(t *testing.T) {
@@ -18,28 +17,20 @@ func TestHandlerAcknowledgesOnlyAfterJournalSync(t *testing.T) {
 		order = append(order, "sync")
 		return journal.AppendResult{Seq: 1}, nil
 	}}
-	delivery := &fakeDelivery{message: fixtureEnvelope(nil, "m1", "crypto_binance", "spot_kline"), ackFn: func() error { order = append(order, "ack"); return nil }}
-	decoder := &fakeDecoder{batch: domain.EventBatch{MessageID: "m1", Rows: []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202606"}}}}, decision: DecisionArchive}
-	handler := NewHandler(decoder, store, &fakeNotifier{})
+	delivery := &fakeDelivery{raw: []byte("raw"), id: "m1", subject: "subject", ackFn: func() error { order = append(order, "ack"); return nil }}
+	handler := NewHandler(&fakeDecoder{batch: domain.EventBatch{MessageID: "m1"}, decision: DecisionArchive}, store, &fakeNotifier{})
 	if err := handler.Handle(context.Background(), delivery); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(order, []string{"sync", "ack"}) {
-		t.Fatalf("order = %v", order)
-	}
+	assert.Equal(t, []string{"sync", "ack"}, order)
 }
 
 func TestHandlerQuarantinesInvalidEventAndTerminates(t *testing.T) {
 	store := &fakeJournal{quarantineFn: func(journal.QuarantineRecord) error { return nil }}
-	delivery := &fakeDelivery{message: fixtureEnvelope(nil, "bad", "crypto_binance", "spot_kline")}
-	decoder := &fakeDecoder{decision: DecisionReject, decodeErr: errors.New("invalid row")}
-	handler := NewHandler(decoder, store, &fakeNotifier{})
-	if err := handler.Handle(context.Background(), delivery); err != nil {
-		t.Fatal(err)
-	}
-	if !delivery.terminated {
-		t.Fatal("delivery was not terminated")
-	}
+	delivery := &fakeDelivery{raw: []byte("bad"), id: "bad", subject: "subject"}
+	handler := NewHandler(&fakeDecoder{decision: DecisionReject, decodeErr: errors.New("invalid row")}, store, &fakeNotifier{})
+	assert.NoError(t, handler.Handle(context.Background(), delivery))
+	assert.True(t, delivery.terminated)
 }
 
 type fakeDecoder struct {
@@ -48,7 +39,7 @@ type fakeDecoder struct {
 	decodeErr error
 }
 
-func (f *fakeDecoder) Decode(*messagepb.MooxMessage) (domain.EventBatch, Decision, error) {
+func (f *fakeDecoder) DecodeEvent([]byte, string, string) (domain.EventBatch, Decision, error) {
 	return f.batch, f.decision, f.decodeErr
 }
 
@@ -75,19 +66,17 @@ func (f *fakeJournal) Quarantine(_ context.Context, q journal.QuarantineRecord) 
 }
 
 type fakeDelivery struct {
-	message    *messagepb.MooxMessage
-	ackFn      func() error
-	terminated bool
+	raw         []byte
+	id, subject string
+	ackFn       func() error
+	terminated  bool
 }
 
-func (f *fakeDelivery) Envelope() *messagepb.MooxMessage { return f.message }
-func (f *fakeDelivery) RawEnvelope() []byte              { return nil }
-func (f *fakeDelivery) MessageID() string                { return f.message.GetMessageId() }
-func (f *fakeDelivery) Subject() string                  { return f.message.GetTopic() }
-func (f *fakeDelivery) StreamSequence() uint64           { return 1 }
-func (f *fakeDelivery) DeliveryCount() uint64            { return 1 }
-func (f *fakeDelivery) DecodeError() error               { return nil }
-func (f *fakeDelivery) ContentType() string              { return "" }
+func (f *fakeDelivery) RawEnvelope() []byte    { return f.raw }
+func (f *fakeDelivery) MessageID() string      { return f.id }
+func (f *fakeDelivery) Subject() string        { return f.subject }
+func (f *fakeDelivery) StreamSequence() uint64 { return 1 }
+func (f *fakeDelivery) DeliveryCount() uint64  { return 1 }
 func (f *fakeDelivery) Ack(context.Context) error {
 	if f.ackFn != nil {
 		return f.ackFn()
@@ -103,8 +92,6 @@ func TestRetryDelay(t *testing.T) {
 	assert.Equal(t, 2*time.Second, retryDelay(2))
 	assert.Equal(t, 30*time.Second, retryDelay(100))
 }
-
 func TestRetryScheduledError(t *testing.T) {
-	err := &RetryScheduledError{Delay: 2 * time.Second}
-	assert.Contains(t, err.Error(), "2s")
+	assert.Contains(t, (&RetryScheduledError{Delay: 2 * time.Second}).Error(), "2s")
 }

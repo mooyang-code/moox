@@ -73,6 +73,24 @@ func init() {
 			panic(fmt.Sprintf("注册K线采集器失败: %v", err))
 		}
 	}
+	for _, market := range []struct {
+		id string
+		cn string
+	}{
+		{id: "spot", cn: "现货"},
+		{id: "swap", cn: "永续合约"},
+	} {
+		err := sources.NewBuilder().
+			Source("binance", "币安").
+			Market(market.id, market.cn).
+			DataType("tick", "原始成交Tick").
+			Description("币安原始成交Tick采集器").
+			Collector(&TickCollector{spotAPI: c.spotAPI, swapAPI: c.swapAPI, lastIDs: make(map[string]int64)}).
+			Register()
+		if err != nil {
+			panic(fmt.Sprintf("注册Tick采集器失败: %v", err))
+		}
+	}
 }
 
 // Source 返回数据源标识

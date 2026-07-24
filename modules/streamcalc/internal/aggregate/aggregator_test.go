@@ -37,6 +37,25 @@ func TestAggregatorClosesFiveMinuteWindowAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAggregatorAppliesTicksAsInputIntervals(t *testing.T) {
+	a, err := New("1m", "2m", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	first, err := a.ApplyTick("tick-1", "crypto", &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 2, TradeTime: timestamppb.New(base.Add(10 * time.Second))})
+	if err != nil || first.Bar.Closed {
+		t.Fatalf("first tick result = %+v, err=%v", first, err)
+	}
+	second, err := a.ApplyTick("tick-2", "crypto", &marketpb.Tick{Symbol: "BTC-USDT", Price: 101, Quantity: 3, TradeTime: timestamppb.New(base.Add(70 * time.Second))})
+	if err != nil || !second.Bar.Closed {
+		t.Fatalf("second tick result = %+v, err=%v", second, err)
+	}
+	if second.Bar.Open != 100 || second.Bar.Close != 101 || second.Bar.Volume != 5 || second.Bar.TradeCount != 2 {
+		t.Fatalf("tick aggregate = %+v", second.Bar)
+	}
+}
+
 func TestAggregatorSnapshotRestoresDeduplicationAndClosedWindow(t *testing.T) {
 	a, err := New("1m", "2m", 30*time.Second)
 	if err != nil {

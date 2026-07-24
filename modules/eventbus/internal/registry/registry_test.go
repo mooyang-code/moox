@@ -51,7 +51,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
-	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.rows.upserted.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx); err != nil {
@@ -85,16 +85,15 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 
 func TestTopicCoverageAndKVTTL(t *testing.T) {
 	c := config.Default()
-	if _, _, err := TopicStream(c, "moox.metrics.host.reported.v1"); err != nil {
+	if _, _, err := TopicStream(c, "moox.metrics.host.reported.v1.space.agent"); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	c.Streams = append(c.Streams, config.StreamConfig{Name: "MOOX_METRICS_DUP", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1})
-	c.Topics = append(c.Topics, config.TopicConfig{Topic: "moox.metrics.ambiguous.v1", Enabled: true, PayloadVersion: 1})
 	if err := c.Validate(); err == nil {
-		t.Fatal("ambiguous topic accepted")
+		t.Fatal("overlapping stream accepted")
 	}
 }
 

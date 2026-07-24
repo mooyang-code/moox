@@ -9,7 +9,7 @@ import (
 type Collector interface {
 	// Source 数据源标识，当前内置 "binance"，未来可扩展
 	Source() string
-	// DataType 数据类型标识，当前支持 "kline"
+	// DataType 数据类型标识，内置支持 "kline" 和 "tick"
 	DataType() string
 	// Collect 执行一次采集
 	// params 包含本次采集所需的参数（如交易对、周期等）

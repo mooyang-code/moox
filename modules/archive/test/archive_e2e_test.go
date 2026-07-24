@@ -12,17 +12,15 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	sharedpb "github.com/mooyang-code/moox/packages/storagepb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
-	storageSubject := "moox.storage.rows.upserted.v1.>"
+	storageSubject := "moox.storage.dataset.rows.upserted.v1.>"
 	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -82,12 +80,8 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	go func() { runErr <- runner.Run(ctx) }()
 
 	publish := func(id, dataTime, close string) {
-		event := &storagepb.RowsUpserted{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
-		payload, err := proto.Marshal(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = publisher.Publish(context.Background(), events.StorageRowsUpserted, &eventstoragepb.RowsUpserted{DatasetId: event.GetDatasetId(), Rows: payload}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
+		event := &sharedpb.DatasetRowsUpserted{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &sharedpb.RowKey_TimeSeries{TimeSeries: &sharedpb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}}}, Fields: []*sharedpb.FieldValue{{FieldId: "close", Value: &sharedpb.TypedValue{Value: &sharedpb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
+		_, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, event, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
 		if err != nil {
 			t.Fatal(err)
 		}

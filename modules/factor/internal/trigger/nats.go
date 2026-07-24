@@ -8,35 +8,11 @@ import (
 	"sync"
 	"time"
 
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
-	"google.golang.org/protobuf/proto"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
-
-func isStorageRowsUpsertedEnvelope(message *messagepb.MooxMessage) bool {
-	_, _, err := validateStorageRowsUpsertedEnvelope(message)
-	return err == nil
-}
-
-func validateStorageRowsUpsertedEnvelope(message *messagepb.MooxMessage) (string, string, error) {
-	if message == nil {
-		return "", "", fmt.Errorf("storage envelope is nil")
-	}
-	if message.GetProtocolVersion() != jetstream.ProtocolVersion || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
-		return "", "", fmt.Errorf("unsupported storage message protocol or kind")
-	}
-	return jetstream.ValidateStorageRowsUpsertedEnvelope(message)
-}
-
-func storageFieldsChangedPayloadMatches(message *messagepb.MooxMessage, event *storagepb.RowsUpserted) bool {
-	spaceID, datasetID, err := validateStorageRowsUpsertedEnvelope(message)
-	return err == nil && event != nil && event.GetSpaceId() == spaceID && event.GetDatasetId() == datasetID
-}
 
 type NATSConfig struct {
 	URLs           []string
@@ -167,58 +143,37 @@ type storageEventHandler struct{ eventBatcher *EventBatcher }
 type rawPullAdapter struct{ *jetstream.PullConsumer }
 
 func (a rawPullAdapter) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
-	return a.FetchRaw(ctx, batch)
+	return a.PullConsumer.Fetch(ctx, batch)
 }
 
 func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 	if delivery == nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM}
 	}
-	event := &storagepb.RowsUpserted{}
 	if delivery.ContentType == events.ContentType {
-		outer := &eventpb.EventMessage{}
-		if err := proto.Unmarshal(delivery.RawData, outer); err != nil || outer.GetEventName() != events.StorageRowsUpserted.Name || outer.GetEventVersion() != events.StorageRowsUpserted.Version {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
-		if delivery.RawMessageID == "" || outer.GetEventId() != delivery.RawMessageID {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("event_id %q does not match NATS message id %q", outer.GetEventId(), delivery.RawMessageID)}
-		}
 		registry, err := events.DefaultRegistry()
 		if err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 		}
-		spec, ok := registry.Spec(events.StorageRowsUpserted)
-		if !ok {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
-		template, err := events.NewSubjectTemplate(spec.Subject)
+		_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
 		if err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 		}
-		expected, err := template.Render(outer.GetSpaceId(), outer.GetSubjectId())
-		if err != nil || expected != delivery.Subject {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
+		event := payload
+		if event.GetSpaceId() == "" || event.GetDatasetId() == "" {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("storage event payload identity is incomplete")}
 		}
-		payload := &eventstoragepb.RowsUpserted{}
-		if err := proto.Unmarshal(outer.GetPayload(), payload); err != nil || proto.Unmarshal(payload.GetRows(), event) != nil || payload.GetDatasetId() != outer.GetSubjectId() || event.GetSpaceId() != outer.GetSpaceId() || event.GetDatasetId() != outer.GetSubjectId() {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
+		return h.ingest(ctx, delivery, event)
 	} else {
-		if delivery.Message == nil {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
-		spaceID, datasetID, err := validateStorageRowsUpsertedEnvelope(delivery.Message)
-		if err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
-		if err := proto.Unmarshal(delivery.Message.GetPayload(), event); err != nil || event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("unexpected storage event content type %q", delivery.ContentType)}
 	}
+}
+
+func (h storageEventHandler) ingest(ctx context.Context, delivery *jetstream.Delivery, event *storagepb.DatasetRowsUpserted) jetstream.HandlerResult {
 	if h.eventBatcher != nil {
 		messageID := delivery.RawMessageID
 		if messageID == "" {
-			messageID = delivery.Message.GetMessageId()
+			messageID = delivery.RawMessageID
 		}
 		if err := h.eventBatcher.IngestMessage(ctx, messageID, event, time.Now().UTC()); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}

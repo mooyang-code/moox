@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,34 +15,24 @@ func Default() *Config {
 		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
 		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 		Streams: []StreamConfig{
-			{Name: "MOOX_MARKET", Subjects: []string{"moox.market.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, MaxBytes: 2147483648},
-			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.rows.upserted.v1.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 2147483648},
-			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, MaxBytes: 536870912},
-			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.exec.v1.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, MaxBytes: 536870912},
-			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, MaxBytes: 268435456},
-		},
-		Topics: []TopicConfig{
-			{Topic: "moox.market.trade.received.v1", Stream: "MOOX_MARKET", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/vnd.moox.event+protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.market.kline.closed.v1", Stream: "MOOX_MARKET", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/vnd.moox.event+protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.metrics.host.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.metrics.snapshot.reported.v1", Stream: "MOOX_METRICS", Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, PayloadContentType: "application/vnd.moox.metrics.snapshot+protobuf", PayloadVersion: 1, Enabled: true},
-			{Topic: "moox.dlq.message.rejected.v1", Stream: "MOOX_DLQ", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/x-protobuf; message=trpc.moox.message.RejectedMessage", PayloadVersion: 1, Enabled: true},
-		},
-		TopicFamilies: []TopicFamilyConfig{
-			{Pattern: "moox.market.trade.received.v1.>", Stream: "MOOX_MARKET", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/vnd.moox.event+protobuf", PayloadVersion: 1, Enabled: true},
-			{Pattern: "moox.market.kline.closed.v1.>", Stream: "MOOX_MARKET", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/vnd.moox.event+protobuf", PayloadVersion: 1, Enabled: true},
-			{Pattern: "moox.storage.rows.upserted.v1.>", Stream: "MOOX_STORAGE", Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, PayloadContentType: "application/vnd.moox.event+protobuf", PayloadVersion: 1, Enabled: true},
-			{Pattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", Stream: "MOOX_CLOUDNODE_EXEC", Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, PayloadContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", PayloadVersion: 1, Enabled: true},
+			{Name: "MOOX_MARKET", Subjects: []string{"moox.market.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 2147483648},
+			{Name: "MOOX_TRADE", Subjects: []string{"moox.trading.>", "moox.trade.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
+			{Name: "MOOX_STRATEGY", Subjects: []string{"moox.strategy.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
+			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.dataset.rows.upserted.v1.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 2147483648},
+			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
+			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
+			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 268435456},
 		},
 		Consumers: []ConsumerConfig{
-			{Stream: "MOOX_MARKET", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
-			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_METRICS", Durable: "monitor_metrics_ingest_v1", FilterSubject: "moox.metrics.snapshot.reported.v1", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: "moox.storage.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 8, MaxDeliver: -1},
-			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
-			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_MARKET", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_TRADE", Durable: "trade_trading_signal_v1", FilterSubject: "moox.trading.signal.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
+			{Stream: "MOOX_METRICS", Durable: "monitor_metrics_ingest_v1", FilterSubject: "moox.metrics.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
+			{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 8, MaxDeliver: -1},
+			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
+			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
 		},
-		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
+		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.job.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
 		KV:                []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
 	}
 }
@@ -99,14 +88,6 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range c.Streams {
 		normalizeStream(&c.Streams[i])
-	}
-	for i := range c.Topics {
-		if c.Topics[i].PayloadVersion == 0 {
-			c.Topics[i].PayloadVersion = 1
-		}
-		if c.Topics[i].PayloadContentType == "" {
-			c.Topics[i].PayloadContentType = "application/x-protobuf"
-		}
 	}
 	for i := range c.KV {
 		normalizeKV(&c.KV[i])

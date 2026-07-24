@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // ReplayRequest is the explicit offline execution boundary for Factor. A
@@ -44,7 +44,7 @@ func (r ReplayRequest) Validate() error {
 // determine a processing window.
 type ReplayEvent struct {
 	MessageID  string
-	Event      *storagepb.RowsUpserted
+	Event      *storagepb.DatasetRowsUpserted
 	ReceivedAt time.Time
 }
 
@@ -94,8 +94,8 @@ func (d *EventBatcher) ReplayRange(ctx context.Context, req ReplayRequest, sourc
 			groupKey := strings.Join([]string{key.GetSubjectId(), key.GetFreq(), key.GetDataTime()}, "\x00")
 			groups[groupKey] = append(groups[groupKey], ReplayEvent{
 				MessageID: item.MessageID,
-				Event: &storagepb.RowsUpserted{
-					SpaceId: item.Event.GetSpaceId(), DatasetId: item.Event.GetDatasetId(), Rows: []*storagepb.RowFieldUpsert{row},
+				Event: &storagepb.DatasetRowsUpserted{
+					SpaceId: item.Event.GetSpaceId(), DatasetId: item.Event.GetDatasetId(), Rows: []*storagepb.RowUpsert{row},
 				},
 				ReceivedAt: item.ReceivedAt,
 			})
@@ -126,7 +126,7 @@ func (d *EventBatcher) ReplayRange(ctx context.Context, req ReplayRequest, sourc
 	return tasks, nil
 }
 
-func validateReplayDataTimes(event *storagepb.RowsUpserted, start, end time.Time) error {
+func validateReplayDataTimes(event *storagepb.DatasetRowsUpserted, start, end time.Time) error {
 	for _, row := range event.GetRows() {
 		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
 			return errors.New("replay row must contain a time-series key")

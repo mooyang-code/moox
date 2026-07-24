@@ -42,3 +42,26 @@ func (t SubjectTemplate) Render(spaceID, subjectID string) (string, error) {
 }
 
 func (t SubjectTemplate) Pattern() string { return t.raw }
+
+// FamilyPattern returns the wildcard topic family covered by this template.
+// The literal prefix is the governed routing identity; everything after the
+// first routing placeholder belongs to the event instance and is covered by
+// the family wildcard. NATS `>` must be the final token, so a template suffix
+// is intentionally included in this prefix family rather than re-emitted
+// after the wildcard.
+func (t SubjectTemplate) FamilyPattern() string {
+	if t.raw == "" {
+		return ""
+	}
+	prefix := t.raw
+	for _, placeholder := range []string{"<space>", "<subject>"} {
+		if index := strings.Index(prefix, placeholder); index >= 0 {
+			prefix = prefix[:index]
+		}
+	}
+	prefix = strings.TrimSuffix(prefix, ".")
+	if prefix == "" {
+		return ">"
+	}
+	return prefix + ".>"
+}

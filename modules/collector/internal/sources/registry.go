@@ -12,7 +12,7 @@ type CollectorDescriptor struct {
 	SourceCN    string    // 数据源中文名
 	Market      string    // 市场，如 "spot" / "swap"
 	MarketCN    string    // 市场中文名
-	DataType    string    // 数据类型，如 "kline"
+	DataType    string    // 数据类型，如 "kline"、"tick"
 	DataTypeCN  string    // 数据类型中文名
 	Description string    // 描述
 	Collector   Collector // 采集器实例（无状态，可复用）

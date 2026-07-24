@@ -1,12 +1,52 @@
 package binance
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPublicAggregateTradeAPIsUseCursorAndExpectedEndpoints(t *testing.T) {
+	tests := []struct {
+		name       string
+		setBaseURL func(*Client, string) error
+		call       func(*Client, *exchange.TradeRequest) ([]*exchange.Trade, error)
+		path       string
+	}{
+		{name: "spot", setBaseURL: (*Client).SetSpotBaseURL, call: func(c *Client, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+			return NewSpotAPI(c).GetRecentTrades(context.Background(), req)
+		}, path: SpotTradesEndpoint},
+		{name: "swap", setBaseURL: (*Client).SetSwapBaseURL, call: func(c *Client, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+			return NewSwapAPI(c).GetRecentTrades(context.Background(), req)
+		}, path: SwapTradesEndpoint},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath, gotFromID string
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotFromID = r.URL.Query().Get("fromId")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`[{"a":41,"p":"100.5","q":"0.2","T":1700000000000,"m":true}]`))
+			}))
+			defer server.Close()
+			client := NewClient()
+			require.NoError(t, tt.setBaseURL(client, server.URL))
+			trades, err := tt.call(client, &exchange.TradeRequest{Symbol: "BTCUSDT", Limit: 100, FromID: 41})
+			require.NoError(t, err)
+			require.Len(t, trades, 1)
+			assert.Equal(t, tt.path, gotPath)
+			assert.Equal(t, "41", gotFromID)
+			assert.Equal(t, int64(41), trades[0].ID)
+		})
+	}
+}
 
 func TestFormatSymbol_HyphenatedSymbol_ShouldRemoveSeparator(t *testing.T) {
 	assert.Equal(t, "BTCUSDT", FormatSymbol("BTC-USDT"))

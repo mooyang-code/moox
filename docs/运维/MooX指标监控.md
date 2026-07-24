@@ -48,7 +48,7 @@ export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 
 ## Topic、payload 和生产者配置
 
-快照 Topic 是 `moox.metrics.snapshot.reported.v1`，payload content type 是 `application/vnd.moox.metrics.snapshot+protobuf`。外层身份、时间、序列、boot_id 和 `space_id` 由 `MooxMessage` 提供。每个样本最多 20 个 label，默认单次解压 4 MiB、压缩 1 MiB、2,000 个 metric family 和 20,000 个 samples；超限快照整体拒绝，不截断半个 family。
+服务指标事件是 `moox.metrics.reported.v1.<space>.<subject>`，主机指标事件是 `moox.metrics.host.reported.v1.<space>.<subject>`，两者均使用固定媒体类型 `application/vnd.moox.event+protobuf` 和 `EventMessage` 外层契约。服务指标 payload 包含服务身份、boot_id、序列和指标快照；每个样本最多 20 个 label，默认单次解压 4 MiB、压缩 1 MiB、2,000 个 metric family 和 20,000 个 samples；超限快照整体拒绝，不截断半个 family。
 
 默认 reporter 配置：
 

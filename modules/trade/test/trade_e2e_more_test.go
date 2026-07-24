@@ -15,8 +15,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
 )
 
 type replaceAdapter struct{ scriptedExchange }
@@ -36,12 +37,12 @@ func (c *countingExchange) Cancel(_ context.Context, _, _ string) (exchange.Exch
 }
 
 type e2eFakePublisher struct {
-	msgs []*messagepb.MooxMessage
+	ids []string
 }
 
-func (f *e2eFakePublisher) Publish(_ context.Context, m *messagepb.MooxMessage, _ ...jetstream.PublishOption) (*jetstream.PublishAck, error) {
-	f.msgs = append(f.msgs, m)
-	return &jetstream.PublishAck{Stream: "MOOX_TRADE", Sequence: uint64(len(f.msgs))}, nil
+func (f *e2eFakePublisher) Publish(_ context.Context, _ events.EventType, _ proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	f.ids = append(f.ids, opts.EventID)
+	return &jetstream.PublishAck{Stream: "MOOX_TRADE", Sequence: uint64(len(f.ids))}, nil
 }
 
 func TestCancelOpenOrderReleasesFrozenBalance(t *testing.T) {
@@ -104,8 +105,8 @@ func TestOutboxRelayMarksPublished(t *testing.T) {
 	if err = (bus.Relay{Store: s, Publisher: pub, InstanceID: "test", BootID: "boot-1"}).RunOnce(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
-	if len(pub.msgs) != 1 {
-		t.Fatalf("published=%d", len(pub.msgs))
+	if len(pub.ids) != 1 {
+		t.Fatalf("published=%d", len(pub.ids))
 	}
 }
 

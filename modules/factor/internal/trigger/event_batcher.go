@@ -11,7 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // Task is an event-batched scheduler request.
@@ -92,13 +92,13 @@ func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding) {
 	d.bindings = append([]domain.FactorBinding(nil), bindings...)
 }
 
-// Ingest adds one Storage rows_upserted event into fixed-window buckets.
-func (d *EventBatcher) Ingest(event *storagepb.RowsUpserted, now time.Time) {
+// Ingest adds one DatasetRowsUpserted event into fixed-window buckets.
+func (d *EventBatcher) Ingest(event *storagepb.DatasetRowsUpserted, now time.Time) {
 	_ = d.ingestMemory("", event, now)
 }
 
 // IngestMessage persists the event before exposing it to the in-memory window.
-func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, event *storagepb.RowsUpserted, now time.Time) error {
+func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, event *storagepb.DatasetRowsUpserted, now time.Time) error {
 	if d == nil || d.inbox == nil {
 		return errors.New("factor event inbox is not configured")
 	}
@@ -118,14 +118,14 @@ func (d *EventBatcher) IngestMessage(ctx context.Context, messageID string, even
 	return nil
 }
 
-func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.RowsUpserted, now time.Time) bool {
+func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.DatasetRowsUpserted, now time.Time) bool {
 	return d.ingestMemoryWithDeadline(messageID, event, now, now)
 }
 
 // ingestMemoryWithDeadline keeps event reception metadata separate from the
 // processing boundary used to close a bucket. Replay uses this to flush a
 // bounded range even when the source event was received much later.
-func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storagepb.RowsUpserted, receivedAt, processingAt time.Time) bool {
+func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storagepb.DatasetRowsUpserted, receivedAt, processingAt time.Time) bool {
 	if d == nil || event == nil {
 		return false
 	}
@@ -141,12 +141,12 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 		if rowKey == nil {
 			continue
 		}
-		key := &storagepb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: rowKey.GetSubjectId(), Freq: rowKey.GetFreq(), DataTime: rowKey.GetDataTime()}
-		dataTime, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
+		key := row.GetKey()
+		dataTime, err := time.Parse(time.RFC3339Nano, rowKey.GetDataTime())
 		if err != nil {
 			continue
 		}
-		matches := d.matchBindings(key)
+		matches := d.matchBindings(key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq())
 		if len(matches) == 0 {
 			continue
 		}
@@ -160,8 +160,8 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 				spaceID:       key.GetSpaceId(),
 				sourceDataset: key.GetDatasetId(),
 				targetDataset: targetDataset,
-				subjectID:     key.GetSubjectId(),
-				freq:          key.GetFreq(),
+				subjectID:     rowKey.GetSubjectId(),
+				freq:          rowKey.GetFreq(),
 			}
 			b := d.buckets[bkey]
 			if b == nil {
@@ -174,8 +174,8 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 						SpaceID:         key.GetSpaceId(),
 						SourceDataset:   key.GetDatasetId(),
 						TargetDataset:   targetDataset,
-						SubjectID:       key.GetSubjectId(),
-						Freq:            key.GetFreq(),
+						SubjectID:       rowKey.GetSubjectId(),
+						Freq:            rowKey.GetFreq(),
 						BarTime:         dataTime.UTC(),
 						FirstReceivedAt: receivedAt.UTC(),
 						LastReceivedAt:  receivedAt.UTC(),
@@ -323,7 +323,7 @@ func (d *EventBatcher) Replay(ctx context.Context) error {
 	if d == nil || d.inbox == nil {
 		return nil
 	}
-	return d.inbox.LoadPendingEvents(ctx, func(messageID string, event *storagepb.RowsUpserted, receivedAt time.Time) error {
+	return d.inbox.LoadPendingEvents(ctx, func(messageID string, event *storagepb.DatasetRowsUpserted, receivedAt time.Time) error {
 		if !d.ingestMemory(messageID, event, receivedAt) {
 			return d.inbox.CommitPendingEvents(ctx, []string{messageID})
 		}
@@ -342,16 +342,16 @@ func orderedMessageIDs(set map[string]struct{}) []string {
 	return out
 }
 
-func (d *EventBatcher) matchBindings(key *storagepb.TimeSeriesKey) []domain.FactorBinding {
+func (d *EventBatcher) matchBindings(spaceID, datasetID, subjectID, freq string) []domain.FactorBinding {
 	out := []domain.FactorBinding{}
 	for _, binding := range d.bindings {
 		if binding.Status != domain.BindingStatusEnabled {
 			continue
 		}
-		if binding.SpaceID != key.GetSpaceId() || binding.SourceDataset != key.GetDatasetId() || binding.Freq != key.GetFreq() {
+		if binding.SpaceID != spaceID || binding.SourceDataset != datasetID || binding.Freq != freq {
 			continue
 		}
-		if !subjectAllowed(binding, key.GetSubjectId()) {
+		if !subjectAllowed(binding, subjectID) {
 			continue
 		}
 		out = append(out, binding)

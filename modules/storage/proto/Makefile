@@ -1,4 +1,4 @@
-PROTO_FILES := common.proto metadata.proto rows.proto data_node.proto primary_store.proto view.proto view_index.proto dataset_fields_changed.proto
+PROTO_FILES := common.proto metadata.proto rows.proto data_node.proto primary_store.proto view.proto view_index.proto
 OUTPUT_DIR := ./storagegen
 COMMON_PROTO_DIR := ../../../packages/commonpb
 

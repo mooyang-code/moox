@@ -23,6 +23,11 @@ func NewSpotAPI(client *Client) *SpotAPI {
 	return &SpotAPI{client: client}
 }
 
+// GetRecentTrades 获取现货最近成交。
+func (api *SpotAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+	return getRecentTrades(ctx, api.client, api.client.SpotDomain(), SpotTradesEndpoint, "SpotAPI", true, req)
+}
+
 // GetKline 获取现货K线数据
 // API: GET https://api.binance.com/api/v3/klines
 func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {

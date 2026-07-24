@@ -40,7 +40,7 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 		nc.Close()
 		t.Fatal(err)
 	}
-	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_v1", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxAckPending: 32, MaxDeliver: 3, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_v1", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxAckPending: 32, MaxDeliver: 3, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		nc.Close()
 		t.Fatal(err)
 	}
@@ -80,19 +80,19 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
 		start := base.Add(time.Duration(i) * time.Minute)
-		payload := &marketpb.KlineClosed{Exchange: "binance", Symbol: "BTC-USDT", Frequency: "1m", WindowStart: timestamppb.New(start), WindowEnd: timestamppb.New(start.Add(time.Minute)), Open: float64(100 + i), High: float64(101 + i), Low: float64(99 + i), Close: float64(100 + i), Volume: 1, QuoteVolume: 100, TradeCount: 2}
-		if _, err := publisher.Publish(context.Background(), events.MarketKlineClosed, payload, events.PublishOptions{EventID: fmt.Sprintf("binance:%s:%d", payload.GetSymbol(), i), OccurredAt: start.Add(time.Minute), SpaceID: "crypto", SubjectID: payload.GetSymbol()}); err != nil {
+		payload := &marketpb.Tick{Exchange: "binance", TradeId: fmt.Sprintf("trade-%d", i), Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(start.Add(10 * time.Second))}
+		if _, err := publisher.Publish(context.Background(), events.TickReceived, payload, events.PublishOptions{EventID: fmt.Sprintf("binance:%s:%d", payload.GetSymbol(), i), OccurredAt: start.Add(time.Minute), SpaceID: "crypto", SubjectID: payload.GetSymbol()}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(writer.bars) != 1 || !writer.bars[0].Closed || writer.bars[0].Volume != 5 || writer.bars[0].TradeCount != 10 {
+	if len(writer.bars) != 1 || !writer.bars[0].Closed || writer.bars[0].Volume != 5 || writer.bars[0].TradeCount != 5 {
 		t.Fatalf("aggregated bars = %+v", writer.bars)
 	}
-	duplicate := &marketpb.KlineClosed{Exchange: "binance", Symbol: "BTC-USDT", Frequency: "1m", WindowStart: timestamppb.New(base.Add(4 * time.Minute)), WindowEnd: timestamppb.New(base.Add(5 * time.Minute)), Open: 104, High: 105, Low: 103, Close: 104, Volume: 1, QuoteVolume: 100, TradeCount: 2}
-	if _, err := publisher.Publish(context.Background(), events.MarketKlineClosed, duplicate, events.PublishOptions{EventID: "binance:BTC-USDT:4", OccurredAt: base.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: duplicate.GetSymbol()}); err != nil {
+	duplicate := &marketpb.Tick{Exchange: "binance", TradeId: "trade-4", Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(base.Add(4*time.Minute + 10*time.Second))}
+	if _, err := publisher.Publish(context.Background(), events.TickReceived, duplicate, events.PublishOptions{EventID: "binance:BTC-USDT:4", OccurredAt: base.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: duplicate.GetSymbol()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.RunOnce(context.Background()); err != nil {

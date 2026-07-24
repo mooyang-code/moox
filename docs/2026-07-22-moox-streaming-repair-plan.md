@@ -4,7 +4,9 @@
 
 **Goal:** 在现有 `Go + NATS JetStream` 基础上，建立统一、显式、可治理的事件模块，打通 `Collector -> NATS -> streamcalc -> Storage` 的实时流计算路径；同时修复消费可靠性、Storage View 全局队头阻塞和 Factor Runtime 边界问题。
 
-**Architecture:** `modules/eventbus` 作为独立部署的 NATS/JetStream 基础设施服务；`packages/events` 作为所有业务事件的唯一契约和发布/消费入口；业务模块不得直接拼接 NATS Subject 或发布裸消息。实时链路采用 `Collector -> EventMessage -> NATS -> streamcalc -> Storage`，Storage 通过 Outbox 发布 `storage.rows.upserted`，下游 Factor、Strategy、View、Archive 再消费标准事件。Storage View 第一阶段按 `delivery.Subject` 建立有序 Lane，使不同 Dataset 并行、同一 Dataset 保序；暂不做同一 Dataset 内按标的并发，直到补齐 Row/Field revision 语义。
+**Architecture:** `modules/eventbus` 作为独立部署的 NATS/JetStream 基础设施服务；`packages/events` 作为所有业务事件的唯一契约和发布/消费入口；业务模块不得直接拼接 NATS Subject 或发布裸消息。实时链路采用 `Collector -> EventMessage -> NATS -> streamcalc -> Storage`，Storage 通过 Outbox 发布 `storage.dataset.rows.upserted`，下游 Factor、Strategy、View、Archive 再消费标准事件。Storage View 第一阶段按 `delivery.Subject` 建立有序 Lane，使不同 Dataset 并行、同一 Dataset 保序；暂不做同一 Dataset 内按标的并发，直到补齐 Row/Field revision 语义。
+
+> **Current contract note (2026-07-23):** 本文早期示例中的 `market.trade.received`、`storage.rows.upserted`、`TradeReceived`、`RowsUpserted` 外层 bytes wrapper 和 `EventSpec` 已被当前执行计划 [2026-07-23-event-contract-refactor-plan.md](2026-07-23-event-contract-refactor-plan.md) supersede。当前唯一命名为 `TickReceived`/`market.tick.received`、`TradingSignal`/`trading.signal`、`DatasetRowsUpserted`/`storage.dataset.rows.upserted`；结构化 Storage Payload 归属 `packages/storagepb`，Registry API 为 `EventSchema`/`Schema`/`Schemas`。本项目未上线，不保留旧名兼容别名。
 
 **Tech Stack:** Go 1.25、NATS JetStream、Pebble、DuckDB、Bleve、SQLite、Protobuf、Prometheus、现有 MooX 多模块 `go.work`。
 
@@ -66,7 +68,7 @@ message EventMessage {
 | `event_version` | Payload/语义版本；新项目直接演进版本，不承担 `protocol_version` 兼容层职责 |
 | `space_id` | 业务空间，例如交易所、账户域或策略空间；由事件注册表声明是否必填 |
 | `subject_id` | 事件主体，例如 `BTC-USDT`、Dataset ID；无主体事件可为空 |
-| `occurred_at` | 事实发生时间，供 event-time 聚合、迟到处理和回放使用 |
+| `occurred_at` | EventMessage 生产事实的时间。DataNode 的 `storage.rows.upserted` 使用 Outbox 事件构造时间；行情行内 `data_time` 才是聚合 event-time |
 | `payload` | 具体 Protobuf Payload；Dataset、频率、窗口、交易 ID 等业务字段放在 Payload 内 |
 
 明确不放入核心消息体的内容：
@@ -130,7 +132,7 @@ events:
   - name: market.kline.closed
     version: 1
     payload: trpc.moox.market.KlineClosed
-    subject: moox.market.kline.closed.v1.<space>.<subject>.<freq>
+    subject: moox.market.kline.closed.v1.<space>.<subject>
     stream: market
     partition_key: subject_id
     owner: streamcalc
@@ -149,6 +151,7 @@ events:
 2. 事件版本、Payload 类型、Subject 版本和 Stream 映射必须一致。
 3. 一个事件只能落到一个 Stream class；Stream 的 `retention`、容量和消费策略不写入事件契约。
 4. Subject 只用于路由，运行时仍校验 Subject 与 `EventMessage` 的 `event_name/version/space_id/subject_id` 一致。
+5. V1 不把 `frequency` 放入 Subject；频率是 K 线 Payload 的事实字段。需要按频率扩容或隔离时，再新增明确的 Subject 分区和对应 Registry/Topology 契约，不能由消费者自行拼接。
 5. 业务模块的生产者、消费者、ACL 和文档由注册表校验或生成；CI 禁止出现未注册的裸 Subject。
 6. 存储事件统一改名为 `storage.rows.upserted`；不保留 `DatasetFieldsChanged` 兼容别名。
 
@@ -234,6 +237,11 @@ producer creates fact
 ACK 只能发生在 Inbox/状态/下游 Outbox 的业务提交完成之后。重复 `event_id` 必须视为已处理并 ACK；临时错误使用 `InProgress`/NAK；Payload 不合法或不可恢复错误进入 DLQ/TERM。
 
 `event_id` 的稳定生成规则：交易事件使用 `exchange + trade_id`；K 线事件使用 `source + subject + freq + window_start + revision`；Storage 事件使用 Storage Outbox ID。重试和 Outbox 重放不能重新生成 ID。
+
+`storage.rows.upserted` 的公共 Payload 只保留 `dataset_id` 和 `rows` 字节。`rows` 由
+Storage 模块自己的 `storagegen.RowsUpserted` 编码，避免 `packages/events` 反向依赖
+`modules/storage` 形成 Go Module 环；公共层提供统一 EventMessage/Storage wrapper 解码器，
+业务模块只负责解码自己的行协议并校验 Space/Dataset 身份。
 
 ## 文件责任边界
 
@@ -606,6 +614,11 @@ laneKey = delivery.Subject
 3. 永久错误才 `Term` 或进入 DLQ；
 4. 不同 Subject Lane 的失败不能阻塞其他 Dataset。
 
+临时错误不能无限占住 `max_ack_pending`。Storage View 默认在客户端重试 10 次；达到上限
+后调用 `RetryExhausted` quarantine/DLQ hook，持久化成功后 `Term`，避免全局 pending
+永久耗尽。Storage View 生产入口默认把原始消息投递到 `moox.dlq.message.rejected.v1`；
+自定义 hook 失败则继续保持 pending 并重试。
+
 - [ ] **Step 5: 增加并发正确性测试**
 
 测试必须验证：
@@ -655,6 +668,7 @@ moox_storage_view_oldest_pending_event_age_seconds
 moox_storage_view_delivery_duration_seconds
 moox_storage_view_ack_errors_total
 moox_storage_view_in_progress_errors_total
+moox_storage_view_retry_exhausted_total
 moox_storage_view_lane_active
 moox_storage_outbox_pending_entries
 moox_storage_outbox_oldest_age_seconds
@@ -1124,13 +1138,13 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 
 ### 必须满足
 
-- `packages/events` 是所有业务事件的唯一 Publish/Consume 入口，Registry 是事件名称、版本、Payload、Subject、Stream 和顺序键的唯一事实来源。
+- `packages/events` 是市场与 Storage 治理事件的唯一 Publish/Consume 入口，Registry 是这些事件名称、版本、Payload、Subject、Stream 和顺序键的唯一事实来源；非治理 Command/Snapshot/运行时消息仍由 `packages/messagepb.MooxMessage` 承载，不能与治理事件混用。
 - `EventMessage` 外层显式包含 `event_id`、`event_name`、`event_version`、`space_id`、`subject_id`、`occurred_at` 和 `payload`；消费者不需要解析 NATS Subject 获取这些信息。
 - 核心 EventMessage 不包含 `protocol_version`、`topic`、`content_type`、`payload_type`、`published_at`、`producer`、`causation_id`、`correlation_id` 或自由扩展 `attributes`。
 - `retention` 只存在于 EventBus Stream topology，不存在于 Event Registry 或 Payload；EventBus 服务可以独立启动、校验和暴露拓扑健康状态。
 - `modules/eventbus` 不承载业务 Handler；`modules/streamcalc` 是独立 Go 服务，消费 NATS 事件并负责 K 线聚合。
 - Collector 实时路径只发布市场事件，不与 streamcalc 对同一事实双写 Storage。
-- Storage 事实事件统一使用 `storage.rows.upserted`；active runtime/config 和新契约测试不再依赖 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed`，旧通用 helper/legacy_storage 测试只作为非验收残留单独标记。
+- Storage 事实事件统一使用 `storage.rows.upserted`；active runtime/config 和新契约测试不再依赖 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed`，非治理模块的 `MooxMessage` 不属于本事件契约。
 - streamcalc 能按 event-time 聚合目标 K 线，处理重复、迟到、窗口关闭和 revision，并在 Storage 写入完成后才 ACK 输入事件。
 - Factor、Archive、Storage View 都能绑定 EventBus 当前声明的 Consumer。
 - DataNode 发布的事件能被 Factor、Archive、Storage View 正确解码。
@@ -1162,6 +1176,9 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 - [x] Storage View 使用 Subject Lane、可配置 Fetch/Worker/AckPending，并让 ApplyViewIndex 与实时/回补 gate 共用协调机制。
 - [x] 补齐 Event ID 与 NATS `Nats-Msg-Id` 校验、坏消息 TERM、streamcalc 写入失败后的 pending output 重试与 checkpoint 保存。
 - [x] 保留 `PublishBatch` 输入结果顺序，但注释明确不承诺 JetStream 发布顺序。
+- [x] 统一 `DecodeRaw`/Storage wrapper 解码入口；Archive 直接消费治理 `EventMessage`，不再伪造 legacy `MooxMessage`。
+- [x] Storage View 使用本地 retry counter（不依赖不会随 `InProgress` 递增的 `DeliveryCount`）；临时失败具备有界重试，默认通过独立 `packages/dlqpb` 发布 typed `RejectedMessage`，DLQ 成功后 TERM；DLQ 发布连续失败达到上限时不 TERM 原消息，停止心跳交给 JetStream 重投，并记录 retry exhaustion 指标。
+- [x] JetStream Stream `duplicates` 进入配置；Registry Subject 模板进程内缓存，EventBus topology 校验从 Registry specs 自动覆盖。
 
 仍需在最终验收阶段完成：
 
@@ -1264,7 +1281,7 @@ message EventMessage {
 | `event_version` | Payload/语义版本；新项目直接演进版本，不承担 `protocol_version` 兼容层职责 |
 | `space_id` | 业务空间，例如交易所、账户域或策略空间；由事件注册表声明是否必填 |
 | `subject_id` | 事件主体，例如 `BTC-USDT`、Dataset ID；无主体事件可为空 |
-| `occurred_at` | 事实发生时间，供 event-time 聚合、迟到处理和回放使用 |
+| `occurred_at` | EventMessage 生产事实的时间；DataNode Storage 事件为 Outbox 构造时间，行情行内 `data_time` 才是聚合 event-time |
 | `payload` | 具体 Protobuf Payload；Dataset、频率、窗口、交易 ID 等业务字段放在 Payload 内 |
 
 明确不放入核心消息体的内容：
@@ -1328,7 +1345,7 @@ events:
   - name: market.kline.closed
     version: 1
     payload: trpc.moox.market.KlineClosed
-    subject: moox.market.kline.closed.v1.<space>.<subject>.<freq>
+    subject: moox.market.kline.closed.v1.<space>.<subject>
     stream: market
     partition_key: subject_id
     owner: streamcalc
@@ -1853,6 +1870,7 @@ moox_storage_view_oldest_pending_event_age_seconds
 moox_storage_view_delivery_duration_seconds
 moox_storage_view_ack_errors_total
 moox_storage_view_in_progress_errors_total
+moox_storage_view_retry_exhausted_total
 moox_storage_view_lane_active
 moox_storage_outbox_pending_entries
 moox_storage_outbox_oldest_age_seconds
@@ -2322,13 +2340,13 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage 
 
 ### 必须满足
 
-- `packages/events` 是所有业务事件的唯一 Publish/Consume 入口，Registry 是事件名称、版本、Payload、Subject、Stream 和顺序键的唯一事实来源。
+- `packages/events` 是市场与 Storage 治理事件的唯一 Publish/Consume 入口；非治理 Command/Snapshot/运行时消息仍由 `packages/messagepb.MooxMessage` 承载，不能与治理事件混用。
 - `EventMessage` 外层显式包含 `event_id`、`event_name`、`event_version`、`space_id`、`subject_id`、`occurred_at` 和 `payload`；消费者不需要解析 NATS Subject 获取这些信息。
 - 核心 EventMessage 不包含 `protocol_version`、`topic`、`content_type`、`payload_type`、`published_at`、`producer`、`causation_id`、`correlation_id` 或自由扩展 `attributes`。
 - `retention` 只存在于 EventBus Stream topology，不存在于 Event Registry 或 Payload；EventBus 服务可以独立启动、校验和暴露拓扑健康状态。
 - `modules/eventbus` 不承载业务 Handler；`modules/streamcalc` 是独立 Go 服务，消费 NATS 事件并负责 K 线聚合。
 - Collector 实时路径只发布市场事件，不与 streamcalc 对同一事实双写 Storage。
-- Storage 事实事件统一使用 `storage.rows.upserted`；active runtime/config 和新契约测试不再依赖 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed`，旧通用 helper/legacy_storage 测试只作为非验收残留单独标记。
+- Storage 事实事件统一使用 `storage.rows.upserted`；active runtime/config 和新契约测试不再依赖 `DatasetFieldsChanged`、`fields_changed` 或 `rows_committed`，非治理模块的 `MooxMessage` 不属于本事件契约。
 - streamcalc 能按 event-time 聚合目标 K 线，处理重复、迟到、窗口关闭和 revision，并在 Storage 写入完成后才 ACK 输入事件。
 - Factor、Archive、Storage View 都能绑定 EventBus 当前声明的 Consumer。
 - DataNode 发布的事件能被 Factor、Archive、Storage View 正确解码。

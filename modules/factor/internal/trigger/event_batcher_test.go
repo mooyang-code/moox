@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -20,11 +20,11 @@ type pendingStoreFake struct {
 }
 
 type pendingStoreRow struct {
-	event      *storagepb.RowsUpserted
+	event      *storagepb.DatasetRowsUpserted
 	receivedAt time.Time
 }
 
-func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event *storagepb.RowsUpserted, at time.Time) (bool, error) {
+func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event *storagepb.DatasetRowsUpserted, at time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.rows == nil {
@@ -36,13 +36,13 @@ func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event
 	if _, ok := s.rows[id]; ok {
 		return false, nil
 	}
-	s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.RowsUpserted), receivedAt: at}
+	s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.DatasetRowsUpserted), receivedAt: at}
 	return true, nil
 }
 
-func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.RowsUpserted, time.Time) error) error {
+func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.DatasetRowsUpserted, time.Time) error) error {
 	for id, row := range s.rows {
-		if err := visit(id, proto.Clone(row.event).(*storagepb.RowsUpserted), row.receivedAt); err != nil {
+		if err := visit(id, proto.Clone(row.event).(*storagepb.DatasetRowsUpserted), row.receivedAt); err != nil {
 			return err
 		}
 	}
@@ -273,6 +273,6 @@ func binding(factorID string, sourceDataset string, subjectMode string, subjects
 	}
 }
 
-func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.RowsUpserted {
-	return &storagepb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: []*storagepb.RowFieldUpsert{{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339)}}}}}}
+func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.DatasetRowsUpserted {
+	return &storagepb.DatasetRowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339)}}}}}}
 }

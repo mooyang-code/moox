@@ -7,11 +7,11 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-const RowsUpsertedSubjectPrefix = "moox.storage.rows.upserted.v1"
+const DatasetRowsUpsertedSubjectPrefix = "moox.storage.dataset.rows.upserted.v1"
 
-func RowsUpsertedSubject(prefix, spaceID, datasetID string) (string, error) {
+func DatasetRowsUpsertedSubject(prefix, spaceID, datasetID string) (string, error) {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = RowsUpsertedSubjectPrefix
+		prefix = DatasetRowsUpsertedSubjectPrefix
 	}
 	spaceToken, err := jetstream.EncodeSubjectToken(spaceID)
 	if err != nil {
@@ -24,9 +24,9 @@ func RowsUpsertedSubject(prefix, spaceID, datasetID string) (string, error) {
 	return fmt.Sprintf("%s.%s.%s", strings.TrimSuffix(prefix, "."), spaceToken, datasetToken), nil
 }
 
-func ParseRowsUpsertedSubject(prefix, subject string) (string, string, error) {
+func ParseDatasetRowsUpsertedSubject(prefix, subject string) (string, string, error) {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = RowsUpsertedSubjectPrefix
+		prefix = DatasetRowsUpsertedSubjectPrefix
 	}
 	parts := strings.Split(subject, ".")
 	prefixParts := strings.Split(strings.TrimSuffix(prefix, "."), ".")

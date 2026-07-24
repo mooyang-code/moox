@@ -13,13 +13,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -86,13 +84,16 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	observed := time.Now().UTC().Truncate(time.Millisecond)
 	raw := []byte("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n")
 	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 1, SampleCount: 1}
-	payload, err := proto.Marshal(snapshot)
+	registry, err := events.DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := timestamppb.New(observed)
-	message := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "monitor-metric-e2e-1", Topic: metrics.MetricTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "fixture-service", InstanceId: "fixture-1", BootId: "boot-1", NodeId: "node-1", Version: "test"}, SpaceId: metrics.InternalMetricSpaceID, OccurredAt: now, PublishedAt: now, ContentType: metrics.MetricContentType, MessageType: "moox.metrics.snapshot.reported.v1", Payload: payload}
-	if _, err := eventClient.Publish(ctx, message); err != nil {
+	publisher, err := events.NewPublisher(eventClient, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageID := "monitor-metric-e2e-1"
+	if _, err := publisher.Publish(ctx, events.MetricsReported, &metricspb.MetricReport{ServiceName: "fixture-service", InstanceId: "fixture-1", NodeId: "node-1", BootId: "boot-1", ServiceVersion: "test", Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: observed, SpaceID: metrics.InternalMetricSpaceID, SubjectID: "fixture-service/fixture-1"}); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := fetchMetricsEventually(ctx, consumer, 5*time.Second)
@@ -113,8 +114,8 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.Value != 7 || latest.MessageID != message.MessageId {
-		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, message.MessageId)
+	if latest.Value != 7 || latest.MessageID != messageID {
+		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
 	if len(access.rows) != 1 || access.rows[0].GetKey().GetSubjectId() != series[0].SeriesID {
 		t.Fatalf("storage rows=%d row=%+v", len(access.rows), access.rows)

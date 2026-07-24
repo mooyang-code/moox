@@ -23,6 +23,11 @@ func NewSwapAPI(client *Client) *SwapAPI {
 	return &SwapAPI{client: client}
 }
 
+// GetRecentTrades 获取永续合约最近成交。
+func (api *SwapAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+	return getRecentTrades(ctx, api.client, api.client.SwapDomain(), SwapTradesEndpoint, "SwapAPI", true, req)
+}
+
 // GetKline 获取永续合约K线数据
 // API: GET https://fapi.binance.com/fapi/v1/klines
 func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {

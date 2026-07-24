@@ -454,7 +454,7 @@ t_monitor_host_notification_outbox
 - consumer transaction 只负责插入 inbox 和自动注册 Agent；commit 后 ACK。只有该 transaction 的临时 DB 错误才 NAK；Storage 错误发生在 ACK 后的本地 projector/outbox，不回退 consumer ACK。
 - projector 在一个 SQLite transaction 中更新 latest/alert、upsert minute history outbox、写 notification outbox 并把 inbox 标为 projected；restart 后继续处理 pending inbox。
 - history outbox 到 `bucket_end + 30s` 才可发送，Storage 成功后删除；失败按有界 backoff 重试。该中央 outbox 与已经取消的 Host Agent outbox 是不同边界。
-- 确定性 poison message发布 `messagepb.RejectedMessage` 后 Term。
+- 确定性 poison message 发布 `dlqpb.RejectedMessage` 后 Term。
 - registry 的 disabled/archived 只控制展示和告警，不是安全撤销；共享 token Agent 可换新 UUID 自动注册。
 - V1 部署脚本和 SysDeploy 只配置一个 host-metrics consumer owner。V1 不实现分布式锁；若运维手工启动第二个相同 durable consumer，NATS 可能分流到不同 SQLite，该配置明确不受支持并在运维文档中告警。
 
@@ -973,7 +973,7 @@ git commit -m "feat(hostagent): publish best-effort host snapshots"
 
 - [ ] **Step 3: 实现 durable loop**
 
-唯一部署 owner bind `monitor_hostmetrics_ingest_v1`；SQLite inbox transaction commit 后 ACK；transaction 临时错误 NAK；poison message 发布 `messagepb.RejectedMessage` 后 Term。部署测试必须断言 SysDeploy/start scripts 只启动一个 owner，并明确不宣称运行时 lease/fencing。
+唯一部署 owner bind `monitor_hostmetrics_ingest_v1`；SQLite inbox transaction commit 后 ACK；transaction 临时错误 NAK；poison message 发布 `dlqpb.RejectedMessage` 后 Term。部署测试必须断言 SysDeploy/start scripts 只启动一个 owner，并明确不宣称运行时 lease/fencing。
 
 - [ ] **Step 4: 验证停止/恢复**
 

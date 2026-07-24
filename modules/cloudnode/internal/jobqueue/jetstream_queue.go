@@ -2,6 +2,7 @@ package jobqueue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,11 +11,11 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	nats "github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -24,6 +25,7 @@ const defaultFetchMaxWait = 500 * time.Millisecond
 type JetStreamQueue struct {
 	rt         *Runtime
 	client     *jetstream.Client
+	publisher  *events.Publisher
 	cfg        QueueConfig
 	mu         sync.Mutex
 	inflight   map[string]*jetstream.Delivery
@@ -52,7 +54,14 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if rt != nil {
 		client = rt.Client()
 	}
-	return &JetStreamQueue{rt: rt, client: client, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.PullConsumer), fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64)}
+	var publisher *events.Publisher
+	if client != nil {
+		registry, err := events.DefaultRegistry()
+		if err == nil {
+			publisher, _ = events.NewPublisher(client, registry)
+		}
+	}
+	return &JetStreamQueue{rt: rt, client: client, publisher: publisher, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.PullConsumer), fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64)}
 }
 
 func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
@@ -62,19 +71,35 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	if strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetJobItemId()) == "" {
 		return nil, fmt.Errorf("space_id and job_item_id are required")
 	}
-	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(item)
+	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(item)
 	if err != nil {
 		return nil, err
 	}
-	now := timestamppb.Now()
 	messageID := item.GetJobItemId()
-	topic := ExecSubject(q.cfg.Naming, item.GetSpaceId(), item.GetCodePackageId(), item.GetJobType())
-	msg := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: messageID, Topic: topic, Kind: messagepb.MessageKind_MESSAGE_KIND_COMMAND, Producer: &messagepb.Producer{ServiceName: "moox-cloudnode", InstanceId: "cloudnode"}, SpaceId: item.GetSpaceId(), OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf; message=trpc.moox.cloudnode.JobItem", MessageType: "moox.cloudnode.job_item.v1", Payload: data}
-	ack, err := q.client.Publish(ctx, msg)
+	values := map[string]any{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, err
+	}
+	payload, err := structpb.NewStruct(values)
 	if err != nil {
 		return nil, err
 	}
-	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: topic, Stream: ack.Stream, Sequence: ack.Sequence}, nil
+	if q.publisher == nil {
+		return nil, errors.New("cloudnode event publisher is unavailable")
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	subject, err := registry.RenderSubject(events.CloudJobRequested, item.GetSpaceId(), item.GetJobItemId())
+	if err != nil {
+		return nil, err
+	}
+	ack, err := q.publisher.Publish(ctx, events.CloudJobRequested, payload, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: item.GetJobItemId()})
+	if err != nil {
+		return nil, err
+	}
+	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: subject, Stream: ack.Stream, Sequence: ack.Sequence}, nil
 }
 
 func consumerConfigForRoute(cfg QueueConfig, spaceID, codePackageID, jobType string) jetstream.ConsumerConfig {
@@ -180,10 +205,30 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 	out := make([]Delivery, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		actionCtx := ctx
-		item := &pb.JobItem{}
-		if err := proto.Unmarshal(delivery.Message.GetPayload(), item); err != nil {
+		registry, err := events.DefaultRegistry()
+		if err != nil {
+			return nil, err
+		}
+		message, payload, decodeErr := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+		if decodeErr != nil {
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
-				return nil, errors.Join(err, fmt.Errorf("term malformed job item: %w", actionErr))
+				return nil, errors.Join(decodeErr, actionErr)
+			}
+			continue
+		}
+		structPayload, ok := payload.(*structpb.Struct)
+		if !ok {
+			if actionErr := delivery.Term(actionCtx); actionErr != nil {
+				return nil, errors.Join(errors.New("cloudnode payload type mismatch"), actionErr)
+			}
+			continue
+		}
+		item := &pb.JobItem{}
+		itemJSON, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(structPayload)
+		unmarshalErr := protojson.UnmarshalOptions{DiscardUnknown: false}.Unmarshal(itemJSON, item)
+		if err != nil || unmarshalErr != nil {
+			if actionErr := delivery.Term(actionCtx); actionErr != nil {
+				return nil, errors.Join(errors.New("decode malformed cloudnode job item"), fmt.Errorf("term malformed job item: %w", actionErr))
 			}
 			continue
 		}
@@ -193,8 +238,12 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 			}
 			continue
 		}
-		meta := JobItemMessage{SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(), JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()), Priority: item.GetPriority(), SubmittedAt: delivery.Message.GetOccurredAt().AsTime()}
-		token := fmt.Sprintf("%s:%d", delivery.Message.GetMessageId(), delivery.ConsumerSeq)
+		submittedAt := time.Now().UTC()
+		if message.GetOccurredAt() != nil {
+			submittedAt = message.GetOccurredAt().AsTime().UTC()
+		}
+		meta := JobItemMessage{SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(), JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()), Priority: item.GetPriority(), SubmittedAt: submittedAt}
+		token := fmt.Sprintf("%s:%d", delivery.RawMessageID, delivery.ConsumerSeq)
 		q.mu.Lock()
 		q.inflight[token] = delivery
 		q.mu.Unlock()

@@ -3,7 +3,6 @@ syntax = "proto3";
 package trpc.moox.eventbus;
 
 import "moox_common.proto";
-import "moox_message.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen;eventbuspb";
 
@@ -49,9 +48,9 @@ message GetConsumerRsp {
 message TopicInfo {
   string topic = 1;
   string stream = 2;
-  trpc.moox.message.MessageKind kind = 3;
-  string payload_content_type = 4;
-  uint32 payload_version = 5;
+  string event_name = 3;
+  uint32 event_version = 4;
+  string payload = 5;
   bool enabled = 6;
 }
 

@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
+	"google.golang.org/protobuf/proto"
 )
 
 type runtimeTestStore struct {
@@ -74,18 +75,24 @@ func newRuntimeTestClient() *runtimeTestClient {
 	client.ready.Store(true)
 	return client
 }
-func (c *runtimeTestClient) Publish(_ context.Context, message *messagepb.MooxMessage, _ ...jetstream.PublishOption) (*jetstream.PublishAck, error) {
-	if !c.ready.Load() {
+func (c *runtimeTestClient) Ready() bool                    { return c.ready.Load() }
+func (c *runtimeTestClient) Close() error                   { c.ready.Store(false); return nil }
+func (c *runtimeTestClient) EventPublisher() EventPublisher { return runtimeEventPublisher{client: c} }
+
+type runtimeEventPublisher struct {
+	client *runtimeTestClient
+}
+
+func (p runtimeEventPublisher) Publish(_ context.Context, _ events.EventType, _ proto.Message, options events.PublishOptions) (*jetstream.PublishAck, error) {
+	if p.client == nil || !p.client.ready.Load() {
 		return nil, errors.New("disconnected")
 	}
-	c.ids <- message.GetMessageId()
+	p.client.ids <- options.EventID
 	return &jetstream.PublishAck{}, nil
 }
-func (c *runtimeTestClient) Ready() bool  { return c.ready.Load() }
-func (c *runtimeTestClient) Close() error { c.ready.Store(false); return nil }
 
 func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
-	store := &runtimeTestStore{row: domain.OutboxMessage{MessageID: "run-1", Topic: "moox.strategy.action.accepted.v1", Payload: []byte(`{}`), CreatedAt: time.Now().Add(-time.Minute)}}
+	store := &runtimeTestStore{row: domain.OutboxMessage{MessageID: "run-1", Topic: "moox.strategy.output.accepted.v1", Payload: []byte(`{}`), CreatedAt: time.Now().Add(-time.Minute)}}
 	client := newRuntimeTestClient()
 	var attempts atomic.Int32
 	runtime, err := NewRuntime(RuntimeConfig{

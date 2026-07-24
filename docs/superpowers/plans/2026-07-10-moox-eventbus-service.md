@@ -133,7 +133,7 @@ moox.dlq.message.rejected.v1
 
 `moox.storage.time_series.rows_updated.v1` and `moox.storage.record.rows_updated.v1` have kind `MESSAGE_KIND_EVENT` and payload types `trpc.moox.storage.TimeSeriesRowsUpdated` and `trpc.moox.storage.RecordRowsUpdated`. View Builder and Factor bind independent predeclared durables; they do not create consumers at startup. V1 标准部署不启动独立 Archive consumer；以后启用时必须先在 EventBus registry 增加两个 exact durables，不能复用 View Builder durable。
 
-`moox.dlq.message.rejected.v1` has kind `MESSAGE_KIND_EVENT` and payload content type `application/x-protobuf; message=trpc.moox.message.RejectedMessage`. Its bounded `reason` is sanitized, and it records only the source payload SHA-256 rather than copying the rejected raw payload.
+`moox.dlq.message.rejected.v1` has kind `MESSAGE_KIND_EVENT` and payload content type `application/x-protobuf; message=trpc.moox.dlq.RejectedMessage`. Its bounded `reason` is sanitized, and it carries the original payload bytes for diagnosis and replay.
 
 The `moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*` Topic family has kind `MESSAGE_KIND_COMMAND` and one `JobItem` payload schema. Space/package/job-type tokens remain in the concrete Subject so WorkQueue consumers keep non-overlapping exact filters and durable names.
 
@@ -544,7 +544,7 @@ topics:
   - topic: moox.dlq.message.rejected.v1
     stream: MOOX_DLQ
     kind: event
-    payload_content_type: application/x-protobuf; message=trpc.moox.message.RejectedMessage
+    payload_content_type: application/x-protobuf; message=trpc.moox.dlq.RejectedMessage
     payload_version: 1
     enabled: true
 
@@ -1046,7 +1046,7 @@ git commit -m "docs(eventbus): add verification and operations guide"
 - EventBus owns all Stream/KV retention configuration and refuses unsafe automatic changes.
 - The management plane is read-only and cannot publish messages.
 - Host metrics use only `moox.metrics.host.reported.v1` with `trpc.moox.hostagent.HostMetric`; no HTTP/tRPC publish path exists.
-- DLQ uses only `moox.dlq.message.rejected.v1` with `trpc.moox.message.RejectedMessage` and never copies rejected raw payloads.
+- DLQ uses only `moox.dlq.message.rejected.v1` with `trpc.moox.dlq.RejectedMessage` and carries rejected raw payloads in the typed quarantine record.
 - Every non-loopback NATS connection verifies the deployment private CA and advertised IP SAN; plaintext and insecure verification are impossible by configuration.
 - Host Agents share only the scoped publisher token, and Monitor uses a distinct scoped consumer token; real allow/deny ACL tests pass.
 - Storage/Factor are exact bind-only roles; CloudNode's explicitly documented security boundary is its entire Stream/KV and all cross-domain requests are denied.

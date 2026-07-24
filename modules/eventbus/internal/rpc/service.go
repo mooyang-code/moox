@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
+	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/nats-io/nats.go"
 )
 
@@ -80,15 +82,23 @@ func (s *Service) ListTopics(ctx context.Context, req *eventbusgen.ListTopicsReq
 	if err := s.statusErr(); err != nil {
 		return &eventbusgen.ListTopicsRsp{RetInfo: retErr(err)}, nil
 	}
-	items := make([]config.TopicConfig, 0)
-	for _, t := range s.cfg.Topics {
-		items = append(items, t)
+	eventRegistry, err := events.DefaultRegistry()
+	if err != nil {
+		return &eventbusgen.ListTopicsRsp{RetInfo: retErr(err)}, nil
+	}
+	items := make([]registry.Topic, 0)
+	for _, spec := range eventRegistry.Schemas() {
+		family, familyErr := eventRegistry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		if familyErr != nil {
+			return &eventbusgen.ListTopicsRsp{RetInfo: retErr(familyErr)}, nil
+		}
+		items = append(items, registry.Topic{Topic: family, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Topic < items[j].Topic })
 	page, rows := paginateRows(req.GetPage(), items)
 	out := make([]*eventbusgen.TopicInfo, 0, len(rows))
 	for _, t := range rows {
-		out = append(out, &eventbusgen.TopicInfo{Topic: t.Topic, Stream: t.Stream, Kind: t.Kind, PayloadContentType: t.PayloadContentType, PayloadVersion: t.PayloadVersion, Enabled: t.Enabled})
+		out = append(out, &eventbusgen.TopicInfo{Topic: t.Topic, Stream: t.Stream, EventName: t.EventName, EventVersion: t.EventVersion, Payload: t.Payload, Enabled: t.Enabled})
 	}
 	return &eventbusgen.ListTopicsRsp{RetInfo: retOK(), Topics: out, PageResult: page}, nil
 }

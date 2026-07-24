@@ -54,6 +54,18 @@ func TestTaskEventFromJobItemAllowsSymbolWithoutSymbolOrInterval(t *testing.T) {
 	}
 }
 
+func TestTaskEventFromJobItemUsesEmptyIntervalForTick(t *testing.T) {
+	event, err := taskEventFromJobItem(nodeRuntime.JobItem{
+		JobItemID: "task-tick",
+		Params: map[string]any{
+			"task_id": "task-tick", "exchange": "binance", "market": "spot", "data_type": "tick", "symbol": "BTCUSDT",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tick", event.DataType)
+	assert.Equal(t, []string{""}, event.Intervals)
+}
+
 func TestRuntimeSpaceID_FromEnv(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	assert.Equal(t, "crypto", runtimeSpaceID())

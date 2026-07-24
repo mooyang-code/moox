@@ -4,7 +4,7 @@ package trpc.moox.events;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/mooyang-code/moox/packages/events/proto/eventpb;eventpb";
+option go_package = "github.com/mooyang-code/moox/packages/events/eventpb;eventpb";
 
 // EventMessage is the small, explicit outer contract shared by all business
 // events. NATS subjects remain infrastructure routing and are not business

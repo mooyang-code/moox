@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/eventcontract"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,7 +17,7 @@ import (
 // DatasetPublisher publishes one durable message to the subject owned by a
 // Dataset. The transport message id is stable for a DataNode outbox id.
 type DatasetPublisher struct {
-	client *jetstream.Client
+	publisher *events.Publisher
 }
 
 func (p *DatasetPublisher) PublishMessage(ctx context.Context, data []byte) error {
@@ -26,55 +26,68 @@ func (p *DatasetPublisher) PublishMessage(ctx context.Context, data []byte) erro
 }
 
 func (p *DatasetPublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
-	if p == nil || p.client == nil {
+	if p == nil || p.publisher == nil {
 		return nil, errors.New("storage eventbus client is nil")
 	}
-	msg := &eventpb.EventMessage{}
-	if err := proto.Unmarshal(data, msg); err != nil {
+	_, _, err := validateDatasetEvent(data)
+	if err != nil {
 		return nil, err
 	}
-	if msg.GetEventName() != events.StorageRowsUpserted.Name || msg.GetEventVersion() != events.StorageRowsUpserted.Version || msg.GetEventId() == "" || msg.GetSubjectId() == "" || msg.GetSpaceId() == "" {
-		return nil, errors.New("dataset event envelope is incomplete")
+	message := new(eventpb.EventMessage)
+	if err := proto.Unmarshal(data, message); err != nil {
+		return nil, err
 	}
-	subject := eventSubject(msg)
-	if subject == "" {
-		return nil, errors.New("dataset event subject cannot be derived")
-	}
-	return p.client.PublishRaw(ctx, subject, msg.GetEventId(), data, events.ContentType)
+	return p.publisher.PublishMessage(ctx, message)
 }
 
-func eventSubject(message *eventpb.EventMessage) string {
+func validateDatasetEvent(data []byte) (string, string, error) {
+	message := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(data, message); err != nil {
+		return "", "", err
+	}
+	if message.GetEventName() != events.DatasetRowsUpserted.Name || message.GetEventVersion() != events.DatasetRowsUpserted.Version || message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
+		return "", "", errors.New("dataset event envelope is incomplete")
+	}
+	if message.GetEventId() == "outbox-pending" {
+		return "", "", errors.New("dataset event cannot use placeholder event id")
+	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
-		return ""
+		return "", "", err
 	}
-	spec, ok := registry.Spec(events.StorageRowsUpserted)
-	if !ok {
-		return ""
-	}
-	template, err := events.NewSubjectTemplate(spec.Subject)
+	subject, err := registry.RenderSubject(events.DatasetRowsUpserted, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
-		return ""
+		return "", "", err
 	}
-	subject, err := template.Render(message.GetSpaceId(), message.GetSubjectId())
-	if err != nil {
-		return ""
+	if _, _, err := events.DecodeDatasetRowsUpserted(registry, data, subject, message.GetEventId()); err != nil {
+		return "", "", fmt.Errorf("validate dataset event: %w", err)
 	}
-	return subject
+	return subject, message.GetEventId(), nil
 }
 
 func NewDatasetPublisher(client *jetstream.Client, _ string) *DatasetPublisher {
-	return &DatasetPublisher{client: client}
+	if client == nil {
+		return &DatasetPublisher{}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return &DatasetPublisher{}
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		return &DatasetPublisher{}
+	}
+	return &DatasetPublisher{publisher: publisher}
 }
 
 func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.RowsUpserted, outboxID uint64) error {
-	if p == nil || p.client == nil {
+	if p == nil || p.publisher == nil {
 		return errors.New("storage eventbus client is nil")
 	}
 	if event == nil || event.GetSpaceId() == "" || event.GetDatasetId() == "" {
 		return errors.New("rows upserted payload requires space_id and dataset_id")
 	}
-	rowPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+	rowPayload, err := eventcontract.ToSharedRows(event)
 	if err != nil {
 		return fmt.Errorf("marshal rows payload: %w", err)
 	}
@@ -86,14 +99,10 @@ func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.RowsUpserted, 
 	if err != nil {
 		return err
 	}
-	encoded, err := registry.Encode(events.StorageRowsUpserted, &eventstoragepb.RowsUpserted{DatasetId: event.GetDatasetId(), Rows: rowPayload}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
+	encoded, err := registry.Encode(events.DatasetRowsUpserted, rowPayload, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
 	if err != nil {
 		return err
 	}
-	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
-	if err != nil {
-		return err
-	}
-	_, err = p.client.PublishRaw(ctx, encoded.Subject, messageID, body, events.ContentType)
+	_, err = p.publisher.PublishMessage(ctx, encoded.Message)
 	return err
 }

@@ -8,12 +8,13 @@ require (
 	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/dlqpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/doctor v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
@@ -118,6 +119,8 @@ replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../stor
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
+replace github.com/mooyang-code/moox/packages/dlqpb => ../../packages/dlqpb
+
 replace github.com/mooyang-code/moox/packages/doctor => ../../packages/doctor
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
@@ -130,7 +133,7 @@ replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hos
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
+replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 

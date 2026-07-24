@@ -1,6 +1,6 @@
 # MooX EventBus 运维
 
-`moox-eventbus` 是 MooX 唯一的生产 NATS JetStream 所有者。业务进程直接连接 NATS 发布 `MooxMessage`，不经过 tRPC/HTTP 发布代理。EventBus 管理面只读，不能代替业务消费者处理消息。
+`moox-eventbus` 是 MooX 唯一的生产 NATS JetStream 所有者。业务进程直接连接 NATS 发布 `EventMessage`，不经过 tRPC/HTTP 发布代理。EventBus 管理面只读，不能代替业务消费者处理消息。
 
 ## 启动顺序
 
@@ -57,7 +57,7 @@ Stream/KV 由 `modules/eventbus/config/app.yaml` 声明并由 EventBus 在 readi
 
 达到时间或字节任一边界后，`limits` Stream 使用 `DiscardOld` 淘汰最旧消息；WorkQueue 在 ACK 后移除消息。完整的磁盘边界、下游历史与永久数据说明见[数据保留与磁盘空间](数据保留与磁盘空间.md)。
 
-Topic 必须遵循 `moox.<domain>.<entity>.<action>.v<major>`，且 `MooxMessage.topic` 必须等于实际 Subject。兼容字段追加可以复用当前 Topic；字段含义变化、重编号或 payload 替换必须发布新的 `.v2` Topic。先扩容再发布方，避免在消息已积压时缩小 `max_age` 或 `max_bytes`。Retention、Storage 和已有消息上的 Subject 删除会被拒绝，需要人工迁移。
+事件 Subject 由 `packages/events/registry/events.yaml` 唯一管理，实际 Subject 必须与 `EventMessage.event_name/event_version/space_id/subject_id` 一致。新项目不保留旧 Subject 兼容别名；字段含义变化或 payload 替换直接修改契约并重建测试环境。先扩容再发布方，避免在消息已积压时缩小 `max_age` 或 `max_bytes`。
 
 ## 积压、重复与 DLQ
 
@@ -86,7 +86,7 @@ V1 不实现回调订阅。未来通知回调应作为独立 durable consumer/wo
 
 ```bash
 ./scripts/test-deploy-moox-eventbus.sh
-go test -count=1 ./modules/eventbus/... ./packages/messagepb ./packages/jetstream
+go test -count=1 ./modules/eventbus/... ./packages/events ./packages/jetstream
 ```
 
 上述测试只使用临时 Broker 和临时持久化目录；发布归档不应包含 `data/eventbus/jetstream`。

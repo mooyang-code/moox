@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
+	"github.com/mooyang-code/moox/packages/events"
 	nats "github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -183,13 +184,11 @@ func (r *Registry) Config() *config.Config {
 }
 
 func enabledTopics(c *config.Config) int {
-	n := 0
-	for _, t := range c.Topics {
-		if t.Enabled {
-			n++
-		}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return 0
 	}
-	return n
+	return len(registry.Schemas())
 }
 
 func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
@@ -205,7 +204,11 @@ func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
 	if strings.EqualFold(s.Discard, "new") {
 		discard = nats.DiscardNew
 	}
-	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: 2 * time.Minute}
+	duplicates := s.Duplicates
+	if duplicates == 0 {
+		duplicates = 2 * time.Minute
+	}
+	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: duplicates}
 }
 
 func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config.StreamConfig, cfg *config.Config) error {
@@ -325,23 +328,38 @@ func subjectRemoved(old, next []string) bool {
 	return false
 }
 
-func TopicStream(cfg *config.Config, topic string) (config.TopicConfig, string, error) {
-	for _, t := range cfg.Topics {
-		if t.Enabled && t.Topic == topic {
-			return t, t.Stream, nil
+type Topic struct {
+	Topic        string
+	Stream       string
+	EventName    string
+	EventVersion uint32
+	Payload      string
+	Enabled      bool
+}
+
+func TopicStream(cfg *config.Config, topic string) (Topic, string, error) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return Topic{}, "", err
+	}
+	for _, spec := range registry.Schemas() {
+		family, familyErr := registry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		if familyErr == nil && topicMatchesPattern(topic, family) {
+			return Topic{Topic: topic, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true}, spec.Stream, nil
 		}
 	}
-	for _, family := range cfg.TopicFamilies {
-		if family.Enabled && topicMatchesPattern(topic, family.Pattern) {
-			return config.TopicConfig{Topic: topic, Stream: family.Stream, Kind: family.Kind, PayloadContentType: family.PayloadContentType, PayloadVersion: family.PayloadVersion, Enabled: family.Enabled}, family.Stream, nil
-		}
-	}
-	return config.TopicConfig{}, "", fmt.Errorf("topic %q is not registered", topic)
+	return Topic{}, "", fmt.Errorf("topic %q is not registered", topic)
 }
 
 func topicMatchesPattern(topic, pattern string) bool {
 	a, b := strings.Split(topic, "."), strings.Split(pattern, ".")
-	if len(a) != len(b) {
+	if len(b) > 0 && b[len(b)-1] == ">" {
+		if len(a) < len(b) {
+			return false
+		}
+		b = b[:len(b)-1]
+		a = a[:len(b)]
+	} else if len(a) != len(b) {
 		return false
 	}
 	for i := range a {

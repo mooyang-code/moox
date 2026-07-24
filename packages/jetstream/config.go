@@ -8,12 +8,7 @@ import (
 )
 
 const (
-	// ProtocolVersion is the current outer MooX Message protocol version.
-	ProtocolVersion uint32 = 1
-	// OuterContentType describes the protobuf envelope carried in a NATS message body.
-	OuterContentType    = "application/vnd.moox.message+protobuf"
-	defaultMaxPayload   = 8 * 1024 * 1024
-	maxBatchConcurrency = 256
+	defaultMaxPayload = 8 * 1024 * 1024
 )
 
 // Config controls the connection to a central NATS JetStream service.
@@ -34,8 +29,6 @@ type Config struct {
 	// MaxReconnects defaults to -1 (unlimited) when zero, so a central broker restart is recoverable.
 	MaxReconnects int
 	MaxPayload    int
-	// BatchConcurrency bounds the number of simultaneous PublishBatch calls.
-	BatchConcurrency int
 }
 
 // ConfigFromEnv applies the deployment-wide EventBus connection contract to a
@@ -94,11 +87,6 @@ func (cfg Config) normalized() Config {
 	}
 	if cfg.MaxPayload <= 0 {
 		cfg.MaxPayload = defaultMaxPayload
-	}
-	if cfg.BatchConcurrency <= 0 {
-		cfg.BatchConcurrency = 64
-	} else if cfg.BatchConcurrency > maxBatchConcurrency {
-		cfg.BatchConcurrency = maxBatchConcurrency
 	}
 	return cfg
 }

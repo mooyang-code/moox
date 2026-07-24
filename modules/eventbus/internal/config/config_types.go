@@ -1,19 +1,13 @@
 // Package config owns the explicit, validated EventBus configuration.
 package config
 
-import (
-	"time"
-
-	"github.com/mooyang-code/moox/packages/messagepb"
-)
+import "time"
 
 type Config struct {
 	Broker            BrokerConfig             `yaml:"broker"`
 	InternalClient    InternalClientConfig     `yaml:"internal_client"`
 	Health            HealthConfig             `yaml:"health"`
 	Streams           []StreamConfig           `yaml:"streams"`
-	Topics            []TopicConfig            `yaml:"topics"`
-	TopicFamilies     []TopicFamilyConfig      `yaml:"topic_families"`
 	Consumers         []ConsumerConfig         `yaml:"consumers"`
 	ConsumerTemplates []ConsumerTemplateConfig `yaml:"consumer_templates"`
 	KV                []KVConfig               `yaml:"kv"`
@@ -71,27 +65,10 @@ type StreamConfig struct {
 	Storage     string        `yaml:"storage"`
 	Replicas    int           `yaml:"replicas"`
 	MaxAge      time.Duration `yaml:"max_age"`
+	Duplicates  time.Duration `yaml:"duplicates"`
 	MaxBytes    int64         `yaml:"max_bytes"`
 	MaxMsgs     int64         `yaml:"max_msgs"`
 	Description string        `yaml:"description"`
-}
-
-type TopicConfig struct {
-	Topic              string                `yaml:"topic"`
-	Stream             string                `yaml:"stream"`
-	Kind               messagepb.MessageKind `yaml:"kind"`
-	PayloadContentType string                `yaml:"payload_content_type"`
-	PayloadVersion     uint32                `yaml:"payload_version"`
-	Enabled            bool                  `yaml:"enabled"`
-}
-
-type TopicFamilyConfig struct {
-	Pattern            string                `yaml:"pattern"`
-	Stream             string                `yaml:"stream"`
-	Kind               messagepb.MessageKind `yaml:"kind"`
-	PayloadContentType string                `yaml:"payload_content_type"`
-	PayloadVersion     uint32                `yaml:"payload_version"`
-	Enabled            bool                  `yaml:"enabled"`
 }
 
 type ConsumerConfig struct {

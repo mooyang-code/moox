@@ -5,10 +5,10 @@ go 1.25.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/messagepb v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tencent/goom v1.0.6
@@ -84,7 +84,7 @@ replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
-replace github.com/mooyang-code/moox/packages/messagepb => ../../packages/messagepb
+replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 

@@ -1,6 +1,6 @@
 # MooX EventBus
 
-`moox-eventbus` is the single production owner of the embedded NATS JetStream broker. Services connect directly to the configured NATS listener and publish the protobuf `MooxMessage`; the EventBus management plane is intentionally read-only and has no publish proxy.
+`moox-eventbus` is the single production owner of the embedded NATS JetStream broker. Services connect directly to the configured NATS listener and publish governed protobuf `EventMessage` values; the EventBus management plane is intentionally read-only and has no publish proxy.
 
 ## Endpoints
 
@@ -12,7 +12,7 @@
 
 ## Configuration
 
-`config/app.yaml` declares the broker, Streams, Topics, and KV buckets. Stream/KV reconciliation is completed before `/readyz` becomes successful. Retention and storage changes are rejected automatically; only bounded limits and descriptions may be changed in place.
+`config/app.yaml` declares the broker, stream and consumer topology, and KV buckets. Event names, versions, payloads, subjects, and owning streams come exclusively from `packages/events/registry/events.yaml`. Stream/KV reconciliation is completed before `/readyz` becomes successful. Retention and storage changes are rejected automatically; only bounded limits and descriptions may be changed in place.
 
 The `consumers` section is also the single source of truth for durable consumer topology. Storage View, Factor, and Archive use `packages/jetstream.BindManagedPullConsumer` with only their Stream, Durable, fetch wait, and poison-decode choice; they do not create, update, or delete consumers and must not duplicate filter or delivery limits in service configuration.
 

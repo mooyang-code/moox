@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -33,11 +34,11 @@ func (r *MetricMessageStore) IsDuplicate(ctx context.Context, messageID string) 
 
 // CommitIngest atomically records dedupe/catalog/latest state. Storage history
 // is deliberately written before this method and is independently idempotent.
-func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.MooxMessage, samples []Sample) (bool, error) {
+func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.EventMessage, report *metricspb.MetricReport, samples []Sample) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("metrics store is not initialized")
 	}
-	if msg == nil || msg.GetMessageId() == "" {
+	if msg == nil || msg.GetEventId() == "" || report == nil {
 		return false, errors.New("message_id is required")
 	}
 	retention := r.DedupeRetention
@@ -48,7 +49,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 	expires := now.Add(retention)
 	var duplicate bool
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		row := &MetricIngestMessage{MessageID: msg.GetMessageId(), ServiceName: msg.GetProducer().GetServiceName(), InstanceID: msg.GetProducer().GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
+		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
 		if at := msg.GetOccurredAt(); at != nil {
 			t := at.AsTime()
 			row.OccurredAt = &t
@@ -61,11 +62,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 			duplicate = true
 			return nil
 		}
-		producer := msg.GetProducer()
-		serviceName, instanceID, bootID, nodeID, version := "", "", "", "", ""
-		if producer != nil {
-			serviceName, instanceID, bootID, nodeID, version = producer.GetServiceName(), producer.GetInstanceId(), producer.GetBootId(), producer.GetNodeId(), producer.GetVersion()
-		}
+		serviceName, instanceID, bootID, nodeID, version := report.GetServiceName(), report.GetInstanceId(), report.GetBootId(), report.GetNodeId(), report.GetServiceVersion()
 		if serviceName == "" {
 			return errors.New("producer.service_name is required")
 		}

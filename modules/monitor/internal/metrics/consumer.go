@@ -2,8 +2,6 @@ package metrics
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,18 +9,15 @@ import (
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const (
-	MetricTopic                    = "moox.metrics.snapshot.reported.v1"
-	MetricContentType              = "application/vnd.moox.metrics.snapshot+protobuf"
-	MetricDLQTopic                 = "moox.dlq.message.rejected.v1"
+	MetricTopic                    = "moox.metrics.reported.v1.>"
 	unknownProducerGraceDeliveries = 120
 )
 
@@ -30,9 +25,6 @@ type ProducerAuthorizer interface {
 	IsRegistered(context.Context, string, string) (bool, error)
 }
 
-// CheckProducerAuthorizer authorizes metric producers against monitor checks.
-// The persistence implementation lives in store; the consumer only depends
-// on the narrow capability it needs.
 type CheckProducerAuthorizer struct{ Checks *store.CheckRepository }
 
 func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, _ string) (bool, error) {
@@ -43,11 +35,13 @@ func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, 
 }
 
 type DLQPublisher interface {
-	Publish(context.Context, *messagepb.MooxMessage) error
+	Publish(context.Context, *eventpb.EventMessage) error
 }
+
 type jetstreamDLQ struct {
 	client   *jetstream.Client
-	producer *messagepb.Producer
+	service  string
+	instance string
 }
 
 func JetStreamDLQ(client *jetstream.Client, service, instance string) DLQPublisher {
@@ -60,17 +54,25 @@ func JetStreamDLQ(client *jetstream.Client, service, instance string) DLQPublish
 	if instance == "" {
 		instance = "unknown"
 	}
-	return jetstreamDLQ{client: client, producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}}
+	return jetstreamDLQ{client: client, service: service, instance: instance}
 }
 
-func (p jetstreamDLQ) Publish(ctx context.Context, msg *messagepb.MooxMessage) error {
+func (p jetstreamDLQ) Publish(ctx context.Context, message *eventpb.EventMessage) error {
 	if p.client == nil {
 		return errors.New("metrics DLQ eventbus client is nil")
 	}
-	if msg == nil {
+	if message == nil {
 		return errors.New("metrics DLQ message is nil")
 	}
-	_, err := p.client.Publish(ctx, msg)
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	publisher, err := events.NewPublisher(p.client, registry)
+	if err != nil {
+		return err
+	}
+	_, err = publisher.PublishMessage(ctx, message)
 	return err
 }
 
@@ -84,6 +86,7 @@ type ConsumerOptions struct {
 	ServiceName  string
 	InstanceID   string
 }
+
 type Consumer struct {
 	pull     *jetstream.PullConsumer
 	opts     ConsumerOptions
@@ -120,7 +123,7 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	if cfg.MaxAckPending <= 0 {
 		cfg.MaxAckPending = 256
 	}
-	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: 3, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait, DeliverDecodeErrors: true})
+	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: 3, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait})
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +131,6 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	return &Consumer{pull: pull, opts: opts}, nil
 }
 
-// Fetch pulls up to batch deliveries for tests and operational drain paths.
 func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
 	if c == nil || c.pull == nil {
 		return nil, errors.New("metrics consumer is nil")
@@ -148,6 +150,7 @@ func (c *Consumer) Close() error {
 	})
 	return nil
 }
+
 func (c *Consumer) Run(ctx context.Context) error {
 	if c == nil || c.pull == nil {
 		return errors.New("metrics consumer is not initialized")
@@ -157,13 +160,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 	c.wg.Add(1)
 	defer c.wg.Done()
-	runner := jetstream.NewRunner(c.pull, c, jetstream.RunnerConfig{BatchSize: c.opts.Config.FetchBatchSize})
-	return runner.Run(ctx)
+	return jetstream.NewRunner(c.pull, c, jetstream.RunnerConfig{BatchSize: c.opts.Config.FetchBatchSize}).Run(ctx)
 }
 
-// RunWhenReady keeps the monitor process alive while Storage metadata or the
-// central EventBus is being deployed. It binds the durable consumer only after
-// read-only schema validation succeeds, avoiding a NAK loop on fresh installs.
 func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
@@ -176,7 +175,7 @@ func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 		interval = 30 * time.Second
 	}
 	for {
-		if err := ctx.Err(); err != nil {
+		if ctx.Err() != nil {
 			return nil
 		}
 		if err := opts.Storage.ValidateSchema(ctx); err != nil {
@@ -188,16 +187,10 @@ func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 			continue
 		}
 		consumer, err := NewConsumer(ctx, opts)
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(interval):
-			}
-			continue
+		if err == nil {
+			err = consumer.Run(ctx)
+			_ = consumer.Close()
 		}
-		err = consumer.Run(ctx)
-		_ = consumer.Close()
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -211,96 +204,53 @@ func RunWhenReady(ctx context.Context, opts ConsumerOptions) error {
 	}
 }
 
-func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.HandlerResult {
-	if d == nil {
+func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	if delivery == nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("empty metric delivery")}
 	}
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	if d.Message == nil {
-		if d.DecodeError == nil {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("empty metric delivery")}
-		}
-		reason := fmt.Errorf("decode metric envelope: %w", d.DecodeError)
-		recordIngest("rejected", time.Time{})
-		if c.opts.DLQ == nil {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
-		dlq := malformedRejectionMessage(d, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
-		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
-			return c.retry(fmt.Errorf("publish metrics DLQ: %w", err))
-		}
-		dlqTotal.Inc()
-		return jetstream.HandlerResult{Decision: jetstream.TERM}
+	decoded := events.DecodeDelivery(mustRegistry(), delivery)
+	if decoded.Err != nil {
+		return c.reject(ctx, delivery, fmt.Errorf("decode metric event: %w", decoded.Err))
 	}
-	msg := d.Message
-	permanent := func(reason error) jetstream.HandlerResult {
-		recordIngest("rejected", time.Time{})
-		if c.opts.DLQ == nil {
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
-		}
-		dlq := rejectionMessage(msg, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
-		if err := c.opts.DLQ.Publish(ctx, dlq); err != nil {
-			return c.retry(fmt.Errorf("publish metrics DLQ: %w", err))
-		}
-		dlqTotal.Inc()
-		return jetstream.HandlerResult{Decision: jetstream.TERM}
+	message := decoded.Message
+	report, ok := decoded.Payload.(*metricspb.MetricReport)
+	if !ok || report.GetSnapshot() == nil {
+		return c.reject(ctx, delivery, errors.New("metric report payload is invalid"))
 	}
-	if msg.GetTopic() != c.opts.Config.Topic && msg.GetTopic() != MetricTopic {
-		return permanent(fmt.Errorf("unsupported metric topic %q", msg.GetTopic()))
-	}
-	if msg.GetKind() != messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT {
-		return permanent(fmt.Errorf("unsupported metric message kind %s", msg.GetKind()))
-	}
-	if msg.GetContentType() != MetricContentType && msg.GetContentType() != "application/x-protobuf" {
-		return permanent(fmt.Errorf("unsupported metric content type %q", msg.GetContentType()))
-	}
-	if msg.GetSpaceId() != "" && msg.GetSpaceId() != InternalMetricSpaceID {
-		return permanent(fmt.Errorf("unsupported metric space %q", msg.GetSpaceId()))
-	}
-	if msg.GetProducer() == nil {
-		return permanent(errors.New("metric producer is missing"))
+	if message.GetSpaceId() != InternalMetricSpaceID {
+		return c.reject(ctx, delivery, fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 	}
 	if c.opts.Authorizer != nil {
-		ok, err := c.opts.Authorizer.IsRegistered(ctx, msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId())
+		registered, err := c.opts.Authorizer.IsRegistered(ctx, report.GetServiceName(), report.GetInstanceId())
 		if err != nil {
 			return c.retry(fmt.Errorf("authorize metric producer: %w", err))
 		}
-		if !ok {
-			// SysDeploy synchronization is asynchronous on Monitor startup. Keep
-			// a legitimate first snapshot long enough for the registry to converge;
-			// persistently unknown producers still go to the DLQ.
-			if d.DeliveryCount < unknownProducerGraceDeliveries {
-				return c.retry(fmt.Errorf("metric producer %s/%s is not registered yet", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
+		if !registered {
+			if delivery.DeliveryCount < unknownProducerGraceDeliveries {
+				return c.retry(fmt.Errorf("metric producer %s/%s is not registered yet", report.GetServiceName(), report.GetInstanceId()))
 			}
-			return permanent(fmt.Errorf("unregistered metric producer %s/%s", msg.GetProducer().GetServiceName(), msg.GetProducer().GetInstanceId()))
+			return c.reject(ctx, delivery, fmt.Errorf("unregistered metric producer %s/%s", report.GetServiceName(), report.GetInstanceId()))
 		}
 	}
-	duplicate, err := c.opts.MessageStore.IsDuplicate(ctx, msg.GetMessageId())
+	duplicate, err := c.opts.MessageStore.IsDuplicate(ctx, message.GetEventId())
 	if err != nil {
 		return c.retry(err)
 	}
 	if duplicate {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
-	snapshot := new(metricspb.MetricSnapshot)
-	if err := proto.Unmarshal(msg.GetPayload(), snapshot); err != nil {
-		return permanent(fmt.Errorf("decode metric snapshot: %w", err))
-	}
-	observed := time.Now().UTC()
-	if msg.GetOccurredAt() != nil {
-		observed = msg.GetOccurredAt().AsTime()
-	}
-	producer := msg.GetProducer()
-	samples, err := ParseSnapshot(snapshot, Envelope{ServiceName: producer.GetServiceName(), InstanceID: producer.GetInstanceId(), MessageID: msg.GetMessageId(), ProducerNodeID: producer.GetNodeId(), ProducerVersion: producer.GetVersion(), ObservedAt: observed}, DefaultLimits())
+	observed := message.GetOccurredAt().AsTime()
+	samples, err := ParseSnapshot(report.GetSnapshot(), Envelope{ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(), ProducerVersion: report.GetServiceVersion(), ObservedAt: observed}, DefaultLimits())
 	if err != nil {
-		return permanent(err)
+		return c.reject(ctx, delivery, err)
 	}
 	if err := c.opts.Storage.WriteSamples(ctx, samples); err != nil {
 		return c.retry(err)
 	}
-	duplicate, err = c.opts.MessageStore.CommitIngest(ctx, msg, samples)
+	duplicate, err = c.opts.MessageStore.CommitIngest(ctx, message, report, samples)
 	if err != nil {
 		return c.retry(err)
 	}
@@ -310,55 +260,34 @@ func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.
 	recordIngest("success", observed)
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
-func (c *Consumer) HandleDelivery(ctx context.Context, d *jetstream.Delivery) error {
-	result := c.Handle(ctx, d)
-	return errors.Join(result.Err, jetstream.ApplyHandlerResult(ctx, d, result))
+
+func (c *Consumer) reject(ctx context.Context, delivery *jetstream.Delivery, reason error) jetstream.HandlerResult {
+	recordIngest("rejected", time.Time{})
+	if c.opts.DLQ == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: reason}
+	}
+	event, err := events.RejectedMessage(mustRegistry(), delivery, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
+	if err != nil {
+		return c.retry(err)
+	}
+	if err := c.opts.DLQ.Publish(ctx, event); err != nil {
+		return c.retry(fmt.Errorf("publish metrics DLQ: %w", err))
+	}
+	dlqTotal.Inc()
+	return jetstream.HandlerResult{Decision: jetstream.TERM}
+}
+
+func (c *Consumer) HandleDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	result := c.Handle(ctx, delivery)
+	return errors.Join(result.Err, jetstream.ApplyHandlerResult(ctx, delivery, result))
 }
 
 func (c *Consumer) retry(err error) jetstream.HandlerResult {
 	recordIngest("error", time.Time{})
 	return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 }
-func rejectionMessage(original *messagepb.MooxMessage, reason, service, instance string) *messagepb.MooxMessage {
-	payload, _ := proto.Marshal(original)
-	now := timestamppb.Now()
-	return &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: original.GetMessageId() + ".rejected", Topic: MetricDLQTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, Producer: &messagepb.Producer{ServiceName: service, InstanceId: instance}, OccurredAt: now, PublishedAt: now, ContentType: "application/x-protobuf", MessageType: "moox.monitor.rejected.v1", Payload: payload, Attributes: map[string]string{"rejection_reason": reason, "original_topic": original.GetTopic()}}
-}
 
-func malformedRejectionMessage(delivery *jetstream.Delivery, reason, service, instance string) *messagepb.MooxMessage {
-	now := timestamppb.Now()
-	id := "invalid-envelope"
-	if delivery != nil && delivery.RawMessageID != "" {
-		id = delivery.RawMessageID
-	}
-	var payload []byte
-	var topic string
-	if delivery != nil {
-		payload = append([]byte(nil), delivery.RawData...)
-		topic = delivery.Subject
-	}
-	if id == "invalid-envelope" {
-		hashInput := append([]byte(topic+"\x00"), payload...)
-		sum := sha256.Sum256(hashInput)
-		id += "-" + hex.EncodeToString(sum[:8])
-	}
-	if service == "" {
-		service = "moox-monitor"
-	}
-	if instance == "" {
-		instance = "unknown"
-	}
-	return &messagepb.MooxMessage{
-		ProtocolVersion: 1,
-		MessageId:       id + ".rejected",
-		Topic:           MetricDLQTopic,
-		Kind:            messagepb.MessageKind_MESSAGE_KIND_EVENT,
-		Producer:        &messagepb.Producer{ServiceName: service, InstanceId: instance},
-		OccurredAt:      now,
-		PublishedAt:     now,
-		ContentType:     "application/octet-stream",
-		MessageType:     "moox.monitor.rejected.v1",
-		Payload:         payload,
-		Attributes:      map[string]string{"rejection_reason": reason, "original_topic": topic, "original_message_id": id},
-	}
+func mustRegistry() *events.Registry {
+	registry, _ := events.DefaultRegistry()
+	return registry
 }

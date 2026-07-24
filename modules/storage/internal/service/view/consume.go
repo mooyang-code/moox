@@ -9,12 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/eventcontract"
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -31,12 +30,25 @@ type EventConsumerOptions struct {
 	MaxWorkers    int
 	MaxAckPending int
 	Ordering      string
-	ErrorReporter jetstream.ErrorReporter
-	Metrics       *observability.ViewMetrics
+	// MaxRetryAttempts bounds client-side retries for transient projection
+	// failures. A value of zero uses the safe default; the broker topology is
+	// still authoritative for the durable's immutable settings.
+	MaxRetryAttempts int
+	// RetryExhausted is an optional DLQ/quarantine hook. It must durably record
+	// the delivery before returning nil; a hook failure keeps the message
+	// pending and retryable.
+	RetryExhausted func(context.Context, *jetstream.Delivery, error) error
+	ErrorReporter  jetstream.ErrorReporter
+	Metrics        *observability.ViewMetrics
 	// BeforeProcess is an optional test/diagnostic hook. Production callers
 	// leave it nil; it runs inside the subject lane before projection work.
 	BeforeProcess func(context.Context, *jetstream.Delivery) error
 }
+
+const (
+	defaultMaxRetryAttempts    = 10
+	maxRetryExhaustionAttempts = 3
+)
 
 func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 	if strings.TrimSpace(o.Stream) == "" {
@@ -54,6 +66,11 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 	if o.MaxWorkers == 0 {
 		o.MaxWorkers = 4
 	}
+	if o.MaxRetryAttempts == 0 {
+		// Zero means "use the safe default"; negative values remain invalid
+		// and are rejected below instead of being silently corrected.
+		o.MaxRetryAttempts = defaultMaxRetryAttempts
+	}
 	o.Stream = strings.TrimSpace(o.Stream)
 	o.Durable = strings.TrimSpace(o.Durable)
 	if strings.TrimSpace(o.Ordering) == "" {
@@ -65,6 +82,9 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 	}
 	if o.MaxWorkers < 1 {
 		return o, errors.New("storage view max_workers must be positive")
+	}
+	if o.MaxRetryAttempts < 1 {
+		return o, errors.New("storage view max_retry_attempts must be positive")
 	}
 	if o.Ordering != "subject" {
 		return o, fmt.Errorf("storage view ordering %q is unsupported", o.Ordering)
@@ -105,6 +125,9 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
 	}
+	if opts.RetryExhausted == nil {
+		opts.RetryExhausted = storageViewDLQPublisher(client)
+	}
 	s.metrics = opts.Metrics
 	reporter := opts.ErrorReporter
 	if reporter == nil {
@@ -126,7 +149,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				return err
 			}
 		}
-		return s.processDelivery(ctx, delivery, heartbeat)
+		return s.processDeliveryWithPolicy(ctx, delivery, heartbeat, opts.MaxRetryAttempts, opts.RetryExhausted)
 	}, reporter, laneMetricsHooks{
 		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
 			return newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(time.Duration(opts.AckWaitMS)*time.Millisecond), opts.Metrics)
@@ -149,7 +172,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		defer consumer.Close()
 		defer dispatcher.Close()
 		for loopCtx.Err() == nil {
-			deliveries, fetchErr := consumer.FetchRaw(loopCtx, opts.FetchBatch)
+			deliveries, fetchErr := consumer.Fetch(loopCtx, opts.FetchBatch)
 			opts.Metrics.AddConsumerLagMessages(int64(len(deliveries)))
 			for _, delivery := range deliveries {
 				opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
@@ -187,11 +210,45 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 }
 
 func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
+	return s.processDeliveryWithPolicy(ctx, delivery, firstHeartbeat(queued), defaultMaxRetryAttempts, nil)
+}
+
+func firstHeartbeat(queued []*deliveryHeartbeat) *deliveryHeartbeat {
+	if len(queued) == 0 {
+		return nil
+	}
+	return queued[0]
+}
+
+func (s *Service) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, retryExhausted func(context.Context, *jetstream.Delivery, error) error) error {
+	return s.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, retryExhausted, func(ctx context.Context, delivery *jetstream.Delivery) error {
+		return s.applyDelivery(ctx, delivery)
+	})
+}
+
+func (s *Service) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, retryExhausted func(context.Context, *jetstream.Delivery, error) error, apply func(context.Context, *jetstream.Delivery) error) error {
+	return s.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, retryExhausted, apply, deliveryActions{
+		ack:      delivery.Ack,
+		progress: delivery.InProgress,
+		term:     delivery.Term,
+	})
+}
+
+type deliveryActions struct {
+	ack      func(context.Context) error
+	progress func(context.Context) error
+	term     func(context.Context) error
+}
+
+func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, retryExhausted func(context.Context, *jetstream.Delivery, error) error, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) error {
 	if s == nil {
 		return errors.New("storage view service is nil")
 	}
 	if delivery == nil {
 		return errors.New("storage view delivery is nil")
+	}
+	if apply == nil || actions.ack == nil || actions.progress == nil || actions.term == nil {
+		return errors.New("storage view delivery policy is incomplete")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -201,15 +258,14 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 	if metrics == nil {
 		metrics = observability.DefaultViewMetrics
 	}
-	defer metrics.ObserveDeliveryDuration(time.Since(started))
+	defer func() { metrics.ObserveDeliveryDuration(time.Since(started)) }()
 	if delivery != nil && delivery.DeliveryCount > 1 {
 		metrics.IncRedelivery()
 	}
 	s.liveWork.Add(1)
 	defer s.liveWork.Add(-1)
-	heartbeat := (*deliveryHeartbeat)(nil)
-	if len(queued) > 0 {
-		heartbeat = queued[0]
+	if maxRetryAttempts < 1 {
+		maxRetryAttempts = defaultMaxRetryAttempts
 	}
 	if heartbeat == nil {
 		heartbeat = newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(120*time.Second), metrics)
@@ -219,14 +275,70 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 		return errors.Join(err, heartbeat.err())
 	}
 	defer s.releaseLiveDelivery()
+	retryCount := 0
+	quarantineAttempts := 0
+	quarantinePending := false
+	quarantined := false
+	var lastApplyErr error
 	for ctx.Err() == nil {
-		err := s.applyDelivery(ctx, delivery)
+		if quarantined {
+			if termErr := actions.term(ctx); termErr == nil {
+				metrics.ObserveDelivery("term", "success")
+				return heartbeat.err()
+			} else {
+				log.Printf("storage view delivery term failed after quarantine: %v", termErr)
+				metrics.IncAckError()
+				metrics.ObserveDelivery("term", "error")
+				heartbeat.report(termErr)
+				if errors.Is(termErr, jetstream.ErrInvalidDelivery) || errors.Is(termErr, jetstream.ErrClosed) {
+					return errors.Join(lastApplyErr, termErr, heartbeat.err())
+				}
+			}
+			if !sleepDeliveryRetry(ctx, time.Second) {
+				return ctx.Err()
+			}
+			continue
+		}
+
+		if quarantinePending {
+			quarantineAttempts++
+			if retryExhausted == nil {
+				quarantined = true
+				continue
+			}
+			if escalateErr := retryExhausted(ctx, delivery, lastApplyErr); escalateErr != nil {
+				reporter := fmt.Errorf("storage view retry exhaustion hook failed after %v: %w", lastApplyErr, escalateErr)
+				log.Print(reporter)
+				heartbeat.report(escalateErr)
+				if quarantineAttempts >= maxRetryExhaustionAttempts {
+					// Do not TERM the original event when quarantine is unavailable.
+					// Returning stops the heartbeat and lets JetStream redeliver it.
+					return errors.Join(lastApplyErr, reporter, heartbeat.err())
+				}
+				if progressErr := actions.progress(ctx); progressErr != nil {
+					log.Printf("storage view delivery progress failed while retrying quarantine: %v", progressErr)
+					metrics.IncInProgressError()
+					metrics.ObserveDelivery("in_progress", "error")
+					heartbeat.report(progressErr)
+				} else {
+					metrics.ObserveDelivery("in_progress", "success")
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+				continue
+			}
+			quarantined = true
+			continue
+		}
+
+		err := apply(ctx, delivery)
 		if err == nil {
 			// Applying a projection is deliberately separate from ACK retry:
 			// an ACK transport failure must never repeat an already successful
 			// index write.
 			for ctx.Err() == nil {
-				if ackErr := delivery.Ack(ctx); ackErr == nil {
+				if ackErr := actions.ack(ctx); ackErr == nil {
 					metrics.ObserveDelivery("ack", "success")
 					return heartbeat.err()
 				} else {
@@ -243,7 +355,7 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 		}
 		if isPermanentDeliveryError(err) {
 			for ctx.Err() == nil {
-				if termErr := delivery.Term(ctx); termErr == nil {
+				if termErr := actions.term(ctx); termErr == nil {
 					metrics.ObserveDelivery("term", "success")
 					return heartbeat.err()
 				} else {
@@ -261,9 +373,16 @@ func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Deliv
 			}
 			return ctx.Err()
 		}
+		retryCount++
+		if retryCount >= maxRetryAttempts {
+			metrics.IncRetryExhausted()
+			lastApplyErr = err
+			quarantinePending = true
+			continue
+		}
 		// Keep the delivery pending while retrying. NAK would release
 		// MaxAckPending and allow a later event to overtake it.
-		if progressErr := delivery.InProgress(ctx); progressErr != nil {
+		if progressErr := actions.progress(ctx); progressErr != nil {
 			log.Printf("storage view delivery progress failed after %v: %v", err, progressErr)
 			metrics.IncInProgressError()
 			metrics.ObserveDelivery("in_progress", "error")
@@ -328,42 +447,17 @@ func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Deliver
 		return permanentDeliveryError{delivery.DecodeError}
 	}
 	if delivery.ContentType == events.ContentType {
-		event := &eventpb.EventMessage{}
-		if err := proto.Unmarshal(delivery.RawData, event); err != nil {
-			return permanentDeliveryError{err}
-		}
-		if delivery.RawMessageID == "" || event.GetEventId() != delivery.RawMessageID {
-			return permanentDeliveryError{fmt.Errorf("storage event_id %q does not match NATS message id %q", event.GetEventId(), delivery.RawMessageID)}
-		}
-		if event.GetEventName() != events.StorageRowsUpserted.Name || event.GetEventVersion() != events.StorageRowsUpserted.Version {
-			return permanentDeliveryError{errors.New("unexpected storage event name/version")}
-		}
 		registry, err := events.DefaultRegistry()
 		if err != nil {
 			return permanentDeliveryError{err}
 		}
-		spec, ok := registry.Spec(events.StorageRowsUpserted)
-		if !ok {
-			return permanentDeliveryError{errors.New("storage event is not registered")}
-		}
-		template, err := events.NewSubjectTemplate(spec.Subject)
+		event, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
 		if err != nil {
 			return permanentDeliveryError{err}
 		}
-		expected, err := template.Render(event.GetSpaceId(), event.GetSubjectId())
-		if err != nil || expected != delivery.Subject {
-			return permanentDeliveryError{fmt.Errorf("storage event subject mismatch: got %q want %q", delivery.Subject, expected)}
-		}
-		payload := &eventstoragepb.RowsUpserted{}
-		if err := proto.Unmarshal(event.GetPayload(), payload); err != nil {
+		rowEvent, err := eventcontract.ToLocalRows(payload)
+		if err != nil {
 			return permanentDeliveryError{err}
-		}
-		rowEvent := &pb.RowsUpserted{}
-		if err := proto.Unmarshal(payload.GetRows(), rowEvent); err != nil {
-			return permanentDeliveryError{err}
-		}
-		if payload.GetDatasetId() != event.GetSubjectId() || rowEvent.GetSpaceId() != event.GetSpaceId() || rowEvent.GetDatasetId() != event.GetSubjectId() {
-			return permanentDeliveryError{errors.New("storage event payload identity mismatch")}
 		}
 		return s.applyDatasetEvent(ctx, event.GetSpaceId(), event.GetSubjectId(), rowEvent.GetRows())
 	}

@@ -6,13 +6,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	localpb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	eventstoragepb "github.com/mooyang-code/moox/packages/events/storagepb"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
-	"google.golang.org/protobuf/proto"
+	sharedpb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 type Decision uint8
@@ -27,55 +23,17 @@ type Decoder struct {
 	sources map[string]map[string]struct{}
 }
 
-// DecodeEvent adapts the governed EventMessage contract into the archive's
-// existing row decoder. The adapter is deliberately here, at the archive
-// boundary, so storage event metadata is never inferred from a NATS subject.
-func (d *Decoder) DecodeEvent(raw []byte, subject string) (domain.EventBatch, Decision, error) {
-	message := &eventpb.EventMessage{}
-	if err := proto.Unmarshal(raw, message); err != nil {
-		return domain.EventBatch{}, DecisionReject, err
-	}
-	if message.GetEventName() != events.StorageRowsUpserted.Name || message.GetEventVersion() != events.StorageRowsUpserted.Version {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unexpected storage event name/version")
-	}
+// DecodeEvent decodes the governed storage event directly.
+func (d *Decoder) DecodeEvent(raw []byte, subject, messageID string) (domain.EventBatch, Decision, error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return domain.EventBatch{}, DecisionReject, err
 	}
-	spec, ok := registry.Spec(events.StorageRowsUpserted)
-	if !ok {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event is not registered")
-	}
-	template, err := events.NewSubjectTemplate(spec.Subject)
+	message, payload, err := events.DecodeDatasetRowsUpserted(registry, raw, subject, messageID)
 	if err != nil {
 		return domain.EventBatch{}, DecisionReject, err
 	}
-	expected, err := template.Render(message.GetSpaceId(), message.GetSubjectId())
-	if err != nil || subject != expected {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event subject mismatch: got %q want %q", subject, expected)
-	}
-	payload := &eventstoragepb.RowsUpserted{}
-	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		return domain.EventBatch{}, DecisionReject, err
-	}
-	rowEvent := &storagepb.RowsUpserted{}
-	if err := proto.Unmarshal(payload.GetRows(), rowEvent); err != nil {
-		return domain.EventBatch{}, DecisionReject, err
-	}
-	if payload.GetDatasetId() != message.GetSubjectId() || rowEvent.GetSpaceId() != message.GetSpaceId() || rowEvent.GetDatasetId() != message.GetSubjectId() {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event payload identity mismatch")
-	}
-	spaceToken, err := jetstream.EncodeSubjectToken(message.GetSpaceId())
-	if err != nil {
-		return domain.EventBatch{}, DecisionReject, err
-	}
-	datasetToken, err := jetstream.EncodeSubjectToken(message.GetSubjectId())
-	if err != nil {
-		return domain.EventBatch{}, DecisionReject, err
-	}
-	legacyTopic := fmt.Sprintf("%s%s.%s", jetstream.StorageRowsUpsertedTopicPrefix, spaceToken, datasetToken)
-	legacy := &messagepb.MooxMessage{ProtocolVersion: jetstream.ProtocolVersion, MessageId: message.GetEventId(), Topic: legacyTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_EVENT, SpaceId: message.GetSpaceId(), OccurredAt: message.GetOccurredAt(), ContentType: jetstream.StorageRowsUpsertedContentType, MessageType: jetstream.StorageRowsUpsertedMessageType, Payload: payload.GetRows()}
-	return d.Decode(legacy)
+	return d.decodeRows(message.GetEventId(), message.GetSpaceId(), message.GetSubjectId(), payload, message.GetOccurredAt().AsTime().UTC())
 }
 
 func NewDecoder(sources map[string][]string) *Decoder {
@@ -89,23 +47,9 @@ func NewDecoder(sources map[string][]string) *Decoder {
 	return &Decoder{sources: allowed}
 }
 
-func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Decision, error) {
-	if message == nil {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message is nil")
-	}
-	if message.GetProtocolVersion() != jetstream.ProtocolVersion || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_EVENT {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("unsupported message protocol or kind")
-	}
-	spaceID, datasetID, err := jetstream.ValidateStorageRowsUpsertedEnvelope(message)
-	if err != nil {
-		return domain.EventBatch{}, DecisionReject, err
-	}
-	if strings.TrimSpace(message.GetMessageId()) == "" {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("message_id is required")
-	}
-	var event storagepb.RowsUpserted
-	if err := proto.Unmarshal(message.GetPayload(), &event); err != nil {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("decode time-series event: %w", err)
+func (d *Decoder) decodeRows(messageID, spaceID, datasetID string, event *sharedpb.DatasetRowsUpserted, writtenAt time.Time) (domain.EventBatch, Decision, error) {
+	if event == nil {
+		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage event is nil")
 	}
 	if event.GetSpaceId() != spaceID || event.GetDatasetId() != datasetID {
 		return domain.EventBatch{}, DecisionReject, fmt.Errorf("storage topic and payload identity mismatch")
@@ -113,13 +57,9 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if _, ok := d.sources[event.GetSpaceId()][event.GetDatasetId()]; !ok {
 		return domain.EventBatch{}, DecisionIgnore, nil
 	}
-	if message.GetOccurredAt() == nil || message.GetOccurredAt().CheckValid() != nil {
-		return domain.EventBatch{}, DecisionReject, fmt.Errorf("occurred_at is required")
-	}
-	writtenAt := message.GetOccurredAt().AsTime().UTC()
 	rows := make(map[string]domain.RowPatch)
 	for _, row := range event.GetRows() {
-		patch, err := decodeRow(&event, row, writtenAt)
+		patch, err := decodeRow(event, row, writtenAt)
 		if err != nil {
 			return domain.EventBatch{}, DecisionReject, err
 		}
@@ -133,16 +73,16 @@ func (d *Decoder) Decode(message *messagepb.MooxMessage) (domain.EventBatch, Dec
 	if len(rows) == 0 {
 		// Archive is an append-only historical sink. A committed DELETE is
 		// intentionally acknowledged without creating a tombstone.
-		return domain.EventBatch{MessageID: message.GetMessageId()}, DecisionIgnore, nil
+		return domain.EventBatch{MessageID: messageID}, DecisionIgnore, nil
 	}
-	batch := domain.EventBatch{MessageID: message.GetMessageId(), Rows: make([]domain.RowPatch, 0, len(rows))}
+	batch := domain.EventBatch{MessageID: messageID, Rows: make([]domain.RowPatch, 0, len(rows))}
 	for _, patch := range rows {
 		batch.Rows = append(batch.Rows, patch)
 	}
 	return batch, DecisionArchive, nil
 }
 
-func decodeRow(event *storagepb.RowsUpserted, row *storagepb.RowFieldUpsert, writtenAt time.Time) (domain.RowPatch, error) {
+func decodeRow(event *sharedpb.DatasetRowsUpserted, row *sharedpb.RowUpsert, writtenAt time.Time) (domain.RowPatch, error) {
 	if row == nil || row.GetKey() == nil {
 		return domain.RowPatch{}, fmt.Errorf("row key is required")
 	}
@@ -164,7 +104,7 @@ func decodeRow(event *storagepb.RowsUpserted, row *storagepb.RowFieldUpsert, wri
 	}
 	columns := make(map[string]domain.Scalar, len(row.GetFields()))
 	for _, field := range row.GetFields() {
-		column := &storagepb.ColumnValue{ColumnName: field.GetFieldId(), Value: field.GetValue(), ValueType: typedValueType(field.GetValue())}
+		column := &localpb.ColumnValue{ColumnName: field.GetFieldId(), Value: toLocalTypedValue(field.GetValue()), ValueType: typedValueType(field.GetValue())}
 		if _, exists := columns[column.GetColumnName()]; exists {
 			return domain.RowPatch{}, fmt.Errorf("duplicate column %q", column.GetColumnName())
 		}
@@ -181,39 +121,63 @@ func decodeRow(event *storagepb.RowsUpserted, row *storagepb.RowFieldUpsert, wri
 	return domain.RowPatch{Partition: domain.PartitionKey{SpaceID: event.GetSpaceId(), DatasetID: event.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), Month: domain.MonthOf(dataTime)}, DataTime: dataTime, DimensionsJSON: dimensions, Attributes: attributes, WrittenAt: writtenAt, Columns: columns}, nil
 }
 
-func typedValueType(value *storagepb.TypedValue) storagepb.FieldValueType {
+func typedValueType(value *sharedpb.TypedValue) localpb.FieldValueType {
 	switch value.GetValue().(type) {
-	case *storagepb.TypedValue_StringValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
-	case *storagepb.TypedValue_IntValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
-	case *storagepb.TypedValue_DoubleValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-	case *storagepb.TypedValue_BoolValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL
-	case *storagepb.TypedValue_TimeValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
-	case *storagepb.TypedValue_JsonValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON
-	case *storagepb.TypedValue_BytesValue:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_BYTES
+	case *sharedpb.TypedValue_StringValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_STRING
+	case *sharedpb.TypedValue_IntValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_INT
+	case *sharedpb.TypedValue_DoubleValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+	case *sharedpb.TypedValue_BoolValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_BOOL
+	case *sharedpb.TypedValue_TimeValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_TIME
+	case *sharedpb.TypedValue_JsonValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_JSON
+	case *sharedpb.TypedValue_BytesValue:
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_BYTES
 	default:
-		return storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
+		return localpb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
 	}
 }
 
-func typedValueString(value *storagepb.TypedValue) string {
+func typedValueString(value *sharedpb.TypedValue) string {
 	switch value.GetValue().(type) {
-	case *storagepb.TypedValue_StringValue:
+	case *sharedpb.TypedValue_StringValue:
 		return value.GetStringValue()
-	case *storagepb.TypedValue_IntValue:
+	case *sharedpb.TypedValue_IntValue:
 		return fmt.Sprint(value.GetIntValue())
-	case *storagepb.TypedValue_DoubleValue:
+	case *sharedpb.TypedValue_DoubleValue:
 		return fmt.Sprint(value.GetDoubleValue())
-	case *storagepb.TypedValue_BoolValue:
+	case *sharedpb.TypedValue_BoolValue:
 		return fmt.Sprint(value.GetBoolValue())
 	default:
 		return ""
+	}
+}
+
+func toLocalTypedValue(value *sharedpb.TypedValue) *localpb.TypedValue {
+	if value == nil {
+		return nil
+	}
+	switch v := value.GetValue().(type) {
+	case *sharedpb.TypedValue_StringValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_StringValue{StringValue: v.StringValue}}
+	case *sharedpb.TypedValue_IntValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_IntValue{IntValue: v.IntValue}}
+	case *sharedpb.TypedValue_DoubleValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_DoubleValue{DoubleValue: v.DoubleValue}}
+	case *sharedpb.TypedValue_BoolValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_BoolValue{BoolValue: v.BoolValue}}
+	case *sharedpb.TypedValue_TimeValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_TimeValue{TimeValue: v.TimeValue}}
+	case *sharedpb.TypedValue_JsonValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_JsonValue{JsonValue: v.JsonValue}}
+	case *sharedpb.TypedValue_BytesValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_BytesValue{BytesValue: append([]byte(nil), v.BytesValue...)}}
+	default:
+		return nil
 	}
 }
 

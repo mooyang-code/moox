@@ -15,14 +15,11 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-const hostTopic = "moox.metrics.host.reported.v1"
 
 type Agent struct {
 	cfg                                    *config.Config
@@ -30,6 +27,7 @@ type Agent struct {
 	collector                              snapshotCollector
 	clientMu                               sync.Mutex
 	client                                 *jetstream.Client
+	publisher                              eventPublisher
 	hostname, bootID, version              string
 	latestMu                               sync.RWMutex
 	latest                                 *hostmetricpb.HostSnapshot
@@ -37,6 +35,10 @@ type Agent struct {
 	lastErr                                string
 	collected, published, dropped, skipped atomic.Uint64
 	running                                atomic.Bool
+}
+
+type eventPublisher interface {
+	Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
 
 type snapshotCollector interface {
@@ -100,36 +102,56 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.dropped.Add(1)
 		return nil, err
 	}
-	payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&hostmetricpb.HostMetric{Snapshot: snapshot})
+	publisher, err := a.eventPublisher(ctx)
 	if err != nil {
 		a.dropped.Add(1)
-		return nil, err
+		a.recordError(err)
+		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
+	}
+	_, err = publisher.Publish(ctx, events.MetricsHostReported, &hostmetricpb.HostMetric{AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, events.PublishOptions{EventID: msgID.String(), OccurredAt: now, SpaceID: "moox_system", SubjectID: a.id.AgentID})
+	if err != nil {
+		a.dropped.Add(1)
+		a.recordError(err)
+		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
 	}
 	publishedAt := time.Now().UTC()
-	msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: msgID.String(), Topic: hostTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: a.id.AgentID, NodeId: a.hostname, BootId: a.bootID, Version: a.version}, SpaceId: "moox_system", Sequence: 0, OccurredAt: timestamppb.New(now), PublishedAt: timestamppb.New(publishedAt), ContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", MessageType: "moox.hostagent.host_metric.v1", Payload: payload}
-	client, err := a.eventbus(ctx)
-	if err != nil {
-		a.dropped.Add(1)
-		a.recordError(err)
-		return &hostagentpb.RunOnceRsp{MessageId: msg.GetMessageId(), PublishError: err.Error(), Snapshot: snapshot}, err
-	}
-	_, err = client.Publish(ctx, msg)
-	if err != nil {
-		a.dropped.Add(1)
-		a.recordError(err)
-		return &hostagentpb.RunOnceRsp{MessageId: msg.GetMessageId(), PublishError: err.Error(), Snapshot: snapshot}, err
-	}
 	a.published.Add(1)
 	a.latestMu.Lock()
 	a.lastPublish = publishedAt
 	a.lastErr = ""
 	a.latestMu.Unlock()
-	return &hostagentpb.RunOnceRsp{MessageId: msg.GetMessageId(), Published: true, Snapshot: snapshot}, nil
+	return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), Published: true, Snapshot: snapshot}, nil
+}
+
+func (a *Agent) eventPublisher(ctx context.Context) (eventPublisher, error) {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	if a.publisher != nil {
+		return a.publisher, nil
+	}
+	client, err := a.eventbusLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		return nil, err
+	}
+	a.publisher = publisher
+	return publisher, nil
 }
 
 func (a *Agent) eventbus(ctx context.Context) (*jetstream.Client, error) {
 	a.clientMu.Lock()
 	defer a.clientMu.Unlock()
+	return a.eventbusLocked(ctx)
+}
+
+func (a *Agent) eventbusLocked(ctx context.Context) (*jetstream.Client, error) {
 	if a.client != nil {
 		return a.client, nil
 	}

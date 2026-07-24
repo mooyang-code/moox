@@ -120,7 +120,11 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategybus.Runtime, er
 			}
 		}
 		jsConfig.ConnectTimeout = cfg.EventBus.ConnectTimeout
-		return jetstream.Connect(ctx, jsConfig)
+		client, err := jetstream.Connect(ctx, jsConfig)
+		if err != nil {
+			return nil, err
+		}
+		return strategybus.NewManagedClient(client)
 	}
 	return strategybus.NewRuntime(strategybus.RuntimeConfig{
 		Connector: connector, Store: repo, InstanceID: cfg.InstanceID,

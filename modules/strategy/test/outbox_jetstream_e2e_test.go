@@ -12,11 +12,11 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
@@ -54,7 +54,11 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 			return strategybus.ValidateJetStreamPublisher(ctx, client, "strategy-e2e")
 		},
 		Connector: func(ctx context.Context) (strategybus.JetStreamClient, error) {
-			return jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-e2e", ConnectTimeout: 200 * time.Millisecond})
+			client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-e2e", ConnectTimeout: 200 * time.Millisecond})
+			if err != nil {
+				return nil, err
+			}
+			return strategybus.NewManagedClient(client)
 		},
 	})
 	if err != nil {
@@ -94,7 +98,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	}
 	defer verifyNC.Close()
 	verifyJS, _ := verifyNC.JetStream()
-	subscription, err := verifyJS.SubscribeSync("moox.strategy.action.accepted.v1", nats.DeliverAll())
+	subscription, err := verifyJS.SubscribeSync("moox.strategy.output.accepted.v1.>", nats.DeliverAll())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,14 +109,21 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var envelope messagepb.MooxMessage
-		if err := proto.Unmarshal(message.Data, &envelope); err != nil {
+		registry, err := events.DefaultRegistry()
+		if err != nil {
 			t.Fatal(err)
 		}
-		if message.Header.Get(nats.MsgIdHdr) != envelope.GetMessageId() || envelope.GetTopic() != message.Subject {
+		envelope, payload, err := events.DecodeRaw(registry, message.Data, message.Subject, message.Header.Get(nats.MsgIdHdr), message.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.StrategyOutputAccepted.Name {
 			t.Fatalf("invalid envelope/header: id=%q envelope=%+v", message.Header.Get(nats.MsgIdHdr), &envelope)
 		}
-		seen[envelope.GetMessageId()]++
+		if _, ok := payload.(*structpb.Struct); !ok {
+			t.Fatalf("payload=%T", payload)
+		}
+		seen[envelope.GetEventId()]++
 	}
 	if seen["run-1"] != 1 || seen["run-2"] != 1 {
 		t.Fatalf("published ids=%v", seen)
@@ -121,8 +132,8 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if streamInfo.State.Msgs != 3 {
-		t.Fatalf("stream message count=%d, want probe plus two decisions", streamInfo.State.Msgs)
+	if streamInfo.State.Msgs != 2 {
+		t.Fatalf("stream message count=%d, want two decisions", streamInfo.State.Msgs)
 	}
 }
 

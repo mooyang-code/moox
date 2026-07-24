@@ -4,7 +4,13 @@ package trpc.moox.hostagent;
 
 option go_package = "github.com/mooyang-code/moox/packages/hostmetricpb;hostmetricpb";
 
-message HostMetric { HostSnapshot snapshot = 1; }
+message HostMetric {
+  string agent_id = 1;
+  string hostname = 2;
+  string boot_id = 3;
+  string agent_version = 4;
+  HostSnapshot snapshot = 5;
+}
 message HostSnapshot {
   CpuMetric cpu = 1;
   MemoryMetric memory = 2;

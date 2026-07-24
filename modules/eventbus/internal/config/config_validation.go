@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/events"
@@ -71,6 +70,9 @@ func (c *Config) Validate() error {
 		if s.Discard != "" && s.Discard != "old" && s.Discard != "new" {
 			return fmt.Errorf("stream %q discard %q is invalid", s.Name, s.Discard)
 		}
+		if s.Duplicates < 0 {
+			return fmt.Errorf("stream %q duplicates must not be negative", s.Name)
+		}
 		if s.Replicas < 1 {
 			return fmt.Errorf("stream %q replicas must be positive", s.Name)
 		}
@@ -97,95 +99,8 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	seenTopics := map[string]struct{}{}
-	for i := range c.Topics {
-		t := &c.Topics[i]
-		if !t.Enabled {
-			continue
-		}
-		if err := validateSubject(t.Topic, false); err != nil {
-			return fmt.Errorf("topics[%d]: %w", i, err)
-		}
-		if t.PayloadVersion == 0 {
-			return fmt.Errorf("topic %q payload_version must be positive", t.Topic)
-		}
-		if !validPayloadContentType(t.PayloadContentType) {
-			return fmt.Errorf("topic %q payload_content_type must be application/json or a protobuf message", t.Topic)
-		}
-		if version, err := topicVersion(t.Topic); err != nil || version != t.PayloadVersion {
-			return fmt.Errorf("topic %q must end in .v<major> matching payload_version=%d", t.Topic, t.PayloadVersion)
-		}
-		if _, ok := seenTopics[t.Topic]; ok {
-			return fmt.Errorf("duplicate topic %q", t.Topic)
-		}
-		seenTopics[t.Topic] = struct{}{}
-		matches := 0
-		matchedStream := ""
-		for _, s := range c.Streams {
-			for _, subject := range s.Subjects {
-				if subjectMatches(subject, t.Topic) {
-					matches++
-					matchedStream = s.Name
-					if t.Stream != "" && t.Stream != s.Name {
-						return fmt.Errorf("topic %q stream %q does not cover subject", t.Topic, t.Stream)
-					}
-					break
-				}
-			}
-		}
-		if matches != 1 {
-			return fmt.Errorf("topic %q must be covered by exactly one stream, got %d", t.Topic, matches)
-		}
-		if t.Stream == "" {
-			t.Stream = matchedStream
-		}
-	}
-	seenFamilies := map[string]struct{}{}
-	for i := range c.TopicFamilies {
-		f := &c.TopicFamilies[i]
-		if !f.Enabled {
-			continue
-		}
-		if err := validateSubject(f.Pattern, true); err != nil {
-			return fmt.Errorf("topic_families[%d]: %w", i, err)
-		}
-		if strings.HasPrefix(f.Pattern, "moox.cloudnode.exec.v1.jobitem.") && !validCloudNodeFamily(f.Pattern) {
-			return fmt.Errorf("topic family %q has invalid CloudNode route shape", f.Pattern)
-		}
-		if f.PayloadVersion == 0 {
-			return fmt.Errorf("topic family %q payload_version must be positive", f.Pattern)
-		}
-		if !validPayloadContentType(f.PayloadContentType) {
-			return fmt.Errorf("topic family %q payload_content_type must be application/json or a protobuf message", f.Pattern)
-		}
-		if _, ok := seenFamilies[f.Pattern]; ok {
-			return fmt.Errorf("duplicate topic family %q", f.Pattern)
-		}
-		seenFamilies[f.Pattern] = struct{}{}
-		matches := 0
-		for _, s := range c.Streams {
-			for _, subject := range s.Subjects {
-				if patternsOverlap(subject, f.Pattern) {
-					matches++
-					if f.Stream != "" && f.Stream != s.Name {
-						return fmt.Errorf("topic family %q stream %q does not cover subject", f.Pattern, f.Stream)
-					}
-				}
-			}
-		}
-		if matches != 1 {
-			return fmt.Errorf("topic family %q must be covered by exactly one stream, got %d", f.Pattern, matches)
-		}
-	}
 	if err := validateGovernedEventFamilies(c); err != nil {
 		return err
-	}
-	for i := range c.TopicFamilies {
-		for j := i + 1; j < len(c.TopicFamilies); j++ {
-			if c.TopicFamilies[i].Enabled && c.TopicFamilies[j].Enabled && patternsOverlap(c.TopicFamilies[i].Pattern, c.TopicFamilies[j].Pattern) {
-				return fmt.Errorf("topic families %q and %q overlap", c.TopicFamilies[i].Pattern, c.TopicFamilies[j].Pattern)
-			}
-		}
 	}
 	for i := range c.Consumers {
 		consumer := &c.Consumers[i]
@@ -224,22 +139,21 @@ func validateGovernedEventFamilies(c *Config) error {
 	if err != nil {
 		return fmt.Errorf("load event registry: %w", err)
 	}
-	for _, event := range []events.EventType{events.MarketTradeReceived, events.MarketKlineClosed, events.StorageRowsUpserted} {
-		spec, ok := registry.Spec(event)
-		if !ok {
-			return fmt.Errorf("governed event %s is not registered", event.Name)
+	for _, spec := range registry.Schemas() {
+		want, err := registry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		if err != nil {
+			return fmt.Errorf("derive governed event %s@%d topic family: %w", spec.Name, spec.Version, err)
 		}
-		base := strings.ReplaceAll(strings.ReplaceAll(spec.Subject, ".<space>", ""), ".<subject>", "")
-		want := base + ".>"
-		found := false
-		for _, family := range c.TopicFamilies {
-			if family.Enabled && family.Pattern == want && family.Stream == spec.Stream {
-				found = true
-				break
+		matches := 0
+		for _, stream := range c.Streams {
+			for _, subject := range stream.Subjects {
+				if stream.Name == spec.Stream && patternCovers(subject, want) {
+					matches++
+				}
 			}
 		}
-		if !found {
-			return fmt.Errorf("governed event %s is missing topic family %q in stream %q", event.Name, want, spec.Stream)
+		if matches != 1 {
+			return fmt.Errorf("governed event %s@%d must be covered by exactly one stream family %q in stream %q, got %d", spec.Name, spec.Version, want, spec.Stream, matches)
 		}
 	}
 	return nil
@@ -289,16 +203,15 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 		return fmt.Errorf("consumer %q filter: %w", c.Durable, err)
 	}
 	covered := false
-	for _, t := range cfg.Topics {
-		if t.Enabled && t.Topic == c.FilterSubject && t.Stream == c.Stream {
-			covered = true
-		}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return fmt.Errorf("load event registry: %w", err)
 	}
-	if !covered {
-		for _, f := range cfg.TopicFamilies {
-			if f.Enabled && f.Stream == c.Stream && patternCovers(c.FilterSubject, f.Pattern) {
-				covered = true
-			}
+	for _, spec := range registry.Schemas() {
+		family, familyErr := registry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		if familyErr == nil && spec.Stream == c.Stream && patternCovers(c.FilterSubject, family) {
+			covered = true
+			break
 		}
 	}
 	if !covered {
@@ -314,33 +227,11 @@ func patternCovers(cover, subjectPattern string) bool {
 		if part == ">" {
 			return i < len(subjectParts)
 		}
-		if i >= len(subjectParts) || (part != "*" && part != subjectParts[i]) {
+		if i >= len(subjectParts) || subjectParts[i] == ">" || (part != "*" && part != subjectParts[i]) {
 			return false
 		}
 	}
 	return len(coverParts) == len(subjectParts)
-}
-
-func validPayloadContentType(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "application/json" {
-		return true
-	}
-	if value == "application/vnd.moox.metrics.snapshot+protobuf" {
-		return true
-	}
-	if value == "application/vnd.moox.event+protobuf" {
-		return true
-	}
-	return strings.HasPrefix(value, "application/x-protobuf; message=") && len(strings.TrimPrefix(value, "application/x-protobuf; message=")) > 0
-}
-
-func validCloudNodeFamily(pattern string) bool {
-	parts := strings.Split(pattern, ".")
-	if len(parts) != 11 || parts[0] != "moox" || parts[1] != "cloudnode" || parts[2] != "exec" || parts[3] != "v1" || parts[4] != "jobitem" || parts[5] != "s" || parts[7] != "pkg" || parts[9] != "type" {
-		return false
-	}
-	return parts[6] == "*" && parts[8] == "*" && parts[10] == "*"
 }
 
 func validateConsumerTemplate(c *ConsumerTemplateConfig, cfg *Config) error {
@@ -364,6 +255,21 @@ func validateConsumerTemplate(c *ConsumerTemplateConfig, cfg *Config) error {
 	}
 	if c.AckPolicy != "explicit" || c.DeliverPolicy != "all" || c.ReplayPolicy != "instant" || c.AckWait <= 0 || c.MaxAckPending <= 0 || c.MaxDeliver == 0 {
 		return fmt.Errorf("consumer template %q has invalid policy or limits", c.DurablePrefix)
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return fmt.Errorf("load event registry: %w", err)
+	}
+	covered := false
+	for _, spec := range registry.Schemas() {
+		family, familyErr := registry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		if familyErr == nil && spec.Stream == c.Stream && patternCovers(c.FilterPattern, family) {
+			covered = true
+			break
+		}
+	}
+	if !covered {
+		return fmt.Errorf("consumer template %q filter %q is not registered", c.DurablePrefix, c.FilterPattern)
 	}
 	return nil
 }
@@ -407,18 +313,6 @@ func validateSubject(subject string, wildcard bool) error {
 		}
 	}
 	return nil
-}
-
-func topicVersion(topic string) (uint32, error) {
-	idx := strings.LastIndex(topic, ".v")
-	if idx < 0 || idx+2 >= len(topic) {
-		return 0, fmt.Errorf("missing version suffix")
-	}
-	value, err := strconv.ParseUint(topic[idx+2:], 10, 32)
-	if err != nil || value == 0 {
-		return 0, fmt.Errorf("invalid version suffix")
-	}
-	return uint32(value), nil
 }
 
 func subjectMatches(pattern, subject string) bool {

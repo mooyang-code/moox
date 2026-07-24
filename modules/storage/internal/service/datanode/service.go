@@ -87,7 +87,7 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.
 		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	entries, err := s.store.WriteFieldsEvent(ctx, req.GetRows(), func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildRowsUpsertedMessage(s.nodeID, spaceID, datasetID, rows)
+		return pebble.BuildDatasetRowsUpsertedMessage(s.nodeID, spaceID, datasetID, rows)
 	})
 	if err != nil {
 		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil

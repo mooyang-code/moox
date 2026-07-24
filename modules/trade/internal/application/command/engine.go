@@ -102,10 +102,10 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 		if err := tx.CreateOrder(&r); err != nil {
 			return err
 		}
-		if err := outbox(tx, in.OrderID+":created", "moox.trade.order.intent_created.v1", r); err != nil {
+		if err := outbox(tx, in.OrderID+":created", "moox.trade.order.intent.created.v1", r); err != nil {
 			return err
 		}
-		return outbox(tx, in.OrderID+":ready", "moox.trade.execution.slice_ready.v1", r)
+		return outbox(tx, in.OrderID+":ready", "moox.trade.execution.slice.ready.v1", r)
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -156,14 +156,14 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 	latest, _ := e.Store.GetOrder(ctx, space, orderID)
 	o, _ = aggregate(latest)
 	expected = o.Version
-	event := "moox.trade.order.acknowledged.v1"
+	event := "moox.trade.order.state.changed.v1"
 	if callErr != nil {
 		if exchange.IsCategory(callErr, exchange.ErrorTransportUncertain) {
 			_, err = o.MarkUnknown()
-			event = "moox.trade.order.submit_unknown.v1"
+			event = "moox.trade.order.state.changed.v1"
 		} else {
 			_, err = o.Reject()
-			event = "moox.trade.order.state_changed.v1"
+			event = "moox.trade.order.state.changed.v1"
 		}
 	} else {
 		_, err = o.Acknowledge()

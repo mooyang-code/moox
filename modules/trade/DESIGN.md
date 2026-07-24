@@ -24,7 +24,7 @@ SQLite       JetStream       Binance / OKX
 - `algorithm`：按 `(name, version)` 注册拆单、定价和执行策略；计划生成后完整持久化，不受后续注册表变化影响。
 - `application`：原子创建交易意图，推进提交、成交结算、撤单换单 Saga 和调仓。
 - `infra/store`：唯一事务边界，订单、账本投影与 Outbox 同事务提交。
-- `infra/bus`：使用公共 `packages/messagepb` 和 `packages/jetstream`，不自行封装 NATS 协议。
+- `infra/bus`：使用公共 `packages/events` 和 `packages/jetstream`，不自行封装 NATS 协议。
 - `infra/exchangebridge`：把账户通道解析与旧交易所 REST 适配器隔离在基础设施层。
 
 ## 主链路

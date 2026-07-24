@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/streamcalc/internal/config"
 	"github.com/mooyang-code/moox/packages/events/marketpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type WindowKey struct {
@@ -147,6 +148,28 @@ func (a *Aggregator) Apply(eventID, spaceID string, input *marketpb.KlineClosed)
 		}
 	}
 	return Result{Bar: cloneBar(bar)}, nil
+}
+
+// ApplyTick maps one exchange transaction into the configured input interval
+// and reuses the same event-time/window logic as closed input bars. A later
+// tick in the target window closes the bar when its input interval reaches
+// the target boundary; sparse symbols remain pending until a later tick acts
+// as the event-time watermark.
+func (a *Aggregator) ApplyTick(eventID, spaceID string, input *marketpb.Tick) (Result, error) {
+	if a == nil || input == nil || input.GetTradeTime() == nil {
+		return Result{}, fmt.Errorf("aggregator or tick is nil")
+	}
+	tradeTime := input.GetTradeTime().AsTime().UTC()
+	if eventID == "" || spaceID == "" || input.GetSymbol() == "" || input.GetPrice() <= 0 || input.GetQuantity() <= 0 {
+		return Result{}, fmt.Errorf("tick has incomplete identity or values")
+	}
+	start := tradeTime.Truncate(a.inputFrequency)
+	return a.Apply(eventID, spaceID, &marketpb.KlineClosed{
+		Exchange: input.GetExchange(), Symbol: input.GetSymbol(), Frequency: formatFrequency(a.inputFrequency),
+		WindowStart: timestamppb.New(start), WindowEnd: timestamppb.New(start.Add(a.inputFrequency)),
+		Open: input.GetPrice(), High: input.GetPrice(), Low: input.GetPrice(), Close: input.GetPrice(),
+		Volume: input.GetQuantity(), QuoteVolume: input.GetPrice() * input.GetQuantity(), TradeCount: 1,
+	})
 }
 
 func (a *Aggregator) Snapshot() []Bar {

@@ -12,14 +12,16 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/wrapperspb"
+	"google.golang.org/protobuf/types/known/structpb"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 type workerStubAdapter struct {
@@ -71,10 +73,35 @@ func openKernelOrder(t *testing.T, s *store.Store, e *command.Engine) store.Orde
 
 func wrapDelivery(t *testing.T, payload []byte, topic, messageID string) *jetstream.Delivery {
 	t.Helper()
-	wrapped, err := proto.Marshal(&wrapperspb.BytesValue{Value: payload})
+	var values map[string]any
+	err := json.Unmarshal(payload, &values)
+	require.NoError(t, err)
+	structured, err := structpb.NewStruct(values)
+	require.NoError(t, err)
+	event := events.TradeExecutionSliceReady
+	if strings.Contains(topic, "rebalance.requested") {
+		event = events.TradeRebalanceRequested
+	}
+	spaceID := structured.GetFields()["space_id"].GetStringValue()
+	if spaceID == "" {
+		spaceID = "space"
+	}
+	subjectID := structured.GetFields()["order_id"].GetStringValue()
+	if subjectID == "" {
+		subjectID = structured.GetFields()["run_id"].GetStringValue()
+	}
+	if subjectID == "" {
+		subjectID = messageID
+	}
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	encoded, err := registry.Encode(event, structured, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: spaceID, SubjectID: subjectID})
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
 	require.NoError(t, err)
 	return &jetstream.Delivery{
-		Message: &messagepb.MooxMessage{Payload: wrapped, Topic: topic, MessageId: messageID},
+		RawData: raw, RawMessageID: messageID, Subject: encoded.Subject, ContentType: events.ContentType,
+		DeliveryCount: 1,
 	}
 }
 
@@ -142,7 +169,7 @@ func TestHandleExecutionDelivery_ReadyOrder_ShouldSubmit(t *testing.T) {
 	require.NoError(t, err)
 	payload, err := json.Marshal(placed)
 	require.NoError(t, err)
-	delivery := wrapDelivery(t, payload, "moox.trade.execution.slice_ready.v1", "msg-1")
+	delivery := wrapDelivery(t, payload, "moox.trade.execution.slice.ready.v1", "msg-1")
 	require.NoError(t, handleExecutionDelivery(context.Background(), delivery, s, engine, "exec-consumer"))
 	got, err := s.GetOrder(context.Background(), "space", "exec-1")
 	require.NoError(t, err)
@@ -189,15 +216,9 @@ func TestStartKernelWorkers_Disabled_ShouldNoop(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestDeliveryTraceContext_WithTrace_ShouldInjectTelemetry(t *testing.T) {
-	delivery := &jetstream.Delivery{
-		Message: &messagepb.MooxMessage{
-			Trace: &messagepb.TraceContext{TraceId: "trace-1", RequestId: "req-1"},
-		},
-	}
-	ctx := deliveryTraceContext(context.Background(), delivery)
-	// Context should differ when trace is present.
-	assert.NotEqual(t, context.Background(), ctx)
+func TestDeliveryTraceContext_DoesNotInventEnvelopeFields(t *testing.T) {
+	ctx := deliveryTraceContext(context.Background(), &jetstream.Delivery{})
+	assert.Equal(t, context.Background(), ctx)
 }
 
 func TestDeliveryTraceContext_NilDelivery_ShouldReturnOriginal(t *testing.T) {

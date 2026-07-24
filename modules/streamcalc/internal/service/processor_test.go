@@ -57,6 +57,34 @@ func TestProcessorWritesOnlyClosedAggregate(t *testing.T) {
 	}
 }
 
+func TestProcessorAcceptsTickPayload(t *testing.T) {
+	aggregator, err := aggregate.New("1m", "2m", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := new(memoryWriter)
+	processor, err := NewProcessor(aggregator, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	for _, item := range []struct {
+		id string
+		at time.Time
+	}{
+		{id: "tick-1", at: base.Add(10 * time.Second)},
+		{id: "tick-2", at: base.Add(70 * time.Second)},
+	} {
+		delivery := &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: item.id, SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(item.at)}}
+		if err := processor.Process(context.Background(), delivery); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(writer.bars) != 1 || !writer.bars[0].Closed {
+		t.Fatalf("tick bars = %+v", writer.bars)
+	}
+}
+
 func TestProcessorRetriesClosedOutputAfterWriterFailure(t *testing.T) {
 	aggregator, err := aggregate.New("1m", "2m", 30*time.Second)
 	if err != nil {

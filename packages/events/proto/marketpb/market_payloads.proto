@@ -4,9 +4,9 @@ package trpc.moox.market;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/mooyang-code/moox/packages/events/proto/marketpb;marketpb";
+option go_package = "github.com/mooyang-code/moox/packages/events/marketpb;marketpb";
 
-message TradeReceived {
+message Tick {
   string exchange = 1;
   string trade_id = 2;
   string symbol = 3;

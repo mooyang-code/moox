@@ -9,11 +9,11 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	nserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/wrapperspb"
+	"google.golang.org/protobuf/encoding/protojson"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,7 +44,7 @@ func TestJetStreamOutboxToSubmissionInboxE2E(t *testing.T) {
 	if _, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_TRADE", Subjects: []string{"moox.trade.>"}, Storage: nats.MemoryStorage}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = js.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice_ready.v1", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 256, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
+	if _, err = js.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 256, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{clientURL}, Name: "trade-e2e"})
@@ -52,7 +52,7 @@ func TestJetStreamOutboxToSubmissionInboxE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	pull, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_TRADE", Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice_ready.v1", AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 256, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy})
+	pull, err := client.BindPullConsumer(ctx, jetstream.ConsumerRef{Stream: "MOOX_TRADE", Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 256, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,13 +66,21 @@ func TestJetStreamOutboxToSubmissionInboxE2E(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fx := &scriptedExchange{}
 	engine := &command.Engine{Store: s, Adapter: fx}
 	r, err := engine.Place(ctx, command.PlaceInput{SpaceID: "space", OrderID: "o-event", ClientOrderID: "c-event", AccountID: "account", ChannelID: "channel", Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Side: "BUY", Quantity: "1", Price: "10"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay := tradebus.Relay{Store: s, Publisher: client, InstanceID: "e2e", BootID: "boot"}
+	relay := tradebus.Relay{Store: s, Publisher: publisher, InstanceID: "e2e", BootID: "boot"}
 	if err = relay.RunOnce(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +89,16 @@ func TestJetStreamOutboxToSubmissionInboxE2E(t *testing.T) {
 		t.Fatalf("fetch %d: %v", len(ds), err)
 	}
 	d := ds[0]
-	var wrapped wrapperspb.BytesValue
-	if err = proto.Unmarshal(d.Message.Payload, &wrapped); err != nil {
+	message, payload, err := events.DecodeRaw(registry, d.RawData, d.Subject, d.RawMessageID, d.ContentType)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var eventOrder store.OrderRecord
-	if err = json.Unmarshal(wrapped.Value, &eventOrder); err != nil {
+	payloadJSON, err := protojson.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(payloadJSON, &eventOrder); err != nil {
 		t.Fatal(err)
 	}
 	if eventOrder.OrderID != r.OrderID {
@@ -109,7 +121,7 @@ func TestJetStreamOutboxToSubmissionInboxE2E(t *testing.T) {
 	if _, err = worker.Handle(ctx, eventOrder.SpaceID, eventOrder.OrderID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.RecordInbox(ctx, "trade_execution_v1", d.Message.MessageId, d.Message.Topic); err != nil {
+	if _, err = s.RecordInbox(ctx, "trade_execution_v1", message.GetEventId(), d.Subject); err != nil {
 		t.Fatal(err)
 	}
 	if err = d.Ack(ctx); err != nil {

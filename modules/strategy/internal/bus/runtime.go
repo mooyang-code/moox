@@ -97,7 +97,17 @@ func (r *Runtime) run(ctx context.Context) {
 			}
 			r.setValidated(true)
 		}
-		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Client: client, InstanceID: r.cfg.InstanceID}}
+		eventPublisher := client.EventPublisher()
+		if eventPublisher == nil {
+			err := errors.New("strategy EventBus event publisher is unavailable")
+			r.setError(err)
+			r.dropClient(client)
+			if !waitFor(ctx, r.cfg.ReconnectInterval) {
+				return
+			}
+			continue
+		}
+		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Publisher: eventPublisher, InstanceID: r.cfg.InstanceID}}
 		if err := relay.PublishPending(ctx, r.cfg.BatchSize); err != nil {
 			r.setError(err)
 			r.dropClient(client)
