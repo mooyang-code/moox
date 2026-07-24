@@ -119,6 +119,9 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDatasetKeepDuration(ctx, tx, item.GetSpaceId(), item.GetDatasetId(), keepDuration); err != nil {
+		return nil, err
+	}
 	item.DataSourceId = existing.GetDataSourceId()
 	item.DataNodeId = existing.GetDataNodeId()
 	item.DataKind = existing.GetDataKind()

@@ -30,6 +30,46 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	}
 }
 
+func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	row := &pb.RowFieldUpsert{
+		Key: &pb.RowKey{
+			SpaceId: "s", DatasetId: "d",
+			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: "x", Freq: "1d", DataTime: "2026-07-18T00:00:00Z",
+			}},
+		},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
+	}
+	if _, err := store.UpsertFieldsEvent(ctx, []*pb.RowFieldUpsert{row}, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return BuildDatasetRowsUpsertedMessage("node-1", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.ListOutbox(ctx, 0, 10)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("outbox before cleanup = %v, %v", before, err)
+	}
+
+	deleted, err := store.CleanupExpiredBuckets(ctx, "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	if err != nil || deleted != 1 {
+		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	}
+	after, err := store.ListOutbox(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("outbox count changed after cleanup: before=%d after=%d", len(before), len(after))
+	}
+}
+
 func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {

@@ -21,6 +21,7 @@ describe("Dataset lifecycle page contract", () => {
   it("requires an active DataNode and keep duration, then forces new datasets disabled", () => {
     expect(source).toContain('field="data_node_id"');
     expect(source).toContain('field="keep_duration"');
+    expect(source).toContain("被 View 使用时，Dataset 保留时长必须不小于 View 保留时长；0 表示永久保存。");
     expect(source).toContain('return { ...common, data_node_id: form.data_node_id, status: "disabled" }');
     expect(source).toContain('const activeDataNodes = computed(() => dataNodes.value.filter(item => item.status === "active"))');
   });

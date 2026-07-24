@@ -114,7 +114,10 @@
           <a-input-tag v-model="freqTags" allow-clear placeholder="例如 1m、1h、1d" />
         </a-form-item>
         <a-form-item field="keep_duration" label="保留时长" required>
-          <a-input v-model="form.keep_duration" placeholder="0 表示永久保存，例如 24h" />
+          <div class="keep-duration-field">
+            <a-input v-model="form.keep_duration" placeholder="0 表示永久保存，例如 24h" />
+            <span>被 View 使用时，Dataset 保留时长必须不小于 View 保留时长；0 表示永久保存。</span>
+          </div>
         </a-form-item>
         <a-form-item v-if="!editing" field="data_node_id" label="DataNode" required>
           <a-select v-model="form.data_node_id" allow-search placeholder="选择 active DataNode">
@@ -707,6 +710,19 @@ onMounted(async () => {
 
 .lock-tag {
   margin-left: 6px;
+}
+
+.keep-duration-field {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.keep-duration-field span {
+  color: var(--color-text-3);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .manage-title {

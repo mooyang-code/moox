@@ -51,6 +51,17 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := validateViewKeepDuration(
+		ctx,
+		tx,
+		next.GetSpaceId(),
+		next.GetViewId(),
+		next.GetKeepDuration(),
+		next.GetPrimaryDatasetId(),
+		next.GetDatasetIds(),
+	); err != nil {
+		return nil, err
+	}
 	existing, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
