@@ -25,14 +25,19 @@ func Default() *Config {
 		},
 		Consumers: []ConsumerConfig{
 			{Stream: "MOOX_MARKET", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_MARKET", Durable: "storage_primary_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_TRADE", Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_TRADE", Durable: "trade_reconciliation_v1", FilterSubject: "moox.trade.reconciliation.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
+			{Stream: "MOOX_TRADE", Durable: "trade_rebalance_v1", FilterSubject: "moox.trade.rebalance.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
+			{Stream: "MOOX_TRADE", Durable: "trade_progress_v1", FilterSubject: "moox.trade.fill.received.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
 			{Stream: "MOOX_TRADE", Durable: "trade_trading_signal_v1", FilterSubject: "moox.trading.signal.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
 			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_METRICS", Durable: "monitor_metrics_ingest_v1", FilterSubject: "moox.metrics.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
+			{Stream: "MOOX_METRICS", Durable: "monitor_metrics_ingest_v1", FilterSubject: "moox.metrics.snapshot.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
 			{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 8, MaxDeliver: -1},
 			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
 			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
 		},
-		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.job.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
+		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.job.execution.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
 		KV:                []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
 	}
 }

@@ -97,11 +97,11 @@ type Output struct {
 	DebugInfo map[string]any `json:"debug_info,omitempty"`
 }
 type Task struct {
-	RunID, BindingID, StrategyID, Version, Namespace, Freq, SourceHash, TriggerBarTime, DataRevision, InputHash string
-	PreviousState                                                                                               State
-	PreviousTargets                                                                                             []TargetWeight
-	Params                                                                                                      map[string]any
-	Data                                                                                                        []map[string]any
+	RunID, BindingID, StrategyID, Version, SpaceID, Namespace, Freq, SourceHash, TriggerBarTime, DataRevision, InputHash string
+	PreviousState                                                                                                        State
+	PreviousTargets                                                                                                      []TargetWeight
+	Params                                                                                                               map[string]any
+	Data                                                                                                                 []map[string]any
 }
 
 type Group struct {

@@ -14,10 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,19 +76,29 @@ func wrapDelivery(t *testing.T, payload []byte, topic, messageID string) *jetstr
 	var values map[string]any
 	err := json.Unmarshal(payload, &values)
 	require.NoError(t, err)
-	structured, err := structpb.NewStruct(values)
-	require.NoError(t, err)
+	var structured proto.Message
 	event := events.TradeExecutionSliceReady
 	if strings.Contains(topic, "rebalance.requested") {
 		event = events.TradeRebalanceRequested
+		structured = &tradeeventpb.RebalanceRequested{}
+	} else {
+		structured = &tradeeventpb.OrderSnapshot{}
 	}
-	spaceID := structured.GetFields()["space_id"].GetStringValue()
+	if _, isRebalance := structured.(*tradeeventpb.RebalanceRequested); isRebalance {
+		structured = &tradeeventpb.RebalanceRequested{RunId: firstString(values, "RunID", "run_id"), AccountId: firstString(values, "AccountID", "account_id"), ChannelId: firstString(values, "ChannelID", "channel_id"), MarketSnapshotId: firstString(values, "MarketSnapshotID", "market_snapshot_id"), PositionSnapshotId: firstString(values, "PositionSnapshotID", "position_snapshot_id"), RulesVersion: firstString(values, "RulesVersion", "rules_version")}
+	} else {
+		structured = &tradeeventpb.OrderSnapshot{OrderId: firstString(values, "OrderID", "order_id"), ClientOrderId: firstString(values, "ClientOrderID", "client_order_id"), AccountId: firstString(values, "AccountID", "account_id"), ChannelId: firstString(values, "ChannelID", "channel_id"), Symbol: firstString(values, "Symbol", "symbol"), Side: firstString(values, "Side", "side"), Quantity: firstString(values, "Quantity", "quantity"), Price: firstString(values, "Price", "price"), FilledQuantity: firstString(values, "FilledQuantity", "filled_quantity"), State: firstString(values, "State", "state"), ExchangeOrderId: firstString(values, "ExchangeOrderID", "exchange_order_id")}
+	}
+	spaceID, _ := values["space_id"].(string)
 	if spaceID == "" {
 		spaceID = "space"
 	}
-	subjectID := structured.GetFields()["order_id"].GetStringValue()
-	if subjectID == "" {
-		subjectID = structured.GetFields()["run_id"].GetStringValue()
+	subjectID := ""
+	switch value := structured.(type) {
+	case *tradeeventpb.OrderSnapshot:
+		subjectID = value.GetOrderId()
+	case *tradeeventpb.RebalanceRequested:
+		subjectID = value.GetRunId()
 	}
 	if subjectID == "" {
 		subjectID = messageID
@@ -103,6 +113,15 @@ func wrapDelivery(t *testing.T, payload []byte, topic, messageID string) *jetstr
 		RawData: raw, RawMessageID: messageID, Subject: encoded.Subject, ContentType: events.ContentType,
 		DeliveryCount: 1,
 	}
+}
+
+func firstString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func TestReconcileOrdersOnce_WithFills_ShouldApply(t *testing.T) {

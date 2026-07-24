@@ -14,7 +14,7 @@ func (s *Store) ListPendingOutbox(ctx context.Context, limit int, now time.Time)
 	}
 	var rows []domain.OutboxMessage
 	err := s.db.WithContext(ctx).Table("t_strategy_outbox").
-		Select("c_message_id AS message_id, c_topic AS topic, c_payload AS payload, c_ctime AS created_at").
+		Select("c_message_id AS message_id, c_event_data AS event_data, c_ctime AS created_at").
 		Where("c_published=0 AND (c_claimed_until IS NULL OR c_claimed_until < ?)", now).
 		Order("c_ctime").Limit(limit).Find(&rows).Error
 	return rows, err

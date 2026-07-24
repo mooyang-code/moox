@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
@@ -16,8 +17,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"google.golang.org/protobuf/proto"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 type replaceAdapter struct{ scriptedExchange }
@@ -40,8 +42,8 @@ type e2eFakePublisher struct {
 	ids []string
 }
 
-func (f *e2eFakePublisher) Publish(_ context.Context, _ events.EventType, _ proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
-	f.ids = append(f.ids, opts.EventID)
+func (f *e2eFakePublisher) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {
+	f.ids = append(f.ids, message.GetEventId())
 	return &jetstream.PublishAck{Stream: "MOOX_TRADE", Sequence: uint64(len(f.ids))}, nil
 }
 
@@ -97,7 +99,15 @@ func TestOutboxRelayMarksPublished(t *testing.T) {
 	}
 	defer s.Close()
 	if err = s.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.AddOutbox("evt-1", "moox.trade.fill.received.v1", []byte(`{"ok":true}`))
+		registry, registryErr := events.DefaultRegistry()
+		if registryErr != nil {
+			return registryErr
+		}
+		data, marshalErr := registry.MarshalMessage(events.TradeFillReceived, &tradeeventpb.FillReceived{FillId: "fill-1", OrderId: "order-1", Symbol: "BTCUSDT", Quantity: "1", Price: "10"}, events.PublishOptions{EventID: "evt-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "fill-1"})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		return tx.AddOutbox("evt-1", data)
 	}); err != nil {
 		t.Fatal(err)
 	}

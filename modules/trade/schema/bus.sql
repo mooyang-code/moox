@@ -1,10 +1,9 @@
 CREATE TABLE IF NOT EXISTS t_trade_inbox (
- c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_consumer TEXT NOT NULL, c_message_id TEXT NOT NULL, c_topic TEXT NOT NULL,
+ c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_consumer TEXT NOT NULL, c_message_id TEXT NOT NULL, c_event_name TEXT NOT NULL,
  c_processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(c_consumer,c_message_id)
 );
 CREATE TABLE IF NOT EXISTS t_trade_outbox (
- c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_message_id TEXT NOT NULL, c_topic TEXT NOT NULL, c_payload BLOB NOT NULL,
- c_trace_id TEXT NOT NULL DEFAULT '', c_request_id TEXT NOT NULL DEFAULT '',
+ c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_message_id TEXT NOT NULL, c_event_data BLOB NOT NULL,
  c_status TEXT NOT NULL DEFAULT 'PENDING', c_attempts INTEGER NOT NULL DEFAULT 0, c_lease_until DATETIME, c_claim_token TEXT NOT NULL DEFAULT '',
  c_last_error TEXT NOT NULL DEFAULT '', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, c_published_at DATETIME,
  UNIQUE(c_message_id)

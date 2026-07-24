@@ -49,7 +49,7 @@ func TestBuildStorageViewDLQMessageMatchesContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload type = %T", payload)
 	}
-	if rejected.GetOriginalMessageId() != "event-1" || rejected.GetOriginalTopic() == "" || rejected.GetDeliveryCount() != 10 {
+	if rejected.GetOriginalMessageId() != "event-1" || rejected.GetOriginalSubject() == "" || rejected.GetDeliveryCount() != 10 {
 		t.Fatalf("rejected payload = %v", rejected)
 	}
 }

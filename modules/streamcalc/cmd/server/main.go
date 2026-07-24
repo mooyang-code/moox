@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/streamcalc/internal/config"
 	"github.com/mooyang-code/moox/modules/streamcalc/internal/service"
 	"github.com/mooyang-code/moox/modules/streamcalc/internal/state"
-	"github.com/mooyang-code/moox/modules/streamcalc/internal/storage"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
@@ -43,11 +42,11 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	writer, err := storage.NewRPCWriter(cfg.Storage.Target, cfg.Storage.SpaceID, cfg.Storage.DatasetID, nil)
+	publisher, err := events.NewPublisher(client, registry)
 	if err != nil {
 		fatal(err)
 	}
-	processor, err := service.NewProcessor(aggregator, writer)
+	processor, err := service.NewEventProcessor(aggregator, publisher)
 	if err != nil {
 		fatal(err)
 	}
@@ -55,6 +54,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	runner.SetDLQPublisher(publisher)
 	runner.SetCheckpoint(state.FileStore{Path: cfg.State.CheckpointPath})
 	if err := runner.Restore(context.Background()); err != nil {
 		fatal(err)

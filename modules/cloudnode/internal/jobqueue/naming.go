@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 const (
@@ -63,12 +65,28 @@ func SubjectToken(raw string) string {
 
 // ExecFilterSubject returns the consumer filter subject for a node and job type.
 func ExecFilterSubject(cfg NamingConfig, spaceID, codePackageID, jobType string) string {
-	return "moox.cloudnode.job.requested.v1.>"
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return ""
+	}
+	subject, err := registry.RenderSubject(events.CloudJobExecutionRequested, spaceID, codePackageID+"/"+jobType)
+	if err != nil {
+		return ""
+	}
+	return subject
 }
 
 // ExecStreamSubject returns the wildcard subject configured on the execution stream.
 func ExecStreamSubject(cfg NamingConfig) string {
-	return "moox.cloudnode.>"
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return ""
+	}
+	pattern, err := registry.FamilyPattern(events.CloudJobExecutionRequested)
+	if err != nil {
+		return ""
+	}
+	return pattern
 }
 
 // ConsumerName returns a durable consumer name for a specific executable route.

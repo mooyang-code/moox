@@ -25,6 +25,28 @@ type EncodedEvent struct {
 	Payload []byte
 }
 
+// MarshalMessage creates the exact deterministic EventMessage bytes that an
+// outbox stores. Relays must publish these bytes without reconstructing the
+// event from topic strings or JSON payloads.
+func (r *Registry) MarshalMessage(event EventType, payload proto.Message, opts PublishOptions) ([]byte, error) {
+	encoded, err := r.Encode(event, payload, opts)
+	if err != nil {
+		return nil, err
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
+}
+
+func (r *Registry) UnmarshalMessage(raw []byte) (*eventpb.EventMessage, error) {
+	message := new(eventpb.EventMessage)
+	if err := proto.Unmarshal(raw, message); err != nil {
+		return nil, fmt.Errorf("decode event message: %w", err)
+	}
+	if _, err := r.ValidateMessage(message); err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
 // ValidateMessage verifies the complete application envelope and its typed
 // payload without consulting NATS transport metadata.
 func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (EventSchema, error) {

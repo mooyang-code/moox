@@ -12,7 +12,6 @@ import (
 type Config struct {
 	EventBus    EventBusConfig    `yaml:"eventbus"`
 	Aggregation AggregationConfig `yaml:"aggregation"`
-	Storage     StorageConfig     `yaml:"storage"`
 	State       StateConfig       `yaml:"state"`
 }
 
@@ -32,12 +31,6 @@ type AggregationConfig struct {
 	InputFrequency  string        `yaml:"input_frequency"`
 	TargetFrequency string        `yaml:"target_frequency"`
 	AllowedLateness time.Duration `yaml:"allowed_lateness"`
-}
-
-type StorageConfig struct {
-	Target    string `yaml:"target"`
-	SpaceID   string `yaml:"space_id"`
-	DatasetID string `yaml:"dataset_id"`
 }
 
 func Load(path string) (Config, error) {
@@ -98,9 +91,6 @@ func (c Config) Validate() error {
 	}
 	if _, err := ParseFrequency(c.Aggregation.TargetFrequency); err != nil {
 		return fmt.Errorf("target_frequency: %w", err)
-	}
-	if c.Storage.SpaceID == "" || c.Storage.DatasetID == "" {
-		return fmt.Errorf("storage space_id and dataset_id are required")
 	}
 	if strings.TrimSpace(c.State.CheckpointPath) == "" {
 		return fmt.Errorf("state checkpoint_path is required")

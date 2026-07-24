@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -16,13 +17,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-type fakeWriter struct{ bars []aggregate.Bar }
-
-func (w *fakeWriter) Write(_ context.Context, bar aggregate.Bar) error {
-	w.bars = append(w.bars, bar)
-	return nil
-}
 
 func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 	server := startJetStream(t)
@@ -41,6 +35,10 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_v1", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxAckPending: 32, MaxDeliver: 3, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
+		nc.Close()
+		t.Fatal(err)
+	}
+	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "storage_primary_kline_v1", Durable: "storage_primary_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxAckPending: 32, MaxDeliver: 3, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		nc.Close()
 		t.Fatal(err)
 	}
@@ -64,12 +62,16 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer consumer.Close()
+	outputConsumer, err := events.NewConsumer(client, jetstream.ConsumerBindRef{Stream: "MOOX_MARKET", Durable: "storage_primary_kline_v1", FetchMaxWait: 50 * time.Millisecond}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outputConsumer.Close()
 	aggregator, err := aggregate.New("1m", "5m", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := new(fakeWriter)
-	processor, err := service.NewProcessor(aggregator, writer)
+	processor, err := service.NewEventProcessor(aggregator, publisher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +90,19 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(writer.bars) != 1 || !writer.bars[0].Closed || writer.bars[0].Volume != 5 || writer.bars[0].TradeCount != 5 {
-		t.Fatalf("aggregated bars = %+v", writer.bars)
+	outputs, err := outputConsumer.Fetch(context.Background(), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputs) != 1 {
+		t.Fatalf("aggregated kline events = %d", len(outputs))
+	}
+	output, ok := outputs[0].Payload.(*marketpb.KlineClosed)
+	if !ok || output.GetVolume() != 5 || output.GetTradeCount() != 5 || output.GetFrequency() != "5m" {
+		t.Fatalf("aggregated kline payload = %#v", outputs[0].Payload)
+	}
+	if err := outputs[0].Delivery.Ack(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	duplicate := &marketpb.Tick{Exchange: "binance", TradeId: "trade-4", Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(base.Add(4*time.Minute + 10*time.Second))}
 	if _, err := publisher.Publish(context.Background(), events.TickReceived, duplicate, events.PublishOptions{EventID: "binance:BTC-USDT:4", OccurredAt: base.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: duplicate.GetSymbol()}); err != nil {
@@ -98,8 +111,12 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(writer.bars) != 1 {
-		t.Fatalf("duplicate produced another storage write: %+v", writer.bars)
+	outputs, err = outputConsumer.Fetch(context.Background(), 8)
+	if err != nil && !errors.Is(err, nats.ErrTimeout) {
+		t.Fatal(err)
+	}
+	if len(outputs) != 0 {
+		t.Fatalf("duplicate produced another kline event: %d", len(outputs))
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -138,7 +139,7 @@ func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.
 	}
 	request := &pb.ListDatasetsReq{}
 	if req != nil {
-		*request = *req
+		request = proto.Clone(req).(*pb.ListDatasetsReq)
 	}
 	request.AuthInfo = c.auth
 	return c.proxy.ListDatasets(ctx, request)
@@ -150,7 +151,7 @@ func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context
 	}
 	request := &pb.CheckDatasetActivationReq{}
 	if req != nil {
-		*request = *req
+		request = proto.Clone(req).(*pb.CheckDatasetActivationReq)
 	}
 	request.AuthInfo = c.auth
 	return c.proxy.CheckDatasetActivation(ctx, request)

@@ -10,8 +10,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"google.golang.org/protobuf/proto"
+	"github.com/mooyang-code/moox/packages/strategyeventpb"
 )
 
 type runtimeTestStore struct {
@@ -83,16 +84,28 @@ type runtimeEventPublisher struct {
 	client *runtimeTestClient
 }
 
-func (p runtimeEventPublisher) Publish(_ context.Context, _ events.EventType, _ proto.Message, options events.PublishOptions) (*jetstream.PublishAck, error) {
+func strategyEventData(id string) ([]byte, error) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	return registry.MarshalMessage(events.StrategyOutputAccepted, &strategyeventpb.StrategyOutputAccepted{RunId: id, BindingId: "binding-1", StrategyId: "strategy-1", Action: "hold"}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "binding-1"})
+}
+
+func (p runtimeEventPublisher) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {
 	if p.client == nil || !p.client.ready.Load() {
 		return nil, errors.New("disconnected")
 	}
-	p.client.ids <- options.EventID
+	p.client.ids <- message.GetEventId()
 	return &jetstream.PublishAck{}, nil
 }
 
 func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
-	store := &runtimeTestStore{row: domain.OutboxMessage{MessageID: "run-1", Topic: "moox.strategy.output.accepted.v1", Payload: []byte(`{}`), CreatedAt: time.Now().Add(-time.Minute)}}
+	data, err := strategyEventData("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &runtimeTestStore{row: domain.OutboxMessage{MessageID: "run-1", EventData: data, CreatedAt: time.Now().Add(-time.Minute)}}
 	client := newRuntimeTestClient()
 	var attempts atomic.Int32
 	runtime, err := NewRuntime(RuntimeConfig{

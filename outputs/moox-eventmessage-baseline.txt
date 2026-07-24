@@ -39,4 +39,11 @@ Verification commands
   packages/report: go test ./...
   modules/storage/internal/service/e2e: CGO_ENABLED=1 go test ./internal/service/e2e -count=1 -v
 
-All commands listed above passed in the current worktree. The target Linux/CGO environment was not available on this macOS checkout; the storage E2E was nevertheless executed with CGO_ENABLED=1 locally.
+All commands listed above passed in the current worktree. The storage E2E also passed remotely on the configured Linux compile host with CGO_ENABLED=1:
+  TestDataNodeManagementLifecycle
+  TestPrimaryDataNodeViewFlow
+  TestViewEventConsumerProcessesIndependentDatasetLanesE2E
+  TestViewQueryFilterSortPageAndTotalE2E
+The remote EventMessage aggregation contract also passed:
+  TestCollectorEventToStreamcalcAggregationE2E
+The remote Storage binaries were verified as Linux/amd64 ELF files. The helper's compressed binary download was stopped after it made no progress; no partial download was used as verification evidence.

@@ -53,6 +53,8 @@ func TestConsumerConfigForRouteUsesExactRoute(t *testing.T) {
 
 	require.Equal(t, ConsumerName("crypto", "moox-collector_v202607142250", "collect.kline"), got.Durable)
 	require.Equal(t, ExecFilterSubject(cfg.Naming, "crypto", "moox-collector_v202607142250", "collect.kline"), got.FilterSubject)
+	require.NotContains(t, got.FilterSubject, ">")
+	require.NotEqual(t, got.FilterSubject, ExecFilterSubject(cfg.Naming, "crypto", "moox-collector_v202607142250", "collect.symbol"))
 }
 
 func TestRouteConsumerKeySeparatesJobTypes(t *testing.T) {

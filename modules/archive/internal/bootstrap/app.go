@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -102,8 +103,16 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	defer pull.Close()
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	eventPublisher, err := events.NewPublisher(natsClient, registry)
+	if err != nil {
+		return err
+	}
 	decoder := consumer.NewDecoder(sourceLists(a.Config))
-	handler := consumer.NewHandler(decoder, store, nil)
+	handler := consumer.NewHandlerWithDLQ(decoder, store, nil, consumer.NewJetStreamDLQ(eventPublisher))
 	runner := consumer.NewRunner(pull, handler, a.Config.Archive.EventBus.FetchBatch)
 	runnerErr := make(chan error, 1)
 	go func() { runnerErr <- runner.Run(ctx) }()

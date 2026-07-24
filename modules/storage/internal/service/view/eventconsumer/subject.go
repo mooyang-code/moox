@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-const DatasetRowsUpsertedSubjectPrefix = "moox.storage.dataset.rows.upserted.v1"
+const DatasetRowsUpsertedSubjectPrefix = ""
 
 func DatasetRowsUpsertedSubject(prefix, spaceID, datasetID string) (string, error) {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = DatasetRowsUpsertedSubjectPrefix
+		registry, err := events.DefaultRegistry()
+		if err != nil {
+			return "", err
+		}
+		return registry.RenderSubject(events.DatasetRowsUpserted, spaceID, datasetID)
 	}
 	spaceToken, err := jetstream.EncodeSubjectToken(spaceID)
 	if err != nil {
@@ -26,7 +31,15 @@ func DatasetRowsUpsertedSubject(prefix, spaceID, datasetID string) (string, erro
 
 func ParseDatasetRowsUpsertedSubject(prefix, subject string) (string, string, error) {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = DatasetRowsUpsertedSubjectPrefix
+		registry, err := events.DefaultRegistry()
+		if err != nil {
+			return "", "", err
+		}
+		schema, ok := registry.Schema(events.DatasetRowsUpserted)
+		if !ok {
+			return "", "", fmt.Errorf("dataset rows event is not registered")
+		}
+		prefix = strings.TrimSuffix(strings.Split(schema.Subject, "<space>")[0], ".")
 	}
 	parts := strings.Split(subject, ".")
 	prefixParts := strings.Split(strings.TrimSuffix(prefix, "."), ".")

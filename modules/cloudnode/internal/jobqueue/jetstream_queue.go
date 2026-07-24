@@ -2,7 +2,6 @@ package jobqueue
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -11,11 +10,10 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	nats "github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/types/known/structpb"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -71,18 +69,13 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	if strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetJobItemId()) == "" {
 		return nil, fmt.Errorf("space_id and job_item_id are required")
 	}
-	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(item)
-	if err != nil {
-		return nil, err
-	}
 	messageID := item.GetJobItemId()
-	values := map[string]any{}
-	if err := json.Unmarshal(data, &values); err != nil {
-		return nil, err
+	if strings.TrimSpace(item.GetCodePackageId()) == "" || strings.TrimSpace(item.GetJobType()) == "" {
+		return nil, fmt.Errorf("code_package_id and job_type are required")
 	}
-	payload, err := structpb.NewStruct(values)
-	if err != nil {
-		return nil, err
+	payload := &cloudjobpb.JobExecutionRequested{
+		JobId: item.GetJobId(), JobItemId: item.GetJobItemId(), JobType: item.GetJobType(),
+		CodePackageId: item.GetCodePackageId(), Params: item.GetParams(), Priority: item.GetPriority(),
 	}
 	if q.publisher == nil {
 		return nil, errors.New("cloudnode event publisher is unavailable")
@@ -91,11 +84,12 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	if err != nil {
 		return nil, err
 	}
-	subject, err := registry.RenderSubject(events.CloudJobRequested, item.GetSpaceId(), item.GetJobItemId())
+	subjectID := item.GetCodePackageId() + "/" + item.GetJobType()
+	subject, err := registry.RenderSubject(events.CloudJobExecutionRequested, item.GetSpaceId(), subjectID)
 	if err != nil {
 		return nil, err
 	}
-	ack, err := q.publisher.Publish(ctx, events.CloudJobRequested, payload, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: item.GetJobItemId()})
+	ack, err := q.publisher.Publish(ctx, events.CloudJobExecutionRequested, payload, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: subjectID})
 	if err != nil {
 		return nil, err
 	}
@@ -211,30 +205,41 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		}
 		message, payload, decodeErr := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
 		if decodeErr != nil {
+			if dlqErr := q.reject(ctx, delivery, decodeErr.Error()); dlqErr != nil {
+				return nil, errors.Join(decodeErr, dlqErr)
+			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(decodeErr, actionErr)
 			}
 			continue
 		}
-		structPayload, ok := payload.(*structpb.Struct)
+		jobPayload, ok := payload.(*cloudjobpb.JobExecutionRequested)
 		if !ok {
+			reason := fmt.Sprintf("cloudnode payload type mismatch: %T", payload)
+			if dlqErr := q.reject(ctx, delivery, reason); dlqErr != nil {
+				return nil, dlqErr
+			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
-				return nil, errors.Join(errors.New("cloudnode payload type mismatch"), actionErr)
+				return nil, errors.Join(errors.New(reason), actionErr)
 			}
 			continue
 		}
-		item := &pb.JobItem{}
-		itemJSON, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(structPayload)
-		unmarshalErr := protojson.UnmarshalOptions{DiscardUnknown: false}.Unmarshal(itemJSON, item)
-		if err != nil || unmarshalErr != nil {
+		if jobPayload.GetJobItemId() == "" || jobPayload.GetCodePackageId() == "" || jobPayload.GetJobType() == "" {
+			if dlqErr := q.reject(ctx, delivery, "cloudnode job payload identity is incomplete"); dlqErr != nil {
+				return nil, dlqErr
+			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(errors.New("decode malformed cloudnode job item"), fmt.Errorf("term malformed job item: %w", actionErr))
 			}
 			continue
 		}
-		if item.GetSpaceId() != req.SpaceID || item.GetCodePackageId() != req.CodePackageID || !contains(req.SupportedJobTypes, item.GetJobType()) {
-			if actionErr := delivery.Nak(actionCtx, time.Second); actionErr != nil {
-				return nil, fmt.Errorf("nak unsupported job item: %w", actionErr)
+		expectedSubject, subjectErr := registry.RenderSubject(events.CloudJobExecutionRequested, req.SpaceID, req.CodePackageID+"/"+jobPayload.GetJobType())
+		if subjectErr != nil || delivery.Subject != expectedSubject || !contains(req.SupportedJobTypes, jobPayload.GetJobType()) {
+			if dlqErr := q.reject(ctx, delivery, "cloudnode route identity mismatch"); dlqErr != nil {
+				return nil, dlqErr
+			}
+			if actionErr := delivery.Term(actionCtx); actionErr != nil {
+				return nil, errors.Join(fmt.Errorf("cloudnode route mismatch"), actionErr)
 			}
 			continue
 		}
@@ -242,7 +247,7 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		if message.GetOccurredAt() != nil {
 			submittedAt = message.GetOccurredAt().AsTime().UTC()
 		}
-		meta := JobItemMessage{SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(), JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()), Priority: item.GetPriority(), SubmittedAt: submittedAt}
+		meta := JobItemMessage{SpaceID: req.SpaceID, JobID: jobPayload.GetJobId(), JobItemID: jobPayload.GetJobItemId(), JobType: jobPayload.GetJobType(), CodePackageID: jobPayload.GetCodePackageId(), Params: structToMap(jobPayload.GetParams()), Priority: jobPayload.GetPriority(), SubmittedAt: submittedAt}
 		token := fmt.Sprintf("%s:%d", delivery.RawMessageID, delivery.ConsumerSeq)
 		q.mu.Lock()
 		q.inflight[token] = delivery
@@ -250,6 +255,18 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		out = append(out, Delivery{Message: meta, AttemptNo: int(delivery.DeliveryCount), AckSubject: token, StreamSeq: delivery.StreamSeq, ConsumerSeq: delivery.ConsumerSeq})
 	}
 	return out, nil
+}
+
+func (q *JetStreamQueue) reject(ctx context.Context, delivery *jetstream.Delivery, reason string) error {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	rejectedBy := "cloudnode"
+	if delivery != nil && strings.TrimSpace(delivery.Consumer) != "" {
+		rejectedBy = delivery.Consumer
+	}
+	return events.PublishRejected(ctx, q.publisher, registry, delivery, reason, rejectedBy)
 }
 
 func (q *JetStreamQueue) take(token string) *jetstream.Delivery {

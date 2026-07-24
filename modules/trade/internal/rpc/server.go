@@ -2,7 +2,7 @@ package rpc
 
 import (
 	"context"
-	"encoding/json"
+	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
@@ -12,6 +12,7 @@ import (
 	domainrebalance "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
@@ -78,9 +79,9 @@ func (h *Server) ReconcileNow(ctx context.Context, req *tradepb.ReconcileNowReq)
 	if err != nil {
 		return &tradepb.ReconcileNowRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	payload, err := json.Marshal(map[string]string{"space_id": spaceID(ctx), "account_id": req.GetAccountId(), "channel_id": req.GetChannelId()})
+	payload, err := tradebus.EncodeReconciliationRequested(id, spaceID(ctx), id, req.GetAccountId(), req.GetChannelId(), time.Now().UTC())
 	if err == nil {
-		err = h.kernel.Store.EnqueueOutbox(ctx, id, "moox.trade.reconciliation.requested.v1", payload)
+		err = h.kernel.Store.EnqueueOutbox(ctx, id, payload)
 	}
 	if err != nil {
 		return &tradepb.ReconcileNowRsp{RetInfo: errToRetInfo(err)}, nil

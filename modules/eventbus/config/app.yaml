@@ -101,6 +101,15 @@ consumers:
     ack_wait: 60s
     max_ack_pending: 256
     max_deliver: -1
+  - stream: MOOX_MARKET
+    durable: storage_primary_kline_v1
+    filter_subject: moox.market.kline.closed.v1.>
+    ack_policy: explicit
+    deliver_policy: all
+    replay_policy: instant
+    ack_wait: 60s
+    max_ack_pending: 256
+    max_deliver: -1
   - stream: MOOX_TRADE
     durable: trade_execution_v1
     filter_subject: moox.trade.execution.slice.ready.v1.>
@@ -157,7 +166,7 @@ consumers:
     max_deliver: 3
   - stream: MOOX_METRICS
     durable: monitor_metrics_ingest_v1
-    filter_subject: moox.metrics.reported.v1.>
+    filter_subject: moox.metrics.snapshot.reported.v1.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant
@@ -195,7 +204,7 @@ consumers:
 consumer_templates:
   - stream: MOOX_CLOUDNODE_EXEC
     durable_prefix: cn_exec_
-    filter_pattern: moox.cloudnode.job.requested.v1.>
+    filter_pattern: moox.cloudnode.job.execution.requested.v1.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant

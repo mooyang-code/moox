@@ -2,7 +2,6 @@ package test
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
@@ -11,9 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	nserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/encoding/protojson"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,14 +92,11 @@ func TestJetStreamOutboxToSubmissionInboxE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var eventOrder store.OrderRecord
-	payloadJSON, err := protojson.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
+	snapshot, ok := payload.(*tradeeventpb.OrderSnapshot)
+	if !ok {
+		t.Fatalf("payload type=%T", payload)
 	}
-	if err = json.Unmarshal(payloadJSON, &eventOrder); err != nil {
-		t.Fatal(err)
-	}
+	eventOrder := store.OrderRecord{SpaceID: message.GetSpaceId(), OrderID: snapshot.GetOrderId(), ClientOrderID: snapshot.GetClientOrderId(), AccountID: snapshot.GetAccountId(), ChannelID: snapshot.GetChannelId(), Symbol: snapshot.GetSymbol(), MarketType: snapshot.GetMarketType(), BaseAsset: snapshot.GetBaseAsset(), QuoteAsset: snapshot.GetQuoteAsset(), Side: snapshot.GetSide(), Quantity: snapshot.GetQuantity(), Price: snapshot.GetPrice(), ReduceOnly: snapshot.GetReduceOnly(), FilledQuantity: snapshot.GetFilledQuantity(), State: snapshot.GetState(), ExchangeOrderID: snapshot.GetExchangeOrderId(), Version: uint64(snapshot.GetVersion())}
 	if eventOrder.OrderID != r.OrderID {
 		t.Fatalf("event order=%s", eventOrder.OrderID)
 	}

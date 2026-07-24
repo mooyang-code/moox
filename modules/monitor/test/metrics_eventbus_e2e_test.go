@@ -93,7 +93,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	messageID := "monitor-metric-e2e-1"
-	if _, err := publisher.Publish(ctx, events.MetricsReported, &metricspb.MetricReport{ServiceName: "fixture-service", InstanceId: "fixture-1", NodeId: "node-1", BootId: "boot-1", ServiceVersion: "test", Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: observed, SpaceID: metrics.InternalMetricSpaceID, SubjectID: "fixture-service/fixture-1"}); err != nil {
+	if _, err := publisher.Publish(ctx, events.MetricsSnapshotReported, &metricspb.MetricReport{ServiceName: "fixture-service", InstanceId: "fixture-1", NodeId: "node-1", BootId: "boot-1", ServiceVersion: "test", Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: observed, SpaceID: metrics.InternalMetricSpaceID, SubjectID: "fixture-service/fixture-1"}); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := fetchMetricsEventually(ctx, consumer, 5*time.Second)

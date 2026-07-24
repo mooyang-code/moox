@@ -137,7 +137,7 @@ func TestHandlePublishesEventMessage(t *testing.T) {
 	if len(publisher.events) != 1 {
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	if publisher.events[0] != events.MetricsReported {
+	if publisher.events[0] != events.MetricsSnapshotReported {
 		t.Fatalf("event = %+v", publisher.events[0])
 	}
 	report, ok := publisher.payloads[0].(*metricspb.MetricReport)

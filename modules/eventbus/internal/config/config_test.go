@@ -36,7 +36,7 @@ func TestDefaultMonitorConsumersMatchRuntimeContracts(t *testing.T) {
 	cfg := Default()
 	want := map[string]string{
 		"monitor_hostmetrics_ingest_v1": "moox.metrics.host.reported.v1.>",
-		"monitor_metrics_ingest_v1":     "moox.metrics.reported.v1.>",
+		"monitor_metrics_ingest_v1":     "moox.metrics.snapshot.reported.v1.>",
 	}
 	for _, consumer := range cfg.Consumers {
 		if topic, ok := want[consumer.Durable]; ok {

@@ -50,15 +50,15 @@ func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(js, c, Options{Ready: func() bool { return true }, Connections: b.Connections})
-	list, err := svc.ListTopics(ctx, &eventbuspb.ListTopicsReq{Page: &commonpb.Page{Page: 1, Size: 2}})
+	list, err := svc.ListEvents(ctx, &eventbuspb.ListEventsReq{Page: &commonpb.Page{Page: 1, Size: 2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list.RetInfo.GetCode() != commonpb.ErrorCode_SUCCESS || len(list.Topics) != 2 || !list.PageResult.GetHasMore() {
+	if list.RetInfo.GetCode() != commonpb.ErrorCode_SUCCESS || len(list.Events) != 2 || !list.PageResult.GetHasMore() {
 		t.Fatalf("unexpected list response: %#v", list)
 	}
-	if list.Topics[0].GetTopic() >= list.Topics[1].GetTopic() {
-		t.Fatalf("topics not sorted: %q, %q", list.Topics[0].GetTopic(), list.Topics[1].GetTopic())
+	if list.Events[0].GetSubjectPattern() >= list.Events[1].GetSubjectPattern() {
+		t.Fatalf("events not sorted: %q, %q", list.Events[0].GetSubjectPattern(), list.Events[1].GetSubjectPattern())
 	}
 	streams, err := svc.ListStreams(ctx, &eventbuspb.ListStreamsReq{})
 	if err != nil || len(streams.Streams) != len(c.Streams) {

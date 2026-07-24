@@ -14,9 +14,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/strategyeventpb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
@@ -120,7 +120,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.StrategyOutputAccepted.Name {
 			t.Fatalf("invalid envelope/header: id=%q envelope=%+v", message.Header.Get(nats.MsgIdHdr), &envelope)
 		}
-		if _, ok := payload.(*structpb.Struct); !ok {
+		if _, ok := payload.(*strategyeventpb.StrategyOutputAccepted); !ok {
 			t.Fatalf("payload=%T", payload)
 		}
 		seen[envelope.GetEventId()]++

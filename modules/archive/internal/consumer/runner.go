@@ -57,6 +57,7 @@ func (d deliveryAdapter) MessageID() string {
 	return d.RawMessageID
 }
 func (d deliveryAdapter) Subject() string        { return d.Delivery.Subject }
+func (d deliveryAdapter) ContentType() string    { return d.Delivery.ContentType }
 func (d deliveryAdapter) StreamSequence() uint64 { return d.Delivery.StreamSeq }
 func (d deliveryAdapter) DeliveryCount() uint64  { return d.Delivery.DeliveryCount }
 

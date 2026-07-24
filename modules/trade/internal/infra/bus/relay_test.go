@@ -4,10 +4,13 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -17,21 +20,21 @@ type fakePublisher struct {
 	bodies   [][]byte
 }
 
-func (f *fakePublisher) Publish(_ context.Context, event events.EventType, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+func (f *fakePublisher) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := registry.Encode(event, payload, opts)
+	subject, err := registry.SubjectForMessage(message)
 	if err != nil {
 		return nil, err
 	}
-	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
 	if err != nil {
 		return nil, err
 	}
-	f.ids = append(f.ids, opts.EventID)
-	f.subjects = append(f.subjects, encoded.Subject)
+	f.ids = append(f.ids, message.GetEventId())
+	f.subjects = append(f.subjects, subject)
 	f.bodies = append(f.bodies, body)
 	return &jetstream.PublishAck{Stream: "MOOX_TRADE", Sequence: uint64(len(f.ids))}, nil
 }
@@ -43,7 +46,11 @@ func TestRelayPublishesGovernedEventMessage(t *testing.T) {
 	}
 	defer s.Close()
 	if err = s.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.AddOutbox("m1", "moox.trade.order.state.changed.v1", []byte(`{"space_id":"space","order_id":"order-1","state":"OPEN"}`))
+		data, encodeErr := registryOrderEvent("m1")
+		if encodeErr != nil {
+			return encodeErr
+		}
+		return tx.AddOutbox("m1", data)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -67,14 +74,10 @@ func TestRelayPublishesGovernedEventMessage(t *testing.T) {
 	}
 }
 
-func TestEventForTopicRejectsLegacyAliases(t *testing.T) {
-	for _, topic := range []string{
-		"moox.trade.order.intent_created.v1",
-		"moox.trade.order.state_changed.v1",
-		"moox.trade.execution.slice_ready.v1",
-	} {
-		if _, err := eventForTopic(topic); err == nil {
-			t.Fatalf("eventForTopic(%q) accepted a legacy alias", topic)
-		}
+func registryOrderEvent(id string) ([]byte, error) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
 	}
+	return registry.MarshalMessage(events.TradeOrderStateChanged, &tradeeventpb.OrderSnapshot{OrderId: "order-1", State: "OPEN"}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "order-1"})
 }

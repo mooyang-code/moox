@@ -15,8 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/marketpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -188,73 +186,13 @@ func SetEventPublisher(publisher *events.Publisher) {
 	eventPublisher = publisher
 }
 
-// CollectLive fetches closed market bars and publishes market.kline.closed. It
-// deliberately does not call Storage; streamcalc owns materialization.
+// CollectLive is deliberately a Tick ingress. K-line aggregation belongs to
+// streamcalc; the collector must not publish a second, competing bar result.
 func (c *KlineCollector) CollectLive(ctx context.Context, params *sources.CollectParams) error {
-	if params == nil || strings.TrimSpace(params.SpaceID) == "" {
-		return fmt.Errorf("实时K线采集需要 space_id")
+	if c == nil {
+		return fmt.Errorf("K线采集器为空")
 	}
-	if eventPublisher == nil {
-		return fmt.Errorf("实时K线采集未配置 EventBus publisher")
-	}
-	if _, err := normalizeFreq(params.Interval); err != nil {
-		return err
-	}
-	exchangeKlines, err := c.fetchKlines(ctx, params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: 1000})
-	if err != nil {
-		return err
-	}
-	klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
-	closed, _ := filterClosedKlines(klines, c.currentTime())
-	for _, kline := range closed {
-		payload, err := marketKlinePayload(kline)
-		if err != nil {
-			return err
-		}
-		eventID := fmt.Sprintf("%s:%s:%s:%s:%s:%d", params.SpaceID, kline.Exchange, params.SubjectID, params.Interval, kline.OpenTime.UTC().Format(time.RFC3339Nano), kline.Revision)
-		if _, err := eventPublisher.Publish(ctx, events.MarketKlineClosed, payload, events.PublishOptions{
-			EventID: eventID, OccurredAt: kline.CloseTime.UTC(), SpaceID: params.SpaceID, SubjectID: params.SubjectID,
-		}); err != nil {
-			return fmt.Errorf("发布实时K线事件: %w", err)
-		}
-	}
-	return nil
-}
-
-func marketKlinePayload(kline *market.Kline) (*marketpb.KlineClosed, error) {
-	if kline == nil {
-		return nil, fmt.Errorf("K线为空")
-	}
-	open, err := kline.Open.Float64()
-	if err != nil {
-		return nil, fmt.Errorf("解析实时K线开盘价: %w", err)
-	}
-	high, err := kline.High.Float64()
-	if err != nil {
-		return nil, fmt.Errorf("解析实时K线最高价: %w", err)
-	}
-	low, err := kline.Low.Float64()
-	if err != nil {
-		return nil, fmt.Errorf("解析实时K线最低价: %w", err)
-	}
-	closeValue, err := kline.Close.Float64()
-	if err != nil {
-		return nil, fmt.Errorf("解析实时K线收盘价: %w", err)
-	}
-	volume, err := kline.Volume.Float64()
-	if err != nil {
-		return nil, fmt.Errorf("解析实时K线成交量: %w", err)
-	}
-	quoteVolume, err := kline.QuoteVolume.Float64()
-	if err != nil {
-		return nil, fmt.Errorf("解析实时K线成交额: %w", err)
-	}
-	return &marketpb.KlineClosed{
-		Exchange: kline.Exchange, Symbol: kline.Symbol, Frequency: kline.Interval,
-		WindowStart: timestamppb.New(kline.OpenTime.UTC()), WindowEnd: timestamppb.New(kline.CloseTime.UTC()),
-		Open: open, High: high, Low: low, Close: closeValue, Volume: volume, QuoteVolume: quoteVolume, TradeCount: kline.TradeCount,
-		Revision: kline.Revision,
-	}, nil
+	return (&TickCollector{spotAPI: c.spotAPI, swapAPI: c.swapAPI, lastIDs: make(map[string]int64)}).Collect(ctx, params)
 }
 
 func (c *KlineCollector) currentTime() time.Time {

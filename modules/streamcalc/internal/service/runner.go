@@ -16,9 +16,11 @@ type Runner struct {
 	process    *Processor
 	batch      int
 	checkpoint state.Store
+	dlq        events.MessagePublisher
 }
 
-func (r *Runner) SetCheckpoint(store state.Store) { r.checkpoint = store }
+func (r *Runner) SetCheckpoint(store state.Store)                   { r.checkpoint = store }
+func (r *Runner) SetDLQPublisher(publisher events.MessagePublisher) { r.dlq = publisher }
 
 func (r *Runner) Restore(ctx context.Context) error {
 	if r == nil || r.checkpoint == nil {
@@ -72,8 +74,20 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 				firstErr = fmt.Errorf("ack streamcalc delivery: %w", ackErr)
 			}
 		case errors.Is(err, ErrLateData) || delivery.Err != nil:
+			registry, dlqErr := events.DefaultRegistry()
+			if dlqErr == nil {
+				dlqErr = events.PublishRejected(ctx, r.dlq, registry, delivery.Delivery, err.Error(), "streamcalc")
+			}
+			if dlqErr != nil {
+				if nakErr := delivery.Delivery.Nak(ctx, time.Second); nakErr != nil && firstErr == nil {
+					firstErr = errors.Join(fmt.Errorf("publish streamcalc DLQ: %w", dlqErr), nakErr)
+				} else if firstErr == nil {
+					firstErr = fmt.Errorf("publish streamcalc DLQ: %w", dlqErr)
+				}
+				continue
+			}
 			if termErr := delivery.Delivery.Term(ctx); termErr != nil && firstErr == nil {
-				firstErr = fmt.Errorf("term streamcalc delivery: %w", termErr)
+				firstErr = fmt.Errorf("term streamcalc delivery after DLQ: %w", termErr)
 			}
 		default:
 			if nakErr := delivery.Delivery.Nak(ctx, time.Second); nakErr != nil && firstErr == nil {

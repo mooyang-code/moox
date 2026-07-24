@@ -7,15 +7,17 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/dlqpb"
 	"github.com/mooyang-code/moox/packages/events/marketpb"
 	"github.com/mooyang-code/moox/packages/events/tradingpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/mooyang-code/moox/packages/strategyeventpb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/structpb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,8 +35,8 @@ var (
 	TradingSignal                = EventType{Name: "trading.signal", Version: 1}
 	DatasetRowsUpserted          = EventType{Name: "storage.dataset.rows.upserted", Version: 1}
 	MetricsHostReported          = EventType{Name: "metrics.host.reported", Version: 1}
-	MetricsReported              = EventType{Name: "metrics.reported", Version: 1}
-	MessageRejected              = EventType{Name: "message.rejected", Version: 1}
+	MetricsSnapshotReported      = EventType{Name: "metrics.snapshot.reported", Version: 1}
+	DLQMessageRejected           = EventType{Name: "dlq.message.rejected", Version: 1}
 	StrategyOutputAccepted       = EventType{Name: "strategy.output.accepted", Version: 1}
 	TradeOrderIntentCreated      = EventType{Name: "trade.order.intent.created", Version: 1}
 	TradeOrderStateChanged       = EventType{Name: "trade.order.state.changed", Version: 1}
@@ -43,7 +45,9 @@ var (
 	TradeRebalanceRequested      = EventType{Name: "trade.rebalance.requested", Version: 1}
 	TradeRebalanceCompleted      = EventType{Name: "trade.rebalance.completed", Version: 1}
 	TradeReconciliationRequested = EventType{Name: "trade.reconciliation.requested", Version: 1}
-	CloudJobRequested            = EventType{Name: "cloudnode.job.requested", Version: 1}
+	CloudJobExecutionRequested   = EventType{Name: "cloudnode.job.execution.requested", Version: 1}
+	TradeOrderAcknowledged       = EventType{Name: "trade.order.acknowledged", Version: 1}
+	TradeOrderSubmitUnknown      = EventType{Name: "trade.order.submit.unknown", Version: 1}
 )
 
 var defaultRegistry struct {
@@ -169,14 +173,20 @@ func validateSchema(spec EventSchema) error {
 
 func payloadFactories() map[protoreflect.FullName]func() proto.Message {
 	return map[protoreflect.FullName]func() proto.Message{
-		"trpc.moox.market.Tick":                       func() proto.Message { return &marketpb.Tick{} },
-		"trpc.moox.market.KlineClosed":                func() proto.Message { return &marketpb.KlineClosed{} },
-		"trpc.moox.trading.TradingSignal":             func() proto.Message { return &tradingpb.TradingSignal{} },
-		"trpc.moox.storage.event.DatasetRowsUpserted": func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
-		"trpc.moox.hostagent.HostMetric":              func() proto.Message { return &hostmetricpb.HostMetric{} },
-		"trpc.moox.metrics.MetricReport":              func() proto.Message { return &metricspb.MetricReport{} },
-		"trpc.moox.dlq.RejectedMessage":               func() proto.Message { return &dlqpb.RejectedMessage{} },
-		"google.protobuf.Struct":                      func() proto.Message { return &structpb.Struct{} },
+		"trpc.moox.cloudjob.JobExecutionRequested":        func() proto.Message { return &cloudjobpb.JobExecutionRequested{} },
+		"trpc.moox.market.Tick":                           func() proto.Message { return &marketpb.Tick{} },
+		"trpc.moox.market.KlineClosed":                    func() proto.Message { return &marketpb.KlineClosed{} },
+		"trpc.moox.trading.TradingSignal":                 func() proto.Message { return &tradingpb.TradingSignal{} },
+		"trpc.moox.storage.event.DatasetRowsUpserted":     func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
+		"trpc.moox.hostagent.HostMetric":                  func() proto.Message { return &hostmetricpb.HostMetric{} },
+		"trpc.moox.metrics.MetricReport":                  func() proto.Message { return &metricspb.MetricReport{} },
+		"trpc.moox.dlq.RejectedMessage":                   func() proto.Message { return &dlqpb.RejectedMessage{} },
+		"trpc.moox.strategy.event.StrategyOutputAccepted": func() proto.Message { return &strategyeventpb.StrategyOutputAccepted{} },
+		"trpc.moox.trade.event.OrderSnapshot":             func() proto.Message { return &tradeeventpb.OrderSnapshot{} },
+		"trpc.moox.trade.event.FillReceived":              func() proto.Message { return &tradeeventpb.FillReceived{} },
+		"trpc.moox.trade.event.ReconciliationRequested":   func() proto.Message { return &tradeeventpb.ReconciliationRequested{} },
+		"trpc.moox.trade.event.RebalanceRequested":        func() proto.Message { return &tradeeventpb.RebalanceRequested{} },
+		"trpc.moox.trade.event.RebalanceCompleted":        func() proto.Message { return &tradeeventpb.RebalanceCompleted{} },
 	}
 }
 

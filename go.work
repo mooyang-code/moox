@@ -26,12 +26,15 @@ use (
 	./modules/trade
 	./modules/trade/proto/tradegen
 	./packages/cloudprovider
+	./packages/cloudjobpb
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/doctor
 	./packages/dlqpb
 	./packages/events
 	./packages/storagepb
+	./packages/tradeeventpb
+	./packages/strategyeventpb
 	./packages/security
 	./packages/gatewayauth
 	./packages/gatewayproxy

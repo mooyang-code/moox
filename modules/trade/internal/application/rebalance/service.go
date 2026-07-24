@@ -2,12 +2,12 @@ package rebalance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	domain "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
+	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"time"
@@ -47,8 +47,11 @@ func (s Service) Create(ctx context.Context, in CreateInput) error {
 		if err := tx.CreateRebalance(run, records); err != nil {
 			return err
 		}
-		b, _ := json.Marshal(run)
-		return tx.AddOutbox(in.RunID+":requested", "moox.trade.rebalance.requested.v1", b)
+		data, err := tradebus.EncodeRebalanceRequested(in.RunID+":requested", run, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		return tx.AddOutbox(in.RunID+":requested", data)
 	})
 }
 func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID string) (string, error) {
@@ -130,7 +133,11 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 			return err
 		}
 		if status == "COMPLETED" {
-			return tx.AddOutbox(runID+":completed", "moox.trade.rebalance.completed.v1", []byte(runID))
+			data, err := tradebus.EncodeRebalanceCompleted(runID+":completed", space, runID, status, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			return tx.AddOutbox(runID+":completed", data)
 		}
 		return nil
 	})

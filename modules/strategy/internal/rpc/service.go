@@ -96,7 +96,7 @@ func (s *Service) RunOnce(ctx context.Context, req *strategypb.RunOnceReq) (*str
 		namespace = "default"
 	}
 	runID := newRunID()
-	task := domain.Task{RunID: runID, BindingID: binding.BindingID, StrategyID: binding.StrategyID, Version: binding.StrategyVersion, Freq: binding.Freq, TriggerBarTime: req.GetTriggerBarTime(), Namespace: namespace, DataRevision: req.GetDataRevision(), PreviousState: state, Params: params, Data: data}
+	task := domain.Task{RunID: runID, BindingID: binding.BindingID, StrategyID: binding.StrategyID, Version: binding.StrategyVersion, SpaceID: binding.SpaceID, Freq: binding.Freq, TriggerBarTime: req.GetTriggerBarTime(), Namespace: namespace, DataRevision: req.GetDataRevision(), PreviousState: state, Params: params, Data: data}
 	out, inputHash, err := (&action.Service{Repo: s.Repo, Engine: s.Engine}).Evaluate(ctx, task, d)
 	if err != nil {
 		return &strategypb.RunOnceRsp{RetInfo: invalid(err)}, nil

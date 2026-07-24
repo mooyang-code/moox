@@ -25,7 +25,7 @@ func TestCommitLogicalRetryIsIdempotent(t *testing.T) {
 	if err := db.Create(&domain.State{BindingID: "b", StrategyVersion: "1.0.0", StateJSON: "{}"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	base := domain.Task{BindingID: "b", Version: "1.0.0", Namespace: "default", TriggerBarTime: "t", PreviousState: domain.State{Revision: 0}}
+	base := domain.Task{RunID: "run-1", BindingID: "b", Version: "1.0.0", Namespace: "default", TriggerBarTime: "t", PreviousState: domain.State{Revision: 0}}
 	out := domain.Output{Action: domain.ActionHold, NextState: map[string]any{}}
 	if err := r.Commit(context.Background(), base, out, "same"); err != nil {
 		t.Fatal(err)

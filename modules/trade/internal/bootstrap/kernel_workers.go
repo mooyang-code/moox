@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -20,9 +19,8 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/types/known/structpb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -61,11 +59,11 @@ func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store
 			}
 		}
 	}()
-	go runExecutionConsumer(ctx, client, cfg, s, e)
-	go runRebalanceConsumer(ctx, client, cfg, s, e)
-	go runProgressConsumer(ctx, client, cfg, s, e)
-	go runReconciliationConsumer(ctx, client, cfg, s, e)
-	go runTradingSignalConsumer(ctx, client, cfg, s)
+	go runExecutionConsumer(ctx, client, cfg, s, e, eventPublisher)
+	go runRebalanceConsumer(ctx, client, cfg, s, e, eventPublisher)
+	go runProgressConsumer(ctx, client, cfg, s, e, eventPublisher)
+	go runReconciliationConsumer(ctx, client, cfg, s, e, eventPublisher)
+	go runTradingSignalConsumer(ctx, client, cfg, s, eventPublisher)
 	go runPrivateStreamSupervisor(ctx, s, e)
 	return nil
 }
@@ -176,8 +174,8 @@ func advanceActiveRebalances(ctx context.Context, s *store.Store, e *command.Eng
 	return nil
 }
 
-func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ProgressDurable, FilterSubject: "moox.trade.fill.received.v1.>", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 16, "progress", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ProgressDurable, events.TradeFillReceived, 64), 16, "progress", publisher, func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		if err := advanceActiveRebalances(ctx, s, e); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
@@ -192,8 +190,8 @@ func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg conf
 	})
 }
 
-func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ReconciliationDurable, FilterSubject: "moox.trade.reconciliation.requested.v1.>", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 8, "reconciliation", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ReconciliationDurable, events.TradeReconciliationRequested, 64), 8, "reconciliation", publisher, func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		deliveryCtx := deliveryTraceContext(ctx, delivery)
 		started := time.Now()
 		var scope struct {
@@ -203,10 +201,13 @@ func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cf
 		}
 		message, payload, err := decodeTradeDelivery(delivery)
 		if err == nil {
-			raw, marshalErr := protojson.Marshal(payload)
-			err = marshalErr
-			if err == nil {
-				err = json.Unmarshal(raw, &scope)
+			request, ok := payload.(*tradeeventpb.ReconciliationRequested)
+			if !ok {
+				err = fmt.Errorf("unexpected reconciliation payload %T", payload)
+			} else {
+				scope.SpaceID = message.GetSpaceId()
+				scope.AccountID = request.GetAccountId()
+				scope.ChannelID = request.GetChannelId()
 			}
 		}
 		if err == nil && scope.SpaceID == "" {
@@ -226,8 +227,8 @@ func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cf
 	})
 }
 
-func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.RebalanceDurable, FilterSubject: "moox.trade.rebalance.requested.v1.>", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 16, "rebalance", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.RebalanceDurable, events.TradeRebalanceRequested, 64), 16, "rebalance", publisher, func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		if err := handleRebalanceDelivery(ctx, delivery, s, e, cfg.RebalanceDurable); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
@@ -235,7 +236,7 @@ func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg con
 	})
 }
 
-func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jetstream.ConsumerRef, batch int, name string, handler jetstream.DeliveryHandlerFunc) {
+func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jetstream.ConsumerRef, batch int, name string, publisher events.MessagePublisher, handler jetstream.DeliveryHandlerFunc) {
 	for ctx.Err() == nil {
 		pull, err := client.BindPullConsumer(ctx, ref)
 		if err != nil {
@@ -243,7 +244,7 @@ func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jet
 			time.Sleep(time.Second)
 			continue
 		}
-		runner := jetstream.NewRunner(pull, handler, jetstream.RunnerConfig{BatchSize: batch, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+		runner := jetstream.NewRunner(pull, withTradeDLQ(handler, publisher), jetstream.RunnerConfig{BatchSize: batch, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			log.WarnContextf(ctx, "trade %s delivery failed: %v", name, err)
 		})})
 		err = runner.Run(ctx)
@@ -258,21 +259,42 @@ func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jet
 	}
 }
 
+func tradeConsumerRef(cfg config.EventBusConfig, durable string, event events.EventType, maxAckPending int) jetstream.ConsumerRef {
+	filter := ""
+	if registry, err := events.DefaultRegistry(); err == nil {
+		filter, _ = registry.FamilyPattern(event)
+	}
+	return jetstream.ConsumerRef{Stream: cfg.Stream, Durable: durable, FilterSubject: filter, AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: maxAckPending, FetchMaxWait: time.Second}
+}
+
+func withTradeDLQ(handler jetstream.DeliveryHandlerFunc, publisher events.MessagePublisher) jetstream.DeliveryHandlerFunc {
+	return func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+		result := handler(ctx, delivery)
+		if result.Decision != jetstream.TERM || result.Err == nil {
+			return result
+		}
+		registry, err := events.DefaultRegistry()
+		if err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+		}
+		if err := events.PublishRejected(ctx, publisher, registry, delivery, result.Err.Error(), "trade"); err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+		}
+		return result
+	}
+}
+
 func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string) error {
 	ctx = deliveryTraceContext(ctx, delivery)
 	message, payload, err := decodeTradeDelivery(delivery)
 	if err != nil {
 		return err
 	}
-	var run store.RebalanceRunRecord
-	raw, err := protojson.Marshal(payload)
-	if err != nil {
-		return err
+	rebalanceEvent, ok := payload.(*tradeeventpb.RebalanceRequested)
+	if !ok {
+		return fmt.Errorf("unexpected rebalance payload %T", payload)
 	}
-	if err := json.Unmarshal(raw, &run); err != nil {
-		return err
-	}
-	if _, err := (rebalanceapp.Service{Store: s, Engine: e}).Advance(ctx, run.SpaceID, run.RunID, run.AccountID, run.ChannelID); err != nil {
+	if _, err := (rebalanceapp.Service{Store: s, Engine: e}).Advance(ctx, message.GetSpaceId(), rebalanceEvent.GetRunId(), rebalanceEvent.GetAccountId(), rebalanceEvent.GetChannelId()); err != nil {
 		return err
 	}
 	_, err = s.RecordInbox(ctx, consumerName, message.GetEventId(), delivery.Subject)
@@ -342,8 +364,8 @@ func recoverOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine) e
 	return errors.Join(errs...)
 }
 
-func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, jetstream.ConsumerRef{Stream: cfg.Stream, Durable: cfg.ExecutionDurable, FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: 256, FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy}, 32, "execution", jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ExecutionDurable, events.TradeExecutionSliceReady, 256), 32, "execution", publisher, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		if err := handleExecutionDelivery(ctx, delivery, s, e, cfg.ExecutionDurable); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
@@ -357,19 +379,15 @@ func handleExecutionDelivery(ctx context.Context, d *jetstream.Delivery, s *stor
 	if err != nil {
 		return err
 	}
-	var r store.OrderRecord
-	raw, err := protojson.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return err
+	snapshot, ok := payload.(*tradeeventpb.OrderSnapshot)
+	if !ok {
+		return fmt.Errorf("unexpected order payload %T", payload)
 	}
 	worker := consumer.SubmissionWorker{Engine: e}
-	if _, err := worker.Handle(ctx, r.SpaceID, r.OrderID); err != nil {
+	if _, err := worker.Handle(ctx, message.GetSpaceId(), snapshot.GetOrderId()); err != nil {
 		return err
 	}
-	if saga, err := s.GetSagaByReplacementOrder(ctx, r.SpaceID, r.OrderID); err == nil {
+	if saga, err := s.GetSagaByReplacementOrder(ctx, message.GetSpaceId(), snapshot.GetOrderId()); err == nil {
 		if _, err := e.ResumeReplace(ctx, saga.SpaceID, saga.SagaID); err != nil {
 			return err
 		}
@@ -385,7 +403,7 @@ func deliveryTraceContext(ctx context.Context, delivery *jetstream.Delivery) con
 	return ctx
 }
 
-func decodeTradeDelivery(delivery *jetstream.Delivery) (*eventpb.EventMessage, *structpb.Struct, error) {
+func decodeTradeDelivery(delivery *jetstream.Delivery) (*eventpb.EventMessage, proto.Message, error) {
 	if delivery == nil {
 		return nil, nil, jetstream.ErrInvalidDelivery
 	}
@@ -397,9 +415,5 @@ func decodeTradeDelivery(delivery *jetstream.Delivery) (*eventpb.EventMessage, *
 	if err != nil {
 		return message, nil, err
 	}
-	structured, ok := payload.(*structpb.Struct)
-	if !ok {
-		return message, nil, fmt.Errorf("trade event payload has type %T", payload)
-	}
-	return message, structured, nil
+	return message, payload, nil
 }

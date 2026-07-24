@@ -2,17 +2,13 @@ package bus
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func ValidateJetStreamPublisher(_ context.Context, client JetStreamClient, _ string) error {
@@ -59,42 +55,24 @@ type JetStreamPublisher struct {
 }
 
 type EventPublisher interface {
-	Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
+	PublishMessage(context.Context, *eventpb.EventMessage) (*jetstream.PublishAck, error)
 }
 
 func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessage) error {
 	if p == nil || p.Publisher == nil {
 		return errors.New("strategy JetStream publisher is unavailable")
 	}
-	var values map[string]any
-	if len(row.Payload) == 0 {
-		values = map[string]any{}
-	} else if err := json.Unmarshal(row.Payload, &values); err != nil {
-		return fmt.Errorf("decode strategy outbox payload: %w", err)
-	}
-	if values["space_id"] == nil {
-		values["space_id"] = "moox_system"
-	}
-	if values["strategy_id"] == nil {
-		values["strategy_id"] = p.InstanceID
-	}
-	spaceID, _ := values["space_id"].(string)
-	subjectID, _ := values["strategy_id"].(string)
-	if strings.TrimSpace(subjectID) == "" {
-		subjectID = p.InstanceID
-	}
-	payload, err := structpb.NewStruct(values)
+	registry, err := events.DefaultRegistry()
 	if err != nil {
-		return fmt.Errorf("build strategy event payload: %w", err)
+		return err
 	}
-	event := events.StrategyOutputAccepted
-	occurredAt := row.CreatedAt.UTC()
-	if occurredAt.IsZero() {
-		occurredAt = time.Now().UTC()
-		if p.Now != nil {
-			occurredAt = p.Now().UTC()
-		}
+	message, err := registry.UnmarshalMessage(row.EventData)
+	if err != nil {
+		return err
 	}
-	_, err = p.Publisher.Publish(ctx, event, payload, events.PublishOptions{EventID: row.MessageID, OccurredAt: occurredAt, SpaceID: spaceID, SubjectID: subjectID})
+	if message.GetEventId() != row.MessageID {
+		return errors.New("strategy outbox event_id does not match message_id")
+	}
+	_, err = p.Publisher.PublishMessage(ctx, message)
 	return err
 }

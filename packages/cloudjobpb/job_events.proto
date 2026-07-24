@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package trpc.moox.cloudjob;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/cloudjobpb;cloudjobpb";
+
+message JobExecutionRequested {
+  string job_id = 1;
+  string job_item_id = 2;
+  string job_type = 3;
+  string code_package_id = 4;
+  google.protobuf.Struct params = 5;
+  int32 priority = 6;
+}

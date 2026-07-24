@@ -13,7 +13,7 @@ func TestEventBusManagementContract(t *testing.T) {
 		t.Fatalf("service name = %q", service)
 	}
 	want := map[string]struct{}{
-		"GetOverview": {}, "ListTopics": {}, "ListStreams": {}, "ListConsumers": {}, "GetConsumer": {},
+		"GetOverview": {}, "ListEvents": {}, "ListStreams": {}, "ListConsumers": {}, "GetConsumer": {},
 	}
 	for _, method := range EventBusMgrServer_ServiceDesc.Methods {
 		name := method.Name[strings.LastIndex(method.Name, "/")+1:]
@@ -32,7 +32,7 @@ func TestEventBusManagementContract(t *testing.T) {
 			}
 		}
 	}
-	if field := (&TopicInfo{}).ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("event_name")); field == nil {
-		t.Fatal("TopicInfo.event_name is missing")
+	if field := (&EventInfo{}).ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("event_name")); field == nil {
+		t.Fatal("EventInfo.event_name is missing")
 	}
 }

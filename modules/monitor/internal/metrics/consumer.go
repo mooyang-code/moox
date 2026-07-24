@@ -16,10 +16,21 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-const (
-	MetricTopic                    = "moox.metrics.reported.v1.>"
-	unknownProducerGraceDeliveries = 120
-)
+const unknownProducerGraceDeliveries = 120
+
+var MetricTopic = governedFamily(events.MetricsSnapshotReported)
+
+func governedFamily(event events.EventType) string {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return ""
+	}
+	family, err := registry.FamilyPattern(event)
+	if err != nil {
+		return ""
+	}
+	return family
+}
 
 type ProducerAuthorizer interface {
 	IsRegistered(context.Context, string, string) (bool, error)

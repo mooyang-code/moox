@@ -78,29 +78,29 @@ func (s *Service) GetOverview(ctx context.Context, _ *eventbusgen.GetOverviewReq
 	return &eventbusgen.GetOverviewRsp{RetInfo: retOK(), Overview: &eventbusgen.Overview{JetstreamReady: ready, Connections: connections, Streams: uint32(len(streams)), Consumers: consumers, Messages: messages, Bytes: bytes, TotalPending: pending}}, nil
 }
 
-func (s *Service) ListTopics(ctx context.Context, req *eventbusgen.ListTopicsReq) (*eventbusgen.ListTopicsRsp, error) {
+func (s *Service) ListEvents(ctx context.Context, req *eventbusgen.ListEventsReq) (*eventbusgen.ListEventsRsp, error) {
 	if err := s.statusErr(); err != nil {
-		return &eventbusgen.ListTopicsRsp{RetInfo: retErr(err)}, nil
+		return &eventbusgen.ListEventsRsp{RetInfo: retErr(err)}, nil
 	}
 	eventRegistry, err := events.DefaultRegistry()
 	if err != nil {
-		return &eventbusgen.ListTopicsRsp{RetInfo: retErr(err)}, nil
+		return &eventbusgen.ListEventsRsp{RetInfo: retErr(err)}, nil
 	}
 	items := make([]registry.Topic, 0)
 	for _, spec := range eventRegistry.Schemas() {
 		family, familyErr := eventRegistry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
 		if familyErr != nil {
-			return &eventbusgen.ListTopicsRsp{RetInfo: retErr(familyErr)}, nil
+			return &eventbusgen.ListEventsRsp{RetInfo: retErr(familyErr)}, nil
 		}
 		items = append(items, registry.Topic{Topic: family, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Topic < items[j].Topic })
 	page, rows := paginateRows(req.GetPage(), items)
-	out := make([]*eventbusgen.TopicInfo, 0, len(rows))
+	out := make([]*eventbusgen.EventInfo, 0, len(rows))
 	for _, t := range rows {
-		out = append(out, &eventbusgen.TopicInfo{Topic: t.Topic, Stream: t.Stream, EventName: t.EventName, EventVersion: t.EventVersion, Payload: t.Payload, Enabled: t.Enabled})
+		out = append(out, &eventbusgen.EventInfo{SubjectPattern: t.Topic, Stream: t.Stream, EventName: t.EventName, EventVersion: t.EventVersion, PayloadType: t.Payload, Enabled: t.Enabled})
 	}
-	return &eventbusgen.ListTopicsRsp{RetInfo: retOK(), Topics: out, PageResult: page}, nil
+	return &eventbusgen.ListEventsRsp{RetInfo: retOK(), Events: out, PageResult: page}, nil
 }
 
 func (s *Service) ListStreams(ctx context.Context, req *eventbusgen.ListStreamsReq) (*eventbusgen.ListStreamsRsp, error) {

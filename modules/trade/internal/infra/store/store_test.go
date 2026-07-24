@@ -25,7 +25,7 @@ func TestTransactionRollbackInboxAndOutbox(t *testing.T) {
 		if e != nil || !ok {
 			t.Fatalf("insert: %v %v", ok, e)
 		}
-		if e = tx.AddOutbox("m", "t", []byte("x")); e != nil {
+		if e = tx.AddOutbox("m", []byte("x")); e != nil {
 			t.Fatal(e)
 		}
 		return ErrConflict
@@ -230,7 +230,7 @@ func TestStore_ListBalances_AfterLedgerPost_ShouldReturnRows(t *testing.T) {
 func TestStore_EnqueueOutbox_ShouldPersist(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", "topic.test", []byte(`{"k":"v"}`)))
+	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", []byte("event-data")))
 	var count int64
 	s.DBForTest().Table("t_trade_outbox").Count(&count)
 	assert.Equal(t, int64(1), count)
@@ -312,7 +312,7 @@ func TestStore_ListRecoverableSagas_ShouldReturnActiveSagaStates(t *testing.T) {
 func TestStore_ClaimReleaseAndMarkOutbox_ShouldUpdateLifecycle(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", "topic.test", []byte(`{"k":"v"}`)))
+	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", []byte("event-data")))
 
 	claimed, err := s.ClaimOutbox(ctx, 0, time.Minute)
 	require.NoError(t, err)

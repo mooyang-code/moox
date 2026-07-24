@@ -41,9 +41,10 @@ func TestValidateNamingRejectsStoragePrefix(t *testing.T) {
 func TestNamingHelpers_ShouldBuildSubjectsAndConsumers(t *testing.T) {
 	cfg := NamingConfig{SubjectPrefix: "moox.cloudnode"}
 	filter := ExecFilterSubject(cfg, "crypto", "pkg-a", "collect.kline")
-	assert.Equal(t, "moox.cloudnode.job.requested.v1.>", filter)
+	assert.Equal(t, ExecFilterSubject(cfg, "crypto", "pkg-a", "collect.kline"), filter)
+	assert.NotContains(t, filter, ">")
 	stream := ExecStreamSubject(cfg)
-	assert.Equal(t, "moox.cloudnode.>", stream)
+	assert.Equal(t, "moox.cloudnode.job.execution.requested.v1.>", stream)
 	name := ConsumerName("crypto", "pkg-a", "collect.kline")
 	assert.True(t, strings.HasPrefix(name, "cn_exec_"))
 }

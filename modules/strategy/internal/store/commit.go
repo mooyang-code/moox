@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/strategyeventpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -102,6 +105,26 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 		if res.RowsAffected != 1 {
 			return ErrStateConflict
 		}
-		return tx.Table("t_strategy_outbox").Create(map[string]any{"c_message_id": task.RunID, "c_topic": "moox.strategy.output.accepted.v1", "c_payload": raw}).Error
+		spaceID := task.SpaceID
+		if spaceID == "" {
+			spaceID = "moox_system"
+		}
+		occurredAt, parseErr := time.Parse(time.RFC3339Nano, task.TriggerBarTime)
+		if parseErr != nil {
+			occurredAt = time.Now().UTC()
+		}
+		payload := &strategyeventpb.StrategyOutputAccepted{RunId: task.RunID, BindingId: task.BindingID, StrategyId: task.StrategyID, StrategyVersion: task.Version, Action: output.Action, DataRevision: task.DataRevision, TriggerTime: timestamppb.New(occurredAt.UTC())}
+		for _, target := range output.Targets {
+			payload.Targets = append(payload.Targets, &strategyeventpb.StrategyTarget{InstrumentId: target.InstrumentID, Symbol: target.Symbol, MarketType: target.MarketType, TargetWeight: target.TargetWeight, Reason: target.Reason})
+		}
+		registry, err := events.DefaultRegistry()
+		if err != nil {
+			return err
+		}
+		eventData, err := registry.MarshalMessage(events.StrategyOutputAccepted, payload, events.PublishOptions{EventID: task.RunID, OccurredAt: occurredAt.UTC(), SpaceID: spaceID, SubjectID: task.BindingID})
+		if err != nil {
+			return err
+		}
+		return tx.Table("t_strategy_outbox").Create(map[string]any{"c_message_id": task.RunID, "c_event_data": eventData}).Error
 	})
 }

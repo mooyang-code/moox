@@ -40,7 +40,7 @@ metrics:
   host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml
   pipeline_config_path: ../config/monitor-pipelines.yaml
   stream: MOOX_METRICS
-  topic: moox.metrics.reported.v1.>
+  topic: moox.metrics.snapshot.reported.v1.>
   consumer: monitor_metrics_ingest_v1
   fetch_batch_size: 64
   fetch_max_wait: 1s

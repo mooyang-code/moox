@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package trpc.moox.strategy.event;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/strategyeventpb;strategyeventpb";
+
+message StrategyOutputAccepted {
+  string run_id = 1;
+  string binding_id = 2;
+  string strategy_id = 3;
+  string strategy_version = 4;
+  string action = 5;
+  repeated StrategyTarget targets = 6;
+  string data_revision = 7;
+  google.protobuf.Timestamp trigger_time = 8;
+}
+
+message StrategyTarget {
+  string instrument_id = 1;
+  string symbol = 2;
+  string market_type = 3;
+  string target_weight = 4;
+  string reason = 5;
+}

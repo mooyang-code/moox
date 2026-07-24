@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,6 +76,7 @@ type fakeDelivery struct {
 func (f *fakeDelivery) RawEnvelope() []byte    { return f.raw }
 func (f *fakeDelivery) MessageID() string      { return f.id }
 func (f *fakeDelivery) Subject() string        { return f.subject }
+func (f *fakeDelivery) ContentType() string    { return events.ContentType }
 func (f *fakeDelivery) StreamSequence() uint64 { return 1 }
 func (f *fakeDelivery) DeliveryCount() uint64  { return 1 }
 func (f *fakeDelivery) Ack(context.Context) error {

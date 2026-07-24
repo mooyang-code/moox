@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/modules/trade/schema"
 	"gorm.io/gorm"
 )
@@ -26,11 +25,10 @@ type Tx struct {
 	ctx context.Context
 }
 type OutboxRecord struct {
-	ID                 int64
-	MessageID, Topic   string
-	Payload            []byte
-	Attempts           int
-	TraceID, RequestID string
+	ID        int64
+	MessageID string
+	EventData []byte
+	Attempts  int
 }
 type SagaRecord struct {
 	SpaceID, SagaID, Type, State, OrderID, ReplacementOrderID, Payload, LastError string
@@ -637,7 +635,7 @@ func (t *Tx) UpdateOrder(v OrderRecord, expected uint64) error {
 }
 
 func (t *Tx) InsertInbox(consumer, id, topic string) (bool, error) {
-	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_inbox(c_consumer,c_message_id,c_topic) VALUES(?,?,?)", consumer, id, topic)
+	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_inbox(c_consumer,c_message_id,c_event_name) VALUES(?,?,?)", consumer, id, topic)
 	return res.RowsAffected == 1, res.Error
 }
 
@@ -675,12 +673,11 @@ func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bo
 	err := s.Transaction(ctx, func(tx *Tx) error { var e error; fresh, e = tx.InsertInbox(consumer, id, topic); return e })
 	return fresh, err
 }
-func (t *Tx) AddOutbox(id, topic string, payload []byte) error {
-	trace := telemetry.TraceFromContext(t.ctx)
-	return t.db.Exec("INSERT INTO t_trade_outbox(c_message_id,c_topic,c_payload,c_trace_id,c_request_id) VALUES(?,?,?,?,?)", id, topic, payload, trace.TraceID, trace.RequestID).Error
+func (t *Tx) AddOutbox(id string, eventData []byte) error {
+	return t.db.Exec("INSERT INTO t_trade_outbox(c_message_id,c_event_data) VALUES(?,?)", id, eventData).Error
 }
-func (s *Store) EnqueueOutbox(ctx context.Context, id, topic string, payload []byte) error {
-	return s.Transaction(ctx, func(tx *Tx) error { return tx.AddOutbox(id, topic, payload) })
+func (s *Store) EnqueueOutbox(ctx context.Context, id string, eventData []byte) error {
+	return s.Transaction(ctx, func(tx *Tx) error { return tx.AddOutbox(id, eventData) })
 }
 func (t *Tx) CreateSaga(s SagaRecord) error {
 	return t.db.Exec("INSERT INTO t_trade_sagas(c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error) VALUES(?,?,?,?,?,?,?,?,?)", s.SpaceID, s.SagaID, s.Type, s.State, s.OrderID, s.ReplacementOrderID, s.Payload, s.Version, s.LastError).Error
@@ -814,11 +811,8 @@ func (s *Store) ClaimOutbox(ctx context.Context, limit int, lease time.Duration)
 	var rows []struct {
 		ID        int64  `gorm:"column:c_id"`
 		MessageID string `gorm:"column:c_message_id"`
-		Topic     string `gorm:"column:c_topic"`
-		Payload   []byte `gorm:"column:c_payload"`
+		EventData []byte `gorm:"column:c_event_data"`
 		Attempts  int    `gorm:"column:c_attempts"`
-		TraceID   string `gorm:"column:c_trace_id"`
-		RequestID string `gorm:"column:c_request_id"`
 	}
 	token := fmt.Sprintf("%d-%d", time.Now().UnixNano(), claimSequence.Add(1))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -826,11 +820,11 @@ func (s *Store) ClaimOutbox(ctx context.Context, limit int, lease time.Duration)
 		if e := tx.Exec("UPDATE t_trade_outbox SET c_lease_until=?,c_attempts=c_attempts+1,c_claim_token=? WHERE c_id IN (SELECT c_id FROM t_trade_outbox WHERE c_status='PENDING' AND (c_lease_until IS NULL OR c_lease_until<?) ORDER BY c_id LIMIT ?)", now.Add(lease), token, now, limit).Error; e != nil {
 			return e
 		}
-		return tx.Raw("SELECT c_id,c_message_id,c_topic,c_payload,c_attempts,c_trace_id,c_request_id FROM t_trade_outbox WHERE c_claim_token=? ORDER BY c_id", token).Scan(&rows).Error
+		return tx.Raw("SELECT c_id,c_message_id,c_event_data,c_attempts FROM t_trade_outbox WHERE c_claim_token=? ORDER BY c_id", token).Scan(&rows).Error
 	})
 	out := make([]OutboxRecord, len(rows))
 	for i, r := range rows {
-		out[i] = OutboxRecord{ID: r.ID, MessageID: r.MessageID, Topic: r.Topic, Payload: r.Payload, Attempts: r.Attempts + 1, TraceID: r.TraceID, RequestID: r.RequestID}
+		out[i] = OutboxRecord{ID: r.ID, MessageID: r.MessageID, EventData: r.EventData, Attempts: r.Attempts + 1}
 	}
 	return out, err
 }

@@ -7,6 +7,7 @@ require (
 	github.com/matoous/go-nanoid/v2 v2.1.0
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
@@ -116,6 +117,7 @@ replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requ
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
+replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb

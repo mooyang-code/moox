@@ -8,6 +8,29 @@
 
 **Tech Stack:** Go 1.25, NATS JetStream, Protocol Buffers, embedded YAML event registry, Pebble/SQLite outbox and inbox, Go workspaces.
 
+## 当前执行状态（2026-07-24）
+
+本计划已在 `feature/mooyang` 工作树中完成主要代码闭环，当前实现以“新项目、无历史兼容”为准：
+
+- EventBus 业务消息统一使用 `packages/events/eventpb.EventMessage`；`packages/messagepb` 不再参与生产代码。
+- Market 链路为 `TickReceived -> Streamcalc -> MarketKlineClosed -> Storage PrimaryStore -> DatasetRowsUpserted`，Streamcalc 不再直接调用 Storage RPC。
+- CloudNode 使用 typed payload 和 Registry 派生的精确 subject；Trade/Strategy outbox 持久化完整 deterministic EventMessage。
+- Storage View、Monitor、Archive、Factor、Trade、CloudNode、Streamcalc 的 poison message 均先经共享 DLQ 发布，DLQ 失败时保留原消息可重试，发布成功后才 TERM。
+- EventBus API 已收敛为 `ListEvents/EventInfo`，并增加 `packages/events/architecture_test.go` 与 `scripts/verify-event-contracts.sh` 门禁。
+
+目标 Linux/CGO Storage 验收已在配置的远端编译机完成；其余跨进程全链路验收仍需按对应模块证据逐项执行。后续勾选项只允许在有命令输出或 E2E 证据时更新，不以静态代码阅读代替目标环境证据。
+
+本次修复后的本机验证记录（2026-07-24）：
+
+- `./scripts/test-go-workspace.sh`：通过，包含各模块 `go test`、`go vet` 和生成代码模块检查。
+- `./scripts/verify-event-contracts.sh`：通过。
+- `packages/events`、`modules/eventbus`、`modules/streamcalc`：`go test -race ./...` 通过。
+- `git diff --check`：通过。
+- 目标 Linux/CGO Storage：已完成 Linux/amd64 编译；Storage E2E 四项测试全部通过。
+- 目标 Linux EventMessage 链路：`modules/streamcalc/test` 的
+  `TestCollectorEventToStreamcalcAggregationE2E` 也已在同一远端工作目录通过。
+- 真实部署拓扑和 Collector/Streamcalc/Storage 全进程联调：仍需单独执行，不能以单模块 E2E 替代。
+
 ---
 
 ## 1. 结论
@@ -826,7 +849,7 @@ chore(event): remove the legacy MooxMessage stack
 - [ ] consumer 处理成功但 ACK 失败 -> redelivery -> side effect 不重复。
 - [ ] Streamcalc 保存 checkpoint 后进程退出 -> 重启恢复窗口。
 - [ ] EventBus 无权限查询 ConsumerInfo 时 readiness 明确失败。
-- [ ] 在目标 Linux/CGO 环境运行 Storage E2E，不能以默认跳过代替验收。
+- [x] 在目标 Linux/CGO 环境运行 Storage E2E，不能以默认跳过代替验收。
 
 Per-module commands:
 
@@ -980,6 +1003,6 @@ independent review has no unresolved P0/P1/P2 findings
   已基于修复后的工作区完成只读复核，无 P0/P1/P2 阻塞问题。其提出的两个 P3 格式问题
   已通过 `gofmt` 处理，计划状态更新为最终验证完成。
 - 基线和验证记录已保存到 [`outputs/moox-eventmessage-baseline.txt`](../../../outputs/moox-eventmessage-baseline.txt)。
-  当前 macOS 已使用 `CGO_ENABLED=1` 运行 Storage E2E；Linux 目标环境本身不在本机，未伪造
-  Linux 验收结果。
+  macOS 和 Linux 目标机均使用 `CGO_ENABLED=1` 运行 Storage E2E；远端产物已核验为
+  Linux/amd64 ELF。压缩回传步骤因长时间无进展停止，未将不完整文件作为本地产物。
 - 当前未执行 commit/push；远端合入仍是后续明确操作，不在本次任务范围内。

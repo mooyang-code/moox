@@ -10,8 +10,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
+	"time"
 )
 
 type FillHandler struct{ Store *store.Store }
@@ -110,7 +112,16 @@ func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, 
 				return err
 			}
 		}
-		return tx.AddOutbox(fmt.Sprintf("%s:fill:%s", orderID, canonicalID), "moox.trade.fill.received.v1", []byte(canonicalID))
+		eventID := fmt.Sprintf("%s:fill:%s", orderID, canonicalID)
+		occurredAt := time.Now().UTC()
+		if f.TradedAt > 0 {
+			occurredAt = time.UnixMilli(normalizeEpochMillis(f.TradedAt)).UTC()
+		}
+		data, encodeErr := tradebus.EncodeFillReceived(eventID, space, canonicalID, orderID, account, r.ChannelID, f, occurredAt)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		return tx.AddOutbox(eventID, data)
 	})
 	result := "applied"
 	if !applied {

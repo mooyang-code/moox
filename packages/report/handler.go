@@ -104,7 +104,7 @@ func (h *Handler) Handle(ctx context.Context) error {
 	if err != nil {
 		return h.reportError(ctx, err)
 	}
-	if _, err := client.Publish(ctx, events.MetricsReported, &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}); err != nil {
+	if _, err := client.Publish(ctx, events.MetricsSnapshotReported, &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}); err != nil {
 		return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
 	}
 	return nil

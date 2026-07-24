@@ -34,8 +34,7 @@ func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
 	}
 	if err := db.Exec(`CREATE TABLE t_strategy_outbox (
 		c_message_id TEXT PRIMARY KEY,
-		c_topic TEXT NOT NULL,
-		c_payload BLOB NOT NULL,
+		c_event_data BLOB NOT NULL,
 		c_published INTEGER NOT NULL DEFAULT 0,
 		c_claimed_until DATETIME,
 		c_claim_token TEXT NOT NULL DEFAULT '',
@@ -48,7 +47,7 @@ func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
 
 func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 	db, repo := openOutboxTestStore(t)
-	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_topic,c_payload) VALUES(?,?,?)", "run-1", "topic", []byte(`{"ok":true}`)).Error; err != nil {
+	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_event_data) VALUES(?,?)", "run-1", []byte("event-data")).Error; err != nil {
 		t.Fatal(err)
 	}
 	publisher := &recordingPublisher{}
@@ -56,7 +55,7 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 	if err := relay.PublishPending(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
-	if len(publisher.rows) != 1 || publisher.rows[0].MessageID != "run-1" || publisher.rows[0].Topic != "topic" {
+	if len(publisher.rows) != 1 || publisher.rows[0].MessageID != "run-1" || len(publisher.rows[0].EventData) == 0 {
 		t.Fatalf("published rows=%+v", publisher.rows)
 	}
 	var published int
@@ -70,7 +69,7 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 
 func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
 	db, repo := openOutboxTestStore(t)
-	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_topic,c_payload) VALUES(?,?,?)", "run-1", "topic", []byte(`{}`)).Error; err != nil {
+	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_event_data) VALUES(?,?)", "run-1", []byte("event-data")).Error; err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("broker unavailable")

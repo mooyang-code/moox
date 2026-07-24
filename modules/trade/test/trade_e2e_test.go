@@ -391,11 +391,11 @@ func TestReconcileNowCommandUsesOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err = s.EnqueueOutbox(ctx, "reconcile-1", "moox.trade.reconciliation.requested.v1", []byte(`{"space_id":"space"}`)); err != nil {
+	if err = s.EnqueueOutbox(ctx, "reconcile-1", []byte("event-data")); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.ClaimOutbox(ctx, 10, time.Minute)
-	if err != nil || len(rows) != 1 || rows[0].Topic != "moox.trade.reconciliation.requested.v1" {
+	if err != nil || len(rows) != 1 || len(rows[0].EventData) == 0 {
 		t.Fatalf("rows=%+v err=%v", rows, err)
 	}
 }

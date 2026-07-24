@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package trpc.moox.trade.event;
+
+option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
+
+message OrderSnapshot {
+  string order_id = 1;
+  string client_order_id = 2;
+  string account_id = 3;
+  string channel_id = 4;
+  string symbol = 5;
+  string market_type = 6;
+  string base_asset = 7;
+  string quote_asset = 8;
+  string side = 9;
+  string quantity = 10;
+  string price = 11;
+  bool reduce_only = 12;
+  string filled_quantity = 13;
+  string state = 14;
+  string exchange_order_id = 15;
+  int64 version = 16;
+}
+
+message FillReceived {
+  string fill_id = 1;
+  string order_id = 2;
+  string account_id = 3;
+  string channel_id = 4;
+  string symbol = 5;
+  string side = 6;
+  string quantity = 7;
+  string price = 8;
+  string fee = 9;
+  string fee_currency = 10;
+  int64 traded_at_ms = 11;
+}
+
+message ReconciliationRequested {
+  string request_id = 1;
+  string account_id = 2;
+  string channel_id = 3;
+}
+
+message RebalanceRequested {
+  string run_id = 1;
+  string account_id = 2;
+  string channel_id = 3;
+  string market_snapshot_id = 4;
+  string position_snapshot_id = 5;
+  string rules_version = 6;
+}
+
+message RebalanceCompleted {
+  string run_id = 1;
+  string status = 2;
+}

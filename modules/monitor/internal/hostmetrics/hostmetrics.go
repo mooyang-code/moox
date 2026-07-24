@@ -21,11 +21,24 @@ import (
 )
 
 const (
-	Topic   = "moox.metrics.host.reported.v1.>"
 	Stream  = "MOOX_METRICS"
 	Durable = "monitor_hostmetrics_ingest_v1"
 	SpaceID = "moox_system"
 )
+
+var Topic = governedFamily(events.MetricsHostReported)
+
+func governedFamily(event events.EventType) string {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return ""
+	}
+	family, err := registry.FamilyPattern(event)
+	if err != nil {
+		return ""
+	}
+	return family
+}
 
 var ErrInvalidHostMetric = errors.New("invalid host metric")
 

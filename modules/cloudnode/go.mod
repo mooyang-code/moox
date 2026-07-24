@@ -6,6 +6,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
@@ -108,6 +109,7 @@ require (
 replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ./proto/cloudnodegen
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 

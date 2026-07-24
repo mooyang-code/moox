@@ -31,7 +31,11 @@ func (c tradeRawPullConsumer) Close() error {
 	return c.pull.Close()
 }
 
-func runTradingSignalConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store) {
+func runTradingSignalConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, publishers ...events.MessagePublisher) {
+	var publisher events.MessagePublisher
+	if len(publishers) > 0 {
+		publisher = publishers[0]
+	}
 	for ctx.Err() == nil {
 		pull, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{
 			Stream:              cfg.Stream,
@@ -47,7 +51,9 @@ func runTradingSignalConsumer(ctx context.Context, client *jetstream.Client, cfg
 
 		consumer := tradeRawPullConsumer{pull: pull}
 		runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(func(handlerCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-			return handleTradingSignalDelivery(handlerCtx, delivery, s, cfg.TradingSignalDurable)
+			return withTradeDLQ(jetstream.DeliveryHandlerFunc(func(handlerCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+				return handleTradingSignalDelivery(handlerCtx, delivery, s, cfg.TradingSignalDurable)
+			}), publisher)(handlerCtx, delivery)
 		}), jetstream.RunnerConfig{
 			BatchSize: 64,
 			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
