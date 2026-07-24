@@ -50,6 +50,18 @@ var (
 	TradeOrderSubmitUnknown      = EventType{Name: "trade.order.submit.unknown", Version: 1}
 )
 
+// AllEventTypes is the compile-time event vocabulary used by producers. The
+// architecture gate verifies every entry remains present in the YAML registry
+// so a new producer constant cannot silently bypass governed subjects.
+var AllEventTypes = []EventType{
+	TickReceived, MarketKlineClosed, TradingSignal, DatasetRowsUpserted,
+	MetricsHostReported, MetricsSnapshotReported, DLQMessageRejected,
+	StrategyOutputAccepted, TradeOrderIntentCreated, TradeOrderStateChanged,
+	TradeExecutionSliceReady, TradeFillReceived, TradeRebalanceRequested,
+	TradeRebalanceCompleted, TradeReconciliationRequested,
+	CloudJobExecutionRequested, TradeOrderAcknowledged, TradeOrderSubmitUnknown,
+}
+
 var defaultRegistry struct {
 	once sync.Once
 	reg  *Registry
@@ -64,6 +76,13 @@ type EventSchema struct {
 	Stream       string                `yaml:"stream"`
 	PartitionKey string                `yaml:"partition_key"`
 	Owner        string                `yaml:"owner"`
+}
+
+// EventTypeFromSchema creates the lookup key used by registry consumers when
+// iterating the governed schema catalog. Producers should use the named
+// vocabulary values above instead of constructing EventType dynamically.
+func EventTypeFromSchema(schema EventSchema) EventType {
+	return EventType{Name: schema.Name, Version: schema.Version}
 }
 
 type registryFile struct {

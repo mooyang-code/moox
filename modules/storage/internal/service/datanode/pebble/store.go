@@ -2,7 +2,9 @@ package pebble
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -17,8 +19,9 @@ import (
 )
 
 const (
-	outboxPrefix = "__outbox/"
-	metaNextID   = "__meta/next_outbox_id"
+	outboxPrefix         = "__outbox/"
+	processedEventPrefix = "__processed_event/"
+	metaNextID           = "__meta/next_outbox_id"
 )
 
 // Options controls one DataNode Pebble database. A node can host multiple
@@ -118,6 +121,24 @@ func (s *Store) WriteFields(ctx context.Context, rows []*pb.RowFieldUpsert) erro
 // the request. The payload is optional so callers that only need local writes
 // can avoid creating an outbox record.
 func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
+	return s.writeFieldsEvent(ctx, rows, "", event)
+}
+
+// WriteFieldsEventWithSource atomically records a source EventMessage ID with
+// the row mutation and its outbox entry. A redelivery after a successful write
+// and failed ACK therefore becomes a no-op instead of creating a second
+// DatasetRowsUpserted event.
+func (s *Store) WriteFieldsEventWithSource(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
+	if strings.TrimSpace(sourceEventID) == "" {
+		return nil, invalid("source_event_id is required")
+	}
+	if event == nil {
+		return nil, invalid("event builder is required for source-id writes")
+	}
+	return s.writeFieldsEvent(ctx, rows, sourceEventID, event)
+}
+
+func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pebble store is closed")
 	}
@@ -140,10 +161,31 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		clone.Key = key
 		normalizedRows = append(normalizedRows, clone)
 	}
-	// One batch preserves all field changes from a request. Dataset event
-	// payloads are staged into the same batch with consecutive internal IDs.
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
+	grouped := groupRowsByDataset(normalizedRows)
+	if sourceEventID != "" {
+		pending := make(map[datasetGroup][]*pb.RowFieldUpsert, len(grouped))
+		for group, groupRows := range grouped {
+			processed, err := s.hasProcessedSourceEvent(sourceEventID, group)
+			if err != nil {
+				return nil, err
+			}
+			if !processed {
+				pending[group] = groupRows
+			}
+		}
+		grouped = pending
+		if len(grouped) == 0 {
+			return nil, nil
+		}
+		normalizedRows = make([]*pb.RowFieldUpsert, 0, len(rows))
+		for _, groupRows := range grouped {
+			normalizedRows = append(normalizedRows, groupRows...)
+		}
+	}
+	// One batch preserves all field changes from a request. Dataset event
+	// payloads and source-event markers are staged into the same batch.
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	for _, row := range normalizedRows {
@@ -178,14 +220,14 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		}
 	}
 
-	grouped := groupRowsByDataset(normalizedRows)
 	entries := make([]*OutboxEntry, 0, len(grouped))
 	if event != nil {
 		nextID, err := s.nextOutboxID()
 		if err != nil {
 			return nil, err
 		}
-		for group, groupRows := range grouped {
+		for _, group := range sortedDatasetGroups(grouped) {
+			groupRows := grouped[group]
 			payload, err := event(group.spaceID, group.datasetID, groupRows)
 			if err != nil {
 				return nil, err
@@ -215,6 +257,11 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 				return nil, err
 			}
 			entries = append(entries, &OutboxEntry{ID: id, Data: append([]byte(nil), payload...), CreatedAt: time.Now().UTC()})
+			if sourceEventID != "" {
+				if err := batch.Set(processedSourceEventKey(sourceEventID, group), []byte{1}, s.writeOptions); err != nil {
+					return nil, err
+				}
+			}
 			nextID++
 		}
 	}
@@ -222,6 +269,37 @@ func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		return nil, err
 	}
 	return entries, nil
+}
+
+func (s *Store) hasProcessedSourceEvent(sourceEventID string, group datasetGroup) (bool, error) {
+	value, closer, err := s.db.Get(processedSourceEventKey(sourceEventID, group))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	closer.Close()
+	return len(value) > 0, nil
+}
+
+func processedSourceEventKey(sourceEventID string, group datasetGroup) []byte {
+	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + group.spaceID + "\x00" + group.datasetID))
+	return []byte(processedEventPrefix + hex.EncodeToString(hash[:]))
+}
+
+func sortedDatasetGroups(grouped map[datasetGroup][]*pb.RowFieldUpsert) []datasetGroup {
+	groups := make([]datasetGroup, 0, len(grouped))
+	for group := range grouped {
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].spaceID == groups[j].spaceID {
+			return groups[i].datasetID < groups[j].datasetID
+		}
+		return groups[i].spaceID < groups[j].spaceID
+	})
+	return groups
 }
 
 func validateUpsert(row *pb.RowFieldUpsert) error {

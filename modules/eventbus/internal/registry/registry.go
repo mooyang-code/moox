@@ -335,6 +335,7 @@ type Topic struct {
 	EventVersion uint32
 	Payload      string
 	Enabled      bool
+	Owner        string
 }
 
 func TopicStream(cfg *config.Config, topic string) (Topic, string, error) {
@@ -343,9 +344,9 @@ func TopicStream(cfg *config.Config, topic string) (Topic, string, error) {
 		return Topic{}, "", err
 	}
 	for _, spec := range registry.Schemas() {
-		family, familyErr := registry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		family, familyErr := registry.FamilyPattern(events.EventTypeFromSchema(spec))
 		if familyErr == nil && topicMatchesPattern(topic, family) {
-			return Topic{Topic: topic, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true}, spec.Stream, nil
+			return Topic{Topic: topic, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true, Owner: spec.Owner}, spec.Stream, nil
 		}
 	}
 	return Topic{}, "", fmt.Errorf("topic %q is not registered", topic)

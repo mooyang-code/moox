@@ -93,6 +93,34 @@ func TestWriteFieldsEventRejectsCallbackIdentityMismatch(t *testing.T) {
 	}
 }
 
+func TestWriteFieldsEventWithSourceIsIdempotentAfterRedelivery(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "5m", DataTime: "2026-07-23T10:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}}}
+	build := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return BuildDatasetRowsUpsertedMessageForSource("foo", "market-kline-1", spaceID, datasetID, rows)
+	}
+	first, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first source write entries=%v err=%v", first, err)
+	}
+	second, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
+	if err != nil || len(second) != 0 {
+		t.Fatalf("redelivery source write entries=%v err=%v", second, err)
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("outbox entries=%v err=%v", entries, err)
+	}
+	message := mustEvent(t, entries[0].Data)
+	if message.GetEventId() == "" || message.GetEventId() == "outbox-pending" {
+		t.Fatalf("source event id was not persisted: %q", message.GetEventId())
+	}
+}
+
 func mustEvent(t *testing.T, raw []byte) *eventpb.EventMessage {
 	t.Helper()
 	message := &eventpb.EventMessage{}

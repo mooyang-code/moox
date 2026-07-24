@@ -86,9 +86,19 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	entries, err := s.store.WriteFieldsEvent(ctx, req.GetRows(), func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage(s.nodeID, spaceID, datasetID, rows)
-	})
+	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		if req.GetSourceEventId() == "" {
+			return pebble.BuildDatasetRowsUpsertedMessage(s.nodeID, spaceID, datasetID, rows)
+		}
+		return pebble.BuildDatasetRowsUpsertedMessageForSource(s.nodeID, req.GetSourceEventId(), spaceID, datasetID, rows)
+	}
+	var entries []*pebble.OutboxEntry
+	var err error
+	if req.GetSourceEventId() == "" {
+		entries, err = s.store.WriteFieldsEvent(ctx, req.GetRows(), writeEvent)
+	} else {
+		entries, err = s.store.WriteFieldsEventWithSource(ctx, req.GetRows(), req.GetSourceEventId(), writeEvent)
+	}
 	if err != nil {
 		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}

@@ -94,7 +94,7 @@ streams:
 consumers:
   - stream: MOOX_MARKET
     durable: streamcalc_kline_v1
-    filter_subject: moox.market.>
+    filter_subject: moox.market.tick.received.v1.>
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant

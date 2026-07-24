@@ -23,7 +23,7 @@ func (s *Service) MergeTimeSeriesRows(ctx context.Context, req *pb.MergeTimeSeri
 			Attributes: stringAttributes(row.GetAttributes()),
 		})
 	}
-	rsp, err := s.WriteFields(ctx, &pb.PrimaryWriteFieldsReq{AuthInfo: req.GetAuthInfo(), Rows: rows})
+	rsp, err := s.WriteFields(ctx, &pb.PrimaryWriteFieldsReq{AuthInfo: req.GetAuthInfo(), Rows: rows, SourceEventId: req.GetSourceEventId()})
 	if err != nil {
 		return nil, err
 	}

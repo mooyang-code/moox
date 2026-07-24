@@ -24,7 +24,7 @@ func Default() *Config {
 			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 268435456},
 		},
 		Consumers: []ConsumerConfig{
-			{Stream: "MOOX_MARKET", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
+			{Stream: "MOOX_MARKET", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.tick.received.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
 			{Stream: "MOOX_MARKET", Durable: "storage_primary_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
 			{Stream: "MOOX_TRADE", Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
 			{Stream: "MOOX_TRADE", Durable: "trade_reconciliation_v1", FilterSubject: "moox.trade.reconciliation.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},

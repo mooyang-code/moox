@@ -26,10 +26,15 @@ if rg -n 'PublishRaw\(|Client\.Publish\(|FetchRaw|AckToken|NakToken' modules --g
   echo "business modules still use the raw or legacy JetStream event API" >&2
   exit 1
 fi
+if rg -n 'events\.EventType[[:space:]]*\{' modules packages --glob '*.go' --glob '!**/*_test.go'; then
+  echo "production code constructs unregistered EventType literals; use a registry vocabulary entry" >&2
+  exit 1
+fi
 if rg -n 'moox\.cloudnode\.job\.requested|moox\.metrics\.reported|(^|["/])message\.rejected(["/]|$)' modules packages --glob '*.go' --glob '*.proto' --glob '*.yaml' --glob '!**/*_test.go'; then
   echo "legacy event subject/name remains" >&2
   exit 1
 fi
 
 (cd packages/events && go test ./...)
+(cd modules/eventbus && go test ./...)
 echo "event contract verification passed"

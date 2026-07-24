@@ -88,17 +88,17 @@ func (s *Service) ListEvents(ctx context.Context, req *eventbusgen.ListEventsReq
 	}
 	items := make([]registry.Topic, 0)
 	for _, spec := range eventRegistry.Schemas() {
-		family, familyErr := eventRegistry.FamilyPattern(events.EventType{Name: spec.Name, Version: spec.Version})
+		family, familyErr := eventRegistry.FamilyPattern(events.EventTypeFromSchema(spec))
 		if familyErr != nil {
 			return &eventbusgen.ListEventsRsp{RetInfo: retErr(familyErr)}, nil
 		}
-		items = append(items, registry.Topic{Topic: family, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true})
+		items = append(items, registry.Topic{Topic: family, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true, Owner: spec.Owner})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Topic < items[j].Topic })
 	page, rows := paginateRows(req.GetPage(), items)
 	out := make([]*eventbusgen.EventInfo, 0, len(rows))
 	for _, t := range rows {
-		out = append(out, &eventbusgen.EventInfo{SubjectPattern: t.Topic, Stream: t.Stream, EventName: t.EventName, EventVersion: t.EventVersion, PayloadType: t.Payload, Enabled: t.Enabled})
+		out = append(out, &eventbusgen.EventInfo{SubjectPattern: t.Topic, Stream: t.Stream, EventName: t.EventName, EventVersion: t.EventVersion, PayloadType: t.Payload, Enabled: t.Enabled, Owner: t.Owner})
 	}
 	return &eventbusgen.ListEventsRsp{RetInfo: retOK(), Events: out, PageResult: page}, nil
 }

@@ -14,9 +14,11 @@
 
 - EventBus 业务消息统一使用 `packages/events/eventpb.EventMessage`；`packages/messagepb` 不再参与生产代码。
 - Market 链路为 `TickReceived -> Streamcalc -> MarketKlineClosed -> Storage PrimaryStore -> DatasetRowsUpserted`，Streamcalc 不再直接调用 Storage RPC。
+- Streamcalc 的生产 Consumer 只绑定 `market.tick.received` family，不再消费自己发布的 `market.kline.closed`。
+- Storage Kline Consumer 将源 `EventMessage.event_id` 传入 PrimaryStore；DataNode 在同一 Pebble batch 持久化 source-event marker、行变更和 outbox，ACK 失败重投不会重复产生 DatasetRowsUpserted。
 - CloudNode 使用 typed payload 和 Registry 派生的精确 subject；Trade/Strategy outbox 持久化完整 deterministic EventMessage。
 - Storage View、Monitor、Archive、Factor、Trade、CloudNode、Streamcalc 的 poison message 均先经共享 DLQ 发布，DLQ 失败时保留原消息可重试，发布成功后才 TERM。
-- EventBus API 已收敛为 `ListEvents/EventInfo`，并增加 `packages/events/architecture_test.go` 与 `scripts/verify-event-contracts.sh` 门禁。
+- EventBus API 已收敛为 `ListEvents/EventInfo`，`EventInfo` 暴露 Registry owner，并增加生产 EventType 注册校验、EventBus topology gate、`packages/events/architecture_test.go` 与 `scripts/verify-event-contracts.sh` 门禁；EventType 声明与 `AllEventTypes` 不一致、生产代码直接构造 EventType 都会失败。
 
 目标 Linux/CGO Storage 验收已在配置的远端编译机完成；其余跨进程全链路验收仍需按对应模块证据逐项执行。后续勾选项只允许在有命令输出或 E2E 证据时更新，不以静态代码阅读代替目标环境证据。
 
@@ -29,7 +31,8 @@
 - 目标 Linux/CGO Storage：已完成 Linux/amd64 编译；Storage E2E 四项测试全部通过。
 - 目标 Linux EventMessage 链路：`modules/streamcalc/test` 的
   `TestCollectorEventToStreamcalcAggregationE2E` 也已在同一远端工作目录通过。
-- 真实部署拓扑和 Collector/Streamcalc/Storage 全进程联调：仍需单独执行，不能以单模块 E2E 替代。
+- 本机 CGO Storage 市场链路：`TestMarketKlineToStorageOutboxE2E` 通过，测试实际构建并启动 Streamcalc server，覆盖 Tick -> Streamcalc -> KlineConsumer -> PrimaryStore -> DataNode source marker/outbox -> relay 以及 View/Factor/Archive durable fan-out；测试关闭首次消费连接强制 ACK 失败，重新绑定同一 durable 验证 JetStream 重投，未产生第二条 outbox event。
+- 真实部署拓扑、真实 Collector 接入和生产配置下的全进程联调：仍需单独执行，不能以本地嵌入式 NATS E2E 替代。
 
 ---
 

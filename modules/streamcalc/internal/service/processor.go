@@ -93,15 +93,13 @@ func (p *Processor) Process(ctx context.Context, delivery *events.EventDelivery)
 	if delivery.Message == nil {
 		return fmt.Errorf("event message is nil")
 	}
+	if delivery.Message.GetEventName() != events.TickReceived.Name || delivery.Message.GetEventVersion() != events.TickReceived.Version {
+		return fmt.Errorf("unexpected streamcalc input event %q@%d", delivery.Message.GetEventName(), delivery.Message.GetEventVersion())
+	}
 	eventID := delivery.Message.GetEventId()
 	var result aggregate.Result
 	var err error
 	switch input := delivery.Payload.(type) {
-	case *marketpb.KlineClosed:
-		if delivery.Message.GetSubjectId() != input.GetSymbol() {
-			return fmt.Errorf("kline subject_id %q does not match payload symbol %q", delivery.Message.GetSubjectId(), input.GetSymbol())
-		}
-		result, err = p.aggregator.Apply(eventID, delivery.Message.GetSpaceId(), input)
 	case *marketpb.Tick:
 		if delivery.Message.GetSubjectId() != input.GetSymbol() {
 			return fmt.Errorf("tick subject_id %q does not match payload symbol %q", delivery.Message.GetSubjectId(), input.GetSymbol())

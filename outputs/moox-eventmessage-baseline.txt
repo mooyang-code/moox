@@ -38,6 +38,10 @@ Verification commands
   modules/trade: go test ./... and go test -race ./...
   packages/report: go test ./...
   modules/storage/internal/service/e2e: CGO_ENABLED=1 go test ./internal/service/e2e -count=1 -v
+  modules/storage/internal/service/e2e: TestMarketKlineToStorageOutboxE2E
+  modules/eventbus: topology tests cover registry EventInfo owner and governed stream families
+  packages/events: architecture test covers every AllEventTypes entry and every registered schema
+  make test-storage-market-pipeline: CGO_ENABLED=1 market pipeline E2E (also included by verify-pr)
 
 All commands listed above passed in the current worktree. The storage E2E also passed remotely on the configured Linux compile host with CGO_ENABLED=1:
   TestDataNodeManagementLifecycle
@@ -46,4 +50,8 @@ All commands listed above passed in the current worktree. The storage E2E also p
   TestViewQueryFilterSortPageAndTotalE2E
 The remote EventMessage aggregation contract also passed:
   TestCollectorEventToStreamcalcAggregationE2E
+The local market handoff contract also passed with CGO_ENABLED=1:
+  TestMarketKlineToStorageOutboxE2E
+  The test builds and starts the Streamcalc server process, then verifies Tick -> KlineClosed -> Storage KlineConsumer -> DataNode outbox -> relay -> View/Factor/Archive durable fan-out.
+  The test closes the first storage consumer connection after the row/outbox commit, observes the same durable redelivery, and produces no second DataNode outbox entry.
 The remote Storage binaries were verified as Linux/amd64 ELF files. The helper's compressed binary download was stopped after it made no progress; no partial download was used as verification evidence.

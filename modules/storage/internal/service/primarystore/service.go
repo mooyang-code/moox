@@ -117,7 +117,7 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 		if err != nil {
 			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
-		rsp, err := node.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: auth, Rows: rows})
+		rsp, err := node.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId()})
 		if err != nil {
 			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}

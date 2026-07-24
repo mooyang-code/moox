@@ -34,7 +34,7 @@ func TestCollectorEventToStreamcalcAggregationE2E(t *testing.T) {
 		nc.Close()
 		t.Fatal(err)
 	}
-	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_v1", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxAckPending: 32, MaxDeliver: 3, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_v1", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.tick.received.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxAckPending: 32, MaxDeliver: 3, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		nc.Close()
 		t.Fatal(err)
 	}

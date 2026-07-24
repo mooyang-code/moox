@@ -52,6 +52,7 @@ message EventInfo {
   uint32 event_version = 4;
   string payload_type = 5;
   bool enabled = 6;
+  string owner = 7;
 }
 
 message StreamInfo {

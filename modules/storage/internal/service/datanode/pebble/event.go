@@ -1,6 +1,8 @@
 package pebble
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"time"
@@ -19,6 +21,21 @@ import (
 // outbox write is the commit boundary. The event_id is replaced with the
 // Pebble outbox id by BindOutboxID after the write batch has reserved that id.
 func BuildDatasetRowsUpsertedMessage(nodeID string, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	return buildDatasetRowsUpsertedMessage(nodeID, "outbox-pending", spaceID, datasetID, rows)
+}
+
+// BuildDatasetRowsUpsertedMessageForSource derives a stable output ID from the
+// source event and write identity. It is used by consumers whose input can be
+// redelivered after the local write has already committed.
+func BuildDatasetRowsUpsertedMessageForSource(nodeID, sourceEventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	if sourceEventID == "" {
+		return nil, fmt.Errorf("source_event_id is required")
+	}
+	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + spaceID + "\x00" + datasetID))
+	return buildDatasetRowsUpsertedMessage(nodeID, "storage-source-"+hex.EncodeToString(hash[:16]), spaceID, datasetID, rows)
+}
+
+func buildDatasetRowsUpsertedMessage(nodeID, eventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 	if spaceID == "" || datasetID == "" {
 		return nil, fmt.Errorf("space_id and dataset_id are required")
 	}
@@ -31,7 +48,7 @@ func BuildDatasetRowsUpsertedMessage(nodeID string, spaceID, datasetID string, r
 		return nil, err
 	}
 	encoded, err := registry.Encode(events.DatasetRowsUpserted, rowPayload, events.PublishOptions{
-		EventID:    "outbox-pending",
+		EventID:    eventID,
 		OccurredAt: time.Now().UTC(),
 		SpaceID:    spaceID,
 		SubjectID:  datasetID,
@@ -56,7 +73,9 @@ func BindOutboxID(data []byte, nodeID string, outboxID uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	newEnvelope.EventId = "storage-" + token + "-" + strconv.FormatUint(outboxID, 10)
+	if newEnvelope.GetEventId() == "outbox-pending" {
+		newEnvelope.EventId = "storage-" + token + "-" + strconv.FormatUint(outboxID, 10)
+	}
 	if err := validateDatasetRowsUpsertedEvent(newEnvelope, ""); err != nil {
 		return nil, fmt.Errorf("validate storage rows.upserted envelope %d: %w", outboxID, err)
 	}

@@ -85,7 +85,7 @@ func (c *KlineConsumer) handle(ctx context.Context, delivery *events.EventDelive
 		doubleField("close", payload.GetClose()), doubleField("volume", payload.GetVolume()), doubleField("quote_volume", payload.GetQuoteVolume()),
 		intField("trade_num", payload.GetTradeCount()),
 	}}
-	rsp, err := c.service.MergeTimeSeriesRows(ctx, &pb.MergeTimeSeriesRowsReq{AuthInfo: c.auth, Rows: []*pb.TimeSeriesRow{row}})
+	rsp, err := c.service.MergeTimeSeriesRows(ctx, &pb.MergeTimeSeriesRowsReq{AuthInfo: c.auth, Rows: []*pb.TimeSeriesRow{row}, SourceEventId: delivery.Message.GetEventId()})
 	if err != nil {
 		if nakErr := delivery.Delivery.Nak(ctx, time.Second); nakErr != nil {
 			return errors.Join(err, nakErr)

@@ -121,6 +121,9 @@ message ReadTimeSeriesRowsRsp {
 message MergeTimeSeriesRowsReq {
   common.AuthInfo auth_info = 1;
   repeated TimeSeriesRow rows = 2;
+  // Source EventMessage ID used to make the DataNode write/outbox idempotent
+  // when the caller is redelivered after a successful write and failed ACK.
+  string source_event_id = 3;
 }
 
 message MergeTimeSeriesRowsRsp {

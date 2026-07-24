@@ -12,6 +12,7 @@ message WriteFieldsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   repeated RowFieldUpsert rows = 3;
+  string source_event_id = 4;
 }
 
 message WriteFieldsRsp {

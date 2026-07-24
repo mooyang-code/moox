@@ -11,6 +11,7 @@ import "rows.proto";
 message PrimaryWriteFieldsReq {
   common.AuthInfo auth_info = 1;
   repeated RowFieldUpsert rows = 2;
+  string source_event_id = 3;
 }
 
 message PrimaryWriteFieldsRsp {

@@ -1,5 +1,3 @@
-//go:build legacy_storage
-
 package rpc
 
 import (
@@ -59,6 +57,11 @@ func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
 	}
 	if list.Events[0].GetSubjectPattern() >= list.Events[1].GetSubjectPattern() {
 		t.Fatalf("events not sorted: %q, %q", list.Events[0].GetSubjectPattern(), list.Events[1].GetSubjectPattern())
+	}
+	for _, event := range list.GetEvents() {
+		if event.GetOwner() == "" {
+			t.Fatalf("event %q is missing owner", event.GetEventName())
+		}
 	}
 	streams, err := svc.ListStreams(ctx, &eventbuspb.ListStreamsReq{})
 	if err != nil || len(streams.Streams) != len(c.Streams) {

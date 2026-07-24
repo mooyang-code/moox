@@ -32,6 +32,18 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	t.Fatal("archive durable consumer missing")
 }
 
+func TestDefaultStreamcalcConsumesOnlyTicks(t *testing.T) {
+	for _, consumer := range Default().Consumers {
+		if consumer.Durable == "streamcalc_kline_v1" {
+			if consumer.Stream != "MOOX_MARKET" || consumer.FilterSubject != "moox.market.tick.received.v1.>" {
+				t.Fatalf("streamcalc consumer = %#v", consumer)
+			}
+			return
+		}
+	}
+	t.Fatal("streamcalc durable consumer missing")
+}
+
 func TestDefaultMonitorConsumersMatchRuntimeContracts(t *testing.T) {
 	cfg := Default()
 	want := map[string]string{
