@@ -62,13 +62,13 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	_, err = store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	_, err = store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	_, err = store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	})
 	if err != nil {
@@ -124,7 +124,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	}); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
 	}); err != nil {
 		t.Fatal(err)

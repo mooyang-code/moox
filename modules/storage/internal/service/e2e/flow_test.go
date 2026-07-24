@@ -50,7 +50,7 @@ func TestPrimaryDataNodeViewFlow(t *testing.T) {
 	factorKey := &pb.RowKey{SpaceId: "quant", DatasetId: "factors", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}}
 	priceField := &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}
 	factorField := &pb.FieldValue{FieldId: "momentum", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}
-	if rsp, err := primary.WriteFields(ctx, &pb.PrimaryWriteFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{{Key: priceKey, Fields: []*pb.FieldValue{priceField}}, {Key: factorKey, Fields: []*pb.FieldValue{factorField}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 2 {
+	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{{Key: priceKey, Fields: []*pb.FieldValue{priceField}}, {Key: factorKey, Fields: []*pb.FieldValue{factorField}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 2 {
 		t.Fatalf("primary write: rsp=%v err=%v", rsp, err)
 	}
 	read, err := primary.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: []*pb.RowKey{priceKey, factorKey}, FieldIds: []string{"close", "momentum"}})

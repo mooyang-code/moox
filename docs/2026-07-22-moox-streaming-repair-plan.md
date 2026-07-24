@@ -211,7 +211,7 @@ Collector
   -> market.trade.received / market.kline.closed
   -> NATS JetStream
   -> streamcalc
-  -> Storage WriteFields
+  -> Storage UpsertFields
   -> storage.rows.upserted
   -> Factor / Strategy / Storage View / Archive
 ```
@@ -1048,7 +1048,7 @@ space_id + subject_id + target_frequency + window_start
 
 - [ ] **Step 5: 原子写入 Storage 并发布下游事实**
 
-聚合结果提交必须遵循：状态更新、Storage `WriteFields`、下游 Outbox 的一致性边界。不能在 Storage 成功前 ACK 输入事件，也不能先发布 `market.kline.closed` 再写 Storage 导致下游看到不存在的数据。推荐使用 streamcalc 本地状态 + Storage 幂等写入 + Outbox/Inbox 记录；具体跨存储事务在实现任务中锁定。
+聚合结果提交必须遵循：状态更新、Storage `UpsertFields`、下游 Outbox 的一致性边界。不能在 Storage 成功前 ACK 输入事件，也不能先发布 `market.kline.closed` 再写 Storage 导致下游看到不存在的数据。推荐使用 streamcalc 本地状态 + Storage 幂等写入 + Outbox/Inbox 记录；具体跨存储事务在实现任务中锁定。
 
 - [ ] **Step 6: 增加可观测性**
 
@@ -1423,7 +1423,7 @@ Collector
   -> market.trade.received / market.kline.closed
   -> NATS JetStream
   -> streamcalc
-  -> Storage WriteFields
+  -> Storage UpsertFields
   -> storage.rows.upserted
   -> Factor / Strategy / Storage View / Archive
 ```
@@ -2250,7 +2250,7 @@ space_id + subject_id + target_frequency + window_start
 
 - [ ] **Step 5: 原子写入 Storage 并发布下游事实**
 
-聚合结果提交必须遵循：状态更新、Storage `WriteFields`、下游 Outbox 的一致性边界。不能在 Storage 成功前 ACK 输入事件，也不能先发布 `market.kline.closed` 再写 Storage 导致下游看到不存在的数据。推荐使用 streamcalc 本地状态 + Storage 幂等写入 + Outbox/Inbox 记录；具体跨存储事务在实现任务中锁定。
+聚合结果提交必须遵循：状态更新、Storage `UpsertFields`、下游 Outbox 的一致性边界。不能在 Storage 成功前 ACK 输入事件，也不能先发布 `market.kline.closed` 再写 Storage 导致下游看到不存在的数据。推荐使用 streamcalc 本地状态 + Storage 幂等写入 + Outbox/Inbox 记录；具体跨存储事务在实现任务中锁定。
 
 - [ ] **Step 6: 增加可观测性**
 

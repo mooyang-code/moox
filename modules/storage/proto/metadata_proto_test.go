@@ -127,9 +127,46 @@ func TestDataNodeRuntimeProtoContract(t *testing.T) {
 	if service == nil {
 		t.Fatal("DataNodeRuntime service is missing")
 	}
-	for _, methodName := range []protoreflect.Name{"WriteFields", "ReadFields", "GetNodeState", "CleanupExpiredBuckets"} {
+	for _, methodName := range []protoreflect.Name{"UpsertFields", "ReadFields", "GetNodeState", "CleanupExpiredBuckets"} {
 		if service.Methods().ByName(methodName) == nil {
 			t.Fatalf("DataNodeRuntime RPC %q is missing", methodName)
+		}
+	}
+}
+
+func TestStorageRuntimeOnlySupportsFieldUpserts(t *testing.T) {
+	upsertMethod := protoreflect.Name("UpsertFields")
+	removedMethod := protoreflect.Name("Delete" + "Fields")
+	legacyWriteMethod := protoreflect.Name("Write" + "Fields")
+	for _, service := range []protoreflect.ServiceDescriptor{
+		storagepb.File_data_node_proto.Services().ByName("DataNodeRuntime"),
+		storagepb.File_primary_store_proto.Services().ByName("PrimaryStore"),
+	} {
+		if service == nil {
+			t.Fatal("storage runtime service is missing")
+		}
+		if service.Methods().ByName(upsertMethod) == nil {
+			t.Fatalf("storage RPC %q is missing from %s", upsertMethod, service.FullName())
+		}
+		if service.Methods().ByName(removedMethod) != nil {
+			t.Fatalf("removed storage RPC %q is still present on %s", removedMethod, service.FullName())
+		}
+		if service.Methods().ByName(legacyWriteMethod) != nil {
+			t.Fatalf("ambiguous storage RPC %q is still present on %s", legacyWriteMethod, service.FullName())
+		}
+	}
+
+	for _, message := range []struct {
+		file protoreflect.FileDescriptor
+		name protoreflect.Name
+	}{
+		{storagepb.File_data_node_proto, protoreflect.Name("Delete" + "FieldsReq")},
+		{storagepb.File_data_node_proto, protoreflect.Name("Delete" + "FieldsRsp")},
+		{storagepb.File_primary_store_proto, protoreflect.Name("PrimaryDelete" + "FieldsReq")},
+		{storagepb.File_primary_store_proto, protoreflect.Name("PrimaryDelete" + "FieldsRsp")},
+	} {
+		if message.file.Messages().ByName(message.name) != nil {
+			t.Fatalf("removed storage message %q is still present", message.name)
 		}
 	}
 }

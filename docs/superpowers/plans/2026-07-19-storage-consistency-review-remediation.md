@@ -15,7 +15,7 @@
 - Metadata 只接受 Schema v4；版本不等于 `metadataSchemaVersion` 时启动失败。
 - Dataset 创建时必须指定 `data_node_id`，创建后不可修改；系统不提供 Dataset 迁移。
 - Schema 只允许追加 Field；已有 `field_id`、`value_type` 和语义不可修改，所有 Field 均可缺失。
-- `WriteFields` 是字段级 Upsert：允许新增、覆盖和为历史 RowKey 补写新增 Field。
+- `UpsertFields` 是字段级 Upsert：允许新增、覆盖和为历史 RowKey 补写新增 Field。
 - 不支持字段删除、Attribute 删除或 DeleteRows。
 - TimeSeries 不存在 Dimensions；RowKey 是 `space_id + dataset_id + subject_id + freq + data_time`。
 - Record RowKey 是 `space_id + dataset_id + record_id + version`；空 Version 读取字符顺序最大的 Version。
@@ -35,7 +35,7 @@
 
 ### 协议与 Metadata
 
-- `modules/storage/proto/data_node.proto`：DataNode `WriteFields`、`ReadFields`、状态和时间桶清理 RPC。
+- `modules/storage/proto/data_node.proto`：DataNode `UpsertFields`、`ReadFields`、状态和时间桶清理 RPC。
 - `modules/storage/proto/rows.proto`：无 Dimensions、无删除字段、无来源 Sequence 的 `RowKey` 和 FieldValue。
 - `modules/storage/proto/dataset_fields_changed.proto`：字段 Upsert 事件，不携带 Node/Dataset Sequence。
 - `modules/storage/proto/view_index.proto`：无 Source Progress 的 `LIVE_WRITE/BACKFILL` 写协议。
@@ -148,7 +148,7 @@ git rev-parse HEAD
 
 **接口：**
 - 输入：最终设计规范。
-- 输出：`RowKey`、`WriteFields/ReadFields`、无 Sequence 的 `DatasetFieldsChanged` 和 A/B Metadata。
+- 输出：`RowKey`、`UpsertFields/ReadFields`、无 Sequence 的 `DatasetFieldsChanged` 和 A/B Metadata。
 
 - [ ] **步骤 1：先写协议边界失败测试**
 
@@ -194,7 +194,7 @@ message FieldValue {
 
 ```proto
 service DataNode {
-  rpc WriteFields(WriteFieldsReq) returns (WriteFieldsRsp);
+  rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
   rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
   rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
   rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
@@ -356,7 +356,7 @@ git commit -m "refactor(storage): split primary node and view roles"
 - 修改：`modules/storage/internal/service/datanode/outbox_relay_test.go`
 
 **接口：**
-- 输入：PrimaryStore 已校验的 `WriteFieldsReq`。
+- 输入：PrimaryStore 已校验的 `UpsertFieldsReq`。
 - 输出：Field/Attribute Upsert、内部有序 Outbox 和无 Sequence 的 DatasetFieldsChanged。
 
 - [ ] **步骤 1：先写 Key Codec 测试**
@@ -835,7 +835,7 @@ datasets:
 
 - [ ] **步骤 2：更新调用方语义**
 
-Collector/Factor 使用 `WriteFields` 部分 Upsert；因子新增后允许按历史 RowKey 补数。Archive/Factor 按明确 Dataset Subject 订阅，范围读取通过 PrimaryStore 有限 RowKey 生成接口；Record 用户文档明确 Version 字符排序规则。
+Collector/Factor 使用 `UpsertFields` 部分 Upsert；因子新增后允许按历史 RowKey 补数。Archive/Factor 按明确 Dataset Subject 订阅，范围读取通过 PrimaryStore 有限 RowKey 生成接口；Record 用户文档明确 Version 字符排序规则。
 
 - [ ] **步骤 3：执行零残留扫描**
 
@@ -948,7 +948,7 @@ git rev-parse '@{upstream}'
 - [ ] Metadata 读取复用现有 snapshotcache，没有 Runtime Catalog。
 - [ ] 所有 Field 可缺失且只增不减，没有 Required 或 Dimensions。
 - [ ] RowKey 取代 FactKey；Field/Attribute 分别使用 `0x01/0x02`，不存在 RowMarker。
-- [ ] `WriteFields` 允许新增、覆盖和补写历史 Field。
+- [ ] `UpsertFields` 允许新增、覆盖和补写历史 Field。
 - [ ] DataNode 只提供指定 RowKey/Field 的精确读取，没有完整行、Scan、Snapshot、Progress 或 Delete RPC。
 - [ ] 字段 Upsert、内部 Outbox 条目和下一 ID 在一个 Pebble Batch 中提交。
 - [ ] TimeSeries 使用可配置时间桶和 `keep_duration`；Record 不自动清理。

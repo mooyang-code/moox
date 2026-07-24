@@ -13,20 +13,16 @@ import (
 )
 
 type recordingNode struct {
-	write func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error)
+	write func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
 	read  func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
 }
 
-func (n *recordingNode) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+func (n *recordingNode) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return n.write(ctx, req)
 }
 
 func (n *recordingNode) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return n.read(ctx, req)
-}
-
-func (n *recordingNode) DeleteFields(context.Context, *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
-	return &pb.DeleteFieldsRsp{RetInfo: successRetInfo()}, nil
 }
 
 func (n *recordingNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -50,11 +46,11 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	rsp, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "ignored"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}})
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "ignored"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
-	bad, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}})
+	bad, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}})
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("bad rsp=%v err=%v", bad, err)
 	}
@@ -63,12 +59,12 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	var resolved []string
 	node := &recordingNode{
-		write: func(_ context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 			keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 			for _, row := range req.GetRows() {
 				keys = append(keys, row.GetKey())
 			}
-			return &pb.WriteFieldsRsp{RetInfo: successRetInfo(), Keys: keys}, nil
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: keys}, nil
 		},
 		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
@@ -93,7 +89,7 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: record}}}},
 		}
 	}
-	rsp, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Rows:     []*pb.RowFieldUpsert{row("space-a", "a"), row("space-b", "b")},
 	})
@@ -107,8 +103,8 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 
 func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 	node := &recordingNode{
-		write: func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
-			return &pb.WriteFieldsRsp{RetInfo: successRetInfo()}, nil
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
 		},
 		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
@@ -145,8 +141,8 @@ func TestPrimaryReadFieldsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 	provider := &mutableSnapshotProvider{current: &testRequestSnapshot{generation: "generation-a"}}
 	var generations []string
 	node := &recordingNode{
-		write: func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
-			return &pb.WriteFieldsRsp{RetInfo: successRetInfo()}, nil
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
 		},
 		read: func(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 			snapshot, ok := metadata.RequestSnapshotFromContext(ctx).(*testRequestSnapshot)
@@ -184,7 +180,7 @@ func TestPrimaryReadFieldsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 
 func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	node := &recordingNode{
-		write: func(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 			t.Fatal("write should not reach DataNode")
 			return nil, nil
 		},
@@ -196,7 +192,7 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsp, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key:    &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}}},
@@ -228,7 +224,7 @@ func TestPrimaryReadFieldsReturnsResolvedLatestRecordVersion(t *testing.T) {
 	}
 	for _, version := range []string{"1", "2"} {
 		key := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
-		rsp, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+		rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
 			AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 			Rows: []*pb.RowFieldUpsert{{
 				Key: key,

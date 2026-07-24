@@ -486,14 +486,11 @@ type dataViewProxyAdapter struct {
 	auth  *pb.AuthInfo
 }
 
-func (a *dataNodeProxyAdapter) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
-	return a.proxy.WriteFields(ctx, req)
+func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+	return a.proxy.UpsertFields(ctx, req)
 }
 func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return a.proxy.ReadFields(ctx, req)
-}
-func (a *dataNodeProxyAdapter) DeleteFields(ctx context.Context, req *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
-	return a.proxy.DeleteFields(ctx, req)
 }
 func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return a.proxy.GetNodeState(ctx, req)

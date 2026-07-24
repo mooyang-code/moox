@@ -283,7 +283,7 @@ LIMIT ? OFFSET ?
 
 ### C. 删除 DataNode 范围扫描 + 首建改为事件流增量构建（P1-3）
 
-**前置澄清（KV 读写接口是符合设计的，予以保留）**：DataNode 底层 Pebble 是 KV 存储，其 RPC 面（`proto/data_node.proto:83-88`）中 `WriteFields`（字段级 upsert + outbox 原子提交，store.go:106-215）与 `ReadFields`（给定精确 RowKey/fieldID 逐个 `db.Get` 点查，store.go:285）正是设计要求的 KV 写入 + KV 点查接口，**保持不变**。本节删除的对象**仅是范围扫描 `ScanFields` 及其上层 `PrimaryStoreScanService`**，不涉及 KV 读写接口。
+**前置澄清（KV 读写接口是符合设计的，予以保留）**：DataNode 底层 Pebble 是 KV 存储，其 RPC 面（`proto/data_node.proto:83-88`）中 `UpsertFields`（字段级 upsert + outbox 原子提交，store.go:106-215）与 `ReadFields`（给定精确 RowKey/fieldID 逐个 `db.Get` 点查，store.go:285）正是设计要求的 KV 写入 + KV 点查接口，**保持不变**。本节删除的对象**仅是范围扫描 `ScanFields` 及其上层 `PrimaryStoreScanService`**，不涉及 KV 读写接口。
 
 **决策已定（方案 A）**：彻底删除范围扫描，View 首建改为**纯事件流增量构建**——不再从 DataNode 枚举 Key，这样"重建 RowKey 只来自旧 ActiveView / 事件流"的约束得以完全自洽（首建时无旧 ActiveView，从事件流起步）。
 
@@ -301,7 +301,7 @@ LIMIT ? OFFSET ?
 
 **决策已定**：不做行删除，删除所有相关设计与代码：
 - proto：`RowFieldOperation` 的 `ROW_FIELD_OPERATION_DELETE`（rows.proto:40）枚举值及相关字段；
-- `datanode/pebble/store.go`：`WriteFieldsEvent` 中的 DELETE 分支（store.go:147-151）、`deleteRowFromBatch`（store.go:217-240）整个删除；
+- `datanode/pebble/store.go`：`UpsertFieldsEvent` 中的 DELETE 分支（store.go:147-151）、`deleteRowFromBatch`（store.go:217-240）整个删除；
 - `datanode/service.go` 及上游对 DELETE 操作的构造/透传；
 - 校验逻辑中"delete row must not contain fields"（store.go:246-251）分支删除。
 

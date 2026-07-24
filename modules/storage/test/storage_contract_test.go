@@ -51,11 +51,11 @@ func TestStorageRoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
 		}
 	}
 	auth := &pb.AuthInfo{AppId: "storage-primary"}
-	rsp, err := primary.WriteFields(ctx, &pb.PrimaryWriteFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "1"), row("space-b", "1")}})
+	rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "1"), row("space-b", "1")}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 2 {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
-	bad, err := primary.WriteFields(ctx, &pb.PrimaryWriteFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "")}})
+	bad, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "")}})
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("empty version rsp=%v err=%v", bad, err)
 	}

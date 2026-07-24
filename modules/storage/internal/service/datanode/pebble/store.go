@@ -129,25 +129,25 @@ func (s *Store) ProcessedEventRetention() time.Duration {
 	return s.processedEventRetention
 }
 
-// WriteFields upserts each Field/Attribute independently. All values and the
-// corresponding event are committed in one Pebble batch by WriteFieldsEvent.
-func (s *Store) WriteFields(ctx context.Context, rows []*pb.RowFieldUpsert) error {
-	_, err := s.WriteFieldsEvent(ctx, rows, nil)
+// UpsertFields upserts each Field/Attribute independently. All values and the
+// corresponding event are committed in one Pebble batch by UpsertFieldsEvent.
+func (s *Store) UpsertFields(ctx context.Context, rows []*pb.RowFieldUpsert) error {
+	_, err := s.UpsertFieldsEvent(ctx, rows, nil)
 	return err
 }
 
-// WriteFieldsEvent returns one durable event payload per dataset represented in
+// UpsertFieldsEvent returns one durable event payload per dataset represented in
 // the request. The payload is optional so callers that only need local writes
 // can avoid creating an outbox record.
-func (s *Store) WriteFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
+func (s *Store) UpsertFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
 	return s.writeFieldsEvent(ctx, rows, "", event)
 }
 
-// WriteFieldsEventWithSource atomically records a source EventMessage ID with
+// UpsertFieldsEventWithSource atomically records a source EventMessage ID with
 // the row mutation and its outbox entry. A redelivery after a successful write
 // and failed ACK therefore becomes a no-op instead of creating a second
 // DatasetRowsUpserted event.
-func (s *Store) WriteFieldsEventWithSource(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
+func (s *Store) UpsertFieldsEventWithSource(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
 	if strings.TrimSpace(sourceEventID) == "" {
 		return nil, invalid("source_event_id is required")
 	}
@@ -468,45 +468,6 @@ func groupRowsByDataset(rows []*pb.RowFieldUpsert) map[datasetGroup][]*pb.RowFie
 func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, error) {
 	rows, _, err := s.ReadFieldsWithPresence(ctx, keys, fieldIDs, attributeKeys)
 	return rows, err
-}
-
-// DeleteFields removes the explicitly addressed field and attribute values for
-// the supplied rows. The caller owns the field schema and must provide at
-// least one namespace key, so cleanup can delete temporary rows without
-// exposing raw Pebble keys.
-func (s *Store) DeleteFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) error {
-	if s == nil || s.db == nil {
-		return errors.New("pebble store is closed")
-	}
-	if len(keys) == 0 || (len(fieldIDs) == 0 && len(attributeKeys) == 0) {
-		return invalid("keys and field_ids or attribute_keys are required")
-	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
-	for _, key := range keys {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		for _, fieldID := range fieldIDs {
-			physical, err := encodeFieldKey(key, fieldID, s.bucketDuration)
-			if err != nil {
-				return err
-			}
-			if err := batch.Delete(physical, s.writeOptions); err != nil {
-				return err
-			}
-		}
-		for _, attributeKey := range attributeKeys {
-			physical, err := encodeAttributeKey(key, attributeKey, s.bucketDuration)
-			if err != nil {
-				return err
-			}
-			if err := batch.Delete(physical, s.writeOptions); err != nil {
-				return err
-			}
-		}
-	}
-	return batch.Commit(s.writeOptions)
 }
 
 func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, []*pb.RowKey, error) {

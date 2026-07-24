@@ -129,7 +129,6 @@ func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 	require.Equal(t, []string{"task16_source"}, api.deletedSources)
 	require.Equal(t, []string{"task16_space"}, api.deletedSpaces)
 	require.Empty(t, api.deletedNodes)
-	require.True(t, primary.deleted)
 	for _, auth := range api.auths {
 		if auth.GetAppId() == "storage-deployer" {
 			require.Equal(t, "deploy-signed", auth.GetAppKey())
@@ -350,21 +349,20 @@ func (f *fakeStorageMetadataAPI) ActivateDataset(_ context.Context, req *storage
 }
 
 type fakeStoragePrimaryAPI struct {
-	auth    *storagepb.AuthInfo
-	row     *storagepb.RowFieldUpsert
-	deleted bool
-	writes  int
+	auth   *storagepb.AuthInfo
+	row    *storagepb.RowFieldUpsert
+	writes int
 }
 
-func (f *fakeStoragePrimaryAPI) WriteFields(_ context.Context, req *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error) {
+func (f *fakeStoragePrimaryAPI) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.auth = req.GetAuthInfo()
 	f.row = req.GetRows()[0]
 	if f.writes == 0 {
 		f.writes++
-		return &storagepb.PrimaryWriteFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+		return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
 	}
 	f.writes++
-	return &storagepb.PrimaryWriteFieldsRsp{RetInfo: storageOK(), Keys: []*storagepb.RowKey{f.row.GetKey()}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: storageOK(), Keys: []*storagepb.RowKey{f.row.GetKey()}}, nil
 }
 
 func (f *fakeStoragePrimaryAPI) ReadFields(_ context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
@@ -374,10 +372,4 @@ func (f *fakeStoragePrimaryAPI) ReadFields(_ context.Context, req *storagepb.Pri
 		Rows:         []*storagepb.RowFieldValues{{Key: f.row.GetKey(), Fields: f.row.GetFields()}},
 		ExistingKeys: []*storagepb.RowKey{f.row.GetKey()},
 	}, nil
-}
-
-func (f *fakeStoragePrimaryAPI) DeleteFields(_ context.Context, req *storagepb.PrimaryDeleteFieldsReq) (*storagepb.PrimaryDeleteFieldsRsp, error) {
-	f.auth = req.GetAuthInfo()
-	f.deleted = true
-	return &storagepb.PrimaryDeleteFieldsRsp{RetInfo: storageOK(), Keys: req.GetKeys()}, nil
 }

@@ -24,13 +24,10 @@ func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery)
 
 type cleanupNode struct{ request *pb.CleanupExpiredBucketsReq }
 
-func (*cleanupNode) WriteFields(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+func (*cleanupNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return nil, nil
 }
 func (*cleanupNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-	return nil, nil
-}
-func (*cleanupNode) DeleteFields(context.Context, *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
 	return nil, nil
 }
 func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -139,16 +136,13 @@ type resolverRuntime struct {
 	reads  int
 }
 
-func (r *resolverRuntime) WriteFields(context.Context, *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+func (r *resolverRuntime) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	r.writes++
-	return &pb.WriteFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+	return &pb.UpsertFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 func (r *resolverRuntime) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	r.reads++
 	return &pb.ReadFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-func (*resolverRuntime) DeleteFields(context.Context, *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
-	return &pb.DeleteFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return &pb.GetNodeStateRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
@@ -232,7 +226,7 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
-	write, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+	write, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller"},
 		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
 	})

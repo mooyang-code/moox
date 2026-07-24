@@ -38,6 +38,7 @@
         </div>
       </div>
 
+      <a-alert class="field-policy-alert" type="info" show-icon> 字段注册后不可删除；不再使用时可将字段停用。 </a-alert>
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
         <section class="field-workbench">
@@ -493,6 +494,9 @@ onMounted(async () => {
 }
 .mobile-group-trigger {
   display: none;
+}
+.field-policy-alert {
+  margin-bottom: var(--moox-space-2);
 }
 .field-workbench {
   display: grid;

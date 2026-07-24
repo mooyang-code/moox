@@ -31,4 +31,11 @@ describe("metadata catalog pages", () => {
     expect(toolbar.indexOf("字段管理")).toBeLessThan(toolbar.indexOf("<a-input-search"));
     expect(source).toMatch(/\.toolbar-main\s*\{[^}]*display:\s*flex;/);
   });
+
+  it("tells users that registered fields cannot be deleted", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "fields/index.vue"), "utf8");
+
+    expect(source).toContain("字段注册后不可删除");
+    expect(source).toContain("不再使用时可将字段停用");
+  });
 });

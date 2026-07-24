@@ -84,9 +84,9 @@ func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Dat
 func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	var writes, reads int
 	node := &recordingNode{
-		write: func(_ context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 			writes++
-			return &pb.WriteFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
 		},
 		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 			reads++
@@ -99,7 +99,7 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
-	write, err := svc.WriteFields(context.Background(), &pb.PrimaryWriteFieldsReq{
+	write, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller"},
 		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
 	})

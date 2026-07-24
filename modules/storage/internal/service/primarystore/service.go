@@ -73,12 +73,12 @@ func (s *Service) requestContext(ctx context.Context) context.Context {
 	return metadata.WithRequestSnapshot(ctx, snapshot)
 }
 
-func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq) (*pb.PrimaryWriteFieldsRsp, error) {
+func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
 	if req == nil || len(req.GetRows()) == 0 {
-		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ctx = s.requestContext(ctx)
 	groups := make(map[routeKey][]*pb.RowFieldUpsert)
@@ -87,7 +87,7 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
 	}); ok {
 		if err := batchValidator.ValidateRows(ctx, req.GetRows()); err != nil {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 	}
 	for _, row := range req.GetRows() {
@@ -98,7 +98,7 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 			validator = nil
 		}
 		if err := validateRow(ctx, row, validator); err != nil {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		group := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
 		if _, ok := groups[group]; !ok {
@@ -111,22 +111,22 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.PrimaryWriteFieldsReq
 		rows := groups[group]
 		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		auth, err := s.signAuth(req.GetAuthInfo())
 		if err != nil {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
-		rsp, err := node.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId()})
+		rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId()})
 		if err != nil {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
 		}
 		keys = append(keys, rsp.GetKeys()...)
 	}
-	return &pb.PrimaryWriteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
 }
 
 func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) (*pb.PrimaryReadFieldsRsp, error) {
@@ -211,48 +211,6 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		}
 	}
 	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
-}
-
-func (s *Service) DeleteFields(ctx context.Context, req *pb.PrimaryDeleteFieldsReq) (*pb.PrimaryDeleteFieldsRsp, error) {
-	if req == nil || len(req.GetKeys()) == 0 || (len(req.GetFieldIds()) == 0 && len(req.GetAttributeKeys()) == 0) {
-		return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys and field_ids or attribute_keys are required"))}, nil
-	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	ctx = s.requestContext(ctx)
-	groups := make(map[routeKey][]*pb.RowKey)
-	order := make([]routeKey, 0)
-	for _, key := range req.GetKeys() {
-		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
-			return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is invalid"))}, nil
-		}
-		group := routeKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
-		if _, ok := groups[group]; !ok {
-			order = append(order, group)
-		}
-		groups[group] = append(groups[group], key)
-	}
-	deleted := make([]*pb.RowKey, 0, len(req.GetKeys()))
-	for _, group := range order {
-		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
-		if err != nil {
-			return nil, err
-		}
-		auth, err := s.signAuth(req.GetAuthInfo())
-		if err != nil {
-			return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
-		rsp, err := node.DeleteFields(ctx, &pb.DeleteFieldsReq{AuthInfo: auth, Keys: groups[group], FieldIds: req.GetFieldIds(), AttributeKeys: req.GetAttributeKeys()})
-		if err != nil {
-			return nil, err
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.PrimaryDeleteFieldsRsp{RetInfo: rsp.GetRetInfo(), Keys: deleted}, nil
-		}
-		deleted = append(deleted, rsp.GetKeys()...)
-	}
-	return &pb.PrimaryDeleteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: deleted}, nil
 }
 
 func latestRecordIdentity(key *pb.RowKey) string {

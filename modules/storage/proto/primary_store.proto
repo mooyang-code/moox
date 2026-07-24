@@ -8,13 +8,13 @@ import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
 
-message PrimaryWriteFieldsReq {
+message PrimaryUpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   repeated RowFieldUpsert rows = 2;
   string source_event_id = 3;
 }
 
-message PrimaryWriteFieldsRsp {
+message PrimaryUpsertFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowKey keys = 2;
 }
@@ -32,24 +32,12 @@ message PrimaryReadFieldsRsp {
   repeated RowKey existing_keys = 3;
 }
 
-message PrimaryDeleteFieldsReq {
-  common.AuthInfo auth_info = 1;
-  repeated RowKey keys = 2;
-  repeated string field_ids = 3;
-  repeated string attribute_keys = 4;
-}
-
-message PrimaryDeleteFieldsRsp {
-  common.RetInfo ret_info = 1;
-  repeated RowKey keys = 2;
-}
-
 // PrimaryStore is the metadata-validating user boundary. It never exposes
 // DataNode merge/scan terminology and routes one Dataset to its owner node.
 service PrimaryStore {
-  rpc WriteFields(PrimaryWriteFieldsReq) returns (PrimaryWriteFieldsRsp);
+  // UpsertFields applies partial updates; omitted fields and attributes are retained.
+  rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
-  rpc DeleteFields(PrimaryDeleteFieldsReq) returns (PrimaryDeleteFieldsRsp);
   rpc MergeTimeSeriesRows(MergeTimeSeriesRowsReq) returns (MergeTimeSeriesRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc MergeRecordRows(MergeRecordRowsReq) returns (MergeRecordRowsRsp);

@@ -45,7 +45,7 @@ func TestPrepareOutboxPublicationIsByteStable(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.WriteFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessage("foo", spaceID, datasetID, rows)
 	}); err != nil {
 		t.Fatal(err)
@@ -79,21 +79,21 @@ func TestValidateNewEventIDRejectsPlaceholder(t *testing.T) {
 	}
 }
 
-func TestWriteFieldsEventRejectsCallbackIdentityMismatch(t *testing.T) {
+func TestUpsertFieldsEventRejectsCallbackIdentityMismatch(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
-	if _, err := store.WriteFieldsEvent(context.Background(), []*pb.RowFieldUpsert{row}, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	if _, err := store.UpsertFieldsEvent(context.Background(), []*pb.RowFieldUpsert{row}, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessage("foo", spaceID, datasetID+"-wrong", rows)
 	}); err == nil {
-		t.Fatal("WriteFieldsEvent() error = nil, want callback identity rejection")
+		t.Fatal("UpsertFieldsEvent() error = nil, want callback identity rejection")
 	}
 }
 
-func TestWriteFieldsEventWithSourceIsIdempotentAfterRedelivery(t *testing.T) {
+func TestUpsertFieldsEventWithSourceIsIdempotentAfterRedelivery(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
 	if err != nil {
 		t.Fatal(err)
@@ -103,11 +103,11 @@ func TestWriteFieldsEventWithSourceIsIdempotentAfterRedelivery(t *testing.T) {
 	build := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessageForSource("foo", "market-kline-1", spaceID, datasetID, rows)
 	}
-	first, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
+	first, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
 	if err != nil || len(first) != 1 {
 		t.Fatalf("first source write entries=%v err=%v", first, err)
 	}
-	second, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
+	second, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
 	if err != nil || len(second) != 0 {
 		t.Fatalf("redelivery source write entries=%v err=%v", second, err)
 	}
@@ -131,14 +131,14 @@ func TestProcessedSourceEventMarkersExpireAfterRetention(t *testing.T) {
 	build := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessageForSource("foo", "source-1", spaceID, datasetID, rows)
 	}
-	if _, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build); err != nil {
+	if _, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build); err != nil {
 		t.Fatal(err)
 	}
 	removed, err := store.CleanupProcessedSourceEvents(context.Background(), time.Now().UTC().Add(2*time.Hour))
 	if err != nil || removed != 1 {
 		t.Fatalf("cleanup removed=%d err=%v, want one expired marker", removed, err)
 	}
-	entries, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build)
+	entries, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("write after marker expiry entries=%v err=%v, want replay to be accepted", entries, err)
 	}

@@ -27,10 +27,10 @@ func TestTwoDataNodesHostIndependentDatasets(t *testing.T) {
 	}
 	authA := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey("secret-a", "storage-primary")}
 	authB := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey("secret-b", "storage-primary")}
-	if rsp, _ := nodeA.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: authA, NodeId: "node-a", Rows: []*pb.RowFieldUpsert{row("prices", "close", "100")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, _ := nodeA.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: authA, NodeId: "node-a", Rows: []*pb.RowFieldUpsert{row("prices", "close", "100")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("node A write: %v", rsp.GetRetInfo())
 	}
-	if rsp, _ := nodeB.WriteFields(ctx, &pb.WriteFieldsReq{AuthInfo: authB, NodeId: "node-b", Rows: []*pb.RowFieldUpsert{row("factors", "momentum", "1.2")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, _ := nodeB.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: authB, NodeId: "node-b", Rows: []*pb.RowFieldUpsert{row("factors", "momentum", "1.2")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("node B write: %v", rsp.GetRetInfo())
 	}
 	read, err := nodeA.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: authA, NodeId: "node-a", DatasetId: "prices", Keys: []*pb.RowKey{row("prices", "close", "100").GetKey()}, FieldIds: []string{"close"}})

@@ -261,8 +261,8 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-func (n *ackFailureNode) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
-	rsp, err := n.DataNodeRuntimeService.WriteFields(ctx, req)
+func (n *ackFailureNode) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+	rsp, err := n.DataNodeRuntimeService.UpsertFields(ctx, req)
 	if err == nil && rsp != nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		n.closeOnce.Do(func() { _ = n.closeInput() })
 	}

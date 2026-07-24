@@ -137,9 +137,8 @@ func (c *storageAdminSpaceProxy) UpdateSpace(ctx context.Context, req *adminpb.U
 }
 
 type storagePrimaryAPI interface {
-	WriteFields(context.Context, *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error)
+	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReadFields(context.Context, *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error)
-	DeleteFields(context.Context, *storagepb.PrimaryDeleteFieldsReq) (*storagepb.PrimaryDeleteFieldsRsp, error)
 }
 
 type storageRuntimeAPI interface {
@@ -229,16 +228,12 @@ type storagePrimaryProxy struct {
 	options []client.Option
 }
 
-func (c *storagePrimaryProxy) WriteFields(ctx context.Context, req *storagepb.PrimaryWriteFieldsReq) (*storagepb.PrimaryWriteFieldsRsp, error) {
-	return c.proxy.WriteFields(ctx, req, c.options...)
+func (c *storagePrimaryProxy) UpsertFields(ctx context.Context, req *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error) {
+	return c.proxy.UpsertFields(ctx, req, c.options...)
 }
 
 func (c *storagePrimaryProxy) ReadFields(ctx context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
 	return c.proxy.ReadFields(ctx, req, c.options...)
-}
-
-func (c *storagePrimaryProxy) DeleteFields(ctx context.Context, req *storagepb.PrimaryDeleteFieldsReq) (*storagepb.PrimaryDeleteFieldsRsp, error) {
-	return c.proxy.DeleteFields(ctx, req, c.options...)
 }
 
 func (c *storageRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error) {
@@ -879,7 +874,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	var cleanupErr error
 	result.Skipped = []string{"second_data_node_runtime", "empty_disabled_node_delete"}
 	defer func() {
-		cleanupErr = cleanupStorageLifecycle(ctx, session, space, source, []*storagepb.Dataset{dataset}, rowKey)
+		cleanupErr = cleanupStorageLifecycle(ctx, session, space, source, []*storagepb.Dataset{dataset})
 		if cleanupErr != nil {
 			result.Cleanup = "failed"
 			if returnErr == nil {
@@ -929,7 +924,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	result.Assertions = append(result.Assertions, "dataset_column_created")
 	rowKey = &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "row-1", Version: "1"}}}
 	row := &storagepb.RowFieldUpsert{Key: rowKey, Fields: []*storagepb.FieldValue{{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "row-value"}}}}, Operation: storagepb.RowFieldOperation_ROW_FIELD_OPERATION_UPSERT}
-	disabledWrite, err := session.primary.WriteFields(ctx, &storagepb.PrimaryWriteFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
+	disabledWrite, err := session.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
 	if err != nil || disabledWrite == nil || disabledWrite.GetRetInfo() == nil || disabledWrite.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
 		return result, errors.New("storage_e2e_disabled_write_accepted")
 	}
@@ -954,7 +949,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	}
 	dataset = activated.GetDataset()
 	result.Assertions = append(result.Assertions, "dataset_activated_locked")
-	writeResponse, err := session.primary.WriteFields(ctx, &storagepb.PrimaryWriteFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
+	writeResponse, err := session.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
 	if err != nil || writeResponse == nil || writeResponse.GetRetInfo() == nil || writeResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(writeResponse.GetKeys()) != 1 {
 		return result, errors.New("storage_e2e_write_failed")
 	}
@@ -977,17 +972,11 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	return result, nil
 }
 
-func cleanupStorageLifecycle(ctx context.Context, session *remoteStorageSession, space *storagepb.Space, source *storagepb.DataSource, datasets []*storagepb.Dataset, rowKey *storagepb.RowKey) error {
+func cleanupStorageLifecycle(ctx context.Context, session *remoteStorageSession, space *storagepb.Space, source *storagepb.DataSource, datasets []*storagepb.Dataset) error {
 	if session == nil {
 		return errors.New("storage_e2e_cleanup_failed")
 	}
 	var first error
-	if rowKey != nil {
-		response, err := session.primary.DeleteFields(ctx, &storagepb.PrimaryDeleteFieldsReq{AuthInfo: session.primaryAuth, Keys: []*storagepb.RowKey{rowKey}, FieldIds: []string{"value"}})
-		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			first = errors.New("row cleanup failed")
-		}
-	}
 	for _, dataset := range datasets {
 		if dataset == nil {
 			continue
@@ -1071,7 +1060,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	var dataset *storagepb.Dataset
 	cleanup = func() error {
 		var first error
-		if err := cleanupStorageLifecycle(ctx, session, storageSpace, source, []*storagepb.Dataset{dataset}, nil); err != nil {
+		if err := cleanupStorageLifecycle(ctx, session, storageSpace, source, []*storagepb.Dataset{dataset}); err != nil {
 			first = err
 		}
 		if adminSpace != nil {

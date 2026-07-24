@@ -68,7 +68,7 @@ Record RowKey 是：
 space_id + dataset_id + record_id + version
 ```
 
-`WriteFields` 对每个 `RowKey + FieldID` 或 `RowKey + AttributeKey` 直接执行 Upsert：
+`UpsertFields` 对每个 `RowKey + FieldID` 或 `RowKey + AttributeKey` 直接执行 Upsert：
 
 - Key 不存在时新增；
 - Key 已存在时覆盖旧值；
@@ -245,13 +245,13 @@ record
 
 实际实现使用保持字节排序的长度前缀二进制 Tuple Codec，不继续使用字符串分隔和手工 `%` 转义。
 
-### WriteFields
+### UpsertFields
 
 ```text
 PrimaryStore
   1. 从 Metadata Cache 获取 Dataset、Fields 和 DataNode
   2. 校验 RowKey、Field 归属、重复 Field、TypedValue 和请求上限
-  3. direct tRPC 调用 DataNode.WriteFields
+  3. direct tRPC 调用 DataNode.UpsertFields
 
 DataNode
   4. 将每个 Field/Attribute 编码为独立 Pebble Key
@@ -285,7 +285,7 @@ Record 未指定 Version 时，DataNode 在已知 `record_id` 的 Prefix 内使�
 
 ### 原子提交与 Outbox
 
-每次 `WriteFields` 在一个 Pebble Batch 中提交：
+每次 `UpsertFields` 在一个 Pebble Batch 中提交：
 
 ```text
 Field Keys
@@ -531,7 +531,7 @@ Server B: storage-node-factor
 - 不存在 Required、Dimensions、字段删除、DeleteRows、ReadRows、ScanRows 或 Snapshot RPC。
 - TimeSeries 使用可配置时间桶；Record 不自动清理。
 - Field 使用 `0x01`，Attribute 使用 `0x02`，不存在 RowMarker。
-- `WriteFields` 对 Field/Attribute 直接 Upsert，允许补写历史新增字段和覆盖旧值。
+- `UpsertFields` 对 Field/Attribute 直接 Upsert，允许补写历史新增字段和覆盖旧值。
 - DataNode `ReadFields` 必须指定 RowKey 和 Field；Record 空 Version 返回字符最大版本。
 - 字段和内部 Outbox 条目在一个 Pebble Batch 中提交。
 - 每个 Dataset 使用 `moox.storage.fields_changed.v1.<space-token>.<dataset-token>`。

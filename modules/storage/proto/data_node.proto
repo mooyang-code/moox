@@ -8,14 +8,14 @@ import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
 
-message WriteFieldsReq {
+message UpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   repeated RowFieldUpsert rows = 3;
   string source_event_id = 4;
 }
 
-message WriteFieldsRsp {
+message UpsertFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowKey keys = 2;
 }
@@ -33,19 +33,6 @@ message ReadFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
   repeated RowKey existing_keys = 3;
-}
-
-message DeleteFieldsReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  repeated RowKey keys = 3;
-  repeated string field_ids = 4;
-  repeated string attribute_keys = 5;
-}
-
-message DeleteFieldsRsp {
-  common.RetInfo ret_info = 1;
-  repeated RowKey keys = 2;
 }
 
 message GetNodeStateReq {
@@ -74,9 +61,9 @@ message CleanupExpiredBucketsRsp {
 
 // DataNodeRuntime is the storage RPC surface; DataNode is reserved for the metadata entity.
 service DataNodeRuntime {
-  rpc WriteFields(WriteFieldsReq) returns (WriteFieldsRsp);
+  // UpsertFields applies partial updates; omitted fields and attributes are retained.
+  rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
   rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
-  rpc DeleteFields(DeleteFieldsReq) returns (DeleteFieldsRsp);
   rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
   rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
 }

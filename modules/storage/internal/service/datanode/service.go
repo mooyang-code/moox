@@ -76,15 +76,15 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
-func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+func (s *Service) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	if req == nil || len(req.GetRows()) == 0 {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		if req.GetSourceEventId() == "" {
@@ -95,23 +95,23 @@ func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.
 	var entries []*pebble.OutboxEntry
 	var err error
 	if req.GetSourceEventId() == "" {
-		entries, err = s.store.WriteFieldsEvent(ctx, req.GetRows(), writeEvent)
+		entries, err = s.store.UpsertFieldsEvent(ctx, req.GetRows(), writeEvent)
 	} else {
-		entries, err = s.store.WriteFieldsEventWithSource(ctx, req.GetRows(), req.GetSourceEventId(), writeEvent)
+		entries, err = s.store.UpsertFieldsEventWithSource(ctx, req.GetRows(), req.GetSourceEventId(), writeEvent)
 	}
 	if err != nil {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 	for _, row := range req.GetRows() {
 		key, err := pebble.NormalizeRowKey(row.GetKey())
 		if err != nil {
-			return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		keys = append(keys, key)
 	}
 	_ = entries // entries are durable and relayed asynchronously by the node.
-	return &pb.WriteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+	return &pb.UpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
 }
 
 func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
@@ -136,22 +136,6 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.Re
 		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
-}
-
-func (s *Service) DeleteFields(ctx context.Context, req *pb.DeleteFieldsReq) (*pb.DeleteFieldsRsp, error) {
-	if req == nil || len(req.GetKeys()) == 0 || (len(req.GetFieldIds()) == 0 && len(req.GetAttributeKeys()) == 0) {
-		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys and field_ids or attribute_keys are required"))}, nil
-	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
-	}
-	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if err := s.store.DeleteFields(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys()); err != nil {
-		return &pb.DeleteFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
-	}
-	return &pb.DeleteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: req.GetKeys()}, nil
 }
 
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {

@@ -19,25 +19,24 @@ import (
 
 // DataNodeRuntimeService defines service.
 type DataNodeRuntimeService interface {
-	WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error)
+	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
+	UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error)
-
-	DeleteFields(ctx context.Context, req *DeleteFieldsReq) (*DeleteFieldsRsp, error)
 
 	GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error)
 
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error)
 }
 
-func DataNodeRuntimeService_WriteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteFieldsReq{}
+func DataNodeRuntimeService_UpsertFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertFieldsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeRuntimeService).WriteFields(ctx, reqbody.(*WriteFieldsReq))
+		return svr.(DataNodeRuntimeService).UpsertFields(ctx, reqbody.(*UpsertFieldsReq))
 	}
 
 	var rsp interface{}
@@ -56,24 +55,6 @@ func DataNodeRuntimeService_ReadFields_Handler(svr interface{}, ctx context.Cont
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataNodeRuntimeService).ReadFields(ctx, reqbody.(*ReadFieldsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataNodeRuntimeService_DeleteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteFieldsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeRuntimeService).DeleteFields(ctx, reqbody.(*DeleteFieldsReq))
 	}
 
 	var rsp interface{}
@@ -126,16 +107,12 @@ var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*DataNodeRuntimeService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.DataNodeRuntime/WriteFields",
-			Func: DataNodeRuntimeService_WriteFields_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/UpsertFields",
+			Func: DataNodeRuntimeService_UpsertFields_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/ReadFields",
 			Func: DataNodeRuntimeService_ReadFields_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNodeRuntime/DeleteFields",
-			Func: DataNodeRuntimeService_DeleteFields_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/GetNodeState",
@@ -159,14 +136,12 @@ func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService
 
 type UnimplementedDataNodeRuntime struct{}
 
-func (s *UnimplementedDataNodeRuntime) WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error) {
-	return nil, errors.New("rpc WriteFields of service DataNodeRuntime is not implemented")
+// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
+func (s *UnimplementedDataNodeRuntime) UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error) {
+	return nil, errors.New("rpc UpsertFields of service DataNodeRuntime is not implemented")
 }
 func (s *UnimplementedDataNodeRuntime) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service DataNodeRuntime is not implemented")
-}
-func (s *UnimplementedDataNodeRuntime) DeleteFields(ctx context.Context, req *DeleteFieldsReq) (*DeleteFieldsRsp, error) {
-	return nil, errors.New("rpc DeleteFields of service DataNodeRuntime is not implemented")
 }
 func (s *UnimplementedDataNodeRuntime) GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error) {
 	return nil, errors.New("rpc GetNodeState of service DataNodeRuntime is not implemented")
@@ -183,11 +158,10 @@ func (s *UnimplementedDataNodeRuntime) CleanupExpiredBuckets(ctx context.Context
 
 // DataNodeRuntimeClientProxy defines service client proxy
 type DataNodeRuntimeClientProxy interface {
-	WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (rsp *WriteFieldsRsp, err error)
+	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
+	UpsertFields(ctx context.Context, req *UpsertFieldsReq, opts ...client.Option) (rsp *UpsertFieldsRsp, err error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (rsp *ReadFieldsRsp, err error)
-
-	DeleteFields(ctx context.Context, req *DeleteFieldsReq, opts ...client.Option) (rsp *DeleteFieldsRsp, err error)
 
 	GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (rsp *GetNodeStateRsp, err error)
 
@@ -203,20 +177,20 @@ var NewDataNodeRuntimeClientProxy = func(opts ...client.Option) DataNodeRuntimeC
 	return &DataNodeRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *DataNodeRuntimeClientProxyImpl) WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (*WriteFieldsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) UpsertFields(ctx context.Context, req *UpsertFieldsReq, opts ...client.Option) (*UpsertFieldsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/WriteFields")
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/UpsertFields")
 	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataNodeRuntime")
-	msg.WithCalleeMethod("WriteFields")
+	msg.WithCalleeMethod("UpsertFields")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &WriteFieldsRsp{}
+	rsp := &UpsertFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -237,26 +211,6 @@ func (c *DataNodeRuntimeClientProxyImpl) ReadFields(ctx context.Context, req *Re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadFieldsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodeRuntimeClientProxyImpl) DeleteFields(ctx context.Context, req *DeleteFieldsReq, opts ...client.Option) (*DeleteFieldsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/DeleteFields")
-	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodeRuntime")
-	msg.WithCalleeMethod("DeleteFields")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &DeleteFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
