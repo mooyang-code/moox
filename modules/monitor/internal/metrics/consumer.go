@@ -14,9 +14,8 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
-
-const unknownProducerGraceDeliveries = 120
 
 var MetricTopic = governedFamily(events.MetricsSnapshotReported)
 
@@ -240,9 +239,16 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 			return c.retry(fmt.Errorf("authorize metric producer: %w", err))
 		}
 		if !registered {
-			if delivery.DeliveryCount < unknownProducerGraceDeliveries {
-				return c.retry(fmt.Errorf("metric producer %s/%s is not registered yet", report.GetServiceName(), report.GetInstanceId()))
-			}
+			log.WarnContextf(
+				ctx,
+				"component=monitor_metrics event_id=%s event_name=%s producer_id=%s/%s subject=%s delivery_count=%d decision=term reason=producer_not_registered",
+				message.GetEventId(),
+				message.GetEventName(),
+				report.GetServiceName(),
+				report.GetInstanceId(),
+				delivery.Subject,
+				delivery.DeliveryCount,
+			)
 			return c.reject(ctx, delivery, fmt.Errorf("unregistered metric producer %s/%s", report.GetServiceName(), report.GetInstanceId()))
 		}
 	}

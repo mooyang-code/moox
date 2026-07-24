@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	Stream  = "MOOX_METRICS"
-	Durable = "monitor_hostmetrics_ingest_v1"
-	SpaceID = "moox_system"
+	Stream       = "MOOX_METRICS"
+	ConsumerName = "monitor_hostmetrics_ingest_v1"
+	SpaceID      = "moox_system"
 )
 
 var Topic = governedFamily(events.MetricsHostReported)
@@ -408,7 +408,7 @@ func bind(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPu
 	if client == nil || store == nil {
 		return nil, errors.New("host metrics client and store are required")
 	}
-	pull, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: Stream, Durable: Durable, FetchMaxWait: time.Second, DeliverDecodeErrors: true})
+	pull, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: Stream, Durable: ConsumerName, FetchMaxWait: time.Second, DeliverDecodeErrors: true})
 	if err != nil {
 		return nil, err
 	}
