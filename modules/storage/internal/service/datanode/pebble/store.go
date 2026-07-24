@@ -22,16 +22,21 @@ const (
 	outboxPrefix         = "__outbox/"
 	processedEventPrefix = "__processed_event/"
 	metaNextID           = "__meta/next_outbox_id"
+	// The market stream keeps source events for 168 hours. Keep dedupe markers
+	// one day longer so a late redelivery cannot recreate a row after stream
+	// retention has elapsed.
+	defaultProcessedEventRetention = 192 * time.Hour
 )
 
 // Options controls one DataNode Pebble database. A node can host multiple
 // datasets; the dataset identity is part of every physical key.
 type Options struct {
-	Path              string
-	NodeID            string
-	BucketDuration    time.Duration
-	MaxEventBytes     int
-	DisableSyncWrites bool
+	Path                    string
+	NodeID                  string
+	BucketDuration          time.Duration
+	MaxEventBytes           int
+	ProcessedEventRetention time.Duration
+	DisableSyncWrites       bool
 }
 
 type OutboxEntry struct {
@@ -46,15 +51,16 @@ type OutboxStats struct {
 }
 
 type Store struct {
-	db             *cpebble.DB
-	writeOptions   *cpebble.WriteOptions
-	nodeID         string
-	bucketDuration time.Duration
-	maxEventBytes  int
-	outboxMu       sync.Mutex
-	maintenanceMu  sync.Mutex
-	maintenanceWG  sync.WaitGroup
-	closing        bool
+	db                      *cpebble.DB
+	writeOptions            *cpebble.WriteOptions
+	nodeID                  string
+	bucketDuration          time.Duration
+	maxEventBytes           int
+	processedEventRetention time.Duration
+	outboxMu                sync.Mutex
+	maintenanceMu           sync.Mutex
+	maintenanceWG           sync.WaitGroup
+	closing                 bool
 }
 
 func Open(opts Options) (*Store, error) {
@@ -67,6 +73,9 @@ func Open(opts Options) (*Store, error) {
 	if opts.BucketDuration <= 0 {
 		opts.BucketDuration = 24 * time.Hour
 	}
+	if opts.ProcessedEventRetention <= 0 {
+		opts.ProcessedEventRetention = defaultProcessedEventRetention
+	}
 	db, err := cpebble.Open(opts.Path, &cpebble.Options{})
 	if err != nil {
 		return nil, err
@@ -75,7 +84,7 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes}, nil
+	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention}, nil
 }
 
 func (s *Store) Close() error {
@@ -108,6 +117,14 @@ func (s *Store) NodeID() string {
 		return ""
 	}
 	return s.nodeID
+}
+
+// ProcessedEventRetention returns the configured source-event dedupe window.
+func (s *Store) ProcessedEventRetention() time.Duration {
+	if s == nil || s.processedEventRetention <= 0 {
+		return defaultProcessedEventRetention
+	}
+	return s.processedEventRetention
 }
 
 // WriteFields upserts each Field/Attribute independently. All values and the
@@ -258,7 +275,7 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			}
 			entries = append(entries, &OutboxEntry{ID: id, Data: append([]byte(nil), payload...), CreatedAt: time.Now().UTC()})
 			if sourceEventID != "" {
-				if err := batch.Set(processedSourceEventKey(sourceEventID, group), []byte{1}, s.writeOptions); err != nil {
+				if err := batch.Set(processedSourceEventKey(sourceEventID, group), encodeProcessedEventTimestamp(time.Now().UTC()), s.writeOptions); err != nil {
 					return nil, err
 				}
 			}
@@ -269,6 +286,80 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		return nil, err
 	}
 	return entries, nil
+}
+
+// CleanupProcessedSourceEvents removes source-event dedupe markers older than
+// the retention window. It serializes with source writes so a marker cannot be
+// deleted between the duplicate check and the corresponding row mutation.
+func (s *Store) CleanupProcessedSourceEvents(ctx context.Context, now time.Time) (int, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return s.CleanupProcessedSourceEventsBefore(ctx, now.UTC().Add(-s.processedEventRetention))
+}
+
+// CleanupProcessedSourceEventsBefore removes markers created before cutoff.
+// The explicit cutoff keeps scheduling policy outside the Pebble store and
+// makes retention behavior deterministic in tests.
+func (s *Store) CleanupProcessedSourceEventsBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("pebble store is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if cutoff.IsZero() {
+		return 0, errors.New("processed event cleanup cutoff is required")
+	}
+	cutoff = cutoff.UTC()
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(processedEventPrefix), UpperBound: []byte(processedEventPrefix + "\xff")})
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+	var expired [][]byte
+	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		createdAt, ok := decodeProcessedEventTimestamp(iter.Value())
+		if !ok || createdAt.Before(cutoff) {
+			expired = append(expired, append([]byte(nil), iter.Key()...))
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return 0, err
+	}
+	if len(expired) == 0 {
+		return 0, nil
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, key := range expired {
+		if err := batch.Delete(key, s.writeOptions); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Commit(s.writeOptions); err != nil {
+		return 0, err
+	}
+	return len(expired), nil
+}
+
+func encodeProcessedEventTimestamp(at time.Time) []byte {
+	var value [8]byte
+	binary.BigEndian.PutUint64(value[:], uint64(at.UnixNano()))
+	return value[:]
+}
+
+func decodeProcessedEventTimestamp(value []byte) (time.Time, bool) {
+	if len(value) != 8 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, int64(binary.BigEndian.Uint64(value))).UTC(), true
 }
 
 func (s *Store) hasProcessedSourceEvent(sourceEventID string, group datasetGroup) (bool, error) {

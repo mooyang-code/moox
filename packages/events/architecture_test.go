@@ -1,12 +1,15 @@
 package events
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -74,40 +77,175 @@ func TestEventVocabularyGateMatchesEventTypeDeclarations(t *testing.T) {
 	}
 }
 
+func TestEventTypeLiteralsDoNotBypassTheVocabularyGate(t *testing.T) {
+	violations, err := qualifiedEventTypeLiterals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("production code constructs qualified EventType literals: %s", strings.Join(violations, "; "))
+	}
+}
+
+func TestQualifiedEventTypeScannerRecognizesImportAliases(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "alias.go", `package example
+
+import ev "github.com/mooyang-code/moox/packages/events"
+
+var _ = ev.EventType{}
+`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	violations := qualifiedEventTypeLiteralsInFile(file, "alias.go")
+	if len(violations) != 1 {
+		t.Fatalf("alias scanner violations=%v, want one", violations)
+	}
+	file, err = parser.ParseFile(token.NewFileSet(), "dot.go", `package example
+
+import . "github.com/mooyang-code/moox/packages/events"
+
+var _ = EventType{}
+`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	violations = qualifiedEventTypeLiteralsInFile(file, "dot.go")
+	if len(violations) != 1 {
+		t.Fatalf("dot-import scanner violations=%v, want one", violations)
+	}
+}
+
 func declaredEventTypes(t *testing.T) map[string]EventType {
 	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate architecture test")
 	}
-	registryPath := filepath.Join(filepath.Dir(testFile), "registry.go")
-	file, err := parser.ParseFile(token.NewFileSet(), registryPath, nil, 0)
-	if err != nil {
-		t.Fatalf("parse event registry source: %v", err)
-	}
 	declared := make(map[string]EventType)
-	for _, declaration := range file.Decls {
-		gen, ok := declaration.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(testFile), "*.go"))
+	if err != nil {
+		t.Fatalf("find event package sources: %v", err)
+	}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
-		for _, spec := range gen.Specs {
-			values := spec.(*ast.ValueSpec)
-			for i, name := range values.Names {
-				if i >= len(values.Values) {
-					continue
-				}
-				event, ok := parseEventTypeLiteral(values.Values[i])
-				if ok {
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse event source %s: %v", path, err)
+		}
+		for _, declaration := range file.Decls {
+			gen, ok := declaration.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				values := spec.(*ast.ValueSpec)
+				for i, name := range values.Names {
+					if i >= len(values.Values) {
+						continue
+					}
+					event, ok := parseEventTypeLiteral(values.Values[i])
+					if !ok {
+						continue
+					}
+					if previous, exists := declared[name.Name]; exists && previous != event {
+						t.Fatalf("EventType declaration %s appears more than once", name.Name)
+					}
 					declared[name.Name] = event
 				}
 			}
 		}
 	}
 	if len(declared) == 0 {
-		t.Fatal("no EventType declarations found in registry.go")
+		t.Fatal("no EventType declarations found in packages/events")
 	}
 	return declared
+}
+
+func qualifiedEventTypeLiterals() ([]string, error) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return nil, fmt.Errorf("locate architecture test")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+	violations := make([]string, 0)
+	for _, root := range []string{filepath.Join(repoRoot, "modules"), filepath.Join(repoRoot, "packages")} {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				if entry.Name() == ".git" || entry.Name() == "vendor" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", path, err)
+			}
+			violations = append(violations, qualifiedEventTypeLiteralsInFile(file, path)...)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return violations, nil
+}
+
+func qualifiedEventTypeLiteralsInFile(file *ast.File, path string) []string {
+	aliases := make(map[string]struct{})
+	dotImport := false
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || importPath != "github.com/mooyang-code/moox/packages/events" {
+			continue
+		}
+		if spec.Name == nil {
+			aliases["events"] = struct{}{}
+			continue
+		}
+		if spec.Name.Name == "_" {
+			continue
+		}
+		if spec.Name.Name == "." {
+			dotImport = true
+			continue
+		}
+		aliases[spec.Name.Name] = struct{}{}
+	}
+	if len(aliases) == 0 && !dotImport {
+		return nil
+	}
+	violations := make([]string, 0)
+	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		selector, selectorOK := literal.Type.(*ast.SelectorExpr)
+		if selectorOK && selector.Sel.Name == "EventType" {
+			identifier, identifierOK := selector.X.(*ast.Ident)
+			if identifierOK {
+				if _, ok := aliases[identifier.Name]; ok {
+					violations = append(violations, path)
+				}
+			}
+			return true
+		}
+		identifier, identifierOK := literal.Type.(*ast.Ident)
+		if dotImport && identifierOK && identifier.Name == "EventType" {
+			violations = append(violations, path)
+		}
+		return true
+	})
+	return violations
 }
 
 func parseEventTypeLiteral(expression ast.Expr) (EventType, bool) {

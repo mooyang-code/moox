@@ -121,6 +121,29 @@ func TestWriteFieldsEventWithSourceIsIdempotentAfterRedelivery(t *testing.T) {
 	}
 }
 
+func TestProcessedSourceEventMarkersExpireAfterRetention(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo", ProcessedEventRetention: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
+	build := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return BuildDatasetRowsUpsertedMessageForSource("foo", "source-1", spaceID, datasetID, rows)
+	}
+	if _, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.CleanupProcessedSourceEvents(context.Background(), time.Now().UTC().Add(2*time.Hour))
+	if err != nil || removed != 1 {
+		t.Fatalf("cleanup removed=%d err=%v, want one expired marker", removed, err)
+	}
+	entries, err := store.WriteFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("write after marker expiry entries=%v err=%v, want replay to be accepted", entries, err)
+	}
+}
+
 func mustEvent(t *testing.T, raw []byte) *eventpb.EventMessage {
 	t.Helper()
 	message := &eventpb.EventMessage{}

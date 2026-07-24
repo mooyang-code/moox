@@ -32,7 +32,7 @@
 - 目标 Linux EventMessage 链路：`modules/streamcalc/test` 的
   `TestCollectorEventToStreamcalcAggregationE2E` 也已在同一远端工作目录通过。
 - 本机 CGO Storage 市场链路：`TestMarketKlineToStorageOutboxE2E` 通过，测试实际构建并启动 Streamcalc server，覆盖 Tick -> Streamcalc -> KlineConsumer -> PrimaryStore -> DataNode source marker/outbox -> relay 以及 View/Factor/Archive durable fan-out；测试关闭首次消费连接强制 ACK 失败，重新绑定同一 durable 验证 JetStream 重投，未产生第二条 outbox event。
-- 真实部署拓扑、真实 Collector 接入和生产配置下的全进程联调：仍需单独执行，不能以本地嵌入式 NATS E2E 替代。
+- 真实部署拓扑、生产配置下的全进程联调：仍需单独执行；本地 E2E 已启动 Streamcalc、Archive、Factor 生产二进制，Collector ingress 另有真实 TickCollector + EventPublisher E2E。
 
 ---
 
@@ -616,7 +616,7 @@ refactor(eventbus): derive governed subjects from the event registry
 - Modify Storage DatasetRowsUpserted publishers and consumers.
 - Modify Archive and Factor storage-event consumers.
 
-- [ ] Collector 只能通过 `events.Publisher.Publish(events.TickReceived, *marketpb.Tick, ...)` 发布 Tick。
+- [x] Collector 只能通过 `events.Publisher.Publish(events.TickReceived, *marketpb.Tick, ...)` 发布 Tick。
 - [ ] Streamcalc 使用 `events.DecodeDelivery`，只接受 `TickReceived`，处理后发布 `MarketKlineClosed`。
 - [ ] Streamcalc 保存 checkpoint 成功后才允许 Runner ACK。
 - [ ] Storage publishers 继续持久化完整 deterministic EventMessage 到 outbox，再由 `PublishMessage` 发布。
@@ -624,7 +624,7 @@ refactor(eventbus): derive governed subjects from the event registry
 - [ ] Storage View 保持同 Dataset lane 内顺序、跨 Dataset 并行和 Backfill 独占。
 - [ ] Archive、Factor 的 handler 先全部改为处理 raw Delivery + `events.DecodeDelivery`；为兼容旧 `Fetch` 保留的临时 adapter 统一在 Task 12 删除。
 - [ ] Factor inbox、batch first/last received time、min/max data time 和 replay 行为保持不变。
-- [ ] 增加 Collector -> Streamcalc -> Storage -> Archive/Factor 的嵌入式 NATS E2E。
+- [x] 增加 Collector ingress -> EventPublisher 的真实 E2E，以及 Streamcalc -> Storage -> Archive/Factor 生产进程的嵌入式 NATS E2E。
 - [ ] 增加进程重启后 checkpoint/outbox/inbox 去重 E2E。
 - [ ] 分别运行 Collector、Streamcalc、Storage、Archive、Factor module tests。
 
@@ -841,8 +841,8 @@ chore(event): remove the legacy MooxMessage stack
 - Update `outputs/` evidence.
 
 - [ ] EventBus 启动并完成 registry reconciliation。
-- [ ] Collector Tick -> Streamcalc Kline -> Storage DatasetRowsUpserted。
-- [ ] DatasetRowsUpserted -> Storage View/Archive/Factor，验证同 Dataset 保序和跨 Dataset 并发。
+- [ ] Collector Tick -> Streamcalc Kline -> Storage DatasetRowsUpserted（当前 Collector ingress 与 downstream E2E 分开，仍需合并为单一链路验收）。
+- [x] DatasetRowsUpserted -> Storage View/Archive/Factor，验证生产 Archive/Factor 进程 durable ACK。
 - [ ] HostAgent/Report -> Monitor，验证 producer identity 未丢失。
 - [ ] CloudNode submit -> exact route poll -> report/ack。
 - [ ] Trade outbox -> workers，验证 typed lifecycle events。

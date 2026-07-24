@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,10 +31,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// TestMarketKlineToStorageOutboxE2E covers the market event path from the
-// streamcalc process through PrimaryStore and the DataNode outbox to the
-// storage fanout. Replaying the same source event after the write is committed
-// must not create another DatasetRowsUpserted event.
+// TestMarketKlineToStorageOutboxE2E covers the real market pipeline from the
+// TestMarketKlineToStorageOutboxE2E covers the real downstream market pipeline
+// from Streamcalc through PrimaryStore, DataNode outbox, Archive and Factor
+// production processes. Collector ingress is covered by the collector module's
+// real TickCollector + EventPublisher E2E. Replaying the same source event
+// after the write is committed must not create another event.
 func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -45,6 +48,8 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	if !server.ReadyForConnections(10 * time.Second) {
 		t.Fatal("embedded NATS did not start")
 	}
+	t.Setenv("MOOX_EVENTBUS_NATS_URL", server.ClientURL())
+	t.Setenv("MOOX_METRICS_EVENTBUS_URL", server.ClientURL())
 	defer server.Shutdown()
 	nc, err := nats.Connect(server.ClientURL())
 	if err != nil {
@@ -59,6 +64,9 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.>"}, Storage: nats.MemoryStorage}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Storage: nats.MemoryStorage}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_v1", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.tick.received.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
@@ -104,7 +112,7 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	}
 	defer streamcalcOutputConsumer.Close()
 	outputs := make(map[string]*events.Consumer)
-	for _, durable := range []string{"storage_view", "factor_calc", "moox_archive_kline_v1"} {
+	for _, durable := range []string{"storage_view"} {
 		consumer, err := events.NewConsumer(client, jetstream.ConsumerBindRef{Stream: "MOOX_STORAGE", Durable: durable, FetchMaxWait: 50 * time.Millisecond}, registry)
 		if err != nil {
 			t.Fatal(err)
@@ -127,7 +135,7 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	klineConsumer, err := primarystore.NewKlineConsumer(inputConsumer, primary, publisher, "market_kline_5m", &pb.AuthInfo{AppId: "storage-streamcalc", AppKey: datanode.ServiceAuthKey("market-secret", "storage-streamcalc")})
+	klineConsumer, err := primarystore.NewKlineConsumer(inputConsumer, primary, publisher, "spot_kline", &pb.AuthInfo{AppId: "storage-streamcalc", AppKey: datanode.ServiceAuthKey("market-secret", "storage-streamcalc")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,12 +144,14 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	consumerDone := make(chan error, 1)
 	go func() { consumerDone <- klineConsumer.Run(consumerCtx, 1) }()
 
-	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	streamcalcLog := startStreamcalc(t, server, server.ClientURL())
+	archiveLog := startArchive(t, server, server.ClientURL())
+	factorLog := startFactor(t, server, server.ClientURL())
+	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
 		tradeTime := base.Add(time.Duration(i)*time.Minute + 10*time.Second)
 		payload := &marketpb.Tick{Exchange: "binance", TradeId: fmt.Sprintf("trade-%d", i), Symbol: "BTC-USDT", Price: float64(100 + i), Quantity: 1, TradeTime: timestamppb.New(tradeTime)}
-		if _, err := publisher.Publish(ctx, events.TickReceived, payload, events.PublishOptions{EventID: fmt.Sprintf("binance:BTC-USDT:%d", i), OccurredAt: tradeTime, SpaceID: "crypto", SubjectID: payload.GetSymbol()}); err != nil {
+		if _, err := publisher.Publish(ctx, events.TickReceived, payload, events.PublishOptions{EventID: fmt.Sprintf("binance:BTC-USDT:%d", i), OccurredAt: tradeTime, SpaceID: "crypto_binance", SubjectID: payload.GetSymbol()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,7 +188,7 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recoveryConsumer.Close()
-	recoveredKlineConsumer, err := primarystore.NewKlineConsumer(recoveryConsumer, primary, publisher, "market_kline_5m", &pb.AuthInfo{AppId: "storage-streamcalc", AppKey: datanode.ServiceAuthKey("market-secret", "storage-streamcalc")})
+	recoveredKlineConsumer, err := primarystore.NewKlineConsumer(recoveryConsumer, primary, publisher, "spot_kline", &pb.AuthInfo{AppId: "storage-streamcalc", AppKey: datanode.ServiceAuthKey("market-secret", "storage-streamcalc")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +219,8 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 			t.Fatalf("ack %s: %v", durable, err)
 		}
 	}
+	waitForConsumerAck(t, js, "MOOX_STORAGE", "factor_calc", factorLog)
+	waitForConsumerAck(t, js, "MOOX_STORAGE", "moox_archive_kline_v1", archiveLog)
 }
 
 type ackFailureNode struct {
@@ -237,6 +249,271 @@ func waitForKlineRedelivery(t *testing.T, js nats.JetStreamContext) {
 	}
 	info, err := js.ConsumerInfo("MOOX_MARKET", "storage_primary_kline_v1")
 	t.Fatalf("kline redelivery was not ACKed without duplicate outbox: info=%+v err=%v", info, err)
+}
+
+func startArchive(t *testing.T, server *natsserver.Server, natsURL string) func() string {
+	t.Helper()
+	repoRoot := repoRootForMarketE2E(t)
+	moduleDir := filepath.Join(repoRoot, "modules", "archive")
+	binaryPath := buildComponent(t, moduleDir, "archive")
+	workDir := t.TempDir()
+	archiveConfig := filepath.Join(workDir, "archive.yaml")
+	trpcConfig := filepath.Join(workDir, "trpc.yaml")
+	keyFile := filepath.Join(workDir, "archive.key")
+	if err := os.WriteFile(keyFile, []byte("archive-e2e-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archiveYAML := fmt.Sprintf(`archive:
+  root_dir: %q
+  state_dir: %q
+  device_id: archive-e2e
+  sources:
+    crypto_binance: {datasets: [spot_kline]}
+  eventbus:
+    urls: [%q]
+    stream: MOOX_STORAGE
+    durable: moox_archive_kline_v1
+    fetch_batch: 16
+    fetch_max_wait: 50ms
+    dedupe_retention: 168h
+  materialize:
+    pending_rows: 100
+    workers: 1
+    row_group_rows: 100
+    shutdown_timeout: 5s
+  storage_rpc:
+    gateway_target: ip://127.0.0.1:11003
+    key_id: archive
+    hmac_key_file: %q
+  cos:
+    enabled: false
+health:
+  addr: 127.0.0.1:%d
+`, filepath.Join(workDir, "archive-data"), filepath.Join(workDir, "archive-state"), natsURL, keyFile, freePort(t))
+	if err := os.WriteFile(archiveConfig, []byte(archiveYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trpcYAML := fmt.Sprintf(`global:
+  namespace: Development
+  env_name: test
+server:
+  timeout: 5000
+  service:
+    - name: trpc.moox.archive.Health
+      ip: 127.0.0.1
+      port: %d
+      network: tcp
+      protocol: http_no_protocol
+    - name: trpc.moox.archive.materialize.timer
+      port: %d
+      network: "0 */10 * * * *?startAtOnce=1"
+      protocol: timer
+    - name: trpc.moox.archive.cos_sync.timer
+      port: %d
+      network: "0 0 * * * *?startAtOnce=1"
+      protocol: timer
+    - name: trpc.moox.archive.metrics.timer
+      port: %d
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+`, freePort(t), freePort(t), freePort(t), freePort(t))
+	if err := os.WriteFile(trpcConfig, []byte(trpcYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startComponentProcess(t, server, binaryPath, moduleDir, []string{"-config", archiveConfig, "-conf", trpcConfig})
+}
+
+func startFactor(t *testing.T, server *natsserver.Server, natsURL string) func() string {
+	t.Helper()
+	repoRoot := repoRootForMarketE2E(t)
+	moduleDir := filepath.Join(repoRoot, "modules", "factor")
+	binaryPath := buildComponent(t, moduleDir, "factor")
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	factorsDir := filepath.Join(workDir, "factors")
+	sectionsDir := filepath.Join(workDir, "sections")
+	keyFile := filepath.Join(workDir, "factor.key")
+	if err := os.WriteFile(keyFile, []byte("factor-e2e-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(factorsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sectionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workerDir := filepath.Join(workDir, "pyworker")
+	if err := os.MkdirAll(workerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"worker.py", "codec.py"} {
+		data, err := os.ReadFile(filepath.Join(moduleDir, "pyworker", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workerDir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appYAML := fmt.Sprintf(`database:
+  type: sqlite
+  path: %q
+storage:
+  gateway_target: ip://127.0.0.1:11003
+  key_id: factor
+  hmac_key_file: %q
+nats:
+  urls: [%q]
+  url: %q
+  stream: MOOX_STORAGE
+  consumer: factor_calc
+  fetch_max_wait: 50ms
+engine:
+  python_bin: python3
+  factors_dir: %q
+  sections_dir: %q
+  workers: 1
+  task_timeout_ms: 10000
+  encoding: json
+  max_batch_parallelism: 1
+scheduler:
+  event_batch_window_ms: 100
+  max_retry: 1
+  reconcile_interval_min: 60
+instance:
+  instance_id: factor-e2e
+  role: primary
+health:
+  addr: 127.0.0.1:%d
+`, filepath.Join(workDir, "factor.db"), keyFile, natsURL, natsURL, factorsDir, sectionsDir, freePort(t))
+	if err := os.WriteFile(filepath.Join(workDir, "config", "app.yaml"), []byte(appYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trpcYAML := fmt.Sprintf(`global:
+  namespace: Development
+  env_name: test
+server:
+  timeout: 5000
+  service:
+    - name: trpc.moox.factor.FactorMgr
+      ip: 127.0.0.1
+      port: %d
+      network: tcp
+      protocol: http
+    - name: trpc.moox.factor.Health
+      ip: 127.0.0.1
+      port: %d
+      network: tcp
+      protocol: http_no_protocol
+    - name: trpc.moox.factor.reconcile.timer
+      port: %d
+      network: "0 */10 * * * *?scheduler=factorReconcileSchedule"
+      protocol: timer
+    - name: trpc.moox.factor.metrics.timer
+      port: %d
+      network: "*/30 * * * * *"
+      protocol: timer
+`, freePort(t), freePort(t), freePort(t), freePort(t))
+	if err := os.WriteFile(filepath.Join(workDir, "config", "trpc_go.yaml"), []byte(trpcYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "trpc_go.yaml"), []byte(trpcYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startComponentProcess(t, server, binaryPath, workDir, nil)
+}
+
+func buildComponent(t *testing.T, moduleDir, name string) string {
+	t.Helper()
+	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	binaryPath := filepath.Join(t.TempDir(), name)
+	build := exec.CommandContext(buildCtx, "go", "build", "-o", binaryPath, "./cmd/server")
+	build.Dir = moduleDir
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", name, err, output)
+	}
+	return binaryPath
+}
+
+func startComponentProcess(t *testing.T, server *natsserver.Server, binaryPath, workDir string, args []string) func() string {
+	t.Helper()
+	baseline := server.NumClients()
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "MOOX_HEALTH_AUTH_ACCESS_KEY=market-e2e", "MOOX_HEALTH_AUTH_SECRET_KEY=market-e2e-secret", "MOOX_INSTANCE_ID=market-e2e", "MOOX_NODE_ID=market-node", "MOOX_BOOT_ID=market-boot")
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		if cmd.Process == nil {
+			return
+		}
+		_ = cmd.Process.Signal(os.Interrupt)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
+	})
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("component %s exited during startup: %v\n%s", filepath.Base(binaryPath), err, output.String())
+		default:
+		}
+		if server.NumClients() > baseline {
+			return output.String
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("component %s did not connect to embedded NATS\n%s", filepath.Base(binaryPath), output.String())
+	return output.String
+}
+
+func waitForConsumerAck(t *testing.T, js nats.JetStreamContext, stream, durable string, componentLogs ...func() string) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		info, err := js.ConsumerInfo(stream, durable)
+		if err == nil && info.AckFloor.Consumer >= 1 && info.NumAckPending == 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	info, err := js.ConsumerInfo(stream, durable)
+	for _, logs := range componentLogs {
+		t.Logf("%s logs: %s", durable, logs())
+	}
+	t.Fatalf("consumer %s did not ACK market output: info=%+v err=%v", durable, info, err)
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func repoRootForMarketE2E(t *testing.T) string {
+	t.Helper()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate market pipeline test")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../../.."))
 }
 
 func startStreamcalc(t *testing.T, server *natsserver.Server, natsURL string) func() string {

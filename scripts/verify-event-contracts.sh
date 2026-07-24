@@ -37,4 +37,6 @@ fi
 
 (cd packages/events && go test ./...)
 (cd modules/eventbus && go test ./...)
+(cd modules/collector && go test ./internal/sources/binance -run TestTickCollectorPublishesThroughRealEventPublisherE2E -count=1)
+(cd modules/storage && CGO_ENABLED=1 go test ./internal/service/e2e -run TestMarketKlineToStorageOutboxE2E -count=1)
 echo "event contract verification passed"

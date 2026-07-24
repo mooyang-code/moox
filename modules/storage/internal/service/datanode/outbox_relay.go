@@ -26,9 +26,11 @@ type PublishAckPublisher interface {
 }
 
 type OutboxRelayOptions struct {
-	PollInterval time.Duration
-	BatchSize    int
-	Metrics      *observability.ViewMetrics
+	PollInterval                  time.Duration
+	BatchSize                     int
+	Metrics                       *observability.ViewMetrics
+	ProcessedEventCleanupInterval time.Duration
+	ProcessedEventRetention       time.Duration
 	// DeleteOutbox is injectable for recovery tests. Production uses Pebble's
 	// delete operation, while tests can force a publish/delete split.
 	DeleteOutbox  func(context.Context, []uint64) error
@@ -60,6 +62,12 @@ func NewOutboxRelay(store *pebble.Store, publisher Publisher, opts OutboxRelayOp
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = 100
 	}
+	if opts.ProcessedEventCleanupInterval <= 0 {
+		opts.ProcessedEventCleanupInterval = time.Hour
+	}
+	if opts.ProcessedEventRetention <= 0 {
+		opts.ProcessedEventRetention = store.ProcessedEventRetention()
+	}
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
 	}
@@ -76,6 +84,11 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 			defer close(r.done)
 			ticker := time.NewTicker(r.options.PollInterval)
 			defer ticker.Stop()
+			cleanupTicker := time.NewTicker(r.options.ProcessedEventCleanupInterval)
+			defer cleanupTicker.Stop()
+			if err := r.cleanupProcessedSourceEvents(ctx); err != nil {
+				r.report(fmt.Errorf("cleanup processed source events: %w", err))
+			}
 			for {
 				if err := r.flush(ctx); err != nil {
 					r.report(err)
@@ -94,10 +107,20 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 					return
 				case <-ctx.Done():
 					return
+				case <-cleanupTicker.C:
+					if err := r.cleanupProcessedSourceEvents(ctx); err != nil {
+						r.report(fmt.Errorf("cleanup processed source events: %w", err))
+					}
 				}
 			}
 		}()
 	})
+}
+
+func (r *OutboxRelay) cleanupProcessedSourceEvents(ctx context.Context) error {
+	cutoff := time.Now().UTC().Add(-r.options.ProcessedEventRetention)
+	_, err := r.store.CleanupProcessedSourceEventsBefore(ctx, cutoff)
+	return err
 }
 
 func (r *OutboxRelay) report(err error) {
