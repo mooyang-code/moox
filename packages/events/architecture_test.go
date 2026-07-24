@@ -36,7 +36,7 @@ func TestEventContractArchitecture(t *testing.T) {
 		if _, ok := registry.PayloadFactory(schema.Payload); !ok {
 			t.Fatalf("event %s payload %s has no factory", schema.Name, schema.Payload)
 		}
-		family, err := registry.FamilyPattern(EventType{name: schema.Name, version: schema.Version})
+		family, err := registry.FamilyPatternForSchema(schema)
 		if err != nil || family == "" {
 			t.Fatalf("event %s family = %q, err = %v", schema.Name, family, err)
 		}

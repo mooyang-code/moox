@@ -34,6 +34,7 @@
 - 本机 CGO Storage 市场链路：`TestMarketKlineToStorageOutboxE2E` 通过，测试实际构建并启动 Streamcalc server，覆盖 Tick -> Streamcalc -> KlineConsumer -> PrimaryStore -> DataNode source marker/outbox -> relay 以及 View/Factor/Archive durable fan-out；测试关闭首次消费连接强制 ACK 失败，重新绑定同一 durable 验证 JetStream 重投，未产生第二条 outbox event。
 - 真实部署拓扑、生产配置下的全进程联调：仍需单独执行；本地市场 E2E 已在同一个 embedded NATS 上运行真实 TickCollector ingress、Streamcalc、Archive、Factor 生产二进制和 Storage KlineConsumer。Collector ingress 使用 `modules/collector/testkit` 调用真实 TickCollector，不再直接调用 Publisher.Publish。
 - source-event marker 使用时间有序索引并按 256 条批次清理，批次之间释放 DataNode outbox 写锁；EventType 已改为不暴露 name/version 字段的 opaque value，并补齐 alias/变量架构门禁。
+- EventType 不再暴露 `EventTypeFromSchema` 动态构造器；拓扑按 registry 提供的 `FamilyPatternForSchema` 查询。市场 E2E 明确断言 Tick/Kline payload symbol 与 envelope `subject_id` 均为 canonical ID，子进程诊断日志使用并发安全 buffer。
 
 ---
 

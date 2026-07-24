@@ -140,7 +140,7 @@ func validateGovernedEventFamilies(c *Config) error {
 		return fmt.Errorf("load event registry: %w", err)
 	}
 	for _, spec := range registry.Schemas() {
-		want, err := registry.FamilyPattern(events.EventTypeFromSchema(spec))
+		want, err := registry.FamilyPatternForSchema(spec)
 		if err != nil {
 			return fmt.Errorf("derive governed event %s@%d topic family: %w", spec.Name, spec.Version, err)
 		}
@@ -208,7 +208,7 @@ func validateConsumer(c *ConsumerConfig, cfg *Config) error {
 		return fmt.Errorf("load event registry: %w", err)
 	}
 	for _, spec := range registry.Schemas() {
-		family, familyErr := registry.FamilyPattern(events.EventTypeFromSchema(spec))
+		family, familyErr := registry.FamilyPatternForSchema(spec)
 		if familyErr == nil && spec.Stream == c.Stream && patternCovers(c.FilterSubject, family) {
 			covered = true
 			break
@@ -262,7 +262,7 @@ func validateConsumerTemplate(c *ConsumerTemplateConfig, cfg *Config) error {
 	}
 	covered := false
 	for _, spec := range registry.Schemas() {
-		family, familyErr := registry.FamilyPattern(events.EventTypeFromSchema(spec))
+		family, familyErr := registry.FamilyPatternForSchema(spec)
 		if familyErr == nil && spec.Stream == c.Stream && patternCovers(c.FilterPattern, family) {
 			covered = true
 			break

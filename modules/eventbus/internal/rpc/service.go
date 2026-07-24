@@ -88,7 +88,7 @@ func (s *Service) ListEvents(ctx context.Context, req *eventbusgen.ListEventsReq
 	}
 	items := make([]registry.Topic, 0)
 	for _, spec := range eventRegistry.Schemas() {
-		family, familyErr := eventRegistry.FamilyPattern(events.EventTypeFromSchema(spec))
+		family, familyErr := eventRegistry.FamilyPatternForSchema(spec)
 		if familyErr != nil {
 			return &eventbusgen.ListEventsRsp{RetInfo: retErr(familyErr)}, nil
 		}

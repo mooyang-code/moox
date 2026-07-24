@@ -344,7 +344,7 @@ func TopicStream(cfg *config.Config, topic string) (Topic, string, error) {
 		return Topic{}, "", err
 	}
 	for _, spec := range registry.Schemas() {
-		family, familyErr := registry.FamilyPattern(events.EventTypeFromSchema(spec))
+		family, familyErr := registry.FamilyPatternForSchema(spec)
 		if familyErr == nil && topicMatchesPattern(topic, family) {
 			return Topic{Topic: topic, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true, Owner: spec.Owner}, spec.Stream, nil
 		}

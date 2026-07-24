@@ -86,13 +86,6 @@ type EventSchema struct {
 	Owner        string                `yaml:"owner"`
 }
 
-// EventTypeFromSchema creates the lookup key used by registry consumers when
-// iterating the governed schema catalog. Producers should use the named
-// vocabulary values above instead of constructing EventType dynamically.
-func EventTypeFromSchema(schema EventSchema) EventType {
-	return EventType{name: schema.Name, version: schema.Version}
-}
-
 type registryFile struct {
 	Version uint32        `yaml:"version"`
 	Events  []EventSchema `yaml:"events"`
@@ -258,6 +251,19 @@ func (r *Registry) FamilyPattern(event EventType) (string, error) {
 		return "", fmt.Errorf("event %s is not registered", eventKey(event))
 	}
 	return template.FamilyPattern(), nil
+}
+
+// FamilyPatternForSchema derives a topology family from a schema returned by
+// this registry without exposing a dynamic EventType constructor to callers.
+func (r *Registry) FamilyPatternForSchema(schema EventSchema) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("event registry is nil")
+	}
+	event := EventType{name: schema.Name, version: schema.Version}
+	if _, ok := r.Schema(event); !ok {
+		return "", fmt.Errorf("event %s is not registered", eventKey(event))
+	}
+	return r.FamilyPattern(event)
 }
 
 func (r *Registry) Validate() error {

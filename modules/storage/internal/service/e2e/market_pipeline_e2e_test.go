@@ -163,7 +163,8 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingress := fetchOneEventually(t, ctx, collectorIngressConsumer, streamcalcLog)
-	if len(ingress) != 1 || ingress[0].Message.GetEventName() != events.TickReceived.Name() {
+	ingressTick, ingressTickOK := ingress[0].Payload.(*marketpb.Tick)
+	if len(ingress) != 1 || ingress[0].Message.GetEventName() != events.TickReceived.Name() || ingress[0].Message.GetSubjectId() != "BTC-USDT" || !ingressTickOK || ingressTick.GetSymbol() != "BTC-USDT" {
 		t.Fatalf("collector ingress=%#v", ingress)
 	}
 	if err := ingress[0].Delivery.Ack(ctx); err != nil {
@@ -171,7 +172,7 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	}
 	outputDeliveries := fetchOneEventually(t, ctx, streamcalcOutputConsumer, streamcalcLog)
 	output, ok := outputDeliveries[0].Payload.(*marketpb.KlineClosed)
-	if !ok || output.GetFrequency() != "5m" || output.GetTradeCount() != 5 || output.GetVolume() != 5 {
+	if !ok || output.GetSymbol() != "BTC-USDT" || outputDeliveries[0].Message.GetSubjectId() != output.GetSymbol() || output.GetFrequency() != "5m" || output.GetTradeCount() != 5 || output.GetVolume() != 5 {
 		t.Fatalf("streamcalc output payload=%#v", outputDeliveries[0].Payload)
 	}
 	if err := outputDeliveries[0].Delivery.Ack(ctx); err != nil {
@@ -241,6 +242,23 @@ type ackFailureNode struct {
 	pb.DataNodeRuntimeService
 	closeOnce  sync.Once
 	closeInput func() error
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(data)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (n *ackFailureNode) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
@@ -458,7 +476,7 @@ func startComponentProcess(t *testing.T, server *natsserver.Server, binaryPath, 
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), "MOOX_HEALTH_AUTH_ACCESS_KEY=market-e2e", "MOOX_HEALTH_AUTH_SECRET_KEY=market-e2e-secret", "MOOX_INSTANCE_ID=market-e2e", "MOOX_NODE_ID=market-node", "MOOX_BOOT_ID=market-boot")
-	var output bytes.Buffer
+	var output lockedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
@@ -580,7 +598,7 @@ state:
 		env = append(env, value)
 	}
 	cmd.Env = append(env, "MOOX_STREAMCALC_CONFIG="+configPath, "MOOX_EVENTBUS_NATS_URL="+natsURL)
-	var output bytes.Buffer
+	var output lockedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
