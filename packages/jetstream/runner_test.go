@@ -116,7 +116,74 @@ func TestRunnerRetryAndTerm(t *testing.T) {
 	}
 }
 
-func TestRunnerReportsHandlerAndTransportErrors(t *testing.T) {
+func TestRunnerRetryBusinessErrorReportsAndContinues(t *testing.T) {
+	testRunnerBusinessErrorReportsAndContinues(t, RETRY, "nak")
+}
+
+func TestRunnerTermBusinessErrorReportsAndContinues(t *testing.T) {
+	testRunnerBusinessErrorReportsAndContinues(t, TERM, "term")
+}
+
+func testRunnerBusinessErrorReportsAndContinues(t *testing.T, decision HandlerDecision, firstAction string) {
+	t.Helper()
+
+	var actions []string
+	first := runnerDelivery(&actions, nil)
+	second := runnerDelivery(&actions, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	second.ackFn = func(context.Context) error {
+		actions = append(actions, "ack")
+		cancel()
+		return nil
+	}
+	handlerErr := errors.New("business processing failed")
+	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
+		if delivery == first {
+			return HandlerResult{Decision: decision, Delay: time.Second, Err: handlerErr}
+		}
+		return HandlerResult{Decision: ACK}
+	})
+	var reported []error
+	runner := NewRunner(
+		&runnerFakeConsumer{batches: [][]*Delivery{{first}, {second}}},
+		handler,
+		RunnerConfig{ErrorReporter: ErrorReporterFunc(func(err error) { reported = append(reported, err) })},
+	)
+
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	if len(actions) != 2 || actions[0] != firstAction || actions[1] != "ack" {
+		t.Fatalf("actions = %v, want [%s ack]", actions, firstAction)
+	}
+	if len(reported) != 1 || !errors.Is(reported[0], handlerErr) {
+		t.Fatalf("reported = %v, want business error once", reported)
+	}
+}
+
+func TestRunnerTransportActionErrorStops(t *testing.T) {
+	nakErr := errors.New("nak transport failed")
+	var actions []string
+	first := runnerDelivery(&actions, map[string]error{"nak": nakErr})
+	second := runnerDelivery(&actions, nil)
+	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
+		if delivery == first {
+			return HandlerResult{Decision: RETRY, Delay: time.Second}
+		}
+		return HandlerResult{Decision: ACK}
+	})
+	consumer := &runnerFakeConsumer{batches: [][]*Delivery{{first}, {second}}}
+
+	err := NewRunner(consumer, handler, RunnerConfig{}).Run(context.Background())
+	if !errors.Is(err, nakErr) {
+		t.Fatalf("Run() error = %v, want %v", err, nakErr)
+	}
+	if consumer.fetches != 1 {
+		t.Fatalf("fetches = %d, want 1", consumer.fetches)
+	}
+}
+
+func TestRunnerReportsBusinessErrorAndReturnsTransportError(t *testing.T) {
 	var actions []string
 	ackErr := errors.New("ack failed")
 	handlerErr := errors.New("handler failed")
@@ -126,15 +193,24 @@ func TestRunnerReportsHandlerAndTransportErrors(t *testing.T) {
 	defer cancel()
 	runner := NewRunner(consumer, &runnerFakeHandler{result: HandlerResult{Decision: ACK, Err: handlerErr}}, RunnerConfig{ErrorReporter: ErrorReporterFunc(func(err error) { reported = append(reported, err) })})
 	err := runner.Run(ctx)
-	if !errors.Is(err, ackErr) || !errors.Is(err, handlerErr) {
-		t.Fatalf("Run() error = %v, want handler and ack errors", err)
+	if !errors.Is(err, ackErr) || errors.Is(err, handlerErr) {
+		t.Fatalf("Run() error = %v, want only ack error", err)
 	}
-	if len(reported) == 0 {
-		t.Fatal("ErrorReporter did not receive an error")
+	if !containsError(reported, handlerErr) {
+		t.Fatalf("reported = %v, want handler error", reported)
 	}
 	if len(actions) != 1 || actions[0] != "ack" {
 		t.Fatalf("actions = %v, want [ack]", actions)
 	}
+}
+
+func containsError(values []error, want error) bool {
+	for _, value := range values {
+		if errors.Is(value, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunnerRetryStopsBatchAndNaksRemainingWithSameDelay(t *testing.T) {

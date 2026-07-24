@@ -52,8 +52,8 @@ type PullConsumerAPI interface {
 	Close() error
 }
 
-// ErrorReporter receives handler, fetch, and transport-action failures while
-// Runner also returns them to its caller.
+// ErrorReporter 接收业务处理、拉取和传输动作错误；业务处理错误只上报，
+// 拉取和传输错误会结束本轮 Runner。
 type ErrorReporter interface {
 	Report(error)
 }
@@ -187,16 +187,15 @@ func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult,
 	close(stopHeartbeat)
 	heartbeatWG.Wait()
 
-	var allErr error
 	if result.Err != nil {
-		r.report(result.Err)
-		allErr = errors.Join(allErr, result.Err)
+		r.report(fmt.Errorf("handle delivery: %w", result.Err))
 	}
+	var transportErr error
 	for {
 		select {
 		case err := <-heartbeatErrs:
 			r.report(err)
-			allErr = errors.Join(allErr, err)
+			transportErr = errors.Join(transportErr, err)
 		default:
 			goto heartbeatDone
 		}
@@ -209,14 +208,15 @@ heartbeatDone:
 	if delivery == nil {
 		err := ErrInvalidDelivery
 		r.report(err)
-		return result, errors.Join(allErr, err)
+		return result, errors.Join(transportErr, err)
 	}
 	actionErr := ApplyHandlerResult(ctx, delivery, result)
 	if actionErr != nil {
+		actionErr = fmt.Errorf("apply handler result: %w", actionErr)
 		r.report(actionErr)
-		allErr = errors.Join(allErr, actionErr)
+		transportErr = errors.Join(transportErr, actionErr)
 	}
-	return result, allErr
+	return result, transportErr
 }
 
 func (r *Runner) heartbeat(ctx context.Context, delivery *Delivery, stop <-chan struct{}, errs chan<- error, wg *sync.WaitGroup) {
