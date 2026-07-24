@@ -4,7 +4,7 @@
 
 **Goal:** 按个人量化、新项目、不过度追求高可靠的边界，把事件系统收敛为五个真正跨进程的事件，删除 Tick/Streamcalc、通用 DLQ、Trade 自消费事件和重复注册配置，并修正 Runner、Monitor、TTL 约束及 Consumer 所有权问题。
 
-**Architecture:** 业务模块只发布跨进程事实或命令，进程内状态推进统一使用本地数据库和后台任务。事件定义采用 Go code-first，EventBus YAML 只描述 JetStream 运行拓扑；业务配置使用 `consumer`，只有 `packages/jetstream` 和 `modules/eventbus` 的基础设施模型保留 JetStream 官方术语 `Durable`。Storage 与 Strategy 在“本地状态和事件必须一起提交”时保留 outbox，其余路径不增加 Saga、全局事务、exactly-once 或 Schema Registry。
+**Architecture:** 业务模块只发布跨进程事实或命令，进程内状态推进使用本地数据库状态机和进程内唤醒，Timer 只负责启动恢复和遗漏兜底。事件定义采用 Go code-first，`Event` 同时表示事件名称、版本、payload factory、Stream 和 owner；`EventMessage` 只表示一次实际传输。EventBus YAML 的资源拓扑只包含 Stream/KV，Consumer 由消费服务通过唯一 `NewConsumer` API 声明、创建和校验；业务配置使用 `consumer`，只有 `packages/jetstream` 的 NATS 适配模型保留官方字段名 `Durable`。Storage 与 Strategy 在“本地状态和事件必须一起提交”时保留 outbox，其余路径不增加 Saga、全局事务、exactly-once 或 Schema Registry。
 
 **Tech Stack:** Go 1.25, NATS JetStream, Protocol Buffers, SQLite/GORM, Pebble, Vue 3, Go workspace.
 
@@ -14,7 +14,7 @@
 
 ### 1.1 最终只保留五个业务事件
 
-| EventType | 语义 | 发布方 | 消费方 | 可靠性 |
+| Event | 语义 | 发布方 | 消费方 | 可靠性 |
 |---|---|---|---|---|
 | `storage.dataset.rows.upserted@1` | Storage 已提交行变更 | Storage | View / Factor / Archive | Storage Pebble batch + outbox |
 | `metrics.host.reported@1` | 主机指标快照 | HostAgent | Monitor | best effort，最多投递 3 次 |
@@ -42,11 +42,11 @@ flowchart LR
 2. TTL 是容量治理，不是业务删除。TTL 清理不发布删除事件，也不增加 tombstone。
 3. Dataset 的 TTL 必须为 `0`，或不短于引用它的 View 保留时长；`0` 表示永久保留。
 4. Storage 不支持删除已注册字段，只保留 `UpsertFields`。该项已由提交 `715f110a` 完成，本计划只把它作为验收前置条件。
-5. 业务层统一使用 `consumer` 命名；JetStream 适配器和 EventBus 拓扑结构继续使用 `Durable`。
+5. 业务层统一使用 `consumer` 命名；只有 `packages/jetstream` 映射 NATS 配置时继续使用官方字段名 `Durable`。
 6. Storage/outbox 语义使用“已提交”或 `committed`，不再用 `durable` 描述业务数据。
 7. 本计划修改到的事件、Storage 和业务消费代码注释统一使用中文；Protobuf/Go API、NATS Header 和 JetStream 官方字段名保持英文。
 8. 通用 EventBus DLQ 删除。永久错误 `TERM` 并记录结构化日志；临时错误 `NAK`；Archive 可继续使用自己的本地 quarantine 文件。
-9. Trade 内部的订单推进、成交推进、对账和恢复使用数据库后台任务，不通过 EventBus 给自己发事件。
+9. Trade 内部的订单推进、成交推进和对账使用数据库状态机；状态提交后立即唤醒本地 Worker，Timer 只做启动恢复和遗漏兜底，不通过 EventBus 给自己发事件。
 10. 不引入 Kafka、Saga、全局事务、分布式锁、exactly-once、独立 Schema Registry、DLQ 管理后台或历史协议兼容层。
 
 ### 1.3 保留的基础协议
@@ -74,6 +74,16 @@ NATS Data = deterministic protobuf(EventMessage)
 NATS Subject = moox.<event_name>.v<event_version>.<space_token>.<subject_token>
 ```
 
+代码侧事件概念只保留：
+
+```text
+Event         静态事件契约和发布/消费句柄
+EventMessage  一次实际传输的消息
+Payload       具体 Protobuf 业务内容
+```
+
+不保留 `EventType`、`EventDefinition` 或 `EventSchema` 三套近义模型。
+
 ### 1.4 最初 CR 与执行任务映射
 
 | 最初 CR | 本轮最终取舍 | 执行任务 |
@@ -83,9 +93,9 @@ NATS Subject = moox.<event_name>.v<event_version>.<space_token>.<subject_token>
 | P1 Monitor unknown producer 阈值 120 与 MaxDeliver=3 冲突 | 未注册 producer 第一次即 TERM；授权查询故障才 RETRY | Task 4 |
 | P1 Runner 把 Handler `RETRY+Err` 当作进程失败 | Handler 错误只上报；只有 fetch/transport/context 结束 Runner | Task 1 |
 | P1 DLQ 可能放大超过 8 MiB，且没有实用查看/重放入口 | 删除通用 DLQ；永久错误 TERM + 结构化日志，Archive 保留本地 quarantine | Task 5 |
-| P2 YAML、EventType、AllEventTypes、factory 和 AST gate 重复 | Go code-first 单点声明，payload/subject/schema 全部派生 | Task 6 |
-| P2 Trade 通过 EventBus 消费自己的状态事件 | Trade 内部改为数据库和 timer，只消费 Strategy 的调仓命令 | Task 8 |
-| P2 Consumer 创建所有权和磁盘淘汰策略漂移 | EventBus 创建静态 Consumer；业务 managed bind；limits 统一 discard old | Task 7 |
+| P2 YAML、EventType、AllEventTypes、factory 和 AST gate 重复 | 合并为 Go code-first `Event`，payload/subject/stream/owner 全部从单个值派生 | Task 6 |
+| P2 Trade 通过 EventBus 消费自己的状态事件 | Trade 内部使用 DB 状态机和本地 Worker 唤醒，Timer 仅兜底；EventBus 只消费 Strategy 调仓命令 | Task 8 |
+| P2 Consumer 创建所有权和磁盘淘汰策略漂移 | 消费服务通过 `NewConsumer` 创建并拥有 Consumer；EventBus 只拥有 Stream/KV；limits 统一 discard old | Task 7 |
 | 后续决定删除 `DeleteFields` | 已由 `715f110a` 完成，本计划只做回归验收 | 第 2 节、Task 11 |
 | 后续决定业务层直接使用 `consumer` | 业务配置改名；基础设施继续使用 JetStream `Durable` | Task 4、Task 7、Task 9 |
 | 后续决定 Storage 描述使用 `committed` 且注释可用中文 | 修改触达文件的业务术语和注释 | Task 9 |
@@ -121,18 +131,29 @@ Expected: exit code `0`。
 | `MOOX_CLOUDNODE_EXEC` | `moox.cloudnode.job.execution.requested.v1.>` | `work_queue` | `old` |
 | `MOOX_TRADE` | `moox.trade.rebalance.requested.v1.>` | `work_queue` | `old` |
 
-静态 Consumer：
+以下 Consumer 由各消费服务在启动时声明并调用 `NewConsumer` 创建或校验，EventBus 配置不保存这些定义：
 
-| Stream | Consumer | Filter | MaxDeliver |
-|---|---|---|---|
-| `MOOX_STORAGE` | `storage_view` | `moox.storage.dataset.rows.upserted.v1.>` | `-1` |
-| `MOOX_STORAGE` | `factor_calc` | `moox.storage.dataset.rows.upserted.v1.>` | `5` |
-| `MOOX_STORAGE` | `moox_archive_kline_v1` | `moox.storage.dataset.rows.upserted.v1.>` | `-1` |
-| `MOOX_METRICS` | `monitor_hostmetrics_ingest_v1` | `moox.metrics.host.reported.v1.>` | `3` |
-| `MOOX_METRICS` | `monitor_metrics_ingest_v1` | `moox.metrics.snapshot.reported.v1.>` | `3` |
-| `MOOX_TRADE` | `trade_rebalance_v1` | `moox.trade.rebalance.requested.v1.>` | `-1` |
+| 所有者 | Stream | Consumer | Event | MaxDeliver |
+|---|---|---|---|---|
+| Storage View | `MOOX_STORAGE` | `storage_view` | `DatasetRowsUpserted` | `-1` |
+| Factor | `MOOX_STORAGE` | `factor_calc` | `DatasetRowsUpserted` | `5` |
+| Archive | `MOOX_STORAGE` | `moox_archive_kline_v1` | `DatasetRowsUpserted` | `-1` |
+| Monitor HostMetrics | `MOOX_METRICS` | `monitor_hostmetrics_ingest_v1` | `MetricsHostReported` | `3` |
+| Monitor Metrics | `MOOX_METRICS` | `monitor_metrics_ingest_v1` | `MetricsSnapshotReported` | `3` |
+| Trade | `MOOX_TRADE` | `trade_rebalance_v1` | `TradeRebalanceRequested` | `-1` |
 
-`MOOX_CLOUDNODE_EXEC` 继续使用 `cn_exec_` 动态 Consumer 模板。EventBus 创建静态 Consumer，业务进程只允许 `BindManagedPullConsumer`；CloudNode 动态路由是唯一允许业务侧 `NewPullConsumer` 的路径。
+CloudNode 按执行路由生成 `cn_exec_` 前缀的 Consumer 名称，也通过同一个 `NewConsumer` API 创建。EventBus 只在启动时创建四个 Stream 和 KV，不创建、不更新、不删除任何业务 Consumer。
+
+`NewConsumer` 的固定语义：
+
+```text
+Consumer 不存在                   -> 创建并返回
+Consumer 配置完全一致             -> 绑定并返回
+AckWait/MaxDeliver/MaxAckPending 不同 -> 更新后返回
+Stream/Durable/Filter/DeliverPolicy 冲突 -> ErrConsumerConfigConflict
+```
+
+不可变配置冲突时不得自动删除重建，避免静默丢失消费位置。
 
 ## 4. 文件结构
 
@@ -140,9 +161,12 @@ Expected: exit code `0`。
 
 - `modules/storage/internal/service/metadata/sqlite/retention.go`：Dataset/View 保留时长比较和引用校验。
 - `modules/storage/internal/service/metadata/sqlite/retention_test.go`：双向 TTL 约束测试。
-- `modules/monitor/internal/metrics/consumer_eventbus_test.go`：真实 managed Consumer 的 TERM/重投契约。
+- `modules/monitor/internal/metrics/consumer_eventbus_test.go`：Monitor 的 TERM 和重投次数契约。
+- `packages/events/consumer_test.go`：`Event` 派生 Stream/filter 并创建 Consumer 的契约测试。
 - `modules/trade/internal/application/rebalance/request.go`：把 `trade.rebalance.requested` 权重命令转换为现有调仓计划。
 - `modules/trade/internal/application/rebalance/request_test.go`：权重、固定资金、价格和当前仓位解析测试。
+- `modules/trade/internal/bootstrap/kernel_wakeup.go`：数据库状态提交后的进程内 Worker 唤醒和恢复扫描。
+- `modules/trade/internal/bootstrap/kernel_wakeup_test.go`：立即唤醒、合并重复唤醒和 Timer 兜底测试。
 - `modules/trade/test/strategy_rebalance_event_e2e_test.go`：Strategy outbox 到 Trade 调仓计划的跨模块契约测试。
 
 ### 4.2 Delete
@@ -169,12 +193,17 @@ Expected: exit code `0`。
 ### 4.3 Modify
 
 - `packages/jetstream/runner.go`, `runner_test.go`：Handler 业务错误只上报，不终止 Runner。
+- `packages/jetstream/consumer.go`, `consumer_test.go`：删除重复 create/bind API，统一为 `NewConsumer`。
+- `packages/events/consumer.go`：适配统一的 JetStream Consumer API。
 - `packages/events/registry.go`, `events_test.go`, `architecture_test.go`, `Makefile`, `go.mod`：code-first 事件定义和五事件词表。
 - `packages/tradeeventpb/trade_events.proto` 及生成文件：只保留可执行的 `RebalanceRequested`。
 - `modules/eventbus/config/app.yaml`
 - `modules/eventbus/internal/config/config_defaults.go`
 - `modules/eventbus/internal/config/config_test.go`
+- `modules/eventbus/internal/config/config_types.go`
 - `modules/eventbus/internal/config/config_validation.go`
+- `modules/eventbus/internal/registry/registry.go`
+- `modules/eventbus/internal/registry/registry_test.go`
 - `modules/collector/internal/sources/binance/kline.go`
 - `modules/collector/internal/sources/binance/kline_test.go`
 - `modules/collector/internal/bootstrap/bootstrap.go`
@@ -525,7 +554,7 @@ git add modules/storage/internal/service/metadata/sqlite web/src/views/data/data
 git commit -m "feat(storage): enforce dataset and view retention bounds"
 ```
 
-### Task 4: 修正 Monitor Consumer 所有权和未知生产方策略
+### Task 4: 修正 Monitor 未知生产方策略
 
 **Files:**
 - Create: `modules/monitor/internal/metrics/consumer_eventbus_test.go`
@@ -534,14 +563,13 @@ git commit -m "feat(storage): enforce dataset and view retention bounds"
 - Modify: `modules/monitor/internal/hostmetrics/hostmetrics.go`
 - Modify: `modules/monitor/internal/hostmetrics/hostmetrics_test.go`
 
-- [ ] **Step 1: 写 managed bind 和投递次数测试**
+- [ ] **Step 1: 写未知生产方和投递次数测试**
 
-使用 embedded NATS 和 EventBus topology 创建 `monitor_metrics_ingest_v1`：
+使用 embedded NATS 创建 `MOOX_METRICS` 和 `MaxDeliver=3` 的测试 Consumer：
 
 1. 未注册 producer 的合法 MetricReport 第一次投递即 `TERM`。
 2. Consumer `NumPending=0` 且不发生第二次投递。
-3. authorizer 返回临时错误时返回 `RETRY`，JetStream 按 topology 的 `MaxDeliver=3` 重投。
-4. Consumer 启动时只 bind 已存在 Consumer，删除该 Consumer 后启动必须失败，不能由 Monitor 偷偷重建。
+3. authorizer 返回临时错误时返回 `RETRY`，JetStream 最多投递 3 次。
 
 - [ ] **Step 2: 验证现状失败**
 
@@ -549,33 +577,12 @@ Run:
 
 ```bash
 cd modules/monitor
-go test -count=1 ./internal/metrics -run 'TestManagedConsumer|TestUnknownProducer|TestAuthorizerFailure'
+go test -count=1 ./internal/metrics -run 'TestUnknownProducer|TestAuthorizerFailure'
 ```
 
-Expected: FAIL；当前 unknown producer 阈值 `120` 永远达不到，且 Monitor 使用 `NewPullConsumer` 复制 topology。
+Expected: FAIL；当前 unknown producer 阈值 `120` 永远达不到。
 
-- [ ] **Step 3: 改为 managed bind**
-
-将：
-
-```go
-opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{...})
-```
-
-改为：
-
-```go
-opts.Client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{
-	Stream:              cfg.Stream,
-	Durable:             cfg.Consumer,
-	FetchMaxWait:        cfg.FetchMaxWait,
-	DeliverDecodeErrors: true,
-})
-```
-
-删除 Monitor 中的 `MaxDeliver: 3`、AckWait、FilterSubject 等不可变配置复制；这些值只由 EventBus YAML 管理。
-
-- [ ] **Step 4: 删除不可达 grace 阈值**
+- [ ] **Step 3: 删除不可达 grace 阈值**
 
 删除 `unknownProducerGraceDeliveries=120`。决策表：
 
@@ -600,7 +607,7 @@ decision=term
 reason=producer_not_registered
 ```
 
-- [ ] **Step 5: 统一 HostMetrics 业务命名**
+- [ ] **Step 4: 统一 HostMetrics 业务命名**
 
 将业务常量：
 
@@ -614,9 +621,9 @@ const Durable = "monitor_hostmetrics_ingest_v1"
 const Consumer = "monitor_hostmetrics_ingest_v1"
 ```
 
-传入 `jetstream.ConsumerBindRef` 时仍写 `Durable: Consumer`。
+Task 7 迁移 Consumer API 时，将该业务名称映射到 `jetstream.ConsumerConfig.Durable`。
 
-- [ ] **Step 6: 运行 Monitor 测试**
+- [ ] **Step 5: 运行 Monitor 测试**
 
 Run:
 
@@ -627,11 +634,11 @@ go test -race -count=1 ./internal/metrics ./internal/hostmetrics ./internal/boot
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交**
+- [ ] **Step 6: 提交**
 
 ```bash
 git add modules/monitor/internal/metrics modules/monitor/internal/hostmetrics modules/monitor/internal/bootstrap
-git commit -m "fix(monitor): bind managed consumers and term unknown producers"
+git commit -m "fix(monitor): term unknown metric producers"
 ```
 
 ### Task 5: 删除通用 DLQ，永久错误直接 TERM
@@ -766,10 +773,18 @@ git commit -m "refactor(events): remove shared eventbus dlq"
 - Delete: `packages/events/tradingpb/**`
 - Delete: `packages/strategyeventpb/**`
 - Modify: `packages/events/registry.go`
+- Modify: `packages/events/message.go`
+- Modify: `packages/events/decode.go`
 - Modify: `packages/events/events_test.go`
 - Modify: `packages/events/architecture_test.go`
 - Modify: `packages/events/Makefile`
 - Modify: `packages/events/go.mod`
+- Modify: `modules/eventbus/internal/config/config_validation.go`
+- Modify: `modules/eventbus/internal/registry/registry.go`
+- Modify: `modules/eventbus/internal/rpc/service.go`
+- Modify: `modules/eventbus/internal/rpc/service_test.go`
+- Modify: `modules/storage/internal/service/view/eventconsumer/subject.go`
+- Modify: `modules/storage/internal/service/view/eventconsumer/subject_test.go`
 - Modify: `go.work`
 - Modify: `Makefile`
 
@@ -787,7 +802,7 @@ want := []string{
 }
 ```
 
-同时断言每个定义：
+同时断言每个 `Event`：
 
 - payload factory 非空。
 - payload full name 由 factory descriptor 得到。
@@ -801,39 +816,46 @@ Run:
 
 ```bash
 cd packages/events
-go test -count=1 -run 'TestEventContractArchitecture|TestBuiltInDefinitions' ./...
+go test -count=1 -run 'TestEventContractArchitecture|TestBuiltInEvents' ./...
 ```
 
 Expected: FAIL，当前注册表包含 18 个事件。
 
 - [ ] **Step 3: 实现单点声明**
 
-采用以下结构：
+使用一个 `Event` 同时承载静态契约和发布/消费句柄：
 
 ```go
-type EventDefinition struct {
-	Type       EventType
-	NewPayload func() proto.Message
-	Stream     string
-	Owner      string
+type Event struct {
+	name       string
+	version    uint32
+	stream     string
+	owner      string
+	newPayload func() proto.Message
 }
 
-var builtInDefinitions []EventDefinition
+func (e Event) Name() string       { return e.name }
+func (e Event) Version() uint32    { return e.version }
+func (e Event) Stream() string     { return e.stream }
+func (e Event) Owner() string      { return e.owner }
+func (e Event) NewPayload() proto.Message {
+	return e.newPayload()
+}
+
+var builtInEvents []Event
 
 func declareEvent(
 	name string,
 	version uint32,
-	newPayload func() proto.Message,
 	stream string,
 	owner string,
-) EventType {
-	event := EventType{name: name, version: version}
-	builtInDefinitions = append(builtInDefinitions, EventDefinition{
-		Type:       event,
-		NewPayload: newPayload,
-		Stream:     stream,
-		Owner:      owner,
-	})
+	newPayload func() proto.Message,
+) Event {
+	event := Event{
+		name: name, version: version, stream: stream, owner: owner,
+		newPayload: newPayload,
+	}
+	builtInEvents = append(builtInEvents, event)
 	return event
 }
 ```
@@ -844,20 +866,20 @@ func declareEvent(
 var DatasetRowsUpserted = declareEvent(
 	"storage.dataset.rows.upserted",
 	1,
-	func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
 	"MOOX_STORAGE",
 	"storage",
+	func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
 )
 ```
 
 其余四个事件按同样形式声明。`trade.rebalance.requested` 的 owner 是 `strategy`，stream 是 `MOOX_TRADE`。
 
-- [ ] **Step 4: 从定义派生 Schema**
+- [ ] **Step 4: 从 `Event` 派生 payload 和 subject**
 
-`DefaultRegistry` 直接遍历 `builtInDefinitions`。`EventSchema.Payload` 使用：
+`DefaultRegistry` 直接遍历 `builtInEvents`。payload full name 使用：
 
 ```go
-definition.NewPayload().
+event.NewPayload().
 	ProtoReflect().
 	Descriptor().
 	FullName()
@@ -868,14 +890,30 @@ subject 使用：
 ```go
 fmt.Sprintf(
 	"moox.%s.v%d.<space>.<subject>",
-	definition.Type.Name(),
-	definition.Type.Version(),
+	event.Name(),
+	event.Version(),
 )
 ```
+
+Registry API 收敛为：
+
+```go
+func (r *Registry) Lookup(name string, version uint32) (Event, bool)
+func (r *Registry) Events() []Event
+func (r *Registry) RenderSubject(event Event, spaceID, subjectID string) (string, error)
+func (r *Registry) FamilyPattern(event Event) (string, error)
+```
+
+`Publisher.Publish`、`Registry.MarshalMessage` 和 Consumer 配置都直接接收 `Event`。
+
+`Registry.ValidateMessage` 改为返回 `(Event, error)`；`DecodeRaw` 使用返回的 `Event.NewPayload()` 解码。EventBus RPC 直接遍历 `registry.Events()` 生成已有的 Protobuf `EventInfo`，Storage subject helper 直接调用 `registry.FamilyPattern(events.DatasetRowsUpserted)`。
 
 删除：
 
 ```text
+EventType
+EventDefinition
+EventSchema
 embedded events.yaml
 registryFile
 NewRegistry(raw []byte)
@@ -886,14 +924,14 @@ YAML tags
 AST EventType declaration扫描
 ```
 
-保留私有 `EventType.name/version`，业务仍不能随意构造事件类型。
+`Event` 字段保持私有，只允许 `packages/events` 内部 `declareEvent` 创建，业务不能制造未注册事件。
 
 - [ ] **Step 5: 简化架构门禁**
 
 `architecture_test.go` 不再解析 Go AST。新门禁只验证：
 
-- `BuiltInDefinitions()` 返回五个定义的只读副本。
-- 定义没有重复 key、payload、subject。
+- `Registry.Events()` 返回五个 `Event` 的稳定只读副本。
+- Event 没有重复 key、payload、subject。
 - `EventMessage` 仍只有七个字段。
 - 生产代码不直接调用 `PublishRaw` 或硬编码五个业务 subject。
 
@@ -907,8 +945,10 @@ Run:
 
 ```bash
 (cd packages/events && go mod tidy && go test -race -count=1 ./...)
+(cd modules/eventbus && go test -count=1 ./internal/config ./internal/registry ./internal/rpc)
+(cd modules/storage && CGO_ENABLED=1 go test -count=1 ./internal/service/view/eventconsumer)
 go work sync
-rg -n 'events.yaml|AllEventTypes|payloadFactories|PartitionKey|NewRegistry\\(' \
+rg -n 'events.yaml|EventType|EventDefinition|EventSchema|AllEventTypes|payloadFactories|PartitionKey|NewRegistry\\(|BuiltInDefinitions' \
   packages/events modules --glob '*.go' --glob '*.yaml'
 ```
 
@@ -917,41 +957,75 @@ Expected: 测试 PASS；扫描无命中。
 - [ ] **Step 8: 提交**
 
 ```bash
-git add -A packages/events packages/strategyeventpb go.work Makefile
+git add -A packages/events packages/strategyeventpb modules/eventbus/internal modules/storage/internal/service/view/eventconsumer go.work Makefile
 git commit -m "refactor(events): declare event catalog in go"
 ```
 
-### Task 7: 收敛 EventBus 拓扑并统一 Consumer 命名
+### Task 7: 让消费服务通过唯一 `NewConsumer` API 拥有 Consumer
 
 **Files:**
+- Modify: `packages/jetstream/consumer.go`
+- Modify: `packages/jetstream/consumer_test.go`
+- Modify: `packages/jetstream/errors.go`
+- Modify: `packages/jetstream/runner.go`
+- Modify: `packages/jetstream/runner_test.go`
+- Modify: `packages/jetstream/transport_test.go`
+- Modify: `packages/events/consumer.go`
+- Create: `packages/events/consumer_test.go`
 - Modify: `modules/eventbus/config/app.yaml`
 - Modify: `modules/eventbus/internal/config/config_defaults.go`
 - Modify: `modules/eventbus/internal/config/config_test.go`
+- Modify: `modules/eventbus/internal/config/config_types.go`
 - Modify: `modules/eventbus/internal/config/config_validation.go`
+- Modify: `modules/eventbus/internal/registry/registry.go`
+- Modify: `modules/eventbus/internal/registry/registry_test.go`
+- Modify: `modules/eventbus/test/storage_consumers_e2e_test.go`
 - Modify: `modules/archive/internal/config/config.go`
 - Modify: `modules/archive/config/app.yaml`
+- Modify: `modules/archive/internal/bootstrap/app.go`
+- Modify: `modules/archive/internal/bootstrap/app_test.go`
+- Modify: `modules/archive/internal/consumer/runner.go`
+- Modify: `modules/archive/internal/consumer/runner_test.go`
+- Modify: `modules/archive/test/archive_e2e_test.go`
 - Modify: `modules/factor/internal/trigger/nats.go`
+- Modify: `modules/factor/internal/trigger/nats_test.go`
 - Modify: `modules/factor/internal/bootstrap/config.go`
 - Modify: `modules/factor/config/app.yaml`
 - Modify: `modules/storage/internal/config/loader.go`
 - Modify: `modules/storage/internal/service/view/consume.go`
+- Modify: `modules/storage/cmd/server/main.go`
+- Modify: `modules/monitor/internal/metrics/consumer.go`
+- Modify: `modules/monitor/internal/hostmetrics/hostmetrics.go`
+- Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue.go`
+- Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue_test.go`
 - Modify: `modules/trade/internal/config/app.go`
 - Modify: `modules/trade/config/app.yaml`
+- Modify: `modules/trade/internal/bootstrap/kernel_workers.go`
+- Modify: `modules/trade/internal/bootstrap/trading_signal_worker.go`
+- Modify: `modules/trade/test/eventbus_e2e_test.go`
 
-- [ ] **Step 1: 写 repository topology 测试**
+- [ ] **Step 1: 写 EventBus 与 Consumer 所有权测试**
 
-新增 test helper：
+EventBus repository config 测试必须断言：
 
-```go
-func loadRepositoryConfig(t *testing.T) *Config {
-	t.Helper()
-	cfg, err := Load("../../config/app.yaml")
-	require.NoError(t, err)
-	return cfg
-}
+```text
+app.yaml 只有 broker/internal_client/health/streams/kv
+Config 不再包含 Consumers
+Config 不再包含 ConsumerTemplates
+EventBus registry 不调用 AddConsumer/UpdateConsumer/DeleteConsumer
 ```
 
-所有 Stream/Consumer 测试使用该 helper，不再把 `Default()` 当作第二份 topology。
+每个业务模块测试自己的 Consumer name、Event、AckWait、MaxDeliver、MaxAckPending 和 DeliverPolicy。不得在 EventBus 测试中复制业务 Consumer 表。
+
+`packages/jetstream/consumer_test.go` 增加：
+
+```go
+func TestNewConsumerCreatesWhenMissing(t *testing.T)
+func TestNewConsumerBindsMatchingConsumer(t *testing.T)
+func TestNewConsumerUpdatesMutableFields(t *testing.T)
+func TestNewConsumerRejectsImmutableConflict(t *testing.T)
+func TestNewConsumerDoesNotDeleteConflictingConsumer(t *testing.T)
+```
 
 - [ ] **Step 2: 让 `Default()` 只提供标量默认值**
 
@@ -963,13 +1037,13 @@ InternalClient
 Health
 ```
 
-`Streams`、`Consumers`、`ConsumerTemplates`、`KV` 不得在 Go 中硬编码。`Load` 的顺序保持：
+`Streams` 和 `KV` 不得在 Go 中硬编码；`Consumers`、`ConsumerTemplates` 及其 config type 直接删除。`Load` 的顺序保持：
 
 ```text
 scalar defaults -> YAML -> normalize -> env override -> Validate
 ```
 
-- [ ] **Step 3: 将 YAML 改为四个 Stream**
+- [ ] **Step 3: 将 YAML 改为四个 Stream 和 KV**
 
 按第 3 节的表删除：
 
@@ -985,20 +1059,119 @@ streamcalc_kline_v1
 storage_primary_kline_v1
 ```
 
-所有 `limits` Stream 显式写 `discard: old`。`MOOX_TRADE` 改成 `work_queue`。
+删除整个 `consumers:` 和 `consumer_templates:` 段。所有 `limits` Stream 显式写 `discard: old`，`MOOX_TRADE` 改成 `work_queue`。
 
-- [ ] **Step 4: 增加定义与拓扑交叉校验**
+- [ ] **Step 4: 只校验 `Event` 与 Stream 的关系**
 
-`Config.Validate` 对每个 `events.EventDefinition` 校验：
+`Config.Validate` 遍历 `registry.Events()`：
 
-1. `definition.Stream` 存在。
-2. 该 Stream 的 subjects 覆盖 `registry.FamilyPattern(definition.Type)`。
+1. `event.Stream()` 存在。
+2. 该 Stream 的 subjects 覆盖 `registry.FamilyPattern(event)`。
 3. family 只被一个 Stream 覆盖。
-4. 每个静态 Consumer 的 filter 被其 Stream subjects 覆盖。
 
-不要求每个事件都有静态 Consumer，因为 CloudNode 使用动态模板。
+EventBus 不再校验 Consumer；Consumer 的 Event/filter 一致性由 `events.NewConsumer` 和各模块测试负责。
 
-- [ ] **Step 5: 重命名业务配置**
+- [ ] **Step 5: 实现唯一的 `NewConsumer` API 并删除重复入口**
+
+在一个可编译提交中增加 `Client.NewConsumer`、迁移全部调用方，并删除：
+
+```text
+NewPullConsumer
+EnsurePullConsumer
+BindPullConsumer
+BindManagedPullConsumer
+ConsumerRef
+ConsumerBindRef
+PullConsumer
+PullConsumerAPI
+NewConsumerFromPull
+```
+
+公开类型统一为：
+
+```go
+type Consumer struct {
+	// 内部仍然使用 NATS pull subscription。
+}
+
+type ConsumerConfig struct {
+	Stream              string
+	Durable             string
+	FilterSubject       string
+	AckWait             time.Duration
+	MaxDeliver          int
+	MaxAckPending       int
+	FetchMaxWait        time.Duration
+	DeliverPolicy       nats.DeliverPolicy
+	DeliverDecodeErrors bool
+}
+
+func (c *Client) NewConsumer(
+	ctx context.Context,
+	cfg ConsumerConfig,
+) (*Consumer, error)
+```
+
+`Runner` 的依赖接口同步重命名为 `ConsumerAPI`。`events.Consumer` 直接保存 `*jetstream.Consumer`，删除只为旧类型适配存在的 `NewConsumerFromPull`。
+
+`NewConsumer` 不根据默认零值偷偷改变显式配置；默认值只在调用方未填写时应用。不可变字段冲突返回：
+
+```go
+var ErrConsumerConfigConflict = errors.New("jetstream consumer config conflict")
+```
+
+用于服务端对账的字段：
+
+```text
+不可变：Stream、Durable、FilterSubject、DeliverPolicy
+可更新：AckWait、MaxDeliver、MaxAckPending
+仅本地：FetchMaxWait、DeliverDecodeErrors
+```
+
+仅本地字段不得参与 JetStream 配置冲突判断。
+
+错误中必须列出 Consumer 名称和冲突字段，不包含凭据。
+
+- [ ] **Step 6: 让 `events.NewConsumer` 派生 Stream 和 filter**
+
+业务侧使用：
+
+```go
+type ConsumerConfig struct {
+	Name                string
+	Event               Event
+	AckWait             time.Duration
+	MaxDeliver          int
+	MaxAckPending       int
+	FetchMaxWait        time.Duration
+	DeliverPolicy       nats.DeliverPolicy
+	DeliverDecodeErrors bool
+}
+
+func NewConsumer(
+	ctx context.Context,
+	client *jetstream.Client,
+	registry *Registry,
+	cfg ConsumerConfig,
+) (*Consumer, error)
+```
+
+`events.NewConsumer` 使用 `cfg.Event.Stream()` 和 `registry.FamilyPattern(cfg.Event)` 生成底层配置，并映射：
+
+```go
+jetstream.ConsumerConfig{
+	Stream:        cfg.Event.Stream(),
+	Durable:       cfg.Name,
+	FilterSubject: family,
+	// 其余字段逐项映射。
+}
+```
+
+Archive、Factor、Storage View、Monitor 和 Trade 使用 `events.NewConsumer`。CloudNode 的 route filter 比 event family 更窄，直接使用 `jetstream.Client.NewConsumer`，但仍从 `Event` 派生 subject 前缀。
+
+这里的“唯一 API”指 `packages/jetstream` 只有一个 Consumer 生命周期入口 `Client.NewConsumer`；`events.NewConsumer` 是增加 EventMessage 解码的类型化包装，不定义第二套创建/绑定语义。
+
+- [ ] **Step 7: 重命名业务配置**
 
 执行以下重命名，不保留兼容字段：
 
@@ -1012,47 +1185,53 @@ trade.rebalance_durable        -> trade.rebalance_consumer
 HostMetrics Durable            -> Consumer
 ```
 
-传给适配器时使用：
+业务调用使用：
 
 ```go
-jetstream.ConsumerBindRef{
-	Stream:  cfg.Stream,
-	Durable: cfg.Consumer,
+events.ConsumerConfig{
+	Name:  cfg.Consumer,
+	Event: events.DatasetRowsUpserted,
 }
 ```
 
-EventBus 的 `ConsumerConfig.Durable`、`ConsumerBindRef.Durable`、NATS `ConsumerConfig.Durable` 不重命名。
+只有 `packages/jetstream.ConsumerConfig.Durable` 和 NATS `ConsumerConfig.Durable` 保留 `Durable`。
 
-- [ ] **Step 6: 所有静态 Consumer 使用 managed bind**
-
-扫描：
-
-```bash
-rg -n 'NewPullConsumer|BindPullConsumer' modules \
-  --glob '*.go' --glob '!**/*_test.go'
-```
-
-除 CloudNode 动态 Consumer 外，生产业务模块只能命中 `BindManagedPullConsumer`。Trade 的 managed bind 在 Task 8 完成。
-
-- [ ] **Step 7: 运行 EventBus 和业务配置测试**
+- [ ] **Step 8: 扫描旧 API 和中心化 Consumer 残留**
 
 Run:
 
 ```bash
+rg -n 'NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsumer|ConsumerBindRef|ConsumerRef|PullConsumer|PullConsumerAPI|NewConsumerFromPull' \
+  modules packages --glob '*.go'
+rg -n '^consumers:|^consumer_templates:|Consumers|ConsumerTemplates' \
+  modules/eventbus --glob '*.go' --glob '*.yaml'
+```
+
+Expected: 两次扫描都无命中。
+
+- [ ] **Step 9: 运行 EventBus、Consumer API 和业务配置测试**
+
+Run:
+
+```bash
+(cd packages/jetstream && go test -race -count=1 ./...)
+(cd packages/events && go test -race -count=1 ./...)
 (cd modules/eventbus && go test -race -count=1 ./...)
 (cd modules/archive && go test -count=1 ./internal/config ./internal/bootstrap)
 (cd modules/factor && go test -count=1 ./internal/trigger ./internal/bootstrap)
 (cd modules/storage && CGO_ENABLED=1 go test -count=1 ./internal/config ./internal/service/view)
+(cd modules/monitor && go test -count=1 ./internal/metrics ./internal/hostmetrics)
+(cd modules/cloudnode && go test -count=1 ./internal/jobqueue)
 (cd modules/trade && go test -count=1 ./internal/config)
 ```
 
 Expected: PASS。
 
-- [ ] **Step 8: 提交**
+- [ ] **Step 10: 提交**
 
 ```bash
-git add modules/eventbus modules/archive modules/factor modules/storage modules/trade modules/monitor
-git commit -m "refactor(eventbus): centralize topology and consumer ownership"
+git add packages/jetstream packages/events modules/eventbus modules/archive modules/factor modules/storage modules/monitor modules/cloudnode modules/trade
+git commit -m "refactor(events): let services own consumers"
 ```
 
 ### Task 8: 将 Strategy -> Trade 收敛为唯一调仓命令
@@ -1073,6 +1252,8 @@ git commit -m "refactor(eventbus): centralize topology and consumer ownership"
 - Modify: `modules/trade/internal/application/rebalance/service_test.go`
 - Modify: `modules/trade/internal/bootstrap/kernel_workers.go`
 - Modify: `modules/trade/internal/bootstrap/kernel_workers_test.go`
+- Create: `modules/trade/internal/bootstrap/kernel_wakeup.go`
+- Create: `modules/trade/internal/bootstrap/kernel_wakeup_test.go`
 - Modify: `modules/trade/internal/bootstrap/kernel_timers.go`
 - Modify: `modules/trade/internal/infra/store/store.go`
 - Modify: `modules/trade/schema/bus.sql`
@@ -1223,7 +1404,7 @@ func (t *Tx) RecordInbox(consumer, eventID, eventName string) (bool, error)
 2. 写 `t_rebalance_runs` 和 legs。
 3. 不写 Trade outbox。
 
-Consumer 成功持久化计划后 ACK。永久校验错误 TERM，Snapshot/DB 临时错误 RETRY。
+Consumer 成功持久化计划后 ACK，并调用本地 `Wake()`；永久校验错误 TERM，Snapshot/DB 临时错误 RETRY。
 
 - [ ] **Step 7: 删除 Trade 自发布事件**
 
@@ -1249,38 +1430,82 @@ TradeOrderSubmitUnknown
 TradingSignal
 ```
 
-Trade 只保留 `trade_rebalance_v1` managed Consumer。
+Trade 只保留自己通过 `events.NewConsumer` 创建的 `trade_rebalance_v1` Consumer。
 
-- [ ] **Step 8: 用后台任务推进 Trade 内部状态**
+- [ ] **Step 8: 用本地唤醒推进正常流程**
 
 `startKernelWorkers` 只启动：
 
 ```text
-rebalance managed consumer
+rebalance Consumer
 private stream supervisor
+trade state worker
 ```
 
-timer：
+新增进程内唤醒器：
+
+```go
+type kernelWakeup struct {
+	ch chan struct{}
+}
+
+func newKernelWakeup() *kernelWakeup {
+	return &kernelWakeup{ch: make(chan struct{}, 1)}
+}
+
+func (w *kernelWakeup) Wake() {
+	select {
+	case w.ch <- struct{}{}:
+	default:
+	}
+}
+```
+
+以下状态提交成功后立即调用 `Wake()`：
 
 ```text
-trade_order_recovery: 1s
-trade_fill_reconcile: 5s
+Rebalance Consumer 创建 PLANNED run
+RPC 创建 READY order
+private stream 写入 fill
+对账更新 order/fill/position
+cancel/replace saga 状态变化
 ```
 
-`recoverOrdersOnce` 继续处理 READY、SUBMITTING、SUBMIT_UNKNOWN、cancel saga 和 active rebalance。Private stream 写入 fill 后不发事件；5s reconcile 和 1s recovery 推进 active rebalance。
+Worker 收到唤醒后调用 `recoverOrdersOnce`，继续处理 READY、SUBMITTING、SUBMIT_UNKNOWN、cancel saga 和 active rebalance。buffer 大小为 1，重复唤醒自动合并；真正待处理工作始终以 DB 为准，channel 不承载业务数据。
 
-- [ ] **Step 9: 写跨模块 E2E**
+- [ ] **Step 9: 让 Timer 只承担恢复兜底**
+
+保留两个低频 Timer：
+
+```text
+trade_order_recovery: 15s
+trade_fill_reconcile: 30s
+```
+
+进程启动时先执行一次 recovery，然后进入“本地唤醒 + 低频 Timer”循环。Timer 只处理以下情况：
+
+```text
+进程在 DB commit 后、Wake 前崩溃
+channel 唤醒被合并
+外部成交回报遗漏，需要主动 reconcile
+启动时 DB 已存在未完成工作
+```
+
+正常下单和成交推进测试不得等待 Timer。
+
+- [ ] **Step 10: 写跨模块 E2E**
 
 `strategy_rebalance_event_e2e_test.go` 使用 embedded NATS：
 
-1. 初始化四 Stream topology 和 `trade_rebalance_v1`。
+1. 初始化四 Stream，不预建 `trade_rebalance_v1`。
 2. Strategy commit 写一条 outbox。
 3. Strategy relay 发布 `trade.rebalance.requested`。
-4. Trade managed Consumer 消费并创建一个 `PLANNED` run。
+4. Trade 通过 `events.NewConsumer` 创建 Consumer，消费并创建一个 `PLANNED` run。
 5. 重发同一个 EventMessage，Trade inbox 保证仍只有一个 run。
-6. 取消 EventBus 后，Trade recovery timer 仍能推进已经落库的 run。
+6. 不推进 fake clock，断言本地 Wake 立即推进已经落库的 run。
+7. 单独构造“DB 已提交但没有 Wake”的重启场景，推进 15s fake clock 后由 recovery Timer 补偿。
 
-- [ ] **Step 10: 运行 Strategy/Trade 全测试**
+- [ ] **Step 11: 运行 Strategy/Trade 全测试**
 
 Run:
 
@@ -1292,7 +1517,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 11: 扫描 Trade 自消费残留**
+- [ ] **Step 12: 扫描 Trade 自消费残留**
 
 Run:
 
@@ -1304,7 +1529,7 @@ rg -n 'TradeOrder|TradeExecution|TradeFill|TradeReconciliation|TradeRebalanceCom
 
 Expected: 无命中。
 
-- [ ] **Step 12: 提交**
+- [ ] **Step 13: 提交**
 
 ```bash
 git add -A packages/tradeeventpb packages/strategyeventpb modules/strategy modules/trade
@@ -1373,7 +1598,10 @@ durable latest value       -> 已提交的最新值
 禁止 Trade 自消费事件
 禁止业务 YAML key 使用 *_durable 或 durable:
 禁止 modules 直接 PublishRaw
-只允许五个 EventType
+只允许五个 Event 值
+禁止 EventType/EventDefinition/EventSchema
+禁止 NewPullConsumer/EnsurePullConsumer/BindPullConsumer/BindManagedPullConsumer/PullConsumerAPI/NewConsumerFromPull
+禁止 EventBus YAML 出现 consumers/consumer_templates
 ```
 
 Archive/Factor 等技术注释中的英文单词不作为门禁；门禁只匹配配置字段和 Go 配置成员。
@@ -1420,7 +1648,8 @@ git commit -m "chore(events): align consumer terminology and contract gates"
 - Collector 直接写闭合 K 线。
 - Storage committed upsert 触发 View/Factor/Archive。
 - Strategy 只在 paper/live execution binding 上发布调仓命令。
-- Trade 内部通过 DB recovery timer 推进。
+- Trade 正常流程由 DB commit 后的本地 Wake 立即推进；Timer 只负责启动恢复和遗漏兜底。
+- EventBus 只创建 Stream/KV；每个消费服务通过 `NewConsumer` 创建并拥有自己的 Consumer。
 
 - [ ] **Step 2: 更新 TTL 说明**
 
@@ -1529,12 +1758,14 @@ Expected: PASS。
 Run:
 
 ```bash
-rg -n 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET|packages/dlqpb|MOOX_DLQ|PublishRejected|AllEventTypes|partition_key|StrategyOutputAccepted|TradingSignal|TradeExecutionSliceReady|TradeFillReceived|TradeReconciliationRequested|t_trade_outbox' \
+rg -n 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET|packages/dlqpb|MOOX_DLQ|PublishRejected|EventType|EventDefinition|EventSchema|AllEventTypes|partition_key|StrategyOutputAccepted|TradingSignal|TradeExecutionSliceReady|TradeFillReceived|TradeReconciliationRequested|t_trade_outbox|NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsumer|ConsumerBindRef|ConsumerRef|PullConsumer|PullConsumerAPI|NewConsumerFromPull' \
   modules packages go.work Makefile scripts \
   --glob '*.go' --glob '*.proto' --glob '*.sql' --glob '*.yaml' --glob 'go.mod' --glob 'go.work' --glob 'Makefile'
+rg -n '^consumers:|^consumer_templates:|Consumers|ConsumerTemplates' \
+  modules/eventbus --glob '*.go' --glob '*.yaml'
 ```
 
-Expected: 无命中。
+Expected: 两次扫描都无命中。
 
 - [ ] **Step 6: 验证只有五个事件**
 
@@ -1542,7 +1773,7 @@ Run:
 
 ```bash
 cd packages/events
-go test -count=1 -run TestBuiltInDefinitions ./...
+go test -count=1 -run TestBuiltInEvents ./...
 ```
 
 Expected: PASS，输出中没有额外事件。
@@ -1603,9 +1834,11 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 
 ### 6.1 结构
 
-- [ ] 生产代码中只存在五个 EventType。
+- [ ] 生产代码中只存在五个 `Event` 值，不存在 `EventType/EventDefinition/EventSchema`。
 - [ ] `packages/events` 不再读取 YAML 注册表。
-- [ ] EventBus topology 只在 `modules/eventbus/config/app.yaml` 定义。
+- [ ] EventBus YAML 只定义 Stream/KV，不包含 Consumer 或 Consumer template。
+- [ ] 每个业务 Consumer 由所属消费服务调用唯一的 `NewConsumer` 创建和校验。
+- [ ] 生产代码不存在旧 Pull/create/bind Consumer API。
 - [ ] `modules/streamcalc`、`packages/dlqpb`、`packages/strategyeventpb` 已删除。
 - [ ] Trade 不再拥有 outbox，不消费自己发布的事件。
 
@@ -1620,12 +1853,13 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 - [ ] 永久错误不再发布 DLQ 事件。
 - [ ] Strategy paper/live 调仓产生一条 `trade.rebalance.requested`；hold/observe 不产生。
 - [ ] Trade 重收相同 event_id 不重复创建调仓计划。
-- [ ] EventBus 不可用时，已落库 Trade 工作仍由本地 timer 推进。
+- [ ] 正常 Trade 状态提交后由本地 Wake 立即推进，不等待 Timer。
+- [ ] Wake 遗漏或进程重启时，已落库 Trade 工作由低频 Timer 恢复。
 
 ### 6.3 命名和文档
 
 - [ ] 业务配置和变量使用 `consumer`。
-- [ ] JetStream/EventBus 基础设施仍使用官方 `Durable` 字段。
+- [ ] 只有 `packages/jetstream` 和 NATS 适配结构使用官方 `Durable` 字段。
 - [ ] Storage/outbox 业务描述使用“已提交”或 `committed`。
 - [ ] 本计划触达代码的注释为中文。
 - [ ] 当前架构和运维文档不再把 Tick、Streamcalc、DLQ、Trade 自消费事件描述为生产架构。
@@ -1641,7 +1875,7 @@ Task 1 Runner
   -> Task 4 Monitor
   -> Task 5 DLQ
   -> Task 6 code-first Registry
-  -> Task 7 EventBus topology/naming
+  -> Task 7 Consumer ownership/NewConsumer
   -> Task 8 Strategy/Trade
   -> Task 9 gates/comments
   -> Task 10 docs
@@ -1651,7 +1885,7 @@ Task 1 Runner
 建议设置三个强制检查点：
 
 1. **Checkpoint A，Task 1-4 后：** Market 链路、TTL、Runner、Monitor 分别通过 focused test。
-2. **Checkpoint B，Task 5-7 后：** 只有五事件、四 Stream、无 DLQ、无重复 topology。
+2. **Checkpoint B，Task 5-7 后：** 只有五个 `Event`、四个 Stream、无 DLQ；EventBus 无 Consumer 配置，业务只使用 `NewConsumer`。
 3. **Checkpoint C，Task 8-11 后：** Strategy -> Trade E2E、workspace test、Linux/CGO 和远端 SHA 全部通过。
 
 任何检查点失败都应在当前任务内修复，不把失败留给后续任务吸收。
