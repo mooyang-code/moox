@@ -361,50 +361,9 @@ func cloneSnapshot(snapshot *hostmetricpb.HostSnapshot) *hostmetricpb.HostSnapsh
 type Consumer struct {
 	pull  *jetstream.PullConsumer
 	store *Store
-	dlq   DLQPublisher
-}
-
-// DLQPublisher receives poison host metric messages after validation fails.
-// It is deliberately optional so unit tests and local memory-only runs can
-// use the same consumer without a second EventBus client.
-type DLQPublisher interface {
-	Publish(context.Context, *eventpb.EventMessage) error
-}
-
-type jetStreamDLQ struct{ client *jetstream.Client }
-
-func NewDLQPublisher(client *jetstream.Client) DLQPublisher {
-	if client == nil {
-		return nil
-	}
-	return jetStreamDLQ{client: client}
-}
-
-func (p jetStreamDLQ) Publish(ctx context.Context, msg *eventpb.EventMessage) error {
-	if p.client == nil {
-		return errors.New("host metric DLQ client is nil")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	publisher, err := events.NewPublisher(p.client, registry)
-	if err != nil {
-		return err
-	}
-	_, err = publisher.PublishMessage(ctx, msg)
-	return err
 }
 
 func Bind(ctx context.Context, client *jetstream.Client, store *Store) (*Consumer, error) {
-	return bind(ctx, client, store, nil)
-}
-
-func BindWithDLQ(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPublisher) (*Consumer, error) {
-	return bind(ctx, client, store, dlq)
-}
-
-func bind(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPublisher) (*Consumer, error) {
 	if client == nil || store == nil {
 		return nil, errors.New("host metrics client and store are required")
 	}
@@ -412,7 +371,7 @@ func bind(ctx context.Context, client *jetstream.Client, store *Store, dlq DLQPu
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{pull: pull, store: store, dlq: dlq}, nil
+	return &Consumer{pull: pull, store: store}, nil
 }
 func (c *Consumer) Close() error {
 	if c == nil || c.pull == nil {
@@ -465,13 +424,9 @@ func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.
 		err = decoded.Err
 	}
 	if err != nil {
-		if c.dlq != nil {
-			if publishErr := c.dlq.Publish(ctx, rejectionEvent(d, err.Error())); publishErr != nil {
-				return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(d.DeliveryCount), Err: errors.Join(err, fmt.Errorf("publish host metrics DLQ: %w", publishErr))}
-			}
-		}
-		log.WarnContextf(ctx, "monitor host metric rejected message_id=%s: %v", d.RawMessageID, err)
-		return jetstream.HandlerResult{Decision: jetstream.TERM}
+		log.WarnContextf(ctx, "component=monitor_hostmetrics consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%v",
+			ConsumerName, d.RawMessageID, d.Subject, d.DeliveryCount, err)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
 	if err := c.store.persist(ctx, d, decoded.Message, metric); err != nil {
 		// Storage is transient from the consumer's perspective. NAK lets
@@ -495,18 +450,6 @@ func retryDelay(deliveryCount uint64) time.Duration {
 	default:
 		return 15 * time.Second
 	}
-}
-
-func rejectionEvent(delivery *jetstream.Delivery, reason string) *eventpb.EventMessage {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return nil
-	}
-	event, err := events.RejectedMessage(registry, delivery, reason, "moox-monitor", "hostmetrics")
-	if err != nil {
-		return nil
-	}
-	return event
 }
 
 func mustRegistry() *events.Registry {

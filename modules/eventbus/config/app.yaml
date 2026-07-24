@@ -57,14 +57,6 @@ streams:
     max_age: 72h
     duplicates: 2m
     max_bytes: 536870912
-  - name: MOOX_DLQ
-    subjects: ["moox.dlq.>"]
-    retention: limits
-    storage: file
-    replicas: 1
-    max_age: 720h
-    duplicates: 2m
-    max_bytes: 268435456
   - name: MOOX_TRADE
     subjects: ["moox.trading.>", "moox.trade.>"]
     retention: limits

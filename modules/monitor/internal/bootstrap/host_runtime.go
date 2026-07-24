@@ -62,7 +62,7 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *
 				waitHostMetrics(ctx)
 				continue
 			}
-			consumer, err := hostmetrics.BindWithDLQ(ctx, client, store, hostmetrics.NewDLQPublisher(client))
+			consumer, err := hostmetrics.Bind(ctx, client, store)
 			if err != nil {
 				_ = client.Close()
 				log.WarnContextf(ctx, "host metrics durable unavailable: %v", err)

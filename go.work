@@ -29,7 +29,6 @@ use (
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/doctor
-	./packages/dlqpb
 	./packages/events
 	./packages/storagepb
 	./packages/tradeeventpb

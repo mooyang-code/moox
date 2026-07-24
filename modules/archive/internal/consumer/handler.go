@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
@@ -33,9 +32,6 @@ type Journal interface {
 	Append(context.Context, domain.EventBatch) (journal.AppendResult, error)
 	Quarantine(context.Context, journal.QuarantineRecord) error
 }
-type DLQPublisher interface {
-	PublishRejected(context.Context, Delivery, error) error
-}
 type DirtyNotifier interface{ Notify([]domain.PartitionKey) }
 type RetryScheduledError struct{ Delay time.Duration }
 
@@ -48,17 +44,10 @@ type Handler struct {
 	journal  Journal
 	notifier DirtyNotifier
 	ackWait  time.Duration
-	dlq      DLQPublisher
 }
 
 func NewHandler(decoder DecoderAPI, store Journal, notifier DirtyNotifier) *Handler {
 	return &Handler{decoder: decoder, journal: store, notifier: notifier, ackWait: 5 * time.Minute}
-}
-
-func NewHandlerWithDLQ(decoder DecoderAPI, store Journal, notifier DirtyNotifier, dlq DLQPublisher) *Handler {
-	h := NewHandler(decoder, store, notifier)
-	h.dlq = dlq
-	return h
 }
 
 func (h *Handler) Handle(ctx context.Context, delivery Delivery) error {
@@ -114,52 +103,9 @@ func (h *Handler) reject(ctx context.Context, delivery Delivery, reason error) j
 	err := h.journal.Quarantine(ctx, journal.QuarantineRecord{MessageID: delivery.MessageID(), Subject: delivery.Subject(), StreamSeq: delivery.StreamSequence(), Delivery: delivery.DeliveryCount(), Reason: reason.Error(), RawEnvelope: delivery.RawEnvelope()})
 	if err != nil {
 		delay := retryDelay(delivery.DeliveryCount())
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: delay, Err: err}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: delay, Err: fmt.Errorf("quarantine archive event: %w", err)}
 	}
-	if h.dlq != nil {
-		if err := h.dlq.PublishRejected(ctx, delivery, reason); err != nil {
-			delay := retryDelay(delivery.DeliveryCount())
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: delay, Err: fmt.Errorf("publish archive DLQ: %w", err)}
-		}
-	}
-	return jetstream.HandlerResult{Decision: jetstream.TERM}
-}
-
-// JetStreamDLQ adapts the shared EventMessage DLQ builder to Archive's small
-// decoder/journal delivery interface. Archive receives raw EventMessage bytes
-// but still quarantines malformed envelopes without decoding them first.
-type JetStreamDLQ struct {
-	publisher events.MessagePublisher
-}
-
-func NewJetStreamDLQ(publisher events.MessagePublisher) *JetStreamDLQ {
-	return &JetStreamDLQ{publisher: publisher}
-}
-
-func (p *JetStreamDLQ) PublishRejected(ctx context.Context, delivery Delivery, reason error) error {
-	if p == nil || p.publisher == nil {
-		return fmt.Errorf("archive DLQ publisher is unavailable")
-	}
-	if delivery == nil {
-		return fmt.Errorf("archive DLQ delivery is nil")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	raw := &jetstream.Delivery{RawData: delivery.RawEnvelope(), RawMessageID: delivery.MessageID(), Subject: delivery.Subject(), ContentType: delivery.ContentType(), DeliveryCount: delivery.DeliveryCount(), Consumer: "archive"}
-	return events.PublishRejected(ctx, p.publisher, registry, raw, boundedReason(reason), "archive")
-}
-
-func boundedReason(reason error) string {
-	if reason == nil {
-		return "archive event rejected"
-	}
-	value := reason.Error()
-	if len(value) > 1024 {
-		return value[:1024]
-	}
-	return value
+	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("archive event rejected: %w", reason)}
 }
 
 func retryDelay(deliveries uint64) time.Duration {

@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
-	"github.com/mooyang-code/moox/packages/dlqpb"
 	"github.com/mooyang-code/moox/packages/events/tradingpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
@@ -41,7 +40,6 @@ var (
 	DatasetRowsUpserted          = EventType{name: "storage.dataset.rows.upserted", version: 1}
 	MetricsHostReported          = EventType{name: "metrics.host.reported", version: 1}
 	MetricsSnapshotReported      = EventType{name: "metrics.snapshot.reported", version: 1}
-	DLQMessageRejected           = EventType{name: "dlq.message.rejected", version: 1}
 	StrategyOutputAccepted       = EventType{name: "strategy.output.accepted", version: 1}
 	TradeOrderIntentCreated      = EventType{name: "trade.order.intent.created", version: 1}
 	TradeOrderStateChanged       = EventType{name: "trade.order.state.changed", version: 1}
@@ -60,7 +58,7 @@ var (
 // so a new producer constant cannot silently bypass governed subjects.
 var AllEventTypes = []EventType{
 	TradingSignal, DatasetRowsUpserted,
-	MetricsHostReported, MetricsSnapshotReported, DLQMessageRejected,
+	MetricsHostReported, MetricsSnapshotReported,
 	StrategyOutputAccepted, TradeOrderIntentCreated, TradeOrderStateChanged,
 	TradeExecutionSliceReady, TradeFillReceived, TradeRebalanceRequested,
 	TradeRebalanceCompleted, TradeReconciliationRequested,
@@ -195,7 +193,6 @@ func payloadFactories() map[protoreflect.FullName]func() proto.Message {
 		"trpc.moox.storage.event.DatasetRowsUpserted":     func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
 		"trpc.moox.hostagent.HostMetric":                  func() proto.Message { return &hostmetricpb.HostMetric{} },
 		"trpc.moox.metrics.MetricReport":                  func() proto.Message { return &metricspb.MetricReport{} },
-		"trpc.moox.dlq.RejectedMessage":                   func() proto.Message { return &dlqpb.RejectedMessage{} },
 		"trpc.moox.strategy.event.StrategyOutputAccepted": func() proto.Message { return &strategyeventpb.StrategyOutputAccepted{} },
 		"trpc.moox.trade.event.OrderSnapshot":             func() proto.Message { return &tradeeventpb.OrderSnapshot{} },
 		"trpc.moox.trade.event.FillReceived":              func() proto.Message { return &tradeeventpb.FillReceived{} },

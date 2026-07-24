@@ -120,7 +120,6 @@ proto:
 	$(MAKE) -C packages/commonpb all
 	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C packages/hostmetricpb all
-	$(MAKE) -C packages/dlqpb all
 	$(MAKE) -C packages/cloudjobpb all
 	$(MAKE) -C packages/tradeeventpb all
 	$(MAKE) -C packages/strategyeventpb all

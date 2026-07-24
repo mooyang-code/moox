@@ -28,13 +28,6 @@ events:
     stream: MOOX_METRICS
     partition_key: subject_id
     owner: monitor
-  - name: dlq.message.rejected
-    version: 1
-    payload: trpc.moox.dlq.RejectedMessage
-    subject: moox.dlq.message.rejected.v1.<space>.<subject>
-    stream: MOOX_DLQ
-    partition_key: subject_id
-    owner: eventbus
   - name: strategy.output.accepted
     version: 1
     payload: trpc.moox.strategy.event.StrategyOutputAccepted

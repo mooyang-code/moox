@@ -19,11 +19,10 @@ var (
 	ingestLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_monitor_metrics_ingest_last_success_timestamp_seconds", Help: "Last successful metric snapshot ingestion."})
 	ingestLatency     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "moox_monitor_metrics_ingest_latency_seconds", Help: "Delay between snapshot occurrence and ingestion."})
 	consumerPending   = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_monitor_metrics_consumer_pending", Help: "Fetched metric deliveries awaiting handling."})
-	dlqTotal          = prometheus.NewCounter(prometheus.CounterOpts{Name: "moox_monitor_metrics_dlq_total", Help: "Metric snapshots sent to the DLQ."})
 )
 
 func init() {
-	prometheus.MustRegister(ingestTotal, ingestLastSuccess, ingestLatency, consumerPending, dlqTotal)
+	prometheus.MustRegister(ingestTotal, ingestLastSuccess, ingestLatency, consumerPending)
 }
 
 func recordIngest(result string, observed time.Time) {

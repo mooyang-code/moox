@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,8 +31,20 @@ func TestHandlerQuarantinesInvalidEventAndTerminates(t *testing.T) {
 	store := &fakeJournal{quarantineFn: func(journal.QuarantineRecord) error { return nil }}
 	delivery := &fakeDelivery{raw: []byte("bad"), id: "bad", subject: "subject"}
 	handler := NewHandler(&fakeDecoder{decision: DecisionReject, decodeErr: errors.New("invalid row")}, store, &fakeNotifier{})
-	assert.NoError(t, handler.Handle(context.Background(), delivery))
+	assert.ErrorContains(t, handler.Handle(context.Background(), delivery), "invalid row")
 	assert.True(t, delivery.terminated)
+}
+
+func TestHandlerRetriesWhenQuarantineFails(t *testing.T) {
+	store := &fakeJournal{quarantineFn: func(journal.QuarantineRecord) error {
+		return errors.New("disk unavailable")
+	}}
+	delivery := &fakeDelivery{raw: []byte("bad"), id: "bad", subject: "subject"}
+	handler := NewHandler(&fakeDecoder{decision: DecisionReject, decodeErr: errors.New("invalid row")}, store, nil)
+	result := handler.HandleDecision(context.Background(), delivery)
+	assert.Equal(t, jetstream.RETRY, result.Decision)
+	assert.ErrorContains(t, result.Err, "disk unavailable")
+	assert.False(t, delivery.terminated)
 }
 
 type fakeDecoder struct {

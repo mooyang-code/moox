@@ -27,7 +27,6 @@ EventBus uses file-backed JetStream with `DiscardOld`; reaching either `max_age`
 | `MOOX_STORAGE` | 72 hours | 2 GiB |
 | `MOOX_METRICS` | 24 hours | 512 MiB |
 | `MOOX_CLOUDNODE_EXEC` | 72 hours | 512 MiB |
-| `MOOX_DLQ` | 30 days | 256 MiB |
 | `MOOX_TRADE` | 7 days | 512 MiB |
 | `MOOX_STRATEGY` | 7 days | 512 MiB |
 | `MOOX_CLOUDNODE_JOB_ACTIVE` KV | 48 hours | no separate byte limit |

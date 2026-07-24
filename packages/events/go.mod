@@ -4,7 +4,6 @@ go 1.25.0
 
 require (
 	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/dlqpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
@@ -49,8 +48,6 @@ require (
 	trpc.group/trpc-go/trpc-go v1.0.4 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.0 // indirect
 )
-
-replace github.com/mooyang-code/moox/packages/dlqpb => ../dlqpb
 
 replace github.com/mooyang-code/moox/packages/cloudjobpb => ../cloudjobpb
 

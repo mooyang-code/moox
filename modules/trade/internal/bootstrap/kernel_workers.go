@@ -59,11 +59,11 @@ func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store
 			}
 		}
 	}()
-	go runExecutionConsumer(ctx, client, cfg, s, e, eventPublisher)
-	go runRebalanceConsumer(ctx, client, cfg, s, e, eventPublisher)
-	go runProgressConsumer(ctx, client, cfg, s, e, eventPublisher)
-	go runReconciliationConsumer(ctx, client, cfg, s, e, eventPublisher)
-	go runTradingSignalConsumer(ctx, client, cfg, s, eventPublisher)
+	go runExecutionConsumer(ctx, client, cfg, s, e)
+	go runRebalanceConsumer(ctx, client, cfg, s, e)
+	go runProgressConsumer(ctx, client, cfg, s, e)
+	go runReconciliationConsumer(ctx, client, cfg, s, e)
+	go runTradingSignalConsumer(ctx, client, cfg, s)
 	go runPrivateStreamSupervisor(ctx, s, e)
 	return nil
 }
@@ -174,8 +174,8 @@ func advanceActiveRebalances(ctx context.Context, s *store.Store, e *command.Eng
 	return nil
 }
 
-func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ProgressDurable, events.TradeFillReceived, 64), 16, "progress", publisher, func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ProgressDurable, events.TradeFillReceived, 64), 16, "progress", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		if err := advanceActiveRebalances(ctx, s, e); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
@@ -190,8 +190,8 @@ func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg conf
 	})
 }
 
-func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ReconciliationDurable, events.TradeReconciliationRequested, 64), 8, "reconciliation", publisher, func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ReconciliationDurable, events.TradeReconciliationRequested, 64), 8, "reconciliation", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		deliveryCtx := deliveryTraceContext(ctx, delivery)
 		started := time.Now()
 		var scope struct {
@@ -227,8 +227,8 @@ func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cf
 	})
 }
 
-func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.RebalanceDurable, events.TradeRebalanceRequested, 64), 16, "rebalance", publisher, func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.RebalanceDurable, events.TradeRebalanceRequested, 64), 16, "rebalance", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		if err := handleRebalanceDelivery(ctx, delivery, s, e, cfg.RebalanceDurable); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}
@@ -236,7 +236,7 @@ func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg con
 	})
 }
 
-func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jetstream.ConsumerRef, batch int, name string, publisher events.MessagePublisher, handler jetstream.DeliveryHandlerFunc) {
+func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jetstream.ConsumerRef, batch int, name string, handler jetstream.DeliveryHandlerFunc) {
 	for ctx.Err() == nil {
 		pull, err := client.BindPullConsumer(ctx, ref)
 		if err != nil {
@@ -244,7 +244,7 @@ func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jet
 			time.Sleep(time.Second)
 			continue
 		}
-		runner := jetstream.NewRunner(pull, withTradeDLQ(handler, publisher), jetstream.RunnerConfig{BatchSize: batch, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+		runner := jetstream.NewRunner(pull, handler, jetstream.RunnerConfig{BatchSize: batch, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			log.WarnContextf(ctx, "trade %s delivery failed: %v", name, err)
 		})})
 		err = runner.Run(ctx)
@@ -265,23 +265,6 @@ func tradeConsumerRef(cfg config.EventBusConfig, durable string, event events.Ev
 		filter, _ = registry.FamilyPattern(event)
 	}
 	return jetstream.ConsumerRef{Stream: cfg.Stream, Durable: durable, FilterSubject: filter, AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: maxAckPending, FetchMaxWait: time.Second}
-}
-
-func withTradeDLQ(handler jetstream.DeliveryHandlerFunc, publisher events.MessagePublisher) jetstream.DeliveryHandlerFunc {
-	return func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		result := handler(ctx, delivery)
-		if result.Decision != jetstream.TERM || result.Err == nil {
-			return result
-		}
-		registry, err := events.DefaultRegistry()
-		if err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		if err := events.PublishRejected(ctx, publisher, registry, delivery, result.Err.Error(), "trade"); err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		return result
-	}
 }
 
 func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string) error {
@@ -364,8 +347,8 @@ func recoverOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine) e
 	return errors.Join(errs...)
 }
 
-func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, publisher events.MessagePublisher) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ExecutionDurable, events.TradeExecutionSliceReady, 256), 32, "execution", publisher, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
+	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ExecutionDurable, events.TradeExecutionSliceReady, 256), 32, "execution", jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		if err := handleExecutionDelivery(ctx, delivery, s, e, cfg.ExecutionDurable); err != nil {
 			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 		}

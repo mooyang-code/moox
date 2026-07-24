@@ -119,7 +119,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
 	assert.Contains(t, storageACL, "moox.storage.dataset.rows.upserted.v1.>")
-	assert.Contains(t, storageACL, "moox.dlq.message.rejected.v1.>")
+	assert.NotContains(t, storageACL, "moox.dlq.")
 	assert.NotContains(t, storageACL, "moox.storage.rows_committed")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.MOOX_STORAGE.storage_view")
 	assert.NotContains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view")

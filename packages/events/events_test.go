@@ -1,14 +1,11 @@
 package events
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/dlqpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/events/tradingpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -25,37 +22,6 @@ func TestDefaultRegistryHasExplicitEvents(t *testing.T) {
 		if _, ok := r.Schema(event); !ok {
 			t.Fatalf("event %s is not registered", eventKey(event))
 		}
-	}
-}
-
-func TestRejectedMessageIsConsumerSpecificAndRetainsTransportMetadata(t *testing.T) {
-	r, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	delivery := &jetstream.Delivery{RawMessageID: "event-1", Subject: "moox.market.tick.received.v1.space.symbol", ContentType: "application/vnd.example", RawData: []byte("bad"), DeliveryCount: 4}
-	first, err := RejectedMessage(r, delivery, "decode failed", "consumer-a", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := RejectedMessage(r, delivery, "decode failed", "consumer-b", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.GetEventId() == second.GetEventId() {
-		t.Fatal("different rejecting consumers must not share a DLQ event id")
-	}
-	dlqSubject, err := r.RenderSubject(DLQMessageRejected, first.GetSpaceId(), first.GetSubjectId())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, payload, err := DecodeRaw(r, mustMarshal(t, first), dlqSubject, first.GetEventId(), ContentType)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rejected := payload.(*dlqpb.RejectedMessage)
-	if rejected.GetRejectedBy() != "consumer-a" || rejected.GetOriginalContentType() != delivery.ContentType || !bytes.Equal(rejected.GetOriginalData(), delivery.RawData) || rejected.GetDeliveryCount() != 4 {
-		t.Fatalf("DLQ payload = %v", rejected)
 	}
 }
 

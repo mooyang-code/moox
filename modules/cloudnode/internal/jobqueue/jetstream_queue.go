@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	nats "github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const defaultFetchMaxWait = 500 * time.Millisecond
@@ -205,42 +206,38 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		}
 		message, payload, decodeErr := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
 		if decodeErr != nil {
-			if dlqErr := q.reject(ctx, delivery, decodeErr.Error()); dlqErr != nil {
-				return nil, errors.Join(decodeErr, dlqErr)
-			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(decodeErr, actionErr)
 			}
+			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%v",
+				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, decodeErr)
 			continue
 		}
 		jobPayload, ok := payload.(*cloudjobpb.JobExecutionRequested)
 		if !ok {
 			reason := fmt.Sprintf("cloudnode payload type mismatch: %T", payload)
-			if dlqErr := q.reject(ctx, delivery, reason); dlqErr != nil {
-				return nil, dlqErr
-			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(errors.New(reason), actionErr)
 			}
+			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%s",
+				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, reason)
 			continue
 		}
 		if jobPayload.GetJobItemId() == "" || jobPayload.GetCodePackageId() == "" || jobPayload.GetJobType() == "" {
-			if dlqErr := q.reject(ctx, delivery, "cloudnode job payload identity is incomplete"); dlqErr != nil {
-				return nil, dlqErr
-			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(errors.New("decode malformed cloudnode job item"), fmt.Errorf("term malformed job item: %w", actionErr))
 			}
+			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=payload_identity_incomplete",
+				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount)
 			continue
 		}
 		expectedSubject, subjectErr := registry.RenderSubject(events.CloudJobExecutionRequested, req.SpaceID, req.CodePackageID+"/"+jobPayload.GetJobType())
 		if subjectErr != nil || delivery.Subject != expectedSubject || !contains(req.SupportedJobTypes, jobPayload.GetJobType()) {
-			if dlqErr := q.reject(ctx, delivery, "cloudnode route identity mismatch"); dlqErr != nil {
-				return nil, dlqErr
-			}
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(fmt.Errorf("cloudnode route mismatch"), actionErr)
 			}
+			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=route_identity_mismatch",
+				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount)
 			continue
 		}
 		submittedAt := time.Now().UTC()
@@ -255,18 +252,6 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 		out = append(out, Delivery{Message: meta, AttemptNo: int(delivery.DeliveryCount), AckSubject: token, StreamSeq: delivery.StreamSeq, ConsumerSeq: delivery.ConsumerSeq})
 	}
 	return out, nil
-}
-
-func (q *JetStreamQueue) reject(ctx context.Context, delivery *jetstream.Delivery, reason string) error {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	rejectedBy := "cloudnode"
-	if delivery != nil && strings.TrimSpace(delivery.Consumer) != "" {
-		rejectedBy = delivery.Consumer
-	}
-	return events.PublishRejected(ctx, q.publisher, registry, delivery, reason, rejectedBy)
 }
 
 func (q *JetStreamQueue) take(token string) *jetstream.Delivery {

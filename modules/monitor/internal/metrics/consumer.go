@@ -10,7 +10,6 @@ import (
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -44,54 +43,11 @@ func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, 
 	return a.Checks.IsSysDeployRegistered(ctx, serviceName)
 }
 
-type DLQPublisher interface {
-	Publish(context.Context, *eventpb.EventMessage) error
-}
-
-type jetstreamDLQ struct {
-	client   *jetstream.Client
-	service  string
-	instance string
-}
-
-func JetStreamDLQ(client *jetstream.Client, service, instance string) DLQPublisher {
-	if client == nil {
-		return nil
-	}
-	if service == "" {
-		service = "moox-monitor"
-	}
-	if instance == "" {
-		instance = "unknown"
-	}
-	return jetstreamDLQ{client: client, service: service, instance: instance}
-}
-
-func (p jetstreamDLQ) Publish(ctx context.Context, message *eventpb.EventMessage) error {
-	if p.client == nil {
-		return errors.New("metrics DLQ eventbus client is nil")
-	}
-	if message == nil {
-		return errors.New("metrics DLQ message is nil")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	publisher, err := events.NewPublisher(p.client, registry)
-	if err != nil {
-		return err
-	}
-	_, err = publisher.PublishMessage(ctx, message)
-	return err
-}
-
 type ConsumerOptions struct {
 	Client       *jetstream.Client
 	Storage      *StorageAdapter
 	MessageStore *MetricMessageStore
 	Authorizer   ProducerAuthorizer
-	DLQ          DLQPublisher
 	Config       monconfig.MetricsConfig
 	ServiceName  string
 	InstanceID   string
@@ -280,18 +236,9 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 
 func (c *Consumer) reject(ctx context.Context, delivery *jetstream.Delivery, reason error) jetstream.HandlerResult {
 	recordIngest("rejected", time.Time{})
-	if c.opts.DLQ == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: reason}
-	}
-	event, err := events.RejectedMessage(mustRegistry(), delivery, reason.Error(), c.opts.ServiceName, c.opts.InstanceID)
-	if err != nil {
-		return c.retry(err)
-	}
-	if err := c.opts.DLQ.Publish(ctx, event); err != nil {
-		return c.retry(fmt.Errorf("publish metrics DLQ: %w", err))
-	}
-	dlqTotal.Inc()
-	return jetstream.HandlerResult{Decision: jetstream.TERM}
+	log.WarnContextf(ctx, "component=monitor_metrics consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%v",
+		c.opts.Config.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, reason)
+	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: reason}
 }
 
 func (c *Consumer) HandleDelivery(ctx context.Context, delivery *jetstream.Delivery) error {

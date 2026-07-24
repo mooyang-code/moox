@@ -34,20 +34,15 @@ type EventConsumerOptions struct {
 	// failures. A value of zero uses the safe default; the broker topology is
 	// still authoritative for the durable's immutable settings.
 	MaxRetryAttempts int
-	// RetryExhausted is an optional DLQ/quarantine hook. It must durably record
-	// the delivery before returning nil; a hook failure keeps the message
-	// pending and retryable.
-	RetryExhausted func(context.Context, *jetstream.Delivery, error) error
-	ErrorReporter  jetstream.ErrorReporter
-	Metrics        *observability.ViewMetrics
+	ErrorReporter    jetstream.ErrorReporter
+	Metrics          *observability.ViewMetrics
 	// BeforeProcess is an optional test/diagnostic hook. Production callers
 	// leave it nil; it runs inside the subject lane before projection work.
 	BeforeProcess func(context.Context, *jetstream.Delivery) error
 }
 
 const (
-	defaultMaxRetryAttempts    = 10
-	maxRetryExhaustionAttempts = 3
+	defaultMaxRetryAttempts = 10
 )
 
 func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
@@ -125,9 +120,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
 	}
-	if opts.RetryExhausted == nil {
-		opts.RetryExhausted = storageViewDLQPublisher(client)
-	}
 	s.metrics = opts.Metrics
 	reporter := opts.ErrorReporter
 	if reporter == nil {
@@ -149,7 +141,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				return err
 			}
 		}
-		return s.processDeliveryWithPolicy(ctx, delivery, heartbeat, opts.MaxRetryAttempts, opts.RetryExhausted)
+		return s.processDeliveryWithPolicy(ctx, delivery, heartbeat, opts.MaxRetryAttempts)
 	}, reporter, laneMetricsHooks{
 		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
 			return newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(time.Duration(opts.AckWaitMS)*time.Millisecond), opts.Metrics)
@@ -210,7 +202,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 }
 
 func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
-	return s.processDeliveryWithPolicy(ctx, delivery, firstHeartbeat(queued), defaultMaxRetryAttempts, nil)
+	return s.processDeliveryWithPolicy(ctx, delivery, firstHeartbeat(queued), defaultMaxRetryAttempts)
 }
 
 func firstHeartbeat(queued []*deliveryHeartbeat) *deliveryHeartbeat {
@@ -220,14 +212,14 @@ func firstHeartbeat(queued []*deliveryHeartbeat) *deliveryHeartbeat {
 	return queued[0]
 }
 
-func (s *Service) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, retryExhausted func(context.Context, *jetstream.Delivery, error) error) error {
-	return s.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, retryExhausted, func(ctx context.Context, delivery *jetstream.Delivery) error {
+func (s *Service) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
+	return s.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, func(ctx context.Context, delivery *jetstream.Delivery) error {
 		return s.applyDelivery(ctx, delivery)
 	})
 }
 
-func (s *Service) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, retryExhausted func(context.Context, *jetstream.Delivery, error) error, apply func(context.Context, *jetstream.Delivery) error) error {
-	return s.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, retryExhausted, apply, deliveryActions{
+func (s *Service) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error) error {
+	return s.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, apply, deliveryActions{
 		ack:      delivery.Ack,
 		progress: delivery.InProgress,
 		term:     delivery.Term,
@@ -240,7 +232,7 @@ type deliveryActions struct {
 	term     func(context.Context) error
 }
 
-func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, retryExhausted func(context.Context, *jetstream.Delivery, error) error, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) error {
+func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) error {
 	if s == nil {
 		return errors.New("storage view service is nil")
 	}
@@ -276,62 +268,7 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 	}
 	defer s.releaseLiveDelivery()
 	retryCount := 0
-	quarantineAttempts := 0
-	quarantinePending := false
-	quarantined := false
-	var lastApplyErr error
 	for ctx.Err() == nil {
-		if quarantined {
-			if termErr := actions.term(ctx); termErr == nil {
-				metrics.ObserveDelivery("term", "success")
-				return heartbeat.err()
-			} else {
-				log.Printf("storage view delivery term failed after quarantine: %v", termErr)
-				metrics.IncAckError()
-				metrics.ObserveDelivery("term", "error")
-				heartbeat.report(termErr)
-				if errors.Is(termErr, jetstream.ErrInvalidDelivery) || errors.Is(termErr, jetstream.ErrClosed) {
-					return errors.Join(lastApplyErr, termErr, heartbeat.err())
-				}
-			}
-			if !sleepDeliveryRetry(ctx, time.Second) {
-				return ctx.Err()
-			}
-			continue
-		}
-
-		if quarantinePending {
-			quarantineAttempts++
-			if retryExhausted == nil {
-				quarantined = true
-				continue
-			}
-			if escalateErr := retryExhausted(ctx, delivery, lastApplyErr); escalateErr != nil {
-				reporter := fmt.Errorf("storage view retry exhaustion hook failed after %v: %w", lastApplyErr, escalateErr)
-				log.Print(reporter)
-				heartbeat.report(escalateErr)
-				if quarantineAttempts >= maxRetryExhaustionAttempts {
-					// Do not TERM the original event when quarantine is unavailable.
-					// Returning stops the heartbeat and lets JetStream redeliver it.
-					return errors.Join(lastApplyErr, reporter, heartbeat.err())
-				}
-				if progressErr := actions.progress(ctx); progressErr != nil {
-					log.Printf("storage view delivery progress failed while retrying quarantine: %v", progressErr)
-					metrics.IncInProgressError()
-					metrics.ObserveDelivery("in_progress", "error")
-					heartbeat.report(progressErr)
-				} else {
-					metrics.ObserveDelivery("in_progress", "success")
-				}
-				if !sleepDeliveryRetry(ctx, time.Second) {
-					return ctx.Err()
-				}
-				continue
-			}
-			quarantined = true
-			continue
-		}
-
 		err := apply(ctx, delivery)
 		if err == nil {
 			// Applying a projection is deliberately separate from ACK retry:
@@ -376,9 +313,15 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 		retryCount++
 		if retryCount >= maxRetryAttempts {
 			metrics.IncRetryExhausted()
-			lastApplyErr = err
-			quarantinePending = true
-			continue
+			log.Printf("storage view delivery retry exhausted: consumer=%s event_id=%s subject=%s delivery_count=%d decision=TERM reason=%v",
+				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, err)
+			if termErr := actions.term(ctx); termErr != nil {
+				metrics.IncAckError()
+				metrics.ObserveDelivery("term", "error")
+				return errors.Join(err, termErr, heartbeat.err())
+			}
+			metrics.ObserveDelivery("term", "success")
+			return errors.Join(err, heartbeat.err())
 		}
 		// Keep the delivery pending while retrying. NAK would release
 		// MaxAckPending and allow a later event to overtake it.

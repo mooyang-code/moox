@@ -41,7 +41,7 @@ func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *te
 	deliveryTerm := func(context.Context) error { terms++; cancel(); return nil }
 	// Keep the callbacks on the delivery rather than changing DeliveryCount;
 	// this models client-side InProgress calls renewing one broker delivery.
-	err := svc.processDeliveryWithApplyAndActions(ctx, delivery, nil, 3, func(context.Context, *jetstream.Delivery, error) error { return nil }, func(context.Context, *jetstream.Delivery) error {
+	err := svc.processDeliveryWithApplyAndActions(ctx, delivery, nil, 3, func(context.Context, *jetstream.Delivery) error {
 		applies++
 		return errors.New("temporary projection failure")
 	}, deliveryActions{
@@ -49,22 +49,19 @@ func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *te
 		progress: deliveryProgress,
 		term:     deliveryTerm,
 	})
-	if err != nil {
-		t.Fatalf("processDeliveryWithApply() error = %v", err)
+	if err == nil {
+		t.Fatal("processDeliveryWithApply() error = nil, want retry exhaustion")
 	}
 	if applies != 3 || terms != 1 || progress != 2 {
 		t.Fatalf("applies=%d terms=%d progress=%d, want applies=3 terms=1 progress=2", applies, terms, progress)
 	}
 }
 
-func TestProcessDeliveryStopsAfterRepeatedQuarantineFailure(t *testing.T) {
+func TestProcessDeliveryTermsAfterRetryExhaustion(t *testing.T) {
 	svc := &Service{}
-	var applies, quarantineCalls, terms int
+	var applies, terms int
 	delivery := &jetstream.Delivery{Subject: "same", DeliveryCount: 1}
-	err := svc.processDeliveryWithApplyAndActions(context.Background(), delivery, nil, 1, func(context.Context, *jetstream.Delivery, error) error {
-		quarantineCalls++
-		return errors.New("dlq unavailable")
-	}, func(context.Context, *jetstream.Delivery) error {
+	err := svc.processDeliveryWithApplyAndActions(context.Background(), delivery, nil, 1, func(context.Context, *jetstream.Delivery) error {
 		applies++
 		return errors.New("temporary projection failure")
 	}, deliveryActions{
@@ -73,10 +70,10 @@ func TestProcessDeliveryStopsAfterRepeatedQuarantineFailure(t *testing.T) {
 		term:     func(context.Context) error { terms++; return nil },
 	})
 	if err == nil {
-		t.Fatal("processDeliveryWithApplyAndActions() error = nil, want quarantine failure")
+		t.Fatal("processDeliveryWithApplyAndActions() error = nil, want retry exhaustion")
 	}
-	if applies != 1 || quarantineCalls != maxRetryExhaustionAttempts || terms != 0 {
-		t.Fatalf("applies=%d quarantine_calls=%d terms=%d, want 1/%d/0", applies, quarantineCalls, terms, maxRetryExhaustionAttempts)
+	if applies != 1 || terms != 1 {
+		t.Fatalf("applies=%d terms=%d, want 1/1", applies, terms)
 	}
 }
 

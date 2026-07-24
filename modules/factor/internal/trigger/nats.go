@@ -63,7 +63,6 @@ type NATSConsumer struct {
 	wg           sync.WaitGroup
 	mu           sync.Mutex
 	runErr       error
-	publisher    events.MessagePublisher
 }
 
 func NewNATSConsumer(cfg NATSConfig, eventBatcher *EventBatcher) *NATSConsumer {
@@ -97,18 +96,8 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 		_ = client.Close()
 		return err
 	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		_ = client.Close()
-		return err
-	}
-	publisher, err := events.NewPublisher(client, registry)
-	if err != nil {
-		_ = client.Close()
-		return err
-	}
-	c.client, c.consumer, c.publisher = client, consumer, publisher
-	c.runner = jetstream.NewRunner(rawPullAdapter{consumer}, storageEventHandler{eventBatcher: c.eventBatcher, publisher: publisher}, jetstream.RunnerConfig{BatchSize: 16})
+	c.client, c.consumer = client, consumer
+	c.runner = jetstream.NewRunner(rawPullAdapter{consumer}, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16})
 	loopCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.wg.Add(1)
@@ -151,7 +140,6 @@ func (c *NATSConsumer) recordError(err error) {
 
 type storageEventHandler struct {
 	eventBatcher *EventBatcher
-	publisher    events.MessagePublisher
 }
 
 type rawPullAdapter struct{ *jetstream.PullConsumer }
@@ -162,7 +150,7 @@ func (a rawPullAdapter) Fetch(ctx context.Context, batch int) ([]*jetstream.Deli
 
 func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 	if delivery == nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: jetstream.ErrInvalidDelivery}
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
 	}
 	if delivery.ContentType == events.ContentType {
 		registry, err := events.DefaultRegistry()
@@ -183,15 +171,8 @@ func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Del
 	}
 }
 
-func (h storageEventHandler) reject(ctx context.Context, delivery *jetstream.Delivery, reason error) jetstream.HandlerResult {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-	}
-	if err := events.PublishRejected(ctx, h.publisher, registry, delivery, reason.Error(), "factor_calc"); err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-	}
-	return jetstream.HandlerResult{Decision: jetstream.TERM}
+func (h storageEventHandler) reject(_ context.Context, _ *jetstream.Delivery, reason error) jetstream.HandlerResult {
+	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("factor event rejected: %w", reason)}
 }
 
 func (h storageEventHandler) ingest(ctx context.Context, delivery *jetstream.Delivery, event *storagepb.DatasetRowsUpserted) jetstream.HandlerResult {
