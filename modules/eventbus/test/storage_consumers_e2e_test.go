@@ -100,7 +100,7 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 			t.Fatalf("deliveries %s=%+v", durable, deliveries)
 		}
 		message := deliveries[0].Message
-		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
+		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
 			t.Fatalf("decoded envelope %s=%+v", durable, message)
 		}
 		if err := deliveries[0].Delivery.Ack(ctx); err != nil {

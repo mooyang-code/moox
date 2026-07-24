@@ -77,9 +77,9 @@ func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (EventSchema, 
 	if len(message.GetPayload()) == 0 {
 		return EventSchema{}, fmt.Errorf("payload is required")
 	}
-	spec, ok := r.Schema(EventType{Name: message.GetEventName(), Version: message.GetEventVersion()})
+	spec, ok := r.Schema(EventType{name: message.GetEventName(), version: message.GetEventVersion()})
 	if !ok {
-		return EventSchema{}, fmt.Errorf("event %s is not registered", eventKey(EventType{Name: message.GetEventName(), Version: message.GetEventVersion()}))
+		return EventSchema{}, fmt.Errorf("event %s is not registered", eventKey(EventType{name: message.GetEventName(), version: message.GetEventVersion()}))
 	}
 	factory, ok := r.PayloadFactory(spec.Payload)
 	if !ok {
@@ -97,7 +97,7 @@ func (r *Registry) SubjectForMessage(message *eventpb.EventMessage) (string, err
 	if _, err := r.ValidateMessage(message); err != nil {
 		return "", err
 	}
-	return r.RenderSubject(EventType{Name: message.GetEventName(), Version: message.GetEventVersion()}, message.GetSpaceId(), message.GetSubjectId())
+	return r.RenderSubject(EventType{name: message.GetEventName(), version: message.GetEventVersion()}, message.GetSpaceId(), message.GetSubjectId())
 }
 
 func (r *Registry) Encode(event EventType, payload proto.Message, opts PublishOptions) (EncodedEvent, error) {

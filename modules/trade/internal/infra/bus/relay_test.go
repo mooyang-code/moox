@@ -69,7 +69,7 @@ func TestRelayPublishesGovernedEventMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.GetEventName() != events.TradeOrderStateChanged.Name || payload == nil {
+	if message.GetEventName() != events.TradeOrderStateChanged.Name() || payload == nil {
 		t.Fatalf("message=%v payload=%T", message, payload)
 	}
 }

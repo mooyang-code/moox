@@ -4,6 +4,7 @@ go 1.25.0
 
 replace (
 	github.com/mooyang-code/moox/modules/storage => ./
+	github.com/mooyang-code/moox/modules/collector => ../collector
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen => ./proto/storagegen
 	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 	github.com/mooyang-code/moox/packages/dlqpb => ../../packages/dlqpb
@@ -19,6 +20,7 @@ require (
 	github.com/blevesearch/bleve_index_api v1.3.11
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
+	github.com/mooyang-code/moox/modules/collector v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/dlqpb v0.0.0-00010101000000-000000000000

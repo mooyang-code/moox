@@ -129,7 +129,7 @@ func TestTickCollectorPublishesThroughRealEventPublisherE2E(t *testing.T) {
 	if err != nil || len(deliveries) != 1 {
 		t.Fatalf("collector event deliveries=%d err=%v", len(deliveries), err)
 	}
-	if tick, ok := deliveries[0].Payload.(*marketpb.Tick); !ok || tick.GetTradeId() != "7" || deliveries[0].Message.GetEventName() != events.TickReceived.Name {
+	if tick, ok := deliveries[0].Payload.(*marketpb.Tick); !ok || tick.GetTradeId() != "7" || deliveries[0].Message.GetEventName() != events.TickReceived.Name() {
 		t.Fatalf("collector delivery=%#v", deliveries[0])
 	}
 	if err := deliveries[0].Delivery.Ack(context.Background()); err != nil {

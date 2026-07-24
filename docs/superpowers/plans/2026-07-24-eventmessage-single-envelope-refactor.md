@@ -32,7 +32,8 @@
 - 目标 Linux EventMessage 链路：`modules/streamcalc/test` 的
   `TestCollectorEventToStreamcalcAggregationE2E` 也已在同一远端工作目录通过。
 - 本机 CGO Storage 市场链路：`TestMarketKlineToStorageOutboxE2E` 通过，测试实际构建并启动 Streamcalc server，覆盖 Tick -> Streamcalc -> KlineConsumer -> PrimaryStore -> DataNode source marker/outbox -> relay 以及 View/Factor/Archive durable fan-out；测试关闭首次消费连接强制 ACK 失败，重新绑定同一 durable 验证 JetStream 重投，未产生第二条 outbox event。
-- 真实部署拓扑、生产配置下的全进程联调：仍需单独执行；本地 E2E 已启动 Streamcalc、Archive、Factor 生产二进制，Collector ingress 另有真实 TickCollector + EventPublisher E2E。
+- 真实部署拓扑、生产配置下的全进程联调：仍需单独执行；本地市场 E2E 已在同一个 embedded NATS 上运行真实 TickCollector ingress、Streamcalc、Archive、Factor 生产二进制和 Storage KlineConsumer。Collector ingress 使用 `modules/collector/testkit` 调用真实 TickCollector，不再直接调用 Publisher.Publish。
+- source-event marker 使用时间有序索引并按 256 条批次清理，批次之间释放 DataNode outbox 写锁；EventType 已改为不暴露 name/version 字段的 opaque value，并补齐 alias/变量架构门禁。
 
 ---
 
@@ -823,7 +824,7 @@ refactor(events): centralize typed DLQ publication
 ```
 
 - [ ] gate 允许 `PublishRaw` 只存在于 `packages/events` 和 `packages/jetstream` 自身测试。
-- [ ] gate 校验生产模块出现的 EventType 全部在 `events.yaml` 注册。
+- [x] gate 校验生产模块出现的 EventType 全部在 `events.yaml` 注册，并拒绝 alias/变量绕过。
 - [ ] gate 校验每个 registry schema 被 EventBus Stream 覆盖。
 - [ ] 运行 `go work sync`，审查 go.sum 变更，禁止无关升级。
 
@@ -841,7 +842,7 @@ chore(event): remove the legacy MooxMessage stack
 - Update `outputs/` evidence.
 
 - [ ] EventBus 启动并完成 registry reconciliation。
-- [ ] Collector Tick -> Streamcalc Kline -> Storage DatasetRowsUpserted（当前 Collector ingress 与 downstream E2E 分开，仍需合并为单一链路验收）。
+- [x] Collector Tick -> Streamcalc Kline -> Storage DatasetRowsUpserted：同一 embedded NATS 上由真实 TickCollector 产生 Tick，Streamcalc、KlineConsumer 和 Storage outbox 继续处理；同时验证 Collector payload symbol 与 envelope subject_id 一致。
 - [x] DatasetRowsUpserted -> Storage View/Archive/Factor，验证生产 Archive/Factor 进程 durable ACK。
 - [ ] HostAgent/Report -> Monitor，验证 producer identity 未丢失。
 - [ ] CloudNode submit -> exact route poll -> report/ack。

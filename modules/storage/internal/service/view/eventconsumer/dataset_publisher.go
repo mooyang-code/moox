@@ -45,7 +45,7 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	if err := proto.Unmarshal(data, message); err != nil {
 		return "", "", err
 	}
-	if message.GetEventName() != events.DatasetRowsUpserted.Name || message.GetEventVersion() != events.DatasetRowsUpserted.Version || message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
+	if message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetEventVersion() != events.DatasetRowsUpserted.Version() || message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
 		return "", "", errors.New("dataset event envelope is incomplete")
 	}
 	if message.GetEventId() == "outbox-pending" {

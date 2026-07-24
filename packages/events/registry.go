@@ -25,29 +25,37 @@ import (
 var defaultRegistryYAML embed.FS
 
 type EventType struct {
-	Name    string
-	Version uint32
+	name    string
+	version uint32
 }
 
+// Name returns the governed event name. EventType intentionally keeps its
+// representation private so producers can only use the vocabulary declared by
+// this package instead of manufacturing unregistered event types.
+func (e EventType) Name() string { return e.name }
+
+// Version returns the governed event schema version.
+func (e EventType) Version() uint32 { return e.version }
+
 var (
-	TickReceived                 = EventType{Name: "market.tick.received", Version: 1}
-	MarketKlineClosed            = EventType{Name: "market.kline.closed", Version: 1}
-	TradingSignal                = EventType{Name: "trading.signal", Version: 1}
-	DatasetRowsUpserted          = EventType{Name: "storage.dataset.rows.upserted", Version: 1}
-	MetricsHostReported          = EventType{Name: "metrics.host.reported", Version: 1}
-	MetricsSnapshotReported      = EventType{Name: "metrics.snapshot.reported", Version: 1}
-	DLQMessageRejected           = EventType{Name: "dlq.message.rejected", Version: 1}
-	StrategyOutputAccepted       = EventType{Name: "strategy.output.accepted", Version: 1}
-	TradeOrderIntentCreated      = EventType{Name: "trade.order.intent.created", Version: 1}
-	TradeOrderStateChanged       = EventType{Name: "trade.order.state.changed", Version: 1}
-	TradeExecutionSliceReady     = EventType{Name: "trade.execution.slice.ready", Version: 1}
-	TradeFillReceived            = EventType{Name: "trade.fill.received", Version: 1}
-	TradeRebalanceRequested      = EventType{Name: "trade.rebalance.requested", Version: 1}
-	TradeRebalanceCompleted      = EventType{Name: "trade.rebalance.completed", Version: 1}
-	TradeReconciliationRequested = EventType{Name: "trade.reconciliation.requested", Version: 1}
-	CloudJobExecutionRequested   = EventType{Name: "cloudnode.job.execution.requested", Version: 1}
-	TradeOrderAcknowledged       = EventType{Name: "trade.order.acknowledged", Version: 1}
-	TradeOrderSubmitUnknown      = EventType{Name: "trade.order.submit.unknown", Version: 1}
+	TickReceived                 = EventType{name: "market.tick.received", version: 1}
+	MarketKlineClosed            = EventType{name: "market.kline.closed", version: 1}
+	TradingSignal                = EventType{name: "trading.signal", version: 1}
+	DatasetRowsUpserted          = EventType{name: "storage.dataset.rows.upserted", version: 1}
+	MetricsHostReported          = EventType{name: "metrics.host.reported", version: 1}
+	MetricsSnapshotReported      = EventType{name: "metrics.snapshot.reported", version: 1}
+	DLQMessageRejected           = EventType{name: "dlq.message.rejected", version: 1}
+	StrategyOutputAccepted       = EventType{name: "strategy.output.accepted", version: 1}
+	TradeOrderIntentCreated      = EventType{name: "trade.order.intent.created", version: 1}
+	TradeOrderStateChanged       = EventType{name: "trade.order.state.changed", version: 1}
+	TradeExecutionSliceReady     = EventType{name: "trade.execution.slice.ready", version: 1}
+	TradeFillReceived            = EventType{name: "trade.fill.received", version: 1}
+	TradeRebalanceRequested      = EventType{name: "trade.rebalance.requested", version: 1}
+	TradeRebalanceCompleted      = EventType{name: "trade.rebalance.completed", version: 1}
+	TradeReconciliationRequested = EventType{name: "trade.reconciliation.requested", version: 1}
+	CloudJobExecutionRequested   = EventType{name: "cloudnode.job.execution.requested", version: 1}
+	TradeOrderAcknowledged       = EventType{name: "trade.order.acknowledged", version: 1}
+	TradeOrderSubmitUnknown      = EventType{name: "trade.order.submit.unknown", version: 1}
 )
 
 // AllEventTypes is the compile-time event vocabulary used by producers. The
@@ -82,7 +90,7 @@ type EventSchema struct {
 // iterating the governed schema catalog. Producers should use the named
 // vocabulary values above instead of constructing EventType dynamically.
 func EventTypeFromSchema(schema EventSchema) EventType {
-	return EventType{Name: schema.Name, Version: schema.Version}
+	return EventType{name: schema.Name, version: schema.Version}
 }
 
 type registryFile struct {
@@ -131,7 +139,7 @@ func NewRegistry(raw []byte) (*Registry, error) {
 		if _, ok := r.payloads[spec.Payload]; !ok {
 			return nil, fmt.Errorf("event %q payload %q is not registered", spec.Name, spec.Payload)
 		}
-		key := eventKey(EventType{Name: spec.Name, Version: spec.Version})
+		key := eventKey(EventType{name: spec.Name, version: spec.Version})
 		if _, ok := r.byKey[key]; ok {
 			return nil, fmt.Errorf("duplicate event %s", key)
 		}
@@ -260,5 +268,5 @@ func (r *Registry) Validate() error {
 }
 
 func eventKey(event EventType) string {
-	return fmt.Sprintf("%s@%d", strings.TrimSpace(event.Name), event.Version)
+	return fmt.Sprintf("%s@%d", strings.TrimSpace(event.name), event.version)
 }

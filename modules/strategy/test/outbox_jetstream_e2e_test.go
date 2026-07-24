@@ -117,7 +117,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.StrategyOutputAccepted.Name {
+		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.StrategyOutputAccepted.Name() {
 			t.Fatalf("invalid envelope/header: id=%q envelope=%+v", message.Header.Get(nats.MsgIdHdr), &envelope)
 		}
 		if _, ok := payload.(*strategyeventpb.StrategyOutputAccepted); !ok {

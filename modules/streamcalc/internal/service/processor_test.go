@@ -47,7 +47,7 @@ func TestProcessorWritesOnlyClosedAggregate(t *testing.T) {
 	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	for i := 0; i < 2; i++ {
 		start := base.Add(time.Duration(i) * time.Minute)
-		delivery := &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: string(rune('a' + i)), EventName: events.TickReceived.Name, EventVersion: events.TickReceived.Version, SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(start.Add(10 * time.Second))}}
+		delivery := &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: string(rune('a' + i)), EventName: events.TickReceived.Name(), EventVersion: events.TickReceived.Version(), SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(start.Add(10 * time.Second))}}
 		if err := processor.Process(context.Background(), delivery); err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +75,7 @@ func TestProcessorAcceptsTickPayload(t *testing.T) {
 		{id: "tick-1", at: base.Add(10 * time.Second)},
 		{id: "tick-2", at: base.Add(70 * time.Second)},
 	} {
-		delivery := &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: item.id, EventName: events.TickReceived.Name, EventVersion: events.TickReceived.Version, SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(item.at)}}
+		delivery := &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: item.id, EventName: events.TickReceived.Name(), EventVersion: events.TickReceived.Version(), SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(item.at)}}
 		if err := processor.Process(context.Background(), delivery); err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +97,7 @@ func TestProcessorRejectsKlineOutputAsInput(t *testing.T) {
 	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	delivery := &events.EventDelivery{
 		Delivery: &jetstream.Delivery{},
-		Message:  &events.EventMessage{EventId: "kline-output", EventName: events.MarketKlineClosed.Name, EventVersion: events.MarketKlineClosed.Version, SpaceId: "crypto", SubjectId: "BTC-USDT"},
+		Message:  &events.EventMessage{EventId: "kline-output", EventName: events.MarketKlineClosed.Name(), EventVersion: events.MarketKlineClosed.Version(), SpaceId: "crypto", SubjectId: "BTC-USDT"},
 		Payload:  &marketpb.KlineClosed{Symbol: "BTC-USDT", Frequency: "5m", WindowStart: timestamppb.New(base), WindowEnd: timestamppb.New(base.Add(5 * time.Minute))},
 	}
 	if err := processor.Process(context.Background(), delivery); err == nil {
@@ -116,7 +116,7 @@ func TestProcessorRejectsTickWithWrongEventName(t *testing.T) {
 	}
 	delivery := &events.EventDelivery{
 		Delivery: &jetstream.Delivery{},
-		Message:  &events.EventMessage{EventId: "wrong-event-name", EventName: events.MarketKlineClosed.Name, EventVersion: events.MarketKlineClosed.Version, SpaceId: "crypto", SubjectId: "BTC-USDT"},
+		Message:  &events.EventMessage{EventId: "wrong-event-name", EventName: events.MarketKlineClosed.Name(), EventVersion: events.MarketKlineClosed.Version(), SpaceId: "crypto", SubjectId: "BTC-USDT"},
 		Payload:  &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(time.Date(2026, 7, 23, 10, 0, 10, 0, time.UTC))},
 	}
 	if err := processor.Process(context.Background(), delivery); err == nil {
@@ -136,7 +136,7 @@ func TestProcessorRetriesClosedOutputAfterWriterFailure(t *testing.T) {
 	}
 	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	delivery := func(id string, start time.Time) *events.EventDelivery {
-		return &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: id, EventName: events.TickReceived.Name, EventVersion: events.TickReceived.Version, SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(start.Add(10 * time.Second))}}
+		return &events.EventDelivery{Delivery: &jetstream.Delivery{}, Message: &events.EventMessage{EventId: id, EventName: events.TickReceived.Name(), EventVersion: events.TickReceived.Version(), SpaceId: "crypto", SubjectId: "BTC-USDT"}, Payload: &marketpb.Tick{Symbol: "BTC-USDT", Price: 100, Quantity: 1, TradeTime: timestamppb.New(start.Add(10 * time.Second))}}
 	}
 	if err := processor.Process(context.Background(), delivery("first", base)); err != nil {
 		t.Fatal(err)

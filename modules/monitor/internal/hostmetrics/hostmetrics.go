@@ -103,7 +103,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if msg == nil {
 		return nil, errors.New("message is nil")
 	}
-	if msg.GetEventName() != events.MetricsHostReported.Name || msg.GetEventVersion() != events.MetricsHostReported.Version {
+	if msg.GetEventName() != events.MetricsHostReported.Name() || msg.GetEventVersion() != events.MetricsHostReported.Version() {
 		return nil, errors.New("host metric envelope contract mismatch")
 	}
 	if msg.GetSpaceId() != SpaceID || strings.TrimSpace(msg.GetSubjectId()) == "" {

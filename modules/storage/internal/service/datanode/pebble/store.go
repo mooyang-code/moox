@@ -19,13 +19,15 @@ import (
 )
 
 const (
-	outboxPrefix         = "__outbox/"
-	processedEventPrefix = "__processed_event/"
-	metaNextID           = "__meta/next_outbox_id"
+	outboxPrefix             = "__outbox/"
+	processedEventPrefix     = "__processed_event/"
+	processedEventTimePrefix = "__processed_event_time/"
+	metaNextID               = "__meta/next_outbox_id"
 	// The market stream keeps source events for 168 hours. Keep dedupe markers
 	// one day longer so a late redelivery cannot recreate a row after stream
 	// retention has elapsed.
 	defaultProcessedEventRetention = 192 * time.Hour
+	processedEventCleanupBatchSize = 256
 )
 
 // Options controls one DataNode Pebble database. A node can host multiple
@@ -275,7 +277,12 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			}
 			entries = append(entries, &OutboxEntry{ID: id, Data: append([]byte(nil), payload...), CreatedAt: time.Now().UTC()})
 			if sourceEventID != "" {
-				if err := batch.Set(processedSourceEventKey(sourceEventID, group), encodeProcessedEventTimestamp(time.Now().UTC()), s.writeOptions); err != nil {
+				createdAt := time.Now().UTC()
+				markerKey := processedSourceEventKey(sourceEventID, group)
+				if err := batch.Set(markerKey, encodeProcessedEventTimestamp(createdAt), s.writeOptions); err != nil {
+					return nil, err
+				}
+				if err := batch.Set(processedSourceEventTimeKey(createdAt, markerKey), markerKey, s.writeOptions); err != nil {
 					return nil, err
 				}
 			}
@@ -299,8 +306,9 @@ func (s *Store) CleanupProcessedSourceEvents(ctx context.Context, now time.Time)
 }
 
 // CleanupProcessedSourceEventsBefore removes markers created before cutoff.
-// The explicit cutoff keeps scheduling policy outside the Pebble store and
-// makes retention behavior deterministic in tests.
+// The time index makes cleanup proportional to expired markers rather than the
+// full marker set. Each bounded batch releases outboxMu before the next batch
+// so maintenance cannot hold the write path hostage for an unbounded scan.
 func (s *Store) CleanupProcessedSourceEventsBefore(ctx context.Context, cutoff time.Time) (int, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("pebble store is closed")
@@ -312,41 +320,60 @@ func (s *Store) CleanupProcessedSourceEventsBefore(ctx context.Context, cutoff t
 		return 0, errors.New("processed event cleanup cutoff is required")
 	}
 	cutoff = cutoff.UTC()
+	removed := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return removed, err
+		}
+		count, err := s.cleanupProcessedSourceEventBatch(ctx, cutoff)
+		removed += count
+		if err != nil || count < processedEventCleanupBatchSize {
+			return removed, err
+		}
+	}
+}
+
+func (s *Store) cleanupProcessedSourceEventBatch(ctx context.Context, cutoff time.Time) (int, error) {
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(processedEventPrefix), UpperBound: []byte(processedEventPrefix + "\xff")})
+	upperBound := processedSourceEventTimeKey(cutoff, nil)
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(processedEventTimePrefix), UpperBound: upperBound})
 	if err != nil {
 		return 0, err
 	}
 	defer iter.Close()
-	var expired [][]byte
-	for valid := iter.First(); valid; valid = iter.Next() {
+	keys := make([][]byte, 0, processedEventCleanupBatchSize)
+	markers := make([][]byte, 0, processedEventCleanupBatchSize)
+	for valid := iter.First(); valid && len(keys) < processedEventCleanupBatchSize; valid = iter.Next() {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		createdAt, ok := decodeProcessedEventTimestamp(iter.Value())
-		if !ok || createdAt.Before(cutoff) {
-			expired = append(expired, append([]byte(nil), iter.Key()...))
-		}
+		keys = append(keys, append([]byte(nil), iter.Key()...))
+		markers = append(markers, append([]byte(nil), iter.Value()...))
 	}
 	if err := iter.Error(); err != nil {
 		return 0, err
 	}
-	if len(expired) == 0 {
+	if len(keys) == 0 {
 		return 0, nil
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	for _, key := range expired {
+	for i, key := range keys {
 		if err := batch.Delete(key, s.writeOptions); err != nil {
 			return 0, err
+		}
+		if len(markers[i]) != 0 {
+			if err := batch.Delete(markers[i], s.writeOptions); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err
 	}
-	return len(expired), nil
+	return len(keys), nil
 }
 
 func encodeProcessedEventTimestamp(at time.Time) []byte {
@@ -377,6 +404,14 @@ func (s *Store) hasProcessedSourceEvent(sourceEventID string, group datasetGroup
 func processedSourceEventKey(sourceEventID string, group datasetGroup) []byte {
 	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + group.spaceID + "\x00" + group.datasetID))
 	return []byte(processedEventPrefix + hex.EncodeToString(hash[:]))
+}
+
+func processedSourceEventTimeKey(createdAt time.Time, markerKey []byte) []byte {
+	key := processedEventTimePrefix + hex.EncodeToString(encodeProcessedEventTimestamp(createdAt))
+	if len(markerKey) == 0 {
+		return []byte(key)
+	}
+	return []byte(key + "/" + hex.EncodeToString(markerKey))
 }
 
 func sortedDatasetGroups(grouped map[datasetGroup][]*pb.RowFieldUpsert) []datasetGroup {

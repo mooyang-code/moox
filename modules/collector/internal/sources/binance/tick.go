@@ -17,7 +17,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type recentTradeAPI interface {
+// RecentTradeAPI is the exchange boundary used by TickCollector.
+type RecentTradeAPI interface {
 	GetRecentTrades(context.Context, *exchange.TradeRequest) ([]*exchange.Trade, error)
 }
 
@@ -27,12 +28,26 @@ type recentTradeAPI interface {
 // make a replayed REST page harmless, while streamcalc remains the sole K-line
 // aggregator.
 type TickCollector struct {
-	spotAPI recentTradeAPI
-	swapAPI recentTradeAPI
+	spotAPI RecentTradeAPI
+	swapAPI RecentTradeAPI
 	publish func(context.Context, events.EventType, proto.Message, events.PublishOptions) error
 
 	mu      sync.Mutex
 	lastIDs map[string]int64
+}
+
+// NewTickCollector constructs a tick collector with explicit dependencies.
+// The runtime normally uses SetEventPublisher, while integration testkits can
+// inject a publisher without mutating process-global state.
+func NewTickCollector(spotAPI, swapAPI RecentTradeAPI, publisher *events.Publisher) *TickCollector {
+	collector := &TickCollector{spotAPI: spotAPI, swapAPI: swapAPI, lastIDs: make(map[string]int64)}
+	if publisher != nil {
+		collector.publish = func(ctx context.Context, event events.EventType, message proto.Message, opts events.PublishOptions) error {
+			_, err := publisher.Publish(ctx, event, message, opts)
+			return err
+		}
+	}
+	return collector
 }
 
 func (c *TickCollector) Source() string   { return "binance" }
@@ -76,7 +91,11 @@ func (c *TickCollector) Collect(ctx context.Context, params *sources.CollectPara
 		if trade == nil || trade.ID <= lastID {
 			continue
 		}
-		payload, err := tickPayload(params.Symbol, trade)
+		// Event subject_id is the canonical MooX instrument identity. The
+		// exchange symbol may be formatted differently (for example BTCUSDT vs
+		// BTC-USDT), so downstream processors must receive the same value in the
+		// typed payload and the envelope.
+		payload, err := tickPayload(subjectID, trade)
 		if err != nil {
 			return err
 		}
@@ -97,7 +116,7 @@ func (c *TickCollector) Collect(ctx context.Context, params *sources.CollectPara
 	return nil
 }
 
-func (c *TickCollector) api(instType string) (recentTradeAPI, error) {
+func (c *TickCollector) api(instType string) (RecentTradeAPI, error) {
 	switch instType {
 	case InstTypeSPOT:
 		if c.spotAPI == nil {
@@ -154,4 +173,4 @@ func (c *TickCollector) setLastID(key string, id int64) {
 }
 
 var _ sources.Collector = (*TickCollector)(nil)
-var _ recentTradeAPI = (*binanceapi.SpotAPI)(nil)
+var _ RecentTradeAPI = (*binanceapi.SpotAPI)(nil)

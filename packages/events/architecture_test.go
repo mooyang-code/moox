@@ -26,7 +26,7 @@ func TestEventContractArchitecture(t *testing.T) {
 	}
 	for _, event := range AllEventTypes {
 		if _, ok := registry.Schema(event); !ok {
-			t.Fatalf("producer event %s@%d is not registered", event.Name, event.Version)
+			t.Fatalf("producer event %s@%d is not registered", event.Name(), event.Version())
 		}
 	}
 	for _, schema := range registry.Schemas() {
@@ -36,7 +36,7 @@ func TestEventContractArchitecture(t *testing.T) {
 		if _, ok := registry.PayloadFactory(schema.Payload); !ok {
 			t.Fatalf("event %s payload %s has no factory", schema.Name, schema.Payload)
 		}
-		family, err := registry.FamilyPattern(EventType{Name: schema.Name, Version: schema.Version})
+		family, err := registry.FamilyPattern(EventType{name: schema.Name, version: schema.Version})
 		if err != nil || family == "" {
 			t.Fatalf("event %s family = %q, err = %v", schema.Name, family, err)
 		}
@@ -113,6 +113,20 @@ var _ = EventType{}
 	violations = qualifiedEventTypeLiteralsInFile(file, "dot.go")
 	if len(violations) != 1 {
 		t.Fatalf("dot-import scanner violations=%v, want one", violations)
+	}
+	file, err = parser.ParseFile(token.NewFileSet(), "bypass.go", `package example
+
+import ev "github.com/mooyang-code/moox/packages/events"
+
+type ET = ev.EventType
+var event ET
+`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	violations = qualifiedEventTypeLiteralsInFile(file, "bypass.go")
+	if len(violations) != 2 {
+		t.Fatalf("alias and variable scanner violations=%v, want two", violations)
 	}
 }
 
@@ -224,7 +238,32 @@ func qualifiedEventTypeLiteralsInFile(file *ast.File, path string) []string {
 		return nil
 	}
 	violations := make([]string, 0)
+	appendViolation := func() { violations = append(violations, path) }
+	// Track aliases of EventType as well as the direct package qualifier. This
+	// keeps the architecture gate effective even when a producer hides the
+	// governed type behind a local alias or variable declaration.
+	for _, declaration := range file.Decls {
+		gen, ok := declaration.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			if isEventTypeExpr(typeSpec.Type, aliases, dotImport) {
+				aliases[typeSpec.Name.Name] = struct{}{}
+				appendViolation()
+			}
+		}
+	}
 	ast.Inspect(file, func(node ast.Node) bool {
+		valueSpec, valueOK := node.(*ast.ValueSpec)
+		if valueOK && valueSpec.Type != nil && isEventTypeExpr(valueSpec.Type, aliases, dotImport) {
+			appendViolation()
+			return true
+		}
 		literal, ok := node.(*ast.CompositeLit)
 		if !ok {
 			return true
@@ -234,18 +273,44 @@ func qualifiedEventTypeLiteralsInFile(file *ast.File, path string) []string {
 			identifier, identifierOK := selector.X.(*ast.Ident)
 			if identifierOK {
 				if _, ok := aliases[identifier.Name]; ok {
-					violations = append(violations, path)
+					appendViolation()
 				}
 			}
 			return true
 		}
 		identifier, identifierOK := literal.Type.(*ast.Ident)
 		if dotImport && identifierOK && identifier.Name == "EventType" {
-			violations = append(violations, path)
+			appendViolation()
+			return true
+		}
+		if identifierOK {
+			if _, ok := aliases[identifier.Name]; ok {
+				appendViolation()
+			}
 		}
 		return true
 	})
 	return violations
+}
+
+func isEventTypeExpr(expression ast.Expr, aliases map[string]struct{}, dotImport bool) bool {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if ok && selector.Sel.Name == "EventType" {
+		identifier, identifierOK := selector.X.(*ast.Ident)
+		if identifierOK {
+			_, ok = aliases[identifier.Name]
+			return ok
+		}
+	}
+	identifier, ok := expression.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if dotImport && identifier.Name == "EventType" {
+		return true
+	}
+	_, ok = aliases[identifier.Name]
+	return ok
 }
 
 func parseEventTypeLiteral(expression ast.Expr) (EventType, bool) {
@@ -269,23 +334,23 @@ func parseEventTypeLiteral(expression ast.Expr) (EventType, bool) {
 			return EventType{}, false
 		}
 		switch fieldName.Name {
-		case "Name":
+		case "name":
 			name, err := strconv.Unquote(value.Value)
 			if err != nil {
 				return EventType{}, false
 			}
-			event.Name = name
-		case "Version":
+			event.name = name
+		case "version":
 			version, err := strconv.ParseUint(value.Value, 0, 32)
 			if err != nil {
 				return EventType{}, false
 			}
-			event.Version = uint32(version)
+			event.version = uint32(version)
 		}
 	}
-	return event, event.Name != "" && event.Version != 0
+	return event, event.name != "" && event.version != 0
 }
 
 func eventVocabularyKey(event EventType) string {
-	return event.Name + "@" + strconv.FormatUint(uint64(event.Version), 10)
+	return event.name + "@" + strconv.FormatUint(uint64(event.version), 10)
 }

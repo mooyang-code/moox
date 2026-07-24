@@ -93,7 +93,7 @@ func (p *Processor) Process(ctx context.Context, delivery *events.EventDelivery)
 	if delivery.Message == nil {
 		return fmt.Errorf("event message is nil")
 	}
-	if delivery.Message.GetEventName() != events.TickReceived.Name || delivery.Message.GetEventVersion() != events.TickReceived.Version {
+	if delivery.Message.GetEventName() != events.TickReceived.Name() || delivery.Message.GetEventVersion() != events.TickReceived.Version() {
 		return fmt.Errorf("unexpected streamcalc input event %q@%d", delivery.Message.GetEventName(), delivery.Message.GetEventVersion())
 	}
 	eventID := delivery.Message.GetEventId()

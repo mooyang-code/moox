@@ -26,7 +26,7 @@ func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) 
 	if err := proto.Unmarshal(data, message); err != nil {
 		t.Fatal(err)
 	}
-	if message.GetEventId() == "" || message.GetEventName() != events.DatasetRowsUpserted.Name || message.GetEventVersion() != 1 || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
+	if message.GetEventId() == "" || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetEventVersion() != events.DatasetRowsUpserted.Version() || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
 		t.Fatalf("outer message = %v", message)
 	}
 	payload := &storagepb.DatasetRowsUpserted{}

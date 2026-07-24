@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	collectortestkit "github.com/mooyang-code/moox/modules/collector/testkit"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
@@ -28,15 +29,12 @@ import (
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// TestMarketKlineToStorageOutboxE2E covers the real market pipeline from the
-// TestMarketKlineToStorageOutboxE2E covers the real downstream market pipeline
-// from Streamcalc through PrimaryStore, DataNode outbox, Archive and Factor
-// production processes. Collector ingress is covered by the collector module's
-// real TickCollector + EventPublisher E2E. Replaying the same source event
-// after the write is committed must not create another event.
+// TestMarketKlineToStorageOutboxE2E covers the real market pipeline on one
+// embedded NATS: the real TickCollector, Streamcalc, PrimaryStore, DataNode
+// outbox, Archive and Factor production processes. Replaying the same source
+// event after the write is committed must not create another event.
 func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,6 +73,9 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "streamcalc_kline_output_v1", Durable: "streamcalc_kline_output_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "collector_ingress_probe", Durable: "collector_ingress_probe", FilterSubject: "moox.market.tick.received.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := js.AddConsumer("MOOX_MARKET", &nats.ConsumerConfig{Name: "storage_primary_kline_v1", Durable: "storage_primary_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: nats.AckExplicitPolicy, AckWait: 100 * time.Millisecond, MaxDeliver: 3, MaxAckPending: 8, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +112,11 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer streamcalcOutputConsumer.Close()
+	collectorIngressConsumer, err := events.NewConsumer(client, jetstream.ConsumerBindRef{Stream: "MOOX_MARKET", Durable: "collector_ingress_probe", FetchMaxWait: 50 * time.Millisecond}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collectorIngressConsumer.Close()
 	outputs := make(map[string]*events.Consumer)
 	for _, durable := range []string{"storage_view"} {
 		consumer, err := events.NewConsumer(client, jetstream.ConsumerBindRef{Stream: "MOOX_STORAGE", Durable: durable, FetchMaxWait: 50 * time.Millisecond}, registry)
@@ -148,12 +154,20 @@ func TestMarketKlineToStorageOutboxE2E(t *testing.T) {
 	archiveLog := startArchive(t, server, server.ClientURL())
 	factorLog := startFactor(t, server, server.ClientURL())
 	base := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	ticks := make([]collectortestkit.BinanceTick, 0, 5)
 	for i := 0; i < 5; i++ {
 		tradeTime := base.Add(time.Duration(i)*time.Minute + 10*time.Second)
-		payload := &marketpb.Tick{Exchange: "binance", TradeId: fmt.Sprintf("trade-%d", i), Symbol: "BTC-USDT", Price: float64(100 + i), Quantity: 1, TradeTime: timestamppb.New(tradeTime)}
-		if _, err := publisher.Publish(ctx, events.TickReceived, payload, events.PublishOptions{EventID: fmt.Sprintf("binance:BTC-USDT:%d", i), OccurredAt: tradeTime, SpaceID: "crypto_binance", SubjectID: payload.GetSymbol()}); err != nil {
-			t.Fatal(err)
-		}
+		ticks = append(ticks, collectortestkit.BinanceTick{ID: int64(i + 1), Price: fmt.Sprintf("%d", 100+i), Quantity: "1", TradeTime: tradeTime})
+	}
+	if err := collectortestkit.PublishBinanceTicks(ctx, publisher, collectortestkit.TickParams{SpaceID: "crypto_binance", InstType: "SPOT", Symbol: "BTCUSDT", SubjectID: "BTC-USDT"}, ticks); err != nil {
+		t.Fatal(err)
+	}
+	ingress := fetchOneEventually(t, ctx, collectorIngressConsumer, streamcalcLog)
+	if len(ingress) != 1 || ingress[0].Message.GetEventName() != events.TickReceived.Name() {
+		t.Fatalf("collector ingress=%#v", ingress)
+	}
+	if err := ingress[0].Delivery.Ack(ctx); err != nil {
+		t.Fatal(err)
 	}
 	outputDeliveries := fetchOneEventually(t, ctx, streamcalcOutputConsumer, streamcalcLog)
 	output, ok := outputDeliveries[0].Payload.(*marketpb.KlineClosed)
@@ -450,25 +464,29 @@ func startComponentProcess(t *testing.T, server *natsserver.Server, binaryPath, 
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	waitDone := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(waitDone)
+	}()
 	t.Cleanup(func() {
 		if cmd.Process == nil {
 			return
 		}
 		_ = cmd.Process.Signal(os.Interrupt)
 		select {
-		case <-done:
+		case <-waitDone:
 		case <-time.After(5 * time.Second):
 			_ = cmd.Process.Kill()
-			<-done
+			<-waitDone
 		}
 	})
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
-		case err := <-done:
-			t.Fatalf("component %s exited during startup: %v\n%s", filepath.Base(binaryPath), err, output.String())
+		case <-waitDone:
+			t.Fatalf("component %s exited during startup: %v\n%s", filepath.Base(binaryPath), waitErr, output.String())
 		default:
 		}
 		if server.NumClients() > baseline {

@@ -96,7 +96,7 @@ func validateNewEventID(message *eventpb.EventMessage) error {
 }
 
 func validateDatasetRowsUpsertedEvent(message *eventpb.EventMessage, subject string) error {
-	if message == nil || message.GetEventName() != events.DatasetRowsUpserted.Name || message.GetEventVersion() != events.DatasetRowsUpserted.Version {
+	if message == nil || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetEventVersion() != events.DatasetRowsUpserted.Version() {
 		return fmt.Errorf("unexpected storage event name/version")
 	}
 	if message.GetSpaceId() == "" || message.GetSubjectId() == "" || message.GetOccurredAt() == nil || message.GetOccurredAt().CheckValid() != nil {

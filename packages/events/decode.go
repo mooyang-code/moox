@@ -42,7 +42,7 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 	if err := message.GetOccurredAt().CheckValid(); err != nil {
 		return message, nil, fmt.Errorf("event message occurred_at: %w", err)
 	}
-	event := EventType{Name: message.GetEventName(), Version: message.GetEventVersion()}
+	event := EventType{name: message.GetEventName(), version: message.GetEventVersion()}
 	spec, ok := registry.Schema(event)
 	if !ok {
 		return message, nil, fmt.Errorf("event %s is not registered", eventKey(event))
@@ -79,7 +79,7 @@ func DecodeTradingSignalWithContentType(registry *Registry, raw []byte, subject,
 	if err != nil {
 		return message, nil, err
 	}
-	if message.GetEventName() != TradingSignal.Name || message.GetEventVersion() != TradingSignal.Version {
+	if message.GetEventName() != TradingSignal.Name() || message.GetEventVersion() != TradingSignal.Version() {
 		return message, nil, fmt.Errorf("unexpected trading signal name/version")
 	}
 	signal, ok := payload.(*tradingpb.TradingSignal)
@@ -109,7 +109,7 @@ func DecodeDatasetRowsUpsertedWithContentType(registry *Registry, raw []byte, su
 	if err != nil {
 		return message, nil, err
 	}
-	if message.GetEventName() != DatasetRowsUpserted.Name || message.GetEventVersion() != DatasetRowsUpserted.Version {
+	if message.GetEventName() != DatasetRowsUpserted.Name() || message.GetEventVersion() != DatasetRowsUpserted.Version() {
 		return message, nil, fmt.Errorf("unexpected storage event name/version")
 	}
 	storagePayload, ok := payload.(*storagepb.DatasetRowsUpserted)
