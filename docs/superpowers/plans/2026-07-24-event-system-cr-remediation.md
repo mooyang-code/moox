@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 按个人量化、新项目、不过度追求高可靠的边界，把事件系统收敛为五个真正跨进程的事件，删除 Tick/Streamcalc、通用 DLQ、Trade 自消费事件和重复注册配置，并修正 Runner、Monitor、TTL 约束及 Consumer 所有权问题。
+**Goal:** 按个人量化、新项目、不过度追求高可靠的边界，把事件系统收敛为五个真正跨进程的事件，删除 Tick/Streamcalc、通用 DLQ、Trade 自消费事件和重复注册配置，并修正 Runner、Monitor、保留时长约束及 Consumer 所有权问题。
 
 **Architecture:** 业务模块只发布跨进程事实或命令，进程内状态推进使用本地数据库状态机和进程内唤醒，Timer 只负责启动恢复和遗漏兜底。事件定义采用 Go code-first，`Event` 同时表示事件名称、版本、payload factory、Stream 和 owner；`EventMessage` 只表示一次实际传输。EventBus YAML 的资源拓扑只包含 Stream/KV，Consumer 由消费服务通过唯一 `NewConsumer` API 声明、创建和校验；业务配置使用 `consumer`，只有 `packages/jetstream` 的 NATS 适配模型保留官方字段名 `Durable`。Storage 与 Strategy 在“本地状态和事件必须一起提交”时保留 outbox，其余路径不增加 Saga、全局事务、exactly-once 或 Schema Registry。
 
@@ -39,8 +39,8 @@ flowchart LR
 ### 1.2 已确认且不得在执行中反转的决策
 
 1. Collector 只拉取交易所已经闭合的 K 线并直接写 Storage；V1 删除 Tick 事件、Streamcalc 和 `market.kline.closed` 事件。
-2. TTL 是容量治理，不是业务删除。TTL 清理不发布删除事件，也不增加 tombstone。
-3. Dataset 的 TTL 必须为 `0`，或不短于引用它的 View 保留时长；`0` 表示永久保留。
+2. `keep_duration` 是容量治理，不是业务删除。过期清理不发布删除事件，也不增加 tombstone。
+3. Dataset 的 `keep_duration` 必须为 `0`，或不短于引用它的 View `keep_duration`；`0` 表示永久保留。
 4. Storage 不支持删除已注册字段，只保留 `UpsertFields`。该项已由提交 `715f110a` 完成，本计划只把它作为验收前置条件。
 5. 业务层统一使用 `consumer` 命名；只有 `packages/jetstream` 映射 NATS 配置时继续使用官方字段名 `Durable`。
 6. Storage/outbox 语义使用“已提交”或 `committed`，不再用 `durable` 描述业务数据。
@@ -89,7 +89,7 @@ Payload       具体 Protobuf 业务内容
 | 最初 CR | 本轮最终取舍 | 执行任务 |
 |---|---|---|
 | P0 Streamcalc 会提前或重复发布未闭合 K 线，Storage 不处理 revision | 删除 Tick/Streamcalc；Collector 只写交易所闭合 K 线 | Task 2 |
-| P1 Storage 删除和 TTL 无事件会让下游保留数据 | 不修复为删除事件；TTL 明确是容量治理，只增加 Dataset/View TTL 约束 | Task 3 |
+| P1 Storage 删除和过期清理无事件会让下游保留数据 | 不修复为删除事件；`keep_duration` 明确是容量治理，只增加 Dataset/View 保留时长约束 | Task 3 |
 | P1 Monitor unknown producer 阈值 120 与 MaxDeliver=3 冲突 | 未注册 producer 第一次即 TERM；授权查询故障才 RETRY | Task 4 |
 | P1 Runner 把 Handler `RETRY+Err` 当作进程失败 | Handler 错误只上报；只有 fetch/transport/context 结束 Runner | Task 1 |
 | P1 DLQ 可能放大超过 8 MiB，且没有实用查看/重放入口 | 删除通用 DLQ；永久错误 TERM + 结构化日志，Archive 保留本地 quarantine | Task 5 |
@@ -159,8 +159,8 @@ Stream/Durable/Filter/DeliverPolicy 冲突 -> ErrConsumerConfigConflict
 
 ### 4.1 Create
 
-- `modules/storage/internal/service/metadata/sqlite/retention.go`：Dataset/View 保留时长比较和引用校验。
-- `modules/storage/internal/service/metadata/sqlite/retention_test.go`：双向 TTL 约束测试。
+- `modules/storage/internal/service/metadata/sqlite/keep_duration.go`：Dataset/View 保留时长比较和引用校验。
+- `modules/storage/internal/service/metadata/sqlite/keep_duration_test.go`：双向保留时长约束测试。
 - `modules/monitor/internal/metrics/consumer_eventbus_test.go`：Monitor 的 TERM 和重投次数契约。
 - `packages/events/consumer_test.go`：`Event` 派生 Stream/filter 并创建 Consumer 的契约测试。
 - `modules/trade/internal/application/rebalance/request.go`：把 `trade.rebalance.requested` 权重命令转换为现有调仓计划。
@@ -433,11 +433,11 @@ git add -A modules/streamcalc modules/collector modules/storage modules/admin pa
 git commit -m "refactor(market): write closed klines directly to storage"
 ```
 
-### Task 3: 为 Dataset/View 增加 TTL 约束，不发布清理事件
+### Task 3: 为 Dataset/View 增加保留时长约束，不发布清理事件
 
 **Files:**
-- Create: `modules/storage/internal/service/metadata/sqlite/retention.go`
-- Create: `modules/storage/internal/service/metadata/sqlite/retention_test.go`
+- Create: `modules/storage/internal/service/metadata/sqlite/keep_duration.go`
+- Create: `modules/storage/internal/service/metadata/sqlite/keep_duration_test.go`
 - Modify: `modules/storage/internal/service/metadata/sqlite/crud_dataset.go`
 - Modify: `modules/storage/internal/service/metadata/sqlite/crud_view.go`
 - Modify: `web/src/views/data/datasets/index.vue`
@@ -460,7 +460,7 @@ git commit -m "refactor(market): write closed klines directly to storage"
 错误使用稳定 sentinel：
 
 ```go
-var ErrDatasetRetentionShorterThanView = errors.New("dataset keep_duration must be 0 or not shorter than view keep_duration")
+var ErrDatasetKeepDurationShorterThanView = errors.New("dataset keep_duration must be 0 or not shorter than view keep_duration")
 ```
 
 - [ ] **Step 2: 验证现状没有该约束**
@@ -469,7 +469,7 @@ Run:
 
 ```bash
 cd modules/storage
-CGO_ENABLED=1 go test -count=1 ./internal/service/metadata/sqlite -run Retention
+CGO_ENABLED=1 go test -count=1 ./internal/service/metadata/sqlite -run KeepDuration
 ```
 
 Expected: FAIL，当前只校验 duration 格式。
@@ -477,7 +477,7 @@ Expected: FAIL，当前只校验 duration 格式。
 - [ ] **Step 3: 实现纯比较函数**
 
 ```go
-func retentionCovers(datasetKeep, viewKeep string) (bool, error) {
+func keepDurationCovers(datasetKeep, viewKeep string) (bool, error) {
 	if datasetKeep == "0" {
 		return true, nil
 	}
@@ -505,7 +505,7 @@ dataset <dataset_id> keep_duration <dataset_keep> is shorter than view <view_id>
 
 校验必须和 View upsert 使用同一 SQLite transaction，避免读写之间出现不一致。
 
-- [ ] **Step 5: 在 Dataset 缩短 TTL 时反向校验**
+- [ ] **Step 5: 在 Dataset 缩短保留时长时反向校验**
 
 `UpdateDataset` 在写入前查询所有满足以下条件的 View：
 
@@ -520,11 +520,11 @@ AND (
 )
 ```
 
-如果新 TTL 不能覆盖任一 View，拒绝整个更新。Dataset 状态为 disabled 也不能绕过该约束。
+如果新的 `keep_duration` 不能覆盖任一 View，拒绝整个更新。Dataset 状态为 disabled 也不能绕过该约束。
 
-- [ ] **Step 6: 保持 TTL 清理为内部容量操作**
+- [ ] **Step 6: 保持过期清理为内部容量操作**
 
-扫描 `CleanupExpiredBuckets`、TTL timer 和 Pebble bucket 删除路径，确认不调用 events Publisher、不写 outbox。增加一条测试：执行过期 bucket 清理后 outbox count 不增加。
+扫描 `CleanupExpiredBuckets`、过期清理 Timer 和 Pebble bucket 删除路径，确认不调用 events Publisher、不写 outbox。增加一条测试：执行过期 bucket 清理后 outbox count 不增加。
 
 - [ ] **Step 7: 更新 UI 提示和源码契约测试**
 
@@ -551,7 +551,7 @@ Expected: PASS。
 
 ```bash
 git add modules/storage/internal/service/metadata/sqlite web/src/views/data/datasets
-git commit -m "feat(storage): enforce dataset and view retention bounds"
+git commit -m "feat(storage): enforce dataset and view keep duration"
 ```
 
 ### Task 4: 修正 Monitor 未知生产方策略
@@ -1651,15 +1651,15 @@ git commit -m "chore(events): align consumer terminology and contract gates"
 - Trade 正常流程由 DB commit 后的本地 Wake 立即推进；Timer 只负责启动恢复和遗漏兜底。
 - EventBus 只创建 Stream/KV；每个消费服务通过 `NewConsumer` 创建并拥有自己的 Consumer。
 
-- [ ] **Step 2: 更新 TTL 说明**
+- [ ] **Step 2: 更新保留时长说明**
 
 写清：
 
 ```text
-TTL 清理不产生业务事件。
+过期清理不产生业务事件。
 Dataset keep_duration 必须为 0 或 >= 所有引用 View 的 keep_duration。
 0 表示永久保存。
-设置更短 TTL 会在元数据写入阶段被拒绝。
+设置更短的 keep_duration 会在元数据写入阶段被拒绝。
 ```
 
 - [ ] **Step 3: 更新 EventBus 运维说明**
@@ -1846,8 +1846,8 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 
 - [ ] Collector Live/非 Live 都只写交易所闭合 K 线。
 - [ ] Storage committed upsert 仍能驱动 View/Factor/Archive。
-- [ ] TTL cleanup 不产生 EventMessage。
-- [ ] Dataset TTL 小于任一 View TTL 时，创建/更新被拒绝。
+- [ ] 过期清理不产生 EventMessage。
+- [ ] Dataset `keep_duration` 小于任一 View `keep_duration` 时，创建/更新被拒绝。
 - [ ] Handler 返回 `RETRY/TERM + Err` 后 Runner 不退出。
 - [ ] Monitor 未注册 producer 第一次即 TERM；authorizer 临时错误最多重投 3 次。
 - [ ] 永久错误不再发布 DLQ 事件。
@@ -1871,7 +1871,7 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 ```text
 Task 1 Runner
   -> Task 2 Collector/Streamcalc
-  -> Task 3 TTL
+  -> Task 3 keep_duration
   -> Task 4 Monitor
   -> Task 5 DLQ
   -> Task 6 code-first Registry
@@ -1884,7 +1884,7 @@ Task 1 Runner
 
 建议设置三个强制检查点：
 
-1. **Checkpoint A，Task 1-4 后：** Market 链路、TTL、Runner、Monitor 分别通过 focused test。
+1. **Checkpoint A，Task 1-4 后：** Market 链路、保留时长、Runner、Monitor 分别通过 focused test。
 2. **Checkpoint B，Task 5-7 后：** 只有五个 `Event`、四个 Stream、无 DLQ；EventBus 无 Consumer 配置，业务只使用 `NewConsumer`。
 3. **Checkpoint C，Task 8-11 后：** Strategy -> Trade E2E、workspace test、Linux/CGO 和远端 SHA 全部通过。
 
