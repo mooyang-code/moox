@@ -28,7 +28,6 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -135,47 +134,6 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	// Streamcalc publishes closed bars. PrimaryStore is the single writer that
-	// turns those events into DataNode field writes and the DatasetRowsUpserted
-	// outbox event consumed by View/Archive/Factor.
-	eventURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
-	if eventURL == "" {
-		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for primary role")
-	}
-	eventConfig, err := storageEventBusConfig([]string{eventURL}, "storage-primary")
-	if err != nil {
-		return err
-	}
-	eventClient, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
-	if err != nil {
-		return err
-	}
-	defer eventClient.Close()
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	eventConsumer, err := events.NewConsumer(eventClient, jetstream.ConsumerBindRef{Stream: "MOOX_MARKET", Durable: envOrDefault("MOOX_STORAGE_KLINE_DURABLE", "storage_primary_kline_v1"), FetchMaxWait: time.Second}, registry)
-	if err != nil {
-		return err
-	}
-	defer eventConsumer.Close()
-	eventPublisher, err := events.NewPublisher(eventClient, registry)
-	if err != nil {
-		return err
-	}
-	datasetID := strings.TrimSpace(os.Getenv("MOOX_STORAGE_KLINE_DATASET_ID"))
-	if datasetID == "" {
-		return errors.New("MOOX_STORAGE_KLINE_DATASET_ID is required for primary role")
-	}
-	klineConsumer, err := primarystore.NewKlineConsumer(eventConsumer, svc, eventPublisher, datasetID, &pb.AuthInfo{AppId: "storage-streamcalc", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-streamcalc")})
-	if err != nil {
-		return err
-	}
-	consumerCtx, stopConsumer := context.WithCancel(trpc.BackgroundContext())
-	defer stopConsumer()
-	consumerErr := make(chan error, 1)
-	go func() { consumerErr <- klineConsumer.Run(consumerCtx, 32) }()
 	metadataSvc, err := metadataservice.NewMetadataService(meta, cached)
 	if err != nil {
 		return err
@@ -198,16 +156,7 @@ func runPrimaryRole() error {
 	if err := registerRoleHealth(s, "storage-primary"); err != nil {
 		return err
 	}
-	serveErr := s.Serve()
-	stopConsumer()
-	select {
-	case err := <-consumerErr:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return errors.Join(serveErr, err)
-		}
-	default:
-	}
-	return serveErr
+	return s.Serve()
 }
 
 type datasetReader interface {

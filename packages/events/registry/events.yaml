@@ -1,19 +1,5 @@
 version: 1
 events:
-  - name: market.tick.received
-    version: 1
-    payload: trpc.moox.market.Tick
-    subject: moox.market.tick.received.v1.<space>.<subject>
-    stream: MOOX_MARKET
-    partition_key: subject_id
-    owner: collector
-  - name: market.kline.closed
-    version: 1
-    payload: trpc.moox.market.KlineClosed
-    subject: moox.market.kline.closed.v1.<space>.<subject>
-    stream: MOOX_MARKET
-    partition_key: subject_id
-    owner: streamcalc
   - name: trading.signal
     version: 1
     payload: trpc.moox.trading.TradingSignal

@@ -7,7 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/dlqpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/events/marketpb"
 	"github.com/mooyang-code/moox/packages/events/tradingpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -22,7 +21,7 @@ func TestDefaultRegistryHasExplicitEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range []EventType{TickReceived, MarketKlineClosed, TradingSignal, DatasetRowsUpserted, TradeOrderIntentCreated, TradeOrderStateChanged, TradeExecutionSliceReady} {
+	for _, event := range []EventType{TradingSignal, DatasetRowsUpserted, TradeOrderIntentCreated, TradeOrderStateChanged, TradeExecutionSliceReady} {
 		if _, ok := r.Schema(event); !ok {
 			t.Fatalf("event %s is not registered", eventKey(event))
 		}
@@ -66,8 +65,6 @@ func TestRegisteredPayloadDescriptorsHaveCanonicalFullNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []protoreflect.FullName{
-		"trpc.moox.market.Tick",
-		"trpc.moox.market.KlineClosed",
 		"trpc.moox.trading.TradingSignal",
 		"trpc.moox.storage.event.DatasetRowsUpserted",
 	} {
@@ -96,35 +93,8 @@ func TestSubjectFamilyPatternIsDerivedFromValidatedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := r.FamilyPattern(MarketKlineClosed); err != nil || got != "moox.market.kline.closed.v1.>" {
+	if got, err := r.FamilyPattern(DatasetRowsUpserted); err != nil || got != "moox.storage.dataset.rows.upserted.v1.>" {
 		t.Fatalf("registry family pattern = %q, err=%v", got, err)
-	}
-}
-
-func TestEncodeKeepsBusinessMetadataInOuterMessage(t *testing.T) {
-	r, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := &marketpb.Tick{Exchange: "binance", TradeId: "trade-1", Symbol: "BTCUSDT", Price: 100, Quantity: 2}
-	encoded, err := r.Encode(TickReceived, payload, PublishOptions{
-		EventID: "binance:trade-1", OccurredAt: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), SpaceID: "crypto", SubjectID: "BTC-USDT",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if encoded.Message.GetEventName() != "market.tick.received" || encoded.Message.GetEventVersion() != 1 || encoded.Message.GetSpaceId() != "crypto" || encoded.Message.GetSubjectId() != "BTC-USDT" {
-		t.Fatalf("outer metadata = %+v", encoded.Message)
-	}
-	if encoded.Subject != "moox.market.tick.received.v1.mnzhs4dun4.ijkeglkvkncfi" {
-		t.Fatalf("subject = %q", encoded.Subject)
-	}
-	decoded := new(eventpb.EventMessage)
-	if err := proto.Unmarshal(mustMarshal(t, encoded.Message), decoded); err != nil {
-		t.Fatal(err)
-	}
-	if decoded.GetEventName() != encoded.Message.GetEventName() {
-		t.Fatalf("decoded event name = %q", decoded.GetEventName())
 	}
 }
 

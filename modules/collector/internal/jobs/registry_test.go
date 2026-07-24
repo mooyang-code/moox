@@ -9,8 +9,8 @@ import (
 
 func TestListDefinitionsReturnsStableDataTypes(t *testing.T) {
 	defs := ListDefinitions()
-	if len(defs) != 3 || defs[0].DataType != "kline" || defs[1].DataType != "symbol" || defs[2].DataType != "tick" {
-		t.Fatalf("data types = %#v; want kline, symbol, tick", defs)
+	if len(defs) != 2 || defs[0].DataType != "kline" || defs[1].DataType != "symbol" {
+		t.Fatalf("data types = %#v; want kline, symbol", defs)
 	}
 	if defs[0].DataSourceOptions.Options[0].Value != "binance" {
 		t.Fatalf("first datasource = %q, want binance", defs[0].DataSourceOptions.Options[0].Value)
@@ -31,24 +31,6 @@ func TestDefinitionByDataTypeReturnsKlineFields(t *testing.T) {
 	defaults, ok := def.Fields[2].DefaultValue.([]any)
 	if !ok || len(defaults) != 1 || defaults[0] != "1m" {
 		t.Fatalf("kline interval default = %#v, want [1m]", def.Fields[2].DefaultValue)
-	}
-}
-
-func TestDefinitionByDataTypeReturnsTickWithoutInterval(t *testing.T) {
-	def, ok := DefinitionByDataType("tick")
-	if !ok {
-		t.Fatalf("tick definition not found")
-	}
-	params := &domain.CollectParams{}
-	params.Normalize("binance", "tick")
-	params.Target.JobType = JobTypeCollectTick
-	params.Target.DatasetID = "tick-dataset"
-	specs, err := def.Planner(context.Background(), &domain.TaskRule{RuleID: "tick-rule"}, params, []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT"}})
-	if err != nil {
-		t.Fatalf("tick planner error = %v", err)
-	}
-	if len(specs) != 1 || specs[0].Interval != "" || specs[0].DataType != "tick" {
-		t.Fatalf("tick specs = %#v", specs)
 	}
 }
 

@@ -20,7 +20,6 @@ use (
 	./modules/monitor/proto/monitorgen
 	./modules/storage
 	./modules/storage/proto/storagegen
-	./modules/streamcalc
 	./modules/strategy
 	./modules/strategy/proto/strategygen
 	./modules/trade

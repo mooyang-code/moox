@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/dlqpb"
-	"github.com/mooyang-code/moox/packages/events/marketpb"
 	"github.com/mooyang-code/moox/packages/events/tradingpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
@@ -38,8 +37,6 @@ func (e EventType) Name() string { return e.name }
 func (e EventType) Version() uint32 { return e.version }
 
 var (
-	TickReceived                 = EventType{name: "market.tick.received", version: 1}
-	MarketKlineClosed            = EventType{name: "market.kline.closed", version: 1}
 	TradingSignal                = EventType{name: "trading.signal", version: 1}
 	DatasetRowsUpserted          = EventType{name: "storage.dataset.rows.upserted", version: 1}
 	MetricsHostReported          = EventType{name: "metrics.host.reported", version: 1}
@@ -62,7 +59,7 @@ var (
 // architecture gate verifies every entry remains present in the YAML registry
 // so a new producer constant cannot silently bypass governed subjects.
 var AllEventTypes = []EventType{
-	TickReceived, MarketKlineClosed, TradingSignal, DatasetRowsUpserted,
+	TradingSignal, DatasetRowsUpserted,
 	MetricsHostReported, MetricsSnapshotReported, DLQMessageRejected,
 	StrategyOutputAccepted, TradeOrderIntentCreated, TradeOrderStateChanged,
 	TradeExecutionSliceReady, TradeFillReceived, TradeRebalanceRequested,
@@ -194,8 +191,6 @@ func validateSchema(spec EventSchema) error {
 func payloadFactories() map[protoreflect.FullName]func() proto.Message {
 	return map[protoreflect.FullName]func() proto.Message{
 		"trpc.moox.cloudjob.JobExecutionRequested":        func() proto.Message { return &cloudjobpb.JobExecutionRequested{} },
-		"trpc.moox.market.Tick":                           func() proto.Message { return &marketpb.Tick{} },
-		"trpc.moox.market.KlineClosed":                    func() proto.Message { return &marketpb.KlineClosed{} },
 		"trpc.moox.trading.TradingSignal":                 func() proto.Message { return &tradingpb.TradingSignal{} },
 		"trpc.moox.storage.event.DatasetRowsUpserted":     func() proto.Message { return &storagepb.DatasetRowsUpserted{} },
 		"trpc.moox.hostagent.HostMetric":                  func() proto.Message { return &hostmetricpb.HostMetric{} },

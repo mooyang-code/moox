@@ -14,7 +14,6 @@ import (
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -25,8 +24,6 @@ const (
 )
 
 var errKlineNotClosed = errors.New("K线尚未闭合")
-
-var eventPublisher *events.Publisher
 
 // KlineCollector K线数据采集器
 type KlineCollector struct {
@@ -71,24 +68,6 @@ func init() {
 			panic(fmt.Sprintf("注册K线采集器失败: %v", err))
 		}
 	}
-	for _, market := range []struct {
-		id string
-		cn string
-	}{
-		{id: "spot", cn: "现货"},
-		{id: "swap", cn: "永续合约"},
-	} {
-		err := sources.NewBuilder().
-			Source("binance", "币安").
-			Market(market.id, market.cn).
-			DataType("tick", "原始成交Tick").
-			Description("币安原始成交Tick采集器").
-			Collector(&TickCollector{spotAPI: c.spotAPI, swapAPI: c.swapAPI, lastIDs: make(map[string]int64)}).
-			Register()
-		if err != nil {
-			panic(fmt.Sprintf("注册Tick采集器失败: %v", err))
-		}
-	}
 }
 
 // Source 返回数据源标识
@@ -105,9 +84,6 @@ func (c *KlineCollector) DataType() string {
 func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
 	if params == nil {
 		return fmt.Errorf("K线采集参数不能为空")
-	}
-	if params.Live {
-		return c.CollectLive(ctx, params)
 	}
 	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
 		params.InstType, params.Symbol, params.Interval)
@@ -178,21 +154,6 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	}
 	log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d", params.InstType, params.Symbol, params.Interval, total)
 	return nil
-}
-
-// SetEventPublisher configures the explicit live market-event path. Historical
-// collection remains on Collect's direct Storage path unless Live is true.
-func SetEventPublisher(publisher *events.Publisher) {
-	eventPublisher = publisher
-}
-
-// CollectLive is deliberately a Tick ingress. K-line aggregation belongs to
-// streamcalc; the collector must not publish a second, competing bar result.
-func (c *KlineCollector) CollectLive(ctx context.Context, params *sources.CollectParams) error {
-	if c == nil {
-		return fmt.Errorf("K线采集器为空")
-	}
-	return (&TickCollector{spotAPI: c.spotAPI, swapAPI: c.swapAPI, lastIDs: make(map[string]int64)}).Collect(ctx, params)
 }
 
 func (c *KlineCollector) currentTime() time.Time {

@@ -42,7 +42,6 @@ func PollAndExecuteJobItems(ctx context.Context) error {
 		SupportedJobTypes: []string{
 			jobs.JobTypeCollectKline,
 			jobs.JobTypeCollectSymbol,
-			jobs.JobTypeCollectTick,
 		},
 		Limit: 8,
 		Auth: nodeRuntime.AuthConfig{
@@ -60,7 +59,6 @@ func registerCollectorHandlers() {
 	registerHandlersOnce.Do(func() {
 		nodeRuntime.Register(jobs.JobTypeCollectKline, nodeRuntime.HandlerFunc(executeCollectorJobItem))
 		nodeRuntime.Register(jobs.JobTypeCollectSymbol, nodeRuntime.HandlerFunc(executeCollectorJobItem))
-		nodeRuntime.Register(jobs.JobTypeCollectTick, nodeRuntime.HandlerFunc(executeCollectorJobItem))
 	})
 }
 
@@ -105,11 +103,11 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 	if dataType != "symbol" && symbol == "" {
 		return nil, fmt.Errorf("symbol is required")
 	}
-	if dataType != "symbol" && dataType != "tick" && interval == "" {
+	if dataType != "symbol" && interval == "" {
 		interval = "1m"
 	}
 	intervals := []string{interval}
-	if dataType == "symbol" || dataType == "tick" {
+	if dataType == "symbol" {
 		intervals = []string{""}
 	}
 	return &model.TaskExecuteEvent{

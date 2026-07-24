@@ -2,7 +2,6 @@ package binance
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -111,14 +110,36 @@ func TestKlineCollector_SourceAndDataType(t *testing.T) {
 	assert.Equal(t, "kline", c.DataType())
 }
 
-func TestKlineCollectorLivePathRequiresEventPublisher(t *testing.T) {
-	old := eventPublisher
-	eventPublisher = nil
-	defer func() { eventPublisher = old }()
-	err := (&KlineCollector{}).Collect(context.Background(), &sources.CollectParams{Live: true, SpaceID: "crypto", Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m"})
-	if err == nil || !strings.Contains(err.Error(), "EventBus publisher") {
-		t.Fatalf("live Collect() error = %v", err)
+func TestKlineCollectorLiveAlsoWritesOnlyClosedKlines(t *testing.T) {
+	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	watermark := now.Add(-2 * time.Hour)
+	store := &fakeKlineStorage{latest: watermark, found: true}
+	collector := &KlineCollector{
+		storage: store,
+		fetchKlinePage: func(_ context.Context, _ *sources.CollectParams, _ *exchange.KlineRequest) ([]*exchange.Kline, error) {
+			return []*exchange.Kline{
+				{
+					OpenTime: now.Add(-time.Minute), CloseTime: now.Add(-time.Second),
+					Open: common.NewDecimal("1"), High: common.NewDecimal("2"), Low: common.NewDecimal("0.5"), Close: common.NewDecimal("1.5"),
+					Volume: common.NewDecimal("10"), QuoteVolume: common.NewDecimal("15"), TradeCount: 3,
+				},
+				{
+					OpenTime: now, CloseTime: now.Add(time.Minute),
+					Open: common.NewDecimal("1.5"), High: common.NewDecimal("2"), Low: common.NewDecimal("1"), Close: common.NewDecimal("1.8"),
+					Volume: common.NewDecimal("8"), QuoteVolume: common.NewDecimal("14"), TradeCount: 2,
+				},
+			}, nil
+		},
+		now: func() time.Time { return now },
 	}
+
+	err := collector.Collect(context.Background(), &sources.CollectParams{
+		Live: true, InstType: InstTypeSPOT, SpaceID: "crypto", Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
+	})
+	require.NoError(t, err)
+	require.Len(t, store.writes, 1)
+	require.Len(t, store.writes[0], 1)
+	assert.Equal(t, formatKlineTime(now.Add(-time.Minute)), store.writes[0][0].GetKey().GetDataTime())
 }
 
 func TestNormalizeFreq_ShouldNormalizeUnits(t *testing.T) {

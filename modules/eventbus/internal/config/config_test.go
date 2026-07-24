@@ -32,18 +32,6 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	t.Fatal("archive durable consumer missing")
 }
 
-func TestDefaultStreamcalcConsumesOnlyTicks(t *testing.T) {
-	for _, consumer := range Default().Consumers {
-		if consumer.Durable == "streamcalc_kline_v1" {
-			if consumer.Stream != "MOOX_MARKET" || consumer.FilterSubject != "moox.market.tick.received.v1.>" {
-				t.Fatalf("streamcalc consumer = %#v", consumer)
-			}
-			return
-		}
-	}
-	t.Fatal("streamcalc durable consumer missing")
-}
-
 func TestDefaultMonitorConsumersMatchRuntimeContracts(t *testing.T) {
 	cfg := Default()
 	want := map[string]string{
@@ -86,19 +74,6 @@ func TestRejectMissingGovernedEventFamily(t *testing.T) {
 	err := c.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "governed event")
-}
-
-func TestRejectNarrowGovernedEventFamily(t *testing.T) {
-	c := Default()
-	for i := range c.Streams {
-		if c.Streams[i].Name == "MOOX_MARKET" {
-			c.Streams[i].Subjects = []string{"moox.market.tick.received.v1.*", "moox.market.kline.closed.v1.>"}
-		}
-	}
-
-	err := c.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "governed event market.tick.received@1")
 }
 
 func TestRepositoryConfigLoads(t *testing.T) {

@@ -17,7 +17,6 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	CloudNode CloudNodeConfig `yaml:"cloudnode"`
 	Storage   StorageConfig   `yaml:"storage"`
-	EventBus  EventBusConfig  `yaml:"eventbus"`
 	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
 	Health    HealthConfig    `yaml:"health"`
 }
@@ -44,10 +43,6 @@ type StorageConfig struct {
 	GatewayNodeID string `yaml:"gateway_node_id"`
 	KeyID         string `yaml:"key_id"`
 	HMACKeyFile   string `yaml:"hmac_key_file"`
-}
-
-type EventBusConfig struct {
-	URLs []string `yaml:"urls"`
 }
 
 // SysDeployConfig describes optional dependency discovery through admin SysDeploy.
@@ -161,8 +156,7 @@ func Default() *Config {
 			Address:     "127.0.0.1:11401",
 			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
 		},
-		Storage:  StorageConfig{GatewayTarget: "ip://127.0.0.1:11003"},
-		EventBus: EventBusConfig{URLs: []string{"nats://127.0.0.1:4222"}},
+		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003"},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},
 		},

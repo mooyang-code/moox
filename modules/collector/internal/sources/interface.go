@@ -9,7 +9,7 @@ import (
 type Collector interface {
 	// Source 数据源标识，当前内置 "binance"，未来可扩展
 	Source() string
-	// DataType 数据类型标识，内置支持 "kline" 和 "tick"
+	// DataType 数据类型标识，内置支持 "kline" 和 "symbol"
 	DataType() string
 	// Collect 执行一次采集
 	// params 包含本次采集所需的参数（如交易对、周期等）
@@ -23,5 +23,5 @@ type CollectParams struct {
 	Symbol    string // 外部交易对: BTCUSDT，用于请求交易所
 	SubjectID string // MooX 数据对象ID: BTC-USDT，用于写入 storage
 	Interval  string // 周期（K线用）: 1m, 5m, 1h
-	Live      bool   // 实时路径只发布事件，不直接写 Storage
+	Live      bool   // 是否由实时调度触发；闭合 K 线仍直接写入 Storage
 }

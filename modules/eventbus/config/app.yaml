@@ -32,15 +32,6 @@ health:
   addr: "127.0.0.1:11419"
 
 streams:
-  - name: MOOX_MARKET
-    subjects: ["moox.market.>"]
-    retention: limits
-    discard: new
-    storage: file
-    replicas: 1
-    max_age: 168h
-    duplicates: 2m
-    max_bytes: 2147483648
   - name: MOOX_STORAGE
     subjects: ["moox.storage.dataset.rows.upserted.v1.>"]
     retention: limits
@@ -92,24 +83,6 @@ streams:
     max_bytes: 536870912
 
 consumers:
-  - stream: MOOX_MARKET
-    durable: streamcalc_kline_v1
-    filter_subject: moox.market.tick.received.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: -1
-  - stream: MOOX_MARKET
-    durable: storage_primary_kline_v1
-    filter_subject: moox.market.kline.closed.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: -1
   - stream: MOOX_TRADE
     durable: trade_execution_v1
     filter_subject: moox.trade.execution.slice.ready.v1.>

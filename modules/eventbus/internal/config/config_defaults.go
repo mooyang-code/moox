@@ -15,7 +15,6 @@ func Default() *Config {
 		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
 		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 		Streams: []StreamConfig{
-			{Name: "MOOX_MARKET", Subjects: []string{"moox.market.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 2147483648},
 			{Name: "MOOX_TRADE", Subjects: []string{"moox.trading.>", "moox.trade.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
 			{Name: "MOOX_STRATEGY", Subjects: []string{"moox.strategy.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
 			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.dataset.rows.upserted.v1.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 2147483648},
@@ -24,8 +23,6 @@ func Default() *Config {
 			{Name: "MOOX_DLQ", Subjects: []string{"moox.dlq.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 720 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 268435456},
 		},
 		Consumers: []ConsumerConfig{
-			{Stream: "MOOX_MARKET", Durable: "streamcalc_kline_v1", FilterSubject: "moox.market.tick.received.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
-			{Stream: "MOOX_MARKET", Durable: "storage_primary_kline_v1", FilterSubject: "moox.market.kline.closed.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
 			{Stream: "MOOX_TRADE", Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
 			{Stream: "MOOX_TRADE", Durable: "trade_reconciliation_v1", FilterSubject: "moox.trade.reconciliation.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
 			{Stream: "MOOX_TRADE", Durable: "trade_rebalance_v1", FilterSubject: "moox.trade.rebalance.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
