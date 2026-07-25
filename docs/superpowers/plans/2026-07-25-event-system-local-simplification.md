@@ -1175,7 +1175,7 @@ git commit -m "docs(events): describe bounded consumer simplification"
 **Files:**
 - Modify only the plan checkbox state after every command has current-run evidence.
 
-- [ ] **Step 1: 格式和静态检查**
+- [x] **Step 1: 格式和静态检查**
 
 Run:
 
@@ -1189,7 +1189,7 @@ bash -n scripts/deploy-moox.sh scripts/verify-event-contracts.sh
 
 Expected: 无输出或 PASS。
 
-- [ ] **Step 2: 事件契约证明**
+- [x] **Step 2: 事件契约证明**
 
 Run:
 
@@ -1202,7 +1202,7 @@ Run:
 
 Expected: 全部 PASS。
 
-- [ ] **Step 3: 变更模块证明**
+- [x] **Step 3: 变更模块证明**
 
 Run:
 
@@ -1218,7 +1218,7 @@ Run:
 
 Expected: 全部 PASS；race 无报告。
 
-- [ ] **Step 4: 部署和文档证明**
+- [x] **Step 4: 部署和文档证明**
 
 Run:
 
@@ -1231,7 +1231,7 @@ bash scripts/test-docs-architecture.sh
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: 工作区级证明**
+- [x] **Step 5: 工作区级证明**
 
 Run:
 
@@ -1242,7 +1242,7 @@ make verify-pr
 
 Expected: 全部 PASS。MooX 是多 module workspace，不用仓库根目录的裸 `go test ./...` 代替这两个入口。
 
-- [ ] **Step 6: 审查范围和禁止项**
+- [x] **Step 6: 审查范围和禁止项**
 
 Run:
 
@@ -1274,7 +1274,7 @@ CloudNode duplicate topology config: no matches
 - EventBus ACL 角色合并或远程 TLS 放宽。
 - 与本计划无关的格式化、生成代码或依赖升级。
 
-- [ ] **Step 7: 最终提交**
+- [x] **Step 7: 最终提交**
 
 仅当验收步骤产生必要的测试/文档修正时创建最终提交：
 
