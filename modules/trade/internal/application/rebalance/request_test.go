@@ -14,6 +14,7 @@ type fakeSnapshotResolver struct {
 	roundedSymbol string
 	channel       Channel
 	currents      map[string]shared.Decimal
+	rounded       *shared.Decimal
 }
 
 func (f fakeSnapshotResolver) ResolveChannel(context.Context, string, string, string, string) (Channel, error) {
@@ -30,6 +31,9 @@ func (f fakeSnapshotResolver) ResolveCurrentQuantities(context.Context, string, 
 }
 func (f *fakeSnapshotResolver) RoundQuantity(_ context.Context, _, _, _, symbol string, value shared.Decimal) (shared.Decimal, error) {
 	f.roundedSymbol = symbol
+	if f.rounded != nil {
+		return *f.rounded, nil
+	}
 	return value, nil
 }
 
@@ -92,6 +96,27 @@ func TestRequestPlannerAllowsShortOnlyForSwap(t *testing.T) {
 	}
 	if got := input.Targets[0].Quantity.String(); got != "-5" {
 		t.Fatalf("swap short quantity = %s", got)
+	}
+}
+
+func TestRequestPlannerRejectsOKXSwapUntilContractSizingIsSupported(t *testing.T) {
+	request := validRequest()
+	request.Targets[0].MarketType = "swap"
+	_, err := (RequestPlanner{Resolver: &fakeSnapshotResolver{
+		channel: Channel{Exchange: "okx", MarketType: "swap"},
+	}}).Build(context.Background(), "crypto", request)
+	if !IsPermanentRequestError(err) {
+		t.Fatalf("error = %v, want permanent", err)
+	}
+}
+
+func TestRequestPlannerRejectsNonZeroTargetRoundedToZero(t *testing.T) {
+	zero := shared.Zero()
+	_, err := (RequestPlanner{Resolver: &fakeSnapshotResolver{rounded: &zero}}).Build(
+		context.Background(), "crypto", validRequest(),
+	)
+	if !IsPermanentRequestError(err) {
+		t.Fatalf("error = %v, want permanent", err)
 	}
 }
 

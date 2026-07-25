@@ -124,12 +124,15 @@ Expected: exit code `0`。
 
 `modules/eventbus/config/app.yaml` 最终只包含以下 Stream：
 
-| Stream | Subjects | Retention | Discard |
+| Stream | Subjects | 消息保留方式 | 满容量处理 |
 |---|---|---|---|
 | `MOOX_STORAGE` | `moox.storage.dataset.rows.upserted.v1.>` | `limits` | `old` |
 | `MOOX_METRICS` | `moox.metrics.>` | `limits` | `old` |
 | `MOOX_CLOUDNODE_EXEC` | `moox.cloudnode.job.execution.requested.v1.>` | `work_queue` | `old` |
 | `MOOX_TRADE` | `moox.trade.rebalance.requested.v1.>` | `work_queue` | `old` |
+
+这里使用“消息保留方式”描述业务含义；`retention`、`limits`、`work_queue` 和
+`discard` 仅在 EventBus 配置及 NATS JetStream 适配层中作为官方字段和值保留。
 
 以下 Consumer 由各消费服务在启动时声明并调用 `NewConsumer` 创建或校验，EventBus 配置不保存这些定义：
 
@@ -1136,6 +1139,9 @@ var ErrConsumerConfigConflict = errors.New("jetstream consumer config conflict")
 Consumer 名称在整个 EventBus 内视为唯一所有权标识，而不是只在单个 Stream
 内唯一。创建前先列出 Stream，并检查同名 Consumer 是否已经存在于其他 Stream；存在时
 返回 `ErrConsumerConfigConflict`，不得在请求的 Stream 再创建一个同名 Consumer。
+该检查用于启动时发现静态命名冲突，不是跨 Stream 的原子锁。JetStream 只保证单个
+Stream 内名称唯一；个人量化 V1 采用单实例 owner 和固定 Consumer 名称，不为两个服务
+并发创建同名 Consumer 的极小窗口引入分布式锁。
 
 业务 Consumer 自己负责创建和更新，因此生产 ACL 必须同时允许该固定 Consumer 的
 `STREAM.NAMES`、跨 Stream 同名 `CONSUMER.INFO`、目标 Stream 的
@@ -1143,6 +1149,12 @@ Consumer 名称在整个 EventBus 内视为唯一所有权标识，而不是只�
 Consumer 名称收敛，不授予通用 `$JS.API.>`。新增 `trade-eventbus` 凭据；Strategy 只
 允许发布 `moox.trade.rebalance.requested.v1.>`。使用真实鉴权 NATS 测试验证创建、
 可变配置更新、拉取/ACK 和越权创建失败。
+
+CloudNode 的 Consumer 名称按执行路由动态生成，NATS ACL 又不能按 Consumer 名称 token
+的 `cn_exec_` 前缀匹配，因此它额外拥有只读的
+`$JS.API.CONSUMER.INFO.*.>`，用于上述跨 Stream 命名检查。这是个人量化 V1 接受的
+元数据可见性例外；它仍不能在 `MOOX_CLOUDNODE_EXEC` 之外创建、拉取或 ACK Consumer，
+鉴权 E2E 必须覆盖该边界。
 
 - [ ] **Step 6: 让 `events.NewConsumer` 派生 Stream 和 filter**
 
@@ -1401,8 +1413,10 @@ type RequestPlanner struct {
   自己已有的订单或成交，因此新 symbol 第一次调仓也能执行。
 - 命令中的 `quote_asset` 必须与 instrument rules 一致，不能覆盖真实规则。
 - `FULL` 语义读取账户全部本地持仓；命令中省略的持仓目标为 0，空 targets 表示全部
-  平仓。
-- 现货禁止负权重；永续合约允许负权重，gross 按绝对值求和。
+  平仓；若最终没有任何 leg，则 run 在创建事务中直接记为 `COMPLETED`。
+- 非零权重按交易规则取整后数量为 0 时作为永久错误拒绝，不能创建无法推进的空 leg。
+- 现货禁止负权重；以基础资产数量下单的永续合约允许负权重，gross 按绝对值求和。
+  OKX SWAP 的 `sz` 是合约张数，V1 在完成 contract value 换算前明确拒绝。
 
 永久错误：
 
@@ -1412,6 +1426,8 @@ type RequestPlanner struct {
 重复 symbol
 gross weight > 1
 未知 market_type
+非零权重取整为零
+OKX SWAP
 ```
 
 临时错误：
@@ -1801,14 +1817,15 @@ Expected: PASS。
 Run:
 
 ```bash
-rg -n 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET|packages/dlqpb|MOOX_DLQ|PublishRejected|EventType|EventDefinition|EventSchema|AllEventTypes|partition_key|StrategyOutputAccepted|TradingSignal|TradeExecutionSliceReady|TradeFillReceived|TradeReconciliationRequested|t_trade_outbox|NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsumer|ConsumerBindRef|ConsumerRef|PullConsumer|PullConsumerAPI|NewConsumerFromPull' \
+rg -n 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET|packages/dlqpb|MOOX_DLQ|PublishRejected|EventDefinition|EventSchema|AllEventTypes|StrategyOutputAccepted|TradingSignal|TradeExecutionSliceReady|TradeFillReceived|TradeReconciliationRequested|t_trade_outbox|NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsumer|ConsumerBindRef|ConsumerRef|PullConsumer|PullConsumerAPI|NewConsumerFromPull' \
   modules packages go.work Makefile scripts \
   --glob '*.go' --glob '*.proto' --glob '*.sql' --glob '*.yaml' --glob 'go.mod' --glob 'go.work' --glob 'Makefile'
-rg -n '^consumers:|^consumer_templates:|Consumers|ConsumerTemplates' \
-  modules/eventbus --glob '*.go' --glob '*.yaml'
+rg -n '^consumers:|^consumer_templates:|yaml:"consumers"|yaml:"consumer_templates"|ConsumerTemplates' \
+  modules/eventbus/internal/config modules/eventbus/config --glob '*.go' --glob '*.yaml'
 ```
 
-Expected: 两次扫描都无命中。
+Expected: 两次扫描都无命中。不要扫描通用 `EventType`、归档 `partition_key` 或只读
+`ListConsumers` RPC；它们不是本计划要删除的事件注册表或中心化 Consumer 配置。
 
 - [ ] **Step 6: 验证只有五个事件**
 
@@ -1881,7 +1898,8 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 - [ ] `packages/events` 不再读取 YAML 注册表。
 - [ ] EventBus YAML 只定义 Stream/KV，不包含 Consumer 或 Consumer template。
 - [ ] 每个业务 Consumer 由所属消费服务调用唯一的 `NewConsumer` 创建和校验。
-- [ ] 同名 Consumer 已属于其他 Stream 时返回配置冲突，不重复创建。
+- [ ] 启动检查发现同名 Consumer 已属于其他 Stream 时返回配置冲突，不重复创建；V1
+  不承诺跨 Stream 并发创建的原子互斥。
 - [ ] 生产角色凭据允许所有者创建/更新固定 Consumer；鉴权 E2E 验证正常操作和越权失败。
 - [ ] 生产代码不存在旧 Pull/create/bind Consumer API。
 - [ ] `modules/streamcalc`、`packages/dlqpb`、`packages/strategyeventpb` 已删除。
@@ -1899,8 +1917,10 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 - [ ] Strategy paper/live 调仓产生一条 `trade.rebalance.requested`；hold/observe 不产生。
 - [ ] Trade 重收相同 event_id 不重复创建调仓计划。
 - [ ] 已处理事件在行情或规则服务不可用时仍直接 ACK。
-- [ ] FullTarget 会把省略的已有持仓归零，空 targets 可以表达全部平仓。
-- [ ] 现货拒绝负权重，永续合约允许负权重；命令 quote 与交易规则不一致时拒绝。
+- [ ] FullTarget 会把省略的已有持仓归零，空 targets 可以表达全部平仓；无 leg 的空
+  操作直接完成，非零权重取整为零时拒绝。
+- [ ] 现货拒绝负权重，支持基础资产数量语义的永续合约允许负权重；OKX SWAP 在 V1
+  明确拒绝；命令 quote 与交易规则不一致时拒绝。
 - [ ] Paper 只使用模拟通道和本地成交，Live 只使用真实通道，二者不会互相回退。
 - [ ] 新 symbol 不依赖 Trade 历史订单即可从公开 instrument snapshot 获得首笔价格。
 - [ ] 正常 Trade 状态提交后由本地 Wake 立即推进，不等待 Timer。

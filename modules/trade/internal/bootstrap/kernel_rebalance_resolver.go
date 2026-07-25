@@ -35,7 +35,7 @@ func (r tradeSnapshotResolver) ResolveChannel(ctx context.Context, spaceID, acco
 	if channel.MarketType != "spot" && channel.MarketType != "swap" {
 		return rebalanceapp.Channel{}, fmt.Errorf("%w: unsupported channel market_type %q", rebalanceapp.ErrInvalidRequest, channel.MarketType)
 	}
-	return rebalanceapp.Channel{MarketType: channel.MarketType}, nil
+	return rebalanceapp.Channel{Exchange: channel.Exchange, MarketType: channel.MarketType}, nil
 }
 
 func (r tradeSnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, channelID, _ string, target *tradeeventpb.RebalanceTarget) (rebalanceapp.Market, error) {

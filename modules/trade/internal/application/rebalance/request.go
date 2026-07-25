@@ -21,6 +21,7 @@ type SnapshotResolver interface {
 }
 
 type Channel struct {
+	Exchange   string
 	MarketType string
 }
 
@@ -81,6 +82,9 @@ func (p RequestPlanner) Build(ctx context.Context, spaceID string, request *trad
 		if target.GetMarketType() != channel.MarketType {
 			return CreateInput{}, fmt.Errorf("%w: target market_type %q does not match channel %q", ErrInvalidRequest, target.GetMarketType(), channel.MarketType)
 		}
+		if target.GetMarketType() == "swap" && strings.EqualFold(channel.Exchange, "okx") {
+			return CreateInput{}, fmt.Errorf("%w: OKX swap contract sizing is not supported", ErrInvalidRequest)
+		}
 		weight, parseErr := shared.ParseDecimal(target.GetTargetWeight())
 		if parseErr != nil || (weight.IsNegative() && target.GetMarketType() != "swap") {
 			return CreateInput{}, fmt.Errorf("%w: invalid target_weight for %s", ErrInvalidRequest, target.GetSymbol())
@@ -106,6 +110,9 @@ func (p RequestPlanner) Build(ctx context.Context, spaceID string, request *trad
 		)
 		if roundErr != nil {
 			return CreateInput{}, fmt.Errorf("round quantity for %s: %w", target.GetSymbol(), roundErr)
+		}
+		if !weight.IsZero() && quantity.IsZero() {
+			return CreateInput{}, fmt.Errorf("%w: target quantity rounds to zero for %s", ErrInvalidRequest, target.GetSymbol())
 		}
 		current := currents[target.GetSymbol()]
 		input.Targets = append(input.Targets, domain.Target{Symbol: target.GetSymbol(), Quantity: quantity})

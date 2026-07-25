@@ -214,3 +214,28 @@ func TestService_Advance_AllLegsCompleted_ShouldReturnCompleted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "COMPLETED", status)
 }
+
+func TestService_CreateNoOpFullTargetCompletesImmediately(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	defer s.Close()
+
+	ctx := context.Background()
+	svc := Service{Store: s}
+	require.NoError(t, svc.Create(ctx, CreateInput{
+		SpaceID: "space-1", RunID: "run-noop", IdempotencyKey: "idem-noop",
+		AccountID: "acct-1", ChannelID: "chan-1",
+		MarketSnapshotID: "mkt-1", PositionSnapshotID: "pos-1",
+		Mode: domain.FullTarget, Markets: map[string]Market{},
+	}))
+	active, err := s.ListActiveRebalanceRuns(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, active)
+	var status, residual string
+	require.NoError(t, s.DBForTest().Raw(
+		"SELECT c_status,c_residual FROM t_rebalance_runs WHERE c_space_id=? AND c_run_id=?",
+		"space-1", "run-noop",
+	).Row().Scan(&status, &residual))
+	assert.Equal(t, "COMPLETED", status)
+	assert.Equal(t, `{"remaining":"0"}`, residual)
+}

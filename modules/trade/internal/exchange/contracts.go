@@ -77,6 +77,7 @@ type AdapterResolver interface {
 
 type Channel struct {
 	AccountID   string
+	Exchange    string
 	MarketType  string
 	IsSimulated bool
 }

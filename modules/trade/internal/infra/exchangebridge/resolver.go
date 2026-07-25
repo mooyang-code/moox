@@ -43,7 +43,7 @@ func (r Resolver) DescribeChannel(ctx context.Context, space, channelID string) 
 	if err != nil {
 		return legacy.Channel{}, err
 	}
-	return legacy.Channel{AccountID: ch.AccountID, MarketType: ch.MarketType, IsSimulated: ch.IsSimulated}, nil
+	return legacy.Channel{AccountID: ch.AccountID, Exchange: ch.Exchange, MarketType: ch.MarketType, IsSimulated: ch.IsSimulated}, nil
 }
 
 func (r Resolver) ResolvePublic(ctx context.Context, space, channelID string) (legacy.TradingAdapter, error) {

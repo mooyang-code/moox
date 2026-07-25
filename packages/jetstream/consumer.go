@@ -94,8 +94,7 @@ func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer
 		if err := contextErr(ctx, "after consumer creation"); err != nil {
 			return nil, err
 		}
-		// Re-fetch after creation. This closes the race where another process creates
-		// the same durable between the initial lookup and AddConsumer.
+		// 创建后重新读取，处理同一 Stream 内其他进程抢先创建同名 Consumer 的情况。
 		info, err = c.js.ConsumerInfo(cfg.Stream, cfg.Durable, nats.Context(ctx))
 		if err != nil {
 			return nil, classifyConsumerError("inspect created consumer", err)
@@ -122,6 +121,8 @@ func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer
 }
 
 func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, requestedStream, durable string) error {
+	// JetStream 只保证单个 Stream 内名称唯一。这里用于启动时发现静态命名冲突；
+	// V1 依靠单实例 Consumer owner 和固定命名，不为跨 Stream 并发创建引入分布式锁。
 	names := c.js.StreamNames(nats.Context(ctx))
 	for stream := range names {
 		if stream == requestedStream {

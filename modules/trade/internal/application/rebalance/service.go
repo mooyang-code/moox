@@ -75,7 +75,11 @@ func buildCreateRecords(in CreateInput) (store.RebalanceRunRecord, []store.Rebal
 		}
 		records[i] = store.RebalanceLegRecord{SpaceID: in.SpaceID, RunID: in.RunID, LegID: fmt.Sprintf("%s-%d", in.RunID, l.Sequence), Symbol: l.Symbol, MarketType: m.MarketType, BaseAsset: m.BaseAsset, QuoteAsset: m.QuoteAsset, Side: l.Side, Action: string(l.Action), Quantity: l.Quantity.String(), Price: m.Price, ReduceOnly: l.ReduceOnly, Sequence: l.Sequence, DependsOn: l.DependsOn, Status: "PLANNED"}
 	}
-	run := store.RebalanceRunRecord{SpaceID: in.SpaceID, RunID: in.RunID, AccountID: in.AccountID, ChannelID: in.ChannelID, ExecutionMode: in.ExecutionMode, IdempotencyKey: in.IdempotencyKey, MarketSnapshotID: in.MarketSnapshotID, PositionSnapshotID: in.PositionSnapshotID, RulesVersion: in.RulesVersion, AlgorithmName: "target_position", AlgorithmVersion: "1", Status: "PLANNED", Residual: "{}", Version: 1}
+	status, residual := "PLANNED", "{}"
+	if len(records) == 0 {
+		status, residual = "COMPLETED", `{"remaining":"0"}`
+	}
+	run := store.RebalanceRunRecord{SpaceID: in.SpaceID, RunID: in.RunID, AccountID: in.AccountID, ChannelID: in.ChannelID, ExecutionMode: in.ExecutionMode, IdempotencyKey: in.IdempotencyKey, MarketSnapshotID: in.MarketSnapshotID, PositionSnapshotID: in.PositionSnapshotID, RulesVersion: in.RulesVersion, AlgorithmName: "target_position", AlgorithmVersion: "1", Status: status, Residual: residual, Version: 1}
 	return run, records, nil
 }
 func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID string) (string, error) {

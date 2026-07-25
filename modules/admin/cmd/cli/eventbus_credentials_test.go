@@ -305,6 +305,10 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.rebalance.requested.v1.>"},
 	})
 	require.NoError(t, err)
+	_, err = adminJS.AddStream(&nats.StreamConfig{
+		Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.job.execution.requested.v1.>"},
+	})
+	require.NoError(t, err)
 
 	strategy, err := nats.Connect(
 		server.ClientURL(),
@@ -342,4 +346,38 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	cfg.Durable = "not_owned"
 	_, err = trade.NewConsumer(ctx, cfg)
 	require.Error(t, err)
+
+	cloudCtx, cloudCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cloudCancel()
+	cloudnode, err := jetstream.Connect(cloudCtx, jetstream.Config{
+		URLs: []string{server.ClientURL()}, Name: "cloudnode-auth-e2e",
+		Username: "cloudnode-eventbus", Password: tokens["cloudnode-eventbus"],
+	})
+	require.NoError(t, err)
+	defer cloudnode.Close()
+	cloudConsumer, err := cloudnode.NewConsumer(cloudCtx, jetstream.ConsumerConfig{
+		Stream: "MOOX_CLOUDNODE_EXEC", Durable: "cn_exec_auth_e2e",
+		FilterSubject: "moox.cloudnode.job.execution.requested.v1.space.package.>",
+		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	require.NoError(t, err)
+	defer cloudConsumer.Close()
+
+	cloudRaw, err := nats.Connect(
+		server.ClientURL(),
+		nats.UserInfo("cloudnode-eventbus", tokens["cloudnode-eventbus"]),
+	)
+	require.NoError(t, err)
+	defer cloudRaw.Close()
+	cloudJS, err := cloudRaw.JetStream()
+	require.NoError(t, err)
+	_, err = cloudJS.ConsumerInfo("MOOX_TRADE", "trade_rebalance_v1")
+	require.NoError(t, err, "CloudNode 需要只读 Consumer 元数据完成跨 Stream 命名检查")
+	_, err = cloudJS.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{
+		Name: "cn_exec_escape", Durable: "cn_exec_escape",
+		FilterSubject: "moox.trade.rebalance.requested.v1.>",
+		AckPolicy:     nats.AckExplicitPolicy,
+	})
+	require.Error(t, err, "CloudNode 不得在所属 Stream 之外创建 Consumer")
 }
