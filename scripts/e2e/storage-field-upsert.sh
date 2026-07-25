@@ -11,4 +11,4 @@ if [[ -n "${MOOX_STORAGE_CUSTOM_TOML:-}" && ! -f "${MOOX_STORAGE_CUSTOM_TOML}" ]
 fi
 
 env GOCACHE="${GOCACHE:-/tmp/moox-gocache}" go test -count=1 ./internal/service/datanode -run TestTwoDataNodesHostIndependentDatasets
-env GOCACHE="${GOCACHE:-/tmp/moox-gocache}" go test -count=1 ./internal/service/e2e -run TestPrimaryDataNodeViewFlow
+env CGO_ENABLED=1 GOCACHE="${GOCACHE:-/tmp/moox-gocache}" go test -count=1 ./internal/service/e2e -run TestPrimaryDataNodeViewFlow
