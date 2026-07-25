@@ -1106,7 +1106,7 @@ git commit -m "refactor(deploy): provision eventbus credentials only for tls"
 - Modify: `docs/存储层架构.md`
 - Modify: `docs/因子计算模块设计.md`
 
-- [ ] **Step 1: 更新 Consumer API 说明**
+- [x] **Step 1: 更新 Consumer API 说明**
 
 `docs/协议设计.md` 和 `docs/架构总览.md` 明确：
 
@@ -1117,7 +1117,7 @@ Subject；用于 CloudNode route Consumer。
 业务模块不得把裸 FilterSubject 传入 packages/events。
 ```
 
-- [ ] **Step 2: 记录 View 没有直接迁 Runner 的原因**
+- [x] **Step 2: 记录 View 没有直接迁 Runner 的原因**
 
 `docs/存储层架构.md` 的 View 部分增加：
 
@@ -1128,7 +1128,7 @@ Backfill 写优先 gate。通用 Runner 当前为全局串行，不能在不改�
 情况下直接替换该策略。
 ```
 
-- [ ] **Step 3: 把 Factor “去抖”改成准确的固定窗口合并**
+- [x] **Step 3: 把 Factor “去抖”改成准确的固定窗口合并**
 
 把文档 key 改为：
 
@@ -1146,7 +1146,7 @@ bucket[(space_id, source_dataset, target_dataset, subject_id, freq)]
 
 删除 `bucket.max_data_time` 之外的 late/closed-window 分类描述。明确迟到修订仍按其 `BarTime` 生成普通幂等任务，对账和 `writeback_bars` 继续负责业务修正。
 
-- [ ] **Step 4: 验证当前文档没有错误入口**
+- [x] **Step 4: 验证当前文档没有错误入口**
 
 Run:
 
@@ -1160,7 +1160,7 @@ bash scripts/test-docs-architecture.sh
 
 Expected: 第一条命令命中更新后的当前契约；第二条命令无输出；文档架构测试 PASS。
 
-- [ ] **Step 5: 提交当前文档**
+- [x] **Step 5: 提交当前文档**
 
 ```bash
 git add docs/协议设计.md docs/架构总览.md \
