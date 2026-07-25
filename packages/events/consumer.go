@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -49,16 +50,47 @@ type ConsumerConfig struct {
 	DeliverDecodeErrors bool
 }
 
+type SubjectConsumerConfig struct {
+	ConsumerConfig
+	SpaceID   string
+	SubjectID string
+}
+
 func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig) (*Consumer, error) {
-	if client == nil {
-		return nil, fmt.Errorf("event consumer client is nil")
-	}
 	if err := registry.Validate(); err != nil {
 		return nil, err
 	}
 	filter, err := registry.FamilyPattern(cfg.Event)
 	if err != nil {
 		return nil, err
+	}
+	return newConsumer(ctx, client, registry, cfg, filter)
+}
+
+func NewSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*Consumer, error) {
+	filter, err := subjectConsumerFilter(registry, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newConsumer(ctx, client, registry, cfg.ConsumerConfig, filter)
+}
+
+func subjectConsumerFilter(registry *Registry, cfg SubjectConsumerConfig) (string, error) {
+	if strings.TrimSpace(cfg.SpaceID) == "" {
+		return "", fmt.Errorf("event subject consumer space_id is required")
+	}
+	if strings.TrimSpace(cfg.SubjectID) == "" {
+		return "", fmt.Errorf("event subject consumer subject_id is required")
+	}
+	if err := registry.Validate(); err != nil {
+		return "", err
+	}
+	return registry.RenderSubject(cfg.Event, cfg.SpaceID, cfg.SubjectID)
+}
+
+func newConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig, filter string) (*Consumer, error) {
+	if client == nil {
+		return nil, fmt.Errorf("event consumer client is nil")
 	}
 	consumer, err := client.NewConsumer(ctx, jetstream.ConsumerConfig{
 		Stream: cfg.Event.Stream(), Durable: cfg.Name, FilterSubject: filter,

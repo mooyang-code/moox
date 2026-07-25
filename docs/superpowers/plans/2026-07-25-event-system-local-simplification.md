@@ -252,7 +252,7 @@ git commit -m "docs(events): mark transitional plans as historical"
 - Modify: `packages/events/consumer.go`
 - Create: `packages/events/consumer_test.go`
 
-- [ ] **Step 1: 为 exact Subject filter 写失败测试**
+- [x] **Step 1: 为 exact Subject filter 写失败测试**
 
 新增测试，直接验证 filter 由 Registry identity 渲染，而不是接受裸 Subject：
 
@@ -299,7 +299,7 @@ func TestSubjectConsumerFilterRejectsUnregisteredEvent(t *testing.T)
 
 空 identity 必须返回包含 `space_id` 或 `subject_id` 的错误；不同 route 必须得到不同 Subject；未注册 Event 必须被 Registry 拒绝。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run:
 
@@ -309,7 +309,7 @@ Run:
 
 Expected: FAIL，原因是 `SubjectConsumerConfig` 和 `subjectConsumerFilter` 尚不存在。
 
-- [ ] **Step 3: 增加显式配置类型和构造函数**
+- [x] **Step 3: 增加显式配置类型和构造函数**
 
 在 `packages/events/consumer.go` 增加：
 
@@ -392,7 +392,7 @@ func newConsumer(
 
 Import `strings`。不增加 `FilterSubject string` 配置，不允许业务模块绕过 Registry。
 
-- [ ] **Step 4: 验证 family 与 exact 两种语义**
+- [x] **Step 4: 验证 family 与 exact 两种语义**
 
 Run:
 
@@ -403,7 +403,7 @@ Run:
 
 Expected: PASS；既有 `NewConsumer` 行为不变，新增 exact filter 测试通过。
 
-- [ ] **Step 5: 提交契约层 API**
+- [x] **Step 5: 提交契约层 API**
 
 ```bash
 git add packages/events/consumer.go packages/events/consumer_test.go
