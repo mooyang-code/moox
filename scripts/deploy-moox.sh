@@ -29,11 +29,20 @@ RESET_DATA=0
 TARGET_GOOS=""
 TARGET_GOARCH=""
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
+if [[ -n "${MOOX_EVENTBUS_PUBLIC_IP:-}" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" != "1" ]]; then
+  echo "MOOX_EVENTBUS_PUBLIC_IP requires MOOX_EVENTBUS_ENABLE_TLS=1" >&2
+  exit 2
+fi
+if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+  EVENTBUS_SCHEME=tls
+else
+  EVENTBUS_SCHEME=nats
+fi
 if [[ -n "${MOOX_EVENTBUS_PUBLIC_IP:-}" ]]; then
-  EVENTBUS_URL_ENV="tls://${MOOX_EVENTBUS_PUBLIC_IP}:4222"
+  EVENTBUS_URL_ENV="${EVENTBUS_SCHEME}://${MOOX_EVENTBUS_PUBLIC_IP}:4222"
   MOOX_EVENTBUS_HOST=0.0.0.0
 else
-  EVENTBUS_URL_ENV="tls://127.0.0.1:4222"
+  EVENTBUS_URL_ENV="${EVENTBUS_SCHEME}://127.0.0.1:4222"
   MOOX_EVENTBUS_HOST=127.0.0.1
 fi
 export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST
@@ -2379,6 +2388,8 @@ EOF
     printf 'MOOX_GATEWAY_CALLER=moox-cli\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "$(tr -d '\r\n' <"${STAGE_DIR}/secrets/gateway-moox-cli.key")"
     printf 'MOOX_GATEWAY_TARGET_NODE=%q\n' "${NODE_ID}"
+    printf 'MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector\n'
+    printf 'MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=%q\n' "$(tr -d '\r\n' <"${STAGE_DIR}/secrets/gateway-collector.key")"
     printf 'MOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003\n'
     printf 'MOOX_GATEWAY_CA_FILE=%q\n' "${DEPLOY_DIR}/certs/gateway/peers.pem"
   } >"${STAGE_DIR}/secrets/gateway-moox-cli.env"
@@ -2699,9 +2710,10 @@ sync_local_stage() {
   else
     rm -f "${deploy_dir}/secrets/storage-node-auth.env"
   fi
-  for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key; do
+  for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
   done
+  install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
   install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
   install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
   if [[ "${WITH_ADMIN}" -eq 0 ]]; then

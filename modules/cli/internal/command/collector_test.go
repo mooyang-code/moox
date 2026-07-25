@@ -117,6 +117,22 @@ func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing
 	require.ErrorContains(t, err, "managed key")
 }
 
+func TestCollectorFunctionEnvironmentUsesRuntimeCollectorIdentity(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "")
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "node-a")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-cli")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "cli-secret")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
+
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "node-a", env["MOOX_GATEWAY_NODE_ID"])
+	assert.Equal(t, "collector", env["MOOX_GATEWAY_SERVICE_KEY_ID"])
+	assert.Equal(t, "collector-secret", env["MOOX_GATEWAY_SERVICE_SECRET_KEY"])
+}
+
 type collectorCLSAPI struct{}
 
 func (collectorCLSAPI) GetService(context.Context) (bool, error)    { return true, nil }
@@ -218,8 +234,9 @@ func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {
 	}
 }
 
-func TestCollectorFunctionEnvironmentAllowsExplicitEnvOverride(t *testing.T) {
-	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+func TestCollectorFunctionEnvironmentRejectsManagedGatewayOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
 		CloudAccountID:   "account-a",
 		SpaceID:          "crypto",
 		ServiceAccessKey: "svc-ak",
@@ -232,16 +249,7 @@ func TestCollectorFunctionEnvironmentAllowsExplicitEnvOverride(t *testing.T) {
 			"MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS=60",
 		},
 	}, "moox-collector_dev")
-
-	if item.Environment["MOOX_SPACE_ID"] != "override-space" {
-		t.Fatalf("space env = %#v", item.Environment)
-	}
-	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "override-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "override-sk" {
-		t.Fatalf("service auth env = %#v", item.Environment)
-	}
-	if item.Environment["MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS"] != "60" {
-		t.Fatalf("expire env = %#v", item.Environment)
-	}
+	require.ErrorContains(t, err, "managed key")
 }
 
 func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {

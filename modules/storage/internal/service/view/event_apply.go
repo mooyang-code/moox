@@ -103,16 +103,6 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 		return nil
 	}
 	complete, incomplete := partitionCompleteWrites(schema, writes)
-	if len(complete) > 0 {
-		missing, err := s.hasMissingRows(ctx, engine, id, complete)
-		if err != nil {
-			return err
-		}
-		if missing {
-			incomplete = append(incomplete, complete...)
-			complete = nil
-		}
-	}
 	if len(incomplete) > 0 {
 		recovered, err := s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, incomplete)
 		if err != nil {
@@ -154,29 +144,6 @@ func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewinde
 		}
 	}
 	return complete, incomplete
-}
-
-func (s *Service) hasMissingRows(ctx context.Context, engine viewindex.Engine, id string, writes []viewindex.RowWrite) (bool, error) {
-	keys := make([]*pb.RowKey, 0, len(writes))
-	for _, write := range writes {
-		keys = append(keys, write.Key.Key)
-	}
-	rows, _, err := engine.Query(ctx, id, viewindex.QuerySpec{Keys: keys, TotalMode: pb.TotalMode_NONE})
-	if err != nil {
-		return false, err
-	}
-	present := make(map[string]struct{}, len(rows))
-	for _, row := range rows {
-		if row != nil && row.GetKey() != nil {
-			present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
-		}
-	}
-	for _, key := range keys {
-		if _, ok := present[viewindex.RowKeyID(key)]; !ok {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ string, schema viewindex.ViewIndexSchema, datasetID string, events []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {

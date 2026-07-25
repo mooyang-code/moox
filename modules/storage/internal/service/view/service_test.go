@@ -328,6 +328,32 @@ func TestSecondaryEventRecoversCompleteMissingViewRow(t *testing.T) {
 	}
 }
 
+func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "single", Schema: &pb.ViewIndexSchema{
+		SpaceId: "space", ViewId: "single", PrimaryDatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
+	}
+	event := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}}},
+	}
+	if err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{event}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := svc.query(ctx, "single", []*pb.RowKey{event.GetKey()}, nil)
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+}
+
 func TestViewEventUsesDatasetDots(t *testing.T) {
 	schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "dots", PrimaryDatasetID: "primary", ViewVersion: 1, SchemaHash: "hash", Columns: []*pb.ViewColumn{
 		{OriginId: "market.v2.close", ColumnName: "close"},

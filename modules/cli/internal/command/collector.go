@@ -375,9 +375,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	}
 	env := map[string]string{}
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
-	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", os.Getenv("MOOX_GATEWAY_NODE_ID"))
-	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")))
-	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")))
+	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", firstNonEmpty(os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE")))
+	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", firstNonEmpty(opts.ServiceAccessKey, os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID")))
+	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", firstNonEmpty(opts.ServiceSecretKey, os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY")))
 	clsHost := firstNonEmpty(os.Getenv("MOOX_CLS_HOST"), clsprepare.Host)
 	clsSecretID := firstNonEmpty(opts.CLSSecretID, os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID"))
 	clsSecretKey := firstNonEmpty(opts.CLSSecretKey, os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"))
@@ -393,6 +393,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_CODE_PACKAGE_ID":              {},
 		"MOOX_CLS_SECRET_ID":                {},
 		"MOOX_CLS_SECRET_KEY":               {},
+		"MOOX_GATEWAY_SERVICE_KEY_ID":       {},
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   {},
+		"MOOX_GATEWAY_NODE_ID":              {},
 	}
 	for key := range overrides {
 		if _, ok := managed[key]; ok {

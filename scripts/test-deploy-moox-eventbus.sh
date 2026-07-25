@@ -36,6 +36,10 @@ grep -Fq \
 grep -Fq 'missing EventBus TLS credential' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip}' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP requires MOOX_EVENTBUS_ENABLE_TLS=1' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq '"${STAGE_DIR}"/secrets/gateway-cloudnode.key' "${ROOT}/scripts/deploy-moox.sh"
 for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
   grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
   grep -q "dataset_id: ${dataset}.*status: disabled" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
