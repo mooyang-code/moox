@@ -41,6 +41,8 @@ type queueConsumer interface {
 	MaxDeliver() int
 }
 
+const directFetchMaxWait = 500 * time.Millisecond
+
 type roundRobinConsumer struct {
 	bindings []queueBinding
 	next     int
@@ -109,7 +111,7 @@ func RunJobItems(ctx context.Context) error {
 		}
 		consumer, bindErr := events.BindSubjectConsumer(ctx, client, registry, events.SubjectConsumerConfig{
 			ConsumerConfig: events.ConsumerConfig{
-				Name: name, Event: events.CloudJobExecutionRequested, FetchMaxWait: 200 * time.Millisecond,
+				Name: name, Event: events.CloudJobExecutionRequested, FetchMaxWait: directFetchMaxWait,
 				DeliverDecodeErrors: true,
 			},
 			SpaceID: spaceID, SubjectID: subjectID,

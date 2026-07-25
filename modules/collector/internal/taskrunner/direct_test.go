@@ -39,6 +39,9 @@ func (*fakeQueueConsumer) Close() error    { return nil }
 func (*fakeQueueConsumer) MaxDeliver() int { return 3 }
 
 func TestRoundRobinConsumerDoesNotStarveBindings(t *testing.T) {
+	if directFetchMaxWait != 500*time.Millisecond {
+		t.Fatalf("directFetchMaxWait = %s", directFetchMaxWait)
+	}
 	first := &fakeQueueConsumer{results: []fakeFetchResult{
 		{deliveries: []*jetstream.Delivery{{Consumer: "first-1"}}},
 		{deliveries: []*jetstream.Delivery{{Consumer: "first-2"}}},

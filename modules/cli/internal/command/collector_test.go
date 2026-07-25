@@ -168,6 +168,8 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
 	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
 	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		collectorPackageOptions: collectorPackageOptions{
 			CLSLogsetID: "logset-unified",
@@ -202,7 +204,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_SPACE_ID"] != "crypto" {
 		t.Fatalf("space env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "svc-ak" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "svc-sk" {
+	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "collector" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "collector-secret" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
 	if item.Environment["MOOX_CLS_HOST"] != "ap-guangzhou.cls.tencentyun.com" || item.Environment["MOOX_CLS_SECRET_ID"] != "cls-id" || item.Environment["MOOX_CLS_SECRET_KEY"] != "cls-key" {
