@@ -53,8 +53,6 @@ type JetStreamConfig struct {
 	URLs           []string                `yaml:"urls"`
 	NATSURL        string                  `yaml:"nats_url"`
 	CredentialFile string                  `yaml:"credential_file"`
-	SubjectPrefix  string                  `yaml:"subject_prefix"`
-	ExecStream     string                  `yaml:"exec_stream"`
 	Embedded       EmbeddedJetStreamConfig `yaml:"embedded"`
 	AckWaitMillis  int64                   `yaml:"ack_wait_millis"`
 	MaxDeliver     int                     `yaml:"max_deliver"`
@@ -153,8 +151,6 @@ func Default() *Config {
 			URLs:           []string{"nats://127.0.0.1:4222"},
 			NATSURL:        "nats://127.0.0.1:4222",
 			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
-			SubjectPrefix:  "moox.cloudnode",
-			ExecStream:     "MOOX_CLOUDNODE_EXEC",
 			AckWaitMillis:  int64(12 * time.Minute / time.Millisecond),
 			MaxDeliver:     3,
 			FetchMaxWaitMs: 500,

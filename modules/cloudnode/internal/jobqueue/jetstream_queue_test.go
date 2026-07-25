@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,14 +48,16 @@ func TestJetStreamQueue_CloseWithoutConsumer(t *testing.T) {
 }
 
 func TestConsumerConfigForRouteUsesExactRoute(t *testing.T) {
-	cfg := QueueConfig{Naming: NamingConfig{SubjectPrefix: "moox.cloudnode"}}
+	cfg := QueueConfig{}
 
 	got := consumerConfigForRoute(cfg, "crypto", "moox-collector_v202607142250", "collect.kline")
 
-	require.Equal(t, ConsumerName("crypto", "moox-collector_v202607142250", "collect.kline"), got.Durable)
-	require.Equal(t, ExecFilterSubject(cfg.Naming, "crypto", "moox-collector_v202607142250", "collect.kline"), got.FilterSubject)
-	require.NotContains(t, got.FilterSubject, ">")
-	require.NotEqual(t, got.FilterSubject, ExecFilterSubject(cfg.Naming, "crypto", "moox-collector_v202607142250", "collect.symbol"))
+	require.Equal(t, events.CloudJobExecutionRequested.Name(), got.Event.Name())
+	require.Equal(t, events.CloudJobExecutionRequested.Version(), got.Event.Version())
+	require.Equal(t, events.CloudJobExecutionRequested.Stream(), got.Event.Stream())
+	require.Equal(t, "crypto", got.SpaceID)
+	require.Equal(t, "moox-collector_v202607142250/collect.kline", got.SubjectID)
+	require.Equal(t, ConsumerName("crypto", "moox-collector_v202607142250", "collect.kline"), got.Name)
 }
 
 func TestRouteConsumerKeySeparatesJobTypes(t *testing.T) {

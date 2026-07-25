@@ -40,7 +40,6 @@ func TestContains_MatchesTarget(t *testing.T) {
 
 func TestNewJetStreamQueue_AppliesDefaults(t *testing.T) {
 	q := NewJetStreamQueue(nil, QueueConfig{})
-	assert.Equal(t, DefaultExecStream, q.cfg.ExecStream)
 	assert.Equal(t, 2*time.Minute, q.cfg.AckWait)
 	assert.Equal(t, 3, q.cfg.MaxDeliver)
 	assert.Equal(t, defaultFetchMaxWait, q.cfg.FetchMaxWait)

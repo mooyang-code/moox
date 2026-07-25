@@ -9,8 +9,6 @@ import (
 
 // QueueConfig configures the execution queue adapter.
 type QueueConfig struct {
-	Naming          NamingConfig
-	ExecStream      string
 	AckWait         time.Duration
 	MaxDeliver      int
 	FetchMaxWait    time.Duration

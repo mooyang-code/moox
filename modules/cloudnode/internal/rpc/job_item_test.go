@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -143,7 +144,7 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 		t.Fatalf("seed node: %v", err)
 	}
 
-	rt, jsCfg := startRPCQueueRuntime(t)
+	rt, _ := startRPCQueueRuntime(t)
 	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
@@ -155,8 +156,6 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 	historyDir := t.TempDir()
 	history := jobhistory.NewStore(jobhistory.StoreOptions{Dir: historyDir, RetentionDays: 2})
 	queue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-		Naming:          jobqueue.NamingConfig{SubjectPrefix: jobqueue.DefaultSubjectPrefix},
-		ExecStream:      jsCfg.ExecStream,
 		AckWait:         200 * time.Millisecond,
 		MaxDeliver:      3,
 		FetchMaxWait:    500 * time.Millisecond,
@@ -504,7 +503,7 @@ func TestCancelJobItemWritesTerminalHistory(t *testing.T) {
 
 func TestSubmitJobItemsRejectsInvalidItemWithoutActiveKVSideEffect(t *testing.T) {
 	ctx := context.Background()
-	rt, jsCfg := startRPCQueueRuntime(t)
+	rt, _ := startRPCQueueRuntime(t)
 	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
 	if err != nil {
 		t.Fatalf("KeyValue() error = %v", err)
@@ -514,8 +513,6 @@ func TestSubmitJobItemsRejectsInvalidItemWithoutActiveKVSideEffect(t *testing.T)
 		DefaultMaxAttempts: 3,
 	})
 	queue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-		Naming:          jobqueue.NamingConfig{SubjectPrefix: jobqueue.DefaultSubjectPrefix},
-		ExecStream:      jsCfg.ExecStream,
 		AckWait:         200 * time.Millisecond,
 		MaxDeliver:      3,
 		FetchMaxWait:    500 * time.Millisecond,
@@ -544,10 +541,8 @@ func startRPCQueueRuntime(t *testing.T) (*jobqueue.Runtime, config.JetStreamConf
 	t.Helper()
 	port := freeRPCQueuePort(t)
 	cfg := config.JetStreamConfig{
-		Enabled:       true,
-		NATSURL:       "nats://127.0.0.1:" + port,
-		SubjectPrefix: jobqueue.DefaultSubjectPrefix,
-		ExecStream:    jobqueue.DefaultExecStream,
+		Enabled: true,
+		NATSURL: "nats://127.0.0.1:" + port,
 		Embedded: config.EmbeddedJetStreamConfig{
 			Enabled:          true,
 			Host:             "127.0.0.1",
@@ -562,6 +557,22 @@ func startRPCQueueRuntime(t *testing.T) (*jobqueue.Runtime, config.JetStreamConf
 		t.Fatalf("EnsureStreams() error = %v", err)
 	}
 	return rt, cfg
+}
+
+func cloudJobSubjectForTest(spaceID, codePackageID, jobType string) string {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		panic(err)
+	}
+	subject, err := registry.RenderSubject(
+		events.CloudJobExecutionRequested,
+		spaceID,
+		codePackageID+"/"+jobType,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return subject
 }
 
 type recordingExecutionQueue struct {
@@ -609,8 +620,8 @@ func (q *flakyPublishQueue) Publish(_ context.Context, item *pb.JobItem) (*jobqu
 	}
 	return &jobqueue.PublishResult{
 		Created:  true,
-		Subject:  jobqueue.ExecFilterSubject(jobqueue.NamingConfig{}, "crypto", "collector-scf", "collect.kline"),
-		Stream:   jobqueue.DefaultExecStream,
+		Subject:  cloudJobSubjectForTest("crypto", "collector-scf", "collect.kline"),
+		Stream:   events.CloudJobExecutionRequested.Stream(),
 		Sequence: uint64(q.publishes),
 	}, nil
 }

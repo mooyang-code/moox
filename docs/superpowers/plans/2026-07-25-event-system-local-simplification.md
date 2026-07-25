@@ -427,7 +427,7 @@ git commit -m "feat(events): add registry-owned subject consumer"
 - Modify: `modules/cloudnode/internal/rpc/job_item_test.go`
 - Modify: `scripts/verify-event-contracts.sh`
 
-- [ ] **Step 1: 把 route config 测试改成事件层配置**
+- [x] **Step 1: 把 route config 测试改成事件层配置**
 
 `consumerConfigForRoute` 的目标返回值改成：
 
@@ -459,7 +459,7 @@ require.Equal(t, ConsumerName(
 ), got.Name)
 ```
 
-- [ ] **Step 2: 增加架构门禁并确认失败**
+- [x] **Step 2: 增加架构门禁并确认失败**
 
 在 `scripts/verify-event-contracts.sh` 增加：
 
@@ -477,7 +477,7 @@ Run:
 
 Expected: FAIL，并定位到 `modules/cloudnode/internal/jobqueue/jetstream_queue.go` 的底层 `q.client.NewConsumer`。
 
-- [ ] **Step 3: 让 Queue 持有 Registry 和事件 Consumer**
+- [x] **Step 3: 让 Queue 持有 Registry 和事件 Consumer**
 
 `JetStreamQueue` 改为：
 
@@ -508,7 +508,7 @@ if client != nil && registryErr == nil {
 
 初始化 `consumers: make(map[string]*events.Consumer)`。
 
-- [ ] **Step 4: 用精确 Subject API 创建 route Consumer**
+- [x] **Step 4: 用精确 Subject API 创建 route Consumer**
 
 `ensureConsumer` 改成：
 
@@ -539,7 +539,7 @@ func (q *JetStreamQueue) ensureConsumer(
 
 `Fetch` 继续调用 `consumer.Fetch`，因此 Delivery、ACK、NAK、TERM 和 inflight token 行为不变。
 
-- [ ] **Step 5: 删除 CloudNode 重复的业务拓扑配置**
+- [x] **Step 5: 删除 CloudNode 重复的业务拓扑配置**
 
 从 `QueueConfig` 删除：
 
@@ -600,7 +600,7 @@ _, err = js.AddStream(&nats.StreamConfig{
 })
 ```
 
-- [ ] **Step 6: 更新 CloudNode 测试中的 Subject 期望**
+- [x] **Step 6: 更新 CloudNode 测试中的 Subject 期望**
 
 测试需要精确 Subject 时统一调用：
 
@@ -624,7 +624,7 @@ func mustCloudJobSubject(
 
 不要在生产包重新增加一个返回空字符串的 subject helper。
 
-- [ ] **Step 7: 运行 CloudNode、契约和 race 测试**
+- [x] **Step 7: 运行 CloudNode、契约和 race 测试**
 
 Run:
 
@@ -637,7 +637,7 @@ Run:
 
 Expected: 全部 PASS；生产 CloudNode 不再直接调用底层 `NewConsumer`，route 隔离测试仍证明不同 jobType 使用不同精确 Subject。
 
-- [ ] **Step 8: 提交 CloudNode 迁移**
+- [x] **Step 8: 提交 CloudNode 迁移**
 
 ```bash
 git add packages/events \

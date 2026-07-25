@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -131,8 +132,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			DefaultMaxAttempts: cfg.JobItem.DefaultMaxAttempts,
 		})
 		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-			Naming:          jobqueue.NamingConfig{SubjectPrefix: cfg.JetStream.SubjectPrefix},
-			ExecStream:      cfg.JetStream.ExecStream,
 			AckWait:         time.Duration(cfg.JetStream.AckWaitMillis) * time.Millisecond,
 			MaxDeliver:      cfg.JetStream.MaxDeliver,
 			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
@@ -150,8 +149,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			cloudnoderpc.WithJobHistoryStore(historyStore),
 			cloudnoderpc.WithHeartbeatSink(heartbeatSink),
 		)
-		log.InfoContextf(ctx, "cloudnode JetStream 已启用: exec_stream=%s active_kv=%s nats_url=%s",
-			cfg.JetStream.ExecStream, cfg.JobItem.ActiveKVBucket, cfg.JetStream.NATSURL)
+		log.InfoContextf(ctx, "cloudnode JetStream 已启用: event=%s active_kv=%s nats_url=%s",
+			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, cfg.JetStream.NATSURL)
 	}
 
 	svc := cloudnoderpc.New(dbm, opts...)

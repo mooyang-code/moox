@@ -24,19 +24,17 @@ const defaultFetchMaxWait = 500 * time.Millisecond
 type JetStreamQueue struct {
 	rt         *Runtime
 	client     *jetstream.Client
+	registry   *events.Registry
 	publisher  *events.Publisher
 	cfg        QueueConfig
 	mu         sync.Mutex
 	inflight   map[string]*jetstream.Delivery
-	consumers  map[string]*jetstream.Consumer
+	consumers  map[string]*events.Consumer
 	fetchLock  map[string]*sync.Mutex
 	fetchStart map[string]uint64
 }
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
-	if cfg.ExecStream == "" {
-		cfg.ExecStream = DefaultExecStream
-	}
 	if cfg.AckWait <= 0 {
 		cfg.AckWait = 2 * time.Minute
 	}
@@ -53,14 +51,16 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if rt != nil {
 		client = rt.Client()
 	}
+	registry, registryErr := events.DefaultRegistry()
 	var publisher *events.Publisher
-	if client != nil {
-		registry, err := events.DefaultRegistry()
-		if err == nil {
-			publisher, _ = events.NewPublisher(client, registry)
-		}
+	if client != nil && registryErr == nil {
+		publisher, _ = events.NewPublisher(client, registry)
 	}
-	return &JetStreamQueue{rt: rt, client: client, publisher: publisher, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.Consumer), fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64)}
+	return &JetStreamQueue{
+		rt: rt, client: client, registry: registry, publisher: publisher, cfg: cfg,
+		inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*events.Consumer),
+		fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64),
+	}
 }
 
 func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
@@ -81,12 +81,11 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	if q.publisher == nil {
 		return nil, errors.New("cloudnode event publisher is unavailable")
 	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return nil, err
+	if q.registry == nil {
+		return nil, errors.New("cloudnode event registry is unavailable")
 	}
 	subjectID := item.GetCodePackageId() + "/" + item.GetJobType()
-	subject, err := registry.RenderSubject(events.CloudJobExecutionRequested, item.GetSpaceId(), subjectID)
+	subject, err := q.registry.RenderSubject(events.CloudJobExecutionRequested, item.GetSpaceId(), subjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -97,37 +96,38 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*Publis
 	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: subject, Stream: ack.Stream, Sequence: ack.Sequence}, nil
 }
 
-func consumerConfigForRoute(cfg QueueConfig, spaceID, codePackageID, jobType string) jetstream.ConsumerConfig {
-	return jetstream.ConsumerConfig{
-		Stream:        qExecStream(cfg),
-		Durable:       ConsumerName(spaceID, codePackageID, jobType),
-		FilterSubject: ExecFilterSubject(cfg.Naming, spaceID, codePackageID, jobType),
-		AckWait:       cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.DefaultMaxBatch,
-		FetchMaxWait: cfg.FetchMaxWait,
+func consumerConfigForRoute(cfg QueueConfig, spaceID, codePackageID, jobType string) events.SubjectConsumerConfig {
+	return events.SubjectConsumerConfig{
+		ConsumerConfig: events.ConsumerConfig{
+			Name:          ConsumerName(spaceID, codePackageID, jobType),
+			Event:         events.CloudJobExecutionRequested,
+			AckWait:       cfg.AckWait,
+			MaxDeliver:    cfg.MaxDeliver,
+			MaxAckPending: cfg.DefaultMaxBatch,
+			FetchMaxWait:  cfg.FetchMaxWait,
+		},
+		SpaceID:   spaceID,
+		SubjectID: codePackageID + "/" + jobType,
 	}
-}
-
-func qExecStream(cfg QueueConfig) string {
-	if value := strings.TrimSpace(cfg.ExecStream); value != "" {
-		return value
-	}
-	return DefaultExecStream
 }
 
 func routeConsumerKey(spaceID, codePackageID, jobType string) string {
 	return ConsumerName(spaceID, codePackageID, jobType)
 }
 
-func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*jetstream.Consumer, error) {
+func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*events.Consumer, error) {
 	key := routeConsumerKey(spaceID, codePackageID, jobType)
 	if consumer := q.consumers[key]; consumer != nil {
 		return consumer, nil
+	}
+	if q.client == nil || q.registry == nil {
+		return nil, errors.New("cloudnode event consumer is unavailable")
 	}
 	// The subscription is shared by many SCF poll requests. Binding it to the
 	// request context would close the durable subscription as soon as the first
 	// request returns.
 	consumerCfg := consumerConfigForRoute(q.cfg, spaceID, codePackageID, jobType)
-	consumer, err := q.client.NewConsumer(trpc.BackgroundContext(), consumerCfg)
+	consumer, err := events.NewSubjectConsumer(trpc.BackgroundContext(), q.client, q.registry, consumerCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (q *JetStreamQueue) ensureFetchLock(key string) *sync.Mutex {
 	return lock
 }
 
-func fetchRouteConsumer(ctx context.Context, consumer *jetstream.Consumer, limit int) ([]*jetstream.Delivery, error) {
+func fetchRouteConsumer(ctx context.Context, consumer *events.Consumer, limit int) ([]*jetstream.Delivery, error) {
 	deliveries, err := consumer.Fetch(ctx, limit)
 	if errors.Is(err, nats.ErrTimeout) && len(deliveries) == 0 {
 		return nil, nil
@@ -200,11 +200,10 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 	out := make([]Delivery, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		actionCtx := ctx
-		registry, err := events.DefaultRegistry()
-		if err != nil {
-			return nil, err
+		if q.registry == nil {
+			return nil, errors.New("cloudnode event registry is unavailable")
 		}
-		message, payload, decodeErr := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+		message, payload, decodeErr := events.DecodeRaw(q.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
 		if decodeErr != nil {
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(decodeErr, actionErr)
@@ -231,7 +230,7 @@ func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Deliver
 				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount)
 			continue
 		}
-		expectedSubject, subjectErr := registry.RenderSubject(events.CloudJobExecutionRequested, req.SpaceID, req.CodePackageID+"/"+jobPayload.GetJobType())
+		expectedSubject, subjectErr := q.registry.RenderSubject(events.CloudJobExecutionRequested, req.SpaceID, req.CodePackageID+"/"+jobPayload.GetJobType())
 		if subjectErr != nil || delivery.Subject != expectedSubject || !contains(req.SupportedJobTypes, jobPayload.GetJobType()) {
 			if actionErr := delivery.Term(actionCtx); actionErr != nil {
 				return nil, errors.Join(fmt.Errorf("cloudnode route mismatch"), actionErr)
@@ -294,7 +293,7 @@ func (q *JetStreamQueue) InProgress(ctx context.Context, token string) error {
 func (q *JetStreamQueue) Close() error {
 	q.mu.Lock()
 	consumers := q.consumers
-	q.consumers = make(map[string]*jetstream.Consumer)
+	q.consumers = make(map[string]*events.Consumer)
 	q.fetchLock = make(map[string]*sync.Mutex)
 	q.fetchStart = make(map[string]uint64)
 	q.mu.Unlock()

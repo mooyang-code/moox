@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
+	"github.com/mooyang-code/moox/packages/events"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -47,7 +48,26 @@ func StartRuntime(t *testing.T, cfg config.JetStreamConfig) *jobqueue.Runtime {
 		t.Fatal(err)
 	}
 	js, _ := nc.JetStream()
-	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.ExecStream, Subjects: []string{jobqueue.ExecStreamSubject(jobqueue.NamingConfig{SubjectPrefix: cfg.SubjectPrefix})}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy})
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		nc.Close()
+		_ = rt.Close()
+		srv.Shutdown()
+		t.Fatal(err)
+	}
+	family, err := registry.FamilyPattern(events.CloudJobExecutionRequested)
+	if err != nil {
+		nc.Close()
+		_ = rt.Close()
+		srv.Shutdown()
+		t.Fatal(err)
+	}
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:      events.CloudJobExecutionRequested.Stream(),
+		Subjects:  []string{family},
+		Storage:   nats.FileStorage,
+		Retention: nats.WorkQueuePolicy,
+	})
 	if err != nil && !errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
 		nc.Close()
 		_ = rt.Close()
