@@ -33,22 +33,9 @@
               </a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="SecretId" data-index="secret_id" :width="200">
+          <a-table-column title="云密钥" data-index="credential_secret_id" :width="220">
             <template #cell="{ record }">
-              <a-space>
-                <span>{{ record.secret_id }}</span>
-                <icon-copy style="cursor: pointer" @click="copyToClipboard(record.secret_id)" />
-              </a-space>
-            </template>
-          </a-table-column>
-          <a-table-column title="Secret Key" data-index="secret_key" :width="200">
-            <template #cell="{ record }">
-              <a-space>
-                <span>{{ record.secret_key }}</span>
-                <a-tooltip content="密钥已加密存储，显示为掩码">
-                  <icon-info-circle />
-                </a-tooltip>
-              </a-space>
+              <span>{{ secretName(record.credential_secret_id) }}</span>
             </template>
           </a-table-column>
           <a-table-column title="应用ID" data-index="app_id" :width="150">
@@ -114,25 +101,15 @@
         <a-form-item field="provider" label="云厂商" required>
           <a-select v-model="form.provider" placeholder="请选择云厂商" :disabled="isEdit">
             <a-option value="tencent">腾讯云</a-option>
-            <a-option value="aliyun">阿里云</a-option>
-            <a-option value="aws">AWS</a-option>
           </a-select>
         </a-form-item>
 
-        <a-form-item field="secret_id" label="SecretId" required>
-          <a-input v-model="form.secret_id" placeholder="请输入SecretId" :disabled="isEdit" />
-          <template #extra v-if="isEdit">
-            <span style="color: #f53f3f; font-size: 12px"> SecretId不允许修改,如需修改请删除后重新创建 </span>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="secret_key" label="SecretKey" :required="!isEdit">
-          <a-input-password v-model="form.secret_key" placeholder="请输入SecretKey" :disabled="isEdit" allow-clear />
-          <template #extra>
-            <span :style="{ color: isEdit ? '#f53f3f' : '#86909c', fontSize: '12px' }">
-              {{ isEdit ? "SecretKey不允许修改,如需修改请删除后重新创建" : "密钥将加密存储" }}
-            </span>
-          </template>
+        <a-form-item field="credential_secret_id" label="云密钥" required>
+          <a-select v-model="form.credential_secret_id" placeholder="请选择已启用的腾讯云密钥">
+            <a-option v-for="secret in cloudSecrets" :key="secret.secret_id" :value="secret.secret_id">
+              {{ secret.name }} ({{ secret.key_id || secret.secret_id }})
+            </a-option>
+          </a-select>
         </a-form-item>
 
         <a-divider v-if="form.provider === 'tencent'" orientation="left">COS配置(可选)</a-divider>
@@ -178,6 +155,7 @@ import {
   deleteCloudAccount,
   type CloudAccount
 } from "@/api/cloud-account";
+import { listSecrets, type Secret } from "@/api/admin/secret";
 
 // Props
 const props = defineProps<{
@@ -194,6 +172,7 @@ const emit = defineEmits<{
 const visible = ref(props.modelValue);
 const loading = ref(false);
 const accountList = ref<CloudAccount[]>([]);
+const cloudSecrets = ref<Secret[]>([]);
 const total = ref(0);
 const formVisible = ref(false);
 const isEdit = ref(false);
@@ -204,8 +183,7 @@ const defaultForm = {
   account_id: "",
   account_name: "",
   provider: "tencent",
-  secret_id: "",
-  secret_key: "",
+  credential_secret_id: "",
   app_id: "",
   cos_region: "",
   cos_bucket: "",
@@ -224,6 +202,7 @@ watch(
     visible.value = newVal;
     if (newVal) {
       loadAccountList();
+      loadCloudSecrets();
     }
   }
 );
@@ -245,6 +224,16 @@ const loadAccountList = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+const loadCloudSecrets = async () => {
+  const response = await listSecrets({ category: "cloud", provider: "tencent", status: "active", limit: 200 });
+  cloudSecrets.value = response.secrets ?? [];
+};
+
+const secretName = (secretId: string) => {
+  const secret = cloudSecrets.value.find(item => item.secret_id === secretId);
+  return secret ? `${secret.name} (${secret.key_id || secretId})` : secretId;
 };
 
 // 生成唯一的account_id
@@ -272,8 +261,7 @@ const onEdit = (record: CloudAccount) => {
     account_id: record.account_id,
     account_name: record.account_name,
     provider: record.provider,
-    secret_id: record.secret_id,
-    secret_key: "", // 编辑时密钥留空,但会被禁用不允许修改
+    credential_secret_id: record.credential_secret_id,
     app_id: record.app_id || "",
     cos_region: record.cos_region || "",
     cos_bucket: record.cos_bucket || "",
@@ -363,11 +351,11 @@ const handleFormOk = async () => {
 
   try {
     if (isEdit.value) {
-      // 编辑时,不传递secret_id和secret_key字段(不允许修改)
       const updateData: any = {
         account_id: form.account_id,
         account_name: form.account_name,
         provider: form.provider,
+        credential_secret_id: form.credential_secret_id,
         app_id: form.app_id,
         cos_region: form.cos_region,
         cos_bucket: form.cos_bucket,
@@ -381,8 +369,7 @@ const handleFormOk = async () => {
         account_id: form.account_id,
         account_name: form.account_name,
         provider: form.provider,
-        secret_id: form.secret_id,
-        secret_key: form.secret_key,
+        credential_secret_id: form.credential_secret_id,
         app_id: form.app_id,
         cos_region: form.cos_region,
         cos_bucket: form.cos_bucket,
@@ -436,15 +423,6 @@ const formatTime = (time: string | undefined) => {
   });
 };
 
-// 复制到剪贴板
-const copyToClipboard = async (text: string) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    Message.success("已复制到剪贴板");
-  } catch {
-    Message.error("复制失败");
-  }
-};
 </script>
 
 <style scoped>

@@ -136,5 +136,5 @@ func runOnce(ctx context.Context, opts onceOptions) error {
 	runtimeapp.UpdateServiceGatewayTarget(opts.ServiceGatewayTarget)
 	runtimeapp.UpdateNodeInfo(opts.NodeID, version)
 	runtimeapp.UpdateStorageRPCGatewayTarget(opts.StorageRPCGatewayTarget)
-	return taskrunner.PollAndExecuteJobItems(ctx)
+	return taskrunner.RunJobItems(ctx)
 }

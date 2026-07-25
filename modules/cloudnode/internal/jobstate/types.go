@@ -11,46 +11,19 @@ import (
 
 const (
 	StatusPending       = "pending"
-	StatusRunning       = "running"
 	StatusSuccess       = "success"
 	StatusFailed        = "failed"
 	StatusEnqueueFailed = "enqueue_failed"
-
-	AttemptRunning = "running"
-	AttemptSuccess = "success"
-	AttemptFailed  = "failed"
-	AttemptLost    = "lost"
 
 	ErrorRetryable = "retryable"
 	ErrorPermanent = "permanent"
 )
 
 var (
-	ErrConflict     = errors.New("job item state conflict")
-	ErrStaleAttempt = errors.New("stale job item attempt")
-	ErrInactive     = errors.New("job item is not running")
-	ErrInvalid      = errors.New("invalid job item")
-	ErrNotFound     = errors.New("job item not found")
+	ErrConflict = errors.New("job item state conflict")
+	ErrInvalid  = errors.New("invalid job item")
+	ErrNotFound = errors.New("job item not found")
 )
-
-type QueueMeta struct {
-	Subject    string `json:"subject,omitempty"`
-	Stream     string `json:"stream,omitempty"`
-	StreamSeq  uint64 `json:"stream_seq,omitempty"`
-	AckSubject string `json:"ack_subject,omitempty"`
-}
-
-type Attempt struct {
-	AttemptNo     int            `json:"attempt_no"`
-	NodeID        string         `json:"node_id"`
-	Status        string         `json:"status"`
-	ErrorKind     string         `json:"error_kind,omitempty"`
-	ErrorCode     string         `json:"error_code,omitempty"`
-	ErrorMessage  string         `json:"error_message,omitempty"`
-	ResultSummary map[string]any `json:"result_summary,omitempty"`
-	StartedAt     time.Time      `json:"started_at"`
-	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
-}
 
 type State struct {
 	SchemaVersion    int            `json:"schema_version"`
@@ -62,20 +35,15 @@ type State struct {
 	Params           map[string]any `json:"params,omitempty"`
 	Priority         int32          `json:"priority"`
 	Status           string         `json:"status"`
-	RunningNode      string         `json:"running_node,omitempty"`
-	AttemptNo        int            `json:"attempt_no"`
-	RecoverAt        *time.Time     `json:"recover_at,omitempty"`
-	Queue            QueueMeta      `json:"queue,omitempty"`
 	ResultSummary    map[string]any `json:"result_summary,omitempty"`
 	LastErrorKind    string         `json:"last_error_kind,omitempty"`
 	LastErrorCode    string         `json:"last_error_code,omitempty"`
 	LastErrorMessage string         `json:"last_error_message,omitempty"`
-	HistorySynced    bool           `json:"history_synced,omitempty"`
-	StartedAt        *time.Time     `json:"started_at,omitempty"`
-	FinishedAt       *time.Time     `json:"finished_at,omitempty"`
+	DurationMS       int64          `json:"duration_ms,omitempty"`
+	ExecutionNode    string         `json:"execution_node,omitempty"`
 	CreatedAt        time.Time      `json:"created_at"`
+	FinishedAt       *time.Time     `json:"finished_at,omitempty"`
 	UpdatedAt        time.Time      `json:"updated_at"`
-	Attempts         []Attempt      `json:"attempts,omitempty"`
 }
 
 type CreateResult struct {
@@ -86,25 +54,10 @@ type CreateResult struct {
 	Deduplicated bool
 }
 
-type RunningRequest struct {
-	SpaceID    string
-	JobItemID  string
-	NodeID     string
-	AckSubject string
-	StreamSeq  uint64
-}
-
-type RunningState struct {
-	AttemptNo  int
-	AckSubject string
-	RecoverAt  time.Time
-}
-
 type ReportEvent struct {
 	SpaceID       string
 	JobItemID     string
 	NodeID        string
-	AttemptNo     int32
 	Status        string
 	ErrorKind     string
 	ErrorCode     string
@@ -119,41 +72,13 @@ func (s State) IsTerminal() bool {
 }
 
 func (s State) ToDetail() *pb.JobItemDetail {
-	params := mapToStruct(s.Params)
-	result := mapToStruct(s.ResultSummary)
 	return &pb.JobItemDetail{
-		SpaceId:          s.SpaceID,
-		JobId:            s.JobID,
-		JobItemId:        s.JobItemID,
-		JobType:          s.JobType,
-		CodePackageId:    s.CodePackageID,
-		Params:           params,
-		Priority:         s.Priority,
-		Status:           statusToPB(s.Status),
-		RunningNode:      s.RunningNode,
-		AttemptNo:        int32(s.AttemptNo),
-		RecoverAt:        timePtrToPB(s.RecoverAt),
-		ResultSummary:    result,
-		LastErrorKind:    errorKindToPB(s.LastErrorKind),
-		LastErrorCode:    s.LastErrorCode,
-		LastErrorMessage: s.LastErrorMessage,
-		CreateTime:       timeToPB(s.CreatedAt),
-		StartTime:        timePtrToPB(s.StartedAt),
-		FinishTime:       timePtrToPB(s.FinishedAt),
-	}
-}
-
-func (a Attempt) ToProto() *pb.JobItemAttempt {
-	return &pb.JobItemAttempt{
-		AttemptNo:     int32(a.AttemptNo),
-		NodeId:        a.NodeID,
-		Status:        attemptStatusToPB(a.Status),
-		ErrorKind:     errorKindToPB(a.ErrorKind),
-		ErrorCode:     a.ErrorCode,
-		ErrorMessage:  a.ErrorMessage,
-		ResultSummary: mapToStruct(a.ResultSummary),
-		StartedAt:     timeToPB(a.StartedAt),
-		FinishedAt:    timePtrToPB(a.FinishedAt),
+		SpaceId: s.SpaceID, JobId: s.JobID, JobItemId: s.JobItemID, JobType: s.JobType,
+		CodePackageId: s.CodePackageID, Params: mapToStruct(s.Params), Priority: s.Priority,
+		Status: statusToPB(s.Status), ResultSummary: mapToStruct(s.ResultSummary),
+		LastErrorKind: errorKindToPB(s.LastErrorKind), LastErrorCode: s.LastErrorCode,
+		LastErrorMessage: s.LastErrorMessage, DurationMs: s.DurationMS, ExecutionNode: s.ExecutionNode,
+		CreateTime: timeToPB(s.CreatedAt), FinishTime: timePtrToPB(s.FinishedAt),
 	}
 }
 
@@ -161,8 +86,6 @@ func statusToPB(status string) pb.JobItemStatus {
 	switch status {
 	case StatusPending:
 		return pb.JobItemStatus_JOB_ITEM_STATUS_PENDING
-	case StatusRunning:
-		return pb.JobItemStatus_JOB_ITEM_STATUS_RUNNING
 	case StatusSuccess:
 		return pb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS
 	case StatusFailed:
@@ -178,8 +101,6 @@ func StatusFromPB(status pb.JobItemStatus) string {
 	switch status {
 	case pb.JobItemStatus_JOB_ITEM_STATUS_PENDING:
 		return StatusPending
-	case pb.JobItemStatus_JOB_ITEM_STATUS_RUNNING:
-		return StatusRunning
 	case pb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS:
 		return StatusSuccess
 	case pb.JobItemStatus_JOB_ITEM_STATUS_FAILED:
@@ -213,33 +134,18 @@ func ErrorKindFromPB(kind pb.JobItemErrorKind) string {
 	}
 }
 
-func attemptStatusToPB(status string) pb.JobItemAttemptStatus {
-	switch status {
-	case AttemptRunning:
-		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_RUNNING
-	case AttemptSuccess:
-		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_SUCCESS
-	case AttemptFailed:
-		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_FAILED
-	case AttemptLost:
-		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_LOST
-	default:
-		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_UNSPECIFIED
-	}
-}
-
-func timePtrToPB(t *time.Time) *timestamppb.Timestamp {
-	if t == nil || t.IsZero() {
+func timePtrToPB(value *time.Time) *timestamppb.Timestamp {
+	if value == nil || value.IsZero() {
 		return nil
 	}
-	return timestamppb.New(*t)
+	return timestamppb.New(*value)
 }
 
-func timeToPB(t time.Time) *timestamppb.Timestamp {
-	if t.IsZero() {
+func timeToPB(value time.Time) *timestamppb.Timestamp {
+	if value.IsZero() {
 		return nil
 	}
-	return timestamppb.New(t)
+	return timestamppb.New(value)
 }
 
 func mapToStruct(values map[string]any) *structpb.Struct {

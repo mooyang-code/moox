@@ -10,13 +10,14 @@ import (
 )
 
 type CredentialFile struct {
-	Version              int    `yaml:"version"`
-	Username             string `yaml:"username"`
-	Password             string `yaml:"password"`
-	Token                string `yaml:"token"`
-	EventBusToken        string `yaml:"eventbus_token"`
-	MonitorEventBusToken string `yaml:"monitor_eventbus_token"`
-	CAFile               string `yaml:"ca_file"`
+	URLs                 []string `yaml:"urls"`
+	Version              int      `yaml:"version"`
+	Username             string   `yaml:"username"`
+	Password             string   `yaml:"password"`
+	Token                string   `yaml:"token"`
+	EventBusToken        string   `yaml:"eventbus_token"`
+	MonitorEventBusToken string   `yaml:"monitor_eventbus_token"`
+	CAFile               string   `yaml:"ca_file"`
 }
 
 // ExpandCredentialPath resolves environment variables and a leading ~/ so
@@ -72,5 +73,8 @@ func (c *Config) ApplyCredentialFile(path string) error {
 		caFile = filepath.Join(filepath.Dir(path), caFile)
 	}
 	c.Username, c.Password, c.TLSCAFile = file.Username, file.Password, caFile
+	if len(file.URLs) > 0 {
+		c.URLs = append([]string(nil), file.URLs...)
+	}
 	return nil
 }

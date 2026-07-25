@@ -1,41 +1,16 @@
-# packages/cloudruntime
+# CloudRuntime
 
-`packages/cloudruntime` 是 MooX 根级共享库，承载 CloudNode 云函数运行时框架的通用逻辑。
+`cloudruntime` 是 Collector SCF 的单条 JobItem 执行边界。它不拥有队列，也不轮询
+CloudNode。
 
-它不属于 `modules/cloudnode`、`modules/collector`、`modules/factor` 中任意一个业务模块，避免业务模块之间直接 import 对方实现。
+SCF 由 Collector 入口直接绑定 CloudNode 已创建的 JetStream Job Execution Queue。每次
+投递解码后调用 `ExecuteJobItem`：
 
-## 职责
+- 成功：先调用 `/api/service/cloudnode/ReportJobItemStatus`，成功后 ACK。
+- 可重试且未到 `MaxDeliver`：不写终态，NAK 并延迟一秒。
+- 永久失败或末次投递：先上报 failed，成功后 TERM。
+- 终态上报失败：NAK，让 JetStream 重投。
 
-- 使用 `/api/service/cloudnode/PollJobItems` 获取 CloudNode JobItem。
-- 按 `job_type` 查找业务模块注册的 handler。
-- 调用 handler 执行业务逻辑；业务数据由 handler 写入 Storage。
-- 使用 `/api/service/cloudnode/ReportJobItemStatus` 回报执行摘要和错误。
-- 生成 `/api/service/*` 所需 HMAC 服务鉴权 header。
-
-## 边界
-
-- 本包不直接依赖 collector/factor/trade 等业务模块。
-- 本包不持久化状态，不拥有数据库表。
-- 业务模块负责注册 `job_type -> handler`，并把 JobItem `params` 转成自己的执行模型。
-- 本包不处理租约续期、控制指令或复杂调度；运行路径保持 `poll -> execute -> report`。
-
-## 目标使用方式
-
-```go
-cloudruntime.Register("collect.kline", cloudruntime.HandlerFunc(klineHandler))
-cloudruntime.Register("collect.symbol", cloudruntime.HandlerFunc(symbolHandler))
-
-err := cloudruntime.Run(ctx, cloudruntime.Config{
-    ServiceGatewayTarget: "http://127.0.0.1:11002",
-    SpaceID:              "crypto",
-    NodeID:               "collector-node-1",
-    SupportedJobTypes:    []string{"collect.kline", "collect.symbol"},
-    RuntimeVersion:       "dev",
-    Auth: cloudruntime.AuthConfig{
-        TargetNode: os.Getenv("MOOX_GATEWAY_NODE_ID"),
-        AccessKey:  os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"),
-        SecretKey:  os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"),
-        CAFile:     os.Getenv("MOOX_GATEWAY_CA_FILE"),
-    },
-})
-```
+队列身份由 `packages/cloudjobqueue.Identity` 统一生成。运行时必须提供
+`MOOX_SPACE_ID`、`MOOX_CODE_PACKAGE_ID`、节点身份和 Service Gateway 签名凭据。
+`delivery_count` 只用于判断末次投递，不进入业务状态模型。

@@ -14,24 +14,14 @@ import (
 
 // CloudAccount 云账户（脱敏，仅用于列举与取 account_id）。
 type CloudAccount struct {
-	AccountID   string `json:"account_id"`
-	AccountName string `json:"account_name"`
-	Provider    string `json:"provider"`
-	AppID       string `json:"app_id"`
-	COSRegion   string `json:"cos_region"`
-	COSBucket   string `json:"cos_bucket"`
-	IsDeleted   bool   `json:"is_deleted"`
-}
-
-// COSAccountInfo 云账户凭证信息（reveal=true 时含明文 secret_id/secret_key）。
-type COSAccountInfo struct {
-	AccountID string `json:"account_id"`
-	Provider  string `json:"provider"`
-	AppID     string `json:"app_id"`
-	COSRegion string `json:"cos_region"`
-	COSBucket string `json:"cos_bucket"`
-	SecretID  string `json:"secret_id"`
-	SecretKey string `json:"secret_key"`
+	AccountID          string `json:"account_id"`
+	AccountName        string `json:"account_name"`
+	Provider           string `json:"provider"`
+	CredentialSecretID string `json:"credential_secret_id"`
+	AppID              string `json:"app_id"`
+	COSRegion          string `json:"cos_region"`
+	COSBucket          string `json:"cos_bucket"`
+	IsDeleted          bool   `json:"is_deleted"`
 }
 
 type UploadPackageRequest struct {
@@ -199,30 +189,4 @@ func parseBatchChangeResponse(raw []byte, method string) (*BatchChangeResponse, 
 		return nil, fmt.Errorf("%s: empty batch_id", method)
 	}
 	return &BatchChangeResponse{BatchID: resp.BatchID, ProcessedCount: resp.ProcessedCount}, nil
-}
-
-// GetCOSAccountInfo 调 cloudnode/GetCOSAccountInfo（reveal=true），返回明文凭证。
-func (c *Client) GetCOSAccountInfo(ctx context.Context, accountID string) (*COSAccountInfo, error) {
-	if c.ServiceAuth == nil {
-		return nil, fmt.Errorf("service authentication is required to reveal cloud account credentials")
-	}
-	body := map[string]any{"account_id": accountID, "reveal": true}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetCOSAccountInfo", body)
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		RetInfo *retInfo        `json:"ret_info"`
-		Secret  *COSAccountInfo `json:"secret"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, err
-	}
-	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
-		return nil, fmt.Errorf("GetCOSAccountInfo: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
-	}
-	if resp.Secret == nil {
-		return nil, fmt.Errorf("GetCOSAccountInfo: empty secret for %s", accountID)
-	}
-	return resp.Secret, nil
 }

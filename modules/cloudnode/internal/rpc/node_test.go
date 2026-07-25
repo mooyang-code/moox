@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -209,7 +210,8 @@ func TestReportHeartbeatWithoutSink_ShouldUpsertCatalog(t *testing.T) {
 }
 
 func TestNodeConversionHelpers(t *testing.T) {
-	assert.True(t, isTencentProvider("tencent-scf"))
+	assert.True(t, isTencentProvider("tencent"))
+	assert.False(t, isTencentProvider("tencent-scf"))
 	assert.False(t, isTencentProvider("aws"))
 	assert.True(t, isSCFNotFound(errors.New("ResourceNotFound.FunctionName")))
 	assert.Equal(t, int64(30), configInt64(map[string]string{"timeout": "30"}, "timeout", 10))
@@ -248,9 +250,10 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 		}},
 	}}
 	svc := &Service{
-		catalog: catalog,
-		scfClientFactory: func(account store.CloudAccount) scfProvisioner {
-			if account.SecretID != "secret-id" || account.SecretKey != "secret-key" {
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "secret-id", SecretKey: "secret-key"}},
+		scfClientFactory: func(credential cloudcredential.TencentCredential) scfProvisioner {
+			if credential.SecretID != "secret-id" || credential.SecretKey != "secret-key" {
 				t.Fatalf("account credentials were not passed to provider")
 			}
 			return fake
@@ -354,10 +357,17 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
-	fake := &fakeSCFClient{}
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
+		Status: "Active",
+		Environment: map[string]string{
+			"MOOX_EVENTBUS_NATS_PASSWORD": "worker-token",
+			"MOOX_CODE_PACKAGE_ID":        "old-package",
+		},
+	}}}}
 	svc := &Service{
-		catalog: catalog,
-		scfClientFactory: func(account store.CloudAccount) scfProvisioner {
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "secret-id", SecretKey: "secret-key"}},
+		scfClientFactory: func(credential cloudcredential.TencentCredential) scfProvisioner {
 			return fake
 		},
 	}
@@ -384,6 +394,15 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	if update.COSBucket != "moox-scf-1255382561" || update.COSRegion != "ap-guangzhou" || update.COSObject != "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip" {
 		t.Fatalf("cos package = bucket:%q region:%q object:%q", update.COSBucket, update.COSRegion, update.COSObject)
 	}
+	if len(fake.configured) != 1 {
+		t.Fatalf("configuration calls = %d, want 1", len(fake.configured))
+	}
+	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "worker-token" {
+		t.Fatalf("worker credential changed = %q", got)
+	}
+	if got := fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"]; got != "moox-collector_dev" {
+		t.Fatalf("package id env = %q", got)
+	}
 	if update.Handler != "main" {
 		t.Fatalf("handler = %q", update.Handler)
 	}
@@ -394,6 +413,7 @@ type fakeSCFClient struct {
 	getResults []fakeSCFGetResult
 	created    []tencentscf.CreateFunctionRequest
 	updated    []tencentscf.UpdateFunctionCodeRequest
+	configured []tencentscf.UpdateFunctionConfigurationRequest
 }
 
 type fakeSCFGetResult struct {
@@ -426,6 +446,11 @@ func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.Upd
 	return &tencentscf.UpdateFunctionCodeResponse{RequestID: "update-req"}, nil
 }
 
+func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
+	f.configured = append(f.configured, req)
+	return &tencentscf.UpdateFunctionConfigurationResponse{RequestID: "config-req"}, nil
+}
+
 func newNodeSCFTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
@@ -443,15 +468,14 @@ func seedSCFAccountAndPackage(t *testing.T, catalog *store.CatalogRepository) {
 	t.Helper()
 	now := time.Now().UTC()
 	if err := catalog.UpsertAccount(context.Background(), store.CloudAccount{
-		AccountID:   "account-a",
-		AccountName: "test-account",
-		Provider:    "tencent",
-		SecretID:    "secret-id",
-		SecretKey:   "secret-key",
-		AppID:       "1255382561",
-		COSRegion:   "ap-guangzhou",
-		COSBucket:   "moox-scf-1255382561",
-		CreateTime:  now,
+		AccountID:          "account-a",
+		AccountName:        "test-account",
+		Provider:           "tencent",
+		CredentialSecretID: "secret-1",
+		AppID:              "1255382561",
+		COSRegion:          "ap-guangzhou",
+		COSBucket:          "moox-scf-1255382561",
+		CreateTime:         now,
 	}); err != nil {
 		t.Fatalf("seed account: %v", err)
 	}

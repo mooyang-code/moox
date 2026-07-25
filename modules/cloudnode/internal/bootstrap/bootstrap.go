@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
@@ -127,15 +128,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			log.ErrorContextf(ctx, "打开 cloudnode JobItem active KV 失败: %v", err)
 			return nil, err
 		}
-		stateStore := jobstate.NewKVStore(kv, jobstate.Options{
-			RecoverAfterMillis: cfg.JobItem.RecoverAfterMillis,
-			DefaultMaxAttempts: cfg.JobItem.DefaultMaxAttempts,
-		})
+		stateStore := jobstate.NewKVStore(kv, jobstate.Options{})
 		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-			AckWait:         time.Duration(cfg.JetStream.AckWaitMillis) * time.Millisecond,
-			MaxDeliver:      cfg.JetStream.MaxDeliver,
-			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
-			DefaultMaxBatch: cfg.JobItem.MaxLimit,
+			AckWait:       time.Minute,
+			MaxDeliver:    cfg.JetStream.MaxDeliver,
+			MaxAckPending: 1,
 		})
 		catalog := dbm.Catalog()
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
@@ -153,6 +150,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, strings.Join(cfg.JetStream.URLs, ","))
 	}
 
+	credentialResolver, err := cloudcredential.NewFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
 	svc := cloudnoderpc.New(dbm, opts...)
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
 	if err := registerHealth(s, cfg, dbm); err != nil {

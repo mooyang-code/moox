@@ -3,20 +3,20 @@ package rpc
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestRetHelpers_ShouldMapCodes(t *testing.T) {
@@ -37,8 +37,6 @@ func TestRetFromError_ShouldMapKnownErrors(t *testing.T) {
 	}{
 		{store.ErrPollingNodeNotFound, pb.ErrorCode_NOT_FOUND, "cloud node not found"},
 		{jobstate.ErrConflict, pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation"},
-		{jobstate.ErrStaleAttempt, pb.ErrorCode_INVALID_PARAM, "conflict: job item attempt is stale"},
-		{jobstate.ErrInactive, pb.ErrorCode_INVALID_PARAM, "conflict: job item is not running"},
 		{jobstate.ErrNotFound, pb.ErrorCode_NOT_FOUND, "job item not found"},
 		{jobstate.ErrInvalid, pb.ErrorCode_INVALID_PARAM, "invalid job item"},
 		{gorm.ErrRecordNotFound, pb.ErrorCode_NOT_FOUND, "resource not found"},
@@ -77,8 +75,7 @@ func TestNew_ShouldApplyOptions(t *testing.T) {
 	assert.Equal(t, sink, svc.heartbeatSink)
 	assert.NotNil(t, svc.scfClientFactory)
 
-	account := store.CloudAccount{SecretID: "id", SecretKey: "key"}
-	assert.NotNil(t, svc.scfClientFactory(account))
+	assert.NotNil(t, svc.scfClientFactory(cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}))
 }
 
 func TestListCloudRegions_ShouldReturnStaticCatalog(t *testing.T) {
@@ -92,25 +89,25 @@ func TestListCloudRegions_ShouldReturnStaticCatalog(t *testing.T) {
 
 type fakeExecutionQueue struct{}
 
-func (f *fakeExecutionQueue) Publish(context.Context, *pb.JobItem) (*jobqueue.PublishResult, error) {
-	return &jobqueue.PublishResult{}, nil
+type fakeCredentialResolver struct {
+	credential cloudcredential.TencentCredential
+	err        error
 }
-func (f *fakeExecutionQueue) Fetch(context.Context, jobqueue.FetchRequest) ([]jobqueue.Delivery, error) {
-	return nil, nil
+
+func (r fakeCredentialResolver) Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error) {
+	return r.credential, r.err
 }
-func (f *fakeExecutionQueue) Ack(context.Context, string) error                { return nil }
-func (f *fakeExecutionQueue) Nak(context.Context, string, time.Duration) error { return nil }
-func (f *fakeExecutionQueue) Term(context.Context, string) error               { return nil }
-func (f *fakeExecutionQueue) InProgress(context.Context, string) error         { return nil }
-func (f *fakeExecutionQueue) Close() error                                     { return nil }
+
+func (f *fakeExecutionQueue) EnsureJobExecutionQueue(context.Context, cloudjobqueue.Identity) error {
+	return nil
+}
+func (f *fakeExecutionQueue) Publish(context.Context, *pb.JobItem) error { return nil }
+func (f *fakeExecutionQueue) Close() error                               { return nil }
 
 type fakeJobStateStore struct{}
 
-func (f *fakeJobStateStore) CreatePending(context.Context, *pb.JobItem, jobstate.QueueMeta) (*jobstate.CreateResult, error) {
+func (f *fakeJobStateStore) CreatePending(context.Context, *pb.JobItem) (*jobstate.CreateResult, error) {
 	return nil, nil
-}
-func (f *fakeJobStateStore) MarkPublished(context.Context, string, string, jobstate.QueueMeta) error {
-	return nil
 }
 func (f *fakeJobStateStore) MarkEnqueueFailed(context.Context, string, string, string) error {
 	return nil
@@ -118,18 +115,11 @@ func (f *fakeJobStateStore) MarkEnqueueFailed(context.Context, string, string, s
 func (f *fakeJobStateStore) Get(context.Context, string, string) (*jobstate.State, error) {
 	return nil, nil
 }
-func (f *fakeJobStateStore) TryMarkRunning(context.Context, jobstate.RunningRequest) (bool, jobstate.RunningState, error) {
-	return false, jobstate.RunningState{}, nil
+func (f *fakeJobStateStore) MarkReported(context.Context, jobstate.ReportEvent) (*jobstate.State, bool, error) {
+	return nil, false, nil
 }
-func (f *fakeJobStateStore) MarkReported(context.Context, jobstate.ReportEvent) (*jobstate.State, error) {
-	return nil, nil
-}
-func (f *fakeJobStateStore) MarkHistorySynced(context.Context, string, string) error { return nil }
 func (f *fakeJobStateStore) List(context.Context, *pb.ListJobItemsReq) ([]*pb.JobItemDetail, *commonpb.PageResult, error) {
 	return nil, nil, nil
-}
-func (f *fakeJobStateStore) ListAttempts(context.Context, *pb.ListJobItemAttemptsReq) ([]*pb.JobItemAttempt, error) {
-	return nil, nil
 }
 func TestCloudNodeProtoContractIncludesEnqueueFailure(t *testing.T) {
 	if pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED.Number() == 0 {

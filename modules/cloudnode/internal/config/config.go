@@ -34,10 +34,6 @@ type DatabaseConfig struct {
 
 // JobItemConfig controls the async JobItem queue.
 type JobItemConfig struct {
-	DefaultLimit         int    `yaml:"default_limit"`
-	MaxLimit             int    `yaml:"max_limit"`
-	RecoverAfterMillis   int64  `yaml:"recover_after_millis"`
-	DefaultMaxAttempts   int    `yaml:"default_max_attempts"`
 	ActiveKVBucket       string `yaml:"active_kv_bucket"`
 	ActiveTTLHours       int    `yaml:"active_ttl_hours"`
 	HistoryDir           string `yaml:"history_dir"`
@@ -54,9 +50,7 @@ type JetStreamConfig struct {
 	Enabled        bool     `yaml:"enabled"`
 	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
-	AckWaitMillis  int64    `yaml:"ack_wait_millis"`
 	MaxDeliver     int      `yaml:"max_deliver"`
-	FetchMaxWaitMs int64    `yaml:"fetch_max_wait_ms"`
 }
 
 // TencentSCFConfig stores defaults for the Tencent SCF provider.
@@ -95,20 +89,12 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Validate rejects configurations where JetStream can redeliver a job while
-// CloudNode still considers the previous attempt recoverable.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is required")
 	}
-	if c.Queue.Backend != "jetstream" || !c.JetStream.Enabled {
-		return nil
-	}
-	const recoveryGrace = 2 * time.Minute
-	ackWait := time.Duration(c.JetStream.AckWaitMillis) * time.Millisecond
-	recoverAfter := time.Duration(c.JobItem.RecoverAfterMillis) * time.Millisecond
-	if ackWait < recoverAfter+recoveryGrace {
-		return fmt.Errorf("jetstream.ack_wait_millis must be at least job_item.recover_after_millis plus %s", recoveryGrace)
+	if c.Queue.Backend == "jetstream" && c.JetStream.Enabled && c.JetStream.MaxDeliver <= 0 {
+		return fmt.Errorf("jetstream.max_deliver must be positive")
 	}
 	return nil
 }
@@ -157,15 +143,9 @@ func Default() *Config {
 			Enabled:        true,
 			URLs:           []string{"nats://127.0.0.1:4222"},
 			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
-			AckWaitMillis:  int64(12 * time.Minute / time.Millisecond),
 			MaxDeliver:     3,
-			FetchMaxWaitMs: 500,
 		},
 		JobItem: JobItemConfig{
-			DefaultLimit:         10,
-			MaxLimit:             100,
-			RecoverAfterMillis:   int64(10 * time.Minute / time.Millisecond),
-			DefaultMaxAttempts:   3,
 			ActiveKVBucket:       "MOOX_CLOUDNODE_JOB_ACTIVE",
 			ActiveTTLHours:       48,
 			HistoryDir:           "../data/cloudnode/jobs",

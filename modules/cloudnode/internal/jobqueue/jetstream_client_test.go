@@ -32,16 +32,9 @@ func TestRuntime_CloseInvokesHook(t *testing.T) {
 	assert.NoError(t, rt.Close())
 }
 
-func TestContains_MatchesTarget(t *testing.T) {
-	assert.True(t, contains([]string{"a", "b"}, "b"))
-	assert.False(t, contains([]string{"a"}, "c"))
-	assert.False(t, contains(nil, "a"))
-}
-
 func TestNewJetStreamQueue_AppliesDefaults(t *testing.T) {
 	q := NewJetStreamQueue(nil, QueueConfig{})
-	assert.Equal(t, 2*time.Minute, q.cfg.AckWait)
+	assert.Equal(t, time.Minute, q.cfg.AckWait)
 	assert.Equal(t, 3, q.cfg.MaxDeliver)
-	assert.Equal(t, defaultFetchMaxWait, q.cfg.FetchMaxWait)
-	assert.Equal(t, 10, q.cfg.DefaultMaxBatch)
+	assert.Equal(t, 1, q.cfg.MaxAckPending)
 }

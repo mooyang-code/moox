@@ -1,10 +1,5 @@
 PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS t_cloud_invocation_results;
-DROP TABLE IF EXISTS t_cloud_invocations;
-DROP TABLE IF EXISTS t_cloud_job_item_attempts;
-DROP TABLE IF EXISTS t_cloud_job_items;
-
 CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -37,8 +32,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_accounts (
     c_account_id TEXT NOT NULL,
     c_account_name TEXT NOT NULL DEFAULT '',
     c_provider TEXT NOT NULL DEFAULT 'tencent',
-    c_secret_id TEXT NOT NULL DEFAULT '',
-    c_secret_key TEXT NOT NULL DEFAULT '',
+    c_credential_secret_id TEXT NOT NULL,
     c_app_id TEXT NOT NULL DEFAULT '',
     c_cos_region TEXT NOT NULL DEFAULT '',
     c_cos_bucket TEXT NOT NULL DEFAULT '',

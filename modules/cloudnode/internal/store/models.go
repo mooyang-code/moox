@@ -28,19 +28,18 @@ type CloudNode struct {
 func (*CloudNode) TableName() string { return "t_cloud_nodes" }
 
 type CloudAccount struct {
-	ID          int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	AccountID   string    `gorm:"column:c_account_id"`
-	AccountName string    `gorm:"column:c_account_name"`
-	Provider    string    `gorm:"column:c_provider"`
-	SecretID    string    `gorm:"column:c_secret_id"`
-	SecretKey   string    `gorm:"column:c_secret_key"`
-	AppID       string    `gorm:"column:c_app_id"`
-	COSRegion   string    `gorm:"column:c_cos_region"`
-	COSBucket   string    `gorm:"column:c_cos_bucket"`
-	ExtraConfig string    `gorm:"column:c_extra_config"`
-	IsDeleted   bool      `gorm:"column:c_is_deleted"`
-	CreateTime  time.Time `gorm:"column:c_ctime"`
-	ModifyTime  time.Time `gorm:"column:c_mtime"`
+	ID                 int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	AccountID          string    `gorm:"column:c_account_id"`
+	AccountName        string    `gorm:"column:c_account_name"`
+	Provider           string    `gorm:"column:c_provider"`
+	CredentialSecretID string    `gorm:"column:c_credential_secret_id"`
+	AppID              string    `gorm:"column:c_app_id"`
+	COSRegion          string    `gorm:"column:c_cos_region"`
+	COSBucket          string    `gorm:"column:c_cos_bucket"`
+	ExtraConfig        string    `gorm:"column:c_extra_config"`
+	IsDeleted          bool      `gorm:"column:c_is_deleted"`
+	CreateTime         time.Time `gorm:"column:c_ctime"`
+	ModifyTime         time.Time `gorm:"column:c_mtime"`
 }
 
 func (*CloudAccount) TableName() string { return "t_cloud_accounts" }

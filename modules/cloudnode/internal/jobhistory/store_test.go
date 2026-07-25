@@ -28,13 +28,8 @@ func TestStoreWritesTerminalStateToDayDB(t *testing.T) {
 		CreatedAt:     finished.Add(-time.Minute),
 		UpdatedAt:     finished,
 		FinishedAt:    &finished,
-		Attempts: []jobstate.Attempt{{
-			AttemptNo:  1,
-			NodeID:     "node-1",
-			Status:     jobstate.AttemptSuccess,
-			StartedAt:  finished.Add(-time.Second),
-			FinishedAt: &finished,
-		}},
+		DurationMS:    1000,
+		ExecutionNode: "node-1",
 	}
 	if err := store.WriteTerminal(ctx, state); err != nil {
 		t.Fatalf("WriteTerminal() error = %v", err)
@@ -55,11 +50,7 @@ func TestStoreWritesTerminalStateToDayDB(t *testing.T) {
 	if itemCount != 1 {
 		t.Fatalf("itemCount = %d, want 1", itemCount)
 	}
-	var attemptCount int64
-	if err := db.Table("t_cloud_job_item_attempts").Where("c_space_id = ? AND c_job_item_id = ?", "crypto", "ji-1").Count(&attemptCount).Error; err != nil {
-		t.Fatalf("count attempts: %v", err)
-	}
-	if attemptCount != 1 {
-		t.Fatalf("attemptCount = %d, want 1", attemptCount)
+	if db.Migrator().HasTable("t_cloud_job_item_attempts") {
+		t.Fatal("attempt history table must not exist")
 	}
 }

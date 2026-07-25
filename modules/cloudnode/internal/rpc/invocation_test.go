@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -80,13 +81,16 @@ func TestInvocationHelpers_ShouldFormatResults(t *testing.T) {
 func TestInvokeFunction_WithEventData(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
 	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{
-		AccountID: "acct-1", Provider: "tencent", SecretID: "sid", SecretKey: "skey",
+		AccountID: "acct-1", Provider: "tencent", CredentialSecretID: "secret-1",
 	}))
 	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
 		SpaceID: "crypto", NodeID: "node-1", CloudAccountID: "acct-1", Region: "ap-guangzhou",
 		Status: "online", SupportedWorkloads: `["collect.kline"]`,
 	}))
-	svc := &Service{catalog: catalog}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "sid", SecretKey: "skey"}},
+	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
 	event, err := structpb.NewStruct(map[string]any{"k": "v"})
 	require.NoError(t, err)

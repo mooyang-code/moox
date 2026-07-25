@@ -53,7 +53,7 @@ moox-trade      -> modules/trade/schema
 7. 用 Doctor 执行只读激活检查，并显式激活健康 Dataset；激活成功后绑定锁定。
 8. 在管理台或通过 cloudnode API 创建云账户、两阶段上传 collector SCF 代码包（`InitPackageUpload` → COS 直传 → `CompletePackageUpload`）、部署云节点。
 9. 在采集规则页面创建规则，由 `moox-collector` 根据 Dataset subjects 生成 task instances，并提交给 `moox-cloudnode` 的 JobItem 队列。
-10. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行采集并写入已激活 Dataset。
+10. SCF runtime 直接从 JetStream Job Execution Queue 获取 JobItem，执行采集并写入已激活 Dataset。
 11. 如果 View 需要历史重建，执行 ViewBuilder 的 `op=maintain` 维护流程；Archive 由独立 `modules/archive` 服务负责，不通过 Storage View rebuild。
 
 ## Metadata seed 导入
@@ -128,7 +128,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
 5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；规则根据 `binance_spot_kline_1h` 数据集里的 Subject 生成 task instances。
-6. SCF runtime 通过 `/api/service/cloudnode/PollJobItems` 获取 JobItem，执行后通过 Node Service Gateway 的 Storage PrimaryStore RPC 写入 K 线，并通过 `/api/service/collectmgr/ReportTaskStatus` 回写任务状态。
+6. SCF runtime 直接消费 Job Execution Queue，执行后通过 Node Service Gateway 的 Storage PrimaryStore RPC 写入 K 线，并通过 CloudNode service route 上报 JobItem 终态。
 7. 通过数据浏览或视图浏览页面确认 `binance_spot_1h_view` 能看到最新现货 K 线。
 
 如果第 7 步没有数据，不要回写 SQLite。按链路依次检查：服务部署地址、SCF 心跳、collector 任务实例、CloudNode JobItem、storage 写入、view rebuild/事件更新。
@@ -175,7 +175,8 @@ examples/e2e/run.sh \
 ## 边界说明
 
 - `examples/*.seed.yaml` 只表达 Storage 逻辑元数据和 Dataset 的直接 `data_node_id` 绑定，不直接写 admin/cloudnode/collector/trade 表；DataNode 注册属于部署流程。
-- 云账户和真实云厂商密钥不进入 examples，需要通过管理台或 cloudnode API 重新创建。
+- 云账户和真实云厂商密钥不进入 examples；先在 SecretMgr 创建 Tencent cloud secret，再创建引用其 `credential_secret_id` 的 CloudAccount。
 - 采集任务实例不是 seed 数据，应由 collector 规则和 dataset subjects 重新生成。
 - CloudNode 批量创建/部署节点返回 `batch_id`，这是控制面 `batch_change`，不是 collector `task_instance`，也不是 SCF runtime `JobItem`。
-- SCF 异步执行协议统一使用 `SubmitJobItems`、`PollJobItems`、`ReportJobItemStatus` 和 `job_item_id` 字段。
+- SCF 异步执行协议统一使用 `SubmitJobItems`、JetStream Job Execution Queue、
+  `ReportJobItemStatus` 和 `job_item_id` 字段。

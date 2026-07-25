@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
@@ -17,18 +18,22 @@ import (
 // Service is the independent cloudnode service implementation.
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
-	jobState         jobstate.Store
-	history          *jobhistory.Store
-	executionQueue   jobqueue.ExecutionQueue
-	heartbeatSink    projection.HeartbeatSink
-	catalog          *store.CatalogRepository
-	scfClientFactory func(store.CloudAccount) scfProvisioner
+	jobState           jobstate.Store
+	history            *jobhistory.Store
+	executionQueue     jobqueue.ExecutionQueue
+	heartbeatSink      projection.HeartbeatSink
+	catalog            *store.CatalogRepository
+	credentialResolver interface {
+		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
+	}
+	scfClientFactory func(cloudcredential.TencentCredential) scfProvisioner
 }
 
 type scfProvisioner interface {
 	GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error)
 	CreateFunction(context.Context, tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error)
 	UpdateFunctionCode(context.Context, tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error)
+	UpdateFunctionConfiguration(context.Context, tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error)
 }
 
 type Option func(*Service)
@@ -49,6 +54,12 @@ func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
 	return func(s *Service) { s.heartbeatSink = sink }
 }
 
+func WithCredentialResolver(resolver interface {
+	Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
+}) Option {
+	return func(s *Service) { s.credentialResolver = resolver }
+}
+
 // New creates a cloudnode RPC service.
 func New(dbm *store.Store, opts ...Option) *Service {
 	svc := &Service{
@@ -61,8 +72,8 @@ func New(dbm *store.Store, opts ...Option) *Service {
 	return svc
 }
 
-func defaultSCFClientFactory(account store.CloudAccount) scfProvisioner {
-	return tencentscf.New(account.SecretID, account.SecretKey)
+func defaultSCFClientFactory(credential cloudcredential.TencentCredential) scfProvisioner {
+	return tencentscf.New(credential.SecretID, credential.SecretKey)
 }
 
 func retOK() *pb.RetInfo {
@@ -79,10 +90,6 @@ func retFromError(err error) *pb.RetInfo {
 		return retErr(pb.ErrorCode_NOT_FOUND, "cloud node not found")
 	case errors.Is(err, jobstate.ErrConflict):
 		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation")
-	case errors.Is(err, jobstate.ErrStaleAttempt):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item attempt is stale")
-	case errors.Is(err, jobstate.ErrInactive):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item is not running")
 	case errors.Is(err, jobstate.ErrNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "job item not found")
 	case errors.Is(err, jobstate.ErrInvalid):

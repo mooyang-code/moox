@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -73,11 +74,13 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	fs.SetOutput(stderr)
 	dbPath, seedPath := defaultInitDBPath, ""
 	nodeID := ""
+	eventBusNATSURL := ""
 	withStorageShard := false
 	disableStorageShard := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&seedPath, "file", seedPath, "service deployment seed YAML")
 	fs.StringVar(&nodeID, "node-id", nodeID, "override the seed node ID")
+	fs.StringVar(&eventBusNATSURL, "eventbus-nats-url", "", "EventBus client URL for this node")
 	fs.BoolVar(&withStorageShard, "with-storage-shard", false, "enable the independent DataShard route")
 	fs.BoolVar(&disableStorageShard, "disable-storage-shard", false, "disable the independent DataShard route")
 	if err := fs.Parse(args[2:]); err != nil {
@@ -88,6 +91,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	}
 	if strings.TrimSpace(seedPath) == "" {
 		return errors.New("--file is required")
+	}
+	if _, err := validateEventBusNATSURL(eventBusNATSURL); err != nil {
+		return err
 	}
 	if withStorageShard && disableStorageShard {
 		return errors.New("--with-storage-shard and --disable-storage-shard are mutually exclusive")
@@ -103,6 +109,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		seed.Node.ID = nodeID
 	}
 	if err := validateServiceDeploymentSeed(seed); err != nil {
+		return err
+	}
+	if err := setSeedEventBusNATSURL(&seed, eventBusNATSURL); err != nil {
 		return err
 	}
 	if withStorageShard {
@@ -130,6 +139,45 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		"status": "ok", "command": "service-deployments.import", "node_id": seed.Node.ID,
 		"created": created, "updated": updated, "services": len(seed.Services),
 	})
+}
+
+func validateEventBusNATSURL(raw string) (*url.URL, error) {
+	if raw == "" || raw != strings.TrimSpace(raw) {
+		return nil, errors.New("--eventbus-nats-url is required and must not contain surrounding whitespace")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.Port() == "" {
+		return nil, errors.New("--eventbus-nats-url must be a tls URL with host and port")
+	}
+	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("--eventbus-nats-url must contain only scheme, host, and port")
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("--eventbus-nats-url port must be between 1 and 65535")
+	}
+	return parsed, nil
+}
+
+func setSeedEventBusNATSURL(seed *serviceDeploymentSeed, raw string) error {
+	if seed == nil {
+		return errors.New("service deployment seed is required")
+	}
+	found := 0
+	for i := range seed.Services {
+		if seed.Services[i].Name != "eventbus" {
+			continue
+		}
+		found++
+		if seed.Services[i].ExtraConfig == nil {
+			seed.Services[i].ExtraConfig = map[string]any{}
+		}
+		seed.Services[i].ExtraConfig["nats_url"] = raw
+	}
+	if found != 1 {
+		return fmt.Errorf("service deployment seed must contain exactly one eventbus service, got %d", found)
+	}
+	return nil
 }
 
 func disableOptionalStorageShard(seed *serviceDeploymentSeed) error {

@@ -4,48 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	nats "github.com/nats-io/nats.go"
-	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/log"
+	"github.com/nats-io/nats.go"
 )
 
-const defaultFetchMaxWait = 500 * time.Millisecond
-
-// JetStreamQueue implements ExecutionQueue on the centrally managed stream.
 type JetStreamQueue struct {
-	rt         *Runtime
-	client     *jetstream.Client
-	registry   *events.Registry
-	publisher  *events.Publisher
-	cfg        QueueConfig
-	mu         sync.Mutex
-	inflight   map[string]*jetstream.Delivery
-	consumers  map[string]*events.Consumer
-	fetchLock  map[string]*sync.Mutex
-	fetchStart map[string]uint64
+	rt        *Runtime
+	client    *jetstream.Client
+	registry  *events.Registry
+	publisher *events.Publisher
+	cfg       QueueConfig
 }
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if cfg.AckWait <= 0 {
-		cfg.AckWait = 2 * time.Minute
+		cfg.AckWait = time.Minute
 	}
 	if cfg.MaxDeliver <= 0 {
 		cfg.MaxDeliver = 3
 	}
-	if cfg.FetchMaxWait <= 0 {
-		cfg.FetchMaxWait = defaultFetchMaxWait
-	}
-	if cfg.DefaultMaxBatch <= 0 {
-		cfg.DefaultMaxBatch = 10
+	if cfg.MaxAckPending <= 0 {
+		cfg.MaxAckPending = 1
 	}
 	var client *jetstream.Client
 	if rt != nil {
@@ -56,302 +42,65 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if client != nil && registryErr == nil {
 		publisher, _ = events.NewPublisher(client, registry)
 	}
-	return &JetStreamQueue{
-		rt: rt, client: client, registry: registry, publisher: publisher, cfg: cfg,
-		inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*events.Consumer),
-		fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64),
-	}
+	return &JetStreamQueue{rt: rt, client: client, registry: registry, publisher: publisher, cfg: cfg}
 }
 
-func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
+func (q *JetStreamQueue) EnsureJobExecutionQueue(ctx context.Context, identity cloudjobqueue.Identity) error {
+	if q.client == nil || q.registry == nil {
+		return errors.New("cloudnode event consumer is unavailable")
+	}
+	name, err := identity.ConsumerName()
+	if err != nil {
+		return err
+	}
+	subjectID, err := identity.SubjectID()
+	if err != nil {
+		return err
+	}
+	info, err := events.EnsureSubjectConsumer(ctx, q.client, q.registry, events.SubjectConsumerConfig{
+		ConsumerConfig: events.ConsumerConfig{
+			Name: name, Event: events.CloudJobExecutionRequested,
+			AckWait: q.cfg.AckWait, MaxDeliver: q.cfg.MaxDeliver, MaxAckPending: q.cfg.MaxAckPending,
+			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+		},
+		SpaceID: identity.SpaceID, SubjectID: subjectID,
+	})
+	if err != nil {
+		return err
+	}
+	if info.MaxDeliver <= 0 {
+		return errors.New("job execution queue max_deliver must be positive")
+	}
+	return nil
+}
+
+func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) error {
 	if item == nil {
-		return nil, fmt.Errorf("job item is required")
+		return fmt.Errorf("job item is required")
 	}
 	if strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetJobItemId()) == "" {
-		return nil, fmt.Errorf("space_id and job_item_id are required")
+		return fmt.Errorf("space_id and job_item_id are required")
 	}
-	messageID := item.GetJobItemId()
-	if strings.TrimSpace(item.GetCodePackageId()) == "" || strings.TrimSpace(item.GetJobType()) == "" {
-		return nil, fmt.Errorf("code_package_id and job_type are required")
+	subjectID, err := (cloudjobqueue.Identity{SpaceID: item.GetSpaceId(), CodePackageID: item.GetCodePackageId(), JobType: item.GetJobType()}).SubjectID()
+	if err != nil {
+		return err
+	}
+	if q.publisher == nil {
+		return errors.New("cloudnode event publisher is unavailable")
 	}
 	payload := &cloudjobpb.JobExecutionRequested{
 		JobId: item.GetJobId(), JobItemId: item.GetJobItemId(), JobType: item.GetJobType(),
 		CodePackageId: item.GetCodePackageId(), Params: item.GetParams(), Priority: item.GetPriority(),
 	}
-	if q.publisher == nil {
-		return nil, errors.New("cloudnode event publisher is unavailable")
-	}
-	if q.registry == nil {
-		return nil, errors.New("cloudnode event registry is unavailable")
-	}
-	subjectID := item.GetCodePackageId() + "/" + item.GetJobType()
-	subject, err := q.registry.RenderSubject(events.CloudJobExecutionRequested, item.GetSpaceId(), subjectID)
-	if err != nil {
-		return nil, err
-	}
-	ack, err := q.publisher.Publish(ctx, events.CloudJobExecutionRequested, payload, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: subjectID})
-	if err != nil {
-		return nil, err
-	}
-	return &PublishResult{Created: !ack.Duplicate, Duplicate: ack.Duplicate, Subject: subject, Stream: ack.Stream, Sequence: ack.Sequence}, nil
+	_, err = q.publisher.Publish(ctx, events.CloudJobExecutionRequested, payload, events.PublishOptions{
+		EventID: item.GetJobItemId(), OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: subjectID,
+	})
+	return err
 }
 
-func consumerConfigForRoute(cfg QueueConfig, spaceID, codePackageID, jobType string) events.SubjectConsumerConfig {
-	return events.SubjectConsumerConfig{
-		ConsumerConfig: events.ConsumerConfig{
-			Name:          ConsumerName(spaceID, codePackageID, jobType),
-			Event:         events.CloudJobExecutionRequested,
-			AckWait:       cfg.AckWait,
-			MaxDeliver:    cfg.MaxDeliver,
-			MaxAckPending: cfg.DefaultMaxBatch,
-			FetchMaxWait:  cfg.FetchMaxWait,
-		},
-		SpaceID:   spaceID,
-		SubjectID: codePackageID + "/" + jobType,
-	}
-}
-
-func routeConsumerKey(spaceID, codePackageID, jobType string) string {
-	return ConsumerName(spaceID, codePackageID, jobType)
-}
-
-func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*events.Consumer, error) {
-	key := routeConsumerKey(spaceID, codePackageID, jobType)
-	if consumer := q.consumers[key]; consumer != nil {
-		return consumer, nil
-	}
-	if q.client == nil || q.registry == nil {
-		return nil, errors.New("cloudnode event consumer is unavailable")
-	}
-	// The subscription is shared by many SCF poll requests. Binding it to the
-	// request context would close the durable subscription as soon as the first
-	// request returns.
-	consumerCfg := consumerConfigForRoute(q.cfg, spaceID, codePackageID, jobType)
-	consumer, err := events.NewSubjectConsumer(trpc.BackgroundContext(), q.client, q.registry, consumerCfg)
-	if err != nil {
-		return nil, err
-	}
-	q.consumers[key] = consumer
-	return consumer, nil
-}
-
-func (q *JetStreamQueue) ensureFetchLock(key string) *sync.Mutex {
-	if q.fetchLock == nil {
-		q.fetchLock = make(map[string]*sync.Mutex)
-	}
-	if lock := q.fetchLock[key]; lock != nil {
-		return lock
-	}
-	lock := &sync.Mutex{}
-	q.fetchLock[key] = lock
-	return lock
-}
-
-func fetchRouteConsumer(ctx context.Context, consumer *events.Consumer, limit int) ([]*jetstream.Delivery, error) {
-	deliveries, err := consumer.Fetch(ctx, limit)
-	if errors.Is(err, nats.ErrTimeout) && len(deliveries) == 0 {
-		return nil, nil
-	}
-	return deliveries, err
-}
-
-func tryAcquireFetchLock(lock *sync.Mutex) bool {
-	return lock != nil && lock.TryLock()
-}
-
-func (q *JetStreamQueue) Fetch(ctx context.Context, req FetchRequest) ([]Delivery, error) {
-	if strings.TrimSpace(req.SpaceID) == "" || strings.TrimSpace(req.CodePackageID) == "" {
-		return nil, fmt.Errorf("space_id and code_package_id are required")
-	}
-	jobTypes := uniqueStrings(req.SupportedJobTypes)
-	if len(jobTypes) == 0 {
-		return nil, fmt.Errorf("supported_job_types is required")
-	}
-	limit := req.Limit
-	if limit <= 0 || limit > q.cfg.DefaultMaxBatch {
-		limit = q.cfg.DefaultMaxBatch
-	}
-	jobTypes = q.orderedJobTypes(req.SpaceID, req.CodePackageID, jobTypes)
-
-	var deliveries []*jetstream.Delivery
-	for _, jobType := range jobTypes {
-		if len(deliveries) >= limit {
-			break
-		}
-		key := routeConsumerKey(req.SpaceID, req.CodePackageID, jobType)
-		q.mu.Lock()
-		consumer, err := q.ensureConsumer(req.SpaceID, req.CodePackageID, jobType)
-		fetchLock := q.ensureFetchLock(key)
-		q.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		if !tryAcquireFetchLock(fetchLock) {
-			continue
-		}
-		batch, err := fetchRouteConsumer(ctx, consumer, limit-len(deliveries))
-		fetchLock.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		deliveries = append(deliveries, batch...)
-	}
-
-	out := make([]Delivery, 0, len(deliveries))
-	for _, delivery := range deliveries {
-		actionCtx := ctx
-		if q.registry == nil {
-			return nil, errors.New("cloudnode event registry is unavailable")
-		}
-		message, payload, decodeErr := events.DecodeRaw(q.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
-		if decodeErr != nil {
-			if actionErr := delivery.Term(actionCtx); actionErr != nil {
-				return nil, errors.Join(decodeErr, actionErr)
-			}
-			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%v",
-				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, decodeErr)
-			continue
-		}
-		jobPayload, ok := payload.(*cloudjobpb.JobExecutionRequested)
-		if !ok {
-			reason := fmt.Sprintf("cloudnode payload type mismatch: %T", payload)
-			if actionErr := delivery.Term(actionCtx); actionErr != nil {
-				return nil, errors.Join(errors.New(reason), actionErr)
-			}
-			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%s",
-				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, reason)
-			continue
-		}
-		if jobPayload.GetJobItemId() == "" || jobPayload.GetCodePackageId() == "" || jobPayload.GetJobType() == "" {
-			if actionErr := delivery.Term(actionCtx); actionErr != nil {
-				return nil, errors.Join(errors.New("decode malformed cloudnode job item"), fmt.Errorf("term malformed job item: %w", actionErr))
-			}
-			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=payload_identity_incomplete",
-				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount)
-			continue
-		}
-		expectedSubject, subjectErr := q.registry.RenderSubject(events.CloudJobExecutionRequested, req.SpaceID, req.CodePackageID+"/"+jobPayload.GetJobType())
-		if subjectErr != nil || delivery.Subject != expectedSubject || !contains(req.SupportedJobTypes, jobPayload.GetJobType()) {
-			if actionErr := delivery.Term(actionCtx); actionErr != nil {
-				return nil, errors.Join(fmt.Errorf("cloudnode route mismatch"), actionErr)
-			}
-			log.WarnContextf(ctx, "component=cloudnode_jobqueue consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=route_identity_mismatch",
-				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount)
-			continue
-		}
-		submittedAt := time.Now().UTC()
-		if message.GetOccurredAt() != nil {
-			submittedAt = message.GetOccurredAt().AsTime().UTC()
-		}
-		meta := JobItemMessage{SpaceID: req.SpaceID, JobID: jobPayload.GetJobId(), JobItemID: jobPayload.GetJobItemId(), JobType: jobPayload.GetJobType(), CodePackageID: jobPayload.GetCodePackageId(), Params: structToMap(jobPayload.GetParams()), Priority: jobPayload.GetPriority(), SubmittedAt: submittedAt}
-		token := fmt.Sprintf("%s:%d", delivery.RawMessageID, delivery.ConsumerSeq)
-		q.mu.Lock()
-		q.inflight[token] = delivery
-		q.mu.Unlock()
-		out = append(out, Delivery{Message: meta, AttemptNo: int(delivery.DeliveryCount), AckSubject: token, StreamSeq: delivery.StreamSeq, ConsumerSeq: delivery.ConsumerSeq})
-	}
-	return out, nil
-}
-
-func (q *JetStreamQueue) take(token string) *jetstream.Delivery {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	d := q.inflight[token]
-	delete(q.inflight, token)
-	return d
-}
-func (q *JetStreamQueue) Ack(ctx context.Context, token string) error {
-	d := q.take(token)
-	if d == nil {
-		return fmt.Errorf("ack subject not found")
-	}
-	return d.Ack(ctx)
-}
-func (q *JetStreamQueue) Nak(ctx context.Context, token string, delay time.Duration) error {
-	d := q.take(token)
-	if d == nil {
-		return fmt.Errorf("ack subject not found")
-	}
-	return d.Nak(ctx, delay)
-}
-func (q *JetStreamQueue) Term(ctx context.Context, token string) error {
-	d := q.take(token)
-	if d == nil {
-		return fmt.Errorf("ack subject not found")
-	}
-	return d.Term(ctx)
-}
-func (q *JetStreamQueue) InProgress(ctx context.Context, token string) error {
-	q.mu.Lock()
-	d := q.inflight[token]
-	q.mu.Unlock()
-	if d == nil {
-		return fmt.Errorf("ack subject not found")
-	}
-	return d.InProgress(ctx)
-}
 func (q *JetStreamQueue) Close() error {
-	q.mu.Lock()
-	consumers := q.consumers
-	q.consumers = make(map[string]*events.Consumer)
-	q.fetchLock = make(map[string]*sync.Mutex)
-	q.fetchStart = make(map[string]uint64)
-	q.mu.Unlock()
-	var closeErr error
-	for _, consumer := range consumers {
-		if err := consumer.Close(); err != nil {
-			closeErr = errors.Join(closeErr, err)
-		}
+	if q == nil || q.rt == nil {
+		return nil
 	}
-	return closeErr
-}
-
-func uniqueStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func rotateStrings(values []string, start int) []string {
-	if len(values) < 2 || start%len(values) == 0 {
-		return values
-	}
-	start %= len(values)
-	out := make([]string, 0, len(values))
-	out = append(out, values[start:]...)
-	return append(out, values[:start]...)
-}
-
-func (q *JetStreamQueue) orderedJobTypes(spaceID, codePackageID string, jobTypes []string) []string {
-	if len(jobTypes) < 2 {
-		return jobTypes
-	}
-	canonical := append([]string(nil), jobTypes...)
-	sort.Strings(canonical)
-	key := fmt.Sprintf("%q|%q|%q", spaceID, codePackageID, canonical)
-	q.mu.Lock()
-	start := int(q.fetchStart[key] % uint64(len(jobTypes)))
-	q.fetchStart[key]++
-	q.mu.Unlock()
-	return rotateStrings(canonical, start)
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return q.rt.Close()
 }

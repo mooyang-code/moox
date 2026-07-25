@@ -29,7 +29,14 @@ RESET_DATA=0
 TARGET_GOOS=""
 TARGET_GOARCH=""
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
-EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
+if [[ -n "${MOOX_EVENTBUS_PUBLIC_IP:-}" ]]; then
+  EVENTBUS_URL_ENV="tls://${MOOX_EVENTBUS_PUBLIC_IP}:4222"
+  MOOX_EVENTBUS_HOST=0.0.0.0
+else
+  EVENTBUS_URL_ENV="tls://127.0.0.1:4222"
+  MOOX_EVENTBUS_HOST=127.0.0.1
+fi
+export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 PUBLIC_HOST=""
 BROWSER_HTTPS_PORT=9527
@@ -1163,7 +1170,9 @@ MONITOR_ENV=(
 )
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
-EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-${MOOX_EVENTBUS_URL:-}}"
+EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-__EVENTBUS_URL__}"
+MOOX_EVENTBUS_HOST="${MOOX_EVENTBUS_HOST:-__EVENTBUS_HOST__}"
+export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
 ensure_factor_python() {
@@ -1570,7 +1579,8 @@ start_admin() {
     local service_seed_args=(service-deployments import
       --db-path "${ROOT}/data/admin.db" \
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
-      --node-id "${MOOX_ADMIN_NODE_ID}")
+      --node-id "${MOOX_ADMIN_NODE_ID}" \
+      --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
       service_seed_args+=(--with-storage-shard)
     else
@@ -1586,13 +1596,13 @@ start_admin() {
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
       --db-path "${ROOT}/data/admin.db" \
       --encryption-key-file "${encryption_key_file}" \
-      --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" \
+      --node-id "${MOOX_ADMIN_NODE_ID}" \
       >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
       { echo "EventBus credential provisioning failed" >&2; exit 1; }
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export \
       --db-path "${ROOT}/data/admin.db" \
       --encryption-key-file "${encryption_key_file}" \
-      --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" \
+      --node-id "${MOOX_ADMIN_NODE_ID}" \
       --output-dir "${HOME}/.config/moox/eventbus" \
       >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
       { echo "EventBus credential export failed" >&2; exit 1; }
@@ -1620,9 +1630,10 @@ start_cloudnode() {
     exit 2
   fi
   init_cloudnode_schema
+  gateway_service_env_for cloudnode
   runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
       "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
@@ -2277,7 +2288,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -2337,7 +2348,7 @@ prepare_stage() {
   (umask 077; printf '%s\n' "${gateway_service_secret}" >"${STAGE_DIR}/secrets/gateway-service.key")
   command -v openssl >/dev/null 2>&1 || fail "openssl is required to derive Gateway service credentials"
   local caller derived_secret
-  for caller in collector factor monitor archive storage-view storage-primary strategy; do
+  for caller in collector factor monitor archive storage-view storage-primary strategy cloudnode moox-cli; do
     derived_secret=$(printf 'moox-gateway-service-v1:%s' "${caller}" | openssl dgst -sha256 -hmac "${gateway_service_secret}" -r | awk '{print $1}')
     [[ -n "${derived_secret}" ]] || fail "failed to derive Gateway credential for ${caller}"
     (umask 077; printf '%s\n' "${derived_secret}" >"${STAGE_DIR}/secrets/gateway-${caller}.key")
@@ -2361,9 +2372,17 @@ prepare_stage() {
     (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
   fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
-{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"}]}
+{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"}]}
 EOF
-  chmod 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${STAGE_DIR}/secrets/gateway-service.env" "${STAGE_DIR}/secrets/gateway-credentials.json"
+  {
+    printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-cli\n'
+    printf 'MOOX_GATEWAY_CALLER=moox-cli\n'
+    printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "$(tr -d '\r\n' <"${STAGE_DIR}/secrets/gateway-moox-cli.key")"
+    printf 'MOOX_GATEWAY_TARGET_NODE=%q\n' "${NODE_ID}"
+    printf 'MOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003\n'
+    printf 'MOOX_GATEWAY_CA_FILE=%q\n' "${DEPLOY_DIR}/certs/gateway/peers.pem"
+  } >"${STAGE_DIR}/secrets/gateway-moox-cli.env"
+  chmod 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${STAGE_DIR}/secrets/gateway-service.env" "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${STAGE_DIR}/secrets/gateway-credentials.json"
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"
@@ -2742,7 +2761,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -2760,6 +2779,7 @@ sync_remote_stage() {
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
+  quoted_eventbus_host="$(shell_quote "${MOOX_EVENTBUS_HOST}")"
   quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
   quoted_eventbus_enable_tls="$(shell_quote "${MOOX_EVENTBUS_ENABLE_TLS:-0}")"
   quoted_eventbus_public_ip="$(shell_quote "${MOOX_EVENTBUS_PUBLIC_IP:-}")"
@@ -2769,7 +2789,7 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {

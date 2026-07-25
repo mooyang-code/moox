@@ -41,7 +41,6 @@ enum PackageType {
 enum JobItemStatus {
   JOB_ITEM_STATUS_UNSPECIFIED = 0;
   JOB_ITEM_STATUS_PENDING = 1;
-  JOB_ITEM_STATUS_RUNNING = 2;
   JOB_ITEM_STATUS_SUCCESS = 3;
   JOB_ITEM_STATUS_FAILED = 4;
   JOB_ITEM_STATUS_ENQUEUE_FAILED = 6;
@@ -64,14 +63,6 @@ enum JobItemErrorKind {
   JOB_ITEM_ERROR_KIND_UNSPECIFIED = 0;
   JOB_ITEM_ERROR_KIND_RETRYABLE = 1;
   JOB_ITEM_ERROR_KIND_PERMANENT = 2;
-}
-
-enum JobItemAttemptStatus {
-  JOB_ITEM_ATTEMPT_STATUS_UNSPECIFIED = 0;
-  JOB_ITEM_ATTEMPT_STATUS_RUNNING = 1;
-  JOB_ITEM_ATTEMPT_STATUS_SUCCESS = 2;
-  JOB_ITEM_ATTEMPT_STATUS_FAILED = 3;
-  JOB_ITEM_ATTEMPT_STATUS_LOST = 4;
 }
 
 enum InvocationStatus {
@@ -210,25 +201,25 @@ message CloudAccountSummary {
   string account_id = 2;
   string account_name = 3;
   string provider = 4;
-  string app_id = 5;
-  string cos_region = 6;
-  string cos_bucket = 7;
-  string extra_config = 8;
-  bool is_deleted = 9;
-  string create_time = 10;
-  string modify_time = 11;
+  string credential_secret_id = 5;
+  string app_id = 6;
+  string cos_region = 7;
+  string cos_bucket = 8;
+  string extra_config = 9;
+  bool is_deleted = 10;
+  string create_time = 11;
+  string modify_time = 12;
 }
 
 message CloudAccountInput {
   string account_id = 1;
   string account_name = 2;
   string provider = 3;
-  string secret_id = 4;
-  string secret_key = 5;
-  string app_id = 6;
-  string cos_region = 7;
-  string cos_bucket = 8;
-  string extra_config = 9;
+  string credential_secret_id = 4;
+  string app_id = 5;
+  string cos_region = 6;
+  string cos_bucket = 7;
+  string extra_config = 8;
 }
 
 message ListCloudAccountsReq {
@@ -264,26 +255,6 @@ message DeleteCloudAccountReq {
 
 message DeleteCloudAccountRsp {
   common.RetInfo ret_info = 1;
-}
-
-message CloudAccountSecret {
-  string account_id = 1;
-  string provider = 2;
-  string app_id = 3;
-  string cos_region = 4;
-  string cos_bucket = 5;
-  string secret_id = 6;
-  string secret_key = 7;
-}
-
-message GetCOSAccountInfoReq {
-  string account_id = 1;
-  bool reveal = 2;
-}
-
-message GetCOSAccountInfoRsp {
-  common.RetInfo ret_info = 1;
-  CloudAccountSecret secret = 2;
 }
 
 message CloudRegion {
@@ -480,42 +451,16 @@ message SubmitJobItemsRsp {
   int32 rejected = 5;
 }
 
-message PollJobItemsReq {
-  string space_id = 1;
-  string node_id = 2;
-  repeated string supported_job_types = 3;
-  int32 limit = 4;
-  string runtime_version = 5;
-  string protocol_version = 6;
-}
-
-message PolledJobItem {
-  string space_id = 1;
-  string job_id = 2;
-  string job_item_id = 3;
-  string job_type = 4;
-  string code_package_id = 5;
-  google.protobuf.Struct params = 6;
-  int32 attempt_no = 7;
-}
-
-message PollJobItemsRsp {
-  common.RetInfo ret_info = 1;
-  repeated PolledJobItem items = 2;
-  google.protobuf.Timestamp poll_time = 3;
-}
-
 message ReportJobItemStatusReq {
   string space_id = 1;
   string node_id = 2;
   string job_item_id = 3;
-  int32 attempt_no = 4;
-  JobItemReportStatus status = 5;
-  JobItemErrorKind error_kind = 6;
-  string error_code = 7;
-  string error_message = 8;
-  google.protobuf.Struct result_summary = 9;
-  int64 duration_ms = 10;
+  JobItemReportStatus status = 4;
+  JobItemErrorKind error_kind = 5;
+  string error_code = 6;
+  string error_message = 7;
+  google.protobuf.Struct result_summary = 8;
+  int64 duration_ms = 9;
 }
 
 message ReportJobItemStatusRsp {
@@ -536,16 +481,14 @@ message JobItemDetail {
   google.protobuf.Struct params = 6;
   int32 priority = 7;
   JobItemStatus status = 8;
-  string running_node = 9;
-  int32 attempt_no = 10;
-  google.protobuf.Timestamp recover_at = 11;
-  google.protobuf.Struct result_summary = 12;
-  JobItemErrorKind last_error_kind = 13;
-  string last_error_code = 14;
-  string last_error_message = 15;
-  google.protobuf.Timestamp create_time = 16;
-  google.protobuf.Timestamp start_time = 17;
-  google.protobuf.Timestamp finish_time = 18;
+  google.protobuf.Struct result_summary = 9;
+  JobItemErrorKind last_error_kind = 10;
+  string last_error_code = 11;
+  string last_error_message = 12;
+  int64 duration_ms = 13;
+  string execution_node = 14;
+  google.protobuf.Timestamp create_time = 15;
+  google.protobuf.Timestamp finish_time = 16;
 }
 
 message GetJobItemRsp {
@@ -567,27 +510,6 @@ message ListJobItemsRsp {
   common.PageResult page = 3;
 }
 
-message JobItemAttempt {
-  int32 attempt_no = 1;
-  string node_id = 2;
-  JobItemAttemptStatus status = 3;
-  JobItemErrorKind error_kind = 4;
-  string error_code = 5;
-  string error_message = 6;
-  google.protobuf.Struct result_summary = 7;
-  google.protobuf.Timestamp started_at = 8;
-  google.protobuf.Timestamp finished_at = 9;
-}
-
-message ListJobItemAttemptsReq {
-  string space_id = 1;
-  string job_item_id = 2;
-}
-
-message ListJobItemAttemptsRsp {
-  common.RetInfo ret_info = 1;
-  repeated JobItemAttempt attempts = 2;
-}
 
 message InvokeSyncPayload {
   string request_id = 1;
@@ -637,7 +559,6 @@ service CloudNodeMgr {
   rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);
   rpc UpdateCloudAccount(UpdateCloudAccountReq) returns (UpdateCloudAccountRsp);
   rpc DeleteCloudAccount(DeleteCloudAccountReq) returns (DeleteCloudAccountRsp);
-  rpc GetCOSAccountInfo(GetCOSAccountInfoReq) returns (GetCOSAccountInfoRsp);
 
   rpc ListCloudRegions(ListCloudRegionsReq) returns (ListCloudRegionsRsp);
 
@@ -651,10 +572,8 @@ service CloudNodeMgr {
   rpc ReportHeartbeat(ReportHeartbeatReq) returns (ReportHeartbeatRsp);
 
   rpc SubmitJobItems(SubmitJobItemsReq) returns (SubmitJobItemsRsp);
-  rpc PollJobItems(PollJobItemsReq) returns (PollJobItemsRsp);
   rpc ReportJobItemStatus(ReportJobItemStatusReq) returns (ReportJobItemStatusRsp);
   rpc GetJobItem(GetJobItemReq) returns (GetJobItemRsp);
   rpc ListJobItems(ListJobItemsReq) returns (ListJobItemsRsp);
-  rpc ListJobItemAttempts(ListJobItemAttemptsReq) returns (ListJobItemAttemptsRsp);
   rpc InvokeSync(InvokeSyncReq) returns (InvokeSyncRsp);
 }

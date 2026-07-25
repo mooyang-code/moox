@@ -55,7 +55,7 @@ require (
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
-	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
@@ -94,7 +94,6 @@ replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjo
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
-
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 

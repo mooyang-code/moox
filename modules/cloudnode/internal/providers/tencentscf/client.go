@@ -36,6 +36,7 @@ type FunctionInfo struct {
 	CodeSize    int64
 	ClsLogsetID string
 	ClsTopicID  string
+	Environment map[string]string
 }
 
 // CreateFunctionRequest creates a Tencent SCF function from a COS package.
@@ -72,6 +73,15 @@ type UpdateFunctionCodeRequest struct {
 
 // UpdateFunctionCodeResponse describes a Tencent SCF code update.
 type UpdateFunctionCodeResponse struct {
+	RequestID string
+}
+
+type UpdateFunctionConfigurationRequest struct {
+	FunctionRef
+	Environment map[string]string
+}
+
+type UpdateFunctionConfigurationResponse struct {
 	RequestID string
 }
 
@@ -125,8 +135,37 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	out.ModTime = deref(response.Response.ModTime)
 	out.ClsLogsetID = deref(response.Response.ClsLogsetId)
 	out.ClsTopicID = deref(response.Response.ClsTopicId)
+	if response.Response.Environment != nil {
+		out.Environment = make(map[string]string, len(response.Response.Environment.Variables))
+		for _, variable := range response.Response.Environment.Variables {
+			if variable != nil {
+				out.Environment[deref(variable.Key)] = deref(variable.Value)
+			}
+		}
+	}
 	if response.Response.CodeSize != nil {
 		out.CodeSize = int64(*response.Response.CodeSize)
+	}
+	return out, nil
+}
+
+func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunctionConfigurationRequest) (*UpdateFunctionConfigurationResponse, error) {
+	log.InfoContextf(ctx, "[CloudNode-TencentSCF] update function configuration function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := scf.NewUpdateFunctionConfigurationRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
+	response, err := scfClient.UpdateFunctionConfiguration(request)
+	if err != nil {
+		return nil, err
+	}
+	out := &UpdateFunctionConfigurationResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
 	}
 	return out, nil
 }

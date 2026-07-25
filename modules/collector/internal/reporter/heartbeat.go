@@ -274,7 +274,7 @@ func sendSingleHeartbeat(ctx context.Context, url string, data []byte, httpClien
 }
 
 // parseServerResponse 解析服务端响应。
-// CloudNode JobItem is maintained by PollJobItems/ReportJobItemStatus, so heartbeat no longer carries task_instances.
+// CloudNode JobItem terminal state is reported separately, so heartbeat no longer carries task_instances.
 func parseServerResponse(respData []byte) error {
 	// 1. 解析响应体
 	var serverResp ServerResponse

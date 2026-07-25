@@ -11,7 +11,6 @@ require (
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/stretchr/testify v1.11.1
-	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
@@ -24,17 +23,17 @@ require (
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/go-playground/assert/v2 v2.2.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/smartystreets/goconvey v1.7.2 // indirect
+	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 require (
@@ -88,7 +87,6 @@ replace github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen => ./pro
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
-
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 

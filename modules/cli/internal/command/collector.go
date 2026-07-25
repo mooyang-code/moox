@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/spf13/cobra"
 )
 
@@ -35,19 +38,22 @@ type collectorPublishOptions struct {
 	AccessToken string
 	SpaceID     string
 	// 后台服务签名鉴权（推荐，取代登录态 AccessToken）
-	ServiceAccessKey string
-	ServiceSecretKey string
-	CloudAccountID   string
-	Runtime          string
-	Handler          string
-	Region           string
-	ZipPath          string
-	PackageName      string
-	PackageType      string
-	BizType          string
-	NodeType         string
-	Env              []string
-	Config           []string
+	ServiceAccessKey       string
+	ServiceSecretKey       string
+	CloudAccountID         string
+	Runtime                string
+	Handler                string
+	Region                 string
+	ZipPath                string
+	PackageName            string
+	PackageType            string
+	BizType                string
+	NodeType               string
+	Env                    []string
+	Config                 []string
+	EventBusCredentialFile string
+	CLSSecretID            string
+	CLSSecretKey           string
 }
 
 type collectorDeployOptions struct {
@@ -173,6 +179,7 @@ func init() {
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
 }
 
 func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions) {
@@ -254,7 +261,31 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.Region == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
-	clsResources, err := resolveCollectorCLSResources(ctx)
+	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
+	accounts, err := client.ListCloudAccounts(ctx, "tencent")
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	var credentialSecretID string
+	for _, account := range accounts {
+		if account.AccountID == opts.CloudAccountID {
+			credentialSecretID = account.CredentialSecretID
+			break
+		}
+	}
+	if credentialSecretID == "" {
+		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found or has no credential reference", opts.CloudAccountID)
+	}
+	secret, err := client.RevealSecret(ctx, credentialSecretID)
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	opts.CLSSecretID, opts.CLSSecretKey = secret.KeyID, secret.SecretValue
+	clsAPI, err := tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{SecretID: secret.KeyID, SecretKey: secret.SecretValue, Region: clsprepare.Region})
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	clsResources, err := tencent.ResolveExistingCLS(ctx, clsAPI, clsprepare.LogsetName, clsprepare.TopicName)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
@@ -276,7 +307,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
 	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
 		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
 		Version:          defaultFlag(opts.Version, "dev"),
@@ -310,11 +340,15 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
 	bizType := defaultFlag(opts.BizType, "data_collector")
-	environment, err := collectorFunctionEnvironment(opts)
+	environment, err := collectorFunctionEnvironment(opts, packageID)
 	if err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
 	config := parseCollectorOverrides(opts.Config)
+	if config == nil {
+		config = make(map[string]string)
+	}
+	config["timeout"] = "60"
 	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
 	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)
 	return adminclient.NodeCreateItem{
@@ -334,19 +368,73 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}, nil
 }
 
-func collectorFunctionEnvironment(opts collectorPublishOptions) (map[string]string, error) {
+func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
+	packageID := ""
+	if len(packageIDs) > 0 {
+		packageID = packageIDs[0]
+	}
 	env := map[string]string{}
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", os.Getenv("MOOX_GATEWAY_NODE_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY")))
 	clsHost := firstNonEmpty(os.Getenv("MOOX_CLS_HOST"), clsprepare.Host)
-	clsSecretID := firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID"), os.Getenv("TENCENT_SECRET_ID"))
-	clsSecretKey := firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"), os.Getenv("TENCENT_SECRET_KEY"))
+	clsSecretID := firstNonEmpty(opts.CLSSecretID, os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID"))
+	clsSecretKey := firstNonEmpty(opts.CLSSecretKey, os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"))
 	setDefaultEnv(env, "MOOX_CLS_HOST", clsHost)
 	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", clsSecretID)
 	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", clsSecretKey)
 	overrides := parseCollectorOverrides(opts.Env)
+	managed := map[string]struct{}{
+		"MOOX_EVENTBUS_NATS_URL":            {},
+		"MOOX_EVENTBUS_NATS_USERNAME":       {},
+		"MOOX_EVENTBUS_NATS_PASSWORD":       {},
+		"MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64": {},
+		"MOOX_CODE_PACKAGE_ID":              {},
+		"MOOX_CLS_SECRET_ID":                {},
+		"MOOX_CLS_SECRET_KEY":               {},
+	}
+	for key := range overrides {
+		if _, ok := managed[key]; ok {
+			return nil, fmt.Errorf("--env must not override managed key %s", key)
+		}
+	}
+	if packageID != "" && opts.EventBusCredentialFile != "" {
+		credentialPath := jetstream.ExpandCredentialPath(opts.EventBusCredentialFile)
+		credential, err := jetstream.LoadCredentialFile(credentialPath)
+		if err != nil {
+			return nil, err
+		}
+		if len(credential.URLs) != 1 {
+			return nil, fmt.Errorf("cloudnode-worker credential must contain exactly one EventBus URL")
+		}
+		eventBusURL, err := url.Parse(credential.URLs[0])
+		if err != nil || eventBusURL.Scheme != "tls" || eventBusURL.Hostname() == "" || eventBusURL.Port() == "" {
+			return nil, fmt.Errorf("cloudnode-worker credential URL must be tls with host and port")
+		}
+		if host := eventBusURL.Hostname(); host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback() {
+			return nil, fmt.Errorf("SCF EventBus URL must not use a loopback host")
+		}
+		caPath := credential.CAFile
+		if caPath == "" {
+			return nil, fmt.Errorf("cloudnode-worker credential requires ca_file")
+		}
+		if !filepath.IsAbs(caPath) {
+			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
+		}
+		caPEM, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, fmt.Errorf("read EventBus CA file: %w", err)
+		}
+		env["MOOX_EVENTBUS_NATS_URL"] = credential.URLs[0]
+		env["MOOX_EVENTBUS_NATS_USERNAME"] = credential.Username
+		env["MOOX_EVENTBUS_NATS_PASSWORD"] = credential.Password
+		env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = base64.StdEncoding.EncodeToString(caPEM)
+		env["MOOX_CODE_PACKAGE_ID"] = packageID
+	}
+	if strings.TrimSpace(overrides["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
+		return nil, fmt.Errorf("serverless environment must not contain MOOX_EVENTBUS_NATS_TLS_CA_FILE")
+	}
 	if strings.TrimSpace(overrides["MOOX_GATEWAY_CA_FILE"]) != "" {
 		return nil, fmt.Errorf("serverless environment must not contain MOOX_GATEWAY_CA_FILE")
 	}
@@ -375,7 +463,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions) (map[string]stri
 		setDefaultEnv(env, "MOOX_GATEWAY_CA_PEM_B64", caMaterial)
 	}
 	for key, value := range overrides {
-		if key == "MOOX_GATEWAY_CA_FILE" || key == "MOOX_GATEWAY_CA_PEM_B64" {
+		if key == "MOOX_GATEWAY_CA_FILE" || key == "MOOX_GATEWAY_CA_PEM_B64" || key == "MOOX_EVENTBUS_NATS_TLS_CA_FILE" {
 			continue
 		}
 		env[key] = value
@@ -460,7 +548,8 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 		client.ServiceAuth = &adminclient.ServiceAuthConfig{
 			AccessKey:  accessKey,
 			SecretKey:  secretKey,
-			TargetNode: os.Getenv("MOOX_GATEWAY_NODE_ID"),
+			Caller:     defaultFlag(os.Getenv("MOOX_GATEWAY_CALLER"), "moox-cli"),
+			TargetNode: defaultFlag(os.Getenv("MOOX_GATEWAY_TARGET_NODE"), os.Getenv("MOOX_GATEWAY_NODE_ID")),
 			CAFile:     os.Getenv("MOOX_GATEWAY_CA_FILE"),
 			ExpireSecs: 60,
 		}

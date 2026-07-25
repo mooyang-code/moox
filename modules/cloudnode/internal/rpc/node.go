@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -212,7 +213,10 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")
 	node.Metadata = jsonString(metadata)
 
-	client := s.scfClient(*account)
+	client, err := s.scfClient(ctx, *account)
+	if err != nil {
+		return err
+	}
 	ref := tencentscf.FunctionRef{
 		Region:       node.Region,
 		FunctionName: firstString(node.FunctionName, node.NodeID),
@@ -221,7 +225,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	info, err := client.GetFunction(ctx, ref)
 	if err == nil {
 		mergeSCFFunctionMetadata(node, info)
-		return s.updateSCFFunctionCode(ctx, *node, *pkg)
+		return fmt.Errorf("SCF function %s already exists; use deploy to update it", ref.FunctionName)
 	}
 	if !isSCFNotFound(err) {
 		return fmt.Errorf("get scf function %s: %w", ref.FunctionName, err)
@@ -322,19 +326,39 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 		return fmt.Errorf("unsupported cloud provider: %s", account.Provider)
 	}
 	metadata := parseJSONMap(node.Metadata)
-	_, err = s.scfClient(*account).UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
-		FunctionRef: tencentscf.FunctionRef{
-			Region:       node.Region,
-			FunctionName: firstString(node.FunctionName, node.NodeID),
-			Namespace:    firstString(node.Namespace, "default"),
-		},
-		Handler:   firstString(metadataString(metadata, "handler"), "main"),
-		COSBucket: pkg.COSBucket,
-		COSRegion: firstString(pkg.COSRegion, account.COSRegion),
-		COSObject: strings.TrimPrefix(pkg.COSPath, "/"),
+	client, err := s.scfClient(ctx, *account)
+	if err != nil {
+		return err
+	}
+	ref := tencentscf.FunctionRef{
+		Region:       node.Region,
+		FunctionName: firstString(node.FunctionName, node.NodeID),
+		Namespace:    firstString(node.Namespace, "default"),
+	}
+	info, err := client.GetFunction(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("get scf function %s before deploy: %w", ref.FunctionName, err)
+	}
+	_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
+		FunctionRef: ref,
+		Handler:     firstString(metadataString(metadata, "handler"), "main"),
+		COSBucket:   pkg.COSBucket,
+		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
+		COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
 	})
 	if err != nil {
 		return fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err)
+	}
+	environment := copyStringMap(info.Environment)
+	if environment == nil {
+		environment = make(map[string]string)
+	}
+	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
+		FunctionRef: ref,
+		Environment: environment,
+	}); err != nil {
+		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}
 	return nil
 }
@@ -360,21 +384,31 @@ func (s *Service) packageAndAccount(ctx context.Context, spaceID string, package
 	return pkg, account, nil
 }
 
-func (s *Service) scfClient(account store.CloudAccount) scfProvisioner {
+func (s *Service) scfClient(ctx context.Context, account store.CloudAccount) (scfProvisioner, error) {
+	credential, err := s.resolveCloudCredential(ctx, account)
+	if err != nil {
+		return nil, err
+	}
 	factory := s.scfClientFactory
 	if factory == nil {
 		factory = defaultSCFClientFactory
 	}
-	return factory(account)
+	return factory(credential), nil
+}
+
+func (s *Service) resolveCloudCredential(ctx context.Context, account store.CloudAccount) (cloudcredential.TencentCredential, error) {
+	if s.credentialResolver == nil {
+		return cloudcredential.TencentCredential{}, fmt.Errorf("cloud credential resolver is not configured")
+	}
+	credential, err := s.credentialResolver.Resolve(ctx, account)
+	if err != nil {
+		return cloudcredential.TencentCredential{}, err
+	}
+	return credential, nil
 }
 
 func isTencentProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "tencent", "tencent-scf":
-		return true
-	default:
-		return false
-	}
+	return strings.TrimSpace(provider) == "tencent"
 }
 
 func isSCFNotFound(err error) bool {
@@ -421,9 +455,6 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 	}
 	if len(item.GetConfig()) > 0 {
 		metadata["config"] = item.GetConfig()
-	}
-	if len(item.GetEnvironment()) > 0 {
-		metadata["environment"] = item.GetEnvironment()
 	}
 	prefix := firstString(metadataString(metadata, "function_name_prefix"), "moox-cloudnode")
 	indexSuffix := firstString(metadataString(metadata, "index"), strconv.Itoa(index))

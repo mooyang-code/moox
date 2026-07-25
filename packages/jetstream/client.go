@@ -2,6 +2,9 @@ package jetstream
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
@@ -49,6 +52,9 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if len(cfg.URLs) == 0 || strings.TrimSpace(strings.Join(cfg.URLs, ",")) == "" {
 		return nil, fmt.Errorf("%w: at least one NATS URL is required", ErrConnection)
 	}
+	if cfg.TLSCAFile != "" && cfg.TLSCAPEMBase64 != "" {
+		return nil, fmt.Errorf("%w: TLS CA file and embedded PEM are mutually exclusive", ErrConnection)
+	}
 	for _, rawURL := range cfg.URLs {
 		parsed, err := url.Parse(strings.TrimSpace(rawURL))
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -57,7 +63,7 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		if !isLoopbackHost(parsed.Hostname()) && parsed.Scheme != "tls" {
 			return nil, fmt.Errorf("%w: non-loopback NATS URL %q must use tls", ErrConnection, rawURL)
 		}
-		if !isLoopbackHost(parsed.Hostname()) && cfg.TLSCAFile == "" {
+		if !isLoopbackHost(parsed.Hostname()) && cfg.TLSCAFile == "" && cfg.TLSCAPEMBase64 == "" {
 			return nil, fmt.Errorf("%w: non-loopback NATS URL %q requires TLS CA", ErrConnection, rawURL)
 		}
 	}
@@ -73,6 +79,17 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.TLSCAFile != "" {
 		opts = append(opts, nats.RootCAs(cfg.TLSCAFile))
+	}
+	if cfg.TLSCAPEMBase64 != "" {
+		pemBytes, err := base64.StdEncoding.DecodeString(cfg.TLSCAPEMBase64)
+		if err != nil {
+			return nil, fmt.Errorf("%w: decode TLS CA PEM: %w", ErrConnection, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("%w: TLS CA PEM contains no certificates", ErrConnection)
+		}
+		opts = append(opts, nats.Secure(&tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}))
 	}
 	if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {

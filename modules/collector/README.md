@@ -65,7 +65,8 @@ SCF 打包会通过腾讯云 API 查询固定的 `moox/moox-application` 资源�
 - 管理台路径：`/api/admin/collectmgr/{Method}`（admin 网关 JWT）
 - CloudNode JobItem 提交：`/api/service/cloudnode/SubmitJobItems`（Collector 控制面，经 admin 网关 HMAC 鉴权）
 - SCF 唤醒：`/api/service/cloudnode/InvokeFunction`（Collector 控制面用 keepalive event 唤醒节点去 poll）
-- CloudNode JobItem 运行时：`/api/service/cloudnode/PollJobItems`、`/api/service/cloudnode/ReportJobItemStatus`
+- CloudNode JobItem 运行时：直连 JetStream Job Execution Queue，并通过
+  `/api/service/cloudnode/ReportJobItemStatus` 上报终态
 - 采集任务实例状态：`/api/service/collectmgr/ReportTaskStatus`（HMAC，经网关）
 
 ## 部署关系
@@ -77,7 +78,7 @@ admin 网关
   → moox-collector（规划任务）
   → moox-admin `/api/service/cloudnode/SubmitJobItems`（HMAC 鉴权）
   → moox-cloudnode（提交 JobItem / 唤醒 SCF）
-  → moox-collector-scf（PollJobItems 后执行采集）
+  → moox-collector-scf（bind 对应作业路由 Consumer 后执行采集）
   → moox-storage Access（写入 K 线等）
   → 回报 cloudnode ReportJobItemStatus + collectmgr ReportTaskStatus
 ```

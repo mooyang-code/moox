@@ -62,6 +62,15 @@ reject '^[[:space:]]+(stream|consumer|url):' \
 reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
   "CloudNode still exposes duplicate or embedded JetStream settings" \
   --glob '*.go' modules/cloudnode/internal
+reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_wait_ms):' \
+  "code-owned Consumer identity or ack settings remain in business YAML" \
+  --glob '*.yaml' modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
+
+worker_acl='publish: {allow: ["$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>", "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>", "$JS.ACK.MOOX_CLOUDNODE_EXEC.>"]}'
+rg -Fq "$worker_acl" modules/admin/cmd/cli/eventbus_credentials.go || {
+  echo "cloudnode-worker ACL does not match the bind/fetch/ack contract" >&2
+  exit 1
+}
 
 (cd packages/events && go test ./...)
 (cd packages/jetstream && go test ./...)

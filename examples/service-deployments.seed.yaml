@@ -95,6 +95,7 @@ services:
     status: active
     description: MooX 统一 NATS JetStream EventBus 服务
     extra_config:
+      nats_url: tls://127.0.0.1:4222
       health_url: http://127.0.0.1:11419/readyz
       health_kind: readiness
       monitor_enabled: true
@@ -314,7 +315,7 @@ services:
       gateway_methods:
         - ListSecrets
         - RevealSecret
-      gateway_callers: [admin-gateway]
+      gateway_callers: [admin-gateway, cloudnode, moox-cli]
   - name: sysdeploy
     kind: admin_rpc
     deployment_mode: endpoint

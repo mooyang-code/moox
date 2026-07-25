@@ -8,8 +8,8 @@ require (
 	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/doctor v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
@@ -39,9 +39,10 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
-	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect

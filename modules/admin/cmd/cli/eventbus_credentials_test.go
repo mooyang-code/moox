@@ -30,7 +30,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := applySchema(dbPath, adminschema.AdminSQL()); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--public-ip", "203.0.113.10"}
+	seedEventBusDeployment(t, dbPath)
+	args := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}
 	var out bytes.Buffer
 	if err := runEventBusCredentialsCommand(args, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -51,8 +52,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 13 {
-		t.Fatalf("eventbus records=%d, want 13", count)
+	if count != 14 {
+		t.Fatalf("eventbus records=%d, want 14", count)
 	}
 }
 
@@ -62,13 +63,14 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	keyPath := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyPath, []byte("test-encryption-key-for-eventbus"), 0o600))
 	require.NoError(t, applySchema(dbPath, adminschema.AdminSQL()))
+	seedEventBusDeployment(t, dbPath)
 
-	ensureArgs := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--public-ip", "203.0.113.10"}
+	ensureArgs := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}
 	var out bytes.Buffer
 	require.NoError(t, runEventBusCredentialsCommand(ensureArgs, &out, &bytes.Buffer{}))
 
 	exportDir := filepath.Join(dir, "out")
-	exportArgs := []string{"eventbus-credentials", "export", "--db-path", dbPath, "--encryption-key-file", keyPath, "--output-dir", exportDir, "--public-ip", "203.0.113.10"}
+	exportArgs := []string{"eventbus-credentials", "export", "--db-path", dbPath, "--encryption-key-file", keyPath, "--output-dir", exportDir, "--node-id", "gateway-node-1"}
 	out.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(exportArgs, &out, &bytes.Buffer{}))
 	assert.FileExists(t, filepath.Join(exportDir, "users.yaml"))
@@ -80,6 +82,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-metrics-consumer.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "archive-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "trade-eventbus.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "cloudnode-worker.yaml"))
 	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
 	assert.FileExists(t, strategyCredential)
 	info, err := os.Stat(strategyCredential)
@@ -94,6 +97,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"monitor-metrics-consumer":     "e",
 		"storage-eventbus":             "f",
 		"cloudnode-eventbus":           "g",
+		"cloudnode-worker":             "worker",
 		"factor-eventbus":              "h",
 		"strategy-eventbus":            "i",
 		"archive-eventbus":             "j",
@@ -113,6 +117,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"monitor-metrics-consumer":     "e",
 		"storage-eventbus":             "f",
 		"cloudnode-eventbus":           "g",
+		"cloudnode-worker":             "worker",
 		"factor-eventbus":              "h",
 		"archive-eventbus":             "j",
 		"strategy-eventbus":            "i",
@@ -168,6 +173,12 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.API`)
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.ACK`)
 	assert.Contains(t, cloudnodeACL, `subscribe: {allow: ["_INBOX.>"]}`)
+	workerACL := eventBusACLBlock(yaml, "cloudnode-worker")
+	assert.Equal(t, `publish: {allow: ["$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>", "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>", "$JS.ACK.MOOX_CLOUDNODE_EXEC.>"]}`, aclLine(workerACL, "publish:"))
+	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(workerACL, "subscribe:"))
+	for _, forbidden := range []string{"CONSUMER.CREATE", "CONSUMER.DELETE", "STREAM.NAMES", "$KV.", "moox.cloudnode.job.execution"} {
+		assert.NotContains(t, workerACL, forbidden)
+	}
 	for _, role := range eventBusRoles {
 		if role == "eventbus-internal-admin" {
 			continue
@@ -203,6 +214,16 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
 	assert.GreaterOrEqual(t, count, int64(13))
+}
+
+func seedEventBusDeployment(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`INSERT INTO t_gateway_nodes(c_node_id,c_name,c_public_address,c_status) VALUES (?,?,?,?)`,
+		"gateway-node-1", "Gateway", "203.0.113.10", "enabled").Error)
+	require.NoError(t, db.Exec(`INSERT INTO t_service_deployments(c_node_id,c_service_name,c_service_kind,c_status,c_extra_config) VALUES (?,?,?,?,?)`,
+		"gateway-node-1", "eventbus", "eventbus", "active", `{"nats_url":"tls://203.0.113.10:4222"}`).Error)
 }
 
 func eventBusACLBlock(yaml, username string) string {

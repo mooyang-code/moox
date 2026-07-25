@@ -26,7 +26,7 @@ func TestCatalogRepository_AccountCRUD(t *testing.T) {
 
 	require.NoError(t, repo.UpsertAccount(ctx, CloudAccount{
 		AccountID: "acct-1", AccountName: "main", Provider: "tencent",
-		SecretID: "sid", SecretKey: "skey", AppID: "app",
+		CredentialSecretID: "secret-1", AppID: "app",
 	}))
 	got, err := repo.GetAccount(ctx, "acct-1")
 	require.NoError(t, err)

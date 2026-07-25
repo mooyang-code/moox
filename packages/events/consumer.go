@@ -68,11 +68,36 @@ func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Regist
 }
 
 func NewSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*Consumer, error) {
+	if _, err := EnsureSubjectConsumer(ctx, client, registry, cfg); err != nil {
+		return nil, err
+	}
+	return BindSubjectConsumer(ctx, client, registry, cfg)
+}
+
+func EnsureSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*jetstream.ConsumerInfo, error) {
 	filter, err := subjectConsumerFilter(registry, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newConsumer(ctx, client, registry, cfg.ConsumerConfig, filter)
+	if client == nil {
+		return nil, fmt.Errorf("event consumer client is nil")
+	}
+	return client.EnsureConsumer(ctx, jetstreamConsumerConfig(cfg.ConsumerConfig, filter))
+}
+
+func BindSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*Consumer, error) {
+	filter, err := subjectConsumerFilter(registry, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, fmt.Errorf("event consumer client is nil")
+	}
+	consumer, err := client.BindConsumer(ctx, jetstreamConsumerConfig(cfg.ConsumerConfig, filter))
+	if err != nil {
+		return nil, err
+	}
+	return &Consumer{consumer: consumer, registry: registry}, nil
 }
 
 func subjectConsumerFilter(registry *Registry, cfg SubjectConsumerConfig) (string, error) {
@@ -92,16 +117,20 @@ func newConsumer(ctx context.Context, client *jetstream.Client, registry *Regist
 	if client == nil {
 		return nil, fmt.Errorf("event consumer client is nil")
 	}
-	consumer, err := client.NewConsumer(ctx, jetstream.ConsumerConfig{
-		Stream: cfg.Event.Stream(), Durable: cfg.Name, FilterSubject: filter,
-		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
-		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: cfg.DeliverPolicy,
-		DeliverDecodeErrors: cfg.DeliverDecodeErrors,
-	})
+	consumer, err := client.NewConsumer(ctx, jetstreamConsumerConfig(cfg, filter))
 	if err != nil {
 		return nil, err
 	}
 	return &Consumer{consumer: consumer, registry: registry}, nil
+}
+
+func jetstreamConsumerConfig(cfg ConsumerConfig, filter string) jetstream.ConsumerConfig {
+	return jetstream.ConsumerConfig{
+		Stream: cfg.Event.Stream(), Durable: cfg.Name, FilterSubject: filter,
+		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
+		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: cfg.DeliverPolicy,
+		DeliverDecodeErrors: cfg.DeliverDecodeErrors,
+	}
 }
 
 func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
@@ -109,6 +138,13 @@ func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery,
 		return nil, fmt.Errorf("event consumer is not initialized")
 	}
 	return c.consumer.Fetch(ctx, batch)
+}
+
+func (c *Consumer) MaxDeliver() int {
+	if c == nil || c.consumer == nil {
+		return 0
+	}
+	return c.consumer.MaxDeliver()
 }
 
 func (c *Consumer) FetchEvents(ctx context.Context, batch int) ([]*EventDelivery, error) {

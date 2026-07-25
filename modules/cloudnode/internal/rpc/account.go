@@ -24,6 +24,9 @@ func (s *Service) CreateCloudAccount(ctx context.Context, req *pb.CreateCloudAcc
 		return &pb.CreateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "account_id is required")}, nil
 	}
 	account := fromPBAccountInput(req.GetAccount())
+	if account.Provider != "tencent" || account.CredentialSecretID == "" {
+		return &pb.CreateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "provider must be tencent and credential_secret_id is required")}, nil
+	}
 	if err := s.catalog.UpsertAccount(ctx, account); err != nil {
 		return &pb.CreateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -35,17 +38,8 @@ func (s *Service) UpdateCloudAccount(ctx context.Context, req *pb.UpdateCloudAcc
 		return &pb.UpdateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "account_id is required")}, nil
 	}
 	account := fromPBAccountInput(req.GetAccount())
-	existing, err := s.catalog.GetAccount(ctx, account.AccountID)
-	if err != nil {
-		return &pb.UpdateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	if existing != nil {
-		if account.SecretID == "" {
-			account.SecretID = existing.SecretID
-		}
-		if account.SecretKey == "" {
-			account.SecretKey = existing.SecretKey
-		}
+	if account.Provider != "tencent" || account.CredentialSecretID == "" {
+		return &pb.UpdateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "provider must be tencent and credential_secret_id is required")}, nil
 	}
 	if err := s.catalog.UpsertAccount(ctx, account); err != nil {
 		return &pb.UpdateCloudAccountRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -63,25 +57,6 @@ func (s *Service) DeleteCloudAccount(ctx context.Context, req *pb.DeleteCloudAcc
 	return &pb.DeleteCloudAccountRsp{RetInfo: retOK()}, nil
 }
 
-func (s *Service) GetCOSAccountInfo(ctx context.Context, req *pb.GetCOSAccountInfoReq) (*pb.GetCOSAccountInfoRsp, error) {
-	account, err := s.catalog.GetAccount(ctx, req.GetAccountId())
-	if err != nil {
-		return &pb.GetCOSAccountInfoRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	if account == nil {
-		return &pb.GetCOSAccountInfoRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "cloud account not found")}, nil
-	}
-	return &pb.GetCOSAccountInfoRsp{RetInfo: retOK(), Secret: &pb.CloudAccountSecret{
-		AccountId: account.AccountID,
-		Provider:  account.Provider,
-		AppId:     account.AppID,
-		CosRegion: account.COSRegion,
-		CosBucket: account.COSBucket,
-		SecretId:  reveal(account.SecretID, req.GetReveal()),
-		SecretKey: reveal(account.SecretKey, req.GetReveal()),
-	}}, nil
-}
-
 func (s *Service) ListCloudRegions(ctx context.Context, req *pb.ListCloudRegionsReq) (*pb.ListCloudRegionsRsp, error) {
 	regions := []*pb.CloudRegion{
 		{Code: "ap-guangzhou", Name: "广州", Tag: "domestic", MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024},
@@ -94,31 +69,31 @@ func (s *Service) ListCloudRegions(ctx context.Context, req *pb.ListCloudRegions
 
 func toPBAccountSummary(account store.CloudAccount) *pb.CloudAccountSummary {
 	return &pb.CloudAccountSummary{
-		Id:          int32(account.ID),
-		AccountId:   account.AccountID,
-		AccountName: account.AccountName,
-		Provider:    account.Provider,
-		AppId:       account.AppID,
-		CosRegion:   account.COSRegion,
-		CosBucket:   account.COSBucket,
-		ExtraConfig: account.ExtraConfig,
-		IsDeleted:   account.IsDeleted,
-		CreateTime:  formatTime(account.CreateTime),
-		ModifyTime:  formatTime(account.ModifyTime),
+		Id:                 int32(account.ID),
+		AccountId:          account.AccountID,
+		AccountName:        account.AccountName,
+		Provider:           account.Provider,
+		CredentialSecretId: account.CredentialSecretID,
+		AppId:              account.AppID,
+		CosRegion:          account.COSRegion,
+		CosBucket:          account.COSBucket,
+		ExtraConfig:        account.ExtraConfig,
+		IsDeleted:          account.IsDeleted,
+		CreateTime:         formatTime(account.CreateTime),
+		ModifyTime:         formatTime(account.ModifyTime),
 	}
 }
 
 func fromPBAccountInput(account *pb.CloudAccountInput) store.CloudAccount {
 	return store.CloudAccount{
-		AccountID:   account.GetAccountId(),
-		AccountName: account.GetAccountName(),
-		Provider:    firstString(account.GetProvider(), "tencent"),
-		SecretID:    account.GetSecretId(),
-		SecretKey:   account.GetSecretKey(),
-		AppID:       account.GetAppId(),
-		COSRegion:   account.GetCosRegion(),
-		COSBucket:   account.GetCosBucket(),
-		ExtraConfig: firstString(account.GetExtraConfig(), "{}"),
-		IsDeleted:   false,
+		AccountID:          account.GetAccountId(),
+		AccountName:        account.GetAccountName(),
+		Provider:           firstString(account.GetProvider(), "tencent"),
+		CredentialSecretID: account.GetCredentialSecretId(),
+		AppID:              account.GetAppId(),
+		COSRegion:          account.GetCosRegion(),
+		COSBucket:          account.GetCosBucket(),
+		ExtraConfig:        firstString(account.GetExtraConfig(), "{}"),
+		IsDeleted:          false,
 	}
 }

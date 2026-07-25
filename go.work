@@ -24,15 +24,13 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
-	./packages/cloudprovider
 	./packages/cloudjobpb
+	./packages/cloudjobqueue
+	./packages/cloudprovider
 	./packages/cloudruntime
 	./packages/commonpb
 	./packages/doctor
 	./packages/events
-	./packages/storagepb
-	./packages/tradeeventpb
-	./packages/security
 	./packages/gatewayauth
 	./packages/gatewayproxy
 	./packages/healthz
@@ -42,8 +40,11 @@ use (
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
-	./packages/trpcretry
+	./packages/security
+	./packages/storagepb
 	./packages/timerjob
+	./packages/tradeeventpb
+	./packages/trpcretry
 	./web-host
 )
 

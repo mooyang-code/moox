@@ -27,7 +27,7 @@ const keepaliveTaskExecutionTimeout = 45 * time.Second
 
 var reportHeartbeatAfterProbe = reporter.ReportHeartbeat
 var pollJobItemsAfterHeartbeat = func(ctx context.Context) error {
-	return taskrunner.PollAndExecuteJobItems(ctx)
+	return taskrunner.RunJobItems(ctx)
 }
 
 // NewCloudFunctionHandler 创建云函数处理器
@@ -263,7 +263,7 @@ func (h *CloudFunctionHandler) processCloudFunctionEvent(ctx context.Context, ev
 // 链路说明：
 //   - 探测源标识 (source=keepalive_probe/heartbeat_probe) 来自控制面 keepalive_probe.go。
 //   - service_deployments / service_gateway_target 会先被 applyRuntimeConfig 解析。
-//   - 只要事件携带或解析出了服务网关地址，就尝试 ProcessProbe → ReportHeartbeat → PollJobItems。
+//   - 只要事件携带或解析出了服务网关地址，就尝试 ProcessProbe 和 ReportHeartbeat。
 func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
 	log.InfoContextf(ctx, "[handleKeepalive] 执行保活探测, source=%s, service_gateway_target=%s, ServerIP=%s, ServerPort=%d, action=%s",
 		event.Source, event.ServiceGatewayTarget, event.ServerIP, event.ServerPort, event.Action)

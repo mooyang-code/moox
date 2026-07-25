@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestAllSQLDropsLegacyInvocationTables(t *testing.T) {
+func TestAllSQLDoesNotContainDeletedInvocationTables(t *testing.T) {
 	sql := AllSQL()
 	for _, forbidden := range []string{
 		"CREATE TABLE IF NOT EXISTS t_cloud_invocations",
@@ -15,17 +15,9 @@ func TestAllSQLDropsLegacyInvocationTables(t *testing.T) {
 			t.Fatalf("cloudnode schema must not recreate %s", forbidden)
 		}
 	}
-	for _, want := range []string{
-		"DROP TABLE IF EXISTS t_cloud_invocation_results",
-		"DROP TABLE IF EXISTS t_cloud_invocations",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("cloudnode schema must include %q", want)
-		}
-	}
 }
 
-func TestAllSQLDropsLegacyOnlineJobItemTables(t *testing.T) {
+func TestAllSQLDoesNotContainDeletedOnlineJobItemTables(t *testing.T) {
 	sql := AllSQL()
 	for _, forbidden := range []string{
 		"CREATE TABLE IF NOT EXISTS t_cloud_job_items",
@@ -33,14 +25,6 @@ func TestAllSQLDropsLegacyOnlineJobItemTables(t *testing.T) {
 	} {
 		if strings.Contains(sql, forbidden) {
 			t.Fatalf("cloudnode schema must not recreate %s", forbidden)
-		}
-	}
-	for _, want := range []string{
-		"DROP TABLE IF EXISTS t_cloud_job_item_attempts",
-		"DROP TABLE IF EXISTS t_cloud_job_items",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("cloudnode schema must include %q", want)
 		}
 	}
 }

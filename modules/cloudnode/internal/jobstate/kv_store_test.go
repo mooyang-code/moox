@@ -2,170 +2,99 @@ package jobstate
 
 import (
 	"context"
-	"fmt"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-func TestKVStoreCreatePendingDeduplicates(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	item := testJobItem(t, "crypto", "ji-1")
-
-	first, err := store.CreatePending(ctx, item, QueueMeta{})
-	if err != nil {
-		t.Fatalf("CreatePending first error = %v", err)
-	}
-	if !first.Created || first.Status != pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED {
-		t.Fatalf("first = %+v", first)
-	}
-
-	second, err := store.CreatePending(ctx, item, QueueMeta{})
-	if err != nil {
-		t.Fatalf("CreatePending second error = %v", err)
-	}
-	if !second.Deduplicated || second.Status != pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED {
-		t.Fatalf("second = %+v", second)
-	}
+type memoryEntry struct {
+	value []byte
+	rev   uint64
 }
 
-func TestKVStoreRunningAndTerminalReport(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	_, err := store.CreatePending(ctx, testJobItem(t, "crypto", "ji-2"), QueueMeta{Subject: "sub"})
-	if err != nil {
+func (e memoryEntry) Value() []byte    { return append([]byte(nil), e.value...) }
+func (e memoryEntry) Revision() uint64 { return e.rev }
+
+type memoryKV struct {
+	mu   sync.Mutex
+	data map[string]memoryEntry
+}
+
+func newMemoryKV() *memoryKV { return &memoryKV{data: map[string]memoryEntry{}} }
+func (m *memoryKV) Create(key string, value []byte) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.data[key]; ok {
+		return 0, jetstream.ErrKVKeyExists
+	}
+	m.data[key] = memoryEntry{value: append([]byte(nil), value...), rev: 1}
+	return 1, nil
+}
+func (m *memoryKV) Get(key string) (jetstream.LegacyKVEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.data[key]
+	if !ok {
+		return nil, jetstream.ErrKVKeyNotFound
+	}
+	return entry, nil
+}
+func (m *memoryKV) Update(key string, value []byte, revision uint64) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.data[key]
+	if !ok {
+		return 0, jetstream.ErrKVKeyNotFound
+	}
+	if entry.rev != revision {
+		return 0, jetstream.ErrKVKeyExists
+	}
+	entry.rev++
+	entry.value = append([]byte(nil), value...)
+	m.data[key] = entry
+	return entry.rev, nil
+}
+func (m *memoryKV) Keys() ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keys := make([]string, 0, len(m.data))
+	for key := range m.data {
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func TestMarkReportedFirstTerminalWins(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
+	if _, err := store.CreatePending(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkPublished(ctx, "crypto", "ji-2", QueueMeta{Subject: "sub", Stream: "EXEC", StreamSeq: 42}); err != nil {
-		t.Fatal(err)
-	}
-	ok, running, err := store.TryMarkRunning(ctx, RunningRequest{
-		SpaceID: "crypto", JobItemID: "ji-2", NodeID: "node-1", AckSubject: "ack", StreamSeq: 42,
+	finished := time.Unix(100, 0).UTC()
+	state, changed, err := store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "item-1", NodeID: "node-1", Status: StatusFailed,
+		DurationMS: 25, Time: finished,
 	})
-	if err != nil || !ok {
-		t.Fatalf("TryMarkRunning ok=%v state=%+v err=%v", ok, running, err)
+	if err != nil || !changed || state.Status != StatusFailed {
+		t.Fatalf("first report state=%+v changed=%v err=%v", state, changed, err)
 	}
-	if running.AttemptNo != 1 {
-		t.Fatalf("attempt = %d, want 1", running.AttemptNo)
-	}
-	updated, err := store.MarkReported(ctx, ReportEvent{
-		SpaceID: "crypto", JobItemID: "ji-2", NodeID: "node-1", AttemptNo: 1,
-		Status: StatusSuccess, ResultSummary: map[string]any{"rows": float64(3)}, Time: time.Now(),
+	state, changed, err = store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "item-1", NodeID: "node-2", Status: StatusSuccess, DurationMS: 50,
 	})
-	if err != nil {
-		t.Fatalf("MarkReported error = %v", err)
-	}
-	if updated.Status != StatusSuccess || !updated.IsTerminal() || len(updated.Attempts) != 1 {
-		t.Fatalf("updated = %+v", updated)
+	if err != nil || changed || state.Status != StatusFailed || state.ExecutionNode != "node-1" || state.DurationMS != 25 {
+		t.Fatalf("late report state=%+v changed=%v err=%v", state, changed, err)
 	}
 }
 
-func TestKVStoreRetryableFailureReturnsPending(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	_, err := store.CreatePending(ctx, testJobItem(t, "crypto", "ji-retry"), QueueMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ok, _, err := store.TryMarkRunning(ctx, RunningRequest{SpaceID: "crypto", JobItemID: "ji-retry", NodeID: "node-1", AckSubject: "ack"})
-	if err != nil || !ok {
-		t.Fatalf("TryMarkRunning ok=%v err=%v", ok, err)
-	}
-
-	updated, err := store.MarkReported(ctx, ReportEvent{
-		SpaceID: "crypto", JobItemID: "ji-retry", NodeID: "node-1", AttemptNo: 1,
-		Status: StatusFailed, ErrorKind: ErrorRetryable, ErrorMessage: "try again", Time: time.Now(),
+func TestMarkReportedMissingIsIdempotent(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	state, changed, err := store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "missing", Status: StatusSuccess,
 	})
-	if err != nil {
-		t.Fatalf("MarkReported error = %v", err)
-	}
-	if updated.Status != StatusPending || updated.RunningNode != "" || updated.Attempts[0].Status != AttemptFailed {
-		t.Fatalf("updated = %+v", updated)
-	}
-}
-
-func TestKVStoreListAndListAttempts(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-
-	for _, id := range []string{"ji-list-1", "ji-list-2"} {
-		_, err := store.CreatePending(ctx, testJobItem(t, "crypto", id), QueueMeta{})
-		require.NoError(t, err)
-	}
-
-	items, page, err := store.List(ctx, &pb.ListJobItemsReq{SpaceId: "crypto"})
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	assert.Equal(t, uint32(2), page.GetTotal())
-	assert.False(t, page.GetHasMore())
-
-	filtered, page, err := store.List(ctx, &pb.ListJobItemsReq{
-		SpaceId: "crypto",
-		JobId:   "job-1",
-		Page:    &commonpb.Page{Page: 1, Size: 1},
-	})
-	require.NoError(t, err)
-	require.Len(t, filtered, 1)
-	assert.True(t, page.GetHasMore())
-
-	_, _, err = store.TryMarkRunning(ctx, RunningRequest{
-		SpaceID: "crypto", JobItemID: "ji-list-1", NodeID: "node-1", AckSubject: "ack",
-	})
-	require.NoError(t, err)
-	attempts, err := store.ListAttempts(ctx, &pb.ListJobItemAttemptsReq{
-		SpaceId: "crypto", JobItemId: "ji-list-1",
-	})
-	require.NoError(t, err)
-	require.Len(t, attempts, 1)
-	assert.Equal(t, int32(1), attempts[0].GetAttemptNo())
-}
-
-func TestKVStoreListEmptyBucket(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-
-	items, page, err := store.List(ctx, &pb.ListJobItemsReq{SpaceId: "crypto"})
-	require.NoError(t, err)
-	assert.Empty(t, items)
-	assert.Equal(t, uint32(0), page.GetTotal())
-}
-
-func newTestKVStore(t *testing.T, ttl time.Duration) *KVStore {
-	t.Helper()
-	cfg := config.Default().JetStream
-	// The in-process NATS fixture has no EventBus credential file.
-	cfg.CredentialFile = ""
-	rt := testfixture.StartRuntime(t, cfg)
-	t.Cleanup(func() { _ = rt.Close() })
-	bucket := fmt.Sprintf("TEST_JOB_ACTIVE_%d", time.Now().UnixNano())
-	kv, err := rt.Client().CreateKeyValue(bucket, ttl)
-	if err != nil {
-		t.Fatalf("CreateKeyValue() error = %v", err)
-	}
-	return NewKVStore(kv, Options{RecoverAfterMillis: 600000, DefaultMaxAttempts: 3})
-}
-
-func testJobItem(t *testing.T, spaceID, jobItemID string) *pb.JobItem {
-	t.Helper()
-	params, err := structpb.NewStruct(map[string]any{"symbol": "BTC/USDT"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &pb.JobItem{
-		SpaceId:       spaceID,
-		JobId:         "job-1",
-		JobItemId:     jobItemID,
-		JobType:       "collector.kline",
-		CodePackageId: "pkg-1",
-		Params:        params,
-		Priority:      5,
+	if err != nil || changed || state != nil {
+		t.Fatalf("state=%+v changed=%v err=%v", state, changed, err)
 	}
 }

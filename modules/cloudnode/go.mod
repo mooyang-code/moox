@@ -5,17 +5,20 @@ go 1.25.0
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/cloudjobqueue v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/nats.go v1.51.0 // test fixture only
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.131
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.135
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.1.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.70
 	google.golang.org/protobuf v1.36.11
@@ -36,7 +39,9 @@ require (
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/smartystreets/assertions v1.2.0 // indirect
 )
 
 require (
@@ -80,7 +85,6 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron v1.2.0 // indirect
-	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
@@ -108,10 +112,17 @@ require (
 
 replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ./proto/cloudnodegen
 
+replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
+
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+
 replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 
+replace github.com/mooyang-code/moox/packages/cloudjobqueue => ../../packages/cloudjobqueue
+
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+
+replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 

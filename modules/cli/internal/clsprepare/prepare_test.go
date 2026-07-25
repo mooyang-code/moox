@@ -16,7 +16,7 @@ import (
 
 type fakeAccounts struct {
 	items     []adminclient.CloudAccount
-	secrets   map[string]*adminclient.COSAccountInfo
+	secrets   map[string]*adminclient.RevealedSecret
 	revealed  string
 	listErr   error
 	revealErr error
@@ -26,9 +26,9 @@ func (f *fakeAccounts) ListCloudAccounts(context.Context, string) ([]adminclient
 	return f.items, f.listErr
 }
 
-func (f *fakeAccounts) GetCOSAccountInfo(_ context.Context, accountID string) (*adminclient.COSAccountInfo, error) {
-	f.revealed = accountID
-	return f.secrets[accountID], f.revealErr
+func (f *fakeAccounts) RevealSecret(_ context.Context, secretID string) (*adminclient.RevealedSecret, error) {
+	f.revealed = secretID
+	return f.secrets[secretID], f.revealErr
 }
 
 type fakeCLS struct{}
@@ -80,12 +80,12 @@ func testSource() *fakeAccounts {
 		items: []adminclient.CloudAccount{
 			{AccountID: "deleted", Provider: "tencent", IsDeleted: true},
 			{AccountID: "foreign", Provider: "aws"},
-			{AccountID: "newest", Provider: "tencent"},
-			{AccountID: "older", Provider: "tencent"},
+			{AccountID: "newest", Provider: "tencent", CredentialSecretID: "newest"},
+			{AccountID: "older", Provider: "tencent", CredentialSecretID: "older"},
 		},
-		secrets: map[string]*adminclient.COSAccountInfo{
-			"newest": {AccountID: "newest", Provider: "tencent", SecretID: "sid-new", SecretKey: "skey-new"},
-			"older":  {AccountID: "older", Provider: "tencent", SecretID: "sid-old", SecretKey: "skey-old"},
+		secrets: map[string]*adminclient.RevealedSecret{
+			"newest": {Category: "cloud", Provider: "tencent", Status: "active", KeyID: "sid-new", SecretValue: "skey-new"},
+			"older":  {Category: "cloud", Provider: "tencent", Status: "active", KeyID: "sid-old", SecretValue: "skey-old"},
 		},
 	}
 }
@@ -171,7 +171,7 @@ func TestPrepareAtomicallyReplacesExistingCredentialFile(t *testing.T) {
 
 func TestPrepareQuotesCredentialValuesForShellEnv(t *testing.T) {
 	source := testSource()
-	source.secrets["newest"].SecretKey = "key'with spaces"
+	source.secrets["newest"].SecretValue = "key'with spaces"
 	path := filepath.Join(t.TempDir(), "cls.env")
 
 	_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
@@ -185,7 +185,7 @@ func TestPrepareQuotesCredentialValuesForShellEnv(t *testing.T) {
 
 func TestPrepareRejectsIncompleteCredentialsBeforeCallingCLS(t *testing.T) {
 	source := testSource()
-	source.secrets["newest"] = &adminclient.COSAccountInfo{AccountID: "newest", Provider: "tencent"}
+	source.secrets["newest"] = &adminclient.RevealedSecret{Category: "cloud", Provider: "tencent", Status: "active"}
 	called := false
 	_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 		called = true
@@ -193,22 +193,6 @@ func TestPrepareRejectsIncompleteCredentialsBeforeCallingCLS(t *testing.T) {
 	}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
 	require.ErrorContains(t, err, "incomplete Tencent credentials")
 	require.False(t, called)
-}
-
-func TestPrepareRejectsCredentialsForDifferentAccountBeforeCallingCLS(t *testing.T) {
-	for _, returnedAccountID := range []string{"", "older"} {
-		t.Run("returned account "+returnedAccountID, func(t *testing.T) {
-			source := testSource()
-			source.secrets["newest"].AccountID = returnedAccountID
-			called := false
-			_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
-				called = true
-				return fakeCLS{}, nil
-			}, Options{CredentialsOutput: filepath.Join(t.TempDir(), "cls.env")})
-			require.ErrorContains(t, err, `cloud account "newest" returned credentials for a different account`)
-			require.False(t, called)
-		})
-	}
 }
 
 func TestPrepareDoesNotExposeSensitiveUpstreamErrors(t *testing.T) {

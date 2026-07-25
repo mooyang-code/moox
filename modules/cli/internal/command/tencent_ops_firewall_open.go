@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/spf13/cobra"
 )
 
@@ -87,35 +88,37 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 	defer cancel()
 
 	accountID := strings.TrimSpace(opts.CloudAccountID)
-	if accountID == "" {
-		accounts, err := client.ListCloudAccounts(ctx, opts.Provider)
-		if err != nil {
-			return fmt.Errorf("list cloud accounts: %w", err)
+	accounts, err := client.ListCloudAccounts(ctx, opts.Provider)
+	if err != nil {
+		return fmt.Errorf("list cloud accounts: %w", err)
+	}
+	var selected *adminclient.CloudAccount
+	for i := range accounts {
+		if accounts[i].IsDeleted {
+			continue
 		}
-		for _, a := range accounts {
-			if !a.IsDeleted && a.AccountID != "" {
-				accountID = a.AccountID
-				break
-			}
-		}
-		if accountID == "" {
-			return fmt.Errorf("no valid cloud account found in control plane; pass --cloud-account-id explicitly")
+		if accountID == "" || accounts[i].AccountID == accountID {
+			selected = &accounts[i]
+			accountID = accounts[i].AccountID
+			break
 		}
 	}
-
-	info, err := client.GetCOSAccountInfo(ctx, accountID)
+	if selected == nil || selected.CredentialSecretID == "" {
+		return fmt.Errorf("no valid cloud account found in control plane")
+	}
+	info, err := client.RevealSecret(ctx, selected.CredentialSecretID)
 	if err != nil {
 		return fmt.Errorf("get cloud account credentials: %w", err)
 	}
-	if info.SecretID == "" || info.SecretKey == "" {
+	if info.KeyID == "" || info.SecretValue == "" {
 		return fmt.Errorf("cloud account %s returned empty credentials", accountID)
 	}
 
 	fmt.Fprintf(os.Stderr, "使用云账户 %s 的凭证开放防火墙: public_ip=%s ports=%s\n", accountID, opts.PublicIP, opts.Ports)
 
 	addOpts := lighthouseFirewallAddOptions{
-		SecretID:    info.SecretID,
-		SecretKey:   info.SecretKey,
+		SecretID:    info.KeyID,
+		SecretKey:   info.SecretValue,
 		Region:      opts.Region,
 		Endpoint:    "https://lighthouse.tencentcloudapi.com",
 		PublicIP:    opts.PublicIP,

@@ -87,6 +87,36 @@ func TestCollectorFunctionEnvironmentRequiresRuntimeCLSCredentials(t *testing.T)
 	require.ErrorContains(t, err, "CLS runtime host and credentials are required")
 }
 
+func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing.T) {
+	dir := t.TempDir()
+	ca := []byte("test-ca-pem")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.pem"), ca, 0o600))
+	credentialPath := filepath.Join(dir, "cloudnode-worker.yaml")
+	require.NoError(t, os.WriteFile(credentialPath, []byte(
+		"version: 1\nurls: [tls://203.0.113.10:4222]\nusername: cloudnode-worker\ntoken: worker-token\nca_file: ca.pem\n",
+	), 0o600))
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{
+		EventBusCredentialFile: credentialPath,
+		CLSSecretID:            "cls-id",
+		CLSSecretKey:           "cls-key",
+	}, "pkg-1")
+	require.NoError(t, err)
+	assert.Equal(t, "tls://203.0.113.10:4222", env["MOOX_EVENTBUS_NATS_URL"])
+	assert.Equal(t, "cloudnode-worker", env["MOOX_EVENTBUS_NATS_USERNAME"])
+	assert.Equal(t, "worker-token", env["MOOX_EVENTBUS_NATS_PASSWORD"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString(ca), env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"])
+	assert.Equal(t, "pkg-1", env["MOOX_CODE_PACKAGE_ID"])
+	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_FILE")
+
+	_, err = collectorFunctionEnvironment(collectorPublishOptions{
+		EventBusCredentialFile: credentialPath,
+		CLSSecretID:            "cls-id",
+		CLSSecretKey:           "cls-key",
+		Env:                    []string{"MOOX_EVENTBUS_NATS_PASSWORD=override"},
+	}, "pkg-1")
+	require.ErrorContains(t, err, "managed key")
+}
+
 type collectorCLSAPI struct{}
 
 func (collectorCLSAPI) GetService(context.Context) (bool, error)    { return true, nil }

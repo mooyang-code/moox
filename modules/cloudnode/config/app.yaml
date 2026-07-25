@@ -16,15 +16,9 @@ jetstream:
   urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml
-  ack_wait_millis: 720000
   max_deliver: 3
-  fetch_max_wait_ms: 500
 
 job_item:
-  default_limit: 10
-  max_limit: 100
-  recover_after_millis: 600000
-  default_max_attempts: 3
   active_kv_bucket: MOOX_CLOUDNODE_JOB_ACTIVE
   active_ttl_hours: 48
   history_dir: ../data/cloudnode/jobs

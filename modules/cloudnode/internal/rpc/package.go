@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -114,15 +115,16 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	if account.COSRegion == "" || account.COSBucket == "" {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "cloud account cos_region/cos_bucket is required")}, nil
 	}
-	if account.SecretID == "" || account.SecretKey == "" {
-		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "cloud account secret_id/secret_key is required")}, nil
+	credential, err := s.resolveCloudCredential(ctx, *account)
+	if err != nil {
+		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	packageType := packageTypeToDB(req.GetPackageType())
 	filename := sanitizePackageFileName(firstString(req.GetOriginalFilename(), req.GetPackageName()+"-"+req.GetVersion()+".zip"))
 	packageID := buildPackageID(req.GetPackageName(), req.GetVersion())
 	cosPath := buildPackageCOSPath(packageType, req.GetPackageName(), req.GetVersion(), filename)
 	expires := time.Now().UTC().Add(time.Hour)
-	uploadURL, err := presignCOSPut(ctx, *account, cosPath, expires)
+	uploadURL, err := presignCOSPut(ctx, *account, credential, cosPath, expires)
 	if err != nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "presign upload url failed: "+err.Error())}, nil
 	}
@@ -186,7 +188,11 @@ func (s *Service) CompletePackageUpload(ctx context.Context, req *pb.CompletePac
 	if account == nil {
 		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "cloud account not found")}, nil
 	}
-	if err := verifyCOSObject(ctx, *account, pkg.COSPath, req.GetFileSize(), req.GetFileMd5()); err != nil {
+	credential, err := s.resolveCloudCredential(ctx, *account)
+	if err != nil {
+		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := verifyCOSObject(ctx, *account, credential, pkg.COSPath, req.GetFileSize(), req.GetFileMd5()); err != nil {
 		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	pkg.FileSize = req.GetFileSize()
@@ -249,36 +255,36 @@ func cosURL(pkg store.FunctionPackage) string {
 	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", pkg.COSBucket, pkg.COSRegion, strings.TrimPrefix(pkg.COSPath, "/"))
 }
 
-func presignCOSPut(ctx context.Context, account store.CloudAccount, objectPath string, expires time.Time) (string, error) {
+func presignCOSPut(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expires time.Time) (string, error) {
 	bucketURL, err := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	if err != nil {
 		return "", err
 	}
 	client := cos.NewClient(&cos.BaseURL{BucketURL: bucketURL}, &http.Client{
 		Transport: &cos.AuthorizationTransport{
-			SecretID:  account.SecretID,
-			SecretKey: account.SecretKey,
+			SecretID:  credential.SecretID,
+			SecretKey: credential.SecretKey,
 		},
 	})
-	u, err := client.Object.GetPresignedURL(ctx, http.MethodPut, objectPath, account.SecretID, account.SecretKey, time.Until(expires), nil)
+	u, err := client.Object.GetPresignedURL(ctx, http.MethodPut, objectPath, credential.SecretID, credential.SecretKey, time.Until(expires), nil)
 	if err != nil {
 		return "", err
 	}
 	return u.String(), nil
 }
 
-func newCOSClient(account store.CloudAccount) *cos.Client {
+func newCOSClient(account store.CloudAccount, credential cloudcredential.TencentCredential) *cos.Client {
 	bucketURL, _ := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	return cos.NewClient(&cos.BaseURL{BucketURL: bucketURL}, &http.Client{
 		Transport: &cos.AuthorizationTransport{
-			SecretID:  account.SecretID,
-			SecretKey: account.SecretKey,
+			SecretID:  credential.SecretID,
+			SecretKey: credential.SecretKey,
 		},
 	})
 }
 
-func verifyCOSObject(ctx context.Context, account store.CloudAccount, objectPath string, expectedSize int64, expectedMD5 string) error {
-	client := newCOSClient(account)
+func verifyCOSObject(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expectedSize int64, expectedMD5 string) error {
+	client := newCOSClient(account, credential)
 	key := strings.TrimPrefix(objectPath, "/")
 	resp, err := client.Object.Head(ctx, key, nil)
 	if err != nil {

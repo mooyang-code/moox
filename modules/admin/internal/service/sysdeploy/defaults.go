@@ -25,7 +25,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("admin_auth", "admin_rpc", "http", "127.0.0.1", 11100, "trpc.moox.infra.Auth", "internal", "认证 RPC 服务"),
 		deployment("dnsproxy", "admin_rpc", "http", "127.0.0.1", 11101, "trpc.moox.infra.Dns", "internal", "DNS 代理 RPC 服务"),
 		withExtra(deployment("moox_monitor", "monitor", "http", "127.0.0.1", 11410, "trpc.moox.monitor.MonitorMgr", "internal", "独立服务监控模块，承载 HTTP/TCP 探测和告警"), `{"health_url":"http://127.0.0.1:11409/readyz","health_kind":"readiness","monitor_enabled":true}`),
-		withExtra(deployment("eventbus", "eventbus", "http", "127.0.0.1", 11420, "trpc.moox.eventbus.EventBusMgr", "internal", "MooX 统一 NATS JetStream EventBus 服务"), `{"health_url":"http://127.0.0.1:11419/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("eventbus", "eventbus", "http", "127.0.0.1", 11420, "trpc.moox.eventbus.EventBusMgr", "internal", "MooX 统一 NATS JetStream EventBus 服务"), `{"health_url":"http://127.0.0.1:11419/readyz","health_kind":"readiness","monitor_enabled":true,"nats_url":"tls://127.0.0.1:4222"}`),
 		withExtra(deployment("moox_gateway", "gateway", "http", "127.0.0.1", 11002, "", "internal", "节点服务网关，承载服务路由与路由表刷新"), `{"health_url":"http://127.0.0.1:11012/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"), `{"health_url":"http://127.0.0.1:11412/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"), `{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true}`),
@@ -73,7 +73,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments","ListServiceDeployments"],"gateway_callers":["admin-gateway","monitor","moox-cli"]}`
 		}
 		if rows[i].ServiceName == "secret" {
-			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"],"gateway_callers":["admin-gateway"]}`
+			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"],"gateway_callers":["admin-gateway","cloudnode","moox-cli"]}`
 		}
 		if rows[i].GatewayEnabled && !strings.Contains(rows[i].ExtraConfig, `"gateway_methods"`) {
 			rows[i].ExtraConfig = strings.TrimSuffix(rows[i].ExtraConfig, "}") + `,"gateway_methods":["*"],"gateway_callers":["*"]}`

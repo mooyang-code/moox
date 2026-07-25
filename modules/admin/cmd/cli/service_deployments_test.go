@@ -64,8 +64,8 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	dbPath := filepath.Join(tmp, "admin.db")
 	seedPath := filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml")
 	var first, second bytes.Buffer
-	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath}, &first, &bytes.Buffer{}))
-	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath}, &second, &bytes.Buffer{}))
+	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &first, &bytes.Buffer{}))
+	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &second, &bytes.Buffer{}))
 	var result struct {
 		Created int `json:"created"`
 		Updated int `json:"updated"`
@@ -79,6 +79,28 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
 	require.Equal(t, int64(31), count)
+}
+
+func TestSetSeedEventBusNATSURLPreservesExtraConfig(t *testing.T) {
+	seed := serviceDeploymentSeed{Services: []serviceDeploymentEntry{{
+		Name: "eventbus",
+		ExtraConfig: map[string]any{
+			"health_url":      "http://127.0.0.1:11419/readyz",
+			"monitor_enabled": true,
+			"nats_url":        "tls://127.0.0.1:4222",
+		},
+	}}}
+	require.NoError(t, setSeedEventBusNATSURL(&seed, "tls://203.0.113.10:4222"))
+	require.Equal(t, "tls://203.0.113.10:4222", seed.Services[0].ExtraConfig["nats_url"])
+	require.Equal(t, "http://127.0.0.1:11419/readyz", seed.Services[0].ExtraConfig["health_url"])
+	require.Equal(t, true, seed.Services[0].ExtraConfig["monitor_enabled"])
+}
+
+func TestValidateEventBusNATSURLRejectsIncompleteOrNonTLS(t *testing.T) {
+	for _, raw := range []string{"", "nats://host:4222", "tls://host", "tls://:4222", "tls://host:4222/path"} {
+		_, err := validateEventBusNATSURL(raw)
+		require.Error(t, err, raw)
+	}
 }
 
 func TestValidateServiceDeploymentSeed_RejectsDuplicateAndInvalidGateway(t *testing.T) {
@@ -148,7 +170,7 @@ func TestImportWithOptionalStorageShardCompilesOnlyIndependentDataShardRoute(t *
 	seedPath := filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml")
 	var output bytes.Buffer
 	require.NoError(t, runServiceDeploymentsCommand([]string{
-		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--node-id", "gateway-node-1", "--with-storage-shard",
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--node-id", "gateway-node-1", "--eventbus-nats-url", "tls://127.0.0.1:4222", "--with-storage-shard",
 	}, &output, &bytes.Buffer{}))
 	db, err := openAdminCLIDB(dbPath)
 	require.NoError(t, err)

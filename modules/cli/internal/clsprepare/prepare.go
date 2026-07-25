@@ -21,7 +21,7 @@ const (
 
 type AccountSource interface {
 	ListCloudAccounts(context.Context, string) ([]adminclient.CloudAccount, error)
-	GetCOSAccountInfo(context.Context, string) (*adminclient.COSAccountInfo, error)
+	RevealSecret(context.Context, string) (*adminclient.RevealedSecret, error)
 }
 
 type Factory func(secretID, secretKey string) (tencent.CLSAPI, error)
@@ -62,22 +62,19 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	if err != nil {
 		return Result{}, err
 	}
-	secret, err := source.GetCOSAccountInfo(ctx, account.AccountID)
+	secret, err := source.RevealSecret(ctx, account.CredentialSecretID)
 	if err != nil {
 		return Result{}, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.AccountID), err)
 	}
-	if secret == nil {
+	if secret == nil || account.CredentialSecretID == "" {
 		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
 	}
-	if secret.AccountID != account.AccountID {
-		return Result{}, fmt.Errorf("cloud account %q returned credentials for a different account", account.AccountID)
-	}
-	if secret.Provider != "tencent" ||
-		strings.TrimSpace(secret.SecretID) == "" || strings.TrimSpace(secret.SecretKey) == "" {
+	if secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" ||
+		strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
 		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
 	}
 
-	api, err := factory(secret.SecretID, secret.SecretKey)
+	api, err := factory(secret.KeyID, secret.SecretValue)
 	if err != nil {
 		return Result{}, safeUpstreamError("create CLS client", err)
 	}
@@ -87,7 +84,7 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	if err != nil {
 		return Result{}, safeUpstreamError("prepare fixed CLS resources", err)
 	}
-	if err := writeCredentials(opts.CredentialsOutput, secret.SecretID, secret.SecretKey); err != nil {
+	if err := writeCredentials(opts.CredentialsOutput, secret.KeyID, secret.SecretValue); err != nil {
 		return Result{}, err
 	}
 

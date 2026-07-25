@@ -309,8 +309,8 @@ func secretModelToPlainPB(s *model.Secret) *pb.RevealedSecret {
 	}
 	return &pb.RevealedSecret{
 		SecretId: s.SecretID, Name: s.Name, Description: s.Description,
-		Provider: s.Provider, KeyId: s.KeyID, SecretValue: s.SecretValue,
-		ExtraConfig: s.ExtraConfig,
+		Category: s.Category, Provider: s.Provider, SecretType: s.SecretType,
+		KeyId: s.KeyID, SecretValue: s.SecretValue, ExtraConfig: s.ExtraConfig, Status: s.Status,
 	}
 }
 

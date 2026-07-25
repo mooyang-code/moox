@@ -15,7 +15,6 @@ replace (
 
 require (
 	github.com/blevesearch/bleve/v2 v2.5.5
-	github.com/blevesearch/bleve_index_api v1.3.11
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
@@ -24,14 +23,11 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/snapshotcache v0.1.1
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
-	github.com/parquet-go/parquet-go v0.25.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/xid v1.6.0
-	golang.org/x/sys v0.43.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	modernc.org/sqlite v1.45.0
@@ -45,12 +41,14 @@ require (
 
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
+	github.com/blevesearch/bleve_index_api v1.3.11 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.1 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
@@ -58,6 +56,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
+	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
@@ -67,6 +66,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.5.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	google.golang.org/grpc v1.75.0 // indirect
@@ -133,7 +133,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -146,7 +145,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/stretchr/testify v1.11.1
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

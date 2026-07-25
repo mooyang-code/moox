@@ -19,8 +19,8 @@
 
 ## 基础拓扑
 
-EventBus 配置只声明 Stream/KV；Consumer 由使用它的业务服务调用 `NewConsumer` 创建和
-维护。
+EventBus 配置只声明 Stream/KV。普通模块用 `NewConsumer` 创建和维护 Consumer；
+CloudNode 作业队列由 CloudNode ensure，SCF worker 只能 bind。
 
 | 资源 | Subject/用途 | 容量边界 |
 | --- | --- | --- |
@@ -75,10 +75,14 @@ tar -C data/eventbus -czf eventbus-jetstream-$(date +%Y%m%d%H%M%S).tar.gz jetstr
 认证/TLS 在 `config/app.yaml` 和目标机 service environment 中配置。远程部署脚本不把
 NATS 密码、credentials 或 TLS 私钥拼进 SSH 命令行。
 
-默认单机 loopback profile 使用 `nats://127.0.0.1`，不启用 Broker auth/TLS，也不生成
-EventBus role 文件。设置 `MOOX_EVENTBUS_ENABLE_TLS=1` 时，部署流程才 ensure/export
-十一类最小权限凭据和私有 CA。非 loopback NATS URL 仍必须使用 TLS、CA 和认证；不得
-通过合并角色绕过 ACL。
+初始化服务目录的 `eventbus.extra_config.nats_url` 是客户端 URL 唯一静态真源。部署脚本
+根据 `MOOX_EVENTBUS_PUBLIC_IP` 写入 `tls://<host>:4222`，并推导 Broker bind：
+loopback 为 `127.0.0.1`，其他地址为 `0.0.0.0`。
+
+设置 `MOOX_EVENTBUS_ENABLE_TLS=1` 时，部署流程 ensure/export 最小权限角色和私有 CA。
+`cloudnode-eventbus` 负责发布和 ensure；`cloudnode-worker` 只允许 Consumer
+INFO/FETCH/ACK，不允许 CREATE/DELETE、Stream 枚举、KV 或业务消息发布。公网连接必须
+使用导出的 username/token/CA，不得使用 NATS JWT `--creds` 参数。
 
 ## 验证
 

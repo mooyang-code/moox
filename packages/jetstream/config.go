@@ -19,6 +19,7 @@ type Config struct {
 	Password       string
 	Credentials    string
 	TLSCAFile      string
+	TLSCAPEMBase64 string
 	TLSCertFile    string
 	TLSKeyFile     string
 	ConnectTimeout time.Duration
@@ -44,6 +45,7 @@ func ConfigFromEnv(urls []string, name string) Config {
 		Password:             firstEnv("MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_PASSWORD"),
 		Credentials:          firstEnv("MOOX_EVENTBUS_NATS_CREDENTIALS", "MOOX_EVENTBUS_CREDENTIALS"),
 		TLSCAFile:            firstEnv("MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_EVENTBUS_TLS_CA"),
+		TLSCAPEMBase64:       firstEnv("MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"),
 		TLSCertFile:          firstEnv("MOOX_EVENTBUS_NATS_TLS_CERT_FILE", "MOOX_EVENTBUS_TLS_CERT"),
 		TLSKeyFile:           firstEnv("MOOX_EVENTBUS_NATS_TLS_KEY_FILE", "MOOX_EVENTBUS_TLS_KEY"),
 		ReconnectBufferBytes: envInt("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", 0),

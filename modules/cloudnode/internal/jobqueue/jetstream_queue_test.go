@@ -1,92 +1,16 @@
 package jobqueue
 
 import (
-	"context"
-	"sync"
 	"testing"
-
-	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"time"
 )
 
-func TestJetStreamQueue_PublishValidatesInput(t *testing.T) {
-	q := NewJetStreamQueue(&Runtime{}, QueueConfig{})
-
-	_, err := q.Publish(context.Background(), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "required")
-
-	_, err = q.Publish(context.Background(), &pb.JobItem{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "space_id")
-}
-
-func TestJetStreamQueue_AckRequiresInflightToken(t *testing.T) {
-	q := NewJetStreamQueue(nil, QueueConfig{})
-	err := q.Ack(context.Background(), "missing")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-
-	err = q.Nak(context.Background(), "missing", 0)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-
-	err = q.Term(context.Background(), "missing")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-
-	err = q.InProgress(context.Background(), "missing")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-}
-
-func TestJetStreamQueue_CloseWithoutConsumer(t *testing.T) {
-	q := NewJetStreamQueue(nil, QueueConfig{})
-	assert.NoError(t, q.Close())
-}
-
-func TestConsumerConfigForRouteUsesExactRoute(t *testing.T) {
-	cfg := QueueConfig{}
-
-	got := consumerConfigForRoute(cfg, "crypto", "moox-collector_v202607142250", "collect.kline")
-
-	require.Equal(t, events.CloudJobExecutionRequested.Name(), got.Event.Name())
-	require.Equal(t, events.CloudJobExecutionRequested.Version(), got.Event.Version())
-	require.Equal(t, events.CloudJobExecutionRequested.Stream(), got.Event.Stream())
-	require.Equal(t, "crypto", got.SpaceID)
-	require.Equal(t, "moox-collector_v202607142250/collect.kline", got.SubjectID)
-	require.Equal(t, ConsumerName("crypto", "moox-collector_v202607142250", "collect.kline"), got.Name)
-}
-
-func TestRouteConsumerKeySeparatesJobTypes(t *testing.T) {
-	require.NotEqual(t,
-		routeConsumerKey("crypto", "moox-collector_v202607142250", "collect.kline"),
-		routeConsumerKey("crypto", "moox-collector_v202607142250", "collect.symbol"),
-	)
-}
-
-func TestTryAcquireFetchLockSkipsBusyRoute(t *testing.T) {
-	lock := &sync.Mutex{}
-	lock.Lock()
-	require.False(t, tryAcquireFetchLock(lock))
-	lock.Unlock()
-	require.True(t, tryAcquireFetchLock(lock))
-	lock.Unlock()
-}
-
-func TestRotateStringsAdvancesAcrossRoutes(t *testing.T) {
-	values := []string{"collect.kline", "collect.symbol", "collect.trade"}
-	require.Equal(t, []string{"collect.symbol", "collect.trade", "collect.kline"}, rotateStrings(values, 1))
-	require.Equal(t, []string{"collect.trade", "collect.kline", "collect.symbol"}, rotateStrings(values, 2))
-}
-
-func TestOrderedJobTypesIsolatesIndependentRouteSets(t *testing.T) {
-	q := NewJetStreamQueue(nil, QueueConfig{})
-	multi := []string{"collect.kline", "collect.symbol"}
-	require.Equal(t, multi, q.orderedJobTypes("crypto", "pkg", multi))
-	require.Equal(t, []string{"collect.kline"}, q.orderedJobTypes("crypto", "pkg", []string{"collect.kline"}))
-	require.Equal(t, []string{"collect.symbol", "collect.kline"}, q.orderedJobTypes("crypto", "pkg", []string{"collect.symbol", "collect.kline"}))
-	require.Equal(t, multi, q.orderedJobTypes("stocks", "pkg", multi))
+func TestNewJetStreamQueueUsesCodeOwnedDefaults(t *testing.T) {
+	queue := NewJetStreamQueue(nil, QueueConfig{})
+	if queue.cfg.AckWait != time.Minute || queue.cfg.MaxDeliver != 3 || queue.cfg.MaxAckPending != 1 {
+		t.Fatalf("config = %+v", queue.cfg)
+	}
+	if err := queue.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -52,7 +52,9 @@ Admin 启动时会自动补齐同一套默认服务部署。需要在启动前�
 ```bash
 moox-admin-cli service-deployments import \
   --db-path ./data/admin.db \
-  --file examples/service-deployments.seed.yaml
+  --file examples/service-deployments.seed.yaml \
+  --node-id gateway-node-1 \
+  --eventbus-nats-url tls://127.0.0.1:4222
 ```
 
 该命令以 `node.id + service.name` 为幂等键，重复执行会更新清单中的地址、端口、网关

@@ -45,7 +45,7 @@ func (r *CatalogRepository) UpsertAccount(ctx context.Context, account CloudAcco
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_account_id"}, {Name: "c_is_deleted"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"c_account_name", "c_provider", "c_secret_id", "c_secret_key", "c_app_id",
+			"c_account_name", "c_provider", "c_credential_secret_id", "c_app_id",
 			"c_cos_region", "c_cos_bucket", "c_extra_config", "c_mtime",
 		}),
 	}).Create(&account).Error
