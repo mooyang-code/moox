@@ -52,7 +52,7 @@ CREATE TABLE t_cloud_job_items (
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer mgr.Close()
-	for _, column := range []string{"c_queue_subject", "c_enqueue_status", "c_cancel_reason"} {
+	for _, column := range []string{"c_queue_subject", "c_enqueue_status"} {
 		if mgr.db.Migrator().HasColumn("t_cloud_job_items", column) {
 			t.Fatalf("Initialize() added column %s, want schema unchanged", column)
 		}

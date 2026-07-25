@@ -82,26 +82,6 @@ func (s *Service) ReportJobItemStatus(ctx context.Context, req *pb.ReportJobItem
 	return &pb.ReportJobItemStatusRsp{RetInfo: retFromError(errJobItemStateNotConfigured)}, nil
 }
 
-func (s *Service) CancelJobItem(ctx context.Context, req *pb.CancelJobItemReq) (*pb.CancelJobItemRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" {
-		return &pb.CancelJobItemRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
-	}
-	if strings.TrimSpace(req.GetJobItemId()) == "" {
-		return &pb.CancelJobItemRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_item_id is required")}, nil
-	}
-	if s.jobState != nil {
-		if err := s.jobState.MarkCanceled(ctx, req.GetSpaceId(), req.GetJobItemId(), "user canceled"); err != nil {
-			log.ErrorContextf(ctx, "[CloudNode] cancel job item failed: %v", err)
-			return &pb.CancelJobItemRsp{RetInfo: retFromError(err)}, nil
-		}
-		if state, err := s.jobState.Get(ctx, req.GetSpaceId(), req.GetJobItemId()); err == nil && state.IsTerminal() {
-			s.writeTerminalHistory(ctx, *state)
-		}
-		return &pb.CancelJobItemRsp{RetInfo: retOK()}, nil
-	}
-	return &pb.CancelJobItemRsp{RetInfo: retFromError(errJobItemStateNotConfigured)}, nil
-}
-
 func (s *Service) GetJobItem(ctx context.Context, req *pb.GetJobItemReq) (*pb.GetJobItemRsp, error) {
 	if strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.GetJobItemRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
@@ -251,7 +231,7 @@ func (s *Service) pollJobItemsWithActiveKV(ctx context.Context, req *pb.PollJobI
 			}
 			return nil, err
 		}
-		if state.IsTerminal() || state.Status == jobstate.StatusCanceled {
+		if state.IsTerminal() {
 			s.writeTerminalHistory(ctx, *state)
 			if actionErr := deliveryActionError(ctx, delivery, "term", s.executionQueue.Term(ctx, delivery.AckSubject)); actionErr != nil {
 				return nil, actionErr
@@ -304,27 +284,6 @@ func (s *Service) reportJobItemStatusWithActiveKV(ctx context.Context, req *pb.R
 		return err
 	}
 	ackSubject := state.Queue.AckSubject
-	if state.Status == jobstate.StatusCanceled && state.AttemptNo == int(req.GetAttemptNo()) {
-		if state.RunningNode != "" && state.RunningNode != req.GetNodeId() {
-			return jobstate.ErrStaleAttempt
-		}
-		event, err := jobStateReportEventFromReq(req)
-		if err != nil {
-			return err
-		}
-		event.Status = jobstate.StatusCanceled
-		updated, err := s.jobState.MarkReported(ctx, event)
-		if err != nil && !errors.Is(err, jobstate.ErrInactive) {
-			return err
-		}
-		if updated != nil {
-			s.writeTerminalHistory(ctx, *updated)
-		}
-		if err := s.executionQueue.Term(ctx, ackSubject); err != nil {
-			return err
-		}
-		return s.jobState.ClearCancelDirective(ctx, req.GetSpaceId(), req.GetJobItemId(), req.GetAttemptNo())
-	}
 	if state.Status != jobstate.StatusRunning {
 		return jobstate.ErrInactive
 	}
@@ -345,8 +304,6 @@ func (s *Service) reportJobItemStatusWithActiveKV(ctx context.Context, req *pb.R
 	switch {
 	case req.GetStatus() == pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_SUCCESS:
 		return s.executionQueue.Ack(ctx, ackSubject)
-	case req.GetStatus() == pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_CANCELED:
-		return s.executionQueue.Term(ctx, ackSubject)
 	case req.GetStatus() == pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_FAILED &&
 		req.GetErrorKind() == pb.JobItemErrorKind_JOB_ITEM_ERROR_KIND_RETRYABLE &&
 		updated.Status == jobstate.StatusPending:
@@ -378,8 +335,6 @@ func jobStateReportEventFromReq(req *pb.ReportJobItemStatusReq) (jobstate.Report
 		status = jobstate.StatusSuccess
 	case pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_FAILED:
 		status = jobstate.StatusFailed
-	case pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_CANCELED:
-		status = jobstate.StatusCanceled
 	default:
 		return jobstate.ReportEvent{}, jobstate.ErrInvalid
 	}

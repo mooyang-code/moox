@@ -44,7 +44,6 @@ enum JobItemStatus {
   JOB_ITEM_STATUS_RUNNING = 2;
   JOB_ITEM_STATUS_SUCCESS = 3;
   JOB_ITEM_STATUS_FAILED = 4;
-  JOB_ITEM_STATUS_CANCELED = 5;
   JOB_ITEM_STATUS_ENQUEUE_FAILED = 6;
 }
 
@@ -59,7 +58,6 @@ enum JobItemReportStatus {
   JOB_ITEM_REPORT_STATUS_UNSPECIFIED = 0;
   JOB_ITEM_REPORT_STATUS_SUCCESS = 1;
   JOB_ITEM_REPORT_STATUS_FAILED = 2;
-  JOB_ITEM_REPORT_STATUS_CANCELED = 3;
 }
 
 enum JobItemErrorKind {
@@ -74,15 +72,6 @@ enum JobItemAttemptStatus {
   JOB_ITEM_ATTEMPT_STATUS_SUCCESS = 2;
   JOB_ITEM_ATTEMPT_STATUS_FAILED = 3;
   JOB_ITEM_ATTEMPT_STATUS_LOST = 4;
-  JOB_ITEM_ATTEMPT_STATUS_CANCELED = 5;
-}
-
-enum ControlDirectiveType {
-  CONTROL_DIRECTIVE_UNSPECIFIED = 0;
-  CONTROL_DIRECTIVE_CONTINUE = 1;
-  CONTROL_DIRECTIVE_CANCEL = 2;
-  CONTROL_DIRECTIVE_PAUSE_AFTER_CURRENT = 3;
-  CONTROL_DIRECTIVE_REDUCE_RATE = 4;
 }
 
 enum InvocationStatus {
@@ -459,16 +448,8 @@ message ReportHeartbeatReq {
   repeated LocalDNSReportItem local_dns_records = 10;
 }
 
-message ControlDirective {
-  ControlDirectiveType type = 1;
-  string job_item_id = 2;
-  int32 attempt_no = 3;
-  string reason = 4;
-}
-
 message ReportHeartbeatRsp {
   common.RetInfo ret_info = 1;
-  repeated ControlDirective directives = 2;
 }
 
 message JobItem {
@@ -538,15 +519,6 @@ message ReportJobItemStatusReq {
 }
 
 message ReportJobItemStatusRsp {
-  common.RetInfo ret_info = 1;
-}
-
-message CancelJobItemReq {
-  string space_id = 1;
-  string job_item_id = 2;
-}
-
-message CancelJobItemRsp {
   common.RetInfo ret_info = 1;
 }
 
@@ -681,7 +653,6 @@ service CloudNodeMgr {
   rpc SubmitJobItems(SubmitJobItemsReq) returns (SubmitJobItemsRsp);
   rpc PollJobItems(PollJobItemsReq) returns (PollJobItemsRsp);
   rpc ReportJobItemStatus(ReportJobItemStatusReq) returns (ReportJobItemStatusRsp);
-  rpc CancelJobItem(CancelJobItemReq) returns (CancelJobItemRsp);
   rpc GetJobItem(GetJobItemReq) returns (GetJobItemRsp);
   rpc ListJobItems(ListJobItemsReq) returns (ListJobItemsRsp);
   rpc ListJobItemAttempts(ListJobItemAttemptsReq) returns (ListJobItemAttemptsRsp);

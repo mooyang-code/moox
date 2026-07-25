@@ -14,14 +14,12 @@ const (
 	StatusRunning       = "running"
 	StatusSuccess       = "success"
 	StatusFailed        = "failed"
-	StatusCanceled      = "canceled"
 	StatusEnqueueFailed = "enqueue_failed"
 
-	AttemptRunning  = "running"
-	AttemptSuccess  = "success"
-	AttemptFailed   = "failed"
-	AttemptLost     = "lost"
-	AttemptCanceled = "canceled"
+	AttemptRunning = "running"
+	AttemptSuccess = "success"
+	AttemptFailed  = "failed"
+	AttemptLost    = "lost"
 
 	ErrorRetryable = "retryable"
 	ErrorPermanent = "permanent"
@@ -72,7 +70,6 @@ type State struct {
 	LastErrorKind    string         `json:"last_error_kind,omitempty"`
 	LastErrorCode    string         `json:"last_error_code,omitempty"`
 	LastErrorMessage string         `json:"last_error_message,omitempty"`
-	CancelReason     string         `json:"cancel_reason,omitempty"`
 	HistorySynced    bool           `json:"history_synced,omitempty"`
 	StartedAt        *time.Time     `json:"started_at,omitempty"`
 	FinishedAt       *time.Time     `json:"finished_at,omitempty"`
@@ -118,7 +115,7 @@ type ReportEvent struct {
 }
 
 func (s State) IsTerminal() bool {
-	return s.Status == StatusSuccess || s.Status == StatusFailed || s.Status == StatusCanceled
+	return s.Status == StatusSuccess || s.Status == StatusFailed
 }
 
 func (s State) ToDetail() *pb.JobItemDetail {
@@ -170,8 +167,6 @@ func statusToPB(status string) pb.JobItemStatus {
 		return pb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS
 	case StatusFailed:
 		return pb.JobItemStatus_JOB_ITEM_STATUS_FAILED
-	case StatusCanceled:
-		return pb.JobItemStatus_JOB_ITEM_STATUS_CANCELED
 	case StatusEnqueueFailed:
 		return pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED
 	default:
@@ -189,8 +184,6 @@ func StatusFromPB(status pb.JobItemStatus) string {
 		return StatusSuccess
 	case pb.JobItemStatus_JOB_ITEM_STATUS_FAILED:
 		return StatusFailed
-	case pb.JobItemStatus_JOB_ITEM_STATUS_CANCELED:
-		return StatusCanceled
 	case pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED:
 		return StatusEnqueueFailed
 	default:
@@ -230,8 +223,6 @@ func attemptStatusToPB(status string) pb.JobItemAttemptStatus {
 		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_FAILED
 	case AttemptLost:
 		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_LOST
-	case AttemptCanceled:
-		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_CANCELED
 	default:
 		return pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_UNSPECIFIED
 	}

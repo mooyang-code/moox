@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS t_cloud_job_items (
     c_last_error_kind TEXT NOT NULL DEFAULT '',
     c_last_error_code TEXT NOT NULL DEFAULT '',
     c_last_error_message TEXT NOT NULL DEFAULT '',
-    c_cancel_reason TEXT NOT NULL DEFAULT '',
     c_start_time DATETIME,
     c_finish_time DATETIME,
     c_ctime DATETIME,

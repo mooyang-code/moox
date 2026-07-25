@@ -32,13 +32,10 @@ type Store interface {
 	MarkEnqueueFailed(ctx context.Context, spaceID, jobItemID string, message string) error
 	Get(ctx context.Context, spaceID, jobItemID string) (*State, error)
 	TryMarkRunning(ctx context.Context, req RunningRequest) (bool, RunningState, error)
-	MarkCanceled(ctx context.Context, spaceID, jobItemID, reason string) error
-	ClearCancelDirective(ctx context.Context, spaceID, jobItemID string, attemptNo int32) error
 	MarkReported(ctx context.Context, event ReportEvent) (*State, error)
 	MarkHistorySynced(ctx context.Context, spaceID, jobItemID string) error
 	List(ctx context.Context, req *pb.ListJobItemsReq) ([]*pb.JobItemDetail, *commonpb.PageResult, error)
 	ListAttempts(ctx context.Context, req *pb.ListJobItemAttemptsReq) ([]*pb.JobItemAttempt, error)
-	ListCancelDirectives(ctx context.Context, spaceID, nodeID string, limit int) ([]*pb.ControlDirective, error)
 }
 
 type KVStore struct {
@@ -242,43 +239,13 @@ func (s *KVStore) TryMarkRunning(ctx context.Context, req RunningRequest) (bool,
 	return true, running, nil
 }
 
-func (s *KVStore) MarkCanceled(ctx context.Context, spaceID, jobItemID, reason string) error {
-	_, _, err := s.withStateCAS(ctx, JobKey(spaceID, jobItemID), func(state State) (State, bool, error) {
-		if state.Status == StatusSuccess || state.Status == StatusFailed {
-			return state, false, nil
-		}
-		state.Status = StatusCanceled
-		state.CancelReason = strings.TrimSpace(reason)
-		if state.CancelReason == "" {
-			state.CancelReason = "canceled"
-		}
-		if state.AttemptNo == 0 {
-			now := s.now()
-			state.FinishedAt = &now
-		}
-		return state, true, nil
-	})
-	return err
-}
-
-func (s *KVStore) ClearCancelDirective(ctx context.Context, spaceID, jobItemID string, attemptNo int32) error {
-	_, _, err := s.withStateCAS(ctx, JobKey(spaceID, jobItemID), func(state State) (State, bool, error) {
-		if state.AttemptNo != int(attemptNo) || state.CancelReason == "" {
-			return state, false, nil
-		}
-		state.CancelReason = ""
-		return state, true, nil
-	})
-	return err
-}
-
 func (s *KVStore) MarkReported(ctx context.Context, event ReportEvent) (*State, error) {
 	now := event.Time
 	if now.IsZero() {
 		now = s.now()
 	}
 	updated, _, err := s.withStateCAS(ctx, JobKey(event.SpaceID, event.JobItemID), func(state State) (State, bool, error) {
-		if state.Status != StatusRunning && !(state.Status == StatusCanceled && event.Status == StatusCanceled) {
+		if state.Status != StatusRunning {
 			return state, false, ErrInactive
 		}
 		if state.RunningNode != strings.TrimSpace(event.NodeID) || state.AttemptNo != int(event.AttemptNo) {
@@ -301,14 +268,6 @@ func (s *KVStore) MarkReported(ctx context.Context, event ReportEvent) (*State, 
 			attempt.Status = AttemptSuccess
 			state.Status = StatusSuccess
 			state.ResultSummary = event.ResultSummary
-			state.FinishedAt = &now
-			state.clearRunning()
-		case StatusCanceled:
-			attempt.Status = AttemptCanceled
-			state.Status = StatusCanceled
-			if state.CancelReason == "" {
-				state.CancelReason = firstNonEmpty(event.ErrorMessage, "canceled")
-			}
 			state.FinishedAt = &now
 			state.clearRunning()
 		case StatusFailed:
@@ -405,50 +364,6 @@ func (s *KVStore) ListAttempts(ctx context.Context, req *pb.ListJobItemAttemptsR
 	out := make([]*pb.JobItemAttempt, 0, len(state.Attempts))
 	for _, attempt := range state.Attempts {
 		out = append(out, attempt.ToProto())
-	}
-	return out, nil
-}
-
-func (s *KVStore) ListCancelDirectives(_ context.Context, spaceID, nodeID string, limit int) ([]*pb.ControlDirective, error) {
-	if s == nil || s.kv == nil {
-		return nil, ErrInvalid
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	keys, err := s.kv.Keys()
-	if err != nil {
-		if errors.Is(err, jetstream.ErrKVNoKeys) {
-			return nil, nil
-		}
-		return nil, mapKVError(err)
-	}
-	prefix := SpacePrefix(spaceID)
-	out := make([]*pb.ControlDirective, 0)
-	for _, key := range keys {
-		if spaceID != "" && !strings.HasPrefix(key, prefix) {
-			continue
-		}
-		entry, err := s.kv.Get(key)
-		if err != nil {
-			continue
-		}
-		state, err := decodeState(entry.Value())
-		if err != nil {
-			continue
-		}
-		if state.Status != StatusCanceled || state.RunningNode != nodeID || state.AttemptNo <= 0 || state.CancelReason == "" {
-			continue
-		}
-		out = append(out, &pb.ControlDirective{
-			Type:      pb.ControlDirectiveType_CONTROL_DIRECTIVE_CANCEL,
-			JobItemId: state.JobItemID,
-			AttemptNo: int32(state.AttemptNo),
-			Reason:    state.CancelReason,
-		})
-		if len(out) >= limit {
-			break
-		}
 	}
 	return out, nil
 }

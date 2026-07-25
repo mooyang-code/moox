@@ -92,39 +92,6 @@ func TestKVStoreRetryableFailureReturnsPending(t *testing.T) {
 	}
 }
 
-func TestKVStoreCancelDirectiveForRunningNode(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	_, err := store.CreatePending(ctx, testJobItem(t, "crypto", "ji-cancel"), QueueMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ok, _, err := store.TryMarkRunning(ctx, RunningRequest{SpaceID: "crypto", JobItemID: "ji-cancel", NodeID: "node-1", AckSubject: "ack"})
-	if err != nil || !ok {
-		t.Fatalf("TryMarkRunning ok=%v err=%v", ok, err)
-	}
-	if err := store.MarkCanceled(ctx, "crypto", "ji-cancel", "operator cancel"); err != nil {
-		t.Fatalf("MarkCanceled error = %v", err)
-	}
-	directives, err := store.ListCancelDirectives(ctx, "crypto", "node-1", 20)
-	if err != nil {
-		t.Fatalf("ListCancelDirectives error = %v", err)
-	}
-	if len(directives) != 1 || directives[0].GetJobItemId() != "ji-cancel" || directives[0].GetAttemptNo() != 1 {
-		t.Fatalf("directives = %+v", directives)
-	}
-	if err := store.ClearCancelDirective(ctx, "crypto", "ji-cancel", 1); err != nil {
-		t.Fatalf("ClearCancelDirective error = %v", err)
-	}
-	directives, err = store.ListCancelDirectives(ctx, "crypto", "node-1", 20)
-	if err != nil {
-		t.Fatalf("ListCancelDirectives after clear error = %v", err)
-	}
-	if len(directives) != 0 {
-		t.Fatalf("directives after clear = %+v", directives)
-	}
-}
-
 func TestKVStoreListAndListAttempts(t *testing.T) {
 	ctx := context.Background()
 	store := newTestKVStore(t, 48*time.Hour)

@@ -37,7 +37,6 @@ func TestStatusAndErrorKindHelpers(t *testing.T) {
 	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_PENDING, statusToPB(StatusPending))
 	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_RUNNING, statusToPB(StatusRunning))
 	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_FAILED, statusToPB(StatusFailed))
-	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_CANCELED, statusToPB(StatusCanceled))
 	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED, statusToPB(StatusEnqueueFailed))
 	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_UNSPECIFIED, statusToPB("x"))
 
@@ -54,7 +53,6 @@ func TestStatusAndErrorKindHelpers(t *testing.T) {
 	assert.Equal(t, pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_RUNNING, attemptStatusToPB(AttemptRunning))
 	assert.Equal(t, pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_FAILED, attemptStatusToPB(AttemptFailed))
 	assert.Equal(t, pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_LOST, attemptStatusToPB(AttemptLost))
-	assert.Equal(t, pb.JobItemAttemptStatus_JOB_ITEM_ATTEMPT_STATUS_CANCELED, attemptStatusToPB(AttemptCanceled))
 
 	assert.Nil(t, timePtrToPB(nil))
 	assert.Nil(t, timeToPB(time.Time{}))
@@ -89,7 +87,6 @@ func TestStateAndAttemptConvertersCoverDefaults(t *testing.T) {
 func TestStatusErrorAndAttemptMappingsCoverAllBranches(t *testing.T) {
 	assert.Equal(t, pb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS, statusToPB(StatusSuccess))
 	assert.Equal(t, StatusFailed, StatusFromPB(pb.JobItemStatus_JOB_ITEM_STATUS_FAILED))
-	assert.Equal(t, StatusCanceled, StatusFromPB(pb.JobItemStatus_JOB_ITEM_STATUS_CANCELED))
 	assert.Equal(t, StatusEnqueueFailed, StatusFromPB(pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED))
 
 	assert.Equal(t, pb.JobItemErrorKind_JOB_ITEM_ERROR_KIND_UNSPECIFIED, errorKindToPB("unknown"))

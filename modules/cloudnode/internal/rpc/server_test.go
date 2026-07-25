@@ -121,10 +121,6 @@ func (f *fakeJobStateStore) Get(context.Context, string, string) (*jobstate.Stat
 func (f *fakeJobStateStore) TryMarkRunning(context.Context, jobstate.RunningRequest) (bool, jobstate.RunningState, error) {
 	return false, jobstate.RunningState{}, nil
 }
-func (f *fakeJobStateStore) MarkCanceled(context.Context, string, string, string) error { return nil }
-func (f *fakeJobStateStore) ClearCancelDirective(context.Context, string, string, int32) error {
-	return nil
-}
 func (f *fakeJobStateStore) MarkReported(context.Context, jobstate.ReportEvent) (*jobstate.State, error) {
 	return nil, nil
 }
@@ -135,24 +131,8 @@ func (f *fakeJobStateStore) List(context.Context, *pb.ListJobItemsReq) ([]*pb.Jo
 func (f *fakeJobStateStore) ListAttempts(context.Context, *pb.ListJobItemAttemptsReq) ([]*pb.JobItemAttempt, error) {
 	return nil, nil
 }
-func (f *fakeJobStateStore) ListCancelDirectives(context.Context, string, string, int) ([]*pb.ControlDirective, error) {
-	return nil, nil
-}
-
-func TestCloudNodeProtoContractIncludesQueueDirectives(t *testing.T) {
+func TestCloudNodeProtoContractIncludesEnqueueFailure(t *testing.T) {
 	if pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED.Number() == 0 {
 		t.Fatalf("JOB_ITEM_STATUS_ENQUEUE_FAILED must be non-zero")
-	}
-	if pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_CANCELED.Number() == 0 {
-		t.Fatalf("JOB_ITEM_REPORT_STATUS_CANCELED must be non-zero")
-	}
-	rsp := &pb.ReportHeartbeatRsp{Directives: []*pb.ControlDirective{{
-		Type:      pb.ControlDirectiveType_CONTROL_DIRECTIVE_CANCEL,
-		JobItemId: "ji-1",
-		AttemptNo: 1,
-		Reason:    "test",
-	}}}
-	if len(rsp.GetDirectives()) != 1 || rsp.GetDirectives()[0].GetType() != pb.ControlDirectiveType_CONTROL_DIRECTIVE_CANCEL {
-		t.Fatalf("heartbeat directives not available: %+v", rsp)
 	}
 }

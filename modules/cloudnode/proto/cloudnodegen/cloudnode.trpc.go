@@ -63,8 +63,6 @@ type CloudNodeMgrService interface {
 
 	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error)
 
-	CancelJobItem(ctx context.Context, req *CancelJobItemReq) (*CancelJobItemRsp, error)
-
 	GetJobItem(ctx context.Context, req *GetJobItemReq) (*GetJobItemRsp, error)
 
 	ListJobItems(ctx context.Context, req *ListJobItemsReq) (*ListJobItemsRsp, error)
@@ -470,24 +468,6 @@ func CloudNodeMgrService_ReportJobItemStatus_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
-func CloudNodeMgrService_CancelJobItem_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CancelJobItemReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).CancelJobItem(ctx, reqbody.(*CancelJobItemReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func CloudNodeMgrService_GetJobItem_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetJobItemReq{}
 	filters, err := f(req)
@@ -654,10 +634,6 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_ReportJobItemStatus_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/CancelJobItem",
-			Func: CloudNodeMgrService_CancelJobItem_Handler,
-		},
-		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetJobItem",
 			Func: CloudNodeMgrService_GetJobItem_Handler,
 		},
@@ -753,9 +729,6 @@ func (s *UnimplementedCloudNodeMgr) PollJobItems(ctx context.Context, req *PollJ
 func (s *UnimplementedCloudNodeMgr) ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error) {
 	return nil, errors.New("rpc ReportJobItemStatus of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) CancelJobItem(ctx context.Context, req *CancelJobItemReq) (*CancelJobItemRsp, error) {
-	return nil, errors.New("rpc CancelJobItem of service CloudNodeMgr is not implemented")
-}
 func (s *UnimplementedCloudNodeMgr) GetJobItem(ctx context.Context, req *GetJobItemReq) (*GetJobItemRsp, error) {
 	return nil, errors.New("rpc GetJobItem of service CloudNodeMgr is not implemented")
 }
@@ -820,8 +793,6 @@ type CloudNodeMgrClientProxy interface {
 	PollJobItems(ctx context.Context, req *PollJobItemsReq, opts ...client.Option) (rsp *PollJobItemsRsp, err error)
 
 	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq, opts ...client.Option) (rsp *ReportJobItemStatusRsp, err error)
-
-	CancelJobItem(ctx context.Context, req *CancelJobItemReq, opts ...client.Option) (rsp *CancelJobItemRsp, err error)
 
 	GetJobItem(ctx context.Context, req *GetJobItemReq, opts ...client.Option) (rsp *GetJobItemRsp, err error)
 
@@ -1275,26 +1246,6 @@ func (c *CloudNodeMgrClientProxyImpl) ReportJobItemStatus(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReportJobItemStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) CancelJobItem(ctx context.Context, req *CancelJobItemReq, opts ...client.Option) (*CancelJobItemRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/CancelJobItem")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("CancelJobItem")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CancelJobItemRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

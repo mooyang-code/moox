@@ -178,10 +178,6 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 		}
 		return &pb.ReportHeartbeatRsp{RetInfo: retOK()}, nil
 	}
-	directives, err := s.heartbeatDirectives(ctx, spaceID, req.GetNodeId())
-	if err != nil {
-		log.WarnContextf(ctx, "[CloudNode] heartbeat directives query failed: %v", err)
-	}
 	if req.GetNodeId() != "" {
 		supported, _ := json.Marshal(req.GetSupportedWorkloads())
 		metadata, _ := json.Marshal(req.GetMetadata().AsMap())
@@ -189,14 +185,7 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 			log.WarnContextf(ctx, "[CloudNode] heartbeat upsert node failed: %v", err)
 		}
 	}
-	return &pb.ReportHeartbeatRsp{RetInfo: retOK(), Directives: directives}, nil
-}
-
-func (s *Service) heartbeatDirectives(ctx context.Context, spaceID string, nodeID string) ([]*pb.ControlDirective, error) {
-	if s.jobState != nil {
-		return s.jobState.ListCancelDirectives(ctx, spaceID, nodeID, 20)
-	}
-	return nil, nil
+	return &pb.ReportHeartbeatRsp{RetInfo: retOK()}, nil
 }
 
 func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {

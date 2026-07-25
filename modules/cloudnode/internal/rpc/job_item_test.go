@@ -234,68 +234,6 @@ func TestJobItemRPCUsesActiveKVAndWritesHistory(t *testing.T) {
 	}
 }
 
-func TestCanceledRunningJobItemReportTerminatesQueueMessageWithActiveKV(t *testing.T) {
-	ctx := context.Background()
-	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
-	if err != nil {
-		t.Fatalf("KeyValue() error = %v", err)
-	}
-	stateStore := jobstate.NewKVStore(kv, jobstate.Options{
-		RecoverAfterMillis: int64(time.Minute / time.Millisecond),
-		DefaultMaxAttempts: 3,
-	})
-	params, _ := structpb.NewStruct(map[string]any{"symbol": "BTCUSDT"})
-	if _, err := stateStore.CreatePending(ctx, &pb.JobItem{
-		SpaceId:       "crypto",
-		JobId:         "job-1",
-		JobItemId:     "ji-kv-cancel-report",
-		JobType:       "collect.kline",
-		CodePackageId: "collector-scf",
-		Params:        params,
-	}, jobstate.QueueMeta{}); err != nil {
-		t.Fatalf("CreatePending() error = %v", err)
-	}
-	if ok, _, err := stateStore.TryMarkRunning(ctx, jobstate.RunningRequest{
-		SpaceID:    "crypto",
-		JobItemID:  "ji-kv-cancel-report",
-		NodeID:     "node-1",
-		AckSubject: "$JS.ACK.cancel-report",
-		StreamSeq:  1,
-	}); err != nil || !ok {
-		t.Fatalf("TryMarkRunning() ok=%v err=%v", ok, err)
-	}
-	if err := stateStore.MarkCanceled(ctx, "crypto", "ji-kv-cancel-report", "user canceled"); err != nil {
-		t.Fatalf("MarkCanceled() error = %v", err)
-	}
-	queue := &recordingExecutionQueue{}
-	svc := &Service{jobState: stateStore, executionQueue: queue}
-
-	rsp, err := svc.ReportJobItemStatus(ctx, &pb.ReportJobItemStatusReq{
-		SpaceId:   "crypto",
-		NodeId:    "node-1",
-		JobItemId: "ji-kv-cancel-report",
-		AttemptNo: 1,
-		Status:    pb.JobItemReportStatus_JOB_ITEM_REPORT_STATUS_SUCCESS,
-	})
-	if err != nil {
-		t.Fatalf("ReportJobItemStatus transport error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("rsp = %+v", rsp)
-	}
-	if queue.termed != "$JS.ACK.cancel-report" {
-		t.Fatalf("termed ack subject = %q", queue.termed)
-	}
-	directives, err := stateStore.ListCancelDirectives(ctx, "crypto", "node-1", 20)
-	if err != nil {
-		t.Fatalf("ListCancelDirectives() error = %v", err)
-	}
-	if len(directives) != 0 {
-		t.Fatalf("directives after late report = %+v, want none", directives)
-	}
-}
-
 func TestSubmitJobItemsRetriesEnqueueFailedActiveKVItem(t *testing.T) {
 	ctx := context.Background()
 	rt, _ := startRPCQueueRuntime(t)
@@ -444,60 +382,6 @@ func TestPollJobItemsTerminatesAndArchivesWhenMaxAttemptsExhausted(t *testing.T)
 		t.Fatalf("state = %+v", state)
 	}
 	assertHistoryItemCount(t, historyDir, state.UpdatedAt, "crypto", "ji-max-attempt", 1)
-}
-
-func TestCancelJobItemWritesTerminalHistory(t *testing.T) {
-	ctx := context.Background()
-	rt, _ := startRPCQueueRuntime(t)
-	kv, err := rt.Client().KeyValue(config.Default().JobItem.ActiveKVBucket)
-	if err != nil {
-		t.Fatalf("KeyValue() error = %v", err)
-	}
-	stateStore := jobstate.NewKVStore(kv, jobstate.Options{
-		RecoverAfterMillis: int64(time.Minute / time.Millisecond),
-		DefaultMaxAttempts: 3,
-	})
-	params, _ := structpb.NewStruct(map[string]any{"symbol": "BTCUSDT"})
-	if _, err := stateStore.CreatePending(ctx, &pb.JobItem{
-		SpaceId:       "crypto",
-		JobId:         "job-1",
-		JobItemId:     "ji-cancel-history",
-		JobType:       "collect.kline",
-		CodePackageId: "collector-scf",
-		Params:        params,
-	}, jobstate.QueueMeta{}); err != nil {
-		t.Fatalf("CreatePending() error = %v", err)
-	}
-	if ok, _, err := stateStore.TryMarkRunning(ctx, jobstate.RunningRequest{
-		SpaceID:    "crypto",
-		JobItemID:  "ji-cancel-history",
-		NodeID:     "node-1",
-		AckSubject: "$JS.ACK.cancel-history",
-		StreamSeq:  1,
-	}); err != nil || !ok {
-		t.Fatalf("TryMarkRunning() ok=%v err=%v", ok, err)
-	}
-	historyDir := t.TempDir()
-	svc := &Service{
-		jobState: stateStore,
-		history:  jobhistory.NewStore(jobhistory.StoreOptions{Dir: historyDir, RetentionDays: 2}),
-	}
-
-	rsp, err := svc.CancelJobItem(ctx, &pb.CancelJobItemReq{SpaceId: "crypto", JobItemId: "ji-cancel-history"})
-	if err != nil {
-		t.Fatalf("CancelJobItem transport error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("cancel rsp = %+v", rsp)
-	}
-	state, err := stateStore.Get(ctx, "crypto", "ji-cancel-history")
-	if err != nil {
-		t.Fatalf("state Get() error = %v", err)
-	}
-	if state.Status != jobstate.StatusCanceled || !state.HistorySynced {
-		t.Fatalf("state = %+v", state)
-	}
-	assertHistoryItemCount(t, historyDir, state.UpdatedAt, "crypto", "ji-cancel-history", 1)
 }
 
 func TestSubmitJobItemsRejectsInvalidItemWithoutActiveKVSideEffect(t *testing.T) {

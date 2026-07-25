@@ -40,11 +40,6 @@ func TestParseServerResponse_RejectsMalformedJSON(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestHandleControlDirective_DoesNotPanic(t *testing.T) {
-	handleControlDirective(ControlDirective{Type: 2, JobItemID: "j1", AttemptNo: 1, Reason: "stop"})
-	handleControlDirective(ControlDirective{Type: 99})
-}
-
 func TestBuildProbeResponse_WithNodeInfo(t *testing.T) {
 	runtimeapp.UpdateNodeInfo("node-test", "v1")
 	t.Cleanup(func() { runtimeapp.UpdateNodeInfo("", "") })
