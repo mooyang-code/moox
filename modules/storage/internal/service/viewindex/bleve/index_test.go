@@ -91,7 +91,7 @@ func TestBleveSubstringLikeAndMapping(t *testing.T) {
 				{FieldId: "score", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 0.8}}},
 			},
 		}},
-		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.Replace,
+		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
 	}); err != nil {
 		t.Fatal(err)
 	}

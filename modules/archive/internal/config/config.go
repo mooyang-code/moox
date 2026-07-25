@@ -40,11 +40,13 @@ type SourceConfig struct {
 type EventBusConfig struct {
 	URLs            []string      `yaml:"urls"`
 	CredentialFile  string        `yaml:"credential_file"`
-	Consumer        string        `yaml:"consumer"`
+	Consumer        string        `yaml:"-"`
 	FetchBatch      int           `yaml:"fetch_batch"`
 	FetchMaxWait    time.Duration `yaml:"fetch_max_wait"`
 	DedupeRetention time.Duration `yaml:"dedupe_retention"`
 }
+
+const ArchiveConsumer = "moox_archive_kline_v1"
 
 type MaterializeConfig struct {
 	PendingRows     int           `yaml:"pending_rows"`
@@ -87,7 +89,7 @@ func Default() *Config {
 			},
 			EventBus: EventBusConfig{
 				URLs:     []string{"nats://127.0.0.1:4222"},
-				Consumer: "moox_archive_kline_v1", FetchBatch: 128, FetchMaxWait: time.Second,
+				Consumer: ArchiveConsumer, FetchBatch: 128, FetchMaxWait: time.Second,
 				DedupeRetention: 168 * time.Hour,
 			},
 			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},

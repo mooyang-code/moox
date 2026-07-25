@@ -72,7 +72,7 @@ func TestAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 			t.Fatalf("app config still contains %q", oldKey)
 		}
 	}
-	for _, required := range []string{"consumer: moox_archive_kline_v1", "fetch_max_wait: 1s"} {
+	for _, required := range []string{"fetch_max_wait: 1s"} {
 		if !strings.Contains(string(raw), required) {
 			t.Fatalf("app config does not contain %q", required)
 		}

@@ -157,9 +157,6 @@ func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, 
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 	}
-	if fresh && wakeup != nil {
-		wakeup.Wake()
-	}
 	if fresh {
 		s.Wake()
 	}

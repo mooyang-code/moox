@@ -18,36 +18,19 @@ import (
 type runtimeTestStore struct {
 	mu        sync.Mutex
 	row       domain.OutboxMessage
-	claimed   bool
 	published bool
 }
 
-func (s *runtimeTestStore) ListPendingOutbox(context.Context, int, time.Time) ([]domain.OutboxMessage, error) {
+func (s *runtimeTestStore) ListPendingOutbox(context.Context, int) ([]domain.OutboxMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.published || s.claimed || s.row.MessageID == "" {
+	if s.published || s.row.MessageID == "" {
 		return nil, nil
 	}
 	return []domain.OutboxMessage{s.row}, nil
 }
-func (s *runtimeTestStore) ClaimOutbox(context.Context, string, string, time.Time, time.Duration) (bool, error) {
+func (s *runtimeTestStore) DeleteOutbox(context.Context, string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.claimed || s.published {
-		return false, nil
-	}
-	s.claimed = true
-	return true, nil
-}
-func (s *runtimeTestStore) ReleaseOutbox(context.Context, string, string) error {
-	s.mu.Lock()
-	s.claimed = false
-	s.mu.Unlock()
-	return nil
-}
-func (s *runtimeTestStore) MarkOutboxPublished(context.Context, string, string) error {
-	s.mu.Lock()
-	s.claimed = false
 	s.published = true
 	s.mu.Unlock()
 	return nil

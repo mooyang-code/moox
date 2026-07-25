@@ -104,9 +104,6 @@ storage:
     service_name: trpc.moox.storage.DataNode
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    consumer: storage_view
-    max_ack_pending: 8
-    ack_wait_ms: 120000
   view:
     storage_rpc:
       gateway_target: ip://127.0.0.1:11003

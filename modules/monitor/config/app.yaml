@@ -39,11 +39,8 @@ metrics:
   eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml
   host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml
   pipeline_config_path: ../config/monitor-pipelines.yaml
-  consumer: monitor_metrics_ingest_v1
   fetch_batch_size: 64
   fetch_max_wait: 1s
-  ack_wait: 60s
-  max_ack_pending: 256
   no_data_intervals: 2
   storage:
     gateway_target: ip://127.0.0.1:11003

@@ -179,8 +179,9 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 	switch b.GetWriteMode() {
 	case "BACKFILL":
 		mode = viewindex.Backfill
-	case "REPLACE":
-		mode = viewindex.Replace
+	case "LIVE_WRITE":
+	default:
+		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("unsupported write mode %q", b.GetWriteMode()))}, nil
 	}
 	if mode == viewindex.LiveWrite {
 		if err := s.acquireLiveDelivery(ctx, nil); err != nil {

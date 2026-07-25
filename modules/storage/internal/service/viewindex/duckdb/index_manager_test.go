@@ -49,13 +49,13 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 
 func TestDuckTypeMapping(t *testing.T) {
 	cases := map[pb.FieldValueType]string{
-		pb.FieldValueType_FIELD_VALUE_TYPE_INT:    "BIGINT",
-		pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE: "DOUBLE",
-		pb.FieldValueType_FIELD_VALUE_TYPE_BOOL:   "BOOLEAN",
-		pb.FieldValueType_FIELD_VALUE_TYPE_TIME:   "TIMESTAMP",
-		pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:  "BLOB",
-		pb.FieldValueType_FIELD_VALUE_TYPE_JSON:   "JSON",
-		pb.FieldValueType_FIELD_VALUE_TYPE_STRING: "VARCHAR",
+		pb.FieldValueType_FIELD_VALUE_TYPE_INT:         "BIGINT",
+		pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE:      "DOUBLE",
+		pb.FieldValueType_FIELD_VALUE_TYPE_BOOL:        "BOOLEAN",
+		pb.FieldValueType_FIELD_VALUE_TYPE_TIME:        "TIMESTAMP",
+		pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:       "BLOB",
+		pb.FieldValueType_FIELD_VALUE_TYPE_JSON:        "JSON",
+		pb.FieldValueType_FIELD_VALUE_TYPE_STRING:      "VARCHAR",
 		pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED: "VARCHAR",
 	}
 	for valueType, want := range cases {
@@ -143,7 +143,7 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 	write := func(mode viewindex.WriteMode, fields []*pb.FieldValue) {
 		t.Helper()
 		if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
-			RowWrites: []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: fields}},
+			RowWrites:    []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: fields}},
 			ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: mode,
 		}); err != nil {
 			t.Fatal(err)
@@ -172,7 +172,7 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 		t.Fatalf("live write should overwrite omitted columns to null: %v", rows[0].GetFields())
 	}
 	// Seed again, then Backfill only fills missing.
-	write(viewindex.Replace, []*pb.FieldValue{
+	write(viewindex.LiveWrite, []*pb.FieldValue{
 		{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}},
 		{FieldId: "symbol", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "btc"}}},
 	})

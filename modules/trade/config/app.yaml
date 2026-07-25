@@ -46,4 +46,3 @@ eventbus:
   enabled: true
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ~/.config/moox/eventbus/trade-eventbus.yaml
-  rebalance_consumer: trade_rebalance_v1

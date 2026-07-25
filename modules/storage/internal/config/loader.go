@@ -48,10 +48,16 @@ type StorageDevices struct {
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
 	CredentialFile string `yaml:"credential_file"`
-	Consumer       string `yaml:"consumer"`
-	MaxAckPending  int    `yaml:"max_ack_pending"`
-	AckWaitMS      int    `yaml:"ack_wait_ms"`
+	Consumer       string `yaml:"-"`
+	MaxAckPending  int    `yaml:"-"`
+	AckWaitMS      int    `yaml:"-"`
 }
+
+const (
+	StorageViewConsumer      = "storage_view"
+	StorageViewMaxAckPending = 8
+	StorageViewAckWaitMS     = 120000
+)
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
@@ -222,13 +228,13 @@ func (c *StorageConfig) ApplyDefaults() {
 		cleanup.MaxBatchesPerRun = 10
 	}
 	if c.EventBus.Consumer == "" {
-		c.EventBus.Consumer = "storage_view"
+		c.EventBus.Consumer = StorageViewConsumer
 	}
 	if c.EventBus.MaxAckPending == 0 {
-		c.EventBus.MaxAckPending = 8
+		c.EventBus.MaxAckPending = StorageViewMaxAckPending
 	}
 	if c.EventBus.AckWaitMS == 0 {
-		c.EventBus.AckWaitMS = 120000
+		c.EventBus.AckWaitMS = StorageViewAckWaitMS
 	}
 	if c.Primary.Outbox.FlushBatchSize <= 0 {
 		c.Primary.Outbox.FlushBatchSize = 100

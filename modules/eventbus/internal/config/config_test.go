@@ -27,21 +27,21 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 	cfg := loadRepositoryConfig(t)
 	require.Len(t, cfg.Streams, 4)
 	require.Len(t, cfg.KV, 1)
-	want := map[string]bool{
-		"MOOX_CLOUDNODE_EXEC": false,
-		"MOOX_METRICS":        false,
-		"MOOX_STORAGE":        false,
-		"MOOX_TRADE":          false,
+	want := map[string]string{
+		"MOOX_CLOUDNODE_EXEC": "work_queue",
+		"MOOX_METRICS":        "limits",
+		"MOOX_STORAGE":        "limits",
+		"MOOX_TRADE":          "work_queue",
 	}
 	for _, stream := range cfg.Streams {
-		if _, ok := want[stream.Name]; !ok {
+		retention, ok := want[stream.Name]
+		if !ok {
 			t.Fatalf("unexpected stream %q", stream.Name)
 		}
-		want[stream.Name] = true
+		assert.Equal(t, retention, stream.Retention, stream.Name)
+		delete(want, stream.Name)
 	}
-	for name, found := range want {
-		assert.True(t, found, "missing stream %s", name)
-	}
+	assert.Empty(t, want, "missing streams")
 }
 
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {

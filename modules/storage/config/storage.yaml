@@ -10,9 +10,6 @@ storage:
     view_index_root: ./var/storage/view-indexes
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    consumer: storage_view
-    max_ack_pending: 8
-    ack_wait_ms: 120000
   primary:
     service_name: ""
     node_id: storage-node-0

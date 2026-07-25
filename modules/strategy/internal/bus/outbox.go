@@ -3,9 +3,7 @@ package bus
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -16,21 +14,17 @@ type Publisher interface {
 }
 
 type OutboxStore interface {
-	ListPendingOutbox(context.Context, int, time.Time) ([]domain.OutboxMessage, error)
-	ClaimOutbox(context.Context, string, string, time.Time, time.Duration) (bool, error)
-	ReleaseOutbox(context.Context, string, string) error
-	MarkOutboxPublished(context.Context, string, string) error
+	ListPendingOutbox(context.Context, int) ([]domain.OutboxMessage, error)
+	DeleteOutbox(context.Context, string) error
 }
 
 type Relay struct {
-	Store      OutboxStore
-	Publisher  Publisher
-	Lease      time.Duration
-	Now        func() time.Time
-	lastErrMu  sync.RWMutex
-	lastErr    error
-	tokenIndex atomic.Uint64
-	mu         sync.Mutex
+	Store     OutboxStore
+	Publisher Publisher
+	Now       func() time.Time
+	lastErrMu sync.RWMutex
+	lastErr   error
+	mu        sync.Mutex
 }
 
 func (r *Relay) PublishPending(ctx context.Context, limit int) error {
@@ -42,27 +36,16 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	now := r.now()
-	rows, err := r.Store.ListPendingOutbox(ctx, limit, now)
+	rows, err := r.Store.ListPendingOutbox(ctx, limit)
 	if err != nil {
 		return r.recordError(err)
 	}
 	for _, row := range rows {
-		token := fmt.Sprintf("strategy-relay-%d-%d", now.UnixNano(), r.tokenIndex.Add(1))
-		claimed, claimErr := r.Store.ClaimOutbox(ctx, row.MessageID, token, now, r.lease())
-		if claimErr != nil {
-			return r.recordError(claimErr)
-		}
-		if !claimed {
-			continue
-		}
 		if publishErr := r.Publisher.Publish(ctx, row); publishErr != nil {
-			releaseErr := r.Store.ReleaseOutbox(ctx, row.MessageID, token)
-			return r.recordError(errors.Join(publishErr, releaseErr))
+			return r.recordError(publishErr)
 		}
-		if markErr := r.Store.MarkOutboxPublished(ctx, row.MessageID, token); markErr != nil {
-			releaseErr := r.Store.ReleaseOutbox(ctx, row.MessageID, token)
-			return r.recordError(errors.Join(markErr, releaseErr))
+		if deleteErr := r.Store.DeleteOutbox(ctx, row.MessageID); deleteErr != nil {
+			return r.recordError(deleteErr)
 		}
 	}
 	r.recordError(nil)
@@ -102,13 +85,6 @@ func (r *Relay) now() time.Time {
 		return r.Now().UTC()
 	}
 	return time.Now().UTC()
-}
-
-func (r *Relay) lease() time.Duration {
-	if r.Lease > 0 {
-		return r.Lease
-	}
-	return 30 * time.Second
 }
 
 func (r *Relay) recordError(err error) error {

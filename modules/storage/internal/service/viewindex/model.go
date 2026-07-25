@@ -25,15 +25,12 @@ type WriteMode uint8
 const (
 	LiveWrite WriteMode = iota + 1
 	Backfill
-	Replace
 )
 
 func (m WriteMode) String() string {
 	switch m {
 	case Backfill:
 		return "BACKFILL"
-	case Replace:
-		return "REPLACE"
 	default:
 		return "LIVE_WRITE"
 	}

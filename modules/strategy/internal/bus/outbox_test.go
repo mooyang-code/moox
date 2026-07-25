@@ -33,11 +33,9 @@ func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`CREATE TABLE t_strategy_outbox (
-		c_message_id TEXT PRIMARY KEY,
+		c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		c_message_id TEXT NOT NULL UNIQUE,
 		c_event_data BLOB NOT NULL,
-		c_published INTEGER NOT NULL DEFAULT 0,
-		c_claimed_until DATETIME,
-		c_claim_token TEXT NOT NULL DEFAULT '',
 		c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`).Error; err != nil {
 		t.Fatal(err)
@@ -58,12 +56,12 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 	if len(publisher.rows) != 1 || publisher.rows[0].MessageID != "run-1" || len(publisher.rows[0].EventData) == 0 {
 		t.Fatalf("published rows=%+v", publisher.rows)
 	}
-	var published int
-	if err := db.Table("t_strategy_outbox").Select("c_published").Where("c_message_id=?", "run-1").Scan(&published).Error; err != nil {
+	var count int64
+	if err := db.Table("t_strategy_outbox").Where("c_message_id=?", "run-1").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if published != 1 {
-		t.Fatalf("published=%d", published)
+	if count != 0 {
+		t.Fatalf("remaining=%d", count)
 	}
 }
 
@@ -78,12 +76,12 @@ func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
 	if err := relay.PublishPending(context.Background(), 1); !errors.Is(err, want) {
 		t.Fatalf("error=%v", err)
 	}
-	var claimToken string
-	if err := db.Table("t_strategy_outbox").Select("c_claim_token").Where("c_message_id=?", "run-1").Scan(&claimToken).Error; err != nil {
+	var count int64
+	if err := db.Table("t_strategy_outbox").Where("c_message_id=?", "run-1").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if claimToken != "" {
-		t.Fatalf("claim token was not released: %q", claimToken)
+	if count != 1 {
+		t.Fatalf("failed row was removed")
 	}
 	publisher.err = nil
 	if err := relay.PublishPending(context.Background(), 1); err != nil {

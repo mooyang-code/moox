@@ -90,8 +90,10 @@ type EventBusConfig struct {
 	Enabled           bool     `yaml:"enabled"`
 	URLs              []string `yaml:"urls"`
 	CredentialFile    string   `yaml:"credential_file"`
-	RebalanceConsumer string   `yaml:"rebalance_consumer"`
+	RebalanceConsumer string   `yaml:"-"`
 }
+
+const RebalanceConsumer = "trade_rebalance_v1"
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {
@@ -135,7 +137,7 @@ func DefaultConfig() *AppConfig {
 		Health: HealthConfig{
 			Addr: ":11210",
 		},
-		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, RebalanceConsumer: "trade_rebalance_v1"},
+		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, RebalanceConsumer: RebalanceConsumer},
 	}
 }
 

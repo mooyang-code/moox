@@ -102,27 +102,58 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(writes) == 0 {
 		return nil
 	}
-	needsRecovery := datasetID != schema.PrimaryDatasetID
-	if !needsRecovery {
-		needsRecovery, err = s.hasMissingRows(ctx, engine, id, writes)
+	complete, incomplete := partitionCompleteWrites(schema, writes)
+	if len(complete) > 0 {
+		missing, err := s.hasMissingRows(ctx, engine, id, complete)
 		if err != nil {
 			return err
 		}
+		if missing {
+			incomplete = append(incomplete, complete...)
+			complete = nil
+		}
 	}
-	if needsRecovery {
-		writes, err = s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, writes)
+	if len(incomplete) > 0 {
+		recovered, err := s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, incomplete)
 		if err != nil {
 			return err
 		}
-		if len(writes) == 0 {
-			return nil
+		complete = append(complete, recovered...)
+	}
+	if len(complete) == 0 {
+		return nil
+	}
+	return engine.Write(ctx, id, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
+}
+
+func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewindex.RowWrite) (complete, incomplete []viewindex.RowWrite) {
+	required := make(map[string]struct{}, len(schema.Columns))
+	for _, column := range schema.Columns {
+		if column != nil && column.GetColumnName() != "" {
+			required[column.GetColumnName()] = struct{}{}
 		}
 	}
-	mode := viewindex.LiveWrite
-	if needsRecovery {
-		mode = viewindex.Replace
+	for _, write := range writes {
+		present := make(map[string]struct{}, len(write.Fields))
+		for _, field := range write.Fields {
+			if field != nil {
+				present[field.GetFieldId()] = struct{}{}
+			}
+		}
+		isComplete := len(required) > 0
+		for name := range required {
+			if _, ok := present[name]; !ok {
+				isComplete = false
+				break
+			}
+		}
+		if isComplete {
+			complete = append(complete, write)
+		} else {
+			incomplete = append(incomplete, write)
+		}
 	}
-	return engine.Write(ctx, id, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: mode})
+	return complete, incomplete
 }
 
 func (s *Service) hasMissingRows(ctx context.Context, engine viewindex.Engine, id string, writes []viewindex.RowWrite) (bool, error) {

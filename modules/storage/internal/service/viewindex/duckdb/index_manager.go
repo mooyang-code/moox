@@ -162,7 +162,7 @@ func upsertSQL(names []string, mode viewindex.WriteMode) string {
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
 	sets := make([]string, 0, len(names)-3)
 	for _, name := range names[3:] {
-		// LiveWrite/Replace: full column overwrite. Backfill: fill only missing values.
+		// Live writes overwrite complete rows. Backfill only fills missing values.
 		set := fmt.Sprintf("%s = excluded.%s", quote(name), quote(name))
 		if mode == viewindex.Backfill {
 			set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
