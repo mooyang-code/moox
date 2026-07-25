@@ -75,6 +75,11 @@ tar -C data/eventbus -czf eventbus-jetstream-$(date +%Y%m%d%H%M%S).tar.gz jetstr
 认证/TLS 在 `config/app.yaml` 和目标机 service environment 中配置。远程部署脚本不把
 NATS 密码、credentials 或 TLS 私钥拼进 SSH 命令行。
 
+默认单机 loopback profile 使用 `nats://127.0.0.1`，不启用 Broker auth/TLS，也不生成
+EventBus role 文件。设置 `MOOX_EVENTBUS_ENABLE_TLS=1` 时，部署流程才 ensure/export
+十一类最小权限凭据和私有 CA。非 loopback NATS URL 仍必须使用 TLS、CA 和认证；不得
+通过合并角色绕过 ACL。
+
 ## 验证
 
 ```bash

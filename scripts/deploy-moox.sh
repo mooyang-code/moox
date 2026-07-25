@@ -1463,7 +1463,14 @@ start_eventbus() {
     exit 2
   fi
   local credential_dir="${HOME}/.config/moox/eventbus"
-  if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -f "${credential_dir}/users.yaml" ]]; then
+  if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+    for required in \
+      users.yaml internal-admin.yaml ca.pem server.pem server-key.pem; do
+      if [[ ! -r "${credential_dir}/${required}" ]]; then
+        echo "missing EventBus TLS credential: ${credential_dir}/${required}" >&2
+        exit 1
+      fi
+    done
     perl -0pi -e 's#enabled:\s*false\n    username:#enabled: true\n    username:#; s#users_file:\s*""#users_file: "'"${credential_dir}"'/users.yaml"#; s#enabled:\s*false\n    cert_file:#enabled: true\n    cert_file:#; s#cert_file:\s*""#cert_file: "'"${credential_dir}"'/server.pem"#; s#key_file:\s*""#key_file: "'"${credential_dir}"'/server-key.pem"#; s#ca_file:\s*""#ca_file: "'"${credential_dir}"'/ca.pem"#' \
       "${ROOT}/eventbus/config/app.yaml"
     perl -0pi -e 's#credential_file:\s*""#credential_file: "'"${credential_dir}"'/internal-admin.yaml"#; s#tls_ca_file:\s*""#tls_ca_file: "'"${credential_dir}"'/ca.pem"#' \
@@ -1577,10 +1584,21 @@ start_admin() {
         exit 1
     }
   fi
-  if [[ "${WITH_EVENTBUS}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
+  if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
     mkdir -p "${HOME}/.config/moox/eventbus"
-    "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential provisioning failed" >&2; exit 1; }
-    "${ROOT}/bin/moox-admin-cli" eventbus-credentials export --db-path "${ROOT}/data/admin.db" --encryption-key-file "${encryption_key_file}" --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" --output-dir "${HOME}/.config/moox/eventbus" >> "${ROOT}/logs/admin/stdout.log" 2>&1 || { echo "EventBus credential export failed" >&2; exit 1; }
+    "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
+      --db-path "${ROOT}/data/admin.db" \
+      --encryption-key-file "${encryption_key_file}" \
+      --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" \
+      >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
+      { echo "EventBus credential provisioning failed" >&2; exit 1; }
+    "${ROOT}/bin/moox-admin-cli" eventbus-credentials export \
+      --db-path "${ROOT}/data/admin.db" \
+      --encryption-key-file "${encryption_key_file}" \
+      --public-ip "${MOOX_EVENTBUS_PUBLIC_IP:-}" \
+      --output-dir "${HOME}/.config/moox/eventbus" \
+      >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
+      { echo "EventBus credential export failed" >&2; exit 1; }
   fi
   gateway_service_env_for admin-gateway
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"

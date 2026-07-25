@@ -991,7 +991,7 @@ git commit -m "refactor(factor): simplify fixed-window event batching"
 - Modify: `scripts/test-deploy-moox-eventbus.sh`
 - Modify: `docs/运维/MooX-EventBus运维.md`
 
-- [ ] **Step 1: 写静态部署契约检查并确认失败**
+- [x] **Step 1: 写静态部署契约检查并确认失败**
 
 在 `scripts/test-deploy-moox-eventbus.sh` 增加：
 
@@ -1010,7 +1010,7 @@ bash scripts/test-deploy-moox-eventbus.sh
 
 Expected: FAIL，因为当前 `start_admin` 仅按 `WITH_EVENTBUS` 判断。
 
-- [ ] **Step 2: 只在 TLS profile 下 provision/export**
+- [x] **Step 2: 只在 TLS profile 下 provision/export**
 
 把生成脚本中 `start_admin` 的条件改为单行条件，供部署契约测试精确检查：
 
@@ -1035,7 +1035,7 @@ fi
 
 不修改 `eventBusRoles`、`eventBusKeys`、`usersYAML`、CA 生成、rotate 或远程配置校验。
 
-- [ ] **Step 3: TLS profile 缺少文件时 fail closed**
+- [x] **Step 3: TLS profile 缺少文件时 fail closed**
 
 把 `start_eventbus` 中当前的：
 
@@ -1063,7 +1063,7 @@ fi
 
 两个 `perl` 命令保留现有完整替换表达式，不修改生成配置的 auth/TLS 字段。这样显式执行 `./start.sh eventbus` 时不会因为凭据尚未生成而静默降级到明文。
 
-- [ ] **Step 4: 更新运维边界**
+- [x] **Step 4: 更新运维边界**
 
 在 `docs/运维/MooX-EventBus运维.md` 的“容量与安全”写清：
 
@@ -1074,7 +1074,7 @@ ensure/export 十一类最小权限凭据和私有 CA。非 loopback NATS URL �
 TLS、CA 和认证；不得通过合并角色绕过 ACL。
 ```
 
-- [ ] **Step 5: 运行部署和 Admin 凭据测试**
+- [x] **Step 5: 运行部署和 Admin 凭据测试**
 
 Run:
 
@@ -1087,7 +1087,7 @@ bash scripts/test-deploy-moox-storage-profile.sh
 
 Expected: 全部 PASS；TLS storage profile 仍写入 credential file；Admin 测试仍验证十一类角色和 ACL。
 
-- [ ] **Step 6: 提交部署收敛**
+- [x] **Step 6: 提交部署收敛**
 
 ```bash
 git add scripts/deploy-moox.sh \

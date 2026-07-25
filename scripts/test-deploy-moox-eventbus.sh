@@ -26,6 +26,10 @@ grep -q 'moox-admin-cli.*random-secret.*--bytes 32' "${ROOT}/scripts/deploy-moox
 grep -q 'MOOX_HEALTH_AUTH_SECRET_KEY' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'sign_health_request' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_SERVICE_GATEWAY_CA_FILE' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq \
+  '[[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]' \
+  "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'missing EventBus TLS credential' "${ROOT}/scripts/deploy-moox.sh"
 for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
   grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
   grep -q "dataset_id: ${dataset}.*status: disabled" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
