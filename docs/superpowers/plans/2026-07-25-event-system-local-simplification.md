@@ -1285,7 +1285,7 @@ git commit -m "test(events): verify local simplification boundaries"
 
 若 Step 1-6 后工作树已经干净，不创建空提交。
 
-- [ ] **Step 8: 推送和远端证明**
+- [x] **Step 8: 推送和远端证明**
 
 Run:
 
