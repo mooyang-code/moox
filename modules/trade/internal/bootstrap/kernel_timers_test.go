@@ -38,7 +38,7 @@ func TestTradeKernelTimerConfig(t *testing.T) {
 		network string
 		timeout int
 	}{
-		tradeFillReconcileTimerService: {11213, "*/5 * * * * *?startAtOnce=1", 5000},
+		tradeFillReconcileTimerService: {11213, "*/30 * * * * *?startAtOnce=1", 30000},
 		tradeOrderRecoveryTimerService: {11214, "*/15 * * * * *?startAtOnce=1", 15000},
 	}
 	for _, service := range cfg.Server.Services {

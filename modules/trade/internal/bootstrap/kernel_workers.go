@@ -12,6 +12,7 @@ import (
 	rebalanceapp "github.com/mooyang-code/moox/modules/trade/internal/application/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/reconciliation"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
@@ -25,12 +26,47 @@ import (
 func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store.Store, e *command.Engine) error {
 	wakeup := newKernelWakeup()
 	s.SetWakeup(wakeup.Wake)
+	e.ApplyPaperFill = func(fillCtx context.Context, order store.OrderRecord) error {
+		quantity, err := shared.ParseDecimal(order.Quantity)
+		if err != nil {
+			return err
+		}
+		price, err := shared.ParseDecimal(order.Price)
+		if err != nil {
+			return err
+		}
+		fillID := "paper:" + order.OrderID
+		_, err = (consumer.FillHandler{Store: s}).HandleSource(
+			fillCtx, order.SpaceID, order.AccountID, order.OrderID, fillID,
+			exchange.FillEvent{
+				ExchangeTradeID: fillID,
+				ExchangeOrderID: order.ExchangeOrderID,
+				ClientOrderID:   order.ClientOrderID,
+				Symbol:          order.Symbol,
+				Side:            order.Side,
+				BaseAsset:       order.BaseAsset,
+				QuoteAsset:      order.QuoteAsset,
+				Quantity:        quantity,
+				Price:           price,
+				Fee:             shared.Zero(),
+				TradedAt:        time.Now().UnixMilli(),
+			},
+			"paper",
+		)
+		return err
+	}
 	go runTradeStateWorker(ctx, s, e, wakeup)
 	go runPrivateStreamSupervisor(ctx, s, e, wakeup)
 	if !cfg.Enabled {
 		return nil
 	}
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(cfg.URLs, "moox-trade"))
+	clientCfg := jetstream.ConfigFromEnv(cfg.URLs, "moox-trade")
+	if cfg.CredentialFile != "" {
+		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
+			return err
+		}
+	}
+	client, err := jetstream.Connect(ctx, clientCfg)
 	if err != nil {
 		return err
 	}
@@ -102,7 +138,14 @@ func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, 
 	if !ok || request.GetRequestId() != message.GetEventId() || request.GetExecutionBindingId() != message.GetSubjectId() {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: envelope identity mismatch", rebalanceapp.ErrInvalidRequest)}
 	}
-	planner := rebalanceapp.RequestPlanner{Resolver: tradeSnapshotResolver{store: s, engine: e, spaceID: message.GetSpaceId(), channelID: request.GetChannelId()}}
+	processed, err := s.HasInbox(ctx, consumerName, message.GetEventId())
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	}
+	if processed {
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	}
+	planner := rebalanceapp.RequestPlanner{Resolver: tradeSnapshotResolver{store: s, engine: e}}
 	input, err := planner.Build(ctx, message.GetSpaceId(), request)
 	if err != nil {
 		if rebalanceapp.IsPermanentRequestError(err) {
@@ -116,6 +159,9 @@ func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, 
 	}
 	if fresh && wakeup != nil {
 		wakeup.Wake()
+	}
+	if fresh {
+		s.Wake()
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
@@ -156,6 +202,9 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 			}
 			expected := map[string]bool{}
 			for _, row := range orders {
+				if row.ExecutionMode == "paper" {
+					continue
+				}
 				expected[row.SpaceID+":"+row.ChannelID] = true
 			}
 			telemetry.SetPrivateExpected(expected)
@@ -169,6 +218,9 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 			}
 			mu.Unlock()
 			for _, row := range orders {
+				if row.ExecutionMode == "paper" {
+					continue
+				}
 				key := row.SpaceID + ":" + row.ChannelID
 				mu.Lock()
 				if _, exists := active[key]; exists {
@@ -255,6 +307,18 @@ func recoverOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine) e
 		for _, saga := range sagas {
 			if _, err := e.ResumeReplace(ctx, saga.SpaceID, saga.SagaID); err != nil {
 				errs = append(errs, err)
+			}
+		}
+	}
+	openOrders, err := s.ListOpenOrders(ctx, 500)
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, current := range openOrders {
+			if current.ExecutionMode == "paper" {
+				if settleErr := e.SettlePaper(ctx, current); settleErr != nil {
+					errs = append(errs, fmt.Errorf("settle paper order %s: %w", current.OrderID, settleErr))
+				}
 			}
 		}
 	}

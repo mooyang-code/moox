@@ -96,6 +96,29 @@ func TestNewConsumerRejectsImmutableConflict(t *testing.T) {
 	}
 }
 
+func TestNewConsumerRejectsDurableOwnedByAnotherStream(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	ensureTestStream(t, client, "OTHER", "moox.other.>")
+	cfg := testConsumerConfig("shared-name")
+	first, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	cfg.Stream = "OTHER"
+	cfg.FilterSubject = "moox.other.>"
+	if _, err := client.NewConsumer(context.Background(), cfg); !errors.Is(err, ErrConsumerConfigConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	if _, err := client.js.ConsumerInfo("OTHER", cfg.Durable); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("consumer unexpectedly created in OTHER: %v", err)
+	}
+}
+
 func TestNewConsumerDoesNotDeleteConflictingConsumer(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()

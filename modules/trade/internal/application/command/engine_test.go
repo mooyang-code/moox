@@ -248,6 +248,71 @@ func TestEngine_Submit_WithStubAdapter_ShouldAcknowledge(t *testing.T) {
 	assert.Equal(t, "ex-1", submitted.ExchangeOrderID)
 }
 
+func TestEngine_SubmitPaperNeverCallsExchange(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	defer s.Close()
+	seedUSDTBalance(t, s, "space-1", "acct-1")
+
+	adapter := &uniqueExchangeIDAdapter{}
+	filled := false
+	engine := &Engine{
+		Store: s, Adapter: adapter,
+		ApplyPaperFill: func(_ context.Context, current store.OrderRecord) error {
+			filled = true
+			assert.Equal(t, "paper", current.ExecutionMode)
+			assert.Equal(t, "paper-order-1", current.ExchangeOrderID)
+			return nil
+		},
+	}
+	_, err = engine.Place(context.Background(), PlaceInput{
+		SpaceID: "space-1", OrderID: "order-1", ClientOrderID: "client-1",
+		AccountID: "acct-1", ChannelID: "chan-1", Symbol: "BTC-USDT",
+		MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT", ExecutionMode: "paper",
+		Side: "BUY", Quantity: "1", Price: "100",
+	})
+	require.NoError(t, err)
+	submitted, err := engine.Submit(context.Background(), "space-1", "order-1", "")
+	require.NoError(t, err)
+	assert.Equal(t, string(order.Open), submitted.State)
+	assert.True(t, filled)
+	assert.Zero(t, adapter.placeCount)
+}
+
+func TestEngine_RecoverSubmittingPaperNeverCallsExchange(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	defer s.Close()
+	seedUSDTBalance(t, s, "space-1", "acct-1")
+
+	adapter := &uniqueExchangeIDAdapter{}
+	filled := false
+	engine := &Engine{
+		Store: s, Adapter: adapter,
+		ApplyPaperFill: func(context.Context, store.OrderRecord) error {
+			filled = true
+			return nil
+		},
+	}
+	placed, err := engine.Place(context.Background(), PlaceInput{
+		SpaceID: "space-1", OrderID: "order-recover", ClientOrderID: "client-recover",
+		AccountID: "acct-1", ChannelID: "chan-1", Symbol: "BTC-USDT",
+		MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT", ExecutionMode: "paper",
+		Side: "BUY", Quantity: "1", Price: "100",
+	})
+	require.NoError(t, err)
+	placed.State = string(order.Submitting)
+	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateOrder(placed, placed.Version)
+	}))
+
+	recovered, err := engine.RecoverSubmitting(context.Background(), "space-1", placed.OrderID)
+	require.NoError(t, err)
+	assert.Equal(t, string(order.Open), recovered.State)
+	assert.True(t, filled)
+	assert.Zero(t, adapter.placeCount)
+}
+
 func TestEngine_Submit_RejectedByAdapter_ShouldRejectOrder(t *testing.T) {
 	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)

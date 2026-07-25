@@ -32,8 +32,8 @@ type SagaRecord struct {
 	Version                                                                       uint64
 }
 type RebalanceRunRecord struct {
-	SpaceID, RunID, AccountID, ChannelID, IdempotencyKey, MarketSnapshotID, PositionSnapshotID, RulesVersion, AlgorithmName, AlgorithmVersion, Status, Residual string
-	Version                                                                                                                                                     uint64
+	SpaceID, RunID, AccountID, ChannelID, ExecutionMode, IdempotencyKey, MarketSnapshotID, PositionSnapshotID, RulesVersion, AlgorithmName, AlgorithmVersion, Status, Residual string
+	Version                                                                                                                                                                    uint64
 }
 type RebalanceLegRecord struct {
 	SpaceID, RunID, LegID, Symbol, MarketType, BaseAsset, QuoteAsset, Side, Action, Quantity, Price, PlanID, Status string
@@ -186,14 +186,14 @@ func indexByte(s string, b byte) int {
 }
 
 type OrderRecord struct {
-	SpaceID, OrderID, ClientOrderID, AccountID, ChannelID, Symbol, MarketType, BaseAsset, QuoteAsset, Side, Quantity, Price, FilledQuantity, State, ExchangeOrderID, ReservedAsset, ReservedAmount, ConsumedReserved string
-	ReduceOnly                                                                                                                                                                                                       bool
-	Version                                                                                                                                                                                                          uint64
+	SpaceID, OrderID, ClientOrderID, AccountID, ChannelID, Symbol, MarketType, BaseAsset, QuoteAsset, ExecutionMode, Side, Quantity, Price, FilledQuantity, State, ExchangeOrderID, ReservedAsset, ReservedAmount, ConsumedReserved string
+	ReduceOnly                                                                                                                                                                                                                      bool
+	Version                                                                                                                                                                                                                         uint64
 }
 
 func (*OrderRecord) TableName() string { return "t_trade_order_aggregates" }
 func (t *Tx) CreateOrder(v *OrderRecord) error {
-	r := map[string]any{"c_space_id": v.SpaceID, "c_order_id": v.OrderID, "c_client_order_id": v.ClientOrderID, "c_account_id": v.AccountID, "c_channel_id": v.ChannelID, "c_symbol": v.Symbol, "c_market_type": v.MarketType, "c_base_asset": v.BaseAsset, "c_quote_asset": v.QuoteAsset, "c_side": v.Side, "c_quantity": v.Quantity, "c_price": v.Price, "c_reduce_only": v.ReduceOnly, "c_reserved_asset": v.ReservedAsset, "c_reserved_amount": v.ReservedAmount, "c_consumed_reserved": v.ConsumedReserved, "c_filled_quantity": v.FilledQuantity, "c_state": v.State, "c_exchange_order_id": v.ExchangeOrderID, "c_version": v.Version}
+	r := map[string]any{"c_space_id": v.SpaceID, "c_order_id": v.OrderID, "c_client_order_id": v.ClientOrderID, "c_account_id": v.AccountID, "c_channel_id": v.ChannelID, "c_symbol": v.Symbol, "c_market_type": v.MarketType, "c_base_asset": v.BaseAsset, "c_quote_asset": v.QuoteAsset, "c_execution_mode": v.ExecutionMode, "c_side": v.Side, "c_quantity": v.Quantity, "c_price": v.Price, "c_reduce_only": v.ReduceOnly, "c_reserved_asset": v.ReservedAsset, "c_reserved_amount": v.ReservedAmount, "c_consumed_reserved": v.ConsumedReserved, "c_filled_quantity": v.FilledQuantity, "c_state": v.State, "c_exchange_order_id": v.ExchangeOrderID, "c_version": v.Version}
 	if e := t.db.Table("t_trade_order_aggregates").Create(r).Error; e != nil {
 		return ErrConflict
 	}
@@ -315,6 +315,7 @@ func getOrder(db *gorm.DB, column, space, id string) (OrderRecord, error) {
 		MarketType       string `gorm:"column:c_market_type"`
 		BaseAsset        string `gorm:"column:c_base_asset"`
 		QuoteAsset       string `gorm:"column:c_quote_asset"`
+		ExecutionMode    string `gorm:"column:c_execution_mode"`
 		Side             string `gorm:"column:c_side"`
 		Quantity         string `gorm:"column:c_quantity"`
 		Price            string `gorm:"column:c_price"`
@@ -328,7 +329,7 @@ func getOrder(db *gorm.DB, column, space, id string) (OrderRecord, error) {
 		Version          uint64 `gorm:"column:c_version"`
 	}
 	e := db.Table("t_trade_order_aggregates").Where("c_space_id=? AND "+column+"=?", space, id).Take(&r).Error
-	return OrderRecord{SpaceID: r.SpaceID, OrderID: r.OrderID, ClientOrderID: r.ClientOrderID, AccountID: r.AccountID, ChannelID: r.ChannelID, Symbol: r.Symbol, MarketType: r.MarketType, BaseAsset: r.BaseAsset, QuoteAsset: r.QuoteAsset, Side: r.Side, Quantity: r.Quantity, Price: r.Price, ReduceOnly: r.ReduceOnly, ReservedAsset: r.ReservedAsset, ReservedAmount: r.ReservedAmount, ConsumedReserved: r.ConsumedReserved, FilledQuantity: r.FilledQuantity, State: r.State, ExchangeOrderID: r.ExchangeOrderID, Version: r.Version}, e
+	return OrderRecord{SpaceID: r.SpaceID, OrderID: r.OrderID, ClientOrderID: r.ClientOrderID, AccountID: r.AccountID, ChannelID: r.ChannelID, Symbol: r.Symbol, MarketType: r.MarketType, BaseAsset: r.BaseAsset, QuoteAsset: r.QuoteAsset, ExecutionMode: r.ExecutionMode, Side: r.Side, Quantity: r.Quantity, Price: r.Price, ReduceOnly: r.ReduceOnly, ReservedAsset: r.ReservedAsset, ReservedAmount: r.ReservedAmount, ConsumedReserved: r.ConsumedReserved, FilledQuantity: r.FilledQuantity, State: r.State, ExchangeOrderID: r.ExchangeOrderID, Version: r.Version}, e
 }
 func (s *Store) ListOrders(ctx context.Context, space, account, channel, symbol string, openOnly bool) ([]OrderRecord, error) {
 	query := "SELECT c_order_id FROM t_trade_order_aggregates WHERE c_space_id=?"
@@ -554,33 +555,6 @@ func (s *Store) ListPositions(ctx context.Context, space, account, symbol string
 	return out, e
 }
 
-func (s *Store) CurrentPositionQuantity(ctx context.Context, space, account, symbol string) (string, error) {
-	rows, err := s.ListPositions(ctx, space, account, symbol)
-	if err != nil {
-		return "", err
-	}
-	if len(rows) == 0 {
-		return "0", nil
-	}
-	return rows[0].Quantity, nil
-}
-
-func (s *Store) LatestTradePrice(ctx context.Context, space, symbol string) (string, error) {
-	var price string
-	err := s.db.WithContext(ctx).Raw(`
-SELECT c_price FROM (
-  SELECT c_price, c_ctime FROM t_trade_fill_events WHERE c_space_id=? AND c_symbol=?
-  UNION ALL
-  SELECT c_price, c_mtime AS c_ctime FROM t_trade_order_aggregates WHERE c_space_id=? AND c_symbol=?
-) ORDER BY c_ctime DESC LIMIT 1`, space, symbol, space, symbol).Scan(&price).Error
-	if err != nil {
-		return "", err
-	}
-	if price == "" {
-		return "", gorm.ErrRecordNotFound
-	}
-	return price, nil
-}
 func (s *Store) ListFills(ctx context.Context, space, orderID string) ([]FillRecord, error) {
 	rows, _, err := s.ListFillsPage(ctx, space, FillQuery{OrderID: orderID, Limit: 1000})
 	return rows, err
@@ -658,6 +632,16 @@ func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bo
 	err := s.Transaction(ctx, func(tx *Tx) error { var e error; fresh, e = tx.InsertInbox(consumer, id, topic); return e })
 	return fresh, err
 }
+
+func (s *Store) HasInbox(ctx context.Context, consumer, id string) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Raw(
+		"SELECT COUNT(1) FROM t_trade_inbox WHERE c_consumer=? AND c_message_id=?",
+		consumer, id,
+	).Scan(&count).Error
+	return count > 0, err
+}
+
 func (t *Tx) CreateSaga(s SagaRecord) error {
 	return t.db.Exec("INSERT INTO t_trade_sagas(c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error) VALUES(?,?,?,?,?,?,?,?,?)", s.SpaceID, s.SagaID, s.Type, s.State, s.OrderID, s.ReplacementOrderID, s.Payload, s.Version, s.LastError).Error
 }
@@ -721,7 +705,7 @@ func (t *Tx) UpdateSaga(s SagaRecord, expected uint64) error {
 	return nil
 }
 func (t *Tx) CreateRebalance(run RebalanceRunRecord, legs []RebalanceLegRecord) error {
-	if err := t.db.Exec("INSERT INTO t_rebalance_runs(c_space_id,c_run_id,c_account_id,c_channel_id,c_idempotency_key,c_market_snapshot_id,c_position_snapshot_id,c_rules_version,c_algorithm_name,c_algorithm_version,c_status,c_version,c_residual) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", run.SpaceID, run.RunID, run.AccountID, run.ChannelID, run.IdempotencyKey, run.MarketSnapshotID, run.PositionSnapshotID, run.RulesVersion, run.AlgorithmName, run.AlgorithmVersion, run.Status, run.Version, run.Residual).Error; err != nil {
+	if err := t.db.Exec("INSERT INTO t_rebalance_runs(c_space_id,c_run_id,c_account_id,c_channel_id,c_execution_mode,c_idempotency_key,c_market_snapshot_id,c_position_snapshot_id,c_rules_version,c_algorithm_name,c_algorithm_version,c_status,c_version,c_residual) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", run.SpaceID, run.RunID, run.AccountID, run.ChannelID, run.ExecutionMode, run.IdempotencyKey, run.MarketSnapshotID, run.PositionSnapshotID, run.RulesVersion, run.AlgorithmName, run.AlgorithmVersion, run.Status, run.Version, run.Residual).Error; err != nil {
 		return err
 	}
 	for _, l := range legs {
@@ -732,20 +716,40 @@ func (t *Tx) CreateRebalance(run RebalanceRunRecord, legs []RebalanceLegRecord) 
 	}
 	return nil
 }
+
+func (s *Store) GetRebalanceRun(ctx context.Context, space, runID string) (RebalanceRunRecord, error) {
+	var row struct {
+		SpaceID       string `gorm:"column:c_space_id"`
+		RunID         string `gorm:"column:c_run_id"`
+		AccountID     string `gorm:"column:c_account_id"`
+		ChannelID     string `gorm:"column:c_channel_id"`
+		ExecutionMode string `gorm:"column:c_execution_mode"`
+	}
+	err := s.db.WithContext(ctx).Raw(
+		"SELECT c_space_id,c_run_id,c_account_id,c_channel_id,c_execution_mode FROM t_rebalance_runs WHERE c_space_id=? AND c_run_id=?",
+		space, runID,
+	).Take(&row).Error
+	return RebalanceRunRecord{
+		SpaceID: row.SpaceID, RunID: row.RunID, AccountID: row.AccountID,
+		ChannelID: row.ChannelID, ExecutionMode: row.ExecutionMode,
+	}, err
+}
+
 func (s *Store) ListActiveRebalanceRuns(ctx context.Context, limit int) ([]RebalanceRunRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	var rows []struct {
-		SpaceID   string `gorm:"column:c_space_id"`
-		RunID     string `gorm:"column:c_run_id"`
-		AccountID string `gorm:"column:c_account_id"`
-		ChannelID string `gorm:"column:c_channel_id"`
+		SpaceID       string `gorm:"column:c_space_id"`
+		RunID         string `gorm:"column:c_run_id"`
+		AccountID     string `gorm:"column:c_account_id"`
+		ChannelID     string `gorm:"column:c_channel_id"`
+		ExecutionMode string `gorm:"column:c_execution_mode"`
 	}
-	e := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_run_id,c_account_id,c_channel_id FROM t_rebalance_runs WHERE c_status IN ('PLANNED','EXECUTING') ORDER BY c_mtime LIMIT ?", limit).Scan(&rows).Error
+	e := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_run_id,c_account_id,c_channel_id,c_execution_mode FROM t_rebalance_runs WHERE c_status IN ('PLANNED','EXECUTING') ORDER BY c_mtime LIMIT ?", limit).Scan(&rows).Error
 	out := make([]RebalanceRunRecord, len(rows))
 	for i, r := range rows {
-		out[i] = RebalanceRunRecord{SpaceID: r.SpaceID, RunID: r.RunID, AccountID: r.AccountID, ChannelID: r.ChannelID}
+		out[i] = RebalanceRunRecord{SpaceID: r.SpaceID, RunID: r.RunID, AccountID: r.AccountID, ChannelID: r.ChannelID, ExecutionMode: r.ExecutionMode}
 	}
 	return out, e
 }

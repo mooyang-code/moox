@@ -15,6 +15,7 @@ import (
 type Market struct{ MarketType, BaseAsset, QuoteAsset, Price string }
 type CreateInput struct {
 	SpaceID, RunID, IdempotencyKey, AccountID, ChannelID, MarketSnapshotID, PositionSnapshotID, RulesVersion string
+	ExecutionMode                                                                                            string
 	Mode                                                                                                     domain.TargetMode
 	Targets                                                                                                  []domain.Target
 	Currents                                                                                                 []domain.Current
@@ -56,6 +57,12 @@ func buildCreateRecords(in CreateInput) (store.RebalanceRunRecord, []store.Rebal
 	if in.RunID == "" || in.IdempotencyKey == "" || in.MarketSnapshotID == "" || in.PositionSnapshotID == "" {
 		return store.RebalanceRunRecord{}, nil, errors.New("trade: incomplete rebalance snapshots")
 	}
+	if in.ExecutionMode == "" {
+		in.ExecutionMode = "live"
+	}
+	if in.ExecutionMode != "paper" && in.ExecutionMode != "live" {
+		return store.RebalanceRunRecord{}, nil, errors.New("trade: invalid execution mode")
+	}
 	legs, err := (domain.Planner{}).BuildMode(in.Mode, in.Targets, in.Currents)
 	if err != nil {
 		return store.RebalanceRunRecord{}, nil, err
@@ -68,10 +75,24 @@ func buildCreateRecords(in CreateInput) (store.RebalanceRunRecord, []store.Rebal
 		}
 		records[i] = store.RebalanceLegRecord{SpaceID: in.SpaceID, RunID: in.RunID, LegID: fmt.Sprintf("%s-%d", in.RunID, l.Sequence), Symbol: l.Symbol, MarketType: m.MarketType, BaseAsset: m.BaseAsset, QuoteAsset: m.QuoteAsset, Side: l.Side, Action: string(l.Action), Quantity: l.Quantity.String(), Price: m.Price, ReduceOnly: l.ReduceOnly, Sequence: l.Sequence, DependsOn: l.DependsOn, Status: "PLANNED"}
 	}
-	run := store.RebalanceRunRecord{SpaceID: in.SpaceID, RunID: in.RunID, AccountID: in.AccountID, ChannelID: in.ChannelID, IdempotencyKey: in.IdempotencyKey, MarketSnapshotID: in.MarketSnapshotID, PositionSnapshotID: in.PositionSnapshotID, RulesVersion: in.RulesVersion, AlgorithmName: "target_position", AlgorithmVersion: "1", Status: "PLANNED", Residual: "{}", Version: 1}
+	run := store.RebalanceRunRecord{SpaceID: in.SpaceID, RunID: in.RunID, AccountID: in.AccountID, ChannelID: in.ChannelID, ExecutionMode: in.ExecutionMode, IdempotencyKey: in.IdempotencyKey, MarketSnapshotID: in.MarketSnapshotID, PositionSnapshotID: in.PositionSnapshotID, RulesVersion: in.RulesVersion, AlgorithmName: "target_position", AlgorithmVersion: "1", Status: "PLANNED", Residual: "{}", Version: 1}
 	return run, records, nil
 }
 func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID string) (string, error) {
+	run, err := s.Store.GetRebalanceRun(ctx, space, runID)
+	if err != nil {
+		return "", err
+	}
+	if (run.AccountID != "" && accountID != "" && accountID != run.AccountID) ||
+		(run.ChannelID != "" && channelID != "" && channelID != run.ChannelID) {
+		return "", errors.New("trade: rebalance identity mismatch")
+	}
+	if run.AccountID != "" {
+		accountID = run.AccountID
+	}
+	if run.ChannelID != "" {
+		channelID = run.ChannelID
+	}
 	legs, err := s.Store.ListRebalanceLegs(ctx, space, runID)
 	if err != nil {
 		return "", err
@@ -119,7 +140,7 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 			continue
 		}
 		orderID := l.LegID + "-order"
-		_, e := s.Engine.Place(ctx, command.PlaceInput{SpaceID: space, OrderID: orderID, ClientOrderID: orderID, AccountID: accountID, ChannelID: channelID, Symbol: l.Symbol, MarketType: l.MarketType, BaseAsset: l.BaseAsset, QuoteAsset: l.QuoteAsset, Side: l.Side, Quantity: l.Quantity, Price: l.Price, ReduceOnly: l.ReduceOnly})
+		_, e := s.Engine.Place(ctx, command.PlaceInput{SpaceID: space, OrderID: orderID, ClientOrderID: orderID, AccountID: accountID, ChannelID: channelID, Symbol: l.Symbol, MarketType: l.MarketType, BaseAsset: l.BaseAsset, QuoteAsset: l.QuoteAsset, ExecutionMode: run.ExecutionMode, Side: l.Side, Quantity: l.Quantity, Price: l.Price, ReduceOnly: l.ReduceOnly})
 		if e != nil {
 			return "", e
 		}

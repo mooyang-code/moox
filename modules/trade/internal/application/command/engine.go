@@ -15,13 +15,14 @@ import (
 )
 
 type Engine struct {
-	Store    *store.Store
-	Adapter  exchange.TradingAdapter
-	Resolver exchange.AdapterResolver
+	Store          *store.Store
+	Adapter        exchange.TradingAdapter
+	Resolver       exchange.AdapterResolver
+	ApplyPaperFill func(context.Context, store.OrderRecord) error
 }
 type PlaceInput struct {
-	SpaceID, OrderID, ClientOrderID, AccountID, ChannelID, Symbol, MarketType, BaseAsset, QuoteAsset, Side, Quantity, Price string
-	ReduceOnly                                                                                                              bool
+	SpaceID, OrderID, ClientOrderID, AccountID, ChannelID, Symbol, MarketType, BaseAsset, QuoteAsset, ExecutionMode, Side, Quantity, Price string
+	ReduceOnly                                                                                                                             bool
 }
 
 func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, error) {
@@ -46,7 +47,13 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 		telemetry.Commands.WithLabelValues("place", "rejected").Inc()
 		return store.OrderRecord{}, err
 	}
-	if e.Resolver != nil {
+	if in.ExecutionMode == "" {
+		in.ExecutionMode = "live"
+	}
+	if in.ExecutionMode != "live" && in.ExecutionMode != "paper" {
+		return store.OrderRecord{}, errors.New("trade: invalid execution mode")
+	}
+	if e.Resolver != nil && in.ExecutionMode == "live" {
 		a, resolveErr := e.Resolver.Resolve(ctx, in.SpaceID, in.ChannelID)
 		if resolveErr != nil {
 			return store.OrderRecord{}, resolveErr
@@ -134,11 +141,24 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 	if err != nil {
 		return r, err
 	}
-	adapter, err := e.adapter(ctx, r)
-	if err != nil {
-		return r, err
+	var result exchange.ExchangeOrderResult
+	var callErr error
+	if r.ExecutionMode == "paper" {
+		if e.ApplyPaperFill == nil {
+			return r, errors.New("trade: paper fill handler unavailable")
+		}
+		result = exchange.ExchangeOrderResult{
+			ExchangeOrderID: "paper-" + r.OrderID,
+			ClientOrderID:   r.ClientOrderID,
+			Status:          "OPEN",
+		}
+	} else {
+		adapter, adapterErr := e.adapter(ctx, r)
+		if adapterErr != nil {
+			return r, adapterErr
+		}
+		result, callErr = adapter.Place(ctx, exchange.PlaceRequest{ClientOrderID: r.ClientOrderID, Symbol: r.Symbol, Side: r.Side, Type: "LIMIT", TimeInForce: "IOC", Quantity: o.Quantity, Price: price, ReduceOnly: r.ReduceOnly})
 	}
-	result, callErr := adapter.Place(ctx, exchange.PlaceRequest{ClientOrderID: r.ClientOrderID, Symbol: r.Symbol, Side: r.Side, Type: "LIMIT", TimeInForce: "IOC", Quantity: o.Quantity, Price: price, ReduceOnly: r.ReduceOnly})
 	if callErr == nil {
 		telemetry.Submissions.WithLabelValues("acknowledged").Inc()
 	} else if exchange.IsCategory(callErr, exchange.ErrorTransportUncertain) {
@@ -177,7 +197,23 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 	if err == nil {
 		e.Store.Wake()
 	}
-	return latest, err
+	if err != nil {
+		return latest, err
+	}
+	if latest.ExecutionMode == "paper" {
+		return latest, e.SettlePaper(ctx, latest)
+	}
+	return latest, nil
+}
+
+func (e *Engine) SettlePaper(ctx context.Context, current store.OrderRecord) error {
+	if current.ExecutionMode != "paper" || current.State == string(order.Filled) {
+		return nil
+	}
+	if e.ApplyPaperFill == nil {
+		return errors.New("trade: paper fill handler unavailable")
+	}
+	return e.ApplyPaperFill(ctx, current)
 }
 
 func (e *Engine) ResolveUnknown(ctx context.Context, space, orderID string) (store.OrderRecord, error) {
@@ -187,6 +223,24 @@ func (e *Engine) ResolveUnknown(ctx context.Context, space, orderID string) (sto
 	}
 	if r.State != string(order.SubmitUnknown) {
 		return r, nil
+	}
+	if r.ExecutionMode == "paper" {
+		o, aggregateErr := aggregate(r)
+		if aggregateErr != nil {
+			return r, aggregateErr
+		}
+		expected := o.Version
+		if _, aggregateErr = o.Acknowledge(); aggregateErr != nil {
+			return r, aggregateErr
+		}
+		r = recordFrom(r, o)
+		r.ExchangeOrderID = "paper-" + r.OrderID
+		if aggregateErr = e.Store.Transaction(ctx, func(tx *store.Tx) error {
+			return tx.UpdateOrder(r, expected)
+		}); aggregateErr != nil {
+			return r, aggregateErr
+		}
+		return r, e.SettlePaper(ctx, r)
 	}
 	adapter, err := e.adapter(ctx, r)
 	if err != nil {
@@ -285,7 +339,7 @@ func aggregate(r store.OrderRecord) (*order.Order, error) {
 	return &order.Order{ID: shared.OrderID(r.OrderID), ClientOrderID: r.ClientOrderID, Quantity: q, FilledQuantity: f, State: order.State(r.State), Version: r.Version}, nil
 }
 func record(in PlaceInput, o *order.Order, exchangeID string) store.OrderRecord {
-	return store.OrderRecord{SpaceID: in.SpaceID, OrderID: in.OrderID, ClientOrderID: in.ClientOrderID, AccountID: in.AccountID, ChannelID: in.ChannelID, Symbol: in.Symbol, MarketType: in.MarketType, BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset, Side: in.Side, Quantity: o.Quantity.String(), Price: in.Price, ReduceOnly: in.ReduceOnly, FilledQuantity: o.FilledQuantity.String(), State: string(o.State), ExchangeOrderID: exchangeID, Version: o.Version}
+	return store.OrderRecord{SpaceID: in.SpaceID, OrderID: in.OrderID, ClientOrderID: in.ClientOrderID, AccountID: in.AccountID, ChannelID: in.ChannelID, Symbol: in.Symbol, MarketType: in.MarketType, BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset, ExecutionMode: in.ExecutionMode, Side: in.Side, Quantity: o.Quantity.String(), Price: in.Price, ReduceOnly: in.ReduceOnly, FilledQuantity: o.FilledQuantity.String(), State: string(o.State), ExchangeOrderID: exchangeID, Version: o.Version}
 }
 func recordFrom(r store.OrderRecord, o *order.Order) store.OrderRecord {
 	r.FilledQuantity = o.FilledQuantity.String()
@@ -304,4 +358,23 @@ func (e *Engine) adapter(ctx context.Context, r store.OrderRecord) (exchange.Tra
 }
 func (e *Engine) AdapterFor(ctx context.Context, r store.OrderRecord) (exchange.TradingAdapter, error) {
 	return e.adapter(ctx, r)
+}
+
+func (e *Engine) DescribeChannel(ctx context.Context, space, channelID string) (exchange.Channel, error) {
+	resolver, ok := e.Resolver.(exchange.ChannelResolver)
+	if !ok {
+		return exchange.Channel{}, errors.New("trade: channel metadata unavailable")
+	}
+	return resolver.DescribeChannel(ctx, space, channelID)
+}
+
+func (e *Engine) PublicAdapterFor(ctx context.Context, space, channelID string) (exchange.TradingAdapter, error) {
+	resolver, ok := e.Resolver.(exchange.ChannelResolver)
+	if !ok {
+		if e.Adapter == nil {
+			return nil, errors.New("trade: public exchange adapter unavailable")
+		}
+		return e.Adapter, nil
+	}
+	return resolver.ResolvePublic(ctx, space, channelID)
 }

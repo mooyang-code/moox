@@ -32,6 +32,9 @@ func (r Reconciler) Scope(ctx context.Context, scope Scope) (Result, error) {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		if current.ExecutionMode == "paper" {
+			continue
+		}
 		result.OrdersScanned++
 		adapter, err := r.Engine.AdapterFor(ctx, current)
 		if err != nil {

@@ -16,6 +16,7 @@ type Rules struct {
 	StepSize            shared.Decimal
 	MinQuantity         shared.Decimal
 	MinNotional         shared.Decimal
+	LastPrice           shared.Decimal
 	LeverageBrackets    []LeverageBracket
 	SupportsSTP         bool
 	SupportsNativeAmend bool

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
@@ -13,18 +14,32 @@ import (
 )
 
 type tradeSnapshotResolver struct {
-	store     *store.Store
-	engine    *command.Engine
-	spaceID   string
-	channelID string
+	store  *store.Store
+	engine *command.Engine
 }
 
-func (r tradeSnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, channelID string, target *tradeeventpb.RebalanceTarget) (rebalanceapp.Market, error) {
-	price, err := r.store.LatestTradePrice(ctx, spaceID, target.GetSymbol())
+func (r tradeSnapshotResolver) ResolveChannel(ctx context.Context, spaceID, accountID, channelID, mode string) (rebalanceapp.Channel, error) {
+	channel, err := r.engine.DescribeChannel(ctx, spaceID, channelID)
 	if err != nil {
-		return rebalanceapp.Market{}, err
+		return rebalanceapp.Channel{}, err
 	}
-	adapter, err := r.engine.AdapterFor(ctx, store.OrderRecord{SpaceID: spaceID, ChannelID: channelID, Symbol: target.GetSymbol()})
+	if channel.AccountID != accountID {
+		return rebalanceapp.Channel{}, fmt.Errorf("%w: channel does not belong to account", rebalanceapp.ErrInvalidRequest)
+	}
+	if mode == "paper" && !channel.IsSimulated {
+		return rebalanceapp.Channel{}, fmt.Errorf("%w: paper mode requires a simulated channel", rebalanceapp.ErrInvalidRequest)
+	}
+	if mode == "live" && channel.IsSimulated {
+		return rebalanceapp.Channel{}, fmt.Errorf("%w: live mode requires a real channel", rebalanceapp.ErrInvalidRequest)
+	}
+	if channel.MarketType != "spot" && channel.MarketType != "swap" {
+		return rebalanceapp.Channel{}, fmt.Errorf("%w: unsupported channel market_type %q", rebalanceapp.ErrInvalidRequest, channel.MarketType)
+	}
+	return rebalanceapp.Channel{MarketType: channel.MarketType}, nil
+}
+
+func (r tradeSnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, channelID, _ string, target *tradeeventpb.RebalanceTarget) (rebalanceapp.Market, error) {
+	adapter, err := r.engine.PublicAdapterFor(ctx, spaceID, channelID)
 	if err != nil {
 		return rebalanceapp.Market{}, err
 	}
@@ -32,23 +47,34 @@ func (r tradeSnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, 
 	if err != nil {
 		return rebalanceapp.Market{}, err
 	}
-	return rebalanceapp.Market{BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Price: price}, nil
+	if rules.LastPrice.Cmp(shared.Zero()) <= 0 {
+		return rebalanceapp.Market{}, errors.New("trade: instrument last price is unavailable")
+	}
+	return rebalanceapp.Market{BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Price: rules.LastPrice.String()}, nil
 }
 
-func (r tradeSnapshotResolver) ResolveCurrentQuantity(ctx context.Context, spaceID, accountID, symbol string) (shared.Decimal, error) {
-	raw, err := r.store.CurrentPositionQuantity(ctx, spaceID, accountID, symbol)
+func (r tradeSnapshotResolver) ResolveCurrentQuantities(ctx context.Context, spaceID, accountID string) (map[string]shared.Decimal, error) {
+	rows, err := r.store.ListPositions(ctx, spaceID, accountID, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]shared.Decimal, len(rows))
+	for _, row := range rows {
+		quantity, parseErr := shared.ParseDecimal(row.Quantity)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		out[row.Symbol] = quantity
+	}
+	return out, nil
+}
+
+func (r tradeSnapshotResolver) RoundQuantity(ctx context.Context, spaceID, channelID, _ string, symbol string, quantity shared.Decimal) (shared.Decimal, error) {
+	adapter, err := r.engine.PublicAdapterFor(ctx, spaceID, channelID)
 	if err != nil {
 		return shared.Decimal{}, err
 	}
-	return shared.ParseDecimal(raw)
-}
-
-func (r tradeSnapshotResolver) RoundQuantity(ctx context.Context, instrumentID string, quantity shared.Decimal) (shared.Decimal, error) {
-	adapter, err := r.engine.AdapterFor(ctx, store.OrderRecord{SpaceID: r.spaceID, ChannelID: r.channelID, Symbol: instrumentID})
-	if err != nil {
-		return shared.Decimal{}, err
-	}
-	rules, err := adapter.Rules(ctx, instrumentID)
+	rules, err := adapter.Rules(ctx, symbol)
 	if err != nil {
 		return shared.Decimal{}, err
 	}

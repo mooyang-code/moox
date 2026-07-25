@@ -74,3 +74,14 @@ type TradingAdapter interface {
 type AdapterResolver interface {
 	Resolve(context.Context, string, string) (TradingAdapter, error)
 }
+
+type Channel struct {
+	AccountID   string
+	MarketType  string
+	IsSimulated bool
+}
+
+type ChannelResolver interface {
+	DescribeChannel(context.Context, string, string) (Channel, error)
+	ResolvePublic(context.Context, string, string) (TradingAdapter, error)
+}

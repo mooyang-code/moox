@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func (w workerStubAdapter) QueryByClientOrderID(context.Context, string, string)
 func (w workerStubAdapter) Rules(context.Context, string) (instrument.Rules, error) {
 	return instrument.Rules{
 		BaseAsset: "BTC", QuoteAsset: "USDT",
-		StepSize: shared.MustDecimal("0.001"),
+		StepSize: shared.MustDecimal("0.001"), LastPrice: shared.MustDecimal("10"),
 	}, nil
 }
 func (w workerStubAdapter) ListFills(context.Context, string, string) ([]exchange.FillEvent, error) {
@@ -47,6 +48,24 @@ func (w workerStubAdapter) ListFills(context.Context, string, string) ([]exchang
 }
 func (w workerStubAdapter) SubscribePrivate(context.Context, exchange.PrivateEventHandler) error {
 	return nil
+}
+
+type workerResolver struct {
+	adapter exchange.TradingAdapter
+	channel exchange.Channel
+}
+
+func (r workerResolver) Resolve(context.Context, string, string) (exchange.TradingAdapter, error) {
+	return r.adapter, nil
+}
+func (r workerResolver) ResolvePublic(context.Context, string, string) (exchange.TradingAdapter, error) {
+	return r.adapter, nil
+}
+func (r workerResolver) DescribeChannel(context.Context, string, string) (exchange.Channel, error) {
+	if r.channel.MarketType == "" {
+		return exchange.Channel{AccountID: "acct", MarketType: "spot", IsSimulated: true}, nil
+	}
+	return r.channel, nil
 }
 
 func openWorkerStore(t *testing.T) *store.Store {
@@ -101,19 +120,13 @@ func TestHandleRebalanceDeliveryCreatesRunAndDeduplicates(t *testing.T) {
 	ctx := context.Background()
 	s := openWorkerStore(t)
 	seedBalance(t, s, "USDT", shared.MustDecimal("100"))
-	engine := &command.Engine{Store: s, Adapter: workerStubAdapter{}}
-	_, err := engine.Place(ctx, command.PlaceInput{
-		SpaceID: "space", OrderID: "price-source", ClientOrderID: "price-source",
-		AccountID: "acct", ChannelID: "chan", Symbol: "BTC-USDT", MarketType: "spot",
-		BaseAsset: "BTC", QuoteAsset: "USDT", Side: "BUY", Quantity: "1", Price: "10",
-	})
-	require.NoError(t, err)
+	engine := &command.Engine{Store: s, Resolver: workerResolver{adapter: workerStubAdapter{}}}
 
 	request := validRebalanceRequest()
 	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
 	first := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", newKernelWakeup())
 	assert.Equal(t, jetstream.ACK, first.Decision)
-	second := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", newKernelWakeup())
+	second := handleRebalanceDelivery(ctx, delivery, s, &command.Engine{Store: s}, "trade_rebalance_v1", newKernelWakeup())
 	assert.Equal(t, jetstream.ACK, second.Decision)
 
 	runs, err := s.ListActiveRebalanceRuns(ctx, 10)
@@ -123,6 +136,65 @@ func TestHandleRebalanceDeliveryCreatesRunAndDeduplicates(t *testing.T) {
 	var inboxCount int64
 	require.NoError(t, s.DBForTest().Table("t_trade_inbox").Count(&inboxCount).Error)
 	assert.Equal(t, int64(1), inboxCount)
+}
+
+func TestTradeSnapshotResolverRejectsModeChannelMismatch(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode    string
+		channel exchange.Channel
+	}{
+		"paper on real channel": {
+			mode: "paper", channel: exchange.Channel{AccountID: "acct", MarketType: "spot"},
+		},
+		"live on simulated channel": {
+			mode: "live", channel: exchange.Channel{AccountID: "acct", MarketType: "spot", IsSimulated: true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolver := tradeSnapshotResolver{engine: &command.Engine{
+				Resolver: workerResolver{adapter: workerStubAdapter{}, channel: tc.channel},
+			}}
+			_, err := resolver.ResolveChannel(context.Background(), "space", "acct", "chan", tc.mode)
+			require.Error(t, err)
+			assert.True(t, rebalanceapp.IsPermanentRequestError(err))
+		})
+	}
+}
+
+func TestPaperRebalanceFillsWithoutPriorTradeOrRealExchangeCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := openWorkerStore(t)
+	seedBalance(t, s, "USDT", shared.MustDecimal("100"))
+	adapter := &uniquePaperSafetyAdapter{}
+	engine := &command.Engine{Store: s, Resolver: workerResolver{adapter: adapter}}
+	require.NoError(t, startKernelWorkers(ctx, config.EventBusConfig{Enabled: false}, s, engine))
+
+	request := validRebalanceRequest()
+	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
+	result := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", nil)
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.NoError(t, result.Err)
+
+	require.Eventually(t, func() bool {
+		legs, err := s.ListRebalanceLegs(ctx, "space", request.GetRequestId())
+		if err != nil || len(legs) != 1 || legs[0].PlanID == "" {
+			return false
+		}
+		current, err := s.GetOrder(ctx, "space", legs[0].PlanID)
+		return err == nil && current.State == "FILLED"
+	}, 3*time.Second, 10*time.Millisecond)
+	assert.Zero(t, adapter.placeCalls)
+}
+
+type uniquePaperSafetyAdapter struct {
+	workerStubAdapter
+	placeCalls int
+}
+
+func (a *uniquePaperSafetyAdapter) Place(context.Context, exchange.PlaceRequest) (exchange.ExchangeOrderResult, error) {
+	a.placeCalls++
+	return exchange.ExchangeOrderResult{}, errors.New("real exchange must not be called for paper")
 }
 
 func TestHandleRebalanceDeliveryRejectsPermanentContractError(t *testing.T) {

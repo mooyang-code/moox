@@ -13,6 +13,7 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
+	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.47.0

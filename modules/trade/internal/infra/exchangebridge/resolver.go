@@ -38,6 +38,30 @@ func (r Resolver) Resolve(ctx context.Context, space, channelID string) (legacy.
 	return &bound{adapter: a, credential: legacy.Credential{APIKey: key.APIKey, APISecret: key.APISecret, Passphrase: key.Passphrase}, market: legacy.MarketType(ch.MarketType)}, nil
 }
 
+func (r Resolver) DescribeChannel(ctx context.Context, space, channelID string) (legacy.Channel, error) {
+	ch, err := r.Store.GetChannel(ctx, space, channelID)
+	if err != nil {
+		return legacy.Channel{}, err
+	}
+	return legacy.Channel{AccountID: ch.AccountID, MarketType: ch.MarketType, IsSimulated: ch.IsSimulated}, nil
+}
+
+func (r Resolver) ResolvePublic(ctx context.Context, space, channelID string) (legacy.TradingAdapter, error) {
+	ch, err := r.Store.GetChannel(ctx, space, channelID)
+	if err != nil {
+		return nil, err
+	}
+	factory := r.Factory
+	if factory == nil {
+		factory = legacy.New
+	}
+	adapter, err := factory(ch.Exchange)
+	if err != nil {
+		return nil, err
+	}
+	return &bound{adapter: adapter, market: legacy.MarketType(ch.MarketType)}, nil
+}
+
 type bound struct {
 	adapter    legacy.ExchangeAdapter
 	credential legacy.Credential
@@ -95,7 +119,14 @@ func (b *bound) Rules(ctx context.Context, symbol string) (instrument.Rules, err
 			if e != nil {
 				return instrument.Rules{}, e
 			}
-			return instrument.Rules{Version: "exchange-live", Symbol: symbol, BaseAsset: x.BaseCcy, QuoteAsset: x.QuoteCcy, TickSize: tick, StepSize: step, MinQuantity: minq, MinNotional: minn}, nil
+			lastPrice := shared.Zero()
+			if strings.TrimSpace(x.LastPrice) != "" {
+				lastPrice, e = shared.ParseDecimal(x.LastPrice)
+				if e != nil {
+					return instrument.Rules{}, e
+				}
+			}
+			return instrument.Rules{Version: "exchange-live", Symbol: symbol, BaseAsset: x.BaseCcy, QuoteAsset: x.QuoteCcy, TickSize: tick, StepSize: step, MinQuantity: minq, MinNotional: minn, LastPrice: lastPrice}, nil
 		}
 	}
 	return instrument.Rules{}, errors.New("trade: instrument not found")

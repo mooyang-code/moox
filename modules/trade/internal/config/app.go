@@ -89,6 +89,7 @@ type HealthConfig struct {
 type EventBusConfig struct {
 	Enabled           bool     `yaml:"enabled"`
 	URLs              []string `yaml:"urls"`
+	CredentialFile    string   `yaml:"credential_file"`
 	RebalanceConsumer string   `yaml:"rebalance_consumer"`
 }
 

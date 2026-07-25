@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
+	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -32,6 +33,7 @@ func (strategyTradeE2EAdapter) QueryByClientOrderID(context.Context, string, str
 func (strategyTradeE2EAdapter) Rules(context.Context, string) (instrument.Rules, error) {
 	return instrument.Rules{
 		BaseAsset: "BTC", QuoteAsset: "USDT", StepSize: shared.MustDecimal("0.001"),
+		LastPrice: shared.MustDecimal("10"),
 	}, nil
 }
 func (strategyTradeE2EAdapter) ListFills(context.Context, string, string) ([]exchange.FillEvent, error) {
@@ -64,20 +66,12 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	engine := &command.Engine{Store: s, Adapter: strategyTradeE2EAdapter{}}
-	if _, err = engine.Place(ctx, command.PlaceInput{
-		SpaceID: "space", OrderID: "price-source", ClientOrderID: "price-source",
-		AccountID: "acct", ChannelID: "chan", Symbol: "BTC-USDT", MarketType: "spot",
-		BaseAsset: "BTC", QuoteAsset: "USDT", Side: "BUY", Quantity: "1", Price: "10",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	wakeup := newKernelWakeup()
-	s.SetWakeup(wakeup.Wake)
+	engine := &command.Engine{Store: s, Resolver: workerResolver{adapter: strategyTradeE2EAdapter{}}}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	defer stopWorker()
-	go runTradeStateWorker(workerCtx, s, engine, wakeup)
+	if err = startKernelWorkers(workerCtx, config.EventBusConfig{Enabled: false}, s, engine); err != nil {
+		t.Fatal(err)
+	}
 
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-trade-e2e-consumer"})
 	if err != nil {
@@ -104,7 +98,7 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 		t.Fatalf("fetch first delivery: count=%d err=%v", len(deliveries), err)
 	}
 	first := deliveries[0]
-	result := handleRebalanceDelivery(ctx, first, s, engine, "trade_rebalance_v1", wakeup)
+	result := handleRebalanceDelivery(ctx, first, s, engine, "trade_rebalance_v1", nil)
 	if result.Decision != jetstream.ACK || result.Err != nil {
 		t.Fatalf("first decision=%v err=%v", result.Decision, result.Err)
 	}
@@ -116,7 +110,7 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 		t.Fatalf("fetch redelivery: count=%d err=%v", len(deliveries), err)
 	}
 	second := deliveries[0]
-	result = handleRebalanceDelivery(ctx, second, s, engine, "trade_rebalance_v1", wakeup)
+	result = handleRebalanceDelivery(ctx, second, s, engine, "trade_rebalance_v1", nil)
 	if result.Decision != jetstream.ACK || result.Err != nil {
 		t.Fatalf("redelivery decision=%v err=%v", result.Decision, result.Err)
 	}
@@ -130,7 +124,7 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 			return false
 		}
 		order, queryErr := s.GetOrder(ctx, "space", legs[0].PlanID)
-		return queryErr == nil && order.State == "OPEN"
+		return queryErr == nil && order.State == "FILLED"
 	})
 	var inboxCount, runCount int64
 	if err = s.DBForTest().Table("t_trade_inbox").Count(&inboxCount).Error; err != nil {

@@ -66,6 +66,9 @@ func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer
 	if cfg.DeliverPolicy != nats.DeliverAllPolicy && cfg.DeliverPolicy != nats.DeliverNewPolicy {
 		return nil, fmt.Errorf("%w: unsupported deliver policy %d", ErrInvalidConsumer, cfg.DeliverPolicy)
 	}
+	if err := c.rejectConsumerOwnedByAnotherStream(ctx, cfg.Stream, cfg.Durable); err != nil {
+		return nil, err
+	}
 
 	info, err := c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
 	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
@@ -116,6 +119,25 @@ func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer
 		return nil, err
 	}
 	return &Consumer{client: c, sub: sub, cfg: cfg}, nil
+}
+
+func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, requestedStream, durable string) error {
+	names := c.js.StreamNames(nats.Context(ctx))
+	for stream := range names {
+		if stream == requestedStream {
+			continue
+		}
+		_, err := c.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+		switch {
+		case err == nil:
+			return fmt.Errorf("%w: consumer %s already belongs to stream %s", ErrConsumerConfigConflict, durable, stream)
+		case errors.Is(err, nats.ErrConsumerNotFound):
+			continue
+		default:
+			return classifyConsumerError("inspect consumer ownership", err)
+		}
+	}
+	return contextErr(ctx, "after consumer ownership inspection")
 }
 
 func (c *Client) inspectConsumer(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {

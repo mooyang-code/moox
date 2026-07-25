@@ -1025,6 +1025,7 @@ func TestNewConsumerBindsMatchingConsumer(t *testing.T)
 func TestNewConsumerUpdatesMutableFields(t *testing.T)
 func TestNewConsumerRejectsImmutableConflict(t *testing.T)
 func TestNewConsumerDoesNotDeleteConflictingConsumer(t *testing.T)
+func TestNewConsumerRejectsDurableOwnedByAnotherStream(t *testing.T)
 ```
 
 - [ ] **Step 2: 让 `Default()` 只提供标量默认值**
@@ -1131,6 +1132,17 @@ var ErrConsumerConfigConflict = errors.New("jetstream consumer config conflict")
 仅本地字段不得参与 JetStream 配置冲突判断。
 
 错误中必须列出 Consumer 名称和冲突字段，不包含凭据。
+
+Consumer 名称在整个 EventBus 内视为唯一所有权标识，而不是只在单个 Stream
+内唯一。创建前先列出 Stream，并检查同名 Consumer 是否已经存在于其他 Stream；存在时
+返回 `ErrConsumerConfigConflict`，不得在请求的 Stream 再创建一个同名 Consumer。
+
+业务 Consumer 自己负责创建和更新，因此生产 ACL 必须同时允许该固定 Consumer 的
+`STREAM.NAMES`、跨 Stream 同名 `CONSUMER.INFO`、目标 Stream 的
+`CONSUMER.CREATE`、`CONSUMER.DURABLE.CREATE`、`MSG.NEXT` 和 `ACK`。权限仍按固定
+Consumer 名称收敛，不授予通用 `$JS.API.>`。新增 `trade-eventbus` 凭据；Strategy 只
+允许发布 `moox.trade.rebalance.requested.v1.>`。使用真实鉴权 NATS 测试验证创建、
+可变配置更新、拉取/ACK 和越权创建失败。
 
 - [ ] **Step 6: 让 `events.NewConsumer` 派生 Stream 和 filter**
 
@@ -1345,20 +1357,30 @@ eventID := task.RunID + ":rebalance:" + executionBindingID
 
 ```go
 type SnapshotResolver interface {
+	ResolveChannel(
+		context.Context,
+		string,
+		string,
+		string,
+		string,
+	) (Channel, error)
 	ResolveLatestPrice(
 		context.Context,
 		string,
 		string,
+		string,
 		*tradeeventpb.RebalanceTarget,
 	) (Market, error)
-	ResolveCurrentQuantity(
+	ResolveCurrentQuantities(
 		context.Context,
 		string,
 		string,
-		string,
-	) (shared.Decimal, error)
+	) (map[string]shared.Decimal, error)
 	RoundQuantity(
 		context.Context,
+		string,
+		string,
+		string,
 		string,
 		shared.Decimal,
 	) (shared.Decimal, error)
@@ -1369,7 +1391,18 @@ type RequestPlanner struct {
 }
 ```
 
-`Build` 验证所有必填字段、weight 合法性和 gross weight `<= 1`，解析固定资金和价格，产出当前 `Service.Create` 所需的 `Targets/Currents/Markets`。
+`Build` 验证所有必填字段、执行模式、通道归属、weight 合法性和 gross weight
+`<= 1`，解析固定资金和价格，产出当前 `Service.Create` 所需的
+`Targets/Currents/Markets`。
+
+- `paper` 必须绑定模拟通道，`live` 必须绑定真实通道；执行模式写入 rebalance run 和
+  order，不能只校验后丢弃。
+- 最新价格和交易规则来自通道对应交易所的公开 instrument 接口，不依赖 Trade
+  自己已有的订单或成交，因此新 symbol 第一次调仓也能执行。
+- 命令中的 `quote_asset` 必须与 instrument rules 一致，不能覆盖真实规则。
+- `FULL` 语义读取账户全部本地持仓；命令中省略的持仓目标为 0，空 targets 表示全部
+  平仓。
+- 现货禁止负权重；永续合约允许负权重，gross 按绝对值求和。
 
 永久错误：
 
@@ -1405,6 +1438,10 @@ func (t *Tx) RecordInbox(consumer, eventID, eventName string) (bool, error)
 3. 不写 Trade outbox。
 
 Consumer 成功持久化计划后 ACK，并调用本地 `Wake()`；永久校验错误 TERM，Snapshot/DB 临时错误 RETRY。
+
+在完成 EventMessage 身份校验后，Consumer 先只读查询 Inbox。已处理的 event_id
+立即 ACK，不再依赖行情、仓位或交易规则服务；随后仍保留事务内 `RecordInbox`，
+用于处理并发投递竞争。
 
 - [ ] **Step 7: 删除 Trade 自发布事件**
 
@@ -1493,6 +1530,10 @@ channel 唤醒被合并
 
 正常下单和成交推进测试不得等待 Timer。
 
+Paper order 使用与 Live 相同的 rebalance、订单、账本和仓位状态机，但只走本地即时
+模拟成交处理器，绝不调用真实交易所下单或私有流。模拟成交失败时由本地恢复 worker
+继续处理；`paper` order 不进入真实交易所 REST/WS 对账。
+
 - [ ] **Step 10: 写跨模块 E2E**
 
 `strategy_rebalance_event_e2e_test.go` 使用 embedded NATS：
@@ -1502,8 +1543,10 @@ channel 唤醒被合并
 3. Strategy relay 发布 `trade.rebalance.requested`。
 4. Trade 通过 `events.NewConsumer` 创建 Consumer，消费并创建一个 `PLANNED` run。
 5. 重发同一个 EventMessage，Trade inbox 保证仍只有一个 run。
-6. 不推进 fake clock，断言本地 Wake 立即推进已经落库的 run。
-7. 单独构造“DB 已提交但没有 Wake”的重启场景，推进 15s fake clock 后由 recovery Timer 补偿。
+6. 不预置 Trade 历史订单或成交；公开 instrument snapshot 提供首笔价格和规则。
+7. Paper 订单本地成交并更新订单、账本和仓位，断言真实 exchange `Place` 调用次数为 0。
+8. 不推进 fake clock，断言本地 Wake 立即推进已经落库的 run。
+9. 单独构造“DB 已提交但没有 Wake”的重启场景，推进 15s fake clock 后由 recovery Timer 补偿。
 
 - [ ] **Step 11: 运行 Strategy/Trade 全测试**
 
@@ -1838,6 +1881,8 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 - [ ] `packages/events` 不再读取 YAML 注册表。
 - [ ] EventBus YAML 只定义 Stream/KV，不包含 Consumer 或 Consumer template。
 - [ ] 每个业务 Consumer 由所属消费服务调用唯一的 `NewConsumer` 创建和校验。
+- [ ] 同名 Consumer 已属于其他 Stream 时返回配置冲突，不重复创建。
+- [ ] 生产角色凭据允许所有者创建/更新固定 Consumer；鉴权 E2E 验证正常操作和越权失败。
 - [ ] 生产代码不存在旧 Pull/create/bind Consumer API。
 - [ ] `modules/streamcalc`、`packages/dlqpb`、`packages/strategyeventpb` 已删除。
 - [ ] Trade 不再拥有 outbox，不消费自己发布的事件。
@@ -1853,6 +1898,11 @@ Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计
 - [ ] 永久错误不再发布 DLQ 事件。
 - [ ] Strategy paper/live 调仓产生一条 `trade.rebalance.requested`；hold/observe 不产生。
 - [ ] Trade 重收相同 event_id 不重复创建调仓计划。
+- [ ] 已处理事件在行情或规则服务不可用时仍直接 ACK。
+- [ ] FullTarget 会把省略的已有持仓归零，空 targets 可以表达全部平仓。
+- [ ] 现货拒绝负权重，永续合约允许负权重；命令 quote 与交易规则不一致时拒绝。
+- [ ] Paper 只使用模拟通道和本地成交，Live 只使用真实通道，二者不会互相回退。
+- [ ] 新 symbol 不依赖 Trade 历史订单即可从公开 instrument snapshot 获得首笔价格。
 - [ ] 正常 Trade 状态提交后由本地 Wake 立即推进，不等待 Timer。
 - [ ] Wake 遗漏或进程重启时，已落库 Trade 工作由低频 Timer 恢复。
 

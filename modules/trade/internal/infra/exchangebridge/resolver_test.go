@@ -86,7 +86,7 @@ func (stubExchangeAdapter) Ping(context.Context, legacy.Credential) (int64, erro
 func (stubExchangeAdapter) GetInstruments(context.Context, legacy.MarketType) ([]legacy.Instrument, error) {
 	return []legacy.Instrument{{
 		Symbol: "BTC-USDT", BaseCcy: "BTC", QuoteCcy: "USDT",
-		TickSize: "0.01", LotSize: "0.001", MinQty: "0.001", MinNotional: "5",
+		TickSize: "0.01", LotSize: "0.001", MinQty: "0.001", MinNotional: "5", LastPrice: "10",
 	}}, nil
 }
 func (stubExchangeAdapter) GetAccountInfo(context.Context, legacy.Credential, legacy.MarketType) (*legacy.AccountInfo, error) {

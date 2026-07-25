@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS t_rebalance_runs (
  c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_space_id TEXT NOT NULL, c_run_id TEXT NOT NULL, c_account_id TEXT NOT NULL, c_channel_id TEXT NOT NULL,
+ c_execution_mode TEXT NOT NULL,
  c_idempotency_key TEXT NOT NULL, c_market_snapshot_id TEXT NOT NULL, c_position_snapshot_id TEXT NOT NULL,
  c_rules_version TEXT NOT NULL, c_algorithm_name TEXT NOT NULL, c_algorithm_version TEXT NOT NULL, c_status TEXT NOT NULL,
  c_version INTEGER NOT NULL DEFAULT 1, c_residual TEXT NOT NULL DEFAULT '{}', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

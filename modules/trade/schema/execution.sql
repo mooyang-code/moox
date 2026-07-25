@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS t_trade_order_aggregates (
  c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_space_id TEXT NOT NULL, c_order_id TEXT NOT NULL, c_client_order_id TEXT NOT NULL,
  c_account_id TEXT NOT NULL, c_channel_id TEXT NOT NULL, c_symbol TEXT NOT NULL, c_market_type TEXT NOT NULL, c_base_asset TEXT NOT NULL, c_quote_asset TEXT NOT NULL,
+ c_execution_mode TEXT NOT NULL DEFAULT 'live',
  c_side TEXT NOT NULL, c_quantity TEXT NOT NULL, c_price TEXT NOT NULL, c_filled_quantity TEXT NOT NULL DEFAULT '0',
  c_reduce_only INTEGER NOT NULL DEFAULT 0, c_reserved_asset TEXT NOT NULL, c_reserved_amount TEXT NOT NULL,
  c_consumed_reserved TEXT NOT NULL DEFAULT '0',
