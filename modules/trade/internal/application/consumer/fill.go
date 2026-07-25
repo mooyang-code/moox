@@ -3,17 +3,14 @@ package consumer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
-	"time"
 )
 
 type FillHandler struct{ Store *store.Store }
@@ -112,16 +109,7 @@ func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, 
 				return err
 			}
 		}
-		eventID := fmt.Sprintf("%s:fill:%s", orderID, canonicalID)
-		occurredAt := time.Now().UTC()
-		if f.TradedAt > 0 {
-			occurredAt = time.UnixMilli(normalizeEpochMillis(f.TradedAt)).UTC()
-		}
-		data, encodeErr := tradebus.EncodeFillReceived(eventID, space, canonicalID, orderID, account, r.ChannelID, f, occurredAt)
-		if encodeErr != nil {
-			return encodeErr
-		}
-		return tx.AddOutbox(eventID, data)
+		return nil
 	})
 	result := "applied"
 	if !applied {
@@ -131,6 +119,9 @@ func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, 
 		result = "error"
 	}
 	telemetry.Fills.WithLabelValues(source, result).Inc()
+	if err == nil && applied {
+		h.Store.Wake()
+	}
 	return applied, err
 }
 

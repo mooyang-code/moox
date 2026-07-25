@@ -52,7 +52,6 @@ func TestAllSQL_ContainsKernelTables(t *testing.T) {
 	for _, want := range []string{
 		"t_trade_order_aggregates",
 		"t_ledger_entries",
-		"t_trade_outbox",
 		"t_trade_inbox",
 		"t_rebalance_runs",
 	} {

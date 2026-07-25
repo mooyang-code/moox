@@ -1,4 +1,4 @@
-# MooX EventBus owns the single embedded NATS JetStream runtime.
+# MooX EventBus 只负责单机 NATS JetStream 运行时和基础拓扑。
 broker:
   host: 127.0.0.1
   port: 4222
@@ -35,7 +35,7 @@ streams:
   - name: MOOX_STORAGE
     subjects: ["moox.storage.dataset.rows.upserted.v1.>"]
     retention: limits
-    discard: new
+    discard: old
     storage: file
     replicas: 1
     max_age: 72h
@@ -44,138 +44,30 @@ streams:
   - name: MOOX_METRICS
     subjects: ["moox.metrics.>"]
     retention: limits
+    discard: old
     storage: file
     replicas: 1
     max_age: 24h
     duplicates: 2m
     max_bytes: 536870912
   - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.cloudnode.>"]
+    subjects: ["moox.cloudnode.job.execution.requested.v1.>"]
     retention: work_queue
+    discard: old
     storage: file
     replicas: 1
     max_age: 72h
     duplicates: 2m
     max_bytes: 536870912
   - name: MOOX_TRADE
-    subjects: ["moox.trading.>", "moox.trade.>"]
-    retention: limits
+    subjects: ["moox.trade.rebalance.requested.v1.>"]
+    retention: work_queue
+    discard: old
     storage: file
     replicas: 1
     max_age: 168h
     duplicates: 2m
     max_bytes: 536870912
-  - name: MOOX_STRATEGY
-    subjects: ["moox.strategy.>"]
-    retention: limits
-    storage: file
-    replicas: 1
-    max_age: 168h
-    duplicates: 2m
-    max_bytes: 536870912
-
-consumers:
-  - stream: MOOX_TRADE
-    durable: trade_execution_v1
-    filter_subject: moox.trade.execution.slice.ready.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: -1
-  - stream: MOOX_TRADE
-    durable: trade_reconciliation_v1
-    filter_subject: moox.trade.reconciliation.requested.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 64
-    max_deliver: -1
-  - stream: MOOX_TRADE
-    durable: trade_rebalance_v1
-    filter_subject: moox.trade.rebalance.requested.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 64
-    max_deliver: -1
-  - stream: MOOX_TRADE
-    durable: trade_progress_v1
-    filter_subject: moox.trade.fill.received.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 64
-    max_deliver: -1
-  - stream: MOOX_TRADE
-    durable: trade_trading_signal_v1
-    filter_subject: moox.trading.signal.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: -1
-  - stream: MOOX_METRICS
-    durable: monitor_hostmetrics_ingest_v1
-    filter_subject: moox.metrics.host.reported.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: 3
-  - stream: MOOX_METRICS
-    durable: monitor_metrics_ingest_v1
-    filter_subject: moox.metrics.snapshot.reported.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: 3
-  - stream: MOOX_STORAGE
-    durable: storage_view
-    filter_subject: moox.storage.dataset.rows.upserted.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 120s
-    max_ack_pending: 8
-    max_deliver: -1
-  - stream: MOOX_STORAGE
-    durable: factor_calc
-    filter_subject: moox.storage.dataset.rows.upserted.v1.>
-    ack_policy: explicit
-    deliver_policy: new
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 1000
-    max_deliver: 5
-  - stream: MOOX_STORAGE
-    durable: moox_archive_kline_v1
-    filter_subject: moox.storage.dataset.rows.upserted.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 5m
-    max_ack_pending: 256
-    max_deliver: -1
-
-consumer_templates:
-  - stream: MOOX_CLOUDNODE_EXEC
-    durable_prefix: cn_exec_
-    filter_pattern: moox.cloudnode.job.execution.requested.v1.>
-    ack_policy: explicit
-    deliver_policy: all
-    replay_policy: instant
-    ack_wait: 60s
-    max_ack_pending: 256
-    max_deliver: -1
 
 kv:
   - bucket: MOOX_CLOUDNODE_JOB_ACTIVE

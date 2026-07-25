@@ -16,7 +16,7 @@ storage:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
     stream_name: MOOX_STORAGE
     subject_prefix: moox.storage
-    consumer_name: storage_primary
+    consumer: storage_primary
     max_age_hours: 24
     max_msgs: 500000
     max_bytes: 268435456

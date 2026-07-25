@@ -102,18 +102,6 @@ func (c *Config) Validate() error {
 	if err := validateGovernedEventFamilies(c); err != nil {
 		return err
 	}
-	for i := range c.Consumers {
-		consumer := &c.Consumers[i]
-		if err := validateConsumer(consumer, c); err != nil {
-			return err
-		}
-	}
-	for i := range c.ConsumerTemplates {
-		template := &c.ConsumerTemplates[i]
-		if err := validateConsumerTemplate(template, c); err != nil {
-			return err
-		}
-	}
 	seenKV := map[string]struct{}{}
 	for i := range c.KV {
 		k := &c.KV[i]
@@ -139,21 +127,21 @@ func validateGovernedEventFamilies(c *Config) error {
 	if err != nil {
 		return fmt.Errorf("load event registry: %w", err)
 	}
-	for _, spec := range registry.Schemas() {
-		want, err := registry.FamilyPatternForSchema(spec)
+	for _, event := range registry.Events() {
+		want, err := registry.FamilyPattern(event)
 		if err != nil {
-			return fmt.Errorf("derive governed event %s@%d topic family: %w", spec.Name, spec.Version, err)
+			return fmt.Errorf("derive governed event %s@%d topic family: %w", event.Name(), event.Version(), err)
 		}
 		matches := 0
 		for _, stream := range c.Streams {
 			for _, subject := range stream.Subjects {
-				if stream.Name == spec.Stream && patternCovers(subject, want) {
+				if stream.Name == event.Stream() && patternCovers(subject, want) {
 					matches++
 				}
 			}
 		}
 		if matches != 1 {
-			return fmt.Errorf("governed event %s@%d must be covered by exactly one stream family %q in stream %q, got %d", spec.Name, spec.Version, want, spec.Stream, matches)
+			return fmt.Errorf("governed event %s@%d must be covered by exactly one stream family %q in stream %q, got %d", event.Name(), event.Version(), want, event.Stream(), matches)
 		}
 	}
 	return nil
@@ -177,49 +165,6 @@ func publicHost(value string) bool {
 	return value == "0.0.0.0" || value == "::" || !isLoopback(value)
 }
 
-func validateConsumer(c *ConsumerConfig, cfg *Config) error {
-	if strings.TrimSpace(c.Stream) == "" || strings.TrimSpace(c.Durable) == "" || strings.TrimSpace(c.FilterSubject) == "" {
-		return fmt.Errorf("consumer stream, durable, and filter_subject are required")
-	}
-	if c.AckPolicy == "" {
-		c.AckPolicy = "explicit"
-	}
-	if c.DeliverPolicy == "" {
-		c.DeliverPolicy = "all"
-	}
-	if c.ReplayPolicy == "" {
-		c.ReplayPolicy = "instant"
-	}
-	if c.AckPolicy != "explicit" || (c.DeliverPolicy != "all" && c.DeliverPolicy != "new") || c.ReplayPolicy != "instant" {
-		return fmt.Errorf("consumer %q has unsupported policy", c.Durable)
-	}
-	if c.AckWait <= 0 || c.MaxAckPending <= 0 || c.MaxDeliver == 0 {
-		return fmt.Errorf("consumer %q has invalid ack/max settings", c.Durable)
-	}
-	if _, ok := findStream(cfg, c.Stream); !ok {
-		return fmt.Errorf("consumer %q references unknown stream %q", c.Durable, c.Stream)
-	}
-	if err := validateSubject(c.FilterSubject, true); err != nil {
-		return fmt.Errorf("consumer %q filter: %w", c.Durable, err)
-	}
-	covered := false
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return fmt.Errorf("load event registry: %w", err)
-	}
-	for _, spec := range registry.Schemas() {
-		family, familyErr := registry.FamilyPatternForSchema(spec)
-		if familyErr == nil && spec.Stream == c.Stream && patternCovers(c.FilterSubject, family) {
-			covered = true
-			break
-		}
-	}
-	if !covered {
-		return fmt.Errorf("consumer %q filter %q is not registered", c.Durable, c.FilterSubject)
-	}
-	return nil
-}
-
 func patternCovers(cover, subjectPattern string) bool {
 	coverParts := strings.Split(cover, ".")
 	subjectParts := strings.Split(subjectPattern, ".")
@@ -232,46 +177,6 @@ func patternCovers(cover, subjectPattern string) bool {
 		}
 	}
 	return len(coverParts) == len(subjectParts)
-}
-
-func validateConsumerTemplate(c *ConsumerTemplateConfig, cfg *Config) error {
-	if strings.TrimSpace(c.Stream) == "" || strings.TrimSpace(c.DurablePrefix) == "" || strings.TrimSpace(c.FilterPattern) == "" {
-		return fmt.Errorf("consumer template stream, durable_prefix, and filter_pattern are required")
-	}
-	if _, ok := findStream(cfg, c.Stream); !ok {
-		return fmt.Errorf("consumer template references unknown stream %q", c.Stream)
-	}
-	if err := validateSubject(c.FilterPattern, true); err != nil {
-		return fmt.Errorf("consumer template filter: %w", err)
-	}
-	if c.AckPolicy == "" {
-		c.AckPolicy = "explicit"
-	}
-	if c.DeliverPolicy == "" {
-		c.DeliverPolicy = "all"
-	}
-	if c.ReplayPolicy == "" {
-		c.ReplayPolicy = "instant"
-	}
-	if c.AckPolicy != "explicit" || c.DeliverPolicy != "all" || c.ReplayPolicy != "instant" || c.AckWait <= 0 || c.MaxAckPending <= 0 || c.MaxDeliver == 0 {
-		return fmt.Errorf("consumer template %q has invalid policy or limits", c.DurablePrefix)
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return fmt.Errorf("load event registry: %w", err)
-	}
-	covered := false
-	for _, spec := range registry.Schemas() {
-		family, familyErr := registry.FamilyPatternForSchema(spec)
-		if familyErr == nil && spec.Stream == c.Stream && patternCovers(c.FilterPattern, family) {
-			covered = true
-			break
-		}
-	}
-	if !covered {
-		return fmt.Errorf("consumer template %q filter %q is not registered", c.DurablePrefix, c.FilterPattern)
-	}
-	return nil
 }
 
 func findStream(c *Config, name string) (StreamConfig, bool) {

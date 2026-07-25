@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -277,6 +279,16 @@ func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecu
 	if req.GetMode() == "live" && (s == nil || !s.LiveExecutionEnabled) {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("live execution is disabled by server capability"))}, nil
 	}
+	quoteAsset := strings.TrimSpace(req.GetQuoteAsset())
+	if quoteAsset == "" {
+		quoteAsset = "USDT"
+	}
+	if req.GetMode() == "paper" || req.GetMode() == "live" {
+		capital, ok := new(big.Rat).SetString(strings.TrimSpace(req.GetCapitalAmount()))
+		if strings.TrimSpace(req.GetChannelId()) == "" || !ok || capital.Sign() <= 0 {
+			return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("paper/live mode requires channel_id and positive capital_amount"))}, nil
+		}
+	}
 	if !operatorAllowed(ctx) {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("strategy operation requires operator permission"))}, nil
 	}
@@ -287,7 +299,7 @@ func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecu
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
-	err = s.Repo.SetExecutionMode(ctx, binding, req.GetMode(), domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
+	err = s.Repo.SetExecutionMode(ctx, binding, req.GetMode(), req.GetChannelId(), req.GetCapitalAmount(), quoteAsset, domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}

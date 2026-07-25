@@ -2,7 +2,10 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	rebalanceapp "github.com/mooyang-code/moox/modules/trade/internal/application/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
@@ -18,10 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
 )
 
 type workerStubAdapter struct {
@@ -38,7 +37,10 @@ func (w workerStubAdapter) QueryByClientOrderID(context.Context, string, string)
 	return exchange.ExchangeOrderResult{Status: "OPEN"}, nil
 }
 func (w workerStubAdapter) Rules(context.Context, string) (instrument.Rules, error) {
-	return instrument.Rules{BaseAsset: "BTC", QuoteAsset: "USDT"}, nil
+	return instrument.Rules{
+		BaseAsset: "BTC", QuoteAsset: "USDT",
+		StepSize: shared.MustDecimal("0.001"),
+	}, nil
 }
 func (w workerStubAdapter) ListFills(context.Context, string, string) ([]exchange.FillEvent, error) {
 	return w.fills, nil
@@ -47,123 +49,139 @@ func (w workerStubAdapter) SubscribePrivate(context.Context, exchange.PrivateEve
 	return nil
 }
 
-func openKernelOrder(t *testing.T, s *store.Store, e *command.Engine) store.OrderRecord {
+func openWorkerStore(t *testing.T) *store.Store {
 	t.Helper()
-	ctx := context.Background()
-	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func seedBalance(t *testing.T, s *store.Store, asset string, amount shared.Decimal) {
+	t.Helper()
+	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.PostLedger("space", ledger.Transaction{
-			ID: shared.LedgerTransactionID("seed"), BizType: "seed", RefType: "test", RefID: "1",
+			ID: shared.LedgerTransactionID("seed-" + asset), BizType: "seed", RefType: "test", RefID: asset,
 			Entries: []ledger.Entry{
-				{AccountID: "clearing", Asset: "USDT", Bucket: "clearing", Amount: shared.MustDecimal("100").Neg()},
-				{AccountID: "acct", Asset: "USDT", Bucket: "available", Amount: shared.MustDecimal("100")},
+				{AccountID: "clearing", Asset: asset, Bucket: "clearing", Amount: amount.Neg()},
+				{AccountID: "acct", Asset: asset, Bucket: "available", Amount: amount},
 			},
 		})
 	}))
-	placed, err := e.Place(ctx, command.PlaceInput{
-		SpaceID: "space", OrderID: "ord-1", ClientOrderID: "cli-1",
-		AccountID: "acct", ChannelID: "chan", Symbol: "BTC-USDT",
-		MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT",
-		Side: "BUY", Quantity: "1", Price: "10",
-	})
-	require.NoError(t, err)
-	submitted, err := e.Submit(ctx, "space", placed.OrderID, "")
-	require.NoError(t, err)
-	return submitted
 }
 
-func wrapDelivery(t *testing.T, payload []byte, topic, messageID string) *jetstream.Delivery {
+func rebalanceDelivery(t *testing.T, eventID, subjectID string, request *tradeeventpb.RebalanceRequested) *jetstream.Delivery {
 	t.Helper()
-	var values map[string]any
-	err := json.Unmarshal(payload, &values)
-	require.NoError(t, err)
-	var structured proto.Message
-	event := events.TradeExecutionSliceReady
-	if strings.Contains(topic, "rebalance.requested") {
-		event = events.TradeRebalanceRequested
-		structured = &tradeeventpb.RebalanceRequested{}
-	} else {
-		structured = &tradeeventpb.OrderSnapshot{}
-	}
-	if _, isRebalance := structured.(*tradeeventpb.RebalanceRequested); isRebalance {
-		structured = &tradeeventpb.RebalanceRequested{RunId: firstString(values, "RunID", "run_id"), AccountId: firstString(values, "AccountID", "account_id"), ChannelId: firstString(values, "ChannelID", "channel_id"), MarketSnapshotId: firstString(values, "MarketSnapshotID", "market_snapshot_id"), PositionSnapshotId: firstString(values, "PositionSnapshotID", "position_snapshot_id"), RulesVersion: firstString(values, "RulesVersion", "rules_version")}
-	} else {
-		structured = &tradeeventpb.OrderSnapshot{OrderId: firstString(values, "OrderID", "order_id"), ClientOrderId: firstString(values, "ClientOrderID", "client_order_id"), AccountId: firstString(values, "AccountID", "account_id"), ChannelId: firstString(values, "ChannelID", "channel_id"), Symbol: firstString(values, "Symbol", "symbol"), Side: firstString(values, "Side", "side"), Quantity: firstString(values, "Quantity", "quantity"), Price: firstString(values, "Price", "price"), FilledQuantity: firstString(values, "FilledQuantity", "filled_quantity"), State: firstString(values, "State", "state"), ExchangeOrderId: firstString(values, "ExchangeOrderID", "exchange_order_id")}
-	}
-	spaceID, _ := values["space_id"].(string)
-	if spaceID == "" {
-		spaceID = "space"
-	}
-	subjectID := ""
-	switch value := structured.(type) {
-	case *tradeeventpb.OrderSnapshot:
-		subjectID = value.GetOrderId()
-	case *tradeeventpb.RebalanceRequested:
-		subjectID = value.GetRunId()
-	}
-	if subjectID == "" {
-		subjectID = messageID
-	}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(event, structured, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: spaceID, SubjectID: subjectID})
+	encoded, err := registry.Encode(events.TradeRebalanceRequested, request, events.PublishOptions{
+		EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: subjectID,
+	})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)
 	require.NoError(t, err)
 	return &jetstream.Delivery{
-		RawData: raw, RawMessageID: messageID, Subject: encoded.Subject, ContentType: events.ContentType,
-		DeliveryCount: 1,
+		RawData: raw, RawMessageID: eventID, Subject: encoded.Subject,
+		ContentType: events.ContentType, DeliveryCount: 1,
 	}
 }
 
-func firstString(values map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := values[key].(string); ok && value != "" {
-			return value
-		}
+func validRebalanceRequest() *tradeeventpb.RebalanceRequested {
+	return &tradeeventpb.RebalanceRequested{
+		RequestId: "request-1", StrategyRunId: "strategy-run-1", ExecutionBindingId: "execution-1",
+		AccountId: "acct", ChannelId: "chan", Mode: "paper", DataRevision: "revision-1",
+		CapitalAmount: "100", QuoteAsset: "USDT",
+		Targets: []*tradeeventpb.RebalanceTarget{{
+			InstrumentId: "BTC-USDT", Symbol: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5",
+		}},
 	}
-	return ""
 }
 
-func TestReconcileOrdersOnce_WithFills_ShouldApply(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+func TestHandleRebalanceDeliveryCreatesRunAndDeduplicates(t *testing.T) {
+	ctx := context.Background()
+	s := openWorkerStore(t)
+	seedBalance(t, s, "USDT", shared.MustDecimal("100"))
+	engine := &command.Engine{Store: s, Adapter: workerStubAdapter{}}
+	_, err := engine.Place(ctx, command.PlaceInput{
+		SpaceID: "space", OrderID: "price-source", ClientOrderID: "price-source",
+		AccountID: "acct", ChannelID: "chan", Symbol: "BTC-USDT", MarketType: "spot",
+		BaseAsset: "BTC", QuoteAsset: "USDT", Side: "BUY", Quantity: "1", Price: "10",
+	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+
+	request := validRebalanceRequest()
+	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
+	first := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", newKernelWakeup())
+	assert.Equal(t, jetstream.ACK, first.Decision)
+	second := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", newKernelWakeup())
+	assert.Equal(t, jetstream.ACK, second.Decision)
+
+	runs, err := s.ListActiveRebalanceRuns(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, request.GetRequestId(), runs[0].RunID)
+	var inboxCount int64
+	require.NoError(t, s.DBForTest().Table("t_trade_inbox").Count(&inboxCount).Error)
+	assert.Equal(t, int64(1), inboxCount)
+}
+
+func TestHandleRebalanceDeliveryRejectsPermanentContractError(t *testing.T) {
+	s := openWorkerStore(t)
+	request := validRebalanceRequest()
+	delivery := rebalanceDelivery(t, request.GetRequestId(), "wrong-binding", request)
+	result := handleRebalanceDelivery(context.Background(), delivery, s, &command.Engine{Store: s, Adapter: workerStubAdapter{}}, "trade_rebalance_v1", nil)
+	assert.Equal(t, jetstream.TERM, result.Decision)
+	assert.Error(t, result.Err)
+}
+
+func TestHandleRebalanceDeliveryRetriesSnapshotFailure(t *testing.T) {
+	s := openWorkerStore(t)
+	request := validRebalanceRequest()
+	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
+	result := handleRebalanceDelivery(context.Background(), delivery, s, &command.Engine{Store: s, Adapter: workerStubAdapter{}}, "trade_rebalance_v1", nil)
+	assert.Equal(t, jetstream.RETRY, result.Decision)
+	assert.Error(t, result.Err)
+}
+
+func TestReconcileOrdersOnceAppliesFills(t *testing.T) {
+	s := openWorkerStore(t)
+	seedBalance(t, s, "USDT", shared.MustDecimal("100"))
 	adapter := workerStubAdapter{fills: []exchange.FillEvent{{
 		ExchangeTradeID: "fill-1", Symbol: "BTC-USDT", Side: "BUY",
 		BaseAsset: "BTC", QuoteAsset: "USDT",
 		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("10"), Fee: shared.Zero(),
 	}}}
 	engine := &command.Engine{Store: s, Adapter: adapter}
-	rec := openKernelOrder(t, s, engine)
+	placed, err := engine.Place(context.Background(), command.PlaceInput{
+		SpaceID: "space", OrderID: "ord-1", ClientOrderID: "cli-1",
+		AccountID: "acct", ChannelID: "chan", Symbol: "BTC-USDT",
+		MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT",
+		Side: "BUY", Quantity: "1", Price: "10",
+	})
+	require.NoError(t, err)
+	_, err = engine.Submit(context.Background(), "space", placed.OrderID, "")
+	require.NoError(t, err)
 	require.NoError(t, reconcileOrdersOnce(context.Background(), s, engine, "space", "acct", "chan"))
-	got, err := s.GetOrder(context.Background(), "space", rec.OrderID)
+	got, err := s.GetOrder(context.Background(), "space", placed.OrderID)
 	require.NoError(t, err)
 	assert.Equal(t, "1", got.FilledQuantity)
 }
 
-func TestAdvanceActiveRebalances_ActiveRun_ShouldAdvance(t *testing.T) {
+func TestAdvanceActiveRebalancesAdvancesRun(t *testing.T) {
 	ctx := context.Background()
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.PostLedger("space", ledger.Transaction{
-			ID: shared.LedgerTransactionID("seed-btc"), BizType: "seed", RefType: "test", RefID: "btc",
-			Entries: []ledger.Entry{
-				{AccountID: "clearing", Asset: "BTC", Bucket: "clearing", Amount: shared.MustDecimal("1").Neg()},
-				{AccountID: "acct", Asset: "BTC", Bucket: "available", Amount: shared.MustDecimal("1")},
-			},
-		})
-	}))
+	s := openWorkerStore(t)
+	seedBalance(t, s, "BTC", shared.MustDecimal("1"))
 	engine := &command.Engine{Store: s, Adapter: workerStubAdapter{}}
 	svc := rebalanceapp.Service{Store: s, Engine: engine}
 	require.NoError(t, svc.Create(ctx, rebalanceapp.CreateInput{
 		SpaceID: "space", RunID: "run-1", IdempotencyKey: "idem", AccountID: "acct", ChannelID: "chan",
 		MarketSnapshotID: "m1", PositionSnapshotID: "p1", RulesVersion: "r1",
 		Mode:     rebalance.FullTarget,
-		Targets:  []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
-		Currents: []rebalance.Current{{Symbol: "BTCUSDT", Quantity: shared.MustDecimal("1")}},
-		Markets:  map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
+		Targets:  []rebalance.Target{{Symbol: "BTC-USDT", Quantity: shared.Zero()}},
+		Currents: []rebalance.Current{{Symbol: "BTC-USDT", Quantity: shared.MustDecimal("1")}},
+		Markets: map[string]rebalanceapp.Market{
+			"BTC-USDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10", MarketType: "spot"},
+		},
 	}))
 	require.NoError(t, advanceActiveRebalances(ctx, s, engine))
 	legs, err := s.ListRebalanceLegs(ctx, "space", "run-1")
@@ -171,85 +189,19 @@ func TestAdvanceActiveRebalances_ActiveRun_ShouldAdvance(t *testing.T) {
 	assert.NotEmpty(t, legs)
 }
 
-func TestHandleExecutionDelivery_ReadyOrder_ShouldSubmit(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+func TestStartKernelWorkersDisabledStartsLocalWorker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := openWorkerStore(t)
+	err := startKernelWorkers(ctx, config.EventBusConfig{Enabled: false}, s, &command.Engine{Store: s, Adapter: workerStubAdapter{}})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	engine := &command.Engine{Store: s, Adapter: workerStubAdapter{}}
-	require.NoError(t, s.ReconcileBalances(context.Background(), "space", "acct", map[string]map[string]shared.Decimal{
-		"USDT": {"available": shared.MustDecimal("20")},
-	}))
-	placed, err := engine.Place(context.Background(), command.PlaceInput{
-		SpaceID: "space", OrderID: "exec-1", ClientOrderID: "exec-cli",
-		AccountID: "acct", ChannelID: "chan", Symbol: "BTC-USDT",
-		MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT",
-		Side: "BUY", Quantity: "1", Price: "10",
-	})
-	require.NoError(t, err)
-	payload, err := json.Marshal(placed)
-	require.NoError(t, err)
-	delivery := wrapDelivery(t, payload, "moox.trade.execution.slice.ready.v1", "msg-1")
-	require.NoError(t, handleExecutionDelivery(context.Background(), delivery, s, engine, "exec-consumer"))
-	got, err := s.GetOrder(context.Background(), "space", "exec-1")
-	require.NoError(t, err)
-	assert.Equal(t, "OPEN", got.State)
+	cancel()
 }
 
-func TestHandleRebalanceDelivery_ActiveRun_ShouldAdvance(t *testing.T) {
-	ctx := context.Background()
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.PostLedger("space", ledger.Transaction{
-			ID: shared.LedgerTransactionID("seed-btc"), BizType: "seed", RefType: "test", RefID: "btc",
-			Entries: []ledger.Entry{
-				{AccountID: "clearing", Asset: "BTC", Bucket: "clearing", Amount: shared.MustDecimal("1").Neg()},
-				{AccountID: "acct", Asset: "BTC", Bucket: "available", Amount: shared.MustDecimal("1")},
-			},
-		})
-	}))
-	engine := &command.Engine{Store: s, Adapter: workerStubAdapter{}}
-	svc := rebalanceapp.Service{Store: s, Engine: engine}
-	require.NoError(t, svc.Create(ctx, rebalanceapp.CreateInput{
-		SpaceID: "space", RunID: "run-2", IdempotencyKey: "idem2", AccountID: "acct", ChannelID: "chan",
-		MarketSnapshotID: "m1", PositionSnapshotID: "p1", RulesVersion: "r1", Mode: rebalance.FullTarget,
-		Targets:  []rebalance.Target{{Symbol: "BTCUSDT", Quantity: shared.Zero()}},
-		Currents: []rebalance.Current{{Symbol: "BTCUSDT", Quantity: shared.MustDecimal("1")}},
-		Markets:  map[string]rebalanceapp.Market{"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Price: "10"}},
-	}))
-	runRows, err := s.ListActiveRebalanceRuns(ctx, 10)
-	require.NoError(t, err)
-	require.NotEmpty(t, runRows)
-	payload, err := json.Marshal(runRows[0])
-	require.NoError(t, err)
-	delivery := wrapDelivery(t, payload, "moox.trade.rebalance.requested.v1", "msg-2")
-	require.NoError(t, handleRebalanceDelivery(ctx, delivery, s, engine, "rebalance-consumer"))
-	legs, err := s.ListRebalanceLegs(ctx, "space", "run-2")
-	require.NoError(t, err)
-	assert.NotEmpty(t, legs)
-}
-
-func TestStartKernelWorkers_Disabled_ShouldNoop(t *testing.T) {
-	err := startKernelWorkers(context.Background(), config.EventBusConfig{Enabled: false}, nil, nil)
-	assert.NoError(t, err)
-}
-
-func TestDeliveryTraceContext_DoesNotInventEnvelopeFields(t *testing.T) {
-	ctx := deliveryTraceContext(context.Background(), &jetstream.Delivery{})
-	assert.Equal(t, context.Background(), ctx)
-}
-
-func TestDeliveryTraceContext_NilDelivery_ShouldReturnOriginal(t *testing.T) {
-	ctx := context.Background()
-	assert.Equal(t, ctx, deliveryTraceContext(ctx, nil))
-}
-
-func TestKernelEventBusReady_WithNilClient_ShouldReturnFalse(t *testing.T) {
+func TestKernelEventBusReadyWithNilClient(t *testing.T) {
 	setKernelEventBusClient(nil)
 	assert.False(t, kernelEventBusReady())
 }
 
-func TestRegisterMetricsReporter_NilServer_ShouldNoop(t *testing.T) {
+func TestRegisterMetricsReporterNilServer(t *testing.T) {
 	registerMetricsReporter(nil)
 }

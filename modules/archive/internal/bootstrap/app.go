@@ -17,9 +17,11 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -97,7 +99,16 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer natsClient.Close()
 	state.NATSReady.Store(true)
-	pull, err := natsClient.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: a.Config.Archive.EventBus.Stream, Durable: a.Config.Archive.EventBus.Durable, FetchMaxWait: a.Config.Archive.EventBus.FetchMaxWait, DeliverDecodeErrors: true})
+	eventRegistry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	pull, err := events.NewConsumer(ctx, natsClient, eventRegistry, events.ConsumerConfig{
+		Name: a.Config.Archive.EventBus.Consumer, Event: events.DatasetRowsUpserted,
+		AckWait: 5 * time.Minute, MaxDeliver: -1, MaxAckPending: 256,
+		FetchMaxWait: a.Config.Archive.EventBus.FetchMaxWait, DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		return err
 	}

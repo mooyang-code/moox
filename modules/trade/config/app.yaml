@@ -45,9 +45,4 @@ health:
 eventbus:
   enabled: true
   urls: ["nats://127.0.0.1:4222"]
-  stream: MOOX_TRADE
-  execution_durable: trade_execution_v1
-  rebalance_durable: trade_rebalance_v1
-  progress_durable: trade_progress_v1
-  reconciliation_durable: trade_reconciliation_v1
-  trading_signal_durable: trade_trading_signal_v1
+  rebalance_consumer: trade_rebalance_v1

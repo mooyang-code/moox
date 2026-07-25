@@ -68,16 +68,16 @@ func ensureTestStream(t *testing.T, client *Client, name, subject string) {
 	}
 }
 
-func newTestConsumer(t *testing.T, client *Client, durable string, ackWait time.Duration) *PullConsumer {
+func newTestConsumer(t *testing.T, client *Client, durable string, ackWait time.Duration) *Consumer {
 	t.Helper()
-	consumer, err := client.NewPullConsumer(context.Background(), ConsumerConfig{Stream: "TEST", Durable: durable, FilterSubject: "moox.test.>", AckWait: ackWait, MaxDeliver: 5})
+	consumer, err := client.NewConsumer(context.Background(), ConsumerConfig{Stream: "TEST", Durable: durable, FilterSubject: "moox.test.>", AckWait: ackWait, MaxDeliver: 5, MaxAckPending: 1000, FetchMaxWait: time.Second})
 	if err != nil {
-		t.Fatalf("NewPullConsumer() error = %v", err)
+		t.Fatalf("NewConsumer() error = %v", err)
 	}
 	return consumer
 }
 
-func fetchOne(t *testing.T, consumer *PullConsumer) *Delivery {
+func fetchOne(t *testing.T, consumer *Consumer) *Delivery {
 	t.Helper()
 	deliveries, err := consumer.Fetch(context.Background(), 1)
 	if err != nil {

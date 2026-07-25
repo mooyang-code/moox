@@ -62,7 +62,7 @@ type fakeSnapshotCollector struct {
 
 type fakeEventPublisher struct{ err error }
 
-func (f fakeEventPublisher) Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error) {
+func (f fakeEventPublisher) Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

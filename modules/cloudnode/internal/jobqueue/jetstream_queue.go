@@ -28,7 +28,7 @@ type JetStreamQueue struct {
 	cfg        QueueConfig
 	mu         sync.Mutex
 	inflight   map[string]*jetstream.Delivery
-	consumers  map[string]*jetstream.PullConsumer
+	consumers  map[string]*jetstream.Consumer
 	fetchLock  map[string]*sync.Mutex
 	fetchStart map[string]uint64
 }
@@ -60,7 +60,7 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 			publisher, _ = events.NewPublisher(client, registry)
 		}
 	}
-	return &JetStreamQueue{rt: rt, client: client, publisher: publisher, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.PullConsumer), fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64)}
+	return &JetStreamQueue{rt: rt, client: client, publisher: publisher, cfg: cfg, inflight: make(map[string]*jetstream.Delivery), consumers: make(map[string]*jetstream.Consumer), fetchLock: make(map[string]*sync.Mutex), fetchStart: make(map[string]uint64)}
 }
 
 func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) (*PublishResult, error) {
@@ -118,7 +118,7 @@ func routeConsumerKey(spaceID, codePackageID, jobType string) string {
 	return ConsumerName(spaceID, codePackageID, jobType)
 }
 
-func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*jetstream.PullConsumer, error) {
+func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) (*jetstream.Consumer, error) {
 	key := routeConsumerKey(spaceID, codePackageID, jobType)
 	if consumer := q.consumers[key]; consumer != nil {
 		return consumer, nil
@@ -127,7 +127,7 @@ func (q *JetStreamQueue) ensureConsumer(spaceID, codePackageID, jobType string) 
 	// request context would close the durable subscription as soon as the first
 	// request returns.
 	consumerCfg := consumerConfigForRoute(q.cfg, spaceID, codePackageID, jobType)
-	consumer, err := q.client.NewPullConsumer(trpc.BackgroundContext(), consumerCfg)
+	consumer, err := q.client.NewConsumer(trpc.BackgroundContext(), consumerCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (q *JetStreamQueue) ensureFetchLock(key string) *sync.Mutex {
 	return lock
 }
 
-func fetchRouteConsumer(ctx context.Context, consumer *jetstream.PullConsumer, limit int) ([]*jetstream.Delivery, error) {
+func fetchRouteConsumer(ctx context.Context, consumer *jetstream.Consumer, limit int) ([]*jetstream.Delivery, error) {
 	deliveries, err := consumer.Fetch(ctx, limit)
 	if errors.Is(err, nats.ErrTimeout) && len(deliveries) == 0 {
 		return nil, nil
@@ -294,7 +294,7 @@ func (q *JetStreamQueue) InProgress(ctx context.Context, token string) error {
 func (q *JetStreamQueue) Close() error {
 	q.mu.Lock()
 	consumers := q.consumers
-	q.consumers = make(map[string]*jetstream.PullConsumer)
+	q.consumers = make(map[string]*jetstream.Consumer)
 	q.fetchLock = make(map[string]*sync.Mutex)
 	q.fetchStart = make(map[string]uint64)
 	q.mu.Unlock()

@@ -28,7 +28,7 @@ const (
 
 var Topic = governedFamily(events.MetricsHostReported)
 
-func governedFamily(event events.EventType) string {
+func governedFamily(event events.Event) string {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return ""
@@ -42,9 +42,8 @@ func governedFamily(event events.EventType) string {
 
 var ErrInvalidHostMetric = errors.New("invalid host metric")
 
-// SnapshotWriter is the only durable dependency of the host ingest path. The
-// monitor keeps no host samples in SQLite; Storage owns the short-lived
-// history and this registry only holds the latest in-memory view.
+// SnapshotWriter 是主机指标写入链路唯一的持久化依赖。Monitor 不在 SQLite
+// 保存主机样本；Storage 保存短期历史，本组件仅保留最新的内存视图。
 type SnapshotWriter interface {
 	WriteSnapshot(context.Context, *hostmetricpb.HostSnapshot, string, time.Time, string) error
 }
@@ -359,7 +358,7 @@ func cloneSnapshot(snapshot *hostmetricpb.HostSnapshot) *hostmetricpb.HostSnapsh
 }
 
 type Consumer struct {
-	pull  *jetstream.PullConsumer
+	pull  *events.Consumer
 	store *Store
 }
 
@@ -367,7 +366,16 @@ func Bind(ctx context.Context, client *jetstream.Client, store *Store) (*Consume
 	if client == nil || store == nil {
 		return nil, errors.New("host metrics client and store are required")
 	}
-	pull, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{Stream: Stream, Durable: ConsumerName, FetchMaxWait: time.Second, DeliverDecodeErrors: true})
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	pull, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
+		Name: ConsumerName, Event: events.MetricsHostReported,
+		AckWait: time.Minute, MaxDeliver: 3, MaxAckPending: 256,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		return nil, err
 	}

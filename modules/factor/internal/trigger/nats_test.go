@@ -7,18 +7,19 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
-func TestLiveConsumerContractUsesOnlyRegistryDurable(t *testing.T) {
-	valid := NATSConfig{Stream: LiveStream, Consumer: LiveDurable, FetchMaxWait: time.Second}
+func TestLiveConsumerContractUsesOwnedConsumer(t *testing.T) {
+	valid := NATSConfig{Stream: LiveStream, Consumer: LiveConsumer, FetchMaxWait: time.Second}
 	if err := ValidateLiveConsumerConfig(valid); err != nil {
 		t.Fatalf("valid live consumer config rejected: %v", err)
 	}
 
 	for name, cfg := range map[string]NATSConfig{
-		"different stream":  {Stream: "MOOX_STORAGE_REPLAY", Consumer: LiveDurable},
+		"different stream":  {Stream: "MOOX_STORAGE_REPLAY", Consumer: LiveConsumer},
 		"different durable": {Stream: LiveStream, Consumer: "factor_replay"},
-		"empty stream":      {Consumer: LiveDurable},
+		"empty stream":      {Consumer: LiveConsumer},
 		"empty durable":     {Stream: LiveStream},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -29,12 +30,15 @@ func TestLiveConsumerContractUsesOnlyRegistryDurable(t *testing.T) {
 	}
 }
 
-func TestLiveConsumerBindRefDoesNotChooseDeliveryPolicy(t *testing.T) {
-	ref, err := liveConsumerBindRef(NATSConfig{Stream: LiveStream, Consumer: LiveDurable, FetchMaxWait: 2 * time.Second})
+func TestLiveConsumerConfig(t *testing.T) {
+	ref, err := liveConsumerConfig(NATSConfig{Stream: LiveStream, Consumer: LiveConsumer, FetchMaxWait: 2 * time.Second})
 	if err != nil {
-		t.Fatalf("liveConsumerBindRef() error = %v", err)
+		t.Fatalf("liveConsumerConfig() error = %v", err)
 	}
-	if ref.Stream != LiveStream || ref.Durable != LiveDurable || ref.FetchMaxWait != 2*time.Second {
+	if ref.Event.Name() != events.DatasetRowsUpserted.Name() ||
+		ref.Event.Version() != events.DatasetRowsUpserted.Version() ||
+		ref.Name != LiveConsumer ||
+		ref.FetchMaxWait != 2*time.Second {
 		t.Fatalf("live consumer bind ref = %+v", ref)
 	}
 }

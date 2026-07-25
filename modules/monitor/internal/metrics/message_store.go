@@ -95,9 +95,8 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 				continue
 			}
 			if latest.ID != 0 && monotonicMetric(sample.MetricName) && sample.Value < latest.Value {
-				// Reporter processes may restart with their in-memory watermark
-				// maps empty. Keep the durable latest value instead of allowing a
-				// stale business watermark to move backwards under a newer scrape.
+				// Reporter 重启后内存水位可能为空。此时保留已提交的最新值，
+				// 避免较新的抓取结果携带旧业务水位并造成数值倒退。
 				continue
 			}
 			latest.ServiceName, latest.InstanceID, latest.MetricName, latest.MetricType, latest.LabelsJSON = sample.ServiceName, sample.InstanceID, sample.MetricName, sample.MetricType, sample.LabelsJSON

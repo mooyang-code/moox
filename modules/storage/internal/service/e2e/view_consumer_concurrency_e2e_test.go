@@ -90,7 +90,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	releaseBlocked := make(chan struct{})
 	var blockOnce sync.Once
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
-		Stream: "MOOX_STORAGE", Durable: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
+		Stream: "MOOX_STORAGE", Consumer: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
 			_, datasetID, err := eventconsumer.ParseDatasetRowsUpsertedSubject(eventconsumer.DatasetRowsUpsertedSubjectPrefix, delivery.Subject)
 			if err != nil || datasetID != "prices_a" {

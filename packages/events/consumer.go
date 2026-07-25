@@ -3,9 +3,11 @@ package events
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -32,39 +34,53 @@ func DecodeDelivery(registry *Registry, delivery *jetstream.Delivery) *EventDeli
 }
 
 type Consumer struct {
-	pull     *jetstream.PullConsumer
+	consumer *jetstream.Consumer
 	registry *Registry
 }
 
-func NewConsumer(client *jetstream.Client, ref jetstream.ConsumerBindRef, registry *Registry) (*Consumer, error) {
+type ConsumerConfig struct {
+	Name                string
+	Event               Event
+	AckWait             time.Duration
+	MaxDeliver          int
+	MaxAckPending       int
+	FetchMaxWait        time.Duration
+	DeliverPolicy       nats.DeliverPolicy
+	DeliverDecodeErrors bool
+}
+
+func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig) (*Consumer, error) {
 	if client == nil {
 		return nil, fmt.Errorf("event consumer client is nil")
 	}
 	if err := registry.Validate(); err != nil {
 		return nil, err
 	}
-	pull, err := client.BindManagedPullConsumer(context.Background(), ref)
+	filter, err := registry.FamilyPattern(cfg.Event)
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{pull: pull, registry: registry}, nil
-}
-
-func NewConsumerFromPull(pull *jetstream.PullConsumer, registry *Registry) (*Consumer, error) {
-	if pull == nil {
-		return nil, fmt.Errorf("event consumer pull consumer is nil")
-	}
-	if err := registry.Validate(); err != nil {
+	consumer, err := client.NewConsumer(ctx, jetstream.ConsumerConfig{
+		Stream: cfg.Event.Stream(), Durable: cfg.Name, FilterSubject: filter,
+		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
+		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: cfg.DeliverPolicy,
+		DeliverDecodeErrors: cfg.DeliverDecodeErrors,
+	})
+	if err != nil {
 		return nil, err
 	}
-	return &Consumer{pull: pull, registry: registry}, nil
+	return &Consumer{consumer: consumer, registry: registry}, nil
 }
 
-func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*EventDelivery, error) {
-	if c == nil || c.pull == nil || c.registry == nil {
+func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
+	if c == nil || c.consumer == nil || c.registry == nil {
 		return nil, fmt.Errorf("event consumer is not initialized")
 	}
-	rawDeliveries, fetchErr := c.pull.Fetch(ctx, batch)
+	return c.consumer.Fetch(ctx, batch)
+}
+
+func (c *Consumer) FetchEvents(ctx context.Context, batch int) ([]*EventDelivery, error) {
+	rawDeliveries, fetchErr := c.Fetch(ctx, batch)
 	deliveries := make([]*EventDelivery, 0, len(rawDeliveries))
 	var firstErr error
 	if fetchErr != nil {
@@ -82,8 +98,8 @@ func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*EventDelivery, erro
 }
 
 func (c *Consumer) Close() error {
-	if c == nil || c.pull == nil {
+	if c == nil || c.consumer == nil {
 		return nil
 	}
-	return c.pull.Close()
+	return c.consumer.Close()
 }

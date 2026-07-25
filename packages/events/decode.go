@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/events/tradingpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,10 +41,9 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 	if err := message.GetOccurredAt().CheckValid(); err != nil {
 		return message, nil, fmt.Errorf("event message occurred_at: %w", err)
 	}
-	event := EventType{name: message.GetEventName(), version: message.GetEventVersion()}
-	spec, ok := registry.Schema(event)
+	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok {
-		return message, nil, fmt.Errorf("event %s is not registered", eventKey(event))
+		return message, nil, fmt.Errorf("event %s is not registered", eventKeyParts(message.GetEventName(), message.GetEventVersion()))
 	}
 	expected, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
@@ -54,45 +52,11 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 	if subject != expected {
 		return message, nil, fmt.Errorf("event subject mismatch: got %q, want %q", subject, expected)
 	}
-	factory, ok := registry.PayloadFactory(spec.Payload)
-	if !ok {
-		return message, nil, fmt.Errorf("payload %q is not registered", spec.Payload)
-	}
-	payload := factory()
+	payload := event.NewPayload()
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		return message, nil, fmt.Errorf("decode %s payload: %w", spec.Name, err)
+		return message, nil, fmt.Errorf("decode %s payload: %w", event.Name(), err)
 	}
 	return message, payload, nil
-}
-
-// DecodeTradingSignal validates the governed envelope and the signal payload
-// identity before a consumer persists the strategy recommendation.
-func DecodeTradingSignal(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *tradingpb.TradingSignal, error) {
-	return DecodeTradingSignalWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeTradingSignalWithContentType validates both the NATS content type and
-// the governed TradingSignal envelope. Consumers should pass the broker
-// Content-Type header instead of assuming it from the payload type.
-func DecodeTradingSignalWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *tradingpb.TradingSignal, error) {
-	message, payload, err := DecodeRaw(registry, raw, subject, messageID, contentType)
-	if err != nil {
-		return message, nil, err
-	}
-	if message.GetEventName() != TradingSignal.Name() || message.GetEventVersion() != TradingSignal.Version() {
-		return message, nil, fmt.Errorf("unexpected trading signal name/version")
-	}
-	signal, ok := payload.(*tradingpb.TradingSignal)
-	if !ok {
-		return message, nil, fmt.Errorf("trading signal payload has type %T", payload)
-	}
-	if err := ValidateTradingSignal(signal); err != nil {
-		return message, nil, err
-	}
-	if signal.GetSymbol() != message.GetSubjectId() {
-		return message, nil, fmt.Errorf("trading signal symbol %q does not match subject_id %q", signal.GetSymbol(), message.GetSubjectId())
-	}
-	return message, signal, nil
 }
 
 // DecodeDatasetRowsUpserted validates the governed storage envelope and its

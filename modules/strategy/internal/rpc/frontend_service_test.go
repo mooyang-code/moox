@@ -145,6 +145,7 @@ func TestBindingOperations_ValidateInputAndChangeStatus(t *testing.T) {
 
 	modeRsp, err := svc.SetExecutionMode(ctx, &strategypb.SetExecutionModeReq{
 		BindingId: "b1", Mode: "paper", OperationId: "op-mode", Reason: "test",
+		ChannelId: "channel-1", CapitalAmount: "100", QuoteAsset: "USDT",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, commonpb.ErrorCode_SUCCESS, modeRsp.GetRetInfo().GetCode())
@@ -253,6 +254,18 @@ func TestSetExecutionModeRejectsLiveWhenCapabilityDisabled(t *testing.T) {
 	assert.Equal(t, "observe", mode)
 }
 
+func TestSetExecutionModeRejectsPaperWithoutExecutionSettings(t *testing.T) {
+	db, repo := newFrontendRPCStore(t)
+	seedFrontendBinding(t, db, repo, "b1")
+	svc := &Service{Repo: repo}
+
+	rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
+		BindingId: "b1", Mode: "paper", OperationId: "op-paper", Reason: "enable paper",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "channel_id")
+}
+
 func TestDisabledLiveCapabilityKeepsObservePaperMutationsAndLiveHistoryAvailable(t *testing.T) {
 	db, repo := newFrontendRPCStore(t)
 	seedFrontendBinding(t, db, repo, "b1")
@@ -261,6 +274,7 @@ func TestDisabledLiveCapabilityKeepsObservePaperMutationsAndLiveHistoryAvailable
 	for i, mode := range []string{"paper", "observe"} {
 		rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
 			BindingId: "b1", Mode: mode, OperationId: fmt.Sprintf("op-mode-%d", i), Reason: "capability boundary test",
+			ChannelId: "channel-1", CapitalAmount: "100", QuoteAsset: "USDT",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())

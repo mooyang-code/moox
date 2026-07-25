@@ -15,7 +15,7 @@ import (
 )
 
 func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
-	c := config.Default()
+	c := rpcTestConfig(t)
 	for i := range c.Streams {
 		c.Streams[i].MaxBytes = 1 << 20
 	}
@@ -77,7 +77,7 @@ func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
 }
 
 func TestGetOverviewAndListConsumers(t *testing.T) {
-	c := config.Default()
+	c := rpcTestConfig(t)
 	for i := range c.Streams {
 		c.Streams[i].MaxBytes = 1 << 20
 	}
@@ -128,4 +128,13 @@ func freePort(t *testing.T) int {
 	}
 	defer listener.Close()
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func rpcTestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg, err := config.Load("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

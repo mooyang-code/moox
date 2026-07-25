@@ -14,7 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
+func TestStorageEventReachesConsumersOwnedByModulesAndDeduplicates(t *testing.T) {
 	server, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,10 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Default()
+	cfg, err := config.Load("../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
 	reg, err := registry.New(js, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -45,16 +48,6 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 	if _, err := reg.Reconcile(context.Background()); err != nil {
 		t.Fatalf("second reconcile managed topology: %v", err)
 	}
-	for _, durable := range []string{"storage_view", "factor_calc", "moox_archive_kline_v1"} {
-		info, err := js.ConsumerInfo("MOOX_STORAGE", durable)
-		if err != nil {
-			t.Fatalf("consumer info %s: %v", durable, err)
-		}
-		if info.Config.FilterSubject != "moox.storage.dataset.rows.upserted.v1.>" || info.Config.MaxAckPending <= 0 {
-			t.Fatalf("managed consumer %s config=%+v", durable, info.Config)
-		}
-	}
-
 	client, err := jetstream.Connect(context.Background(), jetstream.ConfigFromEnv([]string{server.ClientURL()}, "eventbus-topology-e2e"))
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +63,10 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 	}
 	consumers := make(map[string]*events.Consumer, 3)
 	for _, durable := range []string{"storage_view", "factor_calc", "moox_archive_kline_v1"} {
-		consumer, err := events.NewConsumer(client, jetstream.ConsumerBindRef{Stream: "MOOX_STORAGE", Durable: durable, FetchMaxWait: 100 * time.Millisecond}, registry)
+		consumer, err := events.NewConsumer(context.Background(), client, registry, events.ConsumerConfig{
+			Name: durable, Event: events.DatasetRowsUpserted, AckWait: time.Minute,
+			MaxDeliver: 5, MaxAckPending: 256, FetchMaxWait: 100 * time.Millisecond,
+		})
 		if err != nil {
 			t.Fatalf("bind %s: %v", durable, err)
 		}
@@ -96,14 +92,18 @@ func TestStorageEventReachesAllManagedConsumersAndDeduplicates(t *testing.T) {
 		if err != nil && len(deliveries) == 0 {
 			t.Fatalf("fetch %s: %v", durable, err)
 		}
-		if len(deliveries) != 1 || deliveries[0].Err != nil {
+		if len(deliveries) != 1 {
 			t.Fatalf("deliveries %s=%+v", durable, deliveries)
 		}
-		message := deliveries[0].Message
+		delivery := deliveries[0]
+		message, _, err := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+		if err != nil {
+			t.Fatalf("decode %s: %v", durable, err)
+		}
 		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "spot_kline" {
 			t.Fatalf("decoded envelope %s=%+v", durable, message)
 		}
-		if err := deliveries[0].Delivery.Ack(ctx); err != nil {
+		if err := delivery.Ack(ctx); err != nil {
 			t.Fatalf("ack %s: %v", durable, err)
 		}
 	}

@@ -139,21 +139,14 @@ func tradeHealthSnapshot(store *kernelstore.Store, state *health.State) healthz.
 	return func(ctx context.Context) healthz.Response {
 		stats, err := store.Health(ctx)
 		busReady := kernelEventBusReady()
-		outboxLag := time.Duration(0)
-		if !stats.OldestOutbox.IsZero() {
-			outboxLag = time.Since(stats.OldestOutbox)
-		}
 		privateReady := stats.OpenOrders == 0 || telemetry.PrivateStreamsReady()
-		ready := err == nil && busReady && outboxLag <= time.Minute && privateReady
+		ready := err == nil && busReady && privateReady
 		state.SetReady(ready)
 		telemetry.UnknownOrders.Set(float64(stats.UnknownOrders))
-		telemetry.OutboxLag.Set(outboxLag.Seconds())
 		rsp := healthz.Base("trade", "trade", "", "", tradeStartedAt, ready)
 		rsp.Details = map[string]any{
 			"database_ready":             err == nil,
 			"eventbus_ready":             busReady,
-			"outbox_pending":             stats.PendingOutbox,
-			"outbox_lag_seconds":         outboxLag.Seconds(),
 			"unknown_orders":             stats.UnknownOrders,
 			"open_orders":                stats.OpenOrders,
 			"private_stream_ready":       privateReady,

@@ -12,7 +12,7 @@ import (
 )
 
 func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
-	c := config.Default()
+	c := repositoryConfig(t)
 	for i := range c.Streams {
 		c.Streams[i].MaxBytes = 1 << 20
 	}
@@ -84,7 +84,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 }
 
 func TestTopicCoverageAndKVTTL(t *testing.T) {
-	c := config.Default()
+	c := repositoryConfig(t)
 	topic, _, err := TopicStream(c, "moox.metrics.host.reported.v1.space.agent")
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +101,8 @@ func TestTopicCoverageAndKVTTL(t *testing.T) {
 	}
 }
 
-func TestReconcileDeclaredConsumers(t *testing.T) {
-	c := config.Default()
+func TestReconcileDoesNotCreateConsumers(t *testing.T) {
+	c := repositoryConfig(t)
 	for i := range c.Streams {
 		c.Streams[i].MaxBytes = 1 << 20
 	}
@@ -128,13 +128,13 @@ func TestReconcileDeclaredConsumers(t *testing.T) {
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, spec := range c.Consumers {
-		info, err := js.ConsumerInfo(spec.Stream, spec.Durable)
+	for _, stream := range c.Streams {
+		info, err := js.StreamInfo(stream.Name)
 		if err != nil {
-			t.Fatalf("consumer %s/%s: %v", spec.Stream, spec.Durable, err)
+			t.Fatal(err)
 		}
-		if info.Config.FilterSubject != spec.FilterSubject || info.Config.MaxDeliver != spec.MaxDeliver {
-			t.Fatalf("consumer %s/%s config=%+v", spec.Stream, spec.Durable, info.Config)
+		if info.State.Consumers != 0 {
+			t.Fatalf("stream %s consumers=%d", stream.Name, info.State.Consumers)
 		}
 	}
 }
@@ -158,18 +158,8 @@ func freePort(t *testing.T) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-func TestParseAckDeliverReplayPolicies(t *testing.T) {
-	assert.Equal(t, nats.AckNonePolicy, parseAckPolicy("none"))
-	assert.Equal(t, nats.AckAllPolicy, parseAckPolicy("all"))
-	assert.Equal(t, nats.AckExplicitPolicy, parseAckPolicy("explicit"))
-	assert.Equal(t, nats.DeliverNewPolicy, parseDeliverPolicy("new"))
-	assert.Equal(t, nats.DeliverAllPolicy, parseDeliverPolicy("all"))
-	assert.Equal(t, nats.ReplayOriginalPolicy, parseReplayPolicy("original"))
-	assert.Equal(t, nats.ReplayInstantPolicy, parseReplayPolicy("instant"))
-}
-
 func TestEnabledTopics(t *testing.T) {
-	cfg := config.Default()
+	cfg := repositoryConfig(t)
 	assert.Greater(t, enabledTopics(cfg), 0)
 }
 
@@ -186,4 +176,13 @@ func TestSameStrings(t *testing.T) {
 func TestSubjectPatternsOverlapVariants(t *testing.T) {
 	assert.True(t, subjectPatternsOverlap("a.>", "a.b.c"))
 	assert.False(t, subjectPatternsOverlap("a.b", "a.c"))
+}
+
+func repositoryConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg, err := config.Load("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

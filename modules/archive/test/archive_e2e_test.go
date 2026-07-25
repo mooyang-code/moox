@@ -67,7 +67,11 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pull, err := client.BindManagedPullConsumer(context.Background(), jetstream.ConsumerBindRef{Stream: "MOOX_STORAGE", Durable: "archive-e2e", FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true})
+	pull, err := events.NewConsumer(context.Background(), client, registry, events.ConsumerConfig{
+		Name: "archive-e2e", Event: events.DatasetRowsUpserted, AckWait: time.Minute,
+		MaxDeliver: 5, MaxAckPending: 256, FetchMaxWait: 100 * time.Millisecond,
+		DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

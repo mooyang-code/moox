@@ -39,7 +39,7 @@ func init() {
 }
 
 type Publisher interface {
-	Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
+	Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
 
 type Connector func(context.Context, Config) (Publisher, error)

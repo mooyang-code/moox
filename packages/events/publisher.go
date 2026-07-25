@@ -30,7 +30,7 @@ func NewPublisher(client RawPublisher, registry *Registry) (*Publisher, error) {
 	return &Publisher{client: client, registry: registry}, nil
 }
 
-func (p *Publisher) Publish(ctx context.Context, event EventType, payload proto.Message, opts PublishOptions) (*jetstream.PublishAck, error) {
+func (p *Publisher) Publish(ctx context.Context, event Event, payload proto.Message, opts PublishOptions) (*jetstream.PublishAck, error) {
 	if p == nil || p.client == nil || p.registry == nil {
 		return nil, fmt.Errorf("event publisher is not initialized")
 	}

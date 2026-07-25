@@ -410,7 +410,7 @@ func TestServer_SetPause_ValidAccount_ShouldPersist(t *testing.T) {
 	assert.True(t, paused)
 }
 
-func TestServer_ReconcileNow_WithKernel_ShouldEnqueueOutbox(t *testing.T) {
+func TestServer_ReconcileNow_WithKernel_ShouldRunDirectly(t *testing.T) {
 	ks := openKernelStore(t)
 	h := New(nil, &command.Engine{Store: ks})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")

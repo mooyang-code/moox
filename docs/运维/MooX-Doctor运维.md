@@ -52,7 +52,7 @@ cd /home/ubuntu/moox/prod
 | `apply_service_deployments_seed` | 缺少 required SysDeploy 记录或发布契约 | 对比 `examples/service-deployments.seed.yaml` 和 Admin 中的全量部署记录 | 使用 `moox-admin-cli service-deployments import` 重新导入当前 seed | 重跑 `doctor bootstrap`，确认 `bootstrap.inventory` 通过 |
 | `verify_service_identity` | `service/instance_id/node_id/boot_id` 缺失或冲突 | 带 HMAC 读取目标 `/readyz`，核对 `<service>@<node>` 与本次 boot ID | 修正部署 node ID/环境并手工重启单个服务 | 等待两个 Reporter 周期后重跑 `diagnose` |
 | `repair_path_permissions` | Manifest writable path 不存在或不可写 | 使用部署用户检查目录 owner、mode 和挂载只读状态 | 创建目录并只授予部署用户所需权限 | 重跑对应 `bootstrap.path_permissions:*`，确认无探针残留 |
-| `verify_eventbus_credentials` | Reporter 发布、Monitor durable 或 ACL 异常 | 检查 EventBus ready、consumer pending、凭据文件权限和服务 reporter 错误 | 用 Admin credential CLI 重新生成/导出凭据并手工重启受影响服务 | 等待两个周期，确认业务 health 与 Reporter coverage 同时通过 |
+| `verify_eventbus_credentials` | Reporter 发布、Monitor Consumer 或 ACL 异常 | 检查 EventBus ready、consumer pending、凭据文件权限和服务 reporter 错误 | 用 Admin credential CLI 重新生成/导出凭据并手工重启受影响服务 | 等待两个周期，确认业务 health 与 Reporter coverage 同时通过 |
 | `restart_service_manually` | 进程停止或 health 失败 | 检查 PID、日志和签名 `/readyz`，不先删除数据 | 使用部署目录 `./restart.sh <service>` | 先运行 `./healthcheck.sh <service>`，再重跑 Doctor |
 | `inspect_pipeline_input` | enabled workload 无事实、功能错误或输出停滞 | 核对白名单 pipeline、输入是否前进、last success/error、backlog 和 watermark | 修复配置或上游后手工重启/触发既有业务流程 | 确认水位只向前推进，重跑 `diagnose` |
 | `replay_factor_window_manually` | Factor 指定窗口缺失且输入事实完整 | 核对目标窗口、版本和已有输出，避免重复写入 | 使用现有 Factor 单次计算 CLI 手工重放明确窗口 | 查询目标结果和 factor watermark 后重跑 Doctor |

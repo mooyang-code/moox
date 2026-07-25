@@ -14,7 +14,6 @@ var (
 	Fills                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_fills_total", Help: "Private or reconciled fills by result."}, []string{"source", "result"})
 	UnknownOrders             = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_trade_unknown_orders", Help: "Orders awaiting exchange truth."})
 	ReconciliationDifferences = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_reconciliation_differences_total", Help: "Reconciliation differences by kind."}, []string{"kind"})
-	OutboxLag                 = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_trade_outbox_lag_seconds", Help: "Age of the oldest unpublished outbox message."})
 	PrivateStreamFreshness    = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_trade_private_stream_freshness_seconds", Help: "Seconds since the last private stream event."}, []string{"exchange"})
 	Rebalances                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_rebalances_total", Help: "Rebalance runs by result."}, []string{"result"})
 	OperationLatency          = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "moox_trade_operation_duration_seconds", Help: "Trade operation latency.", Buckets: prometheus.DefBuckets}, []string{"operation"})
@@ -26,7 +25,7 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(Commands, Submissions, Fills, UnknownOrders, ReconciliationDifferences, OutboxLag, PrivateStreamFreshness, Rebalances, OperationLatency)
+	prometheus.MustRegister(Commands, Submissions, Fills, UnknownOrders, ReconciliationDifferences, PrivateStreamFreshness, Rebalances, OperationLatency)
 }
 
 func RecordModuleStage(stage, result string, watermark time.Time) {

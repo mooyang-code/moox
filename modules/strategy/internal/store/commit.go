@@ -3,13 +3,15 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/big"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/mooyang-code/moox/packages/strategyeventpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -113,18 +115,61 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 		if parseErr != nil {
 			occurredAt = time.Now().UTC()
 		}
-		payload := &strategyeventpb.StrategyOutputAccepted{RunId: task.RunID, BindingId: task.BindingID, StrategyId: task.StrategyID, StrategyVersion: task.Version, Action: output.Action, DataRevision: task.DataRevision, TriggerTime: timestamppb.New(occurredAt.UTC())}
-		for _, target := range output.Targets {
-			payload.Targets = append(payload.Targets, &strategyeventpb.StrategyTarget{InstrumentId: target.InstrumentID, Symbol: target.Symbol, MarketType: target.MarketType, TargetWeight: target.TargetWeight, Reason: target.Reason})
+		if output.Action != domain.ActionRebalance {
+			return nil
 		}
 		registry, err := events.DefaultRegistry()
 		if err != nil {
 			return err
 		}
-		eventData, err := registry.MarshalMessage(events.StrategyOutputAccepted, payload, events.PublishOptions{EventID: task.RunID, OccurredAt: occurredAt.UTC(), SpaceID: spaceID, SubjectID: task.BindingID})
-		if err != nil {
+		var binding domain.Binding
+		if err := tx.Where("c_binding_id=?", task.BindingID).First(&binding).Error; err != nil {
 			return err
 		}
-		return tx.Table("t_strategy_outbox").Create(map[string]any{"c_message_id": task.RunID, "c_event_data": eventData}).Error
+		var executions []domain.ExecutionBinding
+		if err := tx.Where("c_group_id=? AND c_status='enabled'", binding.GroupID).Find(&executions).Error; err != nil {
+			return err
+		}
+		for _, execution := range executions {
+			if execution.Mode == "observe" {
+				continue
+			}
+			capital, ok := new(big.Rat).SetString(execution.CapitalAmount)
+			if (execution.Mode != "paper" && execution.Mode != "live") ||
+				strings.TrimSpace(execution.AccountID) == "" || strings.TrimSpace(execution.ChannelID) == "" ||
+				!ok || capital.Sign() <= 0 || strings.TrimSpace(execution.QuoteAsset) == "" {
+				return fmt.Errorf("invalid execution binding %q", execution.ExecutionBindingID)
+			}
+			eventID := task.RunID + ":rebalance:" + execution.ExecutionBindingID
+			payload := &tradeeventpb.RebalanceRequested{
+				RequestId: eventID, StrategyRunId: task.RunID, ExecutionBindingId: execution.ExecutionBindingID,
+				AccountId: execution.AccountID, ChannelId: execution.ChannelID, Mode: execution.Mode,
+				DataRevision: task.DataRevision, CapitalAmount: execution.CapitalAmount, QuoteAsset: execution.QuoteAsset,
+			}
+			for _, target := range output.Targets {
+				symbol := target.Symbol
+				if symbol == "" {
+					symbol = target.InstrumentID
+				}
+				marketType := target.MarketType
+				if marketType == "" {
+					marketType = "spot"
+				}
+				payload.Targets = append(payload.Targets, &tradeeventpb.RebalanceTarget{
+					InstrumentId: target.InstrumentID, Symbol: symbol,
+					MarketType: marketType, TargetWeight: target.TargetWeight,
+				})
+			}
+			eventData, err := registry.MarshalMessage(events.TradeRebalanceRequested, payload, events.PublishOptions{
+				EventID: eventID, OccurredAt: occurredAt.UTC(), SpaceID: spaceID, SubjectID: execution.ExecutionBindingID,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.Table("t_strategy_outbox").Create(map[string]any{"c_message_id": eventID, "c_event_data": eventData}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

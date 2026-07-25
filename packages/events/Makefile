@@ -1,7 +1,7 @@
 PROTO_DIR := proto
 MODULE := github.com/mooyang-code/moox/packages/events
 PROTOBUF_PROTO_DIR := ../../modules/eventbus/proto
-PROTO_FILES := eventpb/event_message.proto tradingpb/trading_payloads.proto
+PROTO_FILES := eventpb/event_message.proto
 
 .PHONY: all clean
 
@@ -12,4 +12,4 @@ all:
 	done
 
 clean:
-	rm -f eventpb/*.pb.go tradingpb/*.pb.go
+	rm -f eventpb/*.pb.go

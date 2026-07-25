@@ -12,8 +12,9 @@ var (
 	// ErrDecode means a received NATS message is not a valid MooX message.
 	ErrDecode = errors.New("decode moox message")
 	// ErrInvalidConsumer means a pull consumer configuration is invalid.
-	ErrInvalidConsumer  = errors.New("invalid pull consumer")
-	ErrConsumerNotFound = errors.New("pull consumer not found")
+	ErrInvalidConsumer        = errors.New("invalid pull consumer")
+	ErrConsumerNotFound       = errors.New("pull consumer not found")
+	ErrConsumerConfigConflict = errors.New("jetstream consumer config conflict")
 	// ErrInvalidDelivery means a delivery is nil or no longer usable.
 	ErrInvalidDelivery = errors.New("invalid delivery")
 	// ErrClosed means the client or consumer has already been closed.

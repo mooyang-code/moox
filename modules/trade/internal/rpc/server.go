@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
@@ -12,7 +11,6 @@ import (
 	domainrebalance "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
@@ -79,10 +77,9 @@ func (h *Server) ReconcileNow(ctx context.Context, req *tradepb.ReconcileNowReq)
 	if err != nil {
 		return &tradepb.ReconcileNowRsp{RetInfo: errToRetInfo(err)}, nil
 	}
-	payload, err := tradebus.EncodeReconciliationRequested(id, spaceID(ctx), id, req.GetAccountId(), req.GetChannelId(), time.Now().UTC())
-	if err == nil {
-		err = h.kernel.Store.EnqueueOutbox(ctx, id, payload)
-	}
+	_, err = (reconciliation.Reconciler{Store: h.kernel.Store, Engine: h.kernel}).Scope(ctx, reconciliation.Scope{
+		SpaceID: spaceID(ctx), AccountID: req.GetAccountId(), ChannelID: req.GetChannelId(), Limit: 200,
+	})
 	if err != nil {
 		return &tradepb.ReconcileNowRsp{RetInfo: errToRetInfo(err)}, nil
 	}

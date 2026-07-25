@@ -21,7 +21,7 @@ func registerKernelTimers(s *server.Server, tradeStore *store.Store, engine *com
 	if s == nil || tradeStore == nil || engine == nil {
 		return fmt.Errorf("trade kernel timers require server, store, and engine")
 	}
-	reconcileJob, err := timerjob.New("trade_fill_reconcile", 5*time.Second, func(ctx context.Context) error {
+	reconcileJob, err := timerjob.New("trade_fill_reconcile", 30*time.Second, func(ctx context.Context) error {
 		return reconcileOrdersOnce(ctx, tradeStore, engine, "", "", "")
 	})
 	if err != nil {

@@ -89,7 +89,7 @@ MOOX_CLOUDNODE_EXEC       moox.cloudnode.exec.v1.>     执行消息，负责 ACK
 MOOX_CLOUDNODE_JOB_ACTIVE JetStream KV bucket          active JobItem 状态，TTL 48 小时
 ```
 
-`MOOX_CLOUDNODE_EXEC` 是执行队列事实源。SCF 通过 `PollJobItems` 拉取任务，CloudNode 按 `space_id + code_package_id + job_type` 选择 durable consumer，并在 `ReportJobItemStatus` 时 ACK/NAK/TERM。
+`MOOX_CLOUDNODE_EXEC` 是执行队列事实源。SCF 通过 `PollJobItems` 拉取任务，CloudNode 按 `space_id + code_package_id + job_type` 创建并持有对应 Consumer，并在 `ReportJobItemStatus` 时 ACK/NAK/TERM。
 
 `MOOX_CLOUDNODE_JOB_ACTIVE` 保存管理台可见的 active 状态、attempt 和取消指令。终态 JobItem 会 best-effort 写入 `data/cloudnode/jobs/YYYYMMDD.db`，用于本机排障和短期审计；管理台当前不查询历史日库。
 

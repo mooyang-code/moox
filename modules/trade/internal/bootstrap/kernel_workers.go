@@ -13,18 +13,20 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/reconciliation"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"google.golang.org/protobuf/proto"
+	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store.Store, e *command.Engine) error {
+	wakeup := newKernelWakeup()
+	s.SetWakeup(wakeup.Wake)
+	go runTradeStateWorker(ctx, s, e, wakeup)
+	go runPrivateStreamSupervisor(ctx, s, e, wakeup)
 	if !cfg.Enabled {
 		return nil
 	}
@@ -33,42 +35,106 @@ func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store
 		return err
 	}
 	setKernelEventBusClient(client)
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		_ = client.Close()
-		return err
-	}
-	eventPublisher, err := events.NewPublisher(client, registry)
-	if err != nil {
-		_ = client.Close()
-		return err
-	}
-	relay := tradebus.Relay{Store: s, Publisher: eventPublisher, InstanceID: "trade", BootID: time.Now().UTC().Format(time.RFC3339Nano)}
 	go func() {
-		ticker := time.NewTicker(200 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				_ = client.Close()
-				return
-			case <-ticker.C:
-				if err := relay.RunOnce(ctx, 100); err != nil {
-					log.WarnContextf(ctx, "trade outbox relay: %v", err)
-				}
-			}
-		}
+		<-ctx.Done()
+		client.Close()
 	}()
-	go runExecutionConsumer(ctx, client, cfg, s, e)
-	go runRebalanceConsumer(ctx, client, cfg, s, e)
-	go runProgressConsumer(ctx, client, cfg, s, e)
-	go runReconciliationConsumer(ctx, client, cfg, s, e)
-	go runTradingSignalConsumer(ctx, client, cfg, s)
-	go runPrivateStreamSupervisor(ctx, s, e)
+	go runRebalanceConsumer(ctx, client, cfg, s, e, wakeup)
 	return nil
 }
 
-func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.Engine) {
+func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, wakeup *kernelWakeup) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		log.WarnContextf(ctx, "load trade event registry: %v", err)
+		return
+	}
+	for ctx.Err() == nil {
+		consumer, openErr := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
+			Name: cfg.RebalanceConsumer, Event: events.TradeRebalanceRequested,
+			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64,
+			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+			DeliverDecodeErrors: true,
+		})
+		if openErr != nil {
+			log.WarnContextf(ctx, "open trade rebalance consumer: %v", openErr)
+			if !sleepContext(ctx, time.Second) {
+				return
+			}
+			continue
+		}
+		handler := jetstream.DeliveryHandlerFunc(func(handlerCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+			return handleRebalanceDelivery(handlerCtx, delivery, s, e, cfg.RebalanceConsumer, wakeup)
+		})
+		runner := jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
+			BatchSize: 16,
+			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+				log.WarnContextf(ctx, "trade rebalance delivery failed: %v", err)
+			}),
+		})
+		runErr := runner.Run(ctx)
+		_ = consumer.Close()
+		if ctx.Err() != nil {
+			return
+		}
+		if runErr != nil {
+			log.WarnContextf(ctx, "trade rebalance consumer stopped: %v", runErr)
+		}
+		if !sleepContext(ctx, time.Second) {
+			return
+		}
+	}
+}
+
+func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string, wakeup *kernelWakeup) jetstream.HandlerResult {
+	if delivery == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	}
+	message, payload, err := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	request, ok := payload.(*tradeeventpb.RebalanceRequested)
+	if !ok || request.GetRequestId() != message.GetEventId() || request.GetExecutionBindingId() != message.GetSubjectId() {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: envelope identity mismatch", rebalanceapp.ErrInvalidRequest)}
+	}
+	planner := rebalanceapp.RequestPlanner{Resolver: tradeSnapshotResolver{store: s, engine: e, spaceID: message.GetSpaceId(), channelID: request.GetChannelId()}}
+	input, err := planner.Build(ctx, message.GetSpaceId(), request)
+	if err != nil {
+		if rebalanceapp.IsPermanentRequestError(err) {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	}
+	fresh, err := (rebalanceapp.Service{Store: s, Engine: e}).CreateFromEvent(ctx, consumerName, message.GetEventId(), message.GetEventName(), input)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	}
+	if fresh && wakeup != nil {
+		wakeup.Wake()
+	}
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+func runTradeStateWorker(ctx context.Context, s *store.Store, e *command.Engine, wakeup *kernelWakeup) {
+	_ = recoverOrdersOnce(ctx, s, e)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-wakeup.C():
+			if err := recoverOrdersOnce(ctx, s, e); err != nil && ctx.Err() == nil {
+				log.WarnContextf(ctx, "trade state worker: %v", err)
+			}
+		}
+	}
+}
+
+func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.Engine, wakeup *kernelWakeup) {
 	type streamEntry struct {
 		cancel     context.CancelFunc
 		generation uint64
@@ -126,29 +192,21 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 					}()
 					adapter, err := e.AdapterFor(ctx, row)
 					if err != nil {
-						log.WarnContextf(ctx, "resolve private stream %s: %v", key, err)
 						return
 					}
 					streamCtx = exchange.WithPrivateStreamState(streamCtx, func(ready bool) {
-						mu.Lock()
-						current, ok := active[key]
-						if ok && current.generation == myGeneration {
-							telemetry.SetPrivateConnected(key, ready)
-						}
-						mu.Unlock()
+						telemetry.SetPrivateConnected(key, ready)
 					})
-					exchangeLabel := "configured"
-					if named, ok := adapter.(interface{ ExchangeName() string }); ok {
-						exchangeLabel = named.ExchangeName()
-					}
 					err = adapter.SubscribePrivate(streamCtx, func(eventCtx context.Context, fill exchange.FillEvent) error {
 						orderRow, lookupErr := s.GetOrderForPrivateFill(eventCtx, row.SpaceID, row.ChannelID, fill.Symbol, fill.ExchangeOrderID)
 						if lookupErr != nil {
 							return lookupErr
 						}
 						fill.BaseAsset, fill.QuoteAsset = orderRow.BaseAsset, orderRow.QuoteAsset
-						telemetry.MarkPrivateEvent(exchangeLabel, time.Now())
 						_, handleErr := (consumer.FillHandler{Store: s}).HandleSource(eventCtx, orderRow.SpaceID, orderRow.AccountID, orderRow.OrderID, fill.ExchangeTradeID, fill, "private_stream")
+						if handleErr == nil {
+							wakeup.Wake()
+						}
 						return handleErr
 					})
 					if err != nil && ctx.Err() == nil {
@@ -158,130 +216,6 @@ func runPrivateStreamSupervisor(ctx context.Context, s *store.Store, e *command.
 			}
 		}
 	}
-}
-
-func advanceActiveRebalances(ctx context.Context, s *store.Store, e *command.Engine) error {
-	runs, err := s.ListActiveRebalanceRuns(ctx, 100)
-	if err != nil {
-		return err
-	}
-	service := rebalanceapp.Service{Store: s, Engine: e}
-	for _, run := range runs {
-		if _, err := service.Advance(ctx, run.SpaceID, run.RunID, run.AccountID, run.ChannelID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func runProgressConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ProgressDurable, events.TradeFillReceived, 64), 16, "progress", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		if err := advanceActiveRebalances(ctx, s, e); err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		message, _, err := decodeTradeDelivery(delivery)
-		if err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-		}
-		if _, err := s.RecordInbox(ctx, cfg.ProgressDurable, message.GetEventId(), delivery.Subject); err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		return jetstream.HandlerResult{Decision: jetstream.ACK}
-	})
-}
-
-func runReconciliationConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ReconciliationDurable, events.TradeReconciliationRequested, 64), 8, "reconciliation", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		deliveryCtx := deliveryTraceContext(ctx, delivery)
-		started := time.Now()
-		var scope struct {
-			SpaceID   string `json:"space_id"`
-			AccountID string `json:"account_id"`
-			ChannelID string `json:"channel_id"`
-		}
-		message, payload, err := decodeTradeDelivery(delivery)
-		if err == nil {
-			request, ok := payload.(*tradeeventpb.ReconciliationRequested)
-			if !ok {
-				err = fmt.Errorf("unexpected reconciliation payload %T", payload)
-			} else {
-				scope.SpaceID = message.GetSpaceId()
-				scope.AccountID = request.GetAccountId()
-				scope.ChannelID = request.GetChannelId()
-			}
-		}
-		if err == nil && scope.SpaceID == "" {
-			err = errors.New("trade: reconciliation space is required")
-		}
-		if err == nil {
-			err = reconcileOrdersOnce(deliveryCtx, s, e, scope.SpaceID, scope.AccountID, scope.ChannelID)
-		}
-		telemetry.OperationLatency.WithLabelValues("reconcile").Observe(time.Since(started).Seconds())
-		if err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		if _, err = s.RecordInbox(deliveryCtx, cfg.ReconciliationDurable, message.GetEventId(), delivery.Subject); err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		return jetstream.HandlerResult{Decision: jetstream.ACK}
-	})
-}
-
-func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.RebalanceDurable, events.TradeRebalanceRequested, 64), 16, "rebalance", func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		if err := handleRebalanceDelivery(ctx, delivery, s, e, cfg.RebalanceDurable); err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		return jetstream.HandlerResult{Decision: jetstream.ACK}
-	})
-}
-
-func runTradePullConsumer(ctx context.Context, client *jetstream.Client, ref jetstream.ConsumerRef, batch int, name string, handler jetstream.DeliveryHandlerFunc) {
-	for ctx.Err() == nil {
-		pull, err := client.BindPullConsumer(ctx, ref)
-		if err != nil {
-			log.WarnContextf(ctx, "bind trade %s consumer: %v", name, err)
-			time.Sleep(time.Second)
-			continue
-		}
-		runner := jetstream.NewRunner(pull, handler, jetstream.RunnerConfig{BatchSize: batch, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-			log.WarnContextf(ctx, "trade %s delivery failed: %v", name, err)
-		})})
-		err = runner.Run(ctx)
-		_ = pull.Close()
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			log.WarnContextf(ctx, "trade %s consumer stopped: %v", name, err)
-		}
-		time.Sleep(time.Second)
-	}
-}
-
-func tradeConsumerRef(cfg config.EventBusConfig, durable string, event events.EventType, maxAckPending int) jetstream.ConsumerRef {
-	filter := ""
-	if registry, err := events.DefaultRegistry(); err == nil {
-		filter, _ = registry.FamilyPattern(event)
-	}
-	return jetstream.ConsumerRef{Stream: cfg.Stream, Durable: durable, FilterSubject: filter, AckWait: 60 * time.Second, MaxDeliver: -1, MaxAckPending: maxAckPending, FetchMaxWait: time.Second}
-}
-
-func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string) error {
-	ctx = deliveryTraceContext(ctx, delivery)
-	message, payload, err := decodeTradeDelivery(delivery)
-	if err != nil {
-		return err
-	}
-	rebalanceEvent, ok := payload.(*tradeeventpb.RebalanceRequested)
-	if !ok {
-		return fmt.Errorf("unexpected rebalance payload %T", payload)
-	}
-	if _, err := (rebalanceapp.Service{Store: s, Engine: e}).Advance(ctx, message.GetSpaceId(), rebalanceEvent.GetRunId(), rebalanceEvent.GetAccountId(), rebalanceEvent.GetChannelId()); err != nil {
-		return err
-	}
-	_, err = s.RecordInbox(ctx, consumerName, message.GetEventId(), delivery.Subject)
-	return err
 }
 
 func reconcileOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine, space, account, channel string) error {
@@ -299,104 +233,58 @@ func recoverOrdersOnce(ctx context.Context, s *store.Store, e *command.Engine) e
 	if err != nil {
 		errs = append(errs, fmt.Errorf("list recoverable orders: %w", err))
 	} else {
-		for _, o := range orders {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(append(errs, err)...)
-			}
+		for _, order := range orders {
 			var runErr error
-			switch o.State {
+			switch order.State {
 			case "READY", "SUBMITTING", "SUBMIT_UNKNOWN":
-				_, runErr = worker.Handle(ctx, o.SpaceID, o.OrderID)
+				_, runErr = worker.Handle(ctx, order.SpaceID, order.OrderID)
 			case "CANCELING":
-				_, runErr = e.RecoverCanceling(ctx, o.SpaceID, o.OrderID)
+				_, runErr = e.RecoverCanceling(ctx, order.SpaceID, order.OrderID)
 			case "CANCEL_UNKNOWN":
-				_, runErr = e.ResolveCancelUnknown(ctx, o.SpaceID, o.OrderID)
+				_, runErr = e.ResolveCancelUnknown(ctx, order.SpaceID, order.OrderID)
 			}
 			if runErr != nil {
-				errs = append(errs, fmt.Errorf("recover order %s: %w", o.OrderID, runErr))
+				errs = append(errs, fmt.Errorf("recover order %s: %w", order.OrderID, runErr))
 			}
 		}
 	}
 	sagas, err := s.ListRecoverableSagas(ctx, 100)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("list recoverable sagas: %w", err))
+		errs = append(errs, err)
 	} else {
 		for _, saga := range sagas {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(append(errs, err)...)
-			}
 			if _, err := e.ResumeReplace(ctx, saga.SpaceID, saga.SagaID); err != nil {
-				errs = append(errs, fmt.Errorf("recover saga %s: %w", saga.SagaID, err))
+				errs = append(errs, err)
 			}
 		}
 	}
-	runs, err := s.ListActiveRebalanceRuns(ctx, 100)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("list active rebalance runs: %w", err))
-	} else {
-		svc := rebalanceapp.Service{Store: s, Engine: e}
-		for _, run := range runs {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(append(errs, err)...)
-			}
-			if _, err := svc.Advance(ctx, run.SpaceID, run.RunID, run.AccountID, run.ChannelID); err != nil {
-				errs = append(errs, fmt.Errorf("recover rebalance %s: %w", run.RunID, err))
-			}
-		}
+	if err := advanceActiveRebalances(ctx, s, e); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
 
-func runExecutionConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine) {
-	runTradePullConsumer(ctx, client, tradeConsumerRef(cfg, cfg.ExecutionDurable, events.TradeExecutionSliceReady, 256), 32, "execution", jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		if err := handleExecutionDelivery(ctx, delivery, s, e, cfg.ExecutionDurable); err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-		}
-		return jetstream.HandlerResult{Decision: jetstream.ACK}
-	}))
-}
-
-func handleExecutionDelivery(ctx context.Context, d *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string) error {
-	ctx = deliveryTraceContext(ctx, d)
-	message, payload, err := decodeTradeDelivery(d)
+func advanceActiveRebalances(ctx context.Context, s *store.Store, e *command.Engine) error {
+	runs, err := s.ListActiveRebalanceRuns(ctx, 100)
 	if err != nil {
 		return err
 	}
-	snapshot, ok := payload.(*tradeeventpb.OrderSnapshot)
-	if !ok {
-		return fmt.Errorf("unexpected order payload %T", payload)
-	}
-	worker := consumer.SubmissionWorker{Engine: e}
-	if _, err := worker.Handle(ctx, message.GetSpaceId(), snapshot.GetOrderId()); err != nil {
-		return err
-	}
-	if saga, err := s.GetSagaByReplacementOrder(ctx, message.GetSpaceId(), snapshot.GetOrderId()); err == nil {
-		if _, err := e.ResumeReplace(ctx, saga.SpaceID, saga.SagaID); err != nil {
+	service := rebalanceapp.Service{Store: s, Engine: e}
+	for _, run := range runs {
+		if _, err := service.Advance(ctx, run.SpaceID, run.RunID, run.AccountID, run.ChannelID); err != nil {
 			return err
 		}
 	}
-	if err := advanceActiveRebalances(ctx, s, e); err != nil {
-		return err
-	}
-	_, err = s.RecordInbox(ctx, consumerName, message.GetEventId(), d.Subject)
-	return err
+	return nil
 }
 
-func deliveryTraceContext(ctx context.Context, delivery *jetstream.Delivery) context.Context {
-	return ctx
-}
-
-func decodeTradeDelivery(delivery *jetstream.Delivery) (*eventpb.EventMessage, proto.Message, error) {
-	if delivery == nil {
-		return nil, nil, jetstream.ErrInvalidDelivery
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return nil, nil, err
-	}
-	message, payload, err := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
-	if err != nil {
-		return message, nil, err
-	}
-	return message, payload, nil
 }

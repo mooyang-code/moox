@@ -1733,7 +1733,7 @@ Run:
 ```bash
 cd web
 pnpm test
-pnpm build
+pnpm build:prod
 ```
 
 Expected: PASS，构建无 TypeScript/Vue 错误。

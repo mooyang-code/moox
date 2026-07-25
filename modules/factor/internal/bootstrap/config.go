@@ -137,7 +137,7 @@ func Default() *Config {
 			URLs:         []string{"nats://127.0.0.1:4222"},
 			URL:          "nats://127.0.0.1:4222",
 			Stream:       trigger.LiveStream,
-			Consumer:     trigger.LiveDurable,
+			Consumer:     trigger.LiveConsumer,
 			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
@@ -203,7 +203,7 @@ func (c *Config) applyDefaults() {
 		c.NATS.Stream = trigger.LiveStream
 	}
 	if c.NATS.Consumer == "" {
-		c.NATS.Consumer = trigger.LiveDurable
+		c.NATS.Consumer = trigger.LiveConsumer
 	}
 	if c.NATS.FetchMaxWait == 0 {
 		c.NATS.FetchMaxWait = time.Second

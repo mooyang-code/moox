@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestTransactionRollbackInboxAndOutbox(t *testing.T) {
+func TestTransactionRollbackInbox(t *testing.T) {
 	s, e := Open(filepath.Join(t.TempDir(), "trade.db"))
 	if e != nil {
 		t.Fatal(e)
@@ -24,9 +24,6 @@ func TestTransactionRollbackInboxAndOutbox(t *testing.T) {
 		ok, e := tx.InsertInbox("c", "m", "t")
 		if e != nil || !ok {
 			t.Fatalf("insert: %v %v", ok, e)
-		}
-		if e = tx.AddOutbox("m", []byte("x")); e != nil {
-			t.Fatal(e)
 		}
 		return ErrConflict
 	})
@@ -67,59 +64,6 @@ func TestInboxAndFillIdempotency(t *testing.T) {
 	}); e != nil {
 		t.Fatal(e)
 	}
-}
-
-func TestRecordTradingSignalIsAtomicAndIdempotent(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	record := TradingSignalRecord{
-		SpaceID: "space", EventID: "event-1", SignalID: "signal-1", StrategyID: "strategy-1",
-		Symbol: "BTC-USDT", Side: "SIGNAL_SIDE_BUY", Action: "SIGNAL_ACTION_OPEN",
-		TargetPrice: "101.5", SignalTime: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), Tags: `{"source":"test"}`,
-	}
-	fresh, err := s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "moox.trading.signal.v1.space.subject", record)
-	require.NoError(t, err)
-	assert.True(t, fresh)
-	fresh, err = s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "moox.trading.signal.v1.space.subject", record)
-	require.NoError(t, err)
-	assert.False(t, fresh)
-
-	var count int64
-	require.NoError(t, s.db.Table("t_trade_signal_recommendations").Where("c_space_id=?", record.SpaceID).Count(&count).Error)
-	assert.Equal(t, int64(1), count)
-	var got struct {
-		SignalID    string `gorm:"column:c_signal_id"`
-		Action      string `gorm:"column:c_action"`
-		TargetPrice string `gorm:"column:c_target_price"`
-		Tags        string `gorm:"column:c_tags"`
-	}
-	require.NoError(t, s.db.Table("t_trade_signal_recommendations").Where("c_space_id=? AND c_signal_id=?", record.SpaceID, record.SignalID).Take(&got).Error)
-	assert.Equal(t, record.SignalID, got.SignalID)
-	assert.Equal(t, record.Action, got.Action)
-	assert.Equal(t, record.TargetPrice, got.TargetPrice)
-	assert.JSONEq(t, record.Tags, got.Tags)
-}
-
-func TestRecordTradingSignalTreatsSameSignalWithNewEventAsIdempotent(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	record := TradingSignalRecord{
-		SpaceID: "space", EventID: "event-1", SignalID: "signal-1", StrategyID: "strategy-1",
-		Symbol: "BTC-USDT", Side: "SIGNAL_SIDE_BUY", Action: "SIGNAL_ACTION_OPEN",
-		SignalTime: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), Tags: `{}`,
-	}
-	fresh, err := s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "subject", record)
-	require.NoError(t, err)
-	require.True(t, fresh)
-
-	record.EventID = "event-2"
-	fresh, err = s.RecordTradingSignal(ctx, "trade_trading_signal_v1", record.EventID, "subject", record)
-	require.NoError(t, err)
-	assert.True(t, fresh, "the new envelope was recorded in the inbox")
-
-	var count int64
-	require.NoError(t, s.db.Table("t_trade_signal_recommendations").Where("c_space_id=? AND c_signal_id=?", record.SpaceID, record.SignalID).Count(&count).Error)
-	assert.Equal(t, int64(1), count)
 }
 
 func TestEpochTimeAcceptsSecondsAndMilliseconds(t *testing.T) {
@@ -227,15 +171,6 @@ func TestStore_ListBalances_AfterLedgerPost_ShouldReturnRows(t *testing.T) {
 	require.NotEmpty(t, rows)
 }
 
-func TestStore_EnqueueOutbox_ShouldPersist(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", []byte("event-data")))
-	var count int64
-	s.DBForTest().Table("t_trade_outbox").Count(&count)
-	assert.Equal(t, int64(1), count)
-}
-
 func TestStore_ListOpenOrders_ShouldFilterByState(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -307,27 +242,6 @@ func TestStore_ListRecoverableSagas_ShouldReturnActiveSagaStates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "saga-1", rows[0].SagaID)
-}
-
-func TestStore_ClaimReleaseAndMarkOutbox_ShouldUpdateLifecycle(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", []byte("event-data")))
-
-	claimed, err := s.ClaimOutbox(ctx, 0, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, claimed, 1)
-	assert.Equal(t, "msg-1", claimed[0].MessageID)
-
-	require.NoError(t, s.ReleaseOutbox(ctx, claimed[0].ID, "retry later"))
-	reclaimed, err := s.ClaimOutbox(ctx, 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, reclaimed, 1)
-	require.NoError(t, s.MarkOutboxPublished(ctx, reclaimed[0].ID))
-
-	empty, err := s.ClaimOutbox(ctx, 1, time.Minute)
-	require.NoError(t, err)
-	assert.Empty(t, empty)
 }
 
 func TestSplitSQL_SkipsCommentsAndEmptyLines(t *testing.T) {

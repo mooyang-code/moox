@@ -70,7 +70,7 @@ func TestAppRunBecomesReadyWithEmbeddedNATS(t *testing.T) {
 	_, err = js.AddStream(&nats.StreamConfig{Name: cfg.Archive.EventBus.Stream, Subjects: []string{storageSubject}, Storage: nats.FileStorage})
 	require.NoError(t, err)
 	_, err = js.AddConsumer(cfg.Archive.EventBus.Stream, &nats.ConsumerConfig{
-		Name: cfg.Archive.EventBus.Durable, Durable: cfg.Archive.EventBus.Durable,
+		Name: cfg.Archive.EventBus.Consumer, Durable: cfg.Archive.EventBus.Consumer,
 		FilterSubject: storageSubject, AckPolicy: nats.AckExplicitPolicy,
 		AckWait: 5 * time.Minute, MaxDeliver: -1, MaxAckPending: 256,
 	})
@@ -127,8 +127,8 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	cfg.Archive.StorageRPC.KeyID = "archive"
 	cfg.Archive.StorageRPC.HMACKeyFile = keyFile
 	cfg.Archive.EventBus.URLs = []string{natsURL}
-	cfg.Archive.EventBus.Stream = fmt.Sprintf("MOOX_STORAGE_%d", time.Now().UnixNano())
-	cfg.Archive.EventBus.Durable = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
+	cfg.Archive.EventBus.Stream = "MOOX_STORAGE"
+	cfg.Archive.EventBus.Consumer = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second
 	cfg.Archive.COS.Enabled = false
 	require.NoError(t, cfg.Validate())

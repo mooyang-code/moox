@@ -8,10 +8,8 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/strategyeventpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.11
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -58,7 +56,5 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../jetstream
 replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../storagepb
-
-replace github.com/mooyang-code/moox/packages/strategyeventpb => ../strategyeventpb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../tradeeventpb

@@ -28,18 +28,23 @@ func TestBindingOperationsUpdateAndAuditAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := s.SetExecutionMode(ctx, binding, "paper", domain.OperationAudit{OperationID: "op-mode", Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: "test", RequestID: "op-mode"}); err != nil {
+	if err := s.SetExecutionMode(ctx, binding, "paper", "channel-1", "100", "USDT", domain.OperationAudit{OperationID: "op-mode", Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: "test", RequestID: "op-mode"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetBindingStatus(ctx, binding, "disabled", domain.OperationAudit{OperationID: "op-status", Operator: "admin", Action: "pause", BindingID: binding.BindingID, Reason: "test", RequestID: "op-status"}); err != nil {
 		t.Fatal(err)
 	}
-	var mode string
-	if err := db.Table("t_strategy_execution_bindings").Select("c_mode").Where("c_group_id=?", binding.GroupID).Scan(&mode).Error; err != nil {
+	var execution struct {
+		Mode          string `gorm:"column:c_mode"`
+		ChannelID     string `gorm:"column:c_channel_id"`
+		CapitalAmount string `gorm:"column:c_capital_amount"`
+		QuoteAsset    string `gorm:"column:c_quote_asset"`
+	}
+	if err := db.Table("t_strategy_execution_bindings").Where("c_group_id=?", binding.GroupID).Scan(&execution).Error; err != nil {
 		t.Fatal(err)
 	}
-	if mode != "paper" {
-		t.Fatalf("mode=%q", mode)
+	if execution.Mode != "paper" || execution.ChannelID != "channel-1" || execution.CapitalAmount != "100" || execution.QuoteAsset != "USDT" {
+		t.Fatalf("execution=%+v", execution)
 	}
 	var status string
 	if err := db.Table("t_strategy_bindings").Select("c_status").Where("c_binding_id=?", binding.BindingID).Scan(&status).Error; err != nil {

@@ -46,6 +46,12 @@ MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点�
 JetStream 运行态数据。部署启动顺序为 EventBus -> Storage -> Metadata
 `metadata apply` 预检 -> Monitor -> 其他业务服务。
 
+当前公共事件固定为五个：CloudNode 任务命令、两类 metrics、Storage committed upsert
+和 Strategy 调仓命令。Collector 闭合 K 线后直接写 Storage；Storage 写入触发
+View/Factor/Archive；Strategy 只为 paper/live execution binding 发布调仓命令，Trade
+提交 Inbox 和调仓计划后由本地 wake 立即推进。EventBus 只创建 Stream/KV，各业务服务
+通过 `NewConsumer` 创建并拥有自己的 Consumer。
+
 每个服务的本地 timer 每 30 秒主动上报 Prometheus registry 快照到 EventBus，
 Monitor 消费后把历史写入 Storage 并提供 MooX 看板和结构化多指标阈值告警。
 系统不部署 Prometheus Server、Pushgateway，也不提供手工监控 target API。

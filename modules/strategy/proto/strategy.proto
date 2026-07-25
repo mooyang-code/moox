@@ -49,7 +49,15 @@ message PerformanceSummary { string nav = 1; string return_value = 2; string max
 message GetStrategyPerformanceReq { string binding_id = 1; string performance_source = 2; TimeRange range = 3; string interval = 4; }
 message GetStrategyPerformanceRsp { common.RetInfo ret_info = 1; string performance_source = 2; PerformanceSummary summary = 3; repeated PerformancePoint points = 4; string data_revision = 5; string as_of = 6; }
 message BindingOperationReq { string binding_id = 1; string reason = 2; string operation_id = 3; }
-message SetExecutionModeReq { string binding_id = 1; string mode = 2; string reason = 3; string operation_id = 4; }
+message SetExecutionModeReq {
+  string binding_id = 1;
+  string mode = 2;
+  string reason = 3;
+  string operation_id = 4;
+  string channel_id = 5;
+  string capital_amount = 6;
+  string quote_asset = 7;
+}
 message BindingOperationRsp { common.RetInfo ret_info = 1; string operation_id = 2; string status = 3; }
 
 service StrategyMgr {

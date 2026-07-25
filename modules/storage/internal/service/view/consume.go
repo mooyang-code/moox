@@ -24,7 +24,7 @@ import (
 // this value is only useful for validating a local fetch configuration.
 type EventConsumerOptions struct {
 	Stream        string
-	Durable       string
+	Consumer      string
 	AckWaitMS     int
 	FetchBatch    int
 	MaxWorkers    int
@@ -49,14 +49,17 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 	if strings.TrimSpace(o.Stream) == "" {
 		o.Stream = "MOOX_STORAGE"
 	}
-	if strings.TrimSpace(o.Durable) == "" {
-		o.Durable = "storage_view"
+	if strings.TrimSpace(o.Consumer) == "" {
+		o.Consumer = "storage_view"
 	}
 	if o.AckWaitMS == 0 {
 		o.AckWaitMS = 120000
 	}
 	if o.FetchBatch == 0 {
 		o.FetchBatch = 8
+	}
+	if o.MaxAckPending == 0 {
+		o.MaxAckPending = o.FetchBatch
 	}
 	if o.MaxWorkers == 0 {
 		o.MaxWorkers = 4
@@ -67,7 +70,7 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 		o.MaxRetryAttempts = defaultMaxRetryAttempts
 	}
 	o.Stream = strings.TrimSpace(o.Stream)
-	o.Durable = strings.TrimSpace(o.Durable)
+	o.Consumer = strings.TrimSpace(o.Consumer)
 	if strings.TrimSpace(o.Ordering) == "" {
 		o.Ordering = "subject"
 	}
@@ -104,7 +107,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		return nil, errors.New("eventbus client is required")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		return nil, errors.New("storage view consumer context is required")
 	}
 	opts := EventConsumerOptions{}
 	if len(configured) > 0 {
@@ -127,8 +130,16 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 			log.Printf("storage view event consumer error: %v", err)
 		})
 	}
-	consumer, err := client.BindManagedPullConsumer(ctx, jetstream.ConsumerBindRef{
-		Stream: opts.Stream, Durable: opts.Durable, FetchMaxWait: time.Second, DeliverDecodeErrors: true,
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
+		Name: opts.Consumer, Event: events.DatasetRowsUpserted,
+		AckWait:    time.Duration(opts.AckWaitMS) * time.Millisecond,
+		MaxDeliver: -1, MaxAckPending: opts.MaxAckPending,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverDecodeErrors: true,
 	})
 	if err != nil {
 		return nil, err
@@ -243,7 +254,7 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 		return errors.New("storage view delivery policy is incomplete")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		return errors.New("storage view delivery context is required")
 	}
 	started := time.Now()
 	metrics := s.metrics
@@ -914,15 +925,12 @@ type deliveryHeartbeat struct {
 }
 
 func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, interval time.Duration, metrics ...*observability.ViewMetrics) *deliveryHeartbeat {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	var metricSink *observability.ViewMetrics
 	if len(metrics) > 0 {
 		metricSink = metrics[0]
 	}
 	h := &deliveryHeartbeat{stopCh: make(chan struct{}), doneCh: make(chan struct{}), metrics: metricSink}
-	if delivery == nil || interval <= 0 {
+	if ctx == nil || delivery == nil || interval <= 0 {
 		close(h.doneCh)
 		return h
 	}
@@ -1014,7 +1022,7 @@ func newLiveLeaseGate() *liveLeaseGate {
 
 func (g *liveLeaseGate) acquireRead(ctx context.Context, _ *jetstream.Delivery) error {
 	if ctx == nil {
-		ctx = context.Background()
+		return errors.New("storage view read lease context is required")
 	}
 	for {
 		g.mu.Lock()
@@ -1046,7 +1054,7 @@ func (g *liveLeaseGate) releaseRead() {
 
 func (g *liveLeaseGate) acquireWrite(ctx context.Context) error {
 	if ctx == nil {
-		ctx = context.Background()
+		return errors.New("storage view write lease context is required")
 	}
 	g.mu.Lock()
 	g.waitingWriters++

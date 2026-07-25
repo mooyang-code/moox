@@ -76,8 +76,8 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 moox.storage.dataset.rows.upserted.v1.<space-token>.<dataset-token>
 ```
 
-Token 是可逆的小写无 Padding Base32。View 使用唯一 Durable
-`storage_view`，`Fetch(1)`、`MaxAckPending=1`。View 启动通过 managed bind 只提供 `MOOX_STORAGE`、`storage_view` 和本地 fetch wait；durable 的 filter、ACK 和投递限制由 EventBus topology 提供。Active 写失败时保持当前
+Token 是可逆的小写无 Padding Base32。View 使用唯一 Consumer
+`storage_view`，`Fetch(1)`、`MaxAckPending=1`。View 启动时创建并持有该 Consumer，filter、ACK、DeliverPolicy 和投递限制由 View 在代码中明确声明。Active 写失败时保持当前
 Delivery 并本地退避；无法恢复的 Subject/Proto/Payload 错误执行 `Term`，避免
 毒消息永久阻塞全部 Dataset。
 

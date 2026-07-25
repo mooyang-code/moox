@@ -12,29 +12,6 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-// ConsumerRef identifies a predeclared durable consumer for bind-only clients.
-type ConsumerRef struct {
-	Stream              string
-	Durable             string
-	FilterSubject       string
-	AckWait             time.Duration
-	MaxDeliver          int
-	MaxAckPending       int
-	FetchMaxWait        time.Duration
-	DeliverPolicy       nats.DeliverPolicy
-	DeliverDecodeErrors bool
-}
-
-// ConsumerBindRef identifies a predeclared durable whose server-side
-// configuration is authoritative. Only fetch behavior may be overridden by
-// the binding client.
-type ConsumerBindRef struct {
-	Stream              string
-	Durable             string
-	FetchMaxWait        time.Duration
-	DeliverDecodeErrors bool
-}
-
 type ConsumerConfig struct {
 	Stream        string
 	Durable       string
@@ -44,13 +21,11 @@ type ConsumerConfig struct {
 	MaxAckPending int
 	FetchMaxWait  time.Duration
 	DeliverPolicy nats.DeliverPolicy
-	// DeliverDecodeErrors returns poison deliveries to the caller so it can
-	// publish a domain-specific DLQ record. The default remains false for
-	// callers that only need the transport to terminate malformed messages.
+	// DeliverDecodeErrors 控制是否把解码失败的消息交给业务层分类处理。
 	DeliverDecodeErrors bool
 }
 
-type PullConsumer struct {
+type Consumer struct {
 	client *Client
 	sub    *nats.Subscription
 	cfg    ConsumerConfig
@@ -59,52 +34,8 @@ type PullConsumer struct {
 	closed bool
 }
 
-func (c *Client) NewPullConsumer(ctx context.Context, cfg ConsumerConfig) (*PullConsumer, error) {
-	return c.openPullConsumer(ctx, cfg, true)
-}
-
-// EnsurePullConsumer creates the declared durable when it is absent and binds it otherwise.
-func (c *Client) EnsurePullConsumer(ctx context.Context, cfg ConsumerConfig) (*PullConsumer, error) {
-	return c.openPullConsumer(ctx, cfg, true)
-}
-
-// BindPullConsumer only binds an existing durable. It never creates or updates it.
-func (c *Client) BindPullConsumer(ctx context.Context, ref ConsumerRef) (*PullConsumer, error) {
-	return c.openPullConsumer(ctx, ConsumerConfig{
-		Stream: ref.Stream, Durable: ref.Durable, FilterSubject: ref.FilterSubject,
-		AckWait: ref.AckWait, MaxDeliver: ref.MaxDeliver, MaxAckPending: ref.MaxAckPending,
-		FetchMaxWait: ref.FetchMaxWait, DeliverPolicy: ref.DeliverPolicy,
-		DeliverDecodeErrors: ref.DeliverDecodeErrors,
-	}, false)
-}
-
-// BindManagedPullConsumer binds an existing durable using its server-side
-// configuration. It never creates, updates, or deletes a consumer.
-func (c *Client) BindManagedPullConsumer(ctx context.Context, ref ConsumerBindRef) (*PullConsumer, error) {
-	cfg := ConsumerConfig{
-		Stream: ref.Stream, Durable: ref.Durable,
-		FetchMaxWait: ref.FetchMaxWait, DeliverDecodeErrors: ref.DeliverDecodeErrors,
-	}
-	info, err := c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
-	if errors.Is(err, nats.ErrConsumerNotFound) {
-		return nil, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, strings.TrimSpace(cfg.Stream), strings.TrimSpace(cfg.Durable))
-	}
-	if err != nil {
-		return nil, classifyConsumerError("inspect consumer", err)
-	}
-	cfg.FilterSubject = info.Config.FilterSubject
-	cfg.AckWait = info.Config.AckWait
-	cfg.MaxDeliver = info.Config.MaxDeliver
-	cfg.MaxAckPending = info.Config.MaxAckPending
-	cfg.DeliverPolicy = info.Config.DeliverPolicy
-	return c.openPullConsumerWithInfo(ctx, cfg, false, info)
-}
-
-func (c *Client) openPullConsumer(ctx context.Context, cfg ConsumerConfig, create bool) (*PullConsumer, error) {
-	return c.openPullConsumerWithInfo(ctx, cfg, create, nil)
-}
-
-func (c *Client) openPullConsumerWithInfo(ctx context.Context, cfg ConsumerConfig, create bool, suppliedInfo *nats.ConsumerInfo) (*PullConsumer, error) {
+// NewConsumer 创建缺失的 Consumer、对账已有配置并完成绑定。
+func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -129,34 +60,21 @@ func (c *Client) openPullConsumerWithInfo(ctx context.Context, cfg ConsumerConfi
 	if err := c.alive(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
 	}
-	if cfg.AckWait <= 0 {
-		cfg.AckWait = 30 * time.Second
+	if cfg.AckWait <= 0 || cfg.MaxDeliver == 0 || cfg.MaxAckPending <= 0 || cfg.FetchMaxWait <= 0 {
+		return nil, fmt.Errorf("%w: ack_wait, max_deliver, max_ack_pending and fetch_max_wait must be configured", ErrInvalidConsumer)
 	}
-	if cfg.MaxDeliver == 0 {
-		cfg.MaxDeliver = -1
-	}
-	if cfg.MaxAckPending == 0 {
-		cfg.MaxAckPending = 1000
-	}
-	if cfg.FetchMaxWait <= 0 {
-		cfg.FetchMaxWait = time.Second
-	}
-	if cfg.DeliverPolicy != nats.DeliverNewPolicy {
-		cfg.DeliverPolicy = nats.DeliverAllPolicy
+	if cfg.DeliverPolicy != nats.DeliverAllPolicy && cfg.DeliverPolicy != nats.DeliverNewPolicy {
+		return nil, fmt.Errorf("%w: unsupported deliver policy %d", ErrInvalidConsumer, cfg.DeliverPolicy)
 	}
 
-	info := suppliedInfo
-	var err error
-	if info == nil {
-		info, err = c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
-		if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-			return nil, classifyConsumerError("inspect consumer", err)
-		}
+	info, err := c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
+	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return nil, classifyConsumerError("inspect consumer", err)
 	}
 	if err := contextErr(ctx, "after consumer inspection"); err != nil {
 		return nil, err
 	}
-	if errors.Is(err, nats.ErrConsumerNotFound) && create {
+	if errors.Is(err, nats.ErrConsumerNotFound) {
 		consumerCfg := &nats.ConsumerConfig{
 			Name:          cfg.Durable,
 			Durable:       cfg.Durable,
@@ -180,13 +98,10 @@ func (c *Client) openPullConsumerWithInfo(ctx context.Context, cfg ConsumerConfi
 			return nil, classifyConsumerError("inspect created consumer", err)
 		}
 	}
-	if errors.Is(err, nats.ErrConsumerNotFound) && !create {
-		return nil, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, cfg.Stream, cfg.Durable)
-	}
 	if err := contextErr(ctx, "before consumer validation"); err != nil {
 		return nil, err
 	}
-	if err := validateConsumerConfig(info, cfg); err != nil {
+	if err := reconcileConsumerConfig(ctx, c, info, cfg); err != nil {
 		return nil, err
 	}
 	if err := contextErr(ctx, "before consumer bind"); err != nil {
@@ -200,7 +115,7 @@ func (c *Client) openPullConsumerWithInfo(ctx context.Context, cfg ConsumerConfi
 		_ = sub.Unsubscribe()
 		return nil, err
 	}
-	return &PullConsumer{client: c, sub: sub, cfg: cfg}, nil
+	return &Consumer{client: c, sub: sub, cfg: cfg}, nil
 }
 
 func (c *Client) inspectConsumer(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
@@ -254,29 +169,39 @@ func classifyConsumerError(operation string, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrInvalidConsumer, operation, err)
 }
 
-func validateConsumerConfig(info *nats.ConsumerInfo, cfg ConsumerConfig) error {
+func reconcileConsumerConfig(ctx context.Context, client *Client, info *nats.ConsumerInfo, cfg ConsumerConfig) error {
 	if info == nil {
 		return fmt.Errorf("%w: consumer info is empty", ErrInvalidConsumer)
 	}
 	actual := info.Config
+	var conflicts []string
+	if actual.FilterSubject != cfg.FilterSubject {
+		conflicts = append(conflicts, "FilterSubject")
+	}
+	if actual.DeliverPolicy != cfg.DeliverPolicy {
+		conflicts = append(conflicts, "DeliverPolicy")
+	}
 	switch {
-	case actual.FilterSubject != cfg.FilterSubject:
-		return fmt.Errorf("%w: filter subject mismatch: existing %q, requested %q", ErrInvalidConsumer, actual.FilterSubject, cfg.FilterSubject)
 	case actual.AckPolicy != nats.AckExplicitPolicy:
-		return fmt.Errorf("%w: ack policy mismatch: existing %s", ErrInvalidConsumer, actual.AckPolicy)
-	case actual.AckWait != cfg.AckWait:
-		return fmt.Errorf("%w: ack wait mismatch: existing %s, requested %s", ErrInvalidConsumer, actual.AckWait, cfg.AckWait)
-	case actual.MaxDeliver != cfg.MaxDeliver:
-		return fmt.Errorf("%w: max deliver mismatch: existing %d, requested %d", ErrInvalidConsumer, actual.MaxDeliver, cfg.MaxDeliver)
-	case actual.MaxAckPending != cfg.MaxAckPending:
-		return fmt.Errorf("%w: max ack pending mismatch: existing %d, requested %d", ErrInvalidConsumer, actual.MaxAckPending, cfg.MaxAckPending)
-	case actual.DeliverPolicy != cfg.DeliverPolicy:
-		return fmt.Errorf("%w: deliver policy mismatch: existing %v, requested %v", ErrInvalidConsumer, actual.DeliverPolicy, cfg.DeliverPolicy)
+		conflicts = append(conflicts, "AckPolicy")
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("%w: consumer %s/%s conflicts in %s", ErrConsumerConfigConflict, cfg.Stream, cfg.Durable, strings.Join(conflicts, ","))
+	}
+	if actual.AckWait == cfg.AckWait && actual.MaxDeliver == cfg.MaxDeliver && actual.MaxAckPending == cfg.MaxAckPending {
+		return nil
+	}
+	next := actual
+	next.AckWait = cfg.AckWait
+	next.MaxDeliver = cfg.MaxDeliver
+	next.MaxAckPending = cfg.MaxAckPending
+	if _, err := client.js.UpdateConsumer(cfg.Stream, &next, nats.Context(ctx)); err != nil {
+		return classifyConsumerError("update consumer", err)
 	}
 	return nil
 }
 
-func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error) {
+func (p *Consumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error) {
 	if p == nil {
 		return nil, ErrInvalidConsumer
 	}
@@ -335,7 +260,7 @@ func (p *PullConsumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error
 	return deliveries, errors.Join(firstDecodeErr, transportErr)
 }
 
-func (p *PullConsumer) Close() error {
+func (p *Consumer) Close() error {
 	if p == nil {
 		return nil
 	}

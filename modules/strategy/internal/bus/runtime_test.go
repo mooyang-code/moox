@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/strategyeventpb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 type runtimeTestStore struct {
@@ -89,7 +89,11 @@ func strategyEventData(id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return registry.MarshalMessage(events.StrategyOutputAccepted, &strategyeventpb.StrategyOutputAccepted{RunId: id, BindingId: "binding-1", StrategyId: "strategy-1", Action: "hold"}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "binding-1"})
+	return registry.MarshalMessage(events.TradeRebalanceRequested, &tradeeventpb.RebalanceRequested{
+		RequestId: id, StrategyRunId: "strategy-" + id, ExecutionBindingId: "execution-1",
+		AccountId: "account-1", ChannelId: "channel-1", Mode: "paper", DataRevision: "revision-1",
+		CapitalAmount: "100", QuoteAsset: "USDT",
+	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "execution-1"})
 }
 
 func (p runtimeEventPublisher) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {

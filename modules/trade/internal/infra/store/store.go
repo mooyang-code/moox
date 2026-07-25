@@ -19,16 +19,13 @@ import (
 
 var ErrConflict = errors.New("trade: store conflict")
 
-type Store struct{ db *gorm.DB }
+type Store struct {
+	db     *gorm.DB
+	wakeup atomic.Pointer[func()]
+}
 type Tx struct {
 	db  *gorm.DB
 	ctx context.Context
-}
-type OutboxRecord struct {
-	ID        int64
-	MessageID string
-	EventData []byte
-	Attempts  int
 }
 type SagaRecord struct {
 	SpaceID, SagaID, Type, State, OrderID, ReplacementOrderID, Payload, LastError string
@@ -50,8 +47,7 @@ type ControlRecord struct {
 	Reason               string
 }
 type HealthStats struct {
-	OpenOrders, UnknownOrders, PendingOutbox int64
-	OldestOutbox                             time.Time
+	OpenOrders, UnknownOrders int64
 }
 type BalanceRecord struct {
 	AccountID, Asset, Bucket, Amount string
@@ -67,15 +63,6 @@ type FillRecord struct {
 	CreatedAt                                                                                      time.Time
 }
 
-// TradingSignalRecord is the durable recommendation fact consumed from the
-// governed TradingSignal event. It is intentionally not an order or fill.
-type TradingSignalRecord struct {
-	SpaceID, EventID, SignalID, StrategyID, Symbol, Side, Action string
-	TargetPrice, StopLossPrice, TakeProfitPrice                  string
-	SignalTime, ReceivedAt                                       time.Time
-	Tags                                                         string
-}
-
 type OrderQuery struct {
 	AccountID, ChannelID, Symbol string
 	States                       []string
@@ -89,8 +76,6 @@ type FillQuery struct {
 	StartTimeMS, EndTimeMS     int64
 	Offset, Limit              int
 }
-
-var claimSequence atomic.Uint64
 
 func Open(path string) (*Store, error) {
 	db, err := gorm.Open(sqlite.Open(path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"), &gorm.Config{})
@@ -124,6 +109,14 @@ func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
 	return s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error { return fn(&Tx{db: db, ctx: ctx}) })
 }
 func (s *Store) DBForTest() *gorm.DB { return s.db }
+func (s *Store) SetWakeup(wakeup func()) {
+	s.wakeup.Store(&wakeup)
+}
+func (s *Store) Wake() {
+	if wakeup := s.wakeup.Load(); wakeup != nil && *wakeup != nil {
+		(*wakeup)()
+	}
+}
 
 func splitSQL(raw string) []string {
 	var out []string
@@ -244,17 +237,6 @@ func (s *Store) Health(ctx context.Context) (HealthStats, error) {
 	}
 	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_order_aggregates WHERE c_state IN ('SUBMIT_UNKNOWN','CANCEL_UNKNOWN')").Scan(&stats.UnknownOrders).Error; err != nil {
 		return stats, err
-	}
-	var outbox struct {
-		Count  int64      `gorm:"column:c_count"`
-		Oldest *time.Time `gorm:"column:c_oldest"`
-	}
-	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) c_count, MIN(c_ctime) c_oldest FROM t_trade_outbox WHERE c_published_at IS NULL").Scan(&outbox).Error; err != nil {
-		return stats, err
-	}
-	stats.PendingOutbox = outbox.Count
-	if outbox.Oldest != nil {
-		stats.OldestOutbox = outbox.Oldest.UTC()
 	}
 	return stats, nil
 }
@@ -571,6 +553,34 @@ func (s *Store) ListPositions(ctx context.Context, space, account, symbol string
 	}
 	return out, e
 }
+
+func (s *Store) CurrentPositionQuantity(ctx context.Context, space, account, symbol string) (string, error) {
+	rows, err := s.ListPositions(ctx, space, account, symbol)
+	if err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "0", nil
+	}
+	return rows[0].Quantity, nil
+}
+
+func (s *Store) LatestTradePrice(ctx context.Context, space, symbol string) (string, error) {
+	var price string
+	err := s.db.WithContext(ctx).Raw(`
+SELECT c_price FROM (
+  SELECT c_price, c_ctime FROM t_trade_fill_events WHERE c_space_id=? AND c_symbol=?
+  UNION ALL
+  SELECT c_price, c_mtime AS c_ctime FROM t_trade_order_aggregates WHERE c_space_id=? AND c_symbol=?
+) ORDER BY c_ctime DESC LIMIT 1`, space, symbol, space, symbol).Scan(&price).Error
+	if err != nil {
+		return "", err
+	}
+	if price == "" {
+		return "", gorm.ErrRecordNotFound
+	}
+	return price, nil
+}
 func (s *Store) ListFills(ctx context.Context, space, orderID string) ([]FillRecord, error) {
 	rows, _, err := s.ListFillsPage(ctx, space, FillQuery{OrderID: orderID, Limit: 1000})
 	return rows, err
@@ -639,45 +649,14 @@ func (t *Tx) InsertInbox(consumer, id, topic string) (bool, error) {
 	return res.RowsAffected == 1, res.Error
 }
 
-func (t *Tx) InsertTradingSignal(record TradingSignalRecord) error {
-	if record.Tags == "" {
-		record.Tags = "{}"
-	}
-	if record.ReceivedAt.IsZero() {
-		record.ReceivedAt = time.Now().UTC()
-	}
-	// Signal IDs are the domain idempotency key. A producer may republish the
-	// same recommendation with a new event envelope ID, so duplicate signal
-	// rows are an idempotent success rather than a retryable database error.
-	return t.db.Exec(`INSERT OR IGNORE INTO t_trade_signal_recommendations
- (c_space_id,c_event_id,c_signal_id,c_strategy_id,c_symbol,c_side,c_action,c_target_price,c_stop_loss_price,c_take_profit_price,c_signal_time,c_tags,c_received_at)
- VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		record.SpaceID, record.EventID, record.SignalID, record.StrategyID, record.Symbol, record.Side, record.Action,
-		record.TargetPrice, record.StopLossPrice, record.TakeProfitPrice, record.SignalTime.UTC(), record.Tags, record.ReceivedAt.UTC()).Error
+func (t *Tx) RecordInbox(consumer, eventID, eventName string) (bool, error) {
+	return t.InsertInbox(consumer, eventID, eventName)
 }
 
-func (s *Store) RecordTradingSignal(ctx context.Context, consumer, messageID, topic string, record TradingSignalRecord) (bool, error) {
-	var fresh bool
-	err := s.Transaction(ctx, func(tx *Tx) error {
-		var err error
-		fresh, err = tx.InsertInbox(consumer, messageID, topic)
-		if err != nil || !fresh {
-			return err
-		}
-		return tx.InsertTradingSignal(record)
-	})
-	return fresh, err
-}
 func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bool, error) {
 	var fresh bool
 	err := s.Transaction(ctx, func(tx *Tx) error { var e error; fresh, e = tx.InsertInbox(consumer, id, topic); return e })
 	return fresh, err
-}
-func (t *Tx) AddOutbox(id string, eventData []byte) error {
-	return t.db.Exec("INSERT INTO t_trade_outbox(c_message_id,c_event_data) VALUES(?,?)", id, eventData).Error
-}
-func (s *Store) EnqueueOutbox(ctx context.Context, id string, eventData []byte) error {
-	return s.Transaction(ctx, func(tx *Tx) error { return tx.AddOutbox(id, eventData) })
 }
 func (t *Tx) CreateSaga(s SagaRecord) error {
 	return t.db.Exec("INSERT INTO t_trade_sagas(c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error) VALUES(?,?,?,?,?,?,?,?,?)", s.SpaceID, s.SagaID, s.Type, s.State, s.OrderID, s.ReplacementOrderID, s.Payload, s.Version, s.LastError).Error
@@ -803,36 +782,6 @@ func (t *Tx) UpdateRebalanceLeg(space, legID, status, planID string) error {
 }
 func (t *Tx) UpdateRebalanceRun(space, runID, status, residual string) error {
 	return t.db.Exec("UPDATE t_rebalance_runs SET c_status=?,c_residual=?,c_version=c_version+1,c_mtime=? WHERE c_space_id=? AND c_run_id=?", status, residual, time.Now().UTC(), space, runID).Error
-}
-func (s *Store) ClaimOutbox(ctx context.Context, limit int, lease time.Duration) ([]OutboxRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	var rows []struct {
-		ID        int64  `gorm:"column:c_id"`
-		MessageID string `gorm:"column:c_message_id"`
-		EventData []byte `gorm:"column:c_event_data"`
-		Attempts  int    `gorm:"column:c_attempts"`
-	}
-	token := fmt.Sprintf("%d-%d", time.Now().UnixNano(), claimSequence.Add(1))
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := time.Now().UTC()
-		if e := tx.Exec("UPDATE t_trade_outbox SET c_lease_until=?,c_attempts=c_attempts+1,c_claim_token=? WHERE c_id IN (SELECT c_id FROM t_trade_outbox WHERE c_status='PENDING' AND (c_lease_until IS NULL OR c_lease_until<?) ORDER BY c_id LIMIT ?)", now.Add(lease), token, now, limit).Error; e != nil {
-			return e
-		}
-		return tx.Raw("SELECT c_id,c_message_id,c_event_data,c_attempts FROM t_trade_outbox WHERE c_claim_token=? ORDER BY c_id", token).Scan(&rows).Error
-	})
-	out := make([]OutboxRecord, len(rows))
-	for i, r := range rows {
-		out[i] = OutboxRecord{ID: r.ID, MessageID: r.MessageID, EventData: r.EventData, Attempts: r.Attempts + 1}
-	}
-	return out, err
-}
-func (s *Store) MarkOutboxPublished(ctx context.Context, id int64) error {
-	return s.db.WithContext(ctx).Exec("UPDATE t_trade_outbox SET c_status='PUBLISHED',c_published_at=?,c_lease_until=NULL,c_claim_token='' WHERE c_id=?", time.Now().UTC(), id).Error
-}
-func (s *Store) ReleaseOutbox(ctx context.Context, id int64, msg string) error {
-	return s.db.WithContext(ctx).Exec("UPDATE t_trade_outbox SET c_lease_until=NULL,c_claim_token='',c_last_error=? WHERE c_id=?", msg, id).Error
 }
 func (t *Tx) InsertFill(space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset string, tradedAtMS int64) (bool, error) {
 	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_fill_events(c_space_id,c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset,c_traded_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset, tradedAtMS)

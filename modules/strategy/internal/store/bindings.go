@@ -13,6 +13,14 @@ func (s *Store) GetBinding(ctx context.Context, bindingID string) (domain.Bindin
 	return binding, err
 }
 
+func (s *Store) CreateBinding(ctx context.Context, binding domain.Binding) error {
+	return s.db.WithContext(ctx).Create(&binding).Error
+}
+
+func (s *Store) CreateExecutionBinding(ctx context.Context, binding domain.ExecutionBinding) error {
+	return s.db.WithContext(ctx).Create(&binding).Error
+}
+
 func (s *Store) GetState(ctx context.Context, bindingID string) (domain.State, error) {
 	var state domain.State
 	err := s.db.WithContext(ctx).Where("c_binding_id=?", bindingID).First(&state).Error
@@ -41,7 +49,7 @@ func (s *Store) WriteAudit(ctx context.Context, audit domain.OperationAudit) err
 	return s.db.WithContext(ctx).Create(&audit).Error
 }
 
-func (s *Store) SetExecutionMode(ctx context.Context, binding domain.Binding, mode string, audit domain.OperationAudit) error {
+func (s *Store) SetExecutionMode(ctx context.Context, binding domain.Binding, mode, channelID, capitalAmount, quoteAsset string, audit domain.OperationAudit) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing struct {
 			Mode string `gorm:"column:c_mode"`
@@ -49,7 +57,13 @@ func (s *Store) SetExecutionMode(ctx context.Context, binding domain.Binding, mo
 		if err := tx.Table("t_strategy_execution_bindings").Select("c_mode").Where("c_group_id=?", binding.GroupID).First(&existing).Error; err != nil {
 			return err
 		}
-		if err := tx.Table("t_strategy_execution_bindings").Where("c_group_id=?", binding.GroupID).Update("c_mode", mode).Error; err != nil {
+		updates := map[string]any{"c_mode": mode}
+		if mode == "paper" || mode == "live" {
+			updates["c_channel_id"] = channelID
+			updates["c_capital_amount"] = capitalAmount
+			updates["c_quote_asset"] = quoteAsset
+		}
+		if err := tx.Table("t_strategy_execution_bindings").Where("c_group_id=?", binding.GroupID).Updates(updates).Error; err != nil {
 			return err
 		}
 		audit.OldValue = existing.Mode

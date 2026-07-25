@@ -3,17 +3,14 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
-	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
 )
 
@@ -100,13 +97,7 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 				return err
 			}
 		}
-		if err := tx.CreateOrder(&r); err != nil {
-			return err
-		}
-		if err := outbox(tx, in.OrderID+":created", events.TradeOrderIntentCreated, r); err != nil {
-			return err
-		}
-		return outbox(tx, in.OrderID+":ready", events.TradeExecutionSliceReady, r)
+		return tx.CreateOrder(&r)
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -115,6 +106,7 @@ func (e *Engine) Place(ctx context.Context, in PlaceInput) (store.OrderRecord, e
 		return store.OrderRecord{}, err
 	}
 	telemetry.Commands.WithLabelValues("place", "accepted").Inc()
+	e.Store.Wake()
 	return r, nil
 }
 
@@ -157,19 +149,15 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 	latest, _ := e.Store.GetOrder(ctx, space, orderID)
 	o, _ = aggregate(latest)
 	expected = o.Version
-	event := events.TradeOrderStateChanged
 	if callErr != nil {
 		if exchange.IsCategory(callErr, exchange.ErrorTransportUncertain) {
 			_, err = o.MarkUnknown()
-			event = events.TradeOrderSubmitUnknown
 		} else {
 			_, err = o.Reject()
-			event = events.TradeOrderStateChanged
 		}
 	} else {
 		_, err = o.Acknowledge()
 		latest.ExchangeOrderID = result.ExchangeOrderID
-		event = events.TradeOrderAcknowledged
 	}
 	if err != nil {
 		return latest, err
@@ -184,8 +172,11 @@ func (e *Engine) Submit(ctx context.Context, space, orderID, priceRaw string) (s
 				return err
 			}
 		}
-		return outbox(tx, fmt.Sprintf("%s:%d", orderID, o.Version), event, latest)
+		return nil
 	})
+	if err == nil {
+		e.Store.Wake()
+	}
 	return latest, err
 }
 
@@ -301,17 +292,6 @@ func recordFrom(r store.OrderRecord, o *order.Order) store.OrderRecord {
 	r.State = string(o.State)
 	r.Version = o.Version
 	return r
-}
-func outbox(tx *store.Tx, id string, event events.EventType, v any) error {
-	r, ok := v.(store.OrderRecord)
-	if !ok {
-		return fmt.Errorf("trade outbox %s payload is %T, want store.OrderRecord", id, v)
-	}
-	data, err := tradebus.EncodeOrderSnapshot(event, id, r, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	return tx.AddOutbox(id, data)
 }
 func (e *Engine) adapter(ctx context.Context, r store.OrderRecord) (exchange.TradingAdapter, error) {
 	if e.Resolver != nil {

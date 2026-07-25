@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
@@ -14,12 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 type replaceAdapter struct{ scriptedExchange }
@@ -36,15 +30,6 @@ type countingExchange struct {
 func (c *countingExchange) Cancel(_ context.Context, _, _ string) (exchange.ExchangeOrderResult, error) {
 	c.cancelCalls++
 	return exchange.ExchangeOrderResult{Status: "CANCELED"}, nil
-}
-
-type e2eFakePublisher struct {
-	ids []string
-}
-
-func (f *e2eFakePublisher) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {
-	f.ids = append(f.ids, message.GetEventId())
-	return &jetstream.PublishAck{Stream: "MOOX_TRADE", Sequence: uint64(len(f.ids))}, nil
 }
 
 func TestCancelOpenOrderReleasesFrozenBalance(t *testing.T) {
@@ -89,35 +74,6 @@ func TestCancelOpenOrderReleasesFrozenBalance(t *testing.T) {
 		t.Fatalf("state=%s", got.State)
 	}
 	assertScalar(t, s, "SELECT c_amount FROM t_trade_balance_projections WHERE c_space_id='space' AND c_account_id='account' AND c_asset='USDT' AND c_bucket='frozen'", "0")
-}
-
-func TestOutboxRelayMarksPublished(t *testing.T) {
-	ctx := context.Background()
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err = s.Transaction(ctx, func(tx *store.Tx) error {
-		registry, registryErr := events.DefaultRegistry()
-		if registryErr != nil {
-			return registryErr
-		}
-		data, marshalErr := registry.MarshalMessage(events.TradeFillReceived, &tradeeventpb.FillReceived{FillId: "fill-1", OrderId: "order-1", Symbol: "BTCUSDT", Quantity: "1", Price: "10"}, events.PublishOptions{EventID: "evt-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "fill-1"})
-		if marshalErr != nil {
-			return marshalErr
-		}
-		return tx.AddOutbox("evt-1", data)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	pub := &e2eFakePublisher{}
-	if err = (bus.Relay{Store: s, Publisher: pub, InstanceID: "test", BootID: "boot-1"}).RunOnce(ctx, 10); err != nil {
-		t.Fatal(err)
-	}
-	if len(pub.ids) != 1 {
-		t.Fatalf("published=%d", len(pub.ids))
-	}
 }
 
 func TestPartialFillLeavesOrderPartiallyFilled(t *testing.T) {

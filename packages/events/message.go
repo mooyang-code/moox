@@ -28,7 +28,7 @@ type EncodedEvent struct {
 // MarshalMessage creates the exact deterministic EventMessage bytes that an
 // outbox stores. Relays must publish these bytes without reconstructing the
 // event from topic strings or JSON payloads.
-func (r *Registry) MarshalMessage(event EventType, payload proto.Message, opts PublishOptions) ([]byte, error) {
+func (r *Registry) MarshalMessage(event Event, payload proto.Message, opts PublishOptions) ([]byte, error) {
 	encoded, err := r.Encode(event, payload, opts)
 	if err != nil {
 		return nil, err
@@ -49,64 +49,61 @@ func (r *Registry) UnmarshalMessage(raw []byte) (*eventpb.EventMessage, error) {
 
 // ValidateMessage verifies the complete application envelope and its typed
 // payload without consulting NATS transport metadata.
-func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (EventSchema, error) {
+func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (Event, error) {
 	if r == nil {
-		return EventSchema{}, fmt.Errorf("event registry is nil")
+		return Event{}, fmt.Errorf("event registry is nil")
 	}
 	if message == nil {
-		return EventSchema{}, fmt.Errorf("event message is nil")
+		return Event{}, fmt.Errorf("event message is nil")
 	}
 	if strings.TrimSpace(message.GetEventId()) == "" {
-		return EventSchema{}, fmt.Errorf("event_id is required")
+		return Event{}, fmt.Errorf("event_id is required")
 	}
 	if strings.TrimSpace(message.GetEventName()) == "" || message.GetEventVersion() == 0 {
-		return EventSchema{}, fmt.Errorf("event name and positive version are required")
+		return Event{}, fmt.Errorf("event name and positive version are required")
 	}
 	if strings.TrimSpace(message.GetSpaceId()) == "" {
-		return EventSchema{}, fmt.Errorf("space_id is required")
+		return Event{}, fmt.Errorf("space_id is required")
 	}
 	if strings.TrimSpace(message.GetSubjectId()) == "" {
-		return EventSchema{}, fmt.Errorf("subject_id is required")
+		return Event{}, fmt.Errorf("subject_id is required")
 	}
 	if message.GetOccurredAt() == nil {
-		return EventSchema{}, fmt.Errorf("occurred_at is required")
+		return Event{}, fmt.Errorf("occurred_at is required")
 	}
 	if err := message.GetOccurredAt().CheckValid(); err != nil {
-		return EventSchema{}, fmt.Errorf("occurred_at: %w", err)
+		return Event{}, fmt.Errorf("occurred_at: %w", err)
 	}
 	if len(message.GetPayload()) == 0 {
-		return EventSchema{}, fmt.Errorf("payload is required")
+		return Event{}, fmt.Errorf("payload is required")
 	}
-	spec, ok := r.Schema(EventType{name: message.GetEventName(), version: message.GetEventVersion()})
+	event, ok := r.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok {
-		return EventSchema{}, fmt.Errorf("event %s is not registered", eventKey(EventType{name: message.GetEventName(), version: message.GetEventVersion()}))
+		return Event{}, fmt.Errorf("event %s is not registered", eventKeyParts(message.GetEventName(), message.GetEventVersion()))
 	}
-	factory, ok := r.PayloadFactory(spec.Payload)
-	if !ok {
-		return EventSchema{}, fmt.Errorf("payload %q is not registered", spec.Payload)
-	}
-	payload := factory()
+	payload := event.NewPayload()
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		return EventSchema{}, fmt.Errorf("decode %s payload: %w", spec.Name, err)
+		return Event{}, fmt.Errorf("decode %s payload: %w", event.Name(), err)
 	}
-	return spec, nil
+	return event, nil
 }
 
 // SubjectForMessage derives the NATS subject only from the governed envelope.
 func (r *Registry) SubjectForMessage(message *eventpb.EventMessage) (string, error) {
-	if _, err := r.ValidateMessage(message); err != nil {
+	event, err := r.ValidateMessage(message)
+	if err != nil {
 		return "", err
 	}
-	return r.RenderSubject(EventType{name: message.GetEventName(), version: message.GetEventVersion()}, message.GetSpaceId(), message.GetSubjectId())
+	return r.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 }
 
-func (r *Registry) Encode(event EventType, payload proto.Message, opts PublishOptions) (EncodedEvent, error) {
-	spec, ok := r.Schema(event)
+func (r *Registry) Encode(event Event, payload proto.Message, opts PublishOptions) (EncodedEvent, error) {
+	registered, ok := r.Lookup(event.Name(), event.Version())
 	if !ok {
 		return EncodedEvent{}, fmt.Errorf("event %s is not registered", eventKey(event))
 	}
-	if payload == nil || payload.ProtoReflect().Descriptor().FullName() != spec.Payload {
-		return EncodedEvent{}, fmt.Errorf("event %s payload type = %T, want %s", eventKey(event), payload, spec.Payload)
+	if payload == nil || payload.ProtoReflect().Descriptor().FullName() != registered.PayloadFullName() {
+		return EncodedEvent{}, fmt.Errorf("event %s payload type = %T, want %s", eventKey(event), payload, registered.PayloadFullName())
 	}
 	if strings.TrimSpace(opts.EventID) == "" {
 		return EncodedEvent{}, fmt.Errorf("event_id is required")
@@ -130,8 +127,8 @@ func (r *Registry) Encode(event EventType, payload proto.Message, opts PublishOp
 	}
 	message := &eventpb.EventMessage{
 		EventId:      opts.EventID,
-		EventName:    spec.Name,
-		EventVersion: spec.Version,
+		EventName:    registered.Name(),
+		EventVersion: registered.Version(),
 		SpaceId:      opts.SpaceID,
 		SubjectId:    opts.SubjectID,
 		OccurredAt:   timestamppb.New(opts.OccurredAt.UTC()),

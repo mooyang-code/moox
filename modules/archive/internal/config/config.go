@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var durablePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var consumerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var sourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 type Config struct {
@@ -40,7 +40,7 @@ type EventBusConfig struct {
 	URLs            []string      `yaml:"urls"`
 	CredentialFile  string        `yaml:"credential_file"`
 	Stream          string        `yaml:"stream"`
-	Durable         string        `yaml:"durable"`
+	Consumer        string        `yaml:"consumer"`
 	FetchBatch      int           `yaml:"fetch_batch"`
 	FetchMaxWait    time.Duration `yaml:"fetch_max_wait"`
 	DedupeRetention time.Duration `yaml:"dedupe_retention"`
@@ -87,7 +87,7 @@ func Default() *Config {
 			},
 			EventBus: EventBusConfig{
 				URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_STORAGE",
-				Durable: "moox_archive_kline_v1", FetchBatch: 128, FetchMaxWait: time.Second,
+				Consumer: "moox_archive_kline_v1", FetchBatch: 128, FetchMaxWait: time.Second,
 				DedupeRetention: 168 * time.Hour,
 			},
 			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
@@ -134,8 +134,8 @@ func (c *Config) applyDefaults() {
 	if c.Archive.EventBus.Stream == "" {
 		c.Archive.EventBus.Stream = d.Archive.EventBus.Stream
 	}
-	if c.Archive.EventBus.Durable == "" {
-		c.Archive.EventBus.Durable = d.Archive.EventBus.Durable
+	if c.Archive.EventBus.Consumer == "" {
+		c.Archive.EventBus.Consumer = d.Archive.EventBus.Consumer
 	}
 	if c.Archive.EventBus.FetchBatch == 0 {
 		c.Archive.EventBus.FetchBatch = d.Archive.EventBus.FetchBatch
@@ -227,10 +227,10 @@ func (c *Config) Validate() error {
 	if len(e.URLs) == 0 || strings.TrimSpace(strings.Join(e.URLs, ",")) == "" {
 		return fmt.Errorf("archive eventbus urls are required")
 	}
-	if !durablePattern.MatchString(e.Durable) {
-		return fmt.Errorf("invalid archive eventbus durable %q", e.Durable)
+	if !consumerPattern.MatchString(e.Consumer) {
+		return fmt.Errorf("invalid archive eventbus consumer %q", e.Consumer)
 	}
-	if e.Stream == "" || e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
+	if e.Stream != "MOOX_STORAGE" || e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
 		return fmt.Errorf("archive eventbus settings are invalid")
 	}
 	if e.DedupeRetention < 168*time.Hour {

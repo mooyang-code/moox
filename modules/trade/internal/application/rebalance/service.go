@@ -7,7 +7,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	domain "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
-	tradebus "github.com/mooyang-code/moox/modules/trade/internal/infra/bus"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"time"
@@ -27,32 +26,50 @@ type Service struct {
 }
 
 func (s Service) Create(ctx context.Context, in CreateInput) error {
+	run, records, err := buildCreateRecords(in)
+	if err != nil {
+		return err
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateRebalance(run, records)
+	})
+}
+
+func (s Service) CreateFromEvent(ctx context.Context, consumer, eventID, eventName string, in CreateInput) (bool, error) {
+	run, records, err := buildCreateRecords(in)
+	if err != nil {
+		return false, err
+	}
+	fresh := false
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var recordErr error
+		fresh, recordErr = tx.RecordInbox(consumer, eventID, eventName)
+		if recordErr != nil || !fresh {
+			return recordErr
+		}
+		return tx.CreateRebalance(run, records)
+	})
+	return fresh, err
+}
+
+func buildCreateRecords(in CreateInput) (store.RebalanceRunRecord, []store.RebalanceLegRecord, error) {
 	if in.RunID == "" || in.IdempotencyKey == "" || in.MarketSnapshotID == "" || in.PositionSnapshotID == "" {
-		return errors.New("trade: incomplete rebalance snapshots")
+		return store.RebalanceRunRecord{}, nil, errors.New("trade: incomplete rebalance snapshots")
 	}
 	legs, err := (domain.Planner{}).BuildMode(in.Mode, in.Targets, in.Currents)
 	if err != nil {
-		return err
+		return store.RebalanceRunRecord{}, nil, err
 	}
 	records := make([]store.RebalanceLegRecord, len(legs))
 	for i, l := range legs {
 		m, ok := in.Markets[l.Symbol]
 		if !ok || m.Price == "" {
-			return fmt.Errorf("trade: market snapshot missing %s", l.Symbol)
+			return store.RebalanceRunRecord{}, nil, fmt.Errorf("trade: market snapshot missing %s", l.Symbol)
 		}
 		records[i] = store.RebalanceLegRecord{SpaceID: in.SpaceID, RunID: in.RunID, LegID: fmt.Sprintf("%s-%d", in.RunID, l.Sequence), Symbol: l.Symbol, MarketType: m.MarketType, BaseAsset: m.BaseAsset, QuoteAsset: m.QuoteAsset, Side: l.Side, Action: string(l.Action), Quantity: l.Quantity.String(), Price: m.Price, ReduceOnly: l.ReduceOnly, Sequence: l.Sequence, DependsOn: l.DependsOn, Status: "PLANNED"}
 	}
 	run := store.RebalanceRunRecord{SpaceID: in.SpaceID, RunID: in.RunID, AccountID: in.AccountID, ChannelID: in.ChannelID, IdempotencyKey: in.IdempotencyKey, MarketSnapshotID: in.MarketSnapshotID, PositionSnapshotID: in.PositionSnapshotID, RulesVersion: in.RulesVersion, AlgorithmName: "target_position", AlgorithmVersion: "1", Status: "PLANNED", Residual: "{}", Version: 1}
-	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateRebalance(run, records); err != nil {
-			return err
-		}
-		data, err := tradebus.EncodeRebalanceRequested(in.RunID+":requested", run, time.Now().UTC())
-		if err != nil {
-			return err
-		}
-		return tx.AddOutbox(in.RunID+":requested", data)
-	})
+	return run, records, nil
 }
 func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID string) (string, error) {
 	legs, err := s.Store.ListRebalanceLegs(ctx, space, runID)
@@ -131,13 +148,6 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 		}
 		if err := tx.UpdateRebalanceRun(space, runID, status, residual); err != nil {
 			return err
-		}
-		if status == "COMPLETED" {
-			data, err := tradebus.EncodeRebalanceCompleted(runID+":completed", space, runID, status, time.Now().UTC())
-			if err != nil {
-				return err
-			}
-			return tx.AddOutbox(runID+":completed", data)
 		}
 		return nil
 	})

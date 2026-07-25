@@ -14,27 +14,6 @@ func Default() *Config {
 	return &Config{
 		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
 		Health: HealthConfig{Addr: "127.0.0.1:11419"},
-		Streams: []StreamConfig{
-			{Name: "MOOX_TRADE", Subjects: []string{"moox.trading.>", "moox.trade.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
-			{Name: "MOOX_STRATEGY", Subjects: []string{"moox.strategy.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 168 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
-			{Name: "MOOX_STORAGE", Subjects: []string{"moox.storage.dataset.rows.upserted.v1.>"}, Retention: "limits", Discard: "new", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 2147483648},
-			{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1, MaxAge: 24 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
-			{Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.>"}, Retention: "work_queue", Storage: "file", Replicas: 1, MaxAge: 72 * time.Hour, Duplicates: 2 * time.Minute, MaxBytes: 536870912},
-		},
-		Consumers: []ConsumerConfig{
-			{Stream: "MOOX_TRADE", Durable: "trade_execution_v1", FilterSubject: "moox.trade.execution.slice.ready.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
-			{Stream: "MOOX_TRADE", Durable: "trade_reconciliation_v1", FilterSubject: "moox.trade.reconciliation.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
-			{Stream: "MOOX_TRADE", Durable: "trade_rebalance_v1", FilterSubject: "moox.trade.rebalance.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
-			{Stream: "MOOX_TRADE", Durable: "trade_progress_v1", FilterSubject: "moox.trade.fill.received.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 64, MaxDeliver: -1},
-			{Stream: "MOOX_TRADE", Durable: "trade_trading_signal_v1", FilterSubject: "moox.trading.signal.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1},
-			{Stream: "MOOX_METRICS", Durable: "monitor_hostmetrics_ingest_v1", FilterSubject: "moox.metrics.host.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_METRICS", Durable: "monitor_metrics_ingest_v1", FilterSubject: "moox.metrics.snapshot.reported.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: 3},
-			{Stream: "MOOX_STORAGE", Durable: "storage_view", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 120 * time.Second, MaxAckPending: 8, MaxDeliver: -1},
-			{Stream: "MOOX_STORAGE", Durable: "factor_calc", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "new", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 1000, MaxDeliver: 5},
-			{Stream: "MOOX_STORAGE", Durable: "moox_archive_kline_v1", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 5 * time.Minute, MaxAckPending: 256, MaxDeliver: -1},
-		},
-		ConsumerTemplates: []ConsumerTemplateConfig{{Stream: "MOOX_CLOUDNODE_EXEC", DurablePrefix: "cn_exec_", FilterPattern: "moox.cloudnode.job.execution.requested.v1.>", AckPolicy: "explicit", DeliverPolicy: "all", ReplayPolicy: "instant", AckWait: 60 * time.Second, MaxAckPending: 256, MaxDeliver: -1}},
-		KV:                []KVConfig{{Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE", MaxAge: 48 * time.Hour, History: 1, Storage: "file", Replicas: 1}},
 	}
 }
 

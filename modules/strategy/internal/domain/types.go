@@ -114,6 +114,19 @@ type Group struct {
 
 func (Group) TableName() string { return "t_strategy_groups" }
 
+type ExecutionBinding struct {
+	ExecutionBindingID string `gorm:"column:c_execution_binding_id;primaryKey"`
+	GroupID            string `gorm:"column:c_group_id"`
+	AccountID          string `gorm:"column:c_account_id"`
+	ChannelID          string `gorm:"column:c_channel_id"`
+	Mode               string `gorm:"column:c_mode"`
+	CapitalAmount      string `gorm:"column:c_capital_amount"`
+	QuoteAsset         string `gorm:"column:c_quote_asset"`
+	Status             string `gorm:"column:c_status"`
+}
+
+func (ExecutionBinding) TableName() string { return "t_strategy_execution_bindings" }
+
 type ExecutionRequest struct {
 	ExecutionID         string `gorm:"column:c_execution_id;primaryKey"`
 	ExecutionBindingID  string `gorm:"column:c_execution_binding_id"`

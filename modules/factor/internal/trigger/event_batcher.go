@@ -213,8 +213,8 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 	return matched
 }
 
-// Flush is an in-memory compatibility helper. Durable callers must use
-// FlushPending followed by CommitPending so inbox errors are observable.
+// Flush 是纯内存兼容入口。需要持久化的调用方必须使用 FlushPending，
+// 再调用 CommitPending，确保 inbox 错误可以被观察到。
 func (d *EventBatcher) Flush(now time.Time) []Task {
 	if d == nil || d.inbox != nil {
 		return nil

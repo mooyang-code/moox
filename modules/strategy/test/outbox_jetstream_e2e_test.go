@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/strategyeventpb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -32,7 +32,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_STRATEGY", Subjects: []string{"moox.strategy.>"}, Storage: nats.FileStorage, Duplicates: 2 * time.Minute}); err != nil {
+	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_TRADE", Subjects: []string{"moox.trade.>"}, Storage: nats.FileStorage, Duplicates: 2 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,6 +44,18 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repo.CreateInitialState(context.Background(), domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: 0, StateJSON: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateBinding(context.Background(), domain.Binding{
+		BindingID: "binding-1", StrategyID: "demo", StrategyVersion: "1", SpaceID: "space",
+		ViewID: "view-1", Freq: "1m", GroupID: "group-1", Status: "enabled",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateExecutionBinding(context.Background(), domain.ExecutionBinding{
+		ExecutionBindingID: "execution-1", GroupID: "group-1", AccountID: "account-1",
+		ChannelID: "channel-1", Mode: "paper", CapitalAmount: "100", QuoteAsset: "USDT", Status: "enabled",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	commitDecision(t, repo, "run-1", 0, "2026-07-17T00:00:00Z")
@@ -98,13 +110,14 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	}
 	defer verifyNC.Close()
 	verifyJS, _ := verifyNC.JetStream()
-	subscription, err := verifyJS.SubscribeSync("moox.strategy.output.accepted.v1.>", nats.DeliverAll())
+	subscription, err := verifyJS.SubscribeSync("moox.trade.rebalance.requested.v1.>", nats.DeliverAll())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer subscription.Unsubscribe()
 	seen := map[string]int{}
-	for seen["run-1"] == 0 || seen["run-2"] == 0 {
+	firstID, secondID := "run-1:rebalance:execution-1", "run-2:rebalance:execution-1"
+	for seen[firstID] == 0 || seen[secondID] == 0 {
 		message, err := subscription.NextMsg(3 * time.Second)
 		if err != nil {
 			t.Fatal(err)
@@ -117,18 +130,18 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.StrategyOutputAccepted.Name() {
+		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.TradeRebalanceRequested.Name() {
 			t.Fatalf("invalid envelope/header: id=%q envelope=%+v", message.Header.Get(nats.MsgIdHdr), &envelope)
 		}
-		if _, ok := payload.(*strategyeventpb.StrategyOutputAccepted); !ok {
+		if _, ok := payload.(*tradeeventpb.RebalanceRequested); !ok {
 			t.Fatalf("payload=%T", payload)
 		}
 		seen[envelope.GetEventId()]++
 	}
-	if seen["run-1"] != 1 || seen["run-2"] != 1 {
+	if seen[firstID] != 1 || seen[secondID] != 1 {
 		t.Fatalf("published ids=%v", seen)
 	}
-	streamInfo, err := verifyJS.StreamInfo("MOOX_STRATEGY")
+	streamInfo, err := verifyJS.StreamInfo("MOOX_TRADE")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +167,12 @@ func commitDecision(t *testing.T, repo *store.Store, runID string, revision int6
 	t.Helper()
 	task := domain.Task{
 		RunID: runID, BindingID: "binding-1", StrategyID: "demo", Version: "1", Namespace: "default",
-		TriggerBarTime: trigger, PreviousState: domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: revision, StateJSON: "{}"},
+		TriggerBarTime: trigger, DataRevision: "revision-" + runID,
+		PreviousState: domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: revision, StateJSON: "{}"},
 	}
-	output := domain.Output{Action: domain.ActionHold, Targets: []domain.TargetWeight{}, NextState: map[string]any{"revision": revision + 1}}
+	output := domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetWeight{{
+		InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5",
+	}}, NextState: map[string]any{"revision": revision + 1}}
 	if err := repo.Commit(context.Background(), task, output, "hash-"+runID); err != nil {
 		t.Fatal(err)
 	}

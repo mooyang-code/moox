@@ -11,7 +11,7 @@ archive:
     urls: [nats://127.0.0.1:4222]
     credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml
     stream: MOOX_STORAGE
-    durable: moox_archive_kline_v1
+    consumer: moox_archive_kline_v1
     fetch_batch: 128
     fetch_max_wait: 1s
     dedupe_retention: 168h

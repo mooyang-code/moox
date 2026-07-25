@@ -23,6 +23,7 @@ describe("strategy operation capability", () => {
           "a-space": { template: "<div><slot /></div>" },
           "a-select": { props: ["modelValue"], template: '<select :data-value="modelValue"><slot /></select>' },
           "a-option": { template: "<option><slot /></option>" },
+          "a-input": { props: ["modelValue"], template: '<input :value="modelValue" />' },
           "a-button": { template: "<button><slot /></button>" },
           "a-modal": true,
           "a-textarea": true,

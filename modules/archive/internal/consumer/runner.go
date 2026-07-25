@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-type PullConsumer interface {
+type ConsumerAPI interface {
 	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
 	Close() error
 }
@@ -17,17 +17,17 @@ type Runner struct {
 	batch  int
 }
 
-func NewRunner(consumer PullConsumer, handler *Handler, batch int) *Runner {
+func NewRunner(consumer ConsumerAPI, handler *Handler, batch int) *Runner {
 	if batch <= 0 {
 		batch = 1
 	}
-	return &Runner{shared: jetstream.NewRunner(rawPullAdapter{consumer}, decisionHandler{handler: handler}, jetstream.RunnerConfig{BatchSize: batch}), batch: batch}
+	return &Runner{shared: jetstream.NewRunner(rawConsumerAdapter{consumer}, decisionHandler{handler: handler}, jetstream.RunnerConfig{BatchSize: batch}), batch: batch}
 }
 
-type rawPullAdapter struct{ PullConsumer }
+type rawConsumerAdapter struct{ ConsumerAPI }
 
-func (a rawPullAdapter) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
-	return a.PullConsumer.Fetch(ctx, batch)
+func (a rawConsumerAdapter) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
+	return a.ConsumerAPI.Fetch(ctx, batch)
 }
 
 func (r *Runner) Run(ctx context.Context) error {

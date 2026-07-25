@@ -14,7 +14,10 @@ import (
 )
 
 func TestServerStartsJetStreamAndShutsDown(t *testing.T) {
-	c := config.Default()
+	c, err := config.Load("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c.Broker.StoreDir = t.TempDir()
 	c.Broker.Port = freePort(t)
 	c.Broker.ServerName = "eventbus-test"

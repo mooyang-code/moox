@@ -65,24 +65,24 @@ func buildDatasetRowsUpsertedMessage(nodeID, eventID, spaceID, datasetID string,
 // BindOutboxID assigns the stable transport id after the atomic Pebble batch
 // has reserved its internal outbox id.
 func BindOutboxID(data []byte, nodeID string, outboxID uint64) ([]byte, error) {
-	newEnvelope := &eventpb.EventMessage{}
-	if err := proto.Unmarshal(data, newEnvelope); err != nil {
+	eventMessage := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(data, eventMessage); err != nil {
 		return nil, fmt.Errorf("unmarshal storage outbox message %d: %w", outboxID, err)
 	}
 	token, err := jetstream.EncodeSubjectToken(nodeID)
 	if err != nil {
 		return nil, err
 	}
-	if newEnvelope.GetEventId() == "outbox-pending" {
-		newEnvelope.EventId = "storage-" + token + "-" + strconv.FormatUint(outboxID, 10)
+	if eventMessage.GetEventId() == "outbox-pending" {
+		eventMessage.EventId = "storage-" + token + "-" + strconv.FormatUint(outboxID, 10)
 	}
-	if err := validateDatasetRowsUpsertedEvent(newEnvelope, ""); err != nil {
+	if err := validateDatasetRowsUpsertedEvent(eventMessage, ""); err != nil {
 		return nil, fmt.Errorf("validate storage rows.upserted envelope %d: %w", outboxID, err)
 	}
-	if err := validateNewEventID(newEnvelope); err != nil {
+	if err := validateNewEventID(eventMessage); err != nil {
 		return nil, err
 	}
-	return proto.MarshalOptions{Deterministic: true}.Marshal(newEnvelope)
+	return proto.MarshalOptions{Deterministic: true}.Marshal(eventMessage)
 }
 
 func validateNewEventID(message *eventpb.EventMessage) error {

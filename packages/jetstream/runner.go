@@ -45,9 +45,8 @@ func (f DeliveryHandlerFunc) Handle(ctx context.Context, delivery *Delivery) Han
 	return f(ctx, delivery)
 }
 
-// PullConsumerAPI is the fetch/close surface required by Runner. PullConsumer
-// implements it, while small fakes can be used by module tests.
-type PullConsumerAPI interface {
+// ConsumerAPI 是 Runner 所需的最小消费接口。
+type ConsumerAPI interface {
 	Fetch(context.Context, int) ([]*Delivery, error)
 	Close() error
 }
@@ -73,7 +72,7 @@ type RunnerConfig struct {
 }
 
 type Runner struct {
-	consumer PullConsumerAPI
+	consumer ConsumerAPI
 	handler  DeliveryHandler
 	cfg      RunnerConfig
 }
@@ -100,7 +99,7 @@ func ApplyHandlerResult(ctx context.Context, delivery *Delivery, result HandlerR
 	}
 }
 
-func NewRunner(consumer PullConsumerAPI, handler DeliveryHandler, cfg RunnerConfig) *Runner {
+func NewRunner(consumer ConsumerAPI, handler DeliveryHandler, cfg RunnerConfig) *Runner {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 1
 	}

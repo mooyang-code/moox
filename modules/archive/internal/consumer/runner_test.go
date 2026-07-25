@@ -14,13 +14,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakePullConsumer struct {
+type fakeConsumer struct {
 	batches [][]*jetstream.Delivery
 	err     error
 	closed  bool
 }
 
-func (f *fakePullConsumer) Fetch(_ context.Context, _ int) ([]*jetstream.Delivery, error) {
+func (f *fakeConsumer) Fetch(_ context.Context, _ int) ([]*jetstream.Delivery, error) {
 	if len(f.batches) == 0 {
 		return nil, f.err
 	}
@@ -29,14 +29,14 @@ func (f *fakePullConsumer) Fetch(_ context.Context, _ int) ([]*jetstream.Deliver
 	return batch, f.err
 }
 
-func (f *fakePullConsumer) Close() error {
+func (f *fakeConsumer) Close() error {
 	f.closed = true
 	return nil
 }
 
 func TestRunnerStopsNormallyOnCancel(t *testing.T) {
 	delivery := &jetstream.Delivery{RawMessageID: "m1", RawData: []byte("raw"), Subject: "topic"}
-	consumer := &fakePullConsumer{
+	consumer := &fakeConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}},
 		err:     nats.ErrTimeout,
 	}
@@ -55,7 +55,7 @@ func TestRunnerStopsNormallyOnCancel(t *testing.T) {
 
 func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {
 	delivery := &jetstream.Delivery{RawMessageID: "m1", RawData: []byte("raw"), Subject: "topic", DeliveryCount: 2}
-	consumer := &fakePullConsumer{
+	consumer := &fakeConsumer{
 		batches: [][]*jetstream.Delivery{{delivery}, {}},
 		err:     nats.ErrTimeout,
 	}
@@ -92,7 +92,7 @@ func TestDeliveryAdapter(t *testing.T) {
 }
 
 func TestNewRunnerDefaultsBatchSize(t *testing.T) {
-	runner := NewRunner(&fakePullConsumer{}, NewHandler(&fakeDecoder{}, &fakeJournal{}, nil), 0)
+	runner := NewRunner(&fakeConsumer{}, NewHandler(&fakeDecoder{}, &fakeJournal{}, nil), 0)
 	require.NotNil(t, runner)
 	assert.Equal(t, 1, runner.batch)
 }

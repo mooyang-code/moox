@@ -4,13 +4,11 @@ package config
 import "time"
 
 type Config struct {
-	Broker            BrokerConfig             `yaml:"broker"`
-	InternalClient    InternalClientConfig     `yaml:"internal_client"`
-	Health            HealthConfig             `yaml:"health"`
-	Streams           []StreamConfig           `yaml:"streams"`
-	Consumers         []ConsumerConfig         `yaml:"consumers"`
-	ConsumerTemplates []ConsumerTemplateConfig `yaml:"consumer_templates"`
-	KV                []KVConfig               `yaml:"kv"`
+	Broker         BrokerConfig         `yaml:"broker"`
+	InternalClient InternalClientConfig `yaml:"internal_client"`
+	Health         HealthConfig         `yaml:"health"`
+	Streams        []StreamConfig       `yaml:"streams"`
+	KV             []KVConfig           `yaml:"kv"`
 }
 
 type BrokerConfig struct {
@@ -69,30 +67,6 @@ type StreamConfig struct {
 	MaxBytes    int64         `yaml:"max_bytes"`
 	MaxMsgs     int64         `yaml:"max_msgs"`
 	Description string        `yaml:"description"`
-}
-
-type ConsumerConfig struct {
-	Stream        string        `yaml:"stream"`
-	Durable       string        `yaml:"durable"`
-	FilterSubject string        `yaml:"filter_subject"`
-	AckPolicy     string        `yaml:"ack_policy"`
-	DeliverPolicy string        `yaml:"deliver_policy"`
-	ReplayPolicy  string        `yaml:"replay_policy"`
-	AckWait       time.Duration `yaml:"ack_wait"`
-	MaxAckPending int           `yaml:"max_ack_pending"`
-	MaxDeliver    int           `yaml:"max_deliver"`
-}
-
-type ConsumerTemplateConfig struct {
-	Stream        string        `yaml:"stream"`
-	DurablePrefix string        `yaml:"durable_prefix"`
-	FilterPattern string        `yaml:"filter_pattern"`
-	AckPolicy     string        `yaml:"ack_policy"`
-	DeliverPolicy string        `yaml:"deliver_policy"`
-	ReplayPolicy  string        `yaml:"replay_policy"`
-	AckWait       time.Duration `yaml:"ack_wait"`
-	MaxAckPending int           `yaml:"max_ack_pending"`
-	MaxDeliver    int           `yaml:"max_deliver"`
 }
 
 type KVConfig struct {

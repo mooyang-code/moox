@@ -122,7 +122,6 @@ proto:
 	$(MAKE) -C packages/hostmetricpb all
 	$(MAKE) -C packages/cloudjobpb all
 	$(MAKE) -C packages/tradeeventpb all
-	$(MAKE) -C packages/strategyeventpb all
 	$(MAKE) -C packages/storagepb generate
 	$(MAKE) -C packages/events all
 	$(MAKE) -C modules/storage proto

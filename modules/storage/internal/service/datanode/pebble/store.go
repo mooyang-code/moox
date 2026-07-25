@@ -136,9 +136,8 @@ func (s *Store) UpsertFields(ctx context.Context, rows []*pb.RowFieldUpsert) err
 	return err
 }
 
-// UpsertFieldsEvent returns one durable event payload per dataset represented in
-// the request. The payload is optional so callers that only need local writes
-// can avoid creating an outbox record.
+// UpsertFieldsEvent 为本次已提交写入涉及的每个 Dataset 返回一条事件载荷。
+// event 可为空，本地写入调用方因此不会创建 outbox 记录。
 func (s *Store) UpsertFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
 	return s.writeFieldsEvent(ctx, rows, "", event)
 }
@@ -251,15 +250,15 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			if err != nil {
 				return nil, err
 			}
-			newEnvelope := &eventpb.EventMessage{}
-			if err := proto.Unmarshal(payload, newEnvelope); err != nil {
+			eventMessage := &eventpb.EventMessage{}
+			if err := proto.Unmarshal(payload, eventMessage); err != nil {
 				return nil, fmt.Errorf("unmarshal rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err)
 			}
-			if err := validateDatasetRowsUpsertedEvent(newEnvelope, ""); err != nil {
+			if err := validateDatasetRowsUpsertedEvent(eventMessage, ""); err != nil {
 				return nil, fmt.Errorf("validate rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err)
 			}
-			if newEnvelope.GetSpaceId() != group.spaceID || newEnvelope.GetSubjectId() != group.datasetID {
-				return nil, fmt.Errorf("rows.upserted event identity %s/%s does not match write group %s/%s", newEnvelope.GetSpaceId(), newEnvelope.GetSubjectId(), group.spaceID, group.datasetID)
+			if eventMessage.GetSpaceId() != group.spaceID || eventMessage.GetSubjectId() != group.datasetID {
+				return nil, fmt.Errorf("rows.upserted event identity %s/%s does not match write group %s/%s", eventMessage.GetSpaceId(), eventMessage.GetSubjectId(), group.spaceID, group.datasetID)
 			}
 			id := nextID
 			payload, err = BindOutboxID(payload, s.nodeID, id)
@@ -727,10 +726,9 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	return result, iter.Error()
 }
 
-// OutboxStats scans the durable outbox so the relay can report the full
-// pending count rather than only its publish batch. Timestamp decode errors do
-// not change relay behavior; PrepareOutboxPublication remains the authoritative
-// validation path for the next attempted entry.
+// OutboxStats 扫描已提交 outbox 记录，供 relay 汇报完整等待数量，而非仅汇报
+// 单次发布批次。时间戳解码失败不改变 relay 行为；下一条记录仍由
+// PrepareOutboxPublication 负责权威校验。
 func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
 	if err := ctx.Err(); err != nil {
 		return OutboxStats{}, err

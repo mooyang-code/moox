@@ -6,7 +6,7 @@
 
 ```text
 服务 registry -> 本地 timer -> MetricSnapshot -> moox-eventbus
-    -> Monitor durable consumer -> Storage 历史 + SQLite catalog/latest
+    -> Monitor Consumer -> Storage 历史 + SQLite catalog/latest
     -> 看板查询 -> 结构化 AND/OR 规则 -> webhook
 ```
 
@@ -82,10 +82,12 @@ Counter 保留绝对值，RATE/INCREASE 在 Monitor 使用按时间排序的历�
 | 所有服务无最新值 | `moox-eventbus /readyz`、`MOOX_METRICS` consumer pending、服务 reporter error counter |
 | Monitor 启动但没有 ingest | `monitor` 日志中的 metadata schema status；确认 Space/Dataset/columns/DataNode 绑定已通过 `metadata apply` 并完成激活 |
 | 单个服务 stale | 使用 health HMAC 请求服务 `/metrics`、检查 timer 日志、`MOOX_BOOT_ID`、EventBus 连接和 producer 注册 |
-| DLQ 增长 | `moox.dlq.message.rejected.v1` consumer、原始 message_id、rejection_reason；修复 schema 或 producer 后重新发布新 message_id |
+| Consumer terminated 增长 | Monitor structured error log、原始 `event_id`、producer identity 和 payload schema |
 | 看板历史缺口 | Storage Dataset/DataNode 状态、`service_target`、UpsertFields 错误、series_id 与 Attribute 身份是否完整 |
 
-Malformed envelope、gzip bomb、未知 producer、错误 content type 和不兼容 snapshot 不会影响 Monitor 原有 HTTP/TCP 可用性检查；这些消息写入 DLQ 并终止原 delivery。重复 message_id 在 SQLite dedupe 后 ACK，不重复写入 latest。
+Malformed envelope、gzip bomb、未知 producer、错误 content type 和不兼容 snapshot 不会影响
+Monitor 原有 HTTP/TCP 可用性检查；这些消息记录结构化错误并 TERM。重复 `event_id` 在
+SQLite dedupe 后 ACK，不重复写入 latest。
 
 ## 容量和压测
 

@@ -38,7 +38,7 @@ type Agent struct {
 }
 
 type eventPublisher interface {
-	Publish(context.Context, events.EventType, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
+	Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
 
 type snapshotCollector interface {

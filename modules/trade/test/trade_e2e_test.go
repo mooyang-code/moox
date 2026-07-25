@@ -6,7 +6,6 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
@@ -381,22 +380,6 @@ func TestOperationalPauseFailsClosedAndCanResume(t *testing.T) {
 	}
 	if _, err = engine.Place(ctx, input); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestReconcileNowCommandUsesOutbox(t *testing.T) {
-	ctx := context.Background()
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err = s.EnqueueOutbox(ctx, "reconcile-1", []byte("event-data")); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := s.ClaimOutbox(ctx, 10, time.Minute)
-	if err != nil || len(rows) != 1 || len(rows[0].EventData) == 0 {
-		t.Fatalf("rows=%+v err=%v", rows, err)
 	}
 }
 

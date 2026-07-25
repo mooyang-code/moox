@@ -178,31 +178,9 @@ if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moo
 fi
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
-assert_grep 'wait_eventbus_storage_view_topology' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
-if ! awk '
-  /^start_storage_view\(\) \{/ { in_view=1 }
-  in_view && /wait_eventbus_storage_view_topology/ { checked=1 }
-  in_view && /start_service "storage-view"/ { exit !checked }
-' "${DEPLOY_DIR}/start.sh"; then
-  echo "storage-view must preflight EventBus topology before starting" >&2
-  exit 1
-fi
-topology_block="$(sed -n '/^wait_eventbus_storage_view_topology() {/,/^}/p' "${DEPLOY_DIR}/start.sh")"
-grep -Fq '[[ "${attempts}" =~ ^[1-9][0-9]*$ ]]' <<<"${topology_block}" || {
-  echo "storage-view topology preflight must validate a positive wait duration" >&2
-  exit 1
-}
-grep -Fq 'mktemp "${TMPDIR:-/tmp}/moox-eventbus-topology.XXXXXX"' <<<"${topology_block}" || {
-  echo "storage-view topology preflight must use a temporary response file" >&2
-  exit 1
-}
-grep -Fq -- '--output "${response_file}"' <<<"${topology_block}" || {
-  echo "storage-view topology preflight must save the metrics response" >&2
-  exit 1
-}
-if grep -Eq '\|[[:space:]]*grep' <<<"${topology_block}"; then
-  echo "storage-view topology preflight must not pipe curl into grep" >&2
+if grep -Eq 'wait_eventbus_storage_view_topology|storage_view durable topology' "${DEPLOY_DIR}/start.sh"; then
+  echo "storage-view must create and own its Consumer instead of waiting for EventBus topology" >&2
   exit 1
 fi
 assert_grep '"\$\{ROOT\}/bin/moox-storage-view"' "${DEPLOY_DIR}/start.sh"

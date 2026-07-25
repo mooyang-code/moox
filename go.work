@@ -32,7 +32,6 @@ use (
 	./packages/events
 	./packages/storagepb
 	./packages/tradeeventpb
-	./packages/strategyeventpb
 	./packages/security
 	./packages/gatewayauth
 	./packages/gatewayproxy

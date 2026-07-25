@@ -1,57 +1,37 @@
 # moox-trade
 
-MooX 的事件驱动交易内核，提供账户与通道管理、订单执行、成交结算、账本余额、仓位查询、撤单换单和目标仓位调仓。
+Trade 是账户、订单、成交、账本、仓位和调仓的唯一事实源。它只消费 Strategy 发布的
+`trade.rebalance.requested` 命令，不消费自己产生的订单、成交或进度事件。
 
-## 目录
+## 主流程
 
-```text
-internal/domain/          订单、执行、账本、仓位、调仓领域模型
-internal/algorithm/       可替换且版本化的拆单、定价、执行算法
-internal/application/     命令、消费者、对账与调仓编排
-internal/infra/store/     交易存储和事务边界
-internal/infra/bus/       Inbox/Outbox 与公共 JetStream 客户端
-internal/infra/exchangebridge/ 交易所适配桥
-internal/bootstrap/       生产装配与后台 worker
-test/                     跨组件端到端测试
-```
+Strategy 调仓命令经过 Consumer 解码和校验后，Trade 在同一数据库事务中写入 Inbox、
+调仓 run 和 legs。事务提交后，本地 wake channel 立即推进调仓和订单状态机。下单、
+成交和调仓进度只写 Trade 数据库；私有 WebSocket 提供低延迟成交回报，REST 对账补齐
+断线缺口。
 
-架构细节见 [DESIGN.md](./DESIGN.md)。
+本地 wake 采用容量为 1 的合并通知，状态始终以数据库为准。Timer 不是业务主触发器：
 
-## 服务
-
-账户、余额、资金、API 凭证、通道、交易操作、订单、成交、仓位服务使用端口 `11200-11208`；目标仓位调仓服务使用 `11211`，运维控制服务使用 `11212`。Admin 网关通过 `trade_*` deployment 转发。
-
-生产启动器会为存在活动订单的通道维护 Binance/OKX 鉴权私有 WebSocket。私有流负责实时成交，REST `ListFills` 只负责断线缺口修复。两条路径使用相同的交易所成交号和 `FillHandler`，因此重复回报不会重复结算。
-
-成交缺口修复由 `trpc.moox.trade.fill_reconcile.timer` 每 5 秒执行，订单/Saga/调仓恢复由 `trpc.moox.trade.order_recovery.timer` 每 15 秒执行；两者启动时立即运行，并分别设置 5 秒、15 秒超时。Handler 同步返回汇总错误并跳过同进程重入。低延迟 Outbox 投递、退避状态机和私有流 supervisor 仍是进程内生命周期循环，不属于调度 Timer。
+- 成交缺口对账每 30 秒运行。
+- 订单、Saga 和调仓恢复每 15 秒运行，并在启动时立即执行。
 
 ## 配置
 
-- `database.path`：Trade 数据库路径，底层实现不暴露给应用层。
-- `eventbus.urls` / `eventbus.stream`：JetStream 地址与 `MOOX_TRADE` stream。
-- `eventbus.execution_durable`：订单执行 consumer。
-- `eventbus.rebalance_durable`：调仓请求 consumer。
-- `eventbus.progress_durable`：成交后推进调仓依赖 legs 的 consumer。
-- `eventbus.reconciliation_durable`：立即对账命令 consumer。
-
-## 运维控制
-
-`TradeOpsSvc` 提供：
-
-- `SetPause`：按 Space 暂停或恢复账户、通道；暂停后新单安全拒绝。
-- `ReconcileNow`：通过 Outbox/EventBus 发起有界订单与成交对账。
-- `InspectSaga`：读取撤单换单 Saga 的状态、版本和最后错误。
-
-健康检查验证 Store 可写、EventBus 连接、Outbox 延迟、未知订单数量和活动订单的私有流监督状态。Prometheus 指标以 `moox_trade_` 为前缀，标签仅使用有限枚举，不包含订单号、通道号或 Symbol。
+- `database.path`：Trade SQLite 路径。
+- `eventbus.urls`：JetStream 地址。
+- `eventbus.rebalance_consumer`：Strategy 调仓命令 Consumer 名称。
 - `security.encryption_key`：交易所凭证 AES-GCM 密钥。
 
-## 构建与验证
+`ReconcileNow` 直接执行一次有界对账，不发布事件。健康检查覆盖数据库、EventBus、
+未知订单和私有流状态，不再包含 Trade outbox。
+
+## 验证
 
 ```bash
 make -C proto all
-go build -o bin/moox-trade ./cmd/server
 go test -count=1 ./...
 go test -count=1 ./test -v
 ```
 
-`test/eventbus_e2e_test.go` 会启动进程内 NATS Server，验证真实 JetStream 发布、NAK 重投、Inbox 幂等和单次交易所提交；`test/trade_e2e_test.go` 验证重启恢复、未知提交、成交结算、资金保护、撤单与调仓。
+`internal/bootstrap/kernel_workers_test.go` 覆盖调仓命令解析、Inbox 幂等、重试分类和本地
+状态推进；跨 Strategy、JetStream、Trade 的端到端验证由事件系统 E2E 执行。

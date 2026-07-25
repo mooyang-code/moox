@@ -137,12 +137,12 @@ func TestValidate_SQLiteWithoutPath_ShouldFail(t *testing.T) {
 	assert.Contains(t, err.Error(), "database path is required")
 }
 
-func TestValidate_EventBusEnabledWithoutDurables_ShouldFail(t *testing.T) {
+func TestValidate_EventBusEnabledWithoutConsumer_ShouldFail(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.EventBus.ExecutionDurable = ""
+	cfg.EventBus.RebalanceConsumer = ""
 
 	err := cfg.Validate()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "eventbus stream and durable are required")
+	assert.Contains(t, err.Error(), "eventbus rebalance consumer is required")
 }

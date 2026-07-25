@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -24,31 +25,35 @@ type NATSConfig struct {
 }
 
 const (
-	// LiveStream and LiveDurable are owned by the EventBus topology registry.
-	// Factor realtime must not turn these names into a configurable replay path.
-	LiveStream  = "MOOX_STORAGE"
-	LiveDurable = "factor_calc"
+	// LiveStream 和 LiveConsumer 定义 Factor 实时消费契约。
+	// 实时消费不能把这些名称变成可配置的重放入口。
+	LiveStream   = "MOOX_STORAGE"
+	LiveConsumer = "factor_calc"
 )
 
 var ErrInvalidLiveConsumer = errors.New("factor: invalid live consumer contract")
 
-// ValidateLiveConsumerConfig keeps the realtime trigger on the EventBus-owned
-// live durable. Replay uses a separate durable or an offline entry point.
+// ValidateLiveConsumerConfig 保证实时触发器只使用固定 Consumer。
+// 重放应使用独立 Consumer 或离线入口。
 func ValidateLiveConsumerConfig(cfg NATSConfig) error {
-	if strings.TrimSpace(cfg.Stream) != LiveStream || strings.TrimSpace(cfg.Consumer) != LiveDurable {
-		return fmt.Errorf("%w: realtime must bind %s/%s, got %q/%q", ErrInvalidLiveConsumer, LiveStream, LiveDurable, cfg.Stream, cfg.Consumer)
+	if strings.TrimSpace(cfg.Stream) != LiveStream || strings.TrimSpace(cfg.Consumer) != LiveConsumer {
+		return fmt.Errorf("%w: realtime must bind %s/%s, got %q/%q", ErrInvalidLiveConsumer, LiveStream, LiveConsumer, cfg.Stream, cfg.Consumer)
 	}
 	return nil
 }
 
-func liveConsumerBindRef(cfg NATSConfig) (jetstream.ConsumerBindRef, error) {
+func liveConsumerConfig(cfg NATSConfig) (events.ConsumerConfig, error) {
 	if err := ValidateLiveConsumerConfig(cfg); err != nil {
-		return jetstream.ConsumerBindRef{}, err
+		return events.ConsumerConfig{}, err
 	}
-	return jetstream.ConsumerBindRef{
-		Stream:              LiveStream,
-		Durable:             LiveDurable,
+	return events.ConsumerConfig{
+		Name:                LiveConsumer,
+		Event:               events.DatasetRowsUpserted,
+		AckWait:             time.Minute,
+		MaxDeliver:          5,
+		MaxAckPending:       1000,
 		FetchMaxWait:        cfg.FetchMaxWait,
+		DeliverPolicy:       nats.DeliverNewPolicy,
 		DeliverDecodeErrors: true,
 	}, nil
 }
@@ -57,7 +62,7 @@ type NATSConsumer struct {
 	cfg          NATSConfig
 	eventBatcher *EventBatcher
 	client       *jetstream.Client
-	consumer     *jetstream.PullConsumer
+	consumer     *events.Consumer
 	runner       *jetstream.Runner
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -73,7 +78,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	consumerRef, err := liveConsumerBindRef(c.cfg)
+	consumerCfg, err := liveConsumerConfig(c.cfg)
 	if err != nil {
 		return err
 	}
@@ -91,13 +96,18 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consumer, err := client.BindManagedPullConsumer(ctx, consumerRef)
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		_ = client.Close()
+		return err
+	}
+	consumer, err := events.NewConsumer(ctx, client, registry, consumerCfg)
 	if err != nil {
 		_ = client.Close()
 		return err
 	}
 	c.client, c.consumer = client, consumer
-	c.runner = jetstream.NewRunner(rawPullAdapter{consumer}, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16})
+	c.runner = jetstream.NewRunner(consumer, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16})
 	loopCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.wg.Add(1)
@@ -140,12 +150,6 @@ func (c *NATSConsumer) recordError(err error) {
 
 type storageEventHandler struct {
 	eventBatcher *EventBatcher
-}
-
-type rawPullAdapter struct{ *jetstream.PullConsumer }
-
-func (a rawPullAdapter) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
-	return a.PullConsumer.Fetch(ctx, batch)
 }
 
 func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {

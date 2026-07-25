@@ -35,11 +35,11 @@ func ParseDatasetRowsUpsertedSubject(prefix, subject string) (string, string, er
 		if err != nil {
 			return "", "", err
 		}
-		schema, ok := registry.Schema(events.DatasetRowsUpserted)
-		if !ok {
-			return "", "", fmt.Errorf("dataset rows event is not registered")
+		family, err := registry.FamilyPattern(events.DatasetRowsUpserted)
+		if err != nil {
+			return "", "", err
 		}
-		prefix = strings.TrimSuffix(strings.Split(schema.Subject, "<space>")[0], ".")
+		prefix = strings.TrimSuffix(family, ".>")
 	}
 	parts := strings.Split(subject, ".")
 	prefixParts := strings.Split(strings.TrimSuffix(prefix, "."), ".")

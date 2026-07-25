@@ -87,12 +87,12 @@ func (s *Service) ListEvents(ctx context.Context, req *eventbusgen.ListEventsReq
 		return &eventbusgen.ListEventsRsp{RetInfo: retErr(err)}, nil
 	}
 	items := make([]registry.Topic, 0)
-	for _, spec := range eventRegistry.Schemas() {
-		family, familyErr := eventRegistry.FamilyPatternForSchema(spec)
+	for _, event := range eventRegistry.Events() {
+		family, familyErr := eventRegistry.FamilyPattern(event)
 		if familyErr != nil {
 			return &eventbusgen.ListEventsRsp{RetInfo: retErr(familyErr)}, nil
 		}
-		items = append(items, registry.Topic{Topic: family, Stream: spec.Stream, EventName: spec.Name, EventVersion: spec.Version, Payload: string(spec.Payload), Enabled: true, Owner: spec.Owner})
+		items = append(items, registry.Topic{Topic: family, Stream: event.Stream(), EventName: event.Name(), EventVersion: event.Version(), Payload: string(event.PayloadFullName()), Enabled: true, Owner: event.Owner()})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Topic < items[j].Topic })
 	page, rows := paginateRows(req.GetPage(), items)

@@ -8,6 +8,11 @@
         ><a-option value="observe">Observe</a-option><a-option value="paper">Paper</a-option
         ><a-option v-if="store.liveExecutionEnabled" value="live">Live</a-option></a-select
       >
+      <template v-if="mode === 'paper' || mode === 'live'">
+        <a-input v-model="channelId" style="width: 180px" placeholder="执行通道 ID" :disabled="loading" />
+        <a-input v-model="capitalAmount" style="width: 140px" placeholder="执行资金" :disabled="loading" />
+        <a-input v-model="quoteAsset" style="width: 100px" placeholder="计价资产" :disabled="loading" />
+      </template>
       <a-button :loading="loading" @click="changeMode">应用模式</a-button>
     </a-space>
     <a-modal v-model:visible="reasonVisible" title="填写操作原因" @ok="submitReason">
@@ -27,6 +32,9 @@ const store = useStrategyStore();
 const userStore = useUserInfoStore();
 const canOperate = computed(() => userStore.account.roles.includes("admin"));
 const mode = ref(props.currentMode || "observe");
+const channelId = ref("");
+const capitalAmount = ref("");
+const quoteAsset = ref("USDT");
 const reason = ref("");
 const pending = ref<"pause" | "resume" | "mode">("pause");
 const reasonVisible = ref(false);
@@ -64,11 +72,24 @@ async function submitReason() {
     Message.warning("请填写操作原因");
     return;
   }
+  if (
+    pending.value === "mode" &&
+    (mode.value === "paper" || mode.value === "live") &&
+    (!channelId.value.trim() || !capitalAmount.value.trim())
+  ) {
+    Message.warning("Paper/Live 模式需要执行通道和执行资金");
+    return;
+  }
   loading.value = true;
   try {
     if (pending.value === "pause") await store.pause(props.bindingId, reason.value);
     else if (pending.value === "resume") await store.resume(props.bindingId, reason.value);
-    else await store.changeMode(props.bindingId, mode.value, reason.value);
+    else
+      await store.changeMode(props.bindingId, mode.value, reason.value, {
+        channel_id: channelId.value.trim(),
+        capital_amount: capitalAmount.value.trim(),
+        quote_asset: quoteAsset.value.trim() || "USDT"
+      });
     reasonVisible.value = false;
     Message.success("操作已提交");
     emit("changed");

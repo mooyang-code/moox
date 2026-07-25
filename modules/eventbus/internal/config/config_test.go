@@ -1,153 +1,107 @@
 package config
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultConfigIsValid(t *testing.T) {
-	c := Default()
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if c.Broker.MaxPayloadBytes != 8*1024*1024 || c.Broker.StartupTimeout != 10*time.Second {
-		t.Fatalf("unexpected broker defaults: %#v", c.Broker)
-	}
+func loadRepositoryConfig(t *testing.T) *Config {
+	t.Helper()
+	cfg, err := Load("../../config/app.yaml")
+	require.NoError(t, err)
+	return cfg
 }
 
-func TestDefaultIncludesArchiveConsumer(t *testing.T) {
+func TestDefaultProvidesOnlyProcessDefaults(t *testing.T) {
 	cfg := Default()
-	for _, consumer := range cfg.Consumers {
-		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "moox_archive_kline_v1" {
-			if consumer.FilterSubject != "moox.storage.dataset.rows.upserted.v1.>" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
-				t.Fatalf("archive consumer = %#v", consumer)
-			}
-			return
-		}
-	}
-	t.Fatal("archive durable consumer missing")
+	assert.Equal(t, 8*1024*1024, cfg.Broker.MaxPayloadBytes)
+	assert.Equal(t, 10*time.Second, cfg.Broker.StartupTimeout)
+	assert.Empty(t, cfg.Streams)
+	assert.Empty(t, cfg.KV)
 }
 
-func TestDefaultMonitorConsumersMatchRuntimeContracts(t *testing.T) {
-	cfg := Default()
-	want := map[string]string{
-		"monitor_hostmetrics_ingest_v1": "moox.metrics.host.reported.v1.>",
-		"monitor_metrics_ingest_v1":     "moox.metrics.snapshot.reported.v1.>",
+func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
+	cfg := loadRepositoryConfig(t)
+	require.Len(t, cfg.Streams, 4)
+	require.Len(t, cfg.KV, 1)
+	want := map[string]bool{
+		"MOOX_CLOUDNODE_EXEC": false,
+		"MOOX_METRICS":        false,
+		"MOOX_STORAGE":        false,
+		"MOOX_TRADE":          false,
 	}
-	for _, consumer := range cfg.Consumers {
-		if topic, ok := want[consumer.Durable]; ok {
-			if consumer.FilterSubject != topic || consumer.AckWait != time.Minute || consumer.MaxAckPending != 256 || consumer.MaxDeliver != 3 {
-				t.Fatalf("monitor consumer %q = %#v", consumer.Durable, consumer)
-			}
-			delete(want, consumer.Durable)
+	for _, stream := range cfg.Streams {
+		if _, ok := want[stream.Name]; !ok {
+			t.Fatalf("unexpected stream %q", stream.Name)
 		}
+		want[stream.Name] = true
 	}
-	if len(want) != 0 {
-		t.Fatalf("missing monitor consumers: %#v", want)
+	for name, found := range want {
+		assert.True(t, found, "missing stream %s", name)
 	}
 }
 
-func TestDefaultTradingSignalConsumerMatchesRuntimeContract(t *testing.T) {
-	for _, consumer := range Default().Consumers {
-		if consumer.Durable == "trade_trading_signal_v1" {
-			if consumer.Stream != "MOOX_TRADE" || consumer.FilterSubject != "moox.trading.signal.v1.>" || consumer.DeliverPolicy != "all" || consumer.AckWait != time.Minute || consumer.MaxAckPending != 256 || consumer.MaxDeliver != -1 {
-				t.Fatalf("trading signal consumer = %#v", consumer)
-			}
-			return
-		}
+func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
+	t.Setenv("MOOX_EVENTBUS_PORT", "4333")
+	t.Setenv("MOOX_EVENTBUS_STORE_DIR", t.TempDir())
+	t.Setenv("MOOX_EVENTBUS_STREAM_MAX_BYTES", "104857600")
+	cfg := loadRepositoryConfig(t)
+	assert.Equal(t, 4333, cfg.Broker.Port)
+	for _, stream := range cfg.Streams {
+		assert.Equal(t, int64(104857600), stream.MaxBytes)
 	}
-	t.Fatal("trading signal durable consumer missing")
 }
 
 func TestRejectMissingGovernedEventFamily(t *testing.T) {
-	c := Default()
-	for i := range c.Streams {
-		if c.Streams[i].Name == "MOOX_TRADE" {
-			c.Streams[i].Subjects = []string{"moox.trade.>"}
+	cfg := loadRepositoryConfig(t)
+	for i := range cfg.Streams {
+		if cfg.Streams[i].Name == "MOOX_TRADE" {
+			cfg.Streams[i].Subjects = []string{"moox.trade.other.>"}
 		}
 	}
-
-	err := c.Validate()
+	err := cfg.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "governed event")
 }
 
-func TestRepositoryConfigLoads(t *testing.T) {
-	if _, err := Load("../../config/app.yaml"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLoadYAMLAndEnvironmentOverrides(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "app.yaml")
-	if err := os.WriteFile(path, []byte("broker:\n  store_dir: ./data/test\n  port: 4223\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_EVENTBUS_PORT", "4333")
-	t.Setenv("MOOX_EVENTBUS_STREAM_MAX_BYTES", "104857600")
-	c, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Broker.Port != 4333 || c.Broker.StoreDir != "./data/test" {
-		t.Fatalf("overrides not applied: %#v", c.Broker)
-	}
-	for _, stream := range c.Streams {
-		if stream.MaxBytes != 104857600 {
-			t.Fatalf("stream %s max bytes = %d", stream.Name, stream.MaxBytes)
-		}
-	}
-}
-
 func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
-	for name, mutate := range map[string]func(*Config){
-		"root store":             func(c *Config) { c.Broker.StoreDir = "/" },
-		"duplicate stream":       func(c *Config) { c.Streams = append(c.Streams, c.Streams[0]) },
-		"bad TLS":                func(c *Config) { c.Broker.TLS.Enabled = true; c.Broker.TLS.CertFile = "cert" },
-		"bad auth":               func(c *Config) { c.Broker.Auth.Enabled = true },
-		"missing governed event": func(c *Config) { c.Streams[0].Subjects = []string{"moox.other.>"} },
-		"cluster default name":   func(c *Config) { c.Broker.Cluster.Enabled = true },
-		"overlap":                func(c *Config) { c.Streams[1].Subjects = []string{"moox.metrics.>"} },
-		"negative duplicates":    func(c *Config) { c.Streams[0].Duplicates = -time.Second },
-	} {
+	tests := map[string]func(*Config){
+		"root store":           func(c *Config) { c.Broker.StoreDir = "/" },
+		"duplicate stream":     func(c *Config) { c.Streams = append(c.Streams, c.Streams[0]) },
+		"bad TLS":              func(c *Config) { c.Broker.TLS.Enabled = true; c.Broker.TLS.CertFile = "cert" },
+		"bad auth":             func(c *Config) { c.Broker.Auth.Enabled = true },
+		"cluster default name": func(c *Config) { c.Broker.Cluster.Enabled = true },
+		"overlap": func(c *Config) {
+			c.Streams[0].Subjects = []string{"moox.metrics.>"}
+		},
+		"negative duplicates": func(c *Config) { c.Streams[0].Duplicates = -time.Second },
+		"replicas":            func(c *Config) { c.Streams[0].Replicas = 2 },
+	}
+	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
-			c := Default()
-			mutate(c)
-			if err := c.Validate(); err == nil {
-				t.Fatal("Validate returned nil")
-			}
+			cfg := loadRepositoryConfig(t)
+			mutate(cfg)
+			require.Error(t, cfg.Validate())
 		})
 	}
 }
 
-func TestRejectReplicaWithoutCluster(t *testing.T) {
-	c := Default()
-	c.Streams[0].Replicas = 2
-	if err := c.Validate(); err == nil {
-		t.Fatal("replica count was accepted without a cluster")
-	}
-}
-
-func TestValidateSubject(t *testing.T) {
+func TestSubjectValidationAndMatching(t *testing.T) {
 	require.NoError(t, validateSubject("moox.storage.>", true))
 	require.Error(t, validateSubject("", true))
 	require.Error(t, validateSubject("moox..storage", true))
 	require.Error(t, validateSubject("moox.>", false))
 	require.Error(t, validateSubject("moox.*.rows", false))
-}
 
-func TestSubjectMatches(t *testing.T) {
 	assert.True(t, subjectMatches("moox.storage.>", "moox.storage.rows.v1"))
 	assert.True(t, subjectMatches("moox.*.rows", "moox.storage.rows"))
 	assert.False(t, subjectMatches("moox.storage.rows", "moox.storage.other"))
 }
 
-func TestPatternsOverlap(t *testing.T) {
+func TestPatternOverlap(t *testing.T) {
 	assert.True(t, patternsOverlap("moox.>", "moox.storage"))
 	assert.True(t, patternsOverlap("moox.*.rows", "moox.storage.rows"))
 	assert.False(t, patternsOverlap("moox.storage", "moox.factor"))
@@ -161,34 +115,10 @@ func TestUnsafeStoreDir(t *testing.T) {
 }
 
 func TestFindStream(t *testing.T) {
-	cfg := Default()
-	stream, ok := findStream(cfg, cfg.Streams[0].Name)
+	cfg := loadRepositoryConfig(t)
+	stream, ok := findStream(cfg, "MOOX_STORAGE")
 	require.True(t, ok)
-	assert.Equal(t, cfg.Streams[0].Name, stream.Name)
+	assert.Equal(t, "MOOX_STORAGE", stream.Name)
 	_, ok = findStream(cfg, "missing")
 	assert.False(t, ok)
-}
-
-func TestValidateConsumerTemplate(t *testing.T) {
-	cfg := Default()
-	template := cfg.ConsumerTemplates[0]
-	require.NoError(t, validateConsumerTemplate(&template, cfg))
-	bad := template
-	bad.Stream = "missing"
-	require.Error(t, validateConsumerTemplate(&bad, cfg))
-	bad = template
-	bad.Stream = "MOOX_TRADE"
-	require.Error(t, validateConsumerTemplate(&bad, cfg))
-}
-
-func TestDefaultStorageViewConsumerAllowsParallelLanes(t *testing.T) {
-	for _, consumer := range Default().Consumers {
-		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "storage_view" {
-			if consumer.MaxAckPending != 8 {
-				t.Fatalf("storage_view max_ack_pending = %d, want 8", consumer.MaxAckPending)
-			}
-			return
-		}
-	}
-	t.Fatal("storage_view durable consumer missing")
 }

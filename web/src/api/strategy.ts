@@ -111,6 +111,18 @@ export async function resumeBinding(binding_id: string, reason: string, operatio
   return callControl("strategy", "ResumeBinding", { binding_id, reason, operation_id });
 }
 
-export async function setExecutionMode(binding_id: string, mode: string, reason: string, operation_id: string) {
-  return callControl("strategy", "SetExecutionMode", { binding_id, mode, reason, operation_id });
+export interface ExecutionSettings {
+  channel_id?: string;
+  capital_amount?: string;
+  quote_asset?: string;
+}
+
+export async function setExecutionMode(
+  binding_id: string,
+  mode: string,
+  reason: string,
+  operation_id: string,
+  settings: ExecutionSettings = {}
+) {
+  return callControl("strategy", "SetExecutionMode", { binding_id, mode, reason, operation_id, ...settings });
 }

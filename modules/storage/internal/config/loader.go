@@ -53,7 +53,7 @@ type StorageEventBus struct {
 	CredentialFile string   `yaml:"credential_file"`
 	StreamName     string   `yaml:"stream_name"`
 	SubjectPrefix  string   `yaml:"subject_prefix"`
-	ConsumerName   string   `yaml:"consumer_name"`
+	Consumer       string   `yaml:"consumer"`
 	MaxAgeHours    int      `yaml:"max_age_hours"`
 	MaxMsgs        int64    `yaml:"max_msgs"`
 	MaxBytes       int64    `yaml:"max_bytes"`
@@ -258,8 +258,8 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.EventBus.StreamName == "" {
 		c.EventBus.StreamName = "MOOX_STORAGE"
 	}
-	if c.EventBus.ConsumerName == "" {
-		c.EventBus.ConsumerName = "storage_view"
+	if c.EventBus.Consumer == "" {
+		c.EventBus.Consumer = "storage_view"
 	}
 	if c.EventBus.MaxAgeHours <= 0 {
 		c.EventBus.MaxAgeHours = 24
@@ -409,7 +409,7 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 }
 
-// Validate checks the delivery contract shared with the predeclared durable consumers.
+// Validate 校验 Storage View 创建 Consumer 时使用的投递参数。
 func (c StorageEventBus) Validate() error {
 	if c.AckWaitMS < 3000 {
 		return fmt.Errorf("storage eventbus ack_wait_ms must be at least 3000")

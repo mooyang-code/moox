@@ -12,13 +12,14 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var MetricTopic = governedFamily(events.MetricsSnapshotReported)
 
-func governedFamily(event events.EventType) string {
+func governedFamily(event events.Event) string {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return ""
@@ -54,7 +55,7 @@ type ConsumerOptions struct {
 }
 
 type Consumer struct {
-	pull     *jetstream.PullConsumer
+	pull     *events.Consumer
 	opts     ConsumerOptions
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -89,7 +90,16 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 	if cfg.MaxAckPending <= 0 {
 		cfg.MaxAckPending = 256
 	}
-	pull, err := opts.Client.NewPullConsumer(ctx, jetstream.ConsumerConfig{Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.Topic, AckWait: cfg.AckWait, MaxDeliver: 3, MaxAckPending: cfg.MaxAckPending, FetchMaxWait: cfg.FetchMaxWait})
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	pull, err := events.NewConsumer(ctx, opts.Client, registry, events.ConsumerConfig{
+		Name: cfg.Consumer, Event: events.MetricsSnapshotReported,
+		AckWait: cfg.AckWait, MaxDeliver: 3, MaxAckPending: cfg.MaxAckPending,
+		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		return nil, err
 	}

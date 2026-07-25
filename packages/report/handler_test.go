@@ -18,7 +18,7 @@ import (
 )
 
 type fakePublisher struct {
-	events   []events.EventType
+	events   []events.Event
 	payloads []proto.Message
 	options  []events.PublishOptions
 }
@@ -27,7 +27,7 @@ func validConfig(serviceName string) Config {
 	return Config{ServiceName: serviceName, InstanceID: serviceName + "@node-a", NodeID: "node-a", BootID: "boot-a"}
 }
 
-func (f *fakePublisher) Publish(_ context.Context, event events.EventType, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+func (f *fakePublisher) Publish(_ context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
 	f.events = append(f.events, event)
 	f.payloads = append(f.payloads, payload)
 	f.options = append(f.options, opts)
@@ -137,7 +137,8 @@ func TestHandlePublishesEventMessage(t *testing.T) {
 	if len(publisher.events) != 1 {
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	if publisher.events[0] != events.MetricsSnapshotReported {
+	if publisher.events[0].Name() != events.MetricsSnapshotReported.Name() ||
+		publisher.events[0].Version() != events.MetricsSnapshotReported.Version() {
 		t.Fatalf("event = %+v", publisher.events[0])
 	}
 	report, ok := publisher.payloads[0].(*metricspb.MetricReport)
