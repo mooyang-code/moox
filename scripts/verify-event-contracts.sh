@@ -66,11 +66,15 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
   "code-owned Consumer identity or ack settings remain in business YAML" \
   --glob '*.yaml' modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
 
-worker_acl='publish: {allow: ["$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>", "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>", "$JS.ACK.MOOX_CLOUDNODE_EXEC.>"]}'
-rg -Fq "$worker_acl" modules/admin/cmd/cli/eventbus_credentials.go || {
-  echo "cloudnode-worker ACL does not match the bind/fetch/ack contract" >&2
-  exit 1
-}
+for permission in \
+  '$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>' \
+  '$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>' \
+  '$JS.ACK.MOOX_CLOUDNODE_EXEC.>'; do
+  rg -Fq "$permission" modules/admin/cmd/cli/eventbus_credentials.go || {
+    echo "cloudnode-worker ACL is missing ${permission}" >&2
+    exit 1
+  }
+done
 
 (cd packages/events && go test ./...)
 (cd packages/jetstream && go test ./...)
