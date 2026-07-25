@@ -667,7 +667,7 @@ git commit -m "refactor(cloudnode): use exact event subject consumer"
 - Create: `modules/storage/internal/service/view/live_gate.go`
 - Create: `modules/storage/internal/service/view/live_gate_test.go`
 
-- [ ] **Step 1: 先冻结五项并发和可靠性契约**
+- [x] **Step 1: 先冻结五项并发和可靠性契约**
 
 把现有测试移动到目标测试文件；把测试名中的 `Lane` 改成 `SubjectDispatcher`，断言和测试体不改：
 
@@ -694,7 +694,7 @@ TestEventConsumerOptionsDefaults
 TestEventConsumerOptionsRejectsNegativeRetryAttempts
 ```
 
-- [ ] **Step 2: 只移动测试并验证仍通过**
+- [x] **Step 2: 只移动测试并验证仍通过**
 
 Run:
 
@@ -705,7 +705,7 @@ Run:
 
 Expected: PASS。此时生产 `consume.go` 尚未拆分。
 
-- [ ] **Step 3: 移动 delivery policy**
+- [x] **Step 3: 移动 delivery policy**
 
 把以下符号原样移动到 `delivery_policy.go`：
 
@@ -728,7 +728,7 @@ isPermanentDeliveryError
 - 重试耗尽和永久错误执行 TERM。
 - ACK/TERM/InProgress 错误仍进入现有 reporter/metrics。
 
-- [ ] **Step 4: 移动事件应用逻辑**
+- [x] **Step 4: 移动事件应用逻辑**
 
 把以下符号原样移动到 `event_apply.go`：
 
@@ -747,7 +747,7 @@ viewColumnDataset
 
 不得修改 protobuf 解码、Space/Dataset identity、Active/New 写入、缺行恢复或 checkpoint 行为。
 
-- [ ] **Step 5: 移动 Subject 调度、heartbeat 和 live gate**
+- [x] **Step 5: 移动 Subject 调度、heartbeat 和 live gate**
 
 把原来的 `lane` 命名改为“Subject 队列/调度器”，避免把它误解为 NATS 自带分区：
 
@@ -781,7 +781,7 @@ live_gate.go
 
 最终 `consume.go` 只保留 `EventConsumerOptions.withDefaults` 和 `StartEventConsumer`。
 
-- [ ] **Step 6: 验证没有行为变化和竞态**
+- [x] **Step 6: 验证没有行为变化和竞态**
 
 Run:
 
@@ -794,7 +794,7 @@ Run:
 
 Expected: 全部 PASS；五项冻结契约不变；`consume.go` 不再包含事件应用、Subject 调度、heartbeat 或 gate 的类型实现。
 
-- [ ] **Step 7: 提交纯结构拆分**
+- [x] **Step 7: 提交纯结构拆分**
 
 ```bash
 git add modules/storage/internal/service/view
