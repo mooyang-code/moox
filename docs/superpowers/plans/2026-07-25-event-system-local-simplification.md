@@ -814,7 +814,7 @@ git commit -m "refactor(storage): split view consumer responsibilities"
 - Create: `modules/factor/internal/trigger/event_batcher_inbox.go`
 - Create: `modules/factor/internal/trigger/event_batcher_inbox_test.go`
 
-- [ ] **Step 1: 增加完整 key 和固定窗口回归测试**
+- [x] **Step 1: 增加完整 key 和固定窗口回归测试**
 
 保留并强化以下断言：
 
@@ -844,7 +844,7 @@ TestDurableEventBatcherRestoresPendingWhenCommitFails
 TestDurableEventBatcherSkipsProcessedRedelivery
 ```
 
-- [ ] **Step 2: 把 late-data 测试改成普通历史 bar 调度测试**
+- [x] **Step 2: 把 late-data 测试改成普通历史 bar 调度测试**
 
 删除 `TestEventBatcherMarksDataOlderThanClosedWindowAsLateRecompute`，替换为：
 
@@ -878,7 +878,7 @@ func TestEventBatcherSchedulesOlderBarWithoutExtraLateState(t *testing.T) {
 
 该测试确认迟到修订仍触发幂等重算，但不再维护第二套 closed-window 分类。
 
-- [ ] **Step 3: 运行新测试并确认旧类型仍存在**
+- [x] **Step 3: 运行新测试并确认旧类型仍存在**
 
 Run:
 
@@ -890,7 +890,7 @@ rg -n 'LateData|LateDataPolicy|closedBucket|MinDataTime|MaxDataTime' \
 
 Expected: 测试 PASS，但 `rg` 仍命中待删除实现。
 
-- [ ] **Step 4: 删除没有进入 scheduler/executor 的字段和状态**
+- [x] **Step 4: 删除没有进入 scheduler/executor 的字段和状态**
 
 从 `Task` 删除：
 
@@ -931,7 +931,7 @@ FactorIDs 去重和稳定排序
 PendingEventIDs 去重和稳定排序
 ```
 
-- [ ] **Step 5: 调整 replay 测试**
+- [x] **Step 5: 调整 replay 测试**
 
 `TestReplayRangeCarriesExplicitIdentityAndTimeSemantics` 继续断言：
 
@@ -946,7 +946,7 @@ LastReceivedAt
 
 删除 `MinDataTime`、`MaxDataTime` 和 `LateDataPolicy` 断言。Replay 仍使用独立 batcher，不得 flush live bucket。
 
-- [ ] **Step 6: 把 Inbox 持久化方法移动到独立文件**
+- [x] **Step 6: 把 Inbox 持久化方法移动到独立文件**
 
 移动到 `event_batcher_inbox.go`：
 
@@ -961,7 +961,7 @@ orderedMessageIDs
 
 `Flush` 仍留在 `event_batcher.go`，调用 `FlushPending`。把 Inbox 测试移动到 `event_batcher_inbox_test.go`，测试体不改。
 
-- [ ] **Step 7: 验证 Factor 行为和竞态**
+- [x] **Step 7: 验证 Factor 行为和竞态**
 
 Run:
 
@@ -975,7 +975,7 @@ rg -n 'LateData|LateDataPolicy|closedBucket|MinDataTime|MaxDataTime' \
 
 Expected: 测试和 race PASS；最后一个 `rg` 无输出。
 
-- [ ] **Step 8: 提交 Factor 收敛**
+- [x] **Step 8: 提交 Factor 收敛**
 
 ```bash
 git add modules/factor/internal/trigger

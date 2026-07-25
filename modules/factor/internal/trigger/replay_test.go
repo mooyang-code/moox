@@ -38,11 +38,8 @@ func TestReplayRangeCarriesExplicitIdentityAndTimeSemantics(t *testing.T) {
 	if !task.FirstReceivedAt.Equal(start.Add(10*time.Second)) || !task.LastReceivedAt.Equal(start.Add(10*time.Second)) {
 		t.Fatalf("received time metadata=%+v", task)
 	}
-	if !task.MinDataTime.Equal(start.Add(30*time.Second)) || !task.MaxDataTime.Equal(start.Add(30*time.Second)) {
-		t.Fatalf("data time metadata=%+v", task)
-	}
-	if task.LateDataPolicy != LateDataPolicyRecompute {
-		t.Fatalf("late data policy=%q", task.LateDataPolicy)
+	if !task.BarTime.Equal(start.Add(30 * time.Second)) {
+		t.Fatalf("bar time=%s", task.BarTime)
 	}
 }
 
