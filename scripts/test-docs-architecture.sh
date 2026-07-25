@@ -14,7 +14,7 @@ while IFS= read -r module_path; do
   }
 done < <(awk '/^use \(/ {on=1; next} on && /^\)/ {exit} on {gsub(/^[[:space:]]*\.\//, ""); if (length) print}' go.work)
 
-[[ "${workspace_count}" -eq 41 ]] || {
+[[ "${workspace_count}" -eq 44 ]] || {
   echo "unexpected go.work module count: ${workspace_count}" >&2
   exit 1
 }

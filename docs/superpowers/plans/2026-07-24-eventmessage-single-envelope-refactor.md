@@ -1,5 +1,12 @@
 # EventMessage 单信封事件系统重构实施计划
 
+> **状态：历史执行记录，禁止把“当前执行状态”当作当前架构。**
+> 本文记录重构过程中的阶段性目标；其中的 Market Tick/Streamcalc、共享 DLQ、
+> YAML Registry 和已删除事件不再存在。当前运行契约以
+> [协议设计](../../协议设计.md)、[架构总览](../../架构总览.md)和
+> [Event System CR Remediation](2026-07-24-event-system-cr-remediation.md)
+> 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Use `superpowers:test-driven-development` for every behavioral change and `superpowers:verification-before-completion` before declaring completion.
 
 **Goal:** 删除 `MooxMessage` 及其兼容链路，让所有经过 NATS JetStream 的业务消息统一使用一层 `EventMessage`、结构化 Protobuf payload 和唯一事件注册表；同时保留真正有价值的可靠性机制，删除重复信封、散落主题、JSON/BytesValue 包装和无调用能力。

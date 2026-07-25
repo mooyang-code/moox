@@ -1,5 +1,12 @@
 # Event Contract Naming and Structured Storage Payload Implementation Plan
 
+> **状态：历史计划，禁止作为当前实现依据。**
+> 本文保留 2026-07-23 当时的设计与审查记录，其中的 Tick/Streamcalc、
+> YAML Registry、旧事件词表和 Consumer/DLQ 描述已经过期。当前运行契约以
+> [协议设计](协议设计.md)、[架构总览](架构总览.md)和
+> [Event System CR Remediation](superpowers/plans/2026-07-24-event-system-cr-remediation.md)
+> 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rename the market and trading events according to their actual semantics, introduce a concise structured trading-signal contract, move the structured Storage row event contract into `packages/storagepb`, and rename the Event Registry `Spec` API to `Schema`.

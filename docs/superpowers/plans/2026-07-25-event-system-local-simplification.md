@@ -114,7 +114,7 @@ docs/运维/MooX-EventBus运维.md
 **Files:**
 - Add: `docs/superpowers/plans/2026-07-25-event-system-local-simplification.md`
 
-- [ ] **Step 1: 核对远端精确基线**
+- [x] **Step 1: 核对远端精确基线**
 
 Run:
 
@@ -132,7 +132,7 @@ local and remote SHA: 5775dd6fc9530b9b5e0fcf39de1e76cd6708bd10
 worktree changes: none
 ```
 
-- [ ] **Step 2: 在用户确认后提交计划文档**
+- [x] **Step 2: 在用户确认后提交计划文档**
 
 Run:
 
@@ -147,7 +147,7 @@ git merge-base --is-ancestor \
 
 Expected: 计划提交成功，且代码基线 `5775dd6f` 是计划提交的祖先。
 
-- [ ] **Step 3: 创建实施工作树**
+- [x] **Step 3: 创建实施工作树**
 
 Run:
 
@@ -160,7 +160,7 @@ cd .worktrees/event-system-local-simplification
 
 Expected: `git status --short --branch` 显示新分支且工作树干净。
 
-- [ ] **Step 4: 运行基线证明集**
+- [x] **Step 4: 运行基线证明集**
 
 Run:
 
@@ -180,8 +180,10 @@ Expected: 四组命令全部 PASS。基线失败时停止实施，先把失败�
 **Files:**
 - Modify: `docs/2026-07-23-event-contract-refactor-plan.md:1`
 - Modify: `docs/superpowers/plans/2026-07-24-eventmessage-single-envelope-refactor.md:1`
+- Modify: `docs/架构总览.md:90`
+- Modify: `scripts/test-docs-architecture.sh:13`
 
-- [ ] **Step 1: 写文档状态检查并确认当前失败**
+- [x] **Step 1: 写文档状态检查并确认当前失败**
 
 Run:
 
@@ -192,7 +194,7 @@ head -n 8 docs/superpowers/plans/2026-07-24-eventmessage-single-envelope-refacto
 
 Expected: 两份文档顶部都没有“历史计划，不是当前事实源”的标记。
 
-- [ ] **Step 2: 给 2026-07-23 计划增加固定状态块**
+- [x] **Step 2: 给 2026-07-23 计划增加固定状态块**
 
 在一级标题后加入：
 
@@ -205,7 +207,7 @@ Expected: 两份文档顶部都没有“历史计划，不是当前事实源”�
 > 为准。
 ```
 
-- [ ] **Step 3: 给 single-envelope 计划增加固定状态块**
+- [x] **Step 3: 给 single-envelope 计划增加固定状态块**
 
 在一级标题后加入：
 
@@ -218,7 +220,7 @@ Expected: 两份文档顶部都没有“历史计划，不是当前事实源”�
 > 为准。
 ```
 
-- [ ] **Step 4: 验证链接和状态块**
+- [x] **Step 4: 验证链接和状态块**
 
 Run:
 
@@ -230,7 +232,11 @@ bash scripts/test-docs-architecture.sh
 
 Expected: 两份文档首屏都显示历史状态，文档架构测试 PASS。
 
-- [ ] **Step 5: 提交文档状态**
+执行时发现 `go.work` 已有 44 个 module，而当前架构清单缺少
+`packages/cloudjobpb`、`packages/storagepb`、`packages/tradeeventpb`，文档门禁仍固定为
+41。已同步清单并把门禁计数改为 44；这是恢复既有文档契约所必需的基线修正。
+
+- [x] **Step 5: 提交文档状态**
 
 ```bash
 git add docs/2026-07-23-event-contract-refactor-plan.md \
