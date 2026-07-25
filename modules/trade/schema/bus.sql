@@ -2,6 +2,12 @@ CREATE TABLE IF NOT EXISTS t_trade_inbox (
  c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_consumer TEXT NOT NULL, c_message_id TEXT NOT NULL, c_event_name TEXT NOT NULL,
  c_processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(c_consumer,c_message_id)
 );
+CREATE TABLE IF NOT EXISTS t_trade_command_offsets (
+ c_consumer TEXT NOT NULL, c_space_id TEXT NOT NULL, c_subject_id TEXT NOT NULL,
+ c_last_sequence INTEGER NOT NULL, c_event_id TEXT NOT NULL,
+ c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(c_consumer,c_space_id,c_subject_id)
+);
 CREATE TABLE IF NOT EXISTS t_reconciliation_runs (
  c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_space_id TEXT NOT NULL, c_run_id TEXT NOT NULL, c_account_id TEXT NOT NULL,
  c_status TEXT NOT NULL, c_started_at DATETIME NOT NULL, c_completed_at DATETIME, c_error TEXT NOT NULL DEFAULT '',

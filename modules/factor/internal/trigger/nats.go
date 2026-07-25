@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,9 +16,6 @@ import (
 
 type NATSConfig struct {
 	URLs           []string
-	URL            string
-	Stream         string
-	Consumer       string
 	FetchMaxWait   time.Duration
 	CredentialFile string
 }
@@ -31,21 +27,7 @@ const (
 	LiveConsumer = "factor_calc"
 )
 
-var ErrInvalidLiveConsumer = errors.New("factor: invalid live consumer contract")
-
-// ValidateLiveConsumerConfig 保证实时触发器只使用固定 Consumer。
-// 重放应使用独立 Consumer 或离线入口。
-func ValidateLiveConsumerConfig(cfg NATSConfig) error {
-	if strings.TrimSpace(cfg.Stream) != LiveStream || strings.TrimSpace(cfg.Consumer) != LiveConsumer {
-		return fmt.Errorf("%w: realtime must bind %s/%s, got %q/%q", ErrInvalidLiveConsumer, LiveStream, LiveConsumer, cfg.Stream, cfg.Consumer)
-	}
-	return nil
-}
-
-func liveConsumerConfig(cfg NATSConfig) (events.ConsumerConfig, error) {
-	if err := ValidateLiveConsumerConfig(cfg); err != nil {
-		return events.ConsumerConfig{}, err
-	}
+func liveConsumerConfig(cfg NATSConfig) events.ConsumerConfig {
 	return events.ConsumerConfig{
 		Name:                LiveConsumer,
 		Event:               events.DatasetRowsUpserted,
@@ -55,87 +37,188 @@ func liveConsumerConfig(cfg NATSConfig) (events.ConsumerConfig, error) {
 		FetchMaxWait:        cfg.FetchMaxWait,
 		DeliverPolicy:       nats.DeliverNewPolicy,
 		DeliverDecodeErrors: true,
-	}, nil
+	}
 }
 
 type NATSConsumer struct {
 	cfg          NATSConfig
 	eventBatcher *EventBatcher
-	client       *jetstream.Client
-	consumer     *events.Consumer
-	runner       *jetstream.Runner
+	openSession  func(context.Context) (natsConsumerSession, error)
+	retryDelay   time.Duration
+	session      natsConsumerSession
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 	mu           sync.Mutex
 	runErr       error
+	ready        bool
 }
 
 func NewNATSConsumer(cfg NATSConfig, eventBatcher *EventBatcher) *NATSConsumer {
-	return &NATSConsumer{cfg: cfg, eventBatcher: eventBatcher}
+	consumer := &NATSConsumer{cfg: cfg, eventBatcher: eventBatcher, retryDelay: time.Second}
+	consumer.openSession = consumer.open
+	return consumer
 }
 
 func (c *NATSConsumer) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	consumerCfg, err := liveConsumerConfig(c.cfg)
+	session, err := c.openSession(ctx)
 	if err != nil {
 		return err
 	}
-	urls := append([]string(nil), c.cfg.URLs...)
-	if len(urls) == 0 && strings.TrimSpace(c.cfg.URL) != "" {
-		urls = []string{c.cfg.URL}
+	c.startSessionLoop(ctx, session)
+	return nil
+}
+
+type natsConsumerSession interface {
+	Run(context.Context) error
+	Close() error
+}
+
+type jetStreamConsumerSession struct {
+	client   *jetstream.Client
+	consumer *events.Consumer
+	runner   *jetstream.Runner
+}
+
+func (s *jetStreamConsumerSession) Run(ctx context.Context) error {
+	return s.runner.Run(ctx)
+}
+
+func (s *jetStreamConsumerSession) Close() error {
+	if s == nil {
+		return nil
 	}
+	var consumerErr error
+	if s.consumer != nil {
+		consumerErr = s.consumer.Close()
+	}
+	if s.client != nil {
+		return errors.Join(consumerErr, s.client.Close())
+	}
+	return consumerErr
+}
+
+func (c *NATSConsumer) open(ctx context.Context) (natsConsumerSession, error) {
+	consumerCfg := liveConsumerConfig(c.cfg)
+	urls := append([]string(nil), c.cfg.URLs...)
 	clientCfg := jetstream.ConfigFromEnv(urls, "moox-factor")
 	if c.cfg.CredentialFile != "" {
 		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(c.cfg.CredentialFile)); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	client, err := jetstream.Connect(ctx, clientCfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		_ = client.Close()
-		return err
+		return nil, err
 	}
 	consumer, err := events.NewConsumer(ctx, client, registry, consumerCfg)
 	if err != nil {
 		_ = client.Close()
-		return err
+		return nil, err
 	}
-	c.client, c.consumer = client, consumer
-	c.runner = jetstream.NewRunner(consumer, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16})
+	return &jetStreamConsumerSession{
+		client:   client,
+		consumer: consumer,
+		runner:   jetstream.NewRunner(consumer, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16}),
+	}, nil
+}
+
+func (c *NATSConsumer) startSessionLoop(ctx context.Context, session natsConsumerSession) {
 	loopCtx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
 	c.cancel = cancel
+	c.session = session
+	c.ready = true
+	c.mu.Unlock()
 	c.wg.Add(1)
-	go c.loop(loopCtx)
-	return nil
+	go c.loop(loopCtx, session)
 }
 
 func (c *NATSConsumer) Close() error {
+	c.mu.Lock()
 	if c.cancel != nil {
 		c.cancel()
 	}
-	if c.consumer != nil {
-		_ = c.consumer.Close()
-	}
+	c.ready = false
+	c.mu.Unlock()
 	c.wg.Wait()
 	c.mu.Lock()
 	runErr := c.runErr
 	c.mu.Unlock()
-	if c.client != nil {
-		return errors.Join(runErr, c.client.Close())
-	}
 	return runErr
 }
 
-func (c *NATSConsumer) loop(ctx context.Context) {
+func (c *NATSConsumer) Ready() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ready
+}
+
+func (c *NATSConsumer) loop(ctx context.Context, session natsConsumerSession) {
 	defer c.wg.Done()
-	if err := c.runner.Run(ctx); err != nil && ctx.Err() == nil {
-		c.recordError(err)
+	for {
+		runErr := session.Run(ctx)
+		c.detachSession(session)
+		closeErr := session.Close()
+		if ctx.Err() != nil {
+			return
+		}
+		c.recordError(errors.Join(runErr, closeErr))
+
+		for {
+			if !sleepNATSConsumer(ctx, c.retryDelay) {
+				return
+			}
+			next, err := c.openSession(ctx)
+			if err != nil {
+				c.recordError(err)
+				continue
+			}
+			c.attachSession(next)
+			session = next
+			break
+		}
+	}
+}
+
+func (c *NATSConsumer) detachSession(session natsConsumerSession) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.session == session {
+		c.session = nil
+		c.ready = false
+	}
+}
+
+func (c *NATSConsumer) attachSession(session natsConsumerSession) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.session = session
+	c.ready = true
+	c.runErr = nil
+}
+
+func sleepNATSConsumer(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

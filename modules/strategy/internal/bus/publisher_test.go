@@ -45,7 +45,7 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	data, err := registry.MarshalMessage(events.TradeRebalanceRequested, &tradeeventpb.RebalanceRequested{
 		RequestId: "request-1", StrategyRunId: "run-1", ExecutionBindingId: "execution-1",
 		AccountId: "account-1", ChannelId: "channel-1", Mode: "paper", DataRevision: "revision-1",
-		CapitalAmount: "100", QuoteAsset: "USDT",
+		CapitalAmount: "100", QuoteAsset: "USDT", CommandSequence: 1,
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "execution-1"})
 	require.NoError(t, err)
 	require.NoError(t, publisher.Publish(context.Background(), domain.OutboxMessage{MessageID: "request-1", EventData: data}))

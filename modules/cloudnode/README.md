@@ -24,7 +24,7 @@ config/
   trpc_go.yaml            CloudNodeMgr :11401
 internal/
   bootstrap/              启动与 TRPC 注册
-  jobqueue/               CloudNode 私有 NATS JetStream 执行队列
+  jobqueue/               中心 EventBus 上的 CloudNode JetStream 执行队列
   jobstate/               NATS JetStream KV active JobItem 状态
   jobhistory/             终态 JobItem 历史日库维护
   projection/             节点心跳批处理
@@ -73,16 +73,16 @@ moox-collector-scf
 本地直接运行时数据文件默认：
 
 - CloudNode 主 SQLite：`./data/moox_cloudnode.db`（节点、账号、代码包等控制面数据，以 `config/app.yaml` 为准）
-- CloudNode 私有 JetStream：`../data/cloudnode/nats`
+- EventBus 连接：`MOOX_EVENTBUS_NATS_URL`（默认 `nats://127.0.0.1:4222`）
 - JobItem 终态历史日库：`../data/cloudnode/jobs/YYYYMMDD.db`
 
-通过 `scripts/deploy-moox.sh` 发布时，SQLite 配置会被改写到部署目录的 `../data/cloudnode/moox_cloudnode.db`，JetStream store 位于部署目录的 `data/cloudnode/nats`，JobItem 历史日库位于部署目录的 `data/cloudnode/jobs`。
+通过 `scripts/deploy-moox.sh` 发布时，SQLite 配置会被改写到部署目录的 `../data/cloudnode/moox_cloudnode.db`，CloudNode 连接由 `moox-eventbus` 统一管理的 JetStream，JobItem 历史日库位于部署目录的 `data/cloudnode/jobs`。
 
 CloudNode 主 SQLite 只保存控制面数据，不再保存在线 JobItem 状态。服务启动时会强制把 SQLite 连接池限制为 `max_open_conns=1` / `max_idle_conns=1`，让剩余控制面写入和心跳批处理在进程内排队，避免同进程多连接抢 SQLite 文件写锁。
 
 ## JobItem 执行队列
 
-CloudNode 使用独立的 JetStream 执行 stream 和 KV bucket，避免与 storage 的数据变更事件混用：
+CloudNode 在中心 EventBus 中使用独立的 JetStream 执行 stream 和 KV bucket，避免与 storage 的数据变更事件混用：
 
 ```text
 MOOX_CLOUDNODE_EXEC       moox.cloudnode.job.execution.requested.v1.>  执行命令，负责 ACK/NAK/TERM/重投

@@ -28,7 +28,7 @@ func TestDecoderRejectsInvalidRow(t *testing.T) {
 	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
 	event := validStorageEvent()
 	event.Rows[0].Key.GetTimeSeries().DataTime = "not-time"
-	raw, subject, messageID := marshalEvent(t, event)
+	raw, subject, messageID := marshalUncheckedEvent(t, event)
 	batch, decision, err := decoder.DecodeEvent(raw, subject, messageID)
 	assert.Error(t, err)
 	assert.Equal(t, DecisionReject, decision)
@@ -74,6 +74,22 @@ func marshalEvent(t *testing.T, payload *storagepb.DatasetRowsUpserted) ([]byte,
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "m1", OccurredAt: time.Now().UTC(), SpaceID: payload.GetSpaceId(), SubjectID: payload.GetDatasetId()})
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	return raw, encoded.Subject, encoded.Message.GetEventId()
+}
+
+func marshalUncheckedEvent(t *testing.T, payload *storagepb.DatasetRowsUpserted) ([]byte, string, string) {
+	t.Helper()
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	baseline := validStorageEvent()
+	encoded, err := registry.Encode(events.DatasetRowsUpserted, baseline, events.PublishOptions{
+		EventID: "m1", OccurredAt: time.Now().UTC(), SpaceID: baseline.GetSpaceId(), SubjectID: baseline.GetDatasetId(),
+	})
+	require.NoError(t, err)
+	encoded.Message.Payload, err = proto.Marshal(payload)
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)
 	require.NoError(t, err)

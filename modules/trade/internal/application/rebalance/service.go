@@ -15,6 +15,8 @@ import (
 type Market struct{ MarketType, BaseAsset, QuoteAsset, Price string }
 type CreateInput struct {
 	SpaceID, RunID, IdempotencyKey, AccountID, ChannelID, MarketSnapshotID, PositionSnapshotID, RulesVersion string
+	SubjectID                                                                                                string
+	CommandSequence                                                                                          uint64
 	ExecutionMode                                                                                            string
 	Mode                                                                                                     domain.TargetMode
 	Targets                                                                                                  []domain.Target
@@ -41,16 +43,23 @@ func (s Service) CreateFromEvent(ctx context.Context, consumer, eventID, eventNa
 	if err != nil {
 		return false, err
 	}
-	fresh := false
+	created := false
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var recordErr error
-		fresh, recordErr = tx.RecordInbox(consumer, eventID, eventName)
-		if recordErr != nil || !fresh {
+		created, recordErr = tx.RecordSequencedInbox(
+			consumer,
+			eventID,
+			eventName,
+			in.SpaceID,
+			in.SubjectID,
+			in.CommandSequence,
+		)
+		if recordErr != nil || !created {
 			return recordErr
 		}
 		return tx.CreateRebalance(run, records)
 	})
-	return fresh, err
+	return created, err
 }
 
 func buildCreateRecords(in CreateInput) (store.RebalanceRunRecord, []store.RebalanceLegRecord, error) {

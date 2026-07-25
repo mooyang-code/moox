@@ -131,14 +131,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "恢复 factor event inbox 失败: %v", err)
 		return nil, err
 	}
-	if cfg.NATS.URL == "" {
-		log.WarnContextf(ctx, "factor nats.url is empty, realtime trigger startup skipped")
+	if len(cfg.NATS.URLs) == 0 {
+		log.WarnContextf(ctx, "factor nats.urls is empty, realtime trigger startup skipped")
 	} else {
 		consumer = trigger.NewNATSConsumer(trigger.NATSConfig{
 			URLs:           cfg.NATS.URLs,
-			URL:            cfg.NATS.URL,
-			Stream:         cfg.NATS.Stream,
-			Consumer:       cfg.NATS.Consumer,
 			FetchMaxWait:   cfg.NATS.FetchMaxWait,
 			CredentialFile: cfg.NATS.CredentialFile,
 		}, eventBatcher)
@@ -174,7 +171,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			factorsvc.WithMetadataSync(meta),
 		))
 	}
-	if err := registerHealth(s, cfg, dbm, sched, runtimeExec); err != nil {
+	if err := registerHealth(s, cfg, dbm, sched, runtimeExec, consumer); err != nil {
 		return nil, err
 	}
 
@@ -213,12 +210,16 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor) error {
+type realtimeStatus interface {
+	Ready() bool
+}
+
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, consumer realtimeStatus) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("factor", cfg.Instance.InstanceID, "", "")
-	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, sched, runtimeExec, state)
+	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, sched, runtimeExec, consumer, state)
 	if s == nil {
 		return fmt.Errorf("factor health service is unavailable")
 	}
@@ -228,7 +229,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, sched *sche
 	return nil
 }
 
-func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, state *health.State) healthz.SnapshotFunc {
+func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Service, runtimeExec *engine.RuntimePoolExecutor, consumer realtimeStatus, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
 		workerStatus := engine.WorkerPoolStatus{}
@@ -237,7 +238,8 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Servic
 		}
 		workerReady := workerStatus.Ready && workerStatus.Workers > 0
 		schedulerReady := sched != nil
-		ready := databaseReady && workerReady && schedulerReady
+		natsReady := realtimeConsumerReady(cfg, consumer)
+		ready := databaseReady && workerReady && schedulerReady && natsReady
 		state.SetReady(ready)
 		rsp := healthz.Base("factor", cfg.Instance.InstanceID, "", "", factorStartedAt, ready)
 		rsp.Details = map[string]any{
@@ -247,13 +249,21 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Servic
 			"python_version":  workerStatus.PythonVersion,
 			"arrow_available": workerStatus.ArrowAvailable,
 			"scheduler_ready": schedulerReady,
+			"nats_ready":      natsReady,
 			"role":            cfg.Instance.Role,
 			"worker_count":    cfg.Engine.Workers,
-			"nats_enabled":    cfg.NATS.URL != "",
+			"nats_enabled":    len(cfg.NATS.URLs) > 0,
 			"storage_gateway": cfg.Storage.GatewayTarget,
 		}
 		return rsp
 	}
+}
+
+func realtimeConsumerReady(cfg *Config, consumer realtimeStatus) bool {
+	if cfg == nil || len(cfg.NATS.URLs) == 0 {
+		return true
+	}
+	return consumer != nil && consumer.Ready()
 }
 
 func registerReconcileSchedule(s *server.Server, sched *scheduler.Service) {

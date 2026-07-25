@@ -821,9 +821,6 @@ patch_configs() {
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_cloudnode\.db#path: ../data/cloudnode/moox_cloudnode.db#g' \
       "${STAGE_DIR}/cloudnode/config/app.yaml"
-    local cloudnode_eventbus_url="${EVENTBUS_URL_ENV:-nats://127.0.0.1:4222}"
-    perl -0pi -e 's#nats://127\.0\.0\.1:4322#'"${cloudnode_eventbus_url}"'#g' \
-      "${STAGE_DIR}/cloudnode/config/app.yaml"
   fi
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
@@ -1157,7 +1154,7 @@ COLLECTOR_ENV=(
 FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
-  "MOOX_FACTOR_NATS_URL=${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}"
+  "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
   "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
 )
 
@@ -1231,7 +1228,7 @@ wait_nats() {
 }
 
 wait_factor_nats() {
-  wait_nats factor "${MOOX_FACTOR_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_FACTOR_NATS_SECONDS:-60}"
+  wait_nats factor "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_FACTOR_NATS_SECONDS:-60}"
 }
 
 wait_tcp() {
@@ -1626,6 +1623,7 @@ start_cloudnode() {
   runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
     env "${RUNTIME_IDENTITY_ENV[@]}" \
+      "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
       "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
 }

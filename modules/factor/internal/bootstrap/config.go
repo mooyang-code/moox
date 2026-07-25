@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
@@ -48,9 +47,6 @@ type StorageConfig struct {
 // NATSConfig describes the Storage event stream subscription.
 type NATSConfig struct {
 	URLs           []string      `yaml:"urls"`
-	URL            string        `yaml:"url"`
-	Stream         string        `yaml:"stream"`
-	Consumer       string        `yaml:"consumer"`
 	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
 	CredentialFile string        `yaml:"credential_file"`
 }
@@ -109,9 +105,6 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
-	if err := trigger.ValidateLiveConsumerConfig(trigger.NATSConfig{Stream: cfg.NATS.Stream, Consumer: cfg.NATS.Consumer}); err != nil {
-		return nil, fmt.Errorf("nats realtime consumer: %w", err)
-	}
 	if err := cfg.validateStorageTargets(); err != nil {
 		return nil, err
 	}
@@ -135,9 +128,6 @@ func Default() *Config {
 		},
 		NATS: NATSConfig{
 			URLs:         []string{"nats://127.0.0.1:4222"},
-			URL:          "nats://127.0.0.1:4222",
-			Stream:       trigger.LiveStream,
-			Consumer:     trigger.LiveConsumer,
 			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
@@ -193,17 +183,8 @@ func (c *Config) applyDefaults() {
 	if c.Storage.GatewayTarget == "" {
 		c.Storage.GatewayTarget = "ip://127.0.0.1:11003"
 	}
-	if c.NATS.URL == "" {
-		c.NATS.URL = "nats://127.0.0.1:4222"
-	}
 	if len(c.NATS.URLs) == 0 {
-		c.NATS.URLs = []string{c.NATS.URL}
-	}
-	if c.NATS.Stream == "" {
-		c.NATS.Stream = trigger.LiveStream
-	}
-	if c.NATS.Consumer == "" {
-		c.NATS.Consumer = trigger.LiveConsumer
+		c.NATS.URLs = []string{"nats://127.0.0.1:4222"}
 	}
 	if c.NATS.FetchMaxWait == 0 {
 		c.NATS.FetchMaxWait = time.Second
@@ -280,8 +261,8 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
 		c.Storage.HMACKeyFile = v
 	}
-	if v, ok := os.LookupEnv("MOOX_FACTOR_NATS_URL"); ok {
-		c.NATS.URL = v
+	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok {
+		c.NATS.URLs = splitEventBusURLs(v)
 	}
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_BIN"); v != "" {
 		c.Engine.PythonBin = v
@@ -303,6 +284,17 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_FACTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
+}
+
+func splitEventBusURLs(value string) []string {
+	parts := strings.Split(value, ",")
+	urls := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls
 }
 
 func (c *Config) validateStorageTargets() error {

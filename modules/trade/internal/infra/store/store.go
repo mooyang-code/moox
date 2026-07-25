@@ -627,6 +627,27 @@ func (t *Tx) RecordInbox(consumer, eventID, eventName string) (bool, error) {
 	return t.InsertInbox(consumer, eventID, eventName)
 }
 
+func (t *Tx) RecordSequencedInbox(consumer, eventID, eventName, spaceID, subjectID string, sequence uint64) (bool, error) {
+	fresh, err := t.InsertInbox(consumer, eventID, eventName)
+	if err != nil || !fresh {
+		return false, err
+	}
+	result := t.db.Exec(`
+		INSERT INTO t_trade_command_offsets(
+			c_consumer,c_space_id,c_subject_id,c_last_sequence,c_event_id
+		) VALUES(?,?,?,?,?)
+		ON CONFLICT(c_consumer,c_space_id,c_subject_id) DO UPDATE SET
+			c_last_sequence=excluded.c_last_sequence,
+			c_event_id=excluded.c_event_id,
+			c_mtime=CURRENT_TIMESTAMP
+		WHERE t_trade_command_offsets.c_last_sequence < excluded.c_last_sequence
+	`, consumer, spaceID, subjectID, sequence, eventID)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
 func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bool, error) {
 	var fresh bool
 	err := s.Transaction(ctx, func(tx *Tx) error { var e error; fresh, e = tx.InsertInbox(consumer, id, topic); return e })

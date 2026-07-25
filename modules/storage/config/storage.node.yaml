@@ -14,20 +14,6 @@ storage:
       backoff_base_ms: 200
       backoff_max_ms: 30000
   eventbus:
-    type: jetstream
-    urls:
-      - nats://127.0.0.1:4222
-    nats_url: nats://127.0.0.1:4222
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    stream_name: MOOX_STORAGE
-    subject_prefix: moox.storage.dataset.rows.upserted.v1
-    consumer: storage_node
-    max_age_hours: 24
-    max_msgs: 500000
-    max_bytes: 268435456
-    max_in_flight: 1
-    max_ack_pending: 1
-    ack_wait_ms: 120000
-    max_deliver: -1
   health:
     addr: ":20212"

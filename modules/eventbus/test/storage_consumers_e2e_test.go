@@ -14,7 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestStorageEventReachesConsumersOwnedByModulesAndDeduplicates(t *testing.T) {
+func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testing.T) {
 	server, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

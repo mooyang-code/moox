@@ -113,7 +113,7 @@ func newMetricsEventBusConsumer(t *testing.T, authorizer ProducerAuthorizer) (co
 	consumer, err := NewConsumer(ctx, ConsumerOptions{
 		Client: client, Storage: &StorageAdapter{}, MessageStore: &MetricMessageStore{}, Authorizer: authorizer,
 		Config: monconfig.MetricsConfig{
-			Stream: "MOOX_METRICS", Topic: MetricTopic, Consumer: "monitor_metrics_ingest_v1",
+			Consumer:       "monitor_metrics_ingest_v1",
 			FetchBatchSize: 1, FetchMaxWait: 200 * time.Millisecond, AckWait: 200 * time.Millisecond, MaxAckPending: 8,
 		},
 	})

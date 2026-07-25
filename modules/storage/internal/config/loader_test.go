@@ -33,30 +33,15 @@ func TestStorageViewMaintenanceTargetStaysBelowCustomMaximum(t *testing.T) {
 	}
 }
 
-func TestStorageConfigAppliesEventBusOOMGuardDefaults(t *testing.T) {
+func TestStorageConfigAppliesEventConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 
-	if cfg.Storage.EventBus.MaxAgeHours != 24 {
-		t.Fatalf("EventBus.MaxAgeHours = %d, want 24", cfg.Storage.EventBus.MaxAgeHours)
-	}
-	if cfg.Storage.EventBus.MaxMsgs != 500000 {
-		t.Fatalf("EventBus.MaxMsgs = %d, want 500000", cfg.Storage.EventBus.MaxMsgs)
-	}
-	if cfg.Storage.EventBus.MaxBytes != 256*1024*1024 {
-		t.Fatalf("EventBus.MaxBytes = %d, want 256MiB", cfg.Storage.EventBus.MaxBytes)
-	}
-	if cfg.Storage.EventBus.MaxInFlight != 128 {
-		t.Fatalf("EventBus.MaxInFlight = %d, want 128", cfg.Storage.EventBus.MaxInFlight)
-	}
 	if cfg.Storage.EventBus.MaxAckPending != 8 {
 		t.Fatalf("EventBus.MaxAckPending = %d, want 8", cfg.Storage.EventBus.MaxAckPending)
 	}
 	if cfg.Storage.EventBus.AckWaitMS != 120000 {
 		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
-	}
-	if cfg.Storage.EventBus.MaxDeliver != -1 {
-		t.Fatalf("EventBus.MaxDeliver = %d, want -1", cfg.Storage.EventBus.MaxDeliver)
 	}
 }
 
@@ -65,35 +50,6 @@ func TestStorageViewConsumerDefaults(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.Storage.View.FetchBatch != 8 || cfg.Storage.View.MaxWorkers != 4 || cfg.Storage.View.Ordering != "subject" {
 		t.Fatalf("view consumer defaults = %+v", cfg.Storage.View)
-	}
-}
-
-func TestStorageEventBusValidateDeliveryLimits(t *testing.T) {
-	tests := []struct {
-		name    string
-		cfg     StorageEventBus
-		wantErr string
-	}{
-		{name: "valid", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 4, MaxAckPending: 8, MaxDeliver: -1}},
-		{name: "ack wait", cfg: StorageEventBus{AckWaitMS: 2999, MaxInFlight: 1, MaxAckPending: 1, MaxDeliver: -1}, wantErr: "ack_wait_ms"},
-		{name: "in flight", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: -1, MaxAckPending: 1, MaxDeliver: -1}, wantErr: "max_in_flight"},
-		{name: "ack pending", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 1, MaxAckPending: -1, MaxDeliver: -1}, wantErr: "max_ack_pending"},
-		{name: "in flight exceeds pending", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 9, MaxAckPending: 8, MaxDeliver: -1}, wantErr: "must not exceed"},
-		{name: "max deliver", cfg: StorageEventBus{AckWaitMS: 3000, MaxInFlight: 1, MaxAckPending: 1, MaxDeliver: -2}, wantErr: "max_deliver"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.Validate()
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("Validate() error = %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
 	}
 }
 
@@ -148,11 +104,6 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 			PebblePath:    "/old/storage/pebble",
 			ViewIndexRoot: "/old/storage/view-indexes",
 		},
-		EventBus: StorageEventBus{
-			Embedded: StorageEmbeddedEventBus{
-				StoreDir: "/old/storage/nats",
-			},
-		},
 	}
 
 	cfg.ApplyHomeRoot("/new/storage")
@@ -165,9 +116,6 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 	}
 	if cfg.Devices.PebblePath != "/new/storage/pebble" {
 		t.Fatalf("Devices.PebblePath = %q", cfg.Devices.PebblePath)
-	}
-	if cfg.EventBus.Embedded.StoreDir != "/new/storage/nats" {
-		t.Fatalf("EventBus.Embedded.StoreDir = %q", cfg.EventBus.Embedded.StoreDir)
 	}
 }
 
@@ -196,6 +144,49 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)
 			}
 		})
+	}
+}
+
+func TestStorageDeploymentEventBusConfigOwnsOnlyConnectionAndDeliverySettings(t *testing.T) {
+	allowed := map[string]bool{
+		"credential_file": true,
+		"consumer":        true,
+		"max_ack_pending": true,
+		"ack_wait_ms":     true,
+	}
+	files := []string{"storage.yaml", "storage.primary.yaml", "storage.node.yaml", "storage_view/trpc_go.yaml"}
+	for _, file := range files {
+		t.Run(file, func(t *testing.T) {
+			raw, err := os.ReadFile("../../config/" + file)
+			if err != nil {
+				t.Fatalf("read %s: %v", file, err)
+			}
+			var doc struct {
+				Storage struct {
+					EventBus map[string]interface{} `yaml:"eventbus"`
+				} `yaml:"storage"`
+			}
+			if err := yaml.Unmarshal(raw, &doc); err != nil {
+				t.Fatalf("unmarshal %s: %v", file, err)
+			}
+			for key := range doc.Storage.EventBus {
+				if !allowed[key] {
+					t.Fatalf("%s storage.eventbus still exposes %q", file, key)
+				}
+			}
+		})
+	}
+}
+
+func TestStorageConfigLoaderRejectsRemovedEventBusFields(t *testing.T) {
+	path := t.TempDir()
+	if err := os.WriteFile(path+"/storage.yaml", []byte("storage:\n  eventbus:\n    stream_name: MOOX_STORAGE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg RuntimeConfig
+	err := NewConfigLoader(path).LoadConfigWithDefaults("storage.yaml", &cfg, cfg.ApplyDefaults)
+	if err == nil || !strings.Contains(err.Error(), "stream_name") {
+		t.Fatalf("LoadConfigWithDefaults() error = %v, want removed stream_name rejection", err)
 	}
 }
 

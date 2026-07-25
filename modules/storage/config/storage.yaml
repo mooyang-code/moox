@@ -9,21 +9,10 @@ storage:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
   eventbus:
-    type: jetstream
-    urls:
-      - nats://127.0.0.1:4222
-    nats_url: nats://127.0.0.1:4222
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    stream_name: MOOX_STORAGE
-    subject_prefix: moox.storage.dataset.rows.upserted.v1
     consumer: storage_view
-    max_age_hours: 24
-    max_msgs: 500000
-    max_bytes: 268435456
-    max_in_flight: 1
     max_ack_pending: 8
     ack_wait_ms: 120000
-    max_deliver: -1
   primary:
     service_name: ""
     node_id: storage-node-0

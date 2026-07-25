@@ -2,8 +2,10 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -49,23 +51,12 @@ type QueueConfig struct {
 
 // JetStreamConfig controls the CloudNode JetStream execution queue.
 type JetStreamConfig struct {
-	Enabled        bool                    `yaml:"enabled"`
-	URLs           []string                `yaml:"urls"`
-	NATSURL        string                  `yaml:"nats_url"`
-	CredentialFile string                  `yaml:"credential_file"`
-	Embedded       EmbeddedJetStreamConfig `yaml:"embedded"`
-	AckWaitMillis  int64                   `yaml:"ack_wait_millis"`
-	MaxDeliver     int                     `yaml:"max_deliver"`
-	FetchMaxWaitMs int64                   `yaml:"fetch_max_wait_ms"`
-}
-
-// EmbeddedJetStreamConfig starts a local private NATS JetStream for CloudNode.
-type EmbeddedJetStreamConfig struct {
-	Enabled          bool   `yaml:"enabled"`
-	Host             string `yaml:"host"`
-	Port             int    `yaml:"port"`
-	StoreDir         string `yaml:"store_dir"`
-	StartupTimeoutMS int64  `yaml:"startup_timeout_ms"`
+	Enabled        bool     `yaml:"enabled"`
+	URLs           []string `yaml:"urls"`
+	CredentialFile string   `yaml:"credential_file"`
+	AckWaitMillis  int64    `yaml:"ack_wait_millis"`
+	MaxDeliver     int      `yaml:"max_deliver"`
+	FetchMaxWaitMs int64    `yaml:"fetch_max_wait_ms"`
 }
 
 // TencentSCFConfig stores defaults for the Tencent SCF provider.
@@ -92,7 +83,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyEnv()
@@ -130,6 +123,20 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_CLOUDNODE_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
+	if v := os.Getenv("MOOX_EVENTBUS_NATS_URL"); v != "" {
+		c.JetStream.URLs = splitEventBusURLs(v)
+	}
+}
+
+func splitEventBusURLs(value string) []string {
+	parts := strings.Split(value, ",")
+	urls := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls
 }
 
 // Default returns safe local defaults.
@@ -149,12 +156,10 @@ func Default() *Config {
 		JetStream: JetStreamConfig{
 			Enabled:        true,
 			URLs:           []string{"nats://127.0.0.1:4222"},
-			NATSURL:        "nats://127.0.0.1:4222",
 			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
 			AckWaitMillis:  int64(12 * time.Minute / time.Millisecond),
 			MaxDeliver:     3,
 			FetchMaxWaitMs: 500,
-			Embedded:       EmbeddedJetStreamConfig{},
 		},
 		JobItem: JobItemConfig{
 			DefaultLimit:         10,

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -22,6 +23,7 @@ type Event struct {
 	stream     string
 	owner      string
 	newPayload func() proto.Message
+	validate   EventValidator
 }
 
 func (e Event) Name() string    { return e.name }
@@ -40,11 +42,17 @@ func (e Event) PayloadFullName() protoreflect.FullName {
 	}
 	return ""
 }
+func (e Event) Validate(message *eventpb.EventMessage, payload proto.Message) error {
+	if e.validate == nil {
+		return fmt.Errorf("event %s validator is nil", eventKey(e))
+	}
+	return e.validate(message, payload)
+}
 
 var builtInEvents []Event
 
-func declareEvent(name string, version uint32, stream, owner string, newPayload func() proto.Message) Event {
-	event := Event{name: name, version: version, stream: stream, owner: owner, newPayload: newPayload}
+func declareEvent(name string, version uint32, stream, owner string, newPayload func() proto.Message, validate EventValidator) Event {
+	event := Event{name: name, version: version, stream: stream, owner: owner, newPayload: newPayload, validate: validate}
 	builtInEvents = append(builtInEvents, event)
 	return event
 }
@@ -52,19 +60,19 @@ func declareEvent(name string, version uint32, stream, owner string, newPayload 
 var (
 	CloudJobExecutionRequested = declareEvent("cloudnode.job.execution.requested", 1, "MOOX_CLOUDNODE_EXEC", "cloudnode", func() proto.Message {
 		return &cloudjobpb.JobExecutionRequested{}
-	})
+	}, validateCloudJobExecutionRequested)
 	MetricsHostReported = declareEvent("metrics.host.reported", 1, "MOOX_METRICS", "hostagent", func() proto.Message {
 		return &hostmetricpb.HostMetric{}
-	})
+	}, validateMetricsHostReported)
 	MetricsSnapshotReported = declareEvent("metrics.snapshot.reported", 1, "MOOX_METRICS", "service", func() proto.Message {
 		return &metricspb.MetricReport{}
-	})
+	}, validateMetricsSnapshotReported)
 	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
-	})
+	}, validateDatasetRowsUpserted)
 	TradeRebalanceRequested = declareEvent("trade.rebalance.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.RebalanceRequested{}
-	})
+	}, validateTradeRebalanceRequested)
 )
 
 type Registry struct {
@@ -89,7 +97,7 @@ func newRegistry(events []Event) (*Registry, error) {
 	payloads := make(map[protoreflect.FullName]string, len(events))
 	subjects := make(map[string]string, len(events))
 	for _, event := range events {
-		if strings.TrimSpace(event.Name()) == "" || event.Version() == 0 || strings.TrimSpace(event.Stream()) == "" || strings.TrimSpace(event.Owner()) == "" || event.NewPayload() == nil {
+		if strings.TrimSpace(event.Name()) == "" || event.Version() == 0 || strings.TrimSpace(event.Stream()) == "" || strings.TrimSpace(event.Owner()) == "" || event.NewPayload() == nil || event.validate == nil {
 			return nil, fmt.Errorf("event declaration %q is incomplete", eventKey(event))
 		}
 		key := eventKey(event)

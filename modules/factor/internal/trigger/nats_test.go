@@ -1,45 +1,185 @@
 package trigger
 
 import (
+	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
-func TestLiveConsumerContractUsesOwnedConsumer(t *testing.T) {
-	valid := NATSConfig{Stream: LiveStream, Consumer: LiveConsumer, FetchMaxWait: time.Second}
-	if err := ValidateLiveConsumerConfig(valid); err != nil {
-		t.Fatalf("valid live consumer config rejected: %v", err)
-	}
+type fakeNATSSession struct {
+	run        func(context.Context) error
+	closeCalls atomic.Int32
+}
 
-	for name, cfg := range map[string]NATSConfig{
-		"different stream":  {Stream: "MOOX_STORAGE_REPLAY", Consumer: LiveConsumer},
-		"different durable": {Stream: LiveStream, Consumer: "factor_replay"},
-		"empty stream":      {Consumer: LiveConsumer},
-		"empty durable":     {Stream: LiveStream},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := ValidateLiveConsumerConfig(cfg); !errors.Is(err, ErrInvalidLiveConsumer) {
-				t.Fatalf("ValidateLiveConsumerConfig() error = %v, want ErrInvalidLiveConsumer", err)
-			}
-		})
+func (s *fakeNATSSession) Run(ctx context.Context) error {
+	return s.run(ctx)
+}
+
+func (s *fakeNATSSession) Close() error {
+	s.closeCalls.Add(1)
+	return nil
+}
+
+func TestNATSConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	recovered := make(chan struct{})
+	first := &fakeNATSSession{run: func(context.Context) error {
+		close(started)
+		<-release
+		return errors.New("fetch failed")
+	}}
+	second := &fakeNATSSession{run: func(ctx context.Context) error {
+		close(recovered)
+		<-ctx.Done()
+		return nil
+	}}
+	var opens atomic.Int32
+	consumer := NewNATSConsumer(NATSConfig{}, nil)
+	consumer.retryDelay = 50 * time.Millisecond
+	consumer.openSession = func(context.Context) (natsConsumerSession, error) {
+		opens.Add(1)
+		return second, nil
+	}
+	consumer.startSessionLoop(ctx, first)
+	t.Cleanup(func() { _ = consumer.Close() })
+
+	<-started
+	if !consumer.Ready() {
+		t.Fatal("consumer must be ready while the initial session is running")
+	}
+	close(release)
+	if !eventuallyNATSConsumer(time.Second, func() bool { return !consumer.Ready() }) {
+		t.Fatal("consumer did not become unready after the failed session")
+	}
+	if !eventuallyNATSConsumer(time.Second, func() bool { return consumer.Ready() }) {
+		t.Fatal("consumer did not recover readiness")
+	}
+	<-recovered
+	if opens.Load() != 1 || first.closeCalls.Load() != 1 {
+		t.Fatalf("opens=%d first closes=%d", opens.Load(), first.closeCalls.Load())
 	}
 }
 
-func TestLiveConsumerConfig(t *testing.T) {
-	ref, err := liveConsumerConfig(NATSConfig{Stream: LiveStream, Consumer: LiveConsumer, FetchMaxWait: 2 * time.Second})
-	if err != nil {
-		t.Fatalf("liveConsumerConfig() error = %v", err)
+func eventuallyNATSConsumer(timeout time.Duration, condition func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return true
+		}
+		time.Sleep(time.Millisecond)
 	}
+	return condition()
+}
+
+func TestLiveConsumerConfig(t *testing.T) {
+	ref := liveConsumerConfig(NATSConfig{FetchMaxWait: 2 * time.Second})
 	if ref.Event.Name() != events.DatasetRowsUpserted.Name() ||
 		ref.Event.Version() != events.DatasetRowsUpserted.Version() ||
 		ref.Name != LiveConsumer ||
 		ref.FetchMaxWait != 2*time.Second {
 		t.Fatalf("live consumer bind ref = %+v", ref)
+	}
+}
+
+func TestNATSConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
+	ns, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go ns.Start()
+	if !ns.ReadyForConnections(10 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("factor EventBus fixture did not start")
+	}
+	t.Cleanup(func() {
+		ns.Shutdown()
+		ns.WaitForShutdown()
+	})
+
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, err := nc.JetStream()
+	if err != nil {
+		nc.Close()
+		t.Fatal(err)
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		nc.Close()
+		t.Fatal(err)
+	}
+	family, err := registry.FamilyPattern(events.DatasetRowsUpserted)
+	if err != nil {
+		nc.Close()
+		t.Fatal(err)
+	}
+	if _, err = js.AddStream(&nats.StreamConfig{
+		Name: events.DatasetRowsUpserted.Stream(), Subjects: []string{family}, Storage: nats.MemoryStorage,
+	}); err != nil {
+		nc.Close()
+		t.Fatal(err)
+	}
+	nc.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	inbox := &pendingStoreFake{}
+	batcher := NewDurableEventBatcher(20*time.Millisecond, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	}, inbox)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	consumer := NewNATSConsumer(NATSConfig{
+		URLs: []string{ns.ClientURL()}, FetchMaxWait: 50 * time.Millisecond,
+	}, batcher)
+	if err = consumer.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = consumer.Close() })
+	if !consumer.Ready() {
+		t.Fatal("factor consumer is not ready after binding the real session")
+	}
+
+	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv([]string{ns.ClientURL()}, "factor-real-e2e-publisher"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	if _, err = publisher.Publish(ctx, events.DatasetRowsUpserted, payload, events.PublishOptions{
+		EventID: "factor-real-e2e-1", OccurredAt: now, SpaceID: "crypto", SubjectID: "binance_spot_kline",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !eventuallyNATSConsumer(5*time.Second, func() bool { return inbox.pendingCount() == 1 }) {
+		t.Fatal("real EventBus delivery did not reach Factor's durable inbox")
+	}
+	tasks, err := batcher.FlushPending(ctx, time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].SubjectID != "BTC-USDT" ||
+		len(tasks[0].PendingEventIDs) != 1 || tasks[0].PendingEventIDs[0] != "factor-real-e2e-1" {
+		t.Fatalf("factor tasks = %+v", tasks)
 	}
 }
 

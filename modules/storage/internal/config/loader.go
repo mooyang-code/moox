@@ -47,32 +47,10 @@ type StorageDevices struct {
 
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
-	Type           string   `yaml:"type"`
-	URLs           []string `yaml:"urls"`
-	NATSURL        string   `yaml:"nats_url"`
-	CredentialFile string   `yaml:"credential_file"`
-	StreamName     string   `yaml:"stream_name"`
-	SubjectPrefix  string   `yaml:"subject_prefix"`
-	Consumer       string   `yaml:"consumer"`
-	MaxAgeHours    int      `yaml:"max_age_hours"`
-	MaxMsgs        int64    `yaml:"max_msgs"`
-	MaxBytes       int64    `yaml:"max_bytes"`
-	MaxInFlight    int      `yaml:"max_in_flight"`
-	MaxAckPending  int      `yaml:"max_ack_pending"`
-	AckWaitMS      int      `yaml:"ack_wait_ms"`
-	MaxDeliver     int      `yaml:"max_deliver"`
-	// Embedded is retained for decoding old single-process test configurations.
-	// Production Storage never starts a broker; moox-eventbus owns JetStream.
-	Embedded StorageEmbeddedEventBus `yaml:"embedded"`
-}
-
-// StorageEmbeddedEventBus 保存本地内嵌事件总线服务配置。
-type StorageEmbeddedEventBus struct {
-	Enabled          bool   `yaml:"enabled"`
-	Host             string `yaml:"host"`
-	Port             int    `yaml:"port"`
-	StoreDir         string `yaml:"store_dir"`
-	StartupTimeoutMS int    `yaml:"startup_timeout_ms"`
+	CredentialFile string `yaml:"credential_file"`
+	Consumer       string `yaml:"consumer"`
+	MaxAckPending  int    `yaml:"max_ack_pending"`
+	AckWaitMS      int    `yaml:"ack_wait_ms"`
 }
 
 // StorageView 保存 View 服务消费与批处理配置。
@@ -243,60 +221,14 @@ func (c *StorageConfig) ApplyDefaults() {
 	if cleanup.MaxBatchesPerRun == 0 {
 		cleanup.MaxBatchesPerRun = 10
 	}
-	if c.EventBus.Type == "" {
-		c.EventBus.Type = "jetstream"
-	}
-	if c.EventBus.NATSURL == "" {
-		c.EventBus.NATSURL = "nats://127.0.0.1:4222"
-	}
-	if len(c.EventBus.URLs) == 0 {
-		c.EventBus.URLs = []string{c.EventBus.NATSURL}
-	}
-	if c.EventBus.SubjectPrefix == "" {
-		c.EventBus.SubjectPrefix = "moox.storage"
-	}
-	if c.EventBus.StreamName == "" {
-		c.EventBus.StreamName = "MOOX_STORAGE"
-	}
 	if c.EventBus.Consumer == "" {
 		c.EventBus.Consumer = "storage_view"
-	}
-	if c.EventBus.MaxAgeHours <= 0 {
-		c.EventBus.MaxAgeHours = 24
-	}
-	if c.EventBus.MaxMsgs <= 0 {
-		c.EventBus.MaxMsgs = 500000
-	}
-	if c.EventBus.MaxBytes <= 0 {
-		c.EventBus.MaxBytes = 256 * 1024 * 1024
-	}
-	if c.EventBus.MaxInFlight == 0 {
-		c.EventBus.MaxInFlight = 128
 	}
 	if c.EventBus.MaxAckPending == 0 {
 		c.EventBus.MaxAckPending = 8
 	}
 	if c.EventBus.AckWaitMS == 0 {
 		c.EventBus.AckWaitMS = 120000
-	}
-	if c.EventBus.MaxDeliver == 0 {
-		// -1 means unlimited redelivery in JetStream. Projection events are
-		// idempotent and must not be dropped after transient owner failures.
-		c.EventBus.MaxDeliver = -1
-	}
-	if c.EventBus.Embedded.Enabled {
-		if c.EventBus.Embedded.Host == "" {
-			c.EventBus.Embedded.Host = "127.0.0.1"
-		}
-		if c.EventBus.Embedded.Port == 0 {
-			c.EventBus.Embedded.Port = 4222
-		}
-		if c.EventBus.Embedded.StoreDir == "" {
-			c.EventBus.Embedded.StoreDir = filepath.Join(c.Root, "nats")
-		}
-		if c.EventBus.Embedded.StartupTimeoutMS <= 0 {
-			c.EventBus.Embedded.StartupTimeoutMS = 10000
-		}
 	}
 	if c.Primary.Outbox.FlushBatchSize <= 0 {
 		c.Primary.Outbox.FlushBatchSize = 100
@@ -409,26 +341,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 }
 
-// Validate 校验 Storage View 创建 Consumer 时使用的投递参数。
-func (c StorageEventBus) Validate() error {
-	if c.AckWaitMS < 3000 {
-		return fmt.Errorf("storage eventbus ack_wait_ms must be at least 3000")
-	}
-	if c.MaxInFlight < 1 {
-		return fmt.Errorf("storage eventbus max_in_flight must be at least 1")
-	}
-	if c.MaxAckPending < 1 {
-		return fmt.Errorf("storage eventbus max_ack_pending must be at least 1")
-	}
-	if c.MaxInFlight > c.MaxAckPending {
-		return fmt.Errorf("storage eventbus max_in_flight must not exceed max_ack_pending")
-	}
-	if c.MaxDeliver != -1 && c.MaxDeliver < 1 {
-		return fmt.Errorf("storage eventbus max_deliver must be -1 or at least 1")
-	}
-	return nil
-}
-
 // ApplyHomeRoot rebases standard local storage paths when deployment overrides
 // the storage home directory.
 func (c *StorageConfig) ApplyHomeRoot(root string) {
@@ -444,9 +356,6 @@ func (c *StorageConfig) ApplyHomeRoot(root string) {
 	c.Metadata.Path = rebaseStoragePath(c.Metadata.Path, oldRoot, root, filepath.Join("metadata", "storage_metadata.db"))
 	c.Devices.PebblePath = rebaseStoragePath(c.Devices.PebblePath, oldRoot, root, "pebble")
 	c.Devices.ViewIndexRoot = rebaseStoragePath(c.Devices.ViewIndexRoot, oldRoot, root, "view-indexes")
-	if c.EventBus.Embedded.StoreDir != "" {
-		c.EventBus.Embedded.StoreDir = rebaseStoragePath(c.EventBus.Embedded.StoreDir, oldRoot, root, "nats")
-	}
 }
 
 func rebaseStoragePath(path string, oldRoot string, newRoot string, defaultRel string) string {
@@ -516,12 +425,31 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 		return fmt.Errorf("读取配置文件失败 %s: %w", configPath, err)
 	}
 
+	if err := validateStorageSubtreeStrict(yamlFile, config); err != nil {
+		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
+	}
 	// 解析YAML到Config结构
 	if err := yaml.Unmarshal(yamlFile, config); err != nil {
 		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
 	}
 
 	return nil
+}
+
+func validateStorageSubtreeStrict(raw []byte, config interface{}) error {
+	var document map[interface{}]interface{}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return err
+	}
+	storage, exists := document["storage"]
+	if !exists {
+		return nil
+	}
+	subtree, err := yaml.Marshal(map[interface{}]interface{}{"storage": storage})
+	if err != nil {
+		return err
+	}
+	return yaml.UnmarshalStrict(subtree, config)
 }
 
 // LoadConfigStrict rejects unknown keys for business configuration files.

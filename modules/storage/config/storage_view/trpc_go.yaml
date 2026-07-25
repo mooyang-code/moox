@@ -103,21 +103,10 @@ storage:
   primary:
     service_name: trpc.moox.storage.DataNode
   eventbus:
-    type: jetstream
-    urls:
-      - nats://127.0.0.1:4222
-    nats_url: nats://127.0.0.1:4222
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    stream_name: MOOX_STORAGE
-    subject_prefix: moox.storage
     consumer: storage_view
-    max_age_hours: 24
-    max_msgs: 500000
-    max_bytes: 268435456
-    max_in_flight: 1
     max_ack_pending: 8
     ack_wait_ms: 120000
-    max_deliver: -1
   view:
     storage_rpc:
       gateway_target: ip://127.0.0.1:11003

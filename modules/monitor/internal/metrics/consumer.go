@@ -69,12 +69,6 @@ func NewConsumer(ctx context.Context, opts ConsumerOptions) (*Consumer, error) {
 		return nil, errors.New("metrics storage and message store are required")
 	}
 	cfg := opts.Config
-	if cfg.Stream == "" {
-		cfg.Stream = "MOOX_METRICS"
-	}
-	if cfg.Topic == "" {
-		cfg.Topic = MetricTopic
-	}
 	if cfg.Consumer == "" {
 		cfg.Consumer = "monitor_metrics_ingest_v1"
 	}

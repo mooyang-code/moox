@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -539,17 +538,8 @@ func TestSubmitJobItemsRejectsInvalidItemWithoutActiveKVSideEffect(t *testing.T)
 
 func startRPCQueueRuntime(t *testing.T) (*jobqueue.Runtime, config.JetStreamConfig) {
 	t.Helper()
-	port := freeRPCQueuePort(t)
 	cfg := config.JetStreamConfig{
 		Enabled: true,
-		NATSURL: "nats://127.0.0.1:" + port,
-		Embedded: config.EmbeddedJetStreamConfig{
-			Enabled:          true,
-			Host:             "127.0.0.1",
-			Port:             mustRPCQueueAtoi(t, port),
-			StoreDir:         t.TempDir(),
-			StartupTimeoutMS: 5000,
-		},
 	}
 	rt := testfixture.StartRuntime(t, cfg)
 	t.Cleanup(func() { _ = rt.Close() })
@@ -662,30 +652,4 @@ func assertHistoryItemCount(t *testing.T, dir string, day time.Time, spaceID str
 	if count != want {
 		t.Fatalf("history row count = %d, want %d", count, want)
 	}
-}
-
-func freeRPCQueuePort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen free port: %v", err)
-	}
-	defer listener.Close()
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatalf("split listener addr: %v", err)
-	}
-	return port
-}
-
-func mustRPCQueueAtoi(t *testing.T, raw string) int {
-	t.Helper()
-	var out int
-	for _, r := range raw {
-		if r < '0' || r > '9' {
-			t.Fatalf("invalid port %q", raw)
-		}
-		out = out*10 + int(r-'0')
-	}
-	return out
 }

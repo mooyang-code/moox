@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	domain "github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
@@ -32,7 +33,8 @@ type RequestPlanner struct {
 func (p RequestPlanner) Build(ctx context.Context, spaceID string, request *tradeeventpb.RebalanceRequested) (CreateInput, error) {
 	if request == nil || request.GetRequestId() == "" || request.GetStrategyRunId() == "" ||
 		request.GetExecutionBindingId() == "" || request.GetAccountId() == "" || request.GetChannelId() == "" ||
-		request.GetDataRevision() == "" {
+		request.GetDataRevision() == "" || request.GetCommandSequence() == 0 ||
+		request.GetCommandSequence() > math.MaxInt64 {
 		return CreateInput{}, fmt.Errorf("%w: required identity is missing", ErrInvalidRequest)
 	}
 	if request.GetMode() != "paper" && request.GetMode() != "live" {
@@ -67,6 +69,7 @@ func (p RequestPlanner) Build(ctx context.Context, spaceID string, request *trad
 		AccountID: request.GetAccountId(), ChannelID: request.GetChannelId(),
 		MarketSnapshotID: request.GetDataRevision(), PositionSnapshotID: "trade_position_projection",
 		RulesVersion: "exchange_instrument_rules", ExecutionMode: request.GetMode(),
+		SubjectID: request.GetExecutionBindingId(), CommandSequence: request.GetCommandSequence(),
 		Mode: domain.FullTarget, Markets: map[string]Market{},
 	}
 	seen := make(map[string]struct{}, len(request.GetTargets()))

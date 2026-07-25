@@ -149,8 +149,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			cloudnoderpc.WithJobHistoryStore(historyStore),
 			cloudnoderpc.WithHeartbeatSink(heartbeatSink),
 		)
-		log.InfoContextf(ctx, "cloudnode JetStream 已启用: event=%s active_kv=%s nats_url=%s",
-			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, cfg.JetStream.NATSURL)
+		log.InfoContextf(ctx, "cloudnode JetStream 已启用: event=%s active_kv=%s eventbus_urls=%s",
+			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, strings.Join(cfg.JetStream.URLs, ","))
 	}
 
 	svc := cloudnoderpc.New(dbm, opts...)

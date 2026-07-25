@@ -92,7 +92,7 @@ func strategyEventData(id string) ([]byte, error) {
 	return registry.MarshalMessage(events.TradeRebalanceRequested, &tradeeventpb.RebalanceRequested{
 		RequestId: id, StrategyRunId: "strategy-" + id, ExecutionBindingId: "execution-1",
 		AccountId: "account-1", ChannelId: "channel-1", Mode: "paper", DataRevision: "revision-1",
-		CapitalAmount: "100", QuoteAsset: "USDT",
+		CapitalAmount: "100", QuoteAsset: "USDT", CommandSequence: 1,
 	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "execution-1"})
 }
 

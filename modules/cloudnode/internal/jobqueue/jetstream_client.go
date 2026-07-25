@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -19,9 +18,6 @@ type Runtime struct {
 
 func Connect(ctx context.Context, cfg config.JetStreamConfig) (*Runtime, error) {
 	urls := append([]string(nil), cfg.URLs...)
-	if len(urls) == 0 && strings.TrimSpace(cfg.NATSURL) != "" {
-		urls = []string{cfg.NATSURL}
-	}
 	clientCfg := jetstream.ConfigFromEnv(urls, "moox-cloudnode")
 	if cfg.CredentialFile != "" {
 		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {

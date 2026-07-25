@@ -104,6 +104,9 @@ func TestCommitRebalancePublishesPerExecutionBinding(t *testing.T) {
 						payload.GetExecutionBindingId() != envelope.GetSubjectId() {
 						t.Fatalf("invalid rebalance event: envelope=%+v payload=%+v", envelope, &payload)
 					}
+					if payload.GetCommandSequence() != uint64(task.PreviousState.Revision+1) {
+						t.Fatalf("command sequence=%d, want %d", payload.GetCommandSequence(), task.PreviousState.Revision+1)
+					}
 					if len(payload.GetTargets()) != 1 || payload.GetTargets()[0].GetSymbol() != "BTC-USDT" ||
 						payload.GetTargets()[0].GetMarketType() != "spot" {
 						t.Fatalf("invalid targets: %+v", payload.GetTargets())
@@ -135,6 +138,70 @@ func TestCommitRebalanceDuplicateDoesNotAddOutboxRows(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("outbox=%d", count)
+	}
+}
+
+func TestCommitRebalanceSequenceIsMonotonicPerExecutionBindingAcrossStrategyBindings(t *testing.T) {
+	db := openCommitDB(t)
+	repo := New(db)
+	seedCommitBinding(t, db, []domain.ExecutionBinding{validExecution("paper-1", "paper")})
+	if err := db.Create(&domain.Binding{
+		BindingID: "binding-2", StrategyID: "strategy-2", StrategyVersion: "1",
+		SpaceID: "space", ViewID: "view-2", Freq: "1m", GroupID: "group-1", Status: "enabled",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&domain.State{
+		BindingID: "binding-2", StrategyVersion: "1", Revision: 0, StateJSON: "{}",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	output := domain.Output{
+		Action: domain.ActionRebalance,
+		Targets: []domain.TargetWeight{{
+			InstrumentID: "BTC-USDT", TargetWeight: "0.5",
+		}},
+		NextState: map[string]any{"runs": 1},
+	}
+	first := commitTask("run-1")
+	if err := repo.Commit(context.Background(), first, output, "hash-1"); err != nil {
+		t.Fatal(err)
+	}
+	second := commitTask("run-2")
+	second.BindingID = "binding-2"
+	second.StrategyID = "strategy-2"
+	second.TriggerBarTime = "2026-07-25T00:01:00Z"
+	second.PreviousState.BindingID = "binding-2"
+	if err := repo.Commit(context.Background(), second, output, "hash-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	var rows []struct {
+		EventData []byte `gorm:"column:c_event_data"`
+	}
+	if err := db.Table("t_strategy_outbox").Order("c_ctime, c_message_id").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("outbox rows=%d, want 2", len(rows))
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, row := range rows {
+		envelope, err := registry.UnmarshalMessage(row.EventData)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload tradeeventpb.RebalanceRequested
+		if err := proto.Unmarshal(envelope.GetPayload(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		want := uint64(index + 1)
+		if payload.GetCommandSequence() != want {
+			t.Fatalf("outbox[%d] command sequence=%d, want %d", index, payload.GetCommandSequence(), want)
+		}
 	}
 }
 

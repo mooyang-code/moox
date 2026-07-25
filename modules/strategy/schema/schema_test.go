@@ -7,7 +7,7 @@ import (
 
 func TestAllSQLContainsCoreTables(t *testing.T) {
 	sql := AllSQL()
-	for _, name := range []string{"t_strategy_defs", "t_strategy_bindings", "t_strategy_states", "t_strategy_runs", "t_strategy_outbox"} {
+	for _, name := range []string{"t_strategy_defs", "t_strategy_bindings", "t_strategy_states", "t_strategy_runs", "t_strategy_outbox", "t_strategy_command_sequences"} {
 		if !strings.Contains(sql, name) {
 			t.Fatal(name)
 		}

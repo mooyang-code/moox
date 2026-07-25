@@ -24,6 +24,12 @@ type pendingStoreRow struct {
 	receivedAt time.Time
 }
 
+func (s *pendingStoreFake) pendingCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.rows)
+}
+
 func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event *storagepb.DatasetRowsUpserted, at time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

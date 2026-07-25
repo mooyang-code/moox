@@ -109,11 +109,37 @@ func validRebalanceRequest() *tradeeventpb.RebalanceRequested {
 	return &tradeeventpb.RebalanceRequested{
 		RequestId: "request-1", StrategyRunId: "strategy-run-1", ExecutionBindingId: "execution-1",
 		AccountId: "acct", ChannelId: "chan", Mode: "paper", DataRevision: "revision-1",
-		CapitalAmount: "100", QuoteAsset: "USDT",
+		CapitalAmount: "100", QuoteAsset: "USDT", CommandSequence: 1,
 		Targets: []*tradeeventpb.RebalanceTarget{{
 			InstrumentId: "BTC-USDT", Symbol: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5",
 		}},
 	}
+}
+
+func TestHandleRebalanceDeliveryAcknowledgesStaleSequenceWithoutCreatingRun(t *testing.T) {
+	ctx := context.Background()
+	s := openWorkerStore(t)
+	seedBalance(t, s, "USDT", shared.MustDecimal("100"))
+	engine := &command.Engine{Store: s, Resolver: workerResolver{adapter: workerStubAdapter{}}}
+
+	newer := validRebalanceRequest()
+	newer.RequestId = "request-2"
+	newer.StrategyRunId = "strategy-run-2"
+	newer.CommandSequence = 2
+	result := handleRebalanceDelivery(ctx, rebalanceDelivery(t, newer.GetRequestId(), newer.GetExecutionBindingId(), newer), s, engine, "trade_rebalance_v1", nil)
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.NoError(t, result.Err)
+
+	stale := validRebalanceRequest()
+	result = handleRebalanceDelivery(ctx, rebalanceDelivery(t, stale.GetRequestId(), stale.GetExecutionBindingId(), stale), s, engine, "trade_rebalance_v1", nil)
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.NoError(t, result.Err)
+
+	var runCount, inboxCount int64
+	require.NoError(t, s.DBForTest().Table("t_rebalance_runs").Count(&runCount).Error)
+	require.NoError(t, s.DBForTest().Table("t_trade_inbox").Count(&inboxCount).Error)
+	assert.Equal(t, int64(1), runCount)
+	assert.Equal(t, int64(2), inboxCount)
 }
 
 func TestHandleRebalanceDeliveryCreatesRunAndDeduplicates(t *testing.T) {
@@ -200,7 +226,11 @@ func (a *uniquePaperSafetyAdapter) Place(context.Context, exchange.PlaceRequest)
 func TestHandleRebalanceDeliveryRejectsPermanentContractError(t *testing.T) {
 	s := openWorkerStore(t)
 	request := validRebalanceRequest()
-	delivery := rebalanceDelivery(t, request.GetRequestId(), "wrong-binding", request)
+	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	delivery.Subject, err = registry.RenderSubject(events.TradeRebalanceRequested, "space", "wrong-binding")
+	require.NoError(t, err)
 	result := handleRebalanceDelivery(context.Background(), delivery, s, &command.Engine{Store: s, Adapter: workerStubAdapter{}}, "trade_rebalance_v1", nil)
 	assert.Equal(t, jetstream.TERM, result.Decision)
 	assert.Error(t, result.Err)

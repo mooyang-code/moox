@@ -140,11 +140,16 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 				!ok || capital.Sign() <= 0 || strings.TrimSpace(execution.QuoteAsset) == "" {
 				return fmt.Errorf("invalid execution binding %q", execution.ExecutionBindingID)
 			}
+			commandSequence, err := nextExecutionCommandSequence(tx, execution.ExecutionBindingID)
+			if err != nil {
+				return err
+			}
 			eventID := task.RunID + ":rebalance:" + execution.ExecutionBindingID
 			payload := &tradeeventpb.RebalanceRequested{
 				RequestId: eventID, StrategyRunId: task.RunID, ExecutionBindingId: execution.ExecutionBindingID,
 				AccountId: execution.AccountID, ChannelId: execution.ChannelID, Mode: execution.Mode,
 				DataRevision: task.DataRevision, CapitalAmount: execution.CapitalAmount, QuoteAsset: execution.QuoteAsset,
+				CommandSequence: commandSequence,
 			}
 			for _, target := range output.Targets {
 				symbol := target.Symbol
@@ -172,4 +177,28 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 		}
 		return nil
 	})
+}
+
+func nextExecutionCommandSequence(tx *gorm.DB, executionBindingID string) (uint64, error) {
+	result := tx.Exec(`
+		INSERT INTO t_strategy_command_sequences(c_execution_binding_id,c_last_sequence)
+		VALUES(?,1)
+		ON CONFLICT(c_execution_binding_id) DO UPDATE SET
+			c_last_sequence=t_strategy_command_sequences.c_last_sequence+1,
+			c_mtime=CURRENT_TIMESTAMP
+	`, executionBindingID)
+	if result.Error != nil {
+		return 0, fmt.Errorf("advance command sequence for %q: %w", executionBindingID, result.Error)
+	}
+	var sequence int64
+	if err := tx.Table("t_strategy_command_sequences").
+		Select("c_last_sequence").
+		Where("c_execution_binding_id=?", executionBindingID).
+		Scan(&sequence).Error; err != nil {
+		return 0, fmt.Errorf("read command sequence for %q: %w", executionBindingID, err)
+	}
+	if sequence <= 0 {
+		return 0, fmt.Errorf("command sequence for %q is invalid", executionBindingID)
+	}
+	return uint64(sequence), nil
 }

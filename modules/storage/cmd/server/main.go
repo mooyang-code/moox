@@ -324,7 +324,6 @@ func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
 		return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
 	}
 	return viewservice.EventConsumerOptions{
-		Stream:        runtimeConfig.Storage.EventBus.StreamName,
 		Consumer:      runtimeConfig.Storage.EventBus.Consumer,
 		AckWaitMS:     runtimeConfig.Storage.EventBus.AckWaitMS,
 		FetchBatch:    runtimeConfig.Storage.View.FetchBatch,

@@ -23,13 +23,32 @@ import (
 func TestFactorHealthSnapshot(t *testing.T) {
 	cfg := Default()
 	state := health.New("factor", cfg.Instance.InstanceID, "", "")
-	rsp := factorHealthSnapshot(cfg, nil, nil, nil, state)(context.Background())
+	rsp := factorHealthSnapshot(cfg, nil, nil, nil, nil, state)(context.Background())
 
 	if rsp.Module != "factor" || rsp.Ready || rsp.Status != "degraded" {
 		t.Fatalf("health response = %+v", rsp)
 	}
 	if rsp.Details["worker_count"] != cfg.Engine.Workers {
 		t.Fatalf("worker_count = %v, want %d", rsp.Details["worker_count"], cfg.Engine.Workers)
+	}
+}
+
+type factorRealtimeStatus bool
+
+func (s factorRealtimeStatus) Ready() bool { return bool(s) }
+
+func TestRealtimeConsumerReadinessIsRequiredOnlyWhenEnabled(t *testing.T) {
+	cfg := Default()
+	cfg.NATS.URLs = nil
+	if !realtimeConsumerReady(cfg, nil) {
+		t.Fatal("disabled realtime consumer must not block readiness")
+	}
+	cfg.NATS.URLs = []string{"nats://127.0.0.1:4222"}
+	if realtimeConsumerReady(cfg, nil) || realtimeConsumerReady(cfg, factorRealtimeStatus(false)) {
+		t.Fatal("enabled realtime consumer must be live")
+	}
+	if !realtimeConsumerReady(cfg, factorRealtimeStatus(true)) {
+		t.Fatal("live realtime consumer must satisfy readiness")
 	}
 }
 
@@ -64,10 +83,10 @@ func TestParamsFromJSON_AndFactorAuthInfo(t *testing.T) {
 
 func TestRegisterHelpers_NilServerPaths(t *testing.T) {
 	registerMetricsReporter(nil)
-	require.NoError(t, registerHealth(nil, nil, nil, nil, nil))
+	require.NoError(t, registerHealth(nil, nil, nil, nil, nil, nil))
 
 	cfg := Default()
-	err := registerHealth(nil, cfg, nil, nil, nil)
+	err := registerHealth(nil, cfg, nil, nil, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unavailable")
 }

@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -44,12 +47,27 @@ func (strategyTradeE2EAdapter) SubscribePrivate(context.Context, exchange.Privat
 }
 
 func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T) {
-	natsURL := os.Getenv("MOOX_STRATEGY_TRADE_E2E_NATS_URL")
-	if natsURL == "" {
-		t.Skip("set MOOX_STRATEGY_TRADE_E2E_NATS_URL to run the cross-module E2E")
+	ns, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	go ns.Start()
+	if !ns.ReadyForConnections(10 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("cross-module EventBus fixture did not start")
+	}
+	t.Cleanup(func() {
+		ns.Shutdown()
+		ns.WaitForShutdown()
+	})
+	natsURL := ns.ClientURL()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	runExternalStrategyPublisher(t, ctx, natsURL)
+
 	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +153,30 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 	}
 	if inboxCount != 1 || runCount != 1 {
 		t.Fatalf("inbox=%d runs=%d", inboxCount, runCount)
+	}
+}
+
+func runExternalStrategyPublisher(t *testing.T, ctx context.Context, natsURL string) {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve trade E2E source path")
+	}
+	strategyDir := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "strategy"))
+	cmd := exec.CommandContext(
+		ctx,
+		"go", "test", "./test",
+		"-tags=e2e_external",
+		"-run", "^TestExternalStrategyCommitPublishesRebalance$",
+		"-count=1",
+	)
+	cmd.Dir = strategyDir
+	cmd.Env = append(os.Environ(),
+		"CGO_ENABLED=1",
+		"MOOX_STRATEGY_TRADE_E2E_NATS_URL="+natsURL,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run real Strategy commit/outbox/relay producer: %v\n%s", err, output)
 	}
 }
 

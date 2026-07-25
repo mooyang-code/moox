@@ -75,7 +75,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := metrics.NewConsumer(ctx, metrics.ConsumerOptions{Client: eventClient, Storage: storage, MessageStore: messageStore, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Stream: "MOOX_METRICS", Topic: metrics.MetricTopic, Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
+	consumer, err := metrics.NewConsumer(ctx, metrics.ConsumerOptions{Client: eventClient, Storage: storage, MessageStore: messageStore, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
 	if err != nil {
 		t.Fatal(err)
 	}

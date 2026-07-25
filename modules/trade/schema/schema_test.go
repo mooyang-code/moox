@@ -53,6 +53,7 @@ func TestAllSQL_ContainsKernelTables(t *testing.T) {
 		"t_trade_order_aggregates",
 		"t_ledger_entries",
 		"t_trade_inbox",
+		"t_trade_command_offsets",
 		"t_rebalance_runs",
 	} {
 		assert.Contains(t, sql, want)

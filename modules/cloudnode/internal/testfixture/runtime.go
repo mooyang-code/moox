@@ -20,10 +20,7 @@ import (
 // CloudNode stream/KV topology exactly as moox-eventbus would.
 func StartRuntime(t *testing.T, cfg config.JetStreamConfig) *jobqueue.Runtime {
 	t.Helper()
-	port := cfg.Embedded.Port
-	if port <= 0 {
-		port = freePort(t)
-	}
+	port := freePort(t)
 	dir := t.TempDir()
 	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: filepath.Join(dir, "jetstream"), NoLog: true, NoSigs: true})
 	if err != nil {
@@ -35,7 +32,6 @@ func StartRuntime(t *testing.T, cfg config.JetStreamConfig) *jobqueue.Runtime {
 		t.Fatal("nats fixture not ready")
 	}
 	cfg.URLs = []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}
-	cfg.NATSURL = cfg.URLs[0]
 	rt, err := jobqueue.Connect(trpc.BackgroundContext(), cfg)
 	if err != nil {
 		srv.Shutdown()

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,7 +40,6 @@ type SourceConfig struct {
 type EventBusConfig struct {
 	URLs            []string      `yaml:"urls"`
 	CredentialFile  string        `yaml:"credential_file"`
-	Stream          string        `yaml:"stream"`
 	Consumer        string        `yaml:"consumer"`
 	FetchBatch      int           `yaml:"fetch_batch"`
 	FetchMaxWait    time.Duration `yaml:"fetch_max_wait"`
@@ -86,7 +86,7 @@ func Default() *Config {
 				"crypto_okx":     {Datasets: []string{"spot_kline", "swap_kline"}},
 			},
 			EventBus: EventBusConfig{
-				URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_STORAGE",
+				URLs:     []string{"nats://127.0.0.1:4222"},
 				Consumer: "moox_archive_kline_v1", FetchBatch: 128, FetchMaxWait: time.Second,
 				DedupeRetention: 168 * time.Hour,
 			},
@@ -104,7 +104,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read archive config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse archive config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
@@ -130,9 +132,6 @@ func (c *Config) applyDefaults() {
 	}
 	if len(c.Archive.EventBus.URLs) == 0 {
 		c.Archive.EventBus.URLs = d.Archive.EventBus.URLs
-	}
-	if c.Archive.EventBus.Stream == "" {
-		c.Archive.EventBus.Stream = d.Archive.EventBus.Stream
 	}
 	if c.Archive.EventBus.Consumer == "" {
 		c.Archive.EventBus.Consumer = d.Archive.EventBus.Consumer
@@ -230,7 +229,7 @@ func (c *Config) Validate() error {
 	if !consumerPattern.MatchString(e.Consumer) {
 		return fmt.Errorf("invalid archive eventbus consumer %q", e.Consumer)
 	}
-	if e.Stream != "MOOX_STORAGE" || e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
+	if e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
 		return fmt.Errorf("archive eventbus settings are invalid")
 	}
 	if e.DedupeRetention < 168*time.Hour {

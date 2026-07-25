@@ -1,3 +1,5 @@
+//go:build e2e_external
+
 package e2e_test
 
 import (
@@ -19,7 +21,7 @@ import (
 func TestExternalStrategyCommitPublishesRebalance(t *testing.T) {
 	natsURL := os.Getenv("MOOX_STRATEGY_TRADE_E2E_NATS_URL")
 	if natsURL == "" {
-		t.Skip("set MOOX_STRATEGY_TRADE_E2E_NATS_URL to run the cross-module E2E")
+		t.Fatal("MOOX_STRATEGY_TRADE_E2E_NATS_URL is required by the cross-module harness")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

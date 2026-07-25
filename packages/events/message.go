@@ -83,6 +83,9 @@ func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (Event, error)
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		return Event{}, fmt.Errorf("decode %s payload: %w", event.Name(), err)
 	}
+	if err := event.Validate(message, payload); err != nil {
+		return Event{}, fmt.Errorf("validate %s payload: %w", event.Name(), err)
+	}
 	return event, nil
 }
 
@@ -115,10 +118,6 @@ func (r *Registry) Encode(event Event, payload proto.Message, opts PublishOption
 	if strings.TrimSpace(opts.SubjectID) == "" {
 		return EncodedEvent{}, fmt.Errorf("subject_id is required")
 	}
-	rawPayload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(payload)
-	if err != nil {
-		return EncodedEvent{}, fmt.Errorf("marshal %s payload: %w", eventKey(event), err)
-	}
 	natsSubject, err := r.RenderSubject(event, opts.SpaceID, opts.SubjectID)
 	if err != nil {
 		return EncodedEvent{}, err
@@ -130,10 +129,17 @@ func (r *Registry) Encode(event Event, payload proto.Message, opts PublishOption
 		SpaceId:      opts.SpaceID,
 		SubjectId:    opts.SubjectID,
 		OccurredAt:   timestamppb.New(opts.OccurredAt.UTC()),
-		Payload:      rawPayload,
 	}
 	if err := message.GetOccurredAt().CheckValid(); err != nil {
 		return EncodedEvent{}, fmt.Errorf("occurred_at: %w", err)
 	}
+	if err := registered.Validate(message, payload); err != nil {
+		return EncodedEvent{}, fmt.Errorf("validate %s payload: %w", eventKey(event), err)
+	}
+	rawPayload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(payload)
+	if err != nil {
+		return EncodedEvent{}, fmt.Errorf("marshal %s payload: %w", eventKey(event), err)
+	}
+	message.Payload = rawPayload
 	return EncodedEvent{Message: message, Subject: natsSubject, Payload: rawPayload}, nil
 }

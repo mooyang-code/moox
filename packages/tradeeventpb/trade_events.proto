@@ -22,4 +22,5 @@ message RebalanceRequested {
   string capital_amount = 8;
   string quote_asset = 9;
   repeated RebalanceTarget targets = 10;
+  uint64 command_sequence = 11;
 }

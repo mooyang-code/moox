@@ -14,8 +14,7 @@ queue:
 jetstream:
   enabled: true
   urls:
-    - nats://127.0.0.1:4322
-  nats_url: nats://127.0.0.1:4322
+    - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml
   ack_wait_millis: 720000
   max_deliver: 3

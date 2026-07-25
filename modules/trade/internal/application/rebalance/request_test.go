@@ -3,6 +3,7 @@ package rebalance
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -41,7 +42,7 @@ func validRequest() *tradeeventpb.RebalanceRequested {
 	return &tradeeventpb.RebalanceRequested{
 		RequestId: "event-1", StrategyRunId: "run-1", ExecutionBindingId: "exec-1",
 		AccountId: "account-1", ChannelId: "channel-1", Mode: "paper",
-		DataRevision: "rev-1", CapitalAmount: "1000", QuoteAsset: "USDT",
+		DataRevision: "rev-1", CapitalAmount: "1000", QuoteAsset: "USDT", CommandSequence: 1,
 		Targets: []*tradeeventpb.RebalanceTarget{{
 			InstrumentId: "instrument-btc-usdt", Symbol: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5",
 		}},
@@ -59,6 +60,15 @@ func TestRequestPlannerBuildsFixedCapitalTarget(t *testing.T) {
 	}
 	if resolver.roundedSymbol != "BTC-USDT" {
 		t.Fatalf("rounded symbol = %q", resolver.roundedSymbol)
+	}
+}
+
+func TestRequestPlannerRejectsCommandSequenceOutsideSQLiteRange(t *testing.T) {
+	request := validRequest()
+	request.CommandSequence = uint64(math.MaxInt64) + 1
+	_, err := (RequestPlanner{Resolver: &fakeSnapshotResolver{}}).Build(context.Background(), "crypto", request)
+	if !IsPermanentRequestError(err) {
+		t.Fatalf("error = %v, want permanent", err)
 	}
 }
 

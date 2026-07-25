@@ -18,7 +18,6 @@ import (
 // is intentionally not sent to JetStream: the eventbus topology owns it and
 // this value is only useful for validating a local fetch configuration.
 type EventConsumerOptions struct {
-	Stream        string
 	Consumer      string
 	AckWaitMS     int
 	FetchBatch    int
@@ -41,9 +40,6 @@ const (
 )
 
 func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
-	if strings.TrimSpace(o.Stream) == "" {
-		o.Stream = "MOOX_STORAGE"
-	}
 	if strings.TrimSpace(o.Consumer) == "" {
 		o.Consumer = "storage_view"
 	}
@@ -64,7 +60,6 @@ func (o EventConsumerOptions) withDefaults() (EventConsumerOptions, error) {
 		// and are rejected below instead of being silently corrected.
 		o.MaxRetryAttempts = defaultMaxRetryAttempts
 	}
-	o.Stream = strings.TrimSpace(o.Stream)
 	o.Consumer = strings.TrimSpace(o.Consumer)
 	if strings.TrimSpace(o.Ordering) == "" {
 		o.Ordering = "subject"

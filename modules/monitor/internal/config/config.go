@@ -73,8 +73,6 @@ type MetricsConfig struct {
 	EventBusCredentialFile     string               `yaml:"eventbus_credential_file"`
 	HostEventBusCredentialFile string               `yaml:"host_eventbus_credential_file"`
 	PipelineConfigPath         string               `yaml:"pipeline_config_path"`
-	Stream                     string               `yaml:"stream"`
-	Topic                      string               `yaml:"topic"`
 	Consumer                   string               `yaml:"consumer"`
 	FetchBatchSize             int                  `yaml:"fetch_batch_size"`
 	FetchMaxWait               time.Duration        `yaml:"fetch_max_wait"`
@@ -163,7 +161,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", PipelineConfigPath: "../config/monitor-pipelines.yaml", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1.>", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", PipelineConfigPath: "../config/monitor-pipelines.yaml", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -214,12 +212,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.PipelineConfigPath == "" {
 		c.Metrics.PipelineConfigPath = metricsDefaults.PipelineConfigPath
-	}
-	if c.Metrics.Stream == "" {
-		c.Metrics.Stream = metricsDefaults.Stream
-	}
-	if c.Metrics.Topic == "" {
-		c.Metrics.Topic = metricsDefaults.Topic
 	}
 	if c.Metrics.Consumer == "" {
 		c.Metrics.Consumer = metricsDefaults.Consumer

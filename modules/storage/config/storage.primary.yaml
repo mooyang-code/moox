@@ -9,21 +9,7 @@ storage:
   primary:
     service_name: ""
   eventbus:
-    type: jetstream
-    urls:
-      - nats://127.0.0.1:4222
-    nats_url: nats://127.0.0.1:4222
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    stream_name: MOOX_STORAGE
-    subject_prefix: moox.storage
-    consumer: storage_primary
-    max_age_hours: 24
-    max_msgs: 500000
-    max_bytes: 268435456
-    max_in_flight: 128
-    max_ack_pending: 128
-    ack_wait_ms: 120000
-    max_deliver: -1
   view:
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore

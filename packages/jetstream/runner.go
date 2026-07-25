@@ -145,9 +145,8 @@ func (r *Runner) Run(ctx context.Context) error {
 				batchErr = errors.Join(batchErr, err)
 			}
 			if result.Decision == RETRY {
-				// A retry keeps the current subject lane blocked. NAK the rest of
-				// this fetch with the same delay instead of allowing later events
-				// to overtake the failed delivery.
+				// Keep this fetched batch together. A later fetch may still overtake
+				// these delayed deliveries, so ordered domains must reject stale work.
 				for _, pending := range deliveries[index+1:] {
 					actionErr := ApplyHandlerResult(ctx, pending, HandlerResult{Decision: RETRY, Delay: result.Delay})
 					if actionErr != nil {

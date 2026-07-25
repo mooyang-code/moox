@@ -3,7 +3,6 @@ package jobstate
 import (
 	"context"
 	"fmt"
-	"net"
 	"testing"
 	"time"
 
@@ -174,18 +173,9 @@ func TestKVStoreListEmptyBucket(t *testing.T) {
 
 func newTestKVStore(t *testing.T, ttl time.Duration) *KVStore {
 	t.Helper()
-	port := freeTCPPort(t)
 	cfg := config.Default().JetStream
 	// The in-process NATS fixture has no EventBus credential file.
 	cfg.CredentialFile = ""
-	cfg.NATSURL = "nats://127.0.0.1:" + port
-	cfg.Embedded = config.EmbeddedJetStreamConfig{
-		Enabled:          true,
-		Host:             "127.0.0.1",
-		Port:             mustAtoi(t, port),
-		StoreDir:         t.TempDir(),
-		StartupTimeoutMS: 5000,
-	}
 	rt := testfixture.StartRuntime(t, cfg)
 	t.Cleanup(func() { _ = rt.Close() })
 	bucket := fmt.Sprintf("TEST_JOB_ACTIVE_%d", time.Now().UnixNano())
@@ -211,30 +201,4 @@ func testJobItem(t *testing.T, spaceID, jobItemID string) *pb.JobItem {
 		Params:        params,
 		Priority:      5,
 	}
-}
-
-func freeTCPPort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen free port: %v", err)
-	}
-	defer listener.Close()
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatalf("split listener addr: %v", err)
-	}
-	return port
-}
-
-func mustAtoi(t *testing.T, raw string) int {
-	t.Helper()
-	var out int
-	for _, r := range raw {
-		if r < '0' || r > '9' {
-			t.Fatalf("invalid port %q", raw)
-		}
-		out = out*10 + int(r-'0')
-	}
-	return out
 }
