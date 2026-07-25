@@ -339,6 +339,10 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 	if err != nil {
 		return fmt.Errorf("get scf function %s before deploy: %w", ref.FunctionName, err)
 	}
+	info, err = waitForSCFActive(ctx, client, ref, info)
+	if err != nil {
+		return err
+	}
 	_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
 		FunctionRef: ref,
 		Handler:     firstString(metadataString(metadata, "handler"), "main"),
@@ -348,6 +352,9 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 	})
 	if err != nil {
 		return fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err)
+	}
+	if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
+		return err
 	}
 	environment := copyStringMap(info.Environment)
 	if environment == nil {
@@ -360,7 +367,39 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}
+	if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
+		return err
+	}
 	return nil
+}
+
+func waitForSCFActive(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, current *tencentscf.FunctionInfo) (*tencentscf.FunctionInfo, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		if current == nil {
+			info, err := client.GetFunction(waitCtx, ref)
+			if err != nil {
+				return nil, fmt.Errorf("get scf function %s status: %w", ref.FunctionName, err)
+			}
+			current = info
+		}
+		status := strings.ToLower(strings.TrimSpace(current.Status))
+		if status == "active" {
+			return current, nil
+		}
+		if status == "" || strings.Contains(status, "failed") {
+			return nil, fmt.Errorf("scf function %s entered status %q", ref.FunctionName, current.Status)
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("wait for scf function %s active: %w", ref.FunctionName, waitCtx.Err())
+		case <-timer.C:
+			current = nil
+		}
+	}
 }
 
 func (s *Service) packageAndAccount(ctx context.Context, spaceID string, packageID string, accountID string) (*store.FunctionPackage, *store.CloudAccount, error) {

@@ -3,9 +3,18 @@ package taskrunner
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/packages/cloudjobpb"
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
+	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -68,4 +77,173 @@ func TestRoundRobinConsumerClosesEmptyRound(t *testing.T) {
 	if len(rows) != 0 || !errors.Is(err, jetstream.ErrClosed) {
 		t.Fatalf("fetch = %+v, %v", rows, err)
 	}
+}
+
+func TestDirectWorkerJetStreamAckRetryAndTerm(t *testing.T) {
+	server, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Start()
+	if !server.ReadyForConnections(5 * time.Second) {
+		t.Fatal("NATS server did not become ready")
+	}
+	t.Cleanup(server.Shutdown)
+	url := fmt.Sprintf("nats://%s", server.Addr())
+	raw, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(raw.Close)
+	js, err := raw.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.AddStream(&nats.StreamConfig{
+		Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.job.execution.requested.v1.>"},
+		Storage: nats.MemoryStorage, Retention: nats.WorkQueuePolicy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{url}, Name: "direct-worker-e2e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reportsFail := false
+	reports := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reports++
+		if reportsFail {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
+	}))
+	defer gateway.Close()
+	cfg := nodeRuntime.Config{
+		ServiceGatewayTarget: gateway.URL, SpaceID: "crypto", NodeID: "scf-1", CodePackageID: "pkg-1",
+		Auth: nodeRuntime.AuthConfig{AccessKey: "collector", SecretKey: "secret", TargetNode: "node-1"},
+	}
+
+	nodeRuntime.Register("test.direct.success", nodeRuntime.HandlerFunc(func(context.Context, nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+		return nodeRuntime.Result{Summary: map[string]any{"rows": 1}}, nil
+	}))
+	success := bindDirectTestQueue(t, ctx, client, registry, "test.direct.success")
+	publishDirectTestJob(t, ctx, publisher, success, "success-1")
+	delivery := fetchDirectTestDelivery(t, ctx, success.consumer)
+	result := handleDelivery(ctx, registry, []queueBinding{success}, cfg, delivery)
+	if result.Decision != jetstream.ACK {
+		t.Fatalf("success decision = %+v", result)
+	}
+	if err := jetstream.ApplyHandlerResult(ctx, delivery, result); err != nil {
+		t.Fatal(err)
+	}
+
+	nodeRuntime.Register("test.direct.retry", nodeRuntime.HandlerFunc(func(context.Context, nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+		return nodeRuntime.Result{}, nodeRuntime.Retryable(errors.New("temporary"), "TEMP")
+	}))
+	retry := bindDirectTestQueue(t, ctx, client, registry, "test.direct.retry")
+	publishDirectTestJob(t, ctx, publisher, retry, "retry-1")
+	first := fetchDirectTestDelivery(t, ctx, retry.consumer)
+	firstResult := handleDelivery(ctx, registry, []queueBinding{retry}, cfg, first)
+	if firstResult.Decision != jetstream.RETRY || first.DeliveryCount != 1 {
+		t.Fatalf("first retry = delivery=%+v result=%+v", first, firstResult)
+	}
+	firstResult.Delay = 0
+	if err := jetstream.ApplyHandlerResult(ctx, first, firstResult); err != nil {
+		t.Fatal(err)
+	}
+	last := fetchDirectTestDelivery(t, ctx, retry.consumer)
+	lastResult := handleDelivery(ctx, registry, []queueBinding{retry}, cfg, last)
+	if lastResult.Decision != jetstream.TERM || last.DeliveryCount != 2 {
+		t.Fatalf("last retry = delivery=%+v result=%+v", last, lastResult)
+	}
+	if err := jetstream.ApplyHandlerResult(ctx, last, lastResult); err != nil {
+		t.Fatal(err)
+	}
+
+	nodeRuntime.Register("test.direct.report", nodeRuntime.HandlerFunc(func(context.Context, nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+		return nodeRuntime.Result{}, nil
+	}))
+	reportQueue := bindDirectTestQueue(t, ctx, client, registry, "test.direct.report")
+	publishDirectTestJob(t, ctx, publisher, reportQueue, "report-1")
+	reportsFail = true
+	reportFirst := fetchDirectTestDelivery(t, ctx, reportQueue.consumer)
+	reportResult := handleDelivery(ctx, registry, []queueBinding{reportQueue}, cfg, reportFirst)
+	if reportResult.Decision != jetstream.RETRY {
+		t.Fatalf("report failure decision = %+v", reportResult)
+	}
+	reportResult.Delay = 0
+	if err := jetstream.ApplyHandlerResult(ctx, reportFirst, reportResult); err != nil {
+		t.Fatal(err)
+	}
+	reportsFail = false
+	reportLast := fetchDirectTestDelivery(t, ctx, reportQueue.consumer)
+	reportResult = handleDelivery(ctx, registry, []queueBinding{reportQueue}, cfg, reportLast)
+	if reportResult.Decision != jetstream.ACK || reportLast.DeliveryCount != 2 {
+		t.Fatalf("report recovery = delivery=%+v result=%+v", reportLast, reportResult)
+	}
+	if err := jetstream.ApplyHandlerResult(ctx, reportLast, reportResult); err != nil {
+		t.Fatal(err)
+	}
+	if reports < 4 {
+		t.Fatalf("reports = %d, want at least 4", reports)
+	}
+}
+
+func bindDirectTestQueue(t *testing.T, ctx context.Context, client *jetstream.Client, registry *events.Registry, jobType string) queueBinding {
+	t.Helper()
+	identity := cloudjobqueue.Identity{SpaceID: "crypto", CodePackageID: "pkg-1", JobType: jobType}
+	name, _ := identity.ConsumerName()
+	subjectID, _ := identity.SubjectID()
+	subject, _ := registry.RenderSubject(events.CloudJobExecutionRequested, "crypto", subjectID)
+	cfg := events.SubjectConsumerConfig{
+		ConsumerConfig: events.ConsumerConfig{
+			Name: name, Event: events.CloudJobExecutionRequested, AckWait: time.Second, MaxDeliver: 2,
+			MaxAckPending: 1, FetchMaxWait: time.Second, DeliverDecodeErrors: true,
+		},
+		SpaceID: "crypto", SubjectID: subjectID,
+	}
+	if _, err := events.EnsureSubjectConsumer(ctx, client, registry, cfg); err != nil {
+		t.Fatal(err)
+	}
+	consumer, err := events.BindSubjectConsumer(ctx, client, registry, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = consumer.Close() })
+	return queueBinding{consumer: consumer, name: name, subject: subject, subjectID: subjectID, jobType: jobType, maxDeliver: 2}
+}
+
+func publishDirectTestJob(t *testing.T, ctx context.Context, publisher *events.Publisher, binding queueBinding, itemID string) {
+	t.Helper()
+	_, err := publisher.Publish(ctx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
+		JobId: "job-1", JobItemId: itemID, JobType: binding.jobType, CodePackageId: "pkg-1",
+	}, events.PublishOptions{EventID: itemID, SpaceID: "crypto", SubjectID: binding.subjectID, OccurredAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fetchDirectTestDelivery(t *testing.T, ctx context.Context, consumer queueConsumer) *jetstream.Delivery {
+	t.Helper()
+	deliveries, err := consumer.Fetch(ctx, 1)
+	if err != nil || len(deliveries) != 1 {
+		t.Fatalf("fetch deliveries=%v err=%v", deliveries, err)
+	}
+	return deliveries[0]
 }

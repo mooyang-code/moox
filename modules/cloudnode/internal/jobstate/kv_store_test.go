@@ -98,3 +98,25 @@ func TestMarkReportedMissingIsIdempotent(t *testing.T) {
 		t.Fatalf("state=%+v changed=%v err=%v", state, changed, err)
 	}
 }
+
+func TestCreatePendingRepublishesOnlyNonterminalDuplicate(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
+	first, err := store.CreatePending(context.Background(), item)
+	if err != nil || !first.ShouldPublish {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	duplicate, err := store.CreatePending(context.Background(), item)
+	if err != nil || !duplicate.Deduplicated || !duplicate.ShouldPublish {
+		t.Fatalf("pending duplicate=%+v err=%v", duplicate, err)
+	}
+	if _, _, err := store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "item-1", Status: StatusSuccess,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := store.CreatePending(context.Background(), item)
+	if err != nil || !terminal.Deduplicated || terminal.ShouldPublish {
+		t.Fatalf("terminal duplicate=%+v err=%v", terminal, err)
+	}
+}

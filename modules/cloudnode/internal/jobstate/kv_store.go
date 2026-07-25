@@ -73,11 +73,14 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 			return nil, err
 		}
 		if changed {
-			return &CreateResult{JobItemID: updated.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED, Created: true}, nil
+			return &CreateResult{JobItemID: updated.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED, Created: true, ShouldPublish: true}, nil
 		}
-		return &CreateResult{JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED, Deduplicated: true}, nil
+		return &CreateResult{
+			JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED,
+			Deduplicated: true, ShouldPublish: updated.Status == StatusPending,
+		}, nil
 	}
-	return &CreateResult{JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED, Created: true}, nil
+	return &CreateResult{JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED, Created: true, ShouldPublish: true}, nil
 }
 
 func (s *KVStore) MarkEnqueueFailed(ctx context.Context, spaceID, jobItemID, message string) error {

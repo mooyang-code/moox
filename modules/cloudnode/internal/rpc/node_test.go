@@ -397,6 +397,9 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	if len(fake.configured) != 1 {
 		t.Fatalf("configuration calls = %d, want 1", len(fake.configured))
 	}
+	if fake.getCalls != 3 {
+		t.Fatalf("GetFunction calls = %d, want initial and one after each update", fake.getCalls)
+	}
 	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "worker-token" {
 		t.Fatalf("worker credential changed = %q", got)
 	}
@@ -411,6 +414,7 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 type fakeSCFClient struct {
 	getErr     error
 	getResults []fakeSCFGetResult
+	getCalls   int
 	created    []tencentscf.CreateFunctionRequest
 	updated    []tencentscf.UpdateFunctionCodeRequest
 	configured []tencentscf.UpdateFunctionConfigurationRequest
@@ -422,6 +426,7 @@ type fakeSCFGetResult struct {
 }
 
 func (f *fakeSCFClient) GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error) {
+	f.getCalls++
 	if len(f.getResults) > 0 {
 		result := f.getResults[0]
 		f.getResults = f.getResults[1:]

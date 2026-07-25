@@ -47,11 +47,12 @@ type State struct {
 }
 
 type CreateResult struct {
-	JobItemID    string
-	Status       pb.JobItemAckStatus
-	RejectReason string
-	Created      bool
-	Deduplicated bool
+	JobItemID     string
+	Status        pb.JobItemAckStatus
+	RejectReason  string
+	Created       bool
+	Deduplicated  bool
+	ShouldPublish bool
 }
 
 type ReportEvent struct {

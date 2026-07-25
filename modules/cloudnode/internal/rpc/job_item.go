@@ -44,10 +44,12 @@ func (s *Service) submitJobItems(ctx context.Context, req *pb.SubmitJobItemsReq)
 			return &pb.SubmitJobItemsRsp{RetInfo: retFromError(err)}, nil
 		}
 		ack := &pb.JobItemAck{JobItemId: result.JobItemID, Status: result.Status, RejectReason: result.RejectReason}
-		if result.Created {
+		if result.ShouldPublish {
 			if err := s.executionQueue.Publish(ctx, item); err != nil {
 				_ = report.ObserveModuleRun("cloudnode", "dispatch", "error", "cloudnode-jobs", time.Now())
-				_ = s.jobState.MarkEnqueueFailed(ctx, item.GetSpaceId(), item.GetJobItemId(), err.Error())
+				if stateErr := s.jobState.MarkEnqueueFailed(ctx, item.GetSpaceId(), item.GetJobItemId(), err.Error()); stateErr != nil {
+					return &pb.SubmitJobItemsRsp{RetInfo: retFromError(errors.Join(err, stateErr))}, nil
+				}
 				ack.Status = pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED
 				ack.RejectReason = err.Error()
 			} else {

@@ -121,7 +121,7 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	request := scf.NewGetFunctionRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
-	response, err := scfClient.GetFunction(request)
+	response, err := scfClient.GetFunctionWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
 	request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
-	response, err := scfClient.UpdateFunctionConfiguration(request)
+	response, err := scfClient.UpdateFunctionConfigurationWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (c *Client) CreateFunction(ctx context.Context, req CreateFunctionRequest) 
 	if err != nil {
 		return nil, err
 	}
-	response, err := scfClient.CreateFunction(buildCreateFunctionRequest(req))
+	response, err := scfClient.CreateFunctionWithContext(ctx, buildCreateFunctionRequest(req))
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (c *Client) UpdateFunctionCode(ctx context.Context, req UpdateFunctionCodeR
 	if err != nil {
 		return nil, err
 	}
-	response, err := scfClient.UpdateFunctionCode(buildUpdateFunctionCodeRequest(req))
+	response, err := scfClient.UpdateFunctionCodeWithContext(ctx, buildUpdateFunctionCodeRequest(req))
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +309,7 @@ func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) 
 	}
 	request.ClientContext = common.StringPtr(string(raw))
 
-	response, err := scfClient.Invoke(request)
+	response, err := scfClient.InvokeWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}

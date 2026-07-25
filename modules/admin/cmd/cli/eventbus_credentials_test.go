@@ -384,7 +384,6 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	})
 	require.NoError(t, err)
 	defer cloudConsumer.Close()
-
 	cloudRaw, err := nats.Connect(
 		server.ClientURL(),
 		nats.UserInfo("cloudnode-eventbus", tokens["cloudnode-eventbus"]),
@@ -393,6 +392,41 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	defer cloudRaw.Close()
 	cloudJS, err := cloudRaw.JetStream()
 	require.NoError(t, err)
+	message := nats.NewMsg("moox.cloudnode.job.execution.requested.v1.space.package.job")
+	message.Header.Set(nats.MsgIdHdr, "worker-auth-e2e")
+	message.Data = []byte("payload")
+	_, err = cloudJS.PublishMsg(message)
+	require.NoError(t, err)
+
+	worker, err := jetstream.Connect(cloudCtx, jetstream.Config{
+		URLs: []string{server.ClientURL()}, Name: "cloudnode-worker-auth-e2e",
+		Username: "cloudnode-worker", Password: tokens["cloudnode-worker"],
+	})
+	require.NoError(t, err)
+	defer worker.Close()
+	workerConsumer, err := worker.BindConsumer(cloudCtx, jetstream.ConsumerConfig{
+		Stream: "MOOX_CLOUDNODE_EXEC", Durable: "cn_exec_auth_e2e",
+		FilterSubject: "moox.cloudnode.job.execution.requested.v1.space.package.>",
+		FetchMaxWait:  time.Second,
+	})
+	require.NoError(t, err)
+	defer workerConsumer.Close()
+	deliveries, err := workerConsumer.Fetch(cloudCtx, 1)
+	require.NoError(t, err)
+	require.Len(t, deliveries, 1)
+	require.NoError(t, deliveries[0].Ack(cloudCtx))
+
+	requirePublishPermissionViolation(
+		t, server.ClientURL(), "cloudnode-worker", tokens["cloudnode-worker"],
+		"$JS.API.CONSUMER.CREATE.MOOX_CLOUDNODE_EXEC.cn_exec_forbidden",
+		"CloudNode worker 不得创建 Consumer",
+	)
+	requirePublishPermissionViolation(
+		t, server.ClientURL(), "cloudnode-worker", tokens["cloudnode-worker"],
+		"moox.cloudnode.job.execution.requested.v1.space.package.job",
+		"CloudNode worker 不得发布执行事件",
+	)
+
 	_, err = cloudJS.ConsumerInfo("MOOX_TRADE", "trade_rebalance_v1")
 	require.NoError(t, err, "CloudNode 需要只读 Consumer 元数据完成跨 Stream 命名检查")
 	_, err = cloudJS.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{
