@@ -56,7 +56,7 @@ var (
 	MetricsHostReported = declareEvent("metrics.host.reported", 1, "MOOX_METRICS", "hostagent", func() proto.Message {
 		return &hostmetricpb.HostMetric{}
 	})
-	MetricsSnapshotReported = declareEvent("metrics.snapshot.reported", 1, "MOOX_METRICS", "monitor", func() proto.Message {
+	MetricsSnapshotReported = declareEvent("metrics.snapshot.reported", 1, "MOOX_METRICS", "service", func() proto.Message {
 		return &metricspb.MetricReport{}
 	})
 	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 1, "MOOX_STORAGE", "storage", func() proto.Message {

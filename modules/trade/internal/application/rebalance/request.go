@@ -55,6 +55,9 @@ func (p RequestPlanner) Build(ctx context.Context, spaceID string, request *trad
 	if err != nil {
 		return CreateInput{}, err
 	}
+	if channel.MarketType == "swap" && strings.EqualFold(channel.Exchange, "okx") {
+		return CreateInput{}, fmt.Errorf("%w: OKX swap contract sizing is not supported", ErrInvalidRequest)
+	}
 	currents, err := p.Resolver.ResolveCurrentQuantities(ctx, spaceID, request.GetAccountId())
 	if err != nil {
 		return CreateInput{}, fmt.Errorf("resolve current positions: %w", err)
@@ -81,9 +84,6 @@ func (p RequestPlanner) Build(ctx context.Context, spaceID string, request *trad
 		}
 		if target.GetMarketType() != channel.MarketType {
 			return CreateInput{}, fmt.Errorf("%w: target market_type %q does not match channel %q", ErrInvalidRequest, target.GetMarketType(), channel.MarketType)
-		}
-		if target.GetMarketType() == "swap" && strings.EqualFold(channel.Exchange, "okx") {
-			return CreateInput{}, fmt.Errorf("%w: OKX swap contract sizing is not supported", ErrInvalidRequest)
 		}
 		weight, parseErr := shared.ParseDecimal(target.GetTargetWeight())
 		if parseErr != nil || (weight.IsNegative() && target.GetMarketType() != "swap") {

@@ -25,9 +25,8 @@ type EncodedEvent struct {
 	Payload []byte
 }
 
-// MarshalMessage creates the exact deterministic EventMessage bytes that an
-// outbox stores. Relays must publish these bytes without reconstructing the
-// event from topic strings or JSON payloads.
+// MarshalMessage 生成 outbox 保存的确定性 EventMessage 字节。
+// Relay 必须直接发布这些字节，不能根据 topic 字符串或 JSON payload 重建事件。
 func (r *Registry) MarshalMessage(event Event, payload proto.Message, opts PublishOptions) ([]byte, error) {
 	encoded, err := r.Encode(event, payload, opts)
 	if err != nil {
@@ -47,8 +46,7 @@ func (r *Registry) UnmarshalMessage(raw []byte) (*eventpb.EventMessage, error) {
 	return message, nil
 }
 
-// ValidateMessage verifies the complete application envelope and its typed
-// payload without consulting NATS transport metadata.
+// ValidateMessage 不依赖 NATS 传输元数据，校验完整业务信封及其强类型 payload。
 func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (Event, error) {
 	if r == nil {
 		return Event{}, fmt.Errorf("event registry is nil")
@@ -88,7 +86,7 @@ func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (Event, error)
 	return event, nil
 }
 
-// SubjectForMessage derives the NATS subject only from the governed envelope.
+// SubjectForMessage 只根据受治理的业务信封生成 NATS subject。
 func (r *Registry) SubjectForMessage(message *eventpb.EventMessage) (string, error) {
 	event, err := r.ValidateMessage(message)
 	if err != nil {

@@ -110,6 +110,19 @@ func TestRequestPlannerRejectsOKXSwapUntilContractSizingIsSupported(t *testing.T
 	}
 }
 
+func TestRequestPlannerRejectsOKXSwapBeforeResolvingOmittedPositions(t *testing.T) {
+	request := validRequest()
+	request.Targets = nil
+	_, err := (RequestPlanner{Resolver: &fakeSnapshotResolver{
+		channel:  Channel{Exchange: "okx", MarketType: "swap"},
+		currents: map[string]shared.Decimal{"BTC-USDT-SWAP": shared.MustDecimal("2")},
+		priceErr: errors.New("instrument snapshot must not be queried"),
+	}}).Build(context.Background(), "crypto", request)
+	if !IsPermanentRequestError(err) {
+		t.Fatalf("error = %v, want permanent", err)
+	}
+}
+
 func TestRequestPlannerRejectsNonZeroTargetRoundedToZero(t *testing.T) {
 	zero := shared.Zero()
 	_, err := (RequestPlanner{Resolver: &fakeSnapshotResolver{rounded: &zero}}).Build(

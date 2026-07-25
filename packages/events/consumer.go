@@ -18,8 +18,8 @@ type EventDelivery struct {
 	Err      error
 }
 
-// DecodeDelivery decodes one raw JetStream delivery at the business boundary.
-// JetStream itself deliberately knows nothing about EventMessage.
+// DecodeDelivery 在业务边界解码一条 JetStream 原始投递。
+// JetStream 基础层不感知 EventMessage。
 func DecodeDelivery(registry *Registry, delivery *jetstream.Delivery) *EventDelivery {
 	result := &EventDelivery{Delivery: delivery}
 	if delivery == nil {

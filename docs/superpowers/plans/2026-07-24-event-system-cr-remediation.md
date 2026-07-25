@@ -1,6 +1,6 @@
 # Event System CR Remediation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]` / `- [x]`) syntax for tracking.
 
 **Goal:** 按个人量化、新项目、不过度追求高可靠的边界，把事件系统收敛为五个真正跨进程的事件，删除 Tick/Streamcalc、通用 DLQ、Trade 自消费事件和重复注册配置，并修正 Runner、Monitor、保留时长约束及 Consumer 所有权问题。
 
@@ -261,7 +261,7 @@ Stream/Durable/Filter/DeliverPolicy 冲突 -> ErrConsumerConfigConflict
 - Modify: `packages/jetstream/runner.go`
 - Modify: `packages/jetstream/runner_test.go`
 
-- [ ] **Step 1: 写出 Handler 错误不终止 Runner 的失败测试**
+- [x] **Step 1: 写出 Handler 错误不终止 Runner 的失败测试**
 
 增加以下三类用例：
 
@@ -273,7 +273,7 @@ func TestRunnerTransportActionErrorStops(t *testing.T)
 
 前两个用例让 fake consumer 依次返回两个 batch：第一条 Handler 返回 `RETRY/TERM + Err`，第二条返回 `ACK`；断言 ErrorReporter 收到业务错误、第二个 batch 被消费、`Run` 仅在 context cancel 后返回 `nil`。第三个用例让 `Nak` 或 `Term` 返回错误，断言 `Run` 返回该 transport error。
 
-- [ ] **Step 2: 验证现状会失败**
+- [x] **Step 2: 验证现状会失败**
 
 Run:
 
@@ -284,7 +284,7 @@ go test -count=1 -run 'TestRunner(RetryBusinessErrorReportsAndContinues|TermBusi
 
 Expected: 前两个用例失败，现有 Runner 在第一次 Handler `Err` 后退出。
 
-- [ ] **Step 3: 收窄 `Runner.handle` 返回错误的来源**
+- [x] **Step 3: 收窄 `Runner.handle` 返回错误的来源**
 
 目标逻辑：
 
@@ -310,11 +310,11 @@ return result, nil
 
 HandlerResult 的 `Err` 只用于诊断，不加入 `batchErr`。当某条消息返回 `RETRY` 时，当前 batch 后续消息继续按相同 delay NAK，保持现有 lane 顺序语义。
 
-- [ ] **Step 4: 更新接口中文注释**
+- [x] **Step 4: 更新接口中文注释**
 
 `ErrorReporter` 注释改为“接收业务处理、拉取和传输动作错误；业务处理错误只上报，拉取和传输错误会结束本轮 Runner”。
 
-- [ ] **Step 5: 运行完整包测试**
+- [x] **Step 5: 运行完整包测试**
 
 Run:
 
@@ -325,7 +325,7 @@ go test -race -count=1 ./...
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add packages/jetstream/runner.go packages/jetstream/runner_test.go
@@ -350,7 +350,7 @@ git commit -m "fix(jetstream): keep runner alive after handler errors"
 - Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
 - Modify: `go.work`
 
-- [ ] **Step 1: 锁定闭合 K 线直写行为**
+- [x] **Step 1: 锁定闭合 K 线直写行为**
 
 在 `kline_test.go` 增加：
 
@@ -364,7 +364,7 @@ func TestKlineCollectorLiveAlsoWritesOnlyClosedKlines(t *testing.T)
 - 未发生 EventBus publish。
 - Storage watermark 仍作为起始游标。
 
-- [ ] **Step 2: 验证测试在 Tick 分支下失败**
+- [x] **Step 2: 验证测试在 Tick 分支下失败**
 
 Run:
 
@@ -375,7 +375,7 @@ go test -count=1 ./internal/sources/binance -run TestKlineCollectorLiveAlsoWrite
 
 Expected: FAIL，当前 `Live` 分支进入 `TickCollector`。
 
-- [ ] **Step 3: 删除 Kline Collector 的事件分支**
+- [x] **Step 3: 删除 Kline Collector 的事件分支**
 
 `Collect` 不再判断 `params.Live`，所有模式统一执行当前的 Kline REST 拉取、水位推进、`filterClosedKlines` 和 `MergeTimeSeriesRows`。删除：
 
@@ -387,17 +387,17 @@ func (*KlineCollector) CollectLive(...)
 
 删除 `init()` 中 `DataType("tick")` 注册，只保留 spot/swap 的 `DataType("kline")`。
 
-- [ ] **Step 4: 删除 Collector 对 EventBus 的启动依赖**
+- [x] **Step 4: 删除 Collector 对 EventBus 的启动依赖**
 
 从 `bootstrap.Initialize` 删除 `jetstream.Connect`、`events.DefaultRegistry`、`events.NewPublisher` 和 `binance.SetEventPublisher`。Collector 的指标上报继续走 `packages/report`，不能因本任务误删。
 
 同时从 Collector config 删除只服务 Tick publisher 的 EventBus 字段；若其他 Collector 功能仍读取同一配置，先用 `rg` 证明调用方后再删。
 
-- [ ] **Step 5: 删除 Storage 市场事件入口**
+- [x] **Step 5: 删除 Storage 市场事件入口**
 
 从 Storage server 删除 `MOOX_MARKET` client/consumer、`storage_primary_kline_v1` 启动 goroutine和 `MOOX_STORAGE_KLINE_DURABLE` 环境变量。Storage 只接收 Collector 的 Storage RPC 写入，写入成功后继续由 DataNode outbox 产生 `DatasetRowsUpserted`。
 
-- [ ] **Step 6: 删除模块和 workspace 引用**
+- [x] **Step 6: 删除模块和 workspace 引用**
 
 删除上述文件和整个 `modules/streamcalc`，并从以下位置移除引用：
 
@@ -410,11 +410,11 @@ scripts/verify-event-contracts.sh
 
 根 `Makefile` 若有 Streamcalc build/test target，也一起删除。
 
-- [ ] **Step 7: 用新的端到端测试替代市场事件 E2E**
+- [x] **Step 7: 用新的端到端测试替代市场事件 E2E**
 
 不要保留旧 `Tick -> Streamcalc -> Storage` 测试。使用 Collector 包内测试覆盖“交易所闭合 K 线 -> Storage writer”，使用 Storage 既有 DataNode E2E 覆盖“RPC 写入 -> committed outbox -> View/Factor/Archive”。
 
-- [ ] **Step 8: 运行模块测试和残留扫描**
+- [x] **Step 8: 运行模块测试和残留扫描**
 
 Run:
 
@@ -429,7 +429,7 @@ rg -n 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET|storage_primary_kli
 
 Expected: 测试 PASS；`rg` 无生产代码命中。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add -A modules/streamcalc modules/collector modules/storage modules/admin packages/events/marketpb go.work Makefile scripts/verify-event-contracts.sh
@@ -446,7 +446,7 @@ git commit -m "refactor(market): write closed klines directly to storage"
 - Modify: `web/src/views/data/datasets/index.vue`
 - Modify: `web/src/views/data/datasets/dataset-lifecycle.test.ts`
 
-- [ ] **Step 1: 写双向约束测试**
+- [x] **Step 1: 写双向约束测试**
 
 测试矩阵：
 
@@ -466,7 +466,7 @@ git commit -m "refactor(market): write closed klines directly to storage"
 var ErrDatasetKeepDurationShorterThanView = errors.New("dataset keep_duration must be 0 or not shorter than view keep_duration")
 ```
 
-- [ ] **Step 2: 验证现状没有该约束**
+- [x] **Step 2: 验证现状没有该约束**
 
 Run:
 
@@ -477,7 +477,7 @@ CGO_ENABLED=1 go test -count=1 ./internal/service/metadata/sqlite -run KeepDurat
 
 Expected: FAIL，当前只校验 duration 格式。
 
-- [ ] **Step 3: 实现纯比较函数**
+- [x] **Step 3: 实现纯比较函数**
 
 ```go
 func keepDurationCovers(datasetKeep, viewKeep string) (bool, error) {
@@ -498,7 +498,7 @@ func keepDurationCovers(datasetKeep, viewKeep string) (bool, error) {
 
 View 的 `0` 代表永久保留，因此只有 Dataset=`0` 可以覆盖 View=`0`；实现时必须在 `time.ParseDuration` 前单独处理这个分支。
 
-- [ ] **Step 4: 在 View upsert 事务内校验所有 Dataset**
+- [x] **Step 4: 在 View upsert 事务内校验所有 Dataset**
 
 对去重后的 `primary_dataset_id + dataset_ids` 逐个读取 `t_datasets.c_keep_duration`。不存在的 Dataset 返回明确错误；任一 Dataset 不覆盖 View 时返回：
 
@@ -508,7 +508,7 @@ dataset <dataset_id> keep_duration <dataset_keep> is shorter than view <view_id>
 
 校验必须和 View upsert 使用同一 SQLite transaction，避免读写之间出现不一致。
 
-- [ ] **Step 5: 在 Dataset 缩短保留时长时反向校验**
+- [x] **Step 5: 在 Dataset 缩短保留时长时反向校验**
 
 `UpdateDataset` 在写入前查询所有满足以下条件的 View：
 
@@ -525,11 +525,11 @@ AND (
 
 如果新的 `keep_duration` 不能覆盖任一 View，拒绝整个更新。Dataset 状态为 disabled 也不能绕过该约束。
 
-- [ ] **Step 6: 保持过期清理为内部容量操作**
+- [x] **Step 6: 保持过期清理为内部容量操作**
 
 扫描 `CleanupExpiredBuckets`、过期清理 Timer 和 Pebble bucket 删除路径，确认不调用 events Publisher、不写 outbox。增加一条测试：执行过期 bucket 清理后 outbox count 不增加。
 
-- [ ] **Step 7: 更新 UI 提示和源码契约测试**
+- [x] **Step 7: 更新 UI 提示和源码契约测试**
 
 在 Dataset 保留时长输入框下显示：
 
@@ -539,7 +539,7 @@ AND (
 
 `dataset-lifecycle.test.ts` 断言这段文案存在。
 
-- [ ] **Step 8: 运行测试**
+- [x] **Step 8: 运行测试**
 
 Run:
 
@@ -550,7 +550,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add modules/storage/internal/service/metadata/sqlite web/src/views/data/datasets
@@ -566,7 +566,7 @@ git commit -m "feat(storage): enforce dataset and view keep duration"
 - Modify: `modules/monitor/internal/hostmetrics/hostmetrics.go`
 - Modify: `modules/monitor/internal/hostmetrics/hostmetrics_test.go`
 
-- [ ] **Step 1: 写未知生产方和投递次数测试**
+- [x] **Step 1: 写未知生产方和投递次数测试**
 
 使用 embedded NATS 创建 `MOOX_METRICS` 和 `MaxDeliver=3` 的测试 Consumer：
 
@@ -574,7 +574,7 @@ git commit -m "feat(storage): enforce dataset and view keep duration"
 2. Consumer `NumPending=0` 且不发生第二次投递。
 3. authorizer 返回临时错误时返回 `RETRY`，JetStream 最多投递 3 次。
 
-- [ ] **Step 2: 验证现状失败**
+- [x] **Step 2: 验证现状失败**
 
 Run:
 
@@ -585,7 +585,7 @@ go test -count=1 ./internal/metrics -run 'TestUnknownProducer|TestAuthorizerFail
 
 Expected: FAIL；当前 unknown producer 阈值 `120` 永远达不到。
 
-- [ ] **Step 3: 删除不可达 grace 阈值**
+- [x] **Step 3: 删除不可达 grace 阈值**
 
 删除 `unknownProducerGraceDeliveries=120`。决策表：
 
@@ -610,7 +610,7 @@ decision=term
 reason=producer_not_registered
 ```
 
-- [ ] **Step 4: 统一 HostMetrics 业务命名**
+- [x] **Step 4: 统一 HostMetrics 业务命名**
 
 将业务常量：
 
@@ -626,7 +626,7 @@ const Consumer = "monitor_hostmetrics_ingest_v1"
 
 Task 7 迁移 Consumer API 时，将该业务名称映射到 `jetstream.ConsumerConfig.Durable`。
 
-- [ ] **Step 5: 运行 Monitor 测试**
+- [x] **Step 5: 运行 Monitor 测试**
 
 Run:
 
@@ -637,7 +637,7 @@ go test -race -count=1 ./internal/metrics ./internal/hostmetrics ./internal/boot
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/monitor/internal/metrics modules/monitor/internal/hostmetrics modules/monitor/internal/bootstrap
@@ -665,7 +665,7 @@ git commit -m "fix(monitor): term unknown metric producers"
 - Modify: `go.work`
 - Modify: `Makefile`
 
-- [ ] **Step 1: 为每个 Consumer 锁定错误分类**
+- [x] **Step 1: 为每个 Consumer 锁定错误分类**
 
 每个模块至少增加以下测试：
 
@@ -678,7 +678,7 @@ successful processing   -> ACK
 
 断言永久错误不会调用 EventBus publisher。Archive 额外断言本地 `journal.Quarantine` 写入成功后 TERM；本地 quarantine 写入失败时 RETRY。
 
-- [ ] **Step 2: 验证当前测试依赖 DLQ**
+- [x] **Step 2: 验证当前测试依赖 DLQ**
 
 Run:
 
@@ -689,11 +689,11 @@ rg -n 'PublishRejected|RejectedMessage|DLQPublisher|RetryExhausted|withTradeDLQ|
 
 Expected: 命中 Archive、Factor、Monitor、Storage View、Trade、事件注册表和 `packages/dlqpb`。
 
-- [ ] **Step 3: 删除共享 DLQ 协议和发布器**
+- [x] **Step 3: 删除共享 DLQ 协议和发布器**
 
 删除 `packages/dlqpb` 和 `packages/events/dlq.go`，从 `go.work`、根 `Makefile` 和各模块 `go.mod` 删除 require/replace。
 
-- [ ] **Step 4: 按模块替换为 TERM + 结构化日志**
+- [x] **Step 4: 按模块替换为 TERM + 结构化日志**
 
 统一永久错误结果：
 
@@ -719,7 +719,7 @@ reason
 
 不得把原始 payload 全量写日志。
 
-- [ ] **Step 5: 保留 Archive 的本地 quarantine**
+- [x] **Step 5: 保留 Archive 的本地 quarantine**
 
 Archive Handler 保留本地文件隔离，但删除 `DLQPublisher`、`JetStreamDLQ`、`NewHandlerWithDLQ`。处理顺序：
 
@@ -730,15 +730,15 @@ quarantine 写失败 -> RETRY
 成功 -> ACK
 ```
 
-- [ ] **Step 6: 删除 Storage View `RetryExhausted` Hook**
+- [x] **Step 6: 删除 Storage View `RetryExhausted` Hook**
 
 `ConsumerOptions` 删除 `RetryExhausted`。达到 `MaxRetryAttempts` 时直接返回 `TERM + Err`，增加 `moox_storage_view_retry_exhausted_total` 指标和结构化日志，不再创建第二条事件。
 
-- [ ] **Step 7: 删除 Trade 的 `withTradeDLQ`**
+- [x] **Step 7: 删除 Trade 的 `withTradeDLQ`**
 
 Trade handler 自己区分 permanent/transient；wrapper 不再把 TERM 改成 RETRY。后续 Task 8 会进一步删除多数 Trade handler。
 
-- [ ] **Step 8: 运行受影响模块测试**
+- [x] **Step 8: 运行受影响模块测试**
 
 Run:
 
@@ -753,7 +753,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 9: 扫描残留并提交**
+- [x] **Step 9: 扫描残留并提交**
 
 Run:
 
@@ -791,7 +791,7 @@ git commit -m "refactor(events): remove shared eventbus dlq"
 - Modify: `go.work`
 - Modify: `Makefile`
 
-- [ ] **Step 1: 写五事件词表测试**
+- [x] **Step 1: 写五事件词表测试**
 
 架构测试必须精确断言：
 
@@ -813,7 +813,7 @@ want := []string{
 - owner 和 stream 非空。
 - 事件名唯一。
 
-- [ ] **Step 2: 验证旧 YAML 和重复表仍存在**
+- [x] **Step 2: 验证旧 YAML 和重复表仍存在**
 
 Run:
 
@@ -824,7 +824,7 @@ go test -count=1 -run 'TestEventContractArchitecture|TestBuiltInEvents' ./...
 
 Expected: FAIL，当前注册表包含 18 个事件。
 
-- [ ] **Step 3: 实现单点声明**
+- [x] **Step 3: 实现单点声明**
 
 使用一个 `Event` 同时承载静态契约和发布/消费句柄：
 
@@ -877,7 +877,7 @@ var DatasetRowsUpserted = declareEvent(
 
 其余四个事件按同样形式声明。`trade.rebalance.requested` 的 owner 是 `strategy`，stream 是 `MOOX_TRADE`。
 
-- [ ] **Step 4: 从 `Event` 派生 payload 和 subject**
+- [x] **Step 4: 从 `Event` 派生 payload 和 subject**
 
 `DefaultRegistry` 直接遍历 `builtInEvents`。payload full name 使用：
 
@@ -929,7 +929,7 @@ AST EventType declaration扫描
 
 `Event` 字段保持私有，只允许 `packages/events` 内部 `declareEvent` 创建，业务不能制造未注册事件。
 
-- [ ] **Step 5: 简化架构门禁**
+- [x] **Step 5: 简化架构门禁**
 
 `architecture_test.go` 不再解析 Go AST。新门禁只验证：
 
@@ -938,11 +938,11 @@ AST EventType declaration扫描
 - `EventMessage` 仍只有七个字段。
 - 生产代码不直接调用 `PublishRaw` 或硬编码五个业务 subject。
 
-- [ ] **Step 6: 删除无用 payload 包**
+- [x] **Step 6: 删除无用 payload 包**
 
 删除 market、trading、strategy event payload 包及 workspace/build 引用。`packages/tradeeventpb` 保留到 Task 8，只生成一个调仓命令 payload。
 
-- [ ] **Step 7: 运行测试和依赖整理**
+- [x] **Step 7: 运行测试和依赖整理**
 
 Run:
 
@@ -957,7 +957,7 @@ rg -n 'events.yaml|EventType|EventDefinition|EventSchema|AllEventTypes|payloadFa
 
 Expected: 测试 PASS；扫描无命中。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add -A packages/events packages/strategyeventpb modules/eventbus/internal modules/storage/internal/service/view/eventconsumer go.work Makefile
@@ -1007,7 +1007,7 @@ git commit -m "refactor(events): declare event catalog in go"
 - Modify: `modules/trade/internal/bootstrap/trading_signal_worker.go`
 - Modify: `modules/trade/test/eventbus_e2e_test.go`
 
-- [ ] **Step 1: 写 EventBus 与 Consumer 所有权测试**
+- [x] **Step 1: 写 EventBus 与 Consumer 所有权测试**
 
 EventBus repository config 测试必须断言：
 
@@ -1031,7 +1031,7 @@ func TestNewConsumerDoesNotDeleteConflictingConsumer(t *testing.T)
 func TestNewConsumerRejectsDurableOwnedByAnotherStream(t *testing.T)
 ```
 
-- [ ] **Step 2: 让 `Default()` 只提供标量默认值**
+- [x] **Step 2: 让 `Default()` 只提供标量默认值**
 
 `Default()` 只保留：
 
@@ -1047,7 +1047,7 @@ Health
 scalar defaults -> YAML -> normalize -> env override -> Validate
 ```
 
-- [ ] **Step 3: 将 YAML 改为四个 Stream 和 KV**
+- [x] **Step 3: 将 YAML 改为四个 Stream 和 KV**
 
 按第 3 节的表删除：
 
@@ -1065,7 +1065,7 @@ storage_primary_kline_v1
 
 删除整个 `consumers:` 和 `consumer_templates:` 段。所有 `limits` Stream 显式写 `discard: old`，`MOOX_TRADE` 改成 `work_queue`。
 
-- [ ] **Step 4: 只校验 `Event` 与 Stream 的关系**
+- [x] **Step 4: 只校验 `Event` 与 Stream 的关系**
 
 `Config.Validate` 遍历 `registry.Events()`：
 
@@ -1075,7 +1075,7 @@ storage_primary_kline_v1
 
 EventBus 不再校验 Consumer；Consumer 的 Event/filter 一致性由 `events.NewConsumer` 和各模块测试负责。
 
-- [ ] **Step 5: 实现唯一的 `NewConsumer` API 并删除重复入口**
+- [x] **Step 5: 实现唯一的 `NewConsumer` API 并删除重复入口**
 
 在一个可编译提交中增加 `Client.NewConsumer`、迁移全部调用方，并删除：
 
@@ -1156,7 +1156,7 @@ CloudNode 的 Consumer 名称按执行路由动态生成，NATS ACL 又不能按
 元数据可见性例外；它仍不能在 `MOOX_CLOUDNODE_EXEC` 之外创建、拉取或 ACK Consumer，
 鉴权 E2E 必须覆盖该边界。
 
-- [ ] **Step 6: 让 `events.NewConsumer` 派生 Stream 和 filter**
+- [x] **Step 6: 让 `events.NewConsumer` 派生 Stream 和 filter**
 
 业务侧使用：
 
@@ -1195,7 +1195,7 @@ Archive、Factor、Storage View、Monitor 和 Trade 使用 `events.NewConsumer`�
 
 这里的“唯一 API”指 `packages/jetstream` 只有一个 Consumer 生命周期入口 `Client.NewConsumer`；`events.NewConsumer` 是增加 EventMessage 解码的类型化包装，不定义第二套创建/绑定语义。
 
-- [ ] **Step 7: 重命名业务配置**
+- [x] **Step 7: 重命名业务配置**
 
 执行以下重命名，不保留兼容字段：
 
@@ -1220,7 +1220,7 @@ events.ConsumerConfig{
 
 只有 `packages/jetstream.ConsumerConfig.Durable` 和 NATS `ConsumerConfig.Durable` 保留 `Durable`。
 
-- [ ] **Step 8: 扫描旧 API 和中心化 Consumer 残留**
+- [x] **Step 8: 扫描旧 API 和中心化 Consumer 残留**
 
 Run:
 
@@ -1233,7 +1233,7 @@ rg -n '^consumers:|^consumer_templates:|Consumers|ConsumerTemplates' \
 
 Expected: 两次扫描都无命中。
 
-- [ ] **Step 9: 运行 EventBus、Consumer API 和业务配置测试**
+- [x] **Step 9: 运行 EventBus、Consumer API 和业务配置测试**
 
 Run:
 
@@ -1251,7 +1251,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 10: 提交**
+- [x] **Step 10: 提交**
 
 ```bash
 git add packages/jetstream packages/events modules/eventbus modules/archive modules/factor modules/storage modules/monitor modules/cloudnode modules/trade
@@ -1284,7 +1284,7 @@ git commit -m "refactor(events): let services own consumers"
 - Modify: `modules/trade/schema/rebalance.sql`
 - Create: `modules/trade/test/strategy_rebalance_event_e2e_test.go`
 
-- [ ] **Step 1: 定义可执行但不过度复杂的命令**
+- [x] **Step 1: 定义可执行但不过度复杂的命令**
 
 `trade_events.proto` 删除 OrderSnapshot、FillReceived、ReconciliationRequested、RebalanceCompleted，只保留：
 
@@ -1322,7 +1322,7 @@ message RebalanceRequested {
 
 这套约束刻意避免账户净值估算、保证金优化器和组合级资金调度。
 
-- [ ] **Step 2: 扩展 Strategy execution binding**
+- [x] **Step 2: 扩展 Strategy execution binding**
 
 新项目直接修改建表定义：
 
@@ -1338,7 +1338,7 @@ t_strategy_execution_bindings (
 
 同步 domain、RPC 和页面当前 execution binding 编辑入口；`paper/live` 模式必须填写 channel、正数 capital，`observe` 不发布执行命令。
 
-- [ ] **Step 3: 写 Strategy commit 测试**
+- [x] **Step 3: 写 Strategy commit 测试**
 
 覆盖：
 
@@ -1357,13 +1357,13 @@ action=rebalance, paper+live bindings    -> 2 commands
 eventID := task.RunID + ":rebalance:" + executionBindingID
 ```
 
-- [ ] **Step 4: 在 Strategy transaction 中写调仓命令**
+- [x] **Step 4: 在 Strategy transaction 中写调仓命令**
 
 `Commit` 先写 run/state，再通过 `t_strategy_bindings.c_group_id` 查询 enabled execution bindings。仅对 `paper/live` 生成 `tradeeventpb.RebalanceRequested`，并把完整 EventMessage 写入现有 `t_strategy_outbox`。
 
 删除 `StrategyOutputAccepted` payload 和事件。Strategy outbox relay 保留，因为 state commit 和命令 publish 必须一致。
 
-- [ ] **Step 5: 实现 Trade 请求解析器**
+- [x] **Step 5: 实现 Trade 请求解析器**
 
 `request.go` 定义：
 
@@ -1439,7 +1439,7 @@ instrument precision 读取失败
 SQLite busy
 ```
 
-- [ ] **Step 6: 让 Trade Consumer 原子记录 inbox 和调仓计划**
+- [x] **Step 6: 让 Trade Consumer 原子记录 inbox 和调仓计划**
 
 为 `Tx` 增加：
 
@@ -1459,7 +1459,7 @@ Consumer 成功持久化计划后 ACK，并调用本地 `Wake()`；永久校验�
 立即 ACK，不再依赖行情、仓位或交易规则服务；随后仍保留事务内 `RecordInbox`，
 用于处理并发投递竞争。
 
-- [ ] **Step 7: 删除 Trade 自发布事件**
+- [x] **Step 7: 删除 Trade 自发布事件**
 
 从 `Service.Create` 删除 `EncodeRebalanceRequested` 和 `tx.AddOutbox`。从 `Advance` 删除 `EncodeRebalanceCompleted` 和 `tx.AddOutbox`。
 
@@ -1485,7 +1485,7 @@ TradingSignal
 
 Trade 只保留自己通过 `events.NewConsumer` 创建的 `trade_rebalance_v1` Consumer。
 
-- [ ] **Step 8: 用本地唤醒推进正常流程**
+- [x] **Step 8: 用本地唤醒推进正常流程**
 
 `startKernelWorkers` 只启动：
 
@@ -1526,7 +1526,7 @@ cancel/replace saga 状态变化
 
 Worker 收到唤醒后调用 `recoverOrdersOnce`，继续处理 READY、SUBMITTING、SUBMIT_UNKNOWN、cancel saga 和 active rebalance。buffer 大小为 1，重复唤醒自动合并；真正待处理工作始终以 DB 为准，channel 不承载业务数据。
 
-- [ ] **Step 9: 让 Timer 只承担恢复兜底**
+- [x] **Step 9: 让 Timer 只承担恢复兜底**
 
 保留两个低频 Timer：
 
@@ -1550,7 +1550,7 @@ Paper order 使用与 Live 相同的 rebalance、订单、账本和仓位状态�
 模拟成交处理器，绝不调用真实交易所下单或私有流。模拟成交失败时由本地恢复 worker
 继续处理；`paper` order 不进入真实交易所 REST/WS 对账。
 
-- [ ] **Step 10: 写跨模块 E2E**
+- [x] **Step 10: 写跨模块 E2E**
 
 `strategy_rebalance_event_e2e_test.go` 使用 embedded NATS：
 
@@ -1564,7 +1564,7 @@ Paper order 使用与 Live 相同的 rebalance、订单、账本和仓位状态�
 8. 不推进 fake clock，断言本地 Wake 立即推进已经落库的 run。
 9. 单独构造“DB 已提交但没有 Wake”的重启场景，推进 15s fake clock 后由 recovery Timer 补偿。
 
-- [ ] **Step 11: 运行 Strategy/Trade 全测试**
+- [x] **Step 11: 运行 Strategy/Trade 全测试**
 
 Run:
 
@@ -1576,7 +1576,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 12: 扫描 Trade 自消费残留**
+- [x] **Step 12: 扫描 Trade 自消费残留**
 
 Run:
 
@@ -1588,7 +1588,7 @@ rg -n 'TradeOrder|TradeExecution|TradeFill|TradeReconciliation|TradeRebalanceCom
 
 Expected: 无命中。
 
-- [ ] **Step 13: 提交**
+- [x] **Step 13: 提交**
 
 ```bash
 git add -A packages/tradeeventpb packages/strategyeventpb modules/strategy modules/trade
@@ -1607,7 +1607,7 @@ git commit -m "refactor(trade): consume only strategy rebalance commands"
 - Modify: `modules/trade/internal/config/app.go`
 - Modify: `scripts/verify-event-contracts.sh`
 
-- [ ] **Step 1: 改写 Storage/outbox 注释**
+- [x] **Step 1: 改写 Storage/outbox 注释**
 
 以下语义统一：
 
@@ -1626,7 +1626,7 @@ durable latest value       -> 已提交的最新值
 
 不要改 JetStream `Durable` 字段和确实表示崩溃恢复能力的技术描述。
 
-- [ ] **Step 2: 将本计划触达文件的注释改为中文**
+- [x] **Step 2: 将本计划触达文件的注释改为中文**
 
 范围限于本计划修改过的事件、Storage、Monitor、Archive、Factor、Strategy、Trade 文件。导出符号注释仍以符号名开头，满足 golint 风格：
 
@@ -1634,7 +1634,7 @@ durable latest value       -> 已提交的最新值
 // Consumer 表示业务模块绑定的 EventBus Consumer 名称。
 ```
 
-- [ ] **Step 3: 更新 contract gate**
+- [x] **Step 3: 更新 contract gate**
 
 `verify-event-contracts.sh` 最终执行：
 
@@ -1665,13 +1665,13 @@ durable latest value       -> 已提交的最新值
 
 Archive/Factor 等技术注释中的英文单词不作为门禁；门禁只匹配配置字段和 Go 配置成员。
 
-- [ ] **Step 4: 修复 workspace boundary gate 的现有假阳性**
+- [x] **Step 4: 修复 workspace boundary gate 的现有假阳性**
 
 删除市场 E2E 后，Storage 不应再依赖 Collector testkit。同步删除 `modules/storage/go.mod` 中的 Collector require/replace。
 
 若 `make check-boundaries` 仍因局部变量 `newEnvelope` 命中旧信封规则，将变量改为 `eventMessage`；不要放宽禁止旧 `MooxMessage` 的规则。
 
-- [ ] **Step 5: 运行门禁**
+- [x] **Step 5: 运行门禁**
 
 Run:
 
@@ -1684,7 +1684,7 @@ git diff --check
 
 Expected: 全部 PASS，不接受“既有失败”作为本计划完成条件。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules packages scripts/verify-event-contracts.sh
@@ -1700,7 +1700,7 @@ git commit -m "chore(events): align consumer terminology and contract gates"
 - Modify: `docs/运维/数据保留与磁盘空间.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: 更新架构图和事件表**
+- [x] **Step 1: 更新架构图和事件表**
 
 文档只展示第 1.1 节五个事件。明确：
 
@@ -1710,7 +1710,7 @@ git commit -m "chore(events): align consumer terminology and contract gates"
 - Trade 正常流程由 DB commit 后的本地 Wake 立即推进；Timer 只负责启动恢复和遗漏兜底。
 - EventBus 只创建 Stream/KV；每个消费服务通过 `NewConsumer` 创建并拥有自己的 Consumer。
 
-- [ ] **Step 2: 更新保留时长说明**
+- [x] **Step 2: 更新保留时长说明**
 
 写清：
 
@@ -1721,7 +1721,7 @@ Dataset keep_duration 必须为 0 或 >= 所有引用 View 的 keep_duration。
 设置更短的 keep_duration 会在元数据写入阶段被拒绝。
 ```
 
-- [ ] **Step 3: 更新 EventBus 运维说明**
+- [x] **Step 3: 更新 EventBus 运维说明**
 
 删除 DLQ 查看/重放命令，替换为：
 
@@ -1733,7 +1733,7 @@ Archive 数据错误：查看 Archive 本地 quarantine。
 
 说明 `limits + discard old` 是个人系统的容量策略，允许旧消息自然淘汰。
 
-- [ ] **Step 4: 标记旧计划为历史**
+- [x] **Step 4: 标记旧计划为历史**
 
 不修改旧计划的原始结论；在当前架构文档中注明：
 
@@ -1742,7 +1742,7 @@ Archive 数据错误：查看 Archive 本地 quarantine。
 当前运行契约以本计划完成后的五事件拓扑为准。
 ```
 
-- [ ] **Step 5: 文档扫描**
+- [x] **Step 5: 文档扫描**
 
 Run:
 
@@ -1753,7 +1753,7 @@ rg -n 'Streamcalc|MOOX_MARKET|MOOX_DLQ|dlq.message.rejected|trade.execution.slic
 
 Expected: 仅允许出现在“已删除/历史架构”说明中。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add README.md docs/架构总览.md docs/协议设计.md docs/运维
@@ -1765,7 +1765,7 @@ git commit -m "docs(events): document simplified five-event architecture"
 **Files:**
 - Modify only if verification exposes a defect in the scoped implementation.
 
-- [ ] **Step 1: 运行事件契约和重点模块测试**
+- [x] **Step 1: 运行事件契约和重点模块测试**
 
 Run:
 
@@ -1775,7 +1775,7 @@ Run:
 
 Expected: `event contract verification passed`。
 
-- [ ] **Step 2: 运行 workspace 测试**
+- [x] **Step 2: 运行 workspace 测试**
 
 Run:
 
@@ -1785,7 +1785,7 @@ Run:
 
 Expected: 所有 workspace module 的 `go test` 和 `go vet` PASS。
 
-- [ ] **Step 3: 运行 Web 测试和构建**
+- [x] **Step 3: 运行 Web 测试和构建**
 
 Run:
 
@@ -1797,7 +1797,7 @@ pnpm build:prod
 
 Expected: PASS，构建无 TypeScript/Vue 错误。
 
-- [ ] **Step 4: 运行重点 race 测试**
+- [x] **Step 4: 运行重点 race 测试**
 
 Run:
 
@@ -1812,7 +1812,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 5: 运行最终残留扫描**
+- [x] **Step 5: 运行最终残留扫描**
 
 Run:
 
@@ -1827,7 +1827,7 @@ rg -n '^consumers:|^consumer_templates:|yaml:"consumers"|yaml:"consumer_template
 Expected: 两次扫描都无命中。不要扫描通用 `EventType`、归档 `partition_key` 或只读
 `ListConsumers` RPC；它们不是本计划要删除的事件注册表或中心化 Consumer 配置。
 
-- [ ] **Step 6: 验证只有五个事件**
+- [x] **Step 6: 验证只有五个事件**
 
 Run:
 
@@ -1838,7 +1838,7 @@ go test -count=1 -run TestBuiltInEvents ./...
 
 Expected: PASS，输出中没有额外事件。
 
-- [ ] **Step 7: 目标 Linux/CGO 验收**
+- [x] **Step 7: 目标 Linux/CGO 验收**
 
 使用仓库已有 Linux build 脚本构建 Storage、Strategy、Trade，并在同一 SHA 上运行：
 
@@ -1856,7 +1856,7 @@ Expected: PASS，输出中没有额外事件。
 
 Expected: PASS；返回 artifact 必须是 Linux ELF，记录其 `GIT_COMMIT` 与当前验收 SHA 相同。
 
-- [ ] **Step 8: 检查最终 diff**
+- [x] **Step 8: 检查最终 diff**
 
 Run:
 
@@ -1868,7 +1868,7 @@ git log --oneline --decorate -12
 
 Expected: 只有本计划范围内变更；`git diff --check` 无输出。
 
-- [ ] **Step 9: 最终提交**
+- [x] **Step 9: 最终提交**
 
 如果验证阶段产生修复：
 
@@ -1879,7 +1879,7 @@ git commit -m "test(events): complete simplified event system acceptance"
 
 若没有额外变更，不创建空提交。
 
-- [ ] **Step 10: 推送并验证远端**
+- [x] **Step 10: 推送并验证远端**
 
 ```bash
 git push origin feature/mooyang
@@ -1890,49 +1890,65 @@ test "$LOCAL_SHA" = "$REMOTE_SHA"
 
 Expected: `LOCAL_SHA == REMOTE_SHA`。只有该检查通过后，才能声明计划实施已经远端落地。
 
+### 5.1 独立审查记录
+
+实施完成后进行了三轮互相独立的 Agent 审查，审查者均只读代码和测试，不直接修改文件：
+
+1. 第一轮发现 paper/live 隔离、生产 ACL、新标的价格、FullTarget、swap 负权重等问题，
+   修复后提交为 `2efb6883`。
+2. 第二轮发现零 leg、OKX SWAP 合约数量、CloudNode INFO 权限边界、跨 Stream 并发窗口
+   和当前文档漂移，修复后提交为 `af95c99e`。
+3. 最终轮基于前两轮修复重新审查，补齐 OKX 空目标路径、CloudNode 跨 Stream
+   create/pull/ACK 鉴权、事件 owner、中文注释和现行文档，复核后无剩余
+   P0/P1/P2。
+
+最终验收包含 Strategy -> EventBus -> Trade 外部进程 E2E、真实鉴权 NATS E2E、
+EventBus 部署契约、全 workspace `go test`/`go vet`、重点 race 测试及 Linux/CGO
+目标机验证。
+
 ## 6. 验收标准
 
 ### 6.1 结构
 
-- [ ] 生产代码中只存在五个 `Event` 值，不存在 `EventType/EventDefinition/EventSchema`。
-- [ ] `packages/events` 不再读取 YAML 注册表。
-- [ ] EventBus YAML 只定义 Stream/KV，不包含 Consumer 或 Consumer template。
-- [ ] 每个业务 Consumer 由所属消费服务调用唯一的 `NewConsumer` 创建和校验。
-- [ ] 启动检查发现同名 Consumer 已属于其他 Stream 时返回配置冲突，不重复创建；V1
+- [x] 生产代码中只存在五个 `Event` 值，不存在 `EventType/EventDefinition/EventSchema`。
+- [x] `packages/events` 不再读取 YAML 注册表。
+- [x] EventBus YAML 只定义 Stream/KV，不包含 Consumer 或 Consumer template。
+- [x] 每个业务 Consumer 由所属消费服务调用唯一的 `NewConsumer` 创建和校验。
+- [x] 启动检查发现同名 Consumer 已属于其他 Stream 时返回配置冲突，不重复创建；V1
   不承诺跨 Stream 并发创建的原子互斥。
-- [ ] 生产角色凭据允许所有者创建/更新固定 Consumer；鉴权 E2E 验证正常操作和越权失败。
-- [ ] 生产代码不存在旧 Pull/create/bind Consumer API。
-- [ ] `modules/streamcalc`、`packages/dlqpb`、`packages/strategyeventpb` 已删除。
-- [ ] Trade 不再拥有 outbox，不消费自己发布的事件。
+- [x] 生产角色凭据允许所有者创建/更新固定 Consumer；鉴权 E2E 验证正常操作和越权失败。
+- [x] 生产代码不存在旧 Pull/create/bind Consumer API。
+- [x] `modules/streamcalc`、`packages/dlqpb`、`packages/strategyeventpb` 已删除。
+- [x] Trade 不再拥有 outbox，不消费自己发布的事件。
 
 ### 6.2 行为
 
-- [ ] Collector Live/非 Live 都只写交易所闭合 K 线。
-- [ ] Storage committed upsert 仍能驱动 View/Factor/Archive。
-- [ ] 过期清理不产生 EventMessage。
-- [ ] Dataset `keep_duration` 小于任一 View `keep_duration` 时，创建/更新被拒绝。
-- [ ] Handler 返回 `RETRY/TERM + Err` 后 Runner 不退出。
-- [ ] Monitor 未注册 producer 第一次即 TERM；authorizer 临时错误最多重投 3 次。
-- [ ] 永久错误不再发布 DLQ 事件。
-- [ ] Strategy paper/live 调仓产生一条 `trade.rebalance.requested`；hold/observe 不产生。
-- [ ] Trade 重收相同 event_id 不重复创建调仓计划。
-- [ ] 已处理事件在行情或规则服务不可用时仍直接 ACK。
-- [ ] FullTarget 会把省略的已有持仓归零，空 targets 可以表达全部平仓；无 leg 的空
+- [x] Collector Live/非 Live 都只写交易所闭合 K 线。
+- [x] Storage committed upsert 仍能驱动 View/Factor/Archive。
+- [x] 过期清理不产生 EventMessage。
+- [x] Dataset `keep_duration` 小于任一 View `keep_duration` 时，创建/更新被拒绝。
+- [x] Handler 返回 `RETRY/TERM + Err` 后 Runner 不退出。
+- [x] Monitor 未注册 producer 第一次即 TERM；authorizer 临时错误最多重投 3 次。
+- [x] 永久错误不再发布 DLQ 事件。
+- [x] Strategy paper/live 调仓产生一条 `trade.rebalance.requested`；hold/observe 不产生。
+- [x] Trade 重收相同 event_id 不重复创建调仓计划。
+- [x] 已处理事件在行情或规则服务不可用时仍直接 ACK。
+- [x] FullTarget 会把省略的已有持仓归零，空 targets 可以表达全部平仓；无 leg 的空
   操作直接完成，非零权重取整为零时拒绝。
-- [ ] 现货拒绝负权重，支持基础资产数量语义的永续合约允许负权重；OKX SWAP 在 V1
+- [x] 现货拒绝负权重，支持基础资产数量语义的永续合约允许负权重；OKX SWAP 在 V1
   明确拒绝；命令 quote 与交易规则不一致时拒绝。
-- [ ] Paper 只使用模拟通道和本地成交，Live 只使用真实通道，二者不会互相回退。
-- [ ] 新 symbol 不依赖 Trade 历史订单即可从公开 instrument snapshot 获得首笔价格。
-- [ ] 正常 Trade 状态提交后由本地 Wake 立即推进，不等待 Timer。
-- [ ] Wake 遗漏或进程重启时，已落库 Trade 工作由低频 Timer 恢复。
+- [x] Paper 只使用模拟通道和本地成交，Live 只使用真实通道，二者不会互相回退。
+- [x] 新 symbol 不依赖 Trade 历史订单即可从公开 instrument snapshot 获得首笔价格。
+- [x] 正常 Trade 状态提交后由本地 Wake 立即推进，不等待 Timer。
+- [x] Wake 遗漏或进程重启时，已落库 Trade 工作由低频 Timer 恢复。
 
 ### 6.3 命名和文档
 
-- [ ] 业务配置和变量使用 `consumer`。
-- [ ] 只有 `packages/jetstream` 和 NATS 适配结构使用官方 `Durable` 字段。
-- [ ] Storage/outbox 业务描述使用“已提交”或 `committed`。
-- [ ] 本计划触达代码的注释为中文。
-- [ ] 当前架构和运维文档不再把 Tick、Streamcalc、DLQ、Trade 自消费事件描述为生产架构。
+- [x] 业务配置和变量使用 `consumer`。
+- [x] 只有 `packages/jetstream` 和 NATS 适配结构使用官方 `Durable` 字段。
+- [x] Storage/outbox 业务描述使用“已提交”或 `committed`。
+- [x] 本计划触达代码的注释为中文。
+- [x] 当前架构和运维文档不再把 Tick、Streamcalc、DLQ、Trade 自消费事件描述为生产架构。
 
 ## 7. 实施顺序和检查点
 

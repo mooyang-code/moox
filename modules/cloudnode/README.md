@@ -85,7 +85,7 @@ CloudNode 主 SQLite 只保存控制面数据，不再保存在线 JobItem 状�
 CloudNode 使用独立的 JetStream 执行 stream 和 KV bucket，避免与 storage 的数据变更事件混用：
 
 ```text
-MOOX_CLOUDNODE_EXEC       moox.cloudnode.exec.v1.>     执行消息，负责 ACK/NAK/TERM/重投
+MOOX_CLOUDNODE_EXEC       moox.cloudnode.job.execution.requested.v1.>  执行命令，负责 ACK/NAK/TERM/重投
 MOOX_CLOUDNODE_JOB_ACTIVE JetStream KV bucket          active JobItem 状态，TTL 48 小时
 ```
 

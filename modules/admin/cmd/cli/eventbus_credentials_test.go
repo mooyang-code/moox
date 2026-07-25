@@ -380,4 +380,37 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		AckPolicy:     nats.AckExplicitPolicy,
 	})
 	require.Error(t, err, "CloudNode 不得在所属 Stream 之外创建 Consumer")
+
+	requirePublishPermissionViolation(
+		t, server.ClientURL(), "cloudnode-eventbus", tokens["cloudnode-eventbus"],
+		"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_rebalance_v1",
+		"CloudNode 不得拉取其他 Stream 的 Consumer",
+	)
+	requirePublishPermissionViolation(
+		t, server.ClientURL(), "cloudnode-eventbus", tokens["cloudnode-eventbus"],
+		"$JS.ACK.MOOX_TRADE.trade_rebalance_v1.1.1.1.1.1",
+		"CloudNode 不得 ACK 其他 Stream 的 Consumer",
+	)
+}
+
+func requirePublishPermissionViolation(t *testing.T, url, username, password, subject, message string) {
+	t.Helper()
+	permissionErrors := make(chan error, 1)
+	conn, err := nats.Connect(
+		url,
+		nats.UserInfo(username, password),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			permissionErrors <- err
+		}),
+	)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.Publish(subject, []byte("1")))
+	require.NoError(t, conn.Flush())
+	select {
+	case err := <-permissionErrors:
+		require.ErrorContains(t, err, "Permissions Violation", message)
+	case <-time.After(2 * time.Second):
+		t.Fatal(message)
+	}
 }
