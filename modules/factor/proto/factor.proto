@@ -9,16 +9,14 @@ option go_package = "github.com/mooyang-code/moox/modules/factor/proto/factorgen
 message FactorDef {
   string factor_id = 1;
   string name = 2;
-  string kind = 3;
-  string source_code = 4;
-  string source_hash = 5;
-  string params_json = 6;
-  int32 lookback_bars = 7;
-  int32 writeback_bars = 8;
-  string depends_json = 9;
-  string status = 10;
-  string created_at = 11;
-  string updated_at = 12;
+  string source_code = 3;
+  string source_hash = 4;
+  repeated int32 periods = 5;
+  int32 lookback_bars = 6;
+  repeated string depends = 7;
+  string status = 8;
+  string created_at = 9;
+  string updated_at = 10;
 }
 
 message FactorBinding {
@@ -33,22 +31,6 @@ message FactorBinding {
   string status = 9;
   string created_at = 10;
   string updated_at = 11;
-}
-
-message FactorRun {
-  string run_id = 1;
-  string trigger_type = 2;
-  string space_id = 3;
-  string source_dataset = 4;
-  string target_dataset = 5;
-  string subject_id = 6;
-  string freq = 7;
-  string bar_time = 8;
-  int32 factor_count = 9;
-  string status = 10;
-  string error = 11;
-  int64 elapsed_ms = 12;
-  string created_at = 13;
 }
 
 message CreateFactorReq { FactorDef factor = 1; }
@@ -73,9 +55,8 @@ message GetFactorRsp {
 }
 
 message ListFactorsReq {
-  string kind = 1;
-  string status = 2;
-  common.Page page = 3;
+  string status = 1;
+  common.Page page = 2;
 }
 message ListFactorsRsp {
   common.RetInfo ret_info = 1;
@@ -125,46 +106,13 @@ message RecalcFactorReq {
 }
 message RecalcFactorRsp {
   common.RetInfo ret_info = 1;
-  string recalc_id = 2;
-}
-
-message GetRecalcProgressReq { string recalc_id = 1; }
-message GetRecalcProgressRsp {
-  common.RetInfo ret_info = 1;
-  string recalc_id = 2;
-  string status = 3;
-  int32 total = 4;
-  int32 finished = 5;
-}
-
-message ListFactorRunsReq {
-  string space_id = 1;
-  string source_dataset = 2;
-  string subject_id = 3;
-  string freq = 4;
-  string status = 5;
-  common.Page page = 6;
-}
-message ListFactorRunsRsp {
-  common.RetInfo ret_info = 1;
-  repeated FactorRun runs = 2;
-  common.PageResult page_result = 3;
-}
-
-message WorkerStatus {
-  string worker_id = 1;
-  string state = 2;
-  string current_task_id = 3;
-  int64 restart_count = 4;
 }
 
 message GetEngineStatusReq {}
 message GetEngineStatusRsp {
   common.RetInfo ret_info = 1;
   int32 queue_depth = 2;
-  int64 supersede_count = 3;
-  int64 writeback_failures = 4;
-  repeated WorkerStatus workers = 5;
+  int64 queue_overflow_count = 3;
 }
 
 service FactorMgr {
@@ -177,7 +125,5 @@ service FactorMgr {
   rpc ListBindings(ListBindingsReq) returns (ListBindingsRsp);
   rpc DeleteBinding(DeleteBindingReq) returns (DeleteBindingRsp);
   rpc RecalcFactor(RecalcFactorReq) returns (RecalcFactorRsp);
-  rpc GetRecalcProgress(GetRecalcProgressReq) returns (GetRecalcProgressRsp);
-  rpc ListFactorRuns(ListFactorRunsReq) returns (ListFactorRunsRsp);
   rpc GetEngineStatus(GetEngineStatusReq) returns (GetEngineStatusRsp);
 }

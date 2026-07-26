@@ -1,26 +1,24 @@
 # Factor Run-Once Verification
 
-## Prerequisites
-
-- Storage is running and exposes Metadata tRPC on `127.0.0.1:20100`.
-- Storage is running and exposes Access tRPC on `127.0.0.1:20102`.
-- The source K-line Dataset exists and has rows for the requested symbol/frequency/bar time.
-- The registry sync step in `run-once` can create the result Dataset and factor result columns before writeback.
-- Python can import `pandas` and `numpy` for `pyworker/worker.py`.
-
-## Commands
-
-Run from the factor module directory:
+Storage Gateway、source Dataset 与 Factor target Dataset 需要已经可用。Python 环境需安装
+`pyworker/requirements.txt`。
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/factor
+cd modules/factor
 go run ./cmd/cli init --db ./data/factor/factor.db
-go run ./cmd/cli import --db ./data/factor/factor.db --factors-dir ./factors --default-params 20,96
-go run ./cmd/cli run-once --space crypto --dataset binance_spot_kline --subject BTC-USDT --freq 1m --bar-time 2026-07-06T09:15:00Z
+go run ./cmd/cli import \
+  --db ./data/factor/factor.db \
+  --factors-dir ./factors \
+  --default-periods 20,96
+go run ./cmd/cli run-once \
+  --space crypto \
+  --dataset binance_spot_kline \
+  --subject BTC-USDT \
+  --freq 1m \
+  --start-time 2026-07-26T00:00:00Z \
+  --end-time 2026-07-27T00:00:00Z
 ```
 
-## Acceptance
-
-- Local logs contain one `factor_run_done` line with `status=succeeded`.
-- Storage `binance_spot_factor` has `Bias_20` and `Bias_96` values for the requested tail bars.
-- After View columns are added, Storage View can join K-line rows with the factor result Dataset.
+命令按当前 subject 匹配 enabled binding，并按 binding 的目标 Dataset 分组，同步完成整个
+`[start_time,end_time)` 范围；超过 2000 个目标 bar 自动分块。
+terminal JSON 的 `elapsed_ms` 是完整读取、计算和写回耗时。

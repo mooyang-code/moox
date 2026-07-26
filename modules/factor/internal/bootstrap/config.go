@@ -21,9 +21,6 @@ type Config struct {
 	EventBus  EventBusConfig  `yaml:"eventbus"`
 	Engine    EngineConfig    `yaml:"engine"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
-	Instance  InstanceConfig  `yaml:"instance"`
-	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
-	Health    HealthConfig    `yaml:"health"`
 }
 
 // DatabaseConfig describes local SQLite settings.
@@ -53,42 +50,17 @@ type EventBusConfig struct {
 
 // EngineConfig describes the local Python factor engine.
 type EngineConfig struct {
-	PythonBin           string `yaml:"python_bin"`
-	FactorsDir          string `yaml:"factors_dir"`
-	SectionsDir         string `yaml:"sections_dir"`
-	Workers             int    `yaml:"workers"`
-	TaskTimeoutMS       int    `yaml:"task_timeout_ms"`
-	Encoding            string `yaml:"encoding"`
-	ArrowRowThreshold   int    `yaml:"arrow_row_threshold"`
-	ShmDir              string `yaml:"shm_dir"`
-	MaxBatchParallelism int    `yaml:"max_batch_parallelism"`
-	BatchMinEstimatedMS int64  `yaml:"batch_min_estimated_ms"`
-	SnapshotTTLSeconds  int    `yaml:"snapshot_ttl_seconds"`
+	PythonBin     string `yaml:"python_bin"`
+	FactorsDir    string `yaml:"factors_dir"`
+	Workers       int    `yaml:"workers"`
+	TaskTimeoutMS int    `yaml:"task_timeout_ms"`
 }
 
 // SchedulerConfig describes runtime scheduling behavior.
 type SchedulerConfig struct {
-	EventBatchWindowMS   int `yaml:"event_batch_window_ms"`
-	MaxRetry             int `yaml:"max_retry"`
-	ReconcileIntervalMin int `yaml:"reconcile_interval_min"`
-}
-
-// InstanceConfig identifies a factor process in multi-instance deployments.
-type InstanceConfig struct {
-	InstanceID          string `yaml:"instance_id"`
-	Role                string `yaml:"role"`
-	PrimaryTarget       string `yaml:"primary_target"`
-	HeartbeatIntervalMS int    `yaml:"heartbeat_interval_ms"`
-}
-
-// SysDeployConfig describes optional dependency discovery through admin.
-type SysDeployConfig struct {
-	AdminGatewayURL string `yaml:"admin_gateway_url"`
-}
-
-// HealthConfig controls the lightweight HTTP health endpoint.
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
+	EventBatchWindowMS int `yaml:"event_batch_window_ms"`
+	QueueCapacity      int `yaml:"queue_capacity"`
+	MaxRetry           int `yaml:"max_retry"`
 }
 
 // Load reads YAML config from path and applies factor-specific env overrides.
@@ -131,32 +103,11 @@ func Default() *Config {
 			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
-			PythonBin:           "python3",
-			FactorsDir:          "./factors",
-			SectionsDir:         "./sections",
-			Workers:             workers,
-			TaskTimeoutMS:       30000,
-			Encoding:            "auto",
-			ArrowRowThreshold:   50000,
-			MaxBatchParallelism: workers,
-			BatchMinEstimatedMS: 50,
-			SnapshotTTLSeconds:  300,
+			PythonBin: "python3", FactorsDir: "./factors",
+			Workers: workers, TaskTimeoutMS: 30000,
 		},
 		Scheduler: SchedulerConfig{
-			EventBatchWindowMS:   2000,
-			MaxRetry:             3,
-			ReconcileIntervalMin: 10,
-		},
-		Instance: InstanceConfig{
-			InstanceID:          "factor-01",
-			Role:                "primary",
-			HeartbeatIntervalMS: 5000,
-		},
-		SysDeploy: SysDeployConfig{
-			AdminGatewayURL: "http://127.0.0.1:11002",
-		},
-		Health: HealthConfig{
-			Addr: ":11414",
+			EventBatchWindowMS: 2000, QueueCapacity: 2048, MaxRetry: 1,
 		},
 	}
 }
@@ -195,53 +146,17 @@ func (c *Config) applyDefaults() {
 	if c.Engine.FactorsDir == "" {
 		c.Engine.FactorsDir = "./factors"
 	}
-	if c.Engine.SectionsDir == "" {
-		c.Engine.SectionsDir = "./sections"
-	}
 	if c.Engine.Workers <= 0 {
 		c.Engine.Workers = defaultWorkerCount()
 	}
 	if c.Engine.TaskTimeoutMS == 0 {
 		c.Engine.TaskTimeoutMS = 30000
 	}
-	if c.Engine.Encoding == "" {
-		c.Engine.Encoding = "auto"
-	}
-	if c.Engine.ArrowRowThreshold == 0 {
-		c.Engine.ArrowRowThreshold = 50000
-	}
-	if c.Engine.MaxBatchParallelism <= 0 {
-		c.Engine.MaxBatchParallelism = c.Engine.Workers
-	}
-	if c.Engine.BatchMinEstimatedMS <= 0 {
-		c.Engine.BatchMinEstimatedMS = 50
-	}
-	if c.Engine.SnapshotTTLSeconds <= 0 {
-		c.Engine.SnapshotTTLSeconds = 300
-	}
 	if c.Scheduler.EventBatchWindowMS == 0 {
 		c.Scheduler.EventBatchWindowMS = 2000
 	}
-	if c.Scheduler.MaxRetry == 0 {
-		c.Scheduler.MaxRetry = 3
-	}
-	if c.Scheduler.ReconcileIntervalMin == 0 {
-		c.Scheduler.ReconcileIntervalMin = 10
-	}
-	if c.Instance.InstanceID == "" {
-		c.Instance.InstanceID = "factor-01"
-	}
-	if c.Instance.Role == "" {
-		c.Instance.Role = "primary"
-	}
-	if c.Instance.HeartbeatIntervalMS == 0 {
-		c.Instance.HeartbeatIntervalMS = 5000
-	}
-	if c.SysDeploy.AdminGatewayURL == "" {
-		c.SysDeploy.AdminGatewayURL = "http://127.0.0.1:11002"
-	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = ":11414"
+	if c.Scheduler.QueueCapacity <= 0 {
+		c.Scheduler.QueueCapacity = 2048
 	}
 }
 
@@ -270,19 +185,10 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_FACTORS_DIR"); v != "" {
 		c.Engine.FactorsDir = v
 	}
-	if v := os.Getenv("MOOX_FACTOR_ENGINE_SECTIONS_DIR"); v != "" {
-		c.Engine.SectionsDir = v
-	}
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_WORKERS"); v != "" {
 		if workers, err := strconv.Atoi(v); err == nil && workers > 0 {
 			c.Engine.Workers = workers
 		}
-	}
-	if v := os.Getenv("MOOX_FACTOR_ADMIN_GATEWAY_URL"); v != "" {
-		c.SysDeploy.AdminGatewayURL = v
-	}
-	if v := os.Getenv("MOOX_FACTOR_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
 	}
 }
 
@@ -298,8 +204,8 @@ func splitEventBusURLs(value string) []string {
 }
 
 func (c *Config) validateStorageTargets() error {
-	if c.Engine.MaxBatchParallelism > c.Engine.Workers {
-		return fmt.Errorf("engine.max_batch_parallelism=%d exceeds workers=%d", c.Engine.MaxBatchParallelism, c.Engine.Workers)
+	if c.Scheduler.MaxRetry < 0 {
+		return fmt.Errorf("scheduler.max_retry must be non-negative")
 	}
 	if !isTRPCTarget(c.Storage.GatewayTarget) {
 		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)

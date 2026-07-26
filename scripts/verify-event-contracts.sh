@@ -59,6 +59,10 @@ reject 'NATS\.Stream|NATS\.Consumer|NATS\.URL\b|yaml:"stream"|yaml:"consumer"|ya
 reject '^[[:space:]]+(stream|consumer|url):' \
   "Factor YAML still exposes duplicate or fixed live EventBus settings" \
   --glob '*.yaml' modules/factor/config
+reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|cross_section|arrow_mmap|GetRecalcProgress|ListFactorRuns' \
+  "removed Factor capability remains" \
+  --glob '*.go' --glob '*.proto' --glob '*.py' --glob '!**/*_test.go' \
+  modules/factor/internal modules/factor/proto modules/factor/cmd modules/factor/pyworker
 reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
   "CloudNode still exposes duplicate or embedded JetStream settings" \
   --glob '*.go' modules/cloudnode/internal
@@ -86,6 +90,7 @@ done
 (cd modules/archive && go test ./internal/bootstrap -run '^TestAppRunConsumesStorageEventAndBecomesReadyE2E$' -count=1)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/trigger ./internal/trigger/eventconsumer -run '^(TestConsumerReopensFailedSessionAndRestoresReadiness|TestConsumerReceivesRealEventBusDeliveryE2E)$' -count=1)
+(cd modules/factor && CGO_ENABLED=1 go test ./test -run '^TestRealtimeEventToPythonWritebackE2E$' -count=1)
 (cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox ./test)
 (cd modules/trade && CGO_ENABLED=1 go test ./internal/bootstrap ./internal/eventconsumer ./internal/application/rebalance)

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"time"
 )
 
 // EncodeJSONRequestMeta converts a task and frame into the pyworker JSON v1 meta.
@@ -12,59 +13,43 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 	if frame == nil {
 		return nil, fmt.Errorf("data frame is required")
 	}
-	columns := map[string][]any{}
-	indexMS := []int64{}
-	// Arrow/mmap workers read the immutable snapshot directly. Do not build a
-	// second full JSON copy for every factor batch on that path.
-	if task.SnapshotPath == "" {
-		columns = make(map[string][]any, len(frame.Columns))
-		for colIdx, name := range frame.Columns {
-			values := make([]any, 0, len(frame.Rows))
-			for _, row := range frame.Rows {
-				if colIdx < len(row) {
-					values = append(values, row[colIdx])
-				} else {
-					values = append(values, nil)
-				}
+	columns := make(map[string][]any, len(frame.Columns))
+	for colIdx, name := range frame.Columns {
+		values := make([]any, 0, len(frame.Rows))
+		for _, row := range frame.Rows {
+			if colIdx < len(row) {
+				values = append(values, row[colIdx])
+			} else {
+				values = append(values, nil)
 			}
-			columns[name] = values
 		}
-		indexMS = make([]int64, 0, len(frame.DataTimes))
-		for _, t := range frame.DataTimes {
-			indexMS = append(indexMS, t.UTC().UnixMilli())
-		}
+		columns[name] = values
+	}
+	indexMS := make([]int64, 0, len(frame.DataTimes))
+	for _, t := range frame.DataTimes {
+		indexMS = append(indexMS, t.UTC().UnixMilli())
 	}
 	factors := make([]map[string]any, 0, len(task.Factors))
 	for _, factor := range task.Factors {
 		factors = append(factors, map[string]any{
-			"factor_id":      factor.FactorID,
-			"name":           factor.Name,
-			"source_hash":    factor.SourceHash,
-			"source_path":    factor.SourcePath,
-			"params":         factor.Params,
-			"writeback_bars": factor.WritebackBars,
+			"factor_id":   factor.FactorID,
+			"name":        factor.Name,
+			"source_hash": factor.SourceHash,
+			"source_path": factor.SourcePath,
+			"periods":     factor.Periods,
 		})
 	}
-	encoding := "json"
-	if task.SnapshotPath != "" {
-		encoding = "arrow_mmap"
-	}
 	return map[string]any{
-		"id":             task.TaskID,
-		"factor_version": task.FactorVersion,
-		"target_run_id":  task.TargetRunID,
-		"snapshot_id":    task.SnapshotID,
-		"snapshot_hash":  task.SnapshotHash,
-		"snapshot_path":  task.SnapshotPath,
-		"kind":           task.Kind,
-		"encoding":       encoding,
-		"space_id":       task.SpaceID,
-		"source_dataset": task.SourceDataset,
-		"target_dataset": task.TargetDataset,
-		"subject_id":     task.SubjectID,
-		"freq":           task.Freq,
-		"bar_time":       task.BarTime.UTC().Format("2006-01-02T15:04:05Z"),
-		"factors":        factors,
+		"id":                task.TaskID,
+		"encoding":          "json",
+		"space_id":          task.SpaceID,
+		"source_dataset":    task.SourceDataset,
+		"target_dataset":    task.TargetDataset,
+		"subject_id":        task.SubjectID,
+		"freq":              task.Freq,
+		"target_start_time": task.StartTime.UTC().Format(time.RFC3339Nano),
+		"target_end_time":   task.EndTime.UTC().Format(time.RFC3339Nano),
+		"factors":           factors,
 		"df": map[string]any{
 			"columns":  columns,
 			"index_ms": indexMS,
@@ -77,50 +62,13 @@ func DecodeJSONResponse(meta map[string]any) (*FactorResult, error) {
 	if !ok || len(resultsRaw) == 0 {
 		return nil, fmt.Errorf("factor response contains no results")
 	}
-	out := &FactorResult{
-		Columns:     make(map[string]FactorColumnResult, len(resultsRaw)),
-		PerFactorMS: decodeInt64Map(meta["per_factor_ms"]),
-		ElapsedMS:   numberToInt64(meta["elapsed_ms"]),
-	}
+	out := &FactorResult{Columns: make(map[string][]any, len(resultsRaw))}
 	for name, raw := range resultsRaw {
-		resultMap, ok := raw.(map[string]any)
+		values, ok := raw.([]any)
 		if !ok {
-			return nil, fmt.Errorf("invalid result for column %s", name)
+			return nil, fmt.Errorf("factor column %s must be an array", name)
 		}
-		values, ok := resultMap["values"].([]any)
-		if !ok {
-			return nil, fmt.Errorf("factor column %s values must be an array", name)
-		}
-		tail := int(numberToInt64(resultMap["tail"]))
-		if tail <= 0 || len(values) != tail {
-			return nil, fmt.Errorf("factor column %s tail=%d values=%d mismatch", name, tail, len(values))
-		}
-		out.Columns[name] = FactorColumnResult{
-			Tail:   tail,
-			Values: values,
-		}
+		out.Columns[name] = values
 	}
 	return out, nil
-}
-
-func decodeInt64Map(raw any) map[string]int64 {
-	out := map[string]int64{}
-	values, _ := raw.(map[string]any)
-	for key, value := range values {
-		out[key] = numberToInt64(value)
-	}
-	return out
-}
-
-func numberToInt64(raw any) int64 {
-	switch v := raw.(type) {
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case float64:
-		return int64(v)
-	default:
-		return 0
-	}
 }

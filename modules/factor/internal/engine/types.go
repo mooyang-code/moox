@@ -1,15 +1,6 @@
 package engine
 
-import (
-	"context"
-	"time"
-)
-
-// Executor executes one factor task against an input frame.
-type Executor interface {
-	Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error)
-	Close() error
-}
+import "time"
 
 // DataFrame is a small ordered in-memory table.
 type DataFrame struct {
@@ -21,43 +12,28 @@ type DataFrame struct {
 // FactorTask is the self-contained scheduler-to-engine task shape.
 type FactorTask struct {
 	TaskID        string
-	FactorVersion string
-	TargetRunID   string
-	SnapshotID    string
-	SnapshotHash  string
-	SnapshotPath  string
-	Kind          string
 	SpaceID       string
 	SourceDataset string
 	TargetDataset string
 	SubjectID     string
 	Freq          string
-	BarTime       time.Time
+	StartTime     time.Time
+	EndTime       time.Time
 	LookbackBars  int
 	Factors       []FactorSpec
 }
 
 // FactorSpec describes one Python factor module invocation.
 type FactorSpec struct {
-	FactorID      string
-	Name          string
-	SourceHash    string
-	SourcePath    string
-	EstimatedMS   int64
-	Params        []int
-	WritebackBars int
-	ExtraColumns  []string
+	FactorID   string
+	Name       string
+	SourceHash string
+	SourcePath string
+	Periods    []int
+	Depends    []string
 }
 
-// FactorResult contains all returned result columns for a task.
+// FactorResult contains values aligned with the task's target rows.
 type FactorResult struct {
-	Columns     map[string]FactorColumnResult
-	PerFactorMS map[string]int64
-	ElapsedMS   int64
-}
-
-// FactorColumnResult contains one result column's tail values.
-type FactorColumnResult struct {
-	Tail   int
-	Values []any
+	Columns map[string][]any
 }

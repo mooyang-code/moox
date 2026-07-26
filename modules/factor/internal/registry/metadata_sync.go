@@ -92,13 +92,9 @@ func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, so
 		return err
 	}
 	for _, factor := range factors {
-		params, err := factorParams(factor.ParamsJSON)
-		if err != nil {
-			return fmt.Errorf("parse params for factor %s: %w", factor.FactorID, err)
-		}
-		for _, param := range params {
-			columnName := fmt.Sprintf("%s_%d", factor.Name, param)
-			if err := s.upsertColumn(ctx, spaceID, targetDataset, factor, param, columnName); err != nil {
+		for _, period := range factor.Periods {
+			columnName := fmt.Sprintf("%s_%d", factor.Name, period)
+			if err := s.upsertColumn(ctx, spaceID, targetDataset, factor, period, columnName); err != nil {
 				return err
 			}
 		}
@@ -216,6 +212,10 @@ func (s *MetadataSync) bindDatasetSubject(ctx context.Context, binder datasetSub
 }
 
 func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor domain.FactorDef) error {
+	periods, err := json.Marshal(factor.Periods)
+	if err != nil {
+		return fmt.Errorf("marshal periods for factor %s: %w", factor.FactorID, err)
+	}
 	req := &storagepb.CreateFactorReq{
 		AuthInfo: s.auth,
 		Factor: &storagepb.Factor{
@@ -223,7 +223,7 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 			FactorId:   factor.FactorID,
 			Name:       factor.Name,
 			Algorithm:  factor.Name,
-			ParamsJson: factor.ParamsJSON,
+			ParamsJson: string(periods),
 			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Status:     storageFactorStatus(factor.Status),
 		},
@@ -441,17 +441,6 @@ func activationNotReadyError(spaceID, datasetID string, checks []*storagepb.Data
 		failed = append(failed, "metadata activation checks are not ready")
 	}
 	return fmt.Errorf("dataset %s/%s activation readiness failed: %s", spaceID, datasetID, strings.Join(failed, "; "))
-}
-
-func factorParams(raw string) ([]int, error) {
-	var params []int
-	if strings.TrimSpace(raw) == "" {
-		raw = "[]"
-	}
-	if err := json.Unmarshal([]byte(raw), &params); err != nil {
-		return nil, err
-	}
-	return params, nil
 }
 
 // DataSourceIDFromDataset infers the Storage data_source_id from a dataset id.

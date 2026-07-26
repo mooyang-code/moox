@@ -2,6 +2,10 @@
   <div class="moox-page factor-results-workbench">
     <div class="moox-inner">
       <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
+      <div class="engine-status">
+        <span>队列深度 {{ engineStatus.queue_depth }}</span>
+        <span>队列满丢失 {{ engineStatus.queue_overflow_count }}</span>
+      </div>
       <section class="factor-results-content">
         <ViewDefinitions
           v-if="activeTab === 'definitions'"
@@ -31,8 +35,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
-import { listFactorBindings } from "@/api/factor";
-import type { FactorBinding } from "@/api/factor/types";
+import { getEngineStatus, listFactorBindings } from "@/api/factor";
+import type { EngineStatus, FactorBinding } from "@/api/factor/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { factorBindingTargetDatasetIds } from "@/views/data/shared/factor-result-dataset";
 import ViewDefinitions from "@/views/data/views/index.vue";
@@ -45,6 +49,7 @@ const router = useRouter();
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const bindings = ref<FactorBinding[]>([]);
+const engineStatus = ref<EngineStatus>({ ret_info: { code: 0, msg: "" }, queue_depth: 0, queue_overflow_count: 0 });
 const activeTab = ref(tabFromRoute());
 type FactorResultTab = "definitions" | "browse";
 
@@ -74,6 +79,10 @@ async function loadBindings() {
   bindings.value = await listAllBindings(selectedSpaceId.value);
 }
 
+async function loadEngineStatus() {
+  engineStatus.value = await getEngineStatus();
+}
+
 async function listAllBindings(spaceId: string) {
   const items: FactorBinding[] = [];
   const size = 500;
@@ -94,7 +103,10 @@ watch(selectedSpaceId, loadBindings);
 watch(normalizedQuery, () => {
   activeTab.value = tabFromRoute();
 });
-onMounted(loadBindings);
+onMounted(() => {
+  loadBindings();
+  loadEngineStatus();
+});
 </script>
 
 <style scoped>
@@ -117,6 +129,13 @@ onMounted(loadBindings);
   flex: 1;
   margin-top: var(--moox-space-3);
   overflow: hidden;
+}
+.engine-status {
+  display: flex;
+  gap: var(--moox-space-5);
+  margin-top: var(--moox-space-3);
+  color: var(--color-text-2);
+  font-size: 13px;
 }
 .factor-results-content :deep(.moox-page) {
   height: 100%;

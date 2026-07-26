@@ -2,7 +2,6 @@ import argparse
 import hashlib
 import importlib.util
 import sys
-import time
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
@@ -32,26 +31,17 @@ pd.options.mode.copy_on_write = True
 
 
 class FactorWorker:
-    def __init__(self, factors_dir, sections_dir, encoding="auto"):
+    def __init__(self, factors_dir, encoding="json"):
         self.factors_dir = Path(factors_dir)
-        self.sections_dir = Path(sections_dir)
         self.encoding = encoding
         self.factors = {}
-        self.sections = {}
         self.load_errors = {}
 
     def load_modules(self):
         self.load_errors = {}
         self.factors = self._load_modules_from(self.factors_dir)
-        self.sections = self._load_modules_from(self.sections_dir)
 
     def ready_meta(self):
-        encodings = ["json"]
-        try:
-            import pyarrow  # noqa: F401
-            encodings.append("arrow_mmap")
-        except ImportError:
-            pass
         return {
             "status": "ready",
             "protocol_version": "moox.py/v1",
@@ -59,51 +49,43 @@ class FactorWorker:
             "python_version": sys.version.split()[0],
             "runtime_env_hash": "",
             "encoding": self.encoding,
-            "encodings": encodings,
+            "encodings": ["json"],
             "factors": sorted(self.factors.keys()),
-            "sections": sorted(self.sections.keys()),
             "load_errors": self.load_errors,
         }
 
     def execute_request(self, meta):
-        started = time.perf_counter()
         df = self.decode_frame(meta)
         results = {}
-        result_tails = {}
-        per_factor_ms = {}
-        max_tail = 1
-        modules = self.sections if meta.get("kind") == "cross_section" else self.factors
+        target_start = pd.Timestamp(meta["target_start_time"])
+        target_end = pd.Timestamp(meta["target_end_time"])
+        target_mask = (
+            (df["candle_begin_time"] >= target_start)
+            & (df["candle_begin_time"] < target_end)
+        )
 
         stdout, stderr = StringIO(), StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             for factor in meta.get("factors", []):
                 name = factor["name"]
-                params = factor.get("params", [])
-                tail = int(factor.get("writeback_bars") or meta.get("tail") or 1)
-                max_tail = max(max_tail, tail)
-                mod = modules[name]
-                factor_started = time.perf_counter()
+                periods = factor.get("periods", [])
+                mod = self.factors[name]
                 if hasattr(mod, "signal_multi_params"):
-                    out = mod.signal_multi_params(df.copy(deep=False), params)
+                    out = mod.signal_multi_params(df.copy(deep=False), periods)
                     for param, series in out.items():
-                        results[f"{name}_{param}"] = _tail_values(series, tail)
-                        result_tails[f"{name}_{param}"] = tail
+                        results[f"{name}_{param}"] = series.loc[target_mask].tolist()
                 else:
-                    for param in params:
+                    for param in periods:
                         column = f"{name}_{param}"
                         out_df = mod.signal(df.copy(deep=False), param, column)
-                        results[column] = _tail_values(out_df[column], tail)
-                        result_tails[column] = tail
-                per_factor_ms[name] = int((time.perf_counter() - factor_started) * 1000)
+                        results[column] = out_df.loc[target_mask, column].tolist()
 
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return encode_json_results(meta.get("id", ""), results, max_tail, per_factor_ms, elapsed_ms, result_tails, {"stdout": stdout.getvalue(), "stderr": stderr.getvalue()})
+        return encode_json_results(
+            meta.get("id", ""), results,
+            {"stdout": stdout.getvalue(), "stderr": stderr.getvalue()},
+        )
 
     def decode_frame(self, meta):
-        if meta.get("encoding") == "arrow_mmap" and meta.get("snapshot_path"):
-            from moox_pyruntime.arrow import open_mmap
-            with open_mmap(meta["snapshot_path"]) as reader:
-                return reader.read_all().to_pandas()
         return decode_json_df(meta)
 
     def load_one(self, meta):
@@ -120,10 +102,7 @@ class FactorWorker:
             raise ImportError(f"cannot load factor module {name}")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        if name in self.sections:
-            self.sections[name] = module
-        else:
-            self.factors[name] = module
+        self.factors[name] = module
 
     def _load_modules_from(self, directory):
         modules = {}
@@ -147,20 +126,13 @@ class FactorWorker:
         return modules
 
 
-def _tail_values(series, tail):
-    if hasattr(series, "tail"):
-        return series.tail(tail)
-    return list(series)[-tail:]
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--factors-dir", required=True)
-    parser.add_argument("--sections-dir", required=True)
-    parser.add_argument("--encoding", default="auto")
+    parser.add_argument("--encoding", default="json")
     args = parser.parse_args()
 
-    worker = FactorWorker(args.factors_dir, args.sections_dir, args.encoding)
+    worker = FactorWorker(args.factors_dir, args.encoding)
     try:
         worker.load_modules()
         write_frame(sys.stdout.buffer, TYPE_HELLO, worker.ready_meta())

@@ -9,50 +9,44 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// WriteFactorPatch writes returned factor tail values as Storage column patches.
-func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, frame *engine.DataFrame, result *engine.FactorResult) error {
-	if task == nil || frame == nil || result == nil {
-		return fmt.Errorf("task, frame and result are required")
+func (c *Client) WriteFactorPatch(
+	ctx context.Context,
+	task *engine.FactorTask,
+	targetTimes []time.Time,
+	result *engine.FactorResult,
+) error {
+	if task == nil || result == nil {
+		return fmt.Errorf("task and result are required")
 	}
-	maxTail := 0
-	for _, col := range result.Columns {
-		if col.Tail > maxTail {
-			maxTail = col.Tail
-		}
-	}
-	if maxTail <= 0 || len(frame.DataTimes) == 0 {
-		return nil
-	}
-	start := len(frame.DataTimes) - maxTail
-	if start < 0 {
-		start = 0
-	}
-	rows := make([]*storagepb.RowFieldUpsert, 0, len(frame.DataTimes)-start)
-	computedAt := SnapshotComputedAt()
-	for rowIdx := start; rowIdx < len(frame.DataTimes); rowIdx++ {
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(targetTimes))
+	computedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	for i, targetTime := range targetTimes {
 		row := &storagepb.RowFieldUpsert{
 			Key: &storagepb.RowKey{
 				SpaceId: task.SpaceID, DatasetId: task.TargetDataset,
-				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: task.SubjectID, Freq: task.Freq, DataTime: frame.DataTimes[rowIdx].UTC().Format(time.RFC3339)}},
+				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+					SubjectId: task.SubjectID, Freq: task.Freq,
+					DataTime: targetTime.UTC().Format(time.RFC3339Nano),
+				}},
 			},
 			Attributes: map[string]*storagepb.TypedValue{
 				"factor.parent_task_id": stringValue(task.TaskID),
-				"factor.snapshot_hash":  stringValue(task.SnapshotHash),
 				"factor.computed_at":    stringValue(computedAt),
 			},
 		}
-		for columnName, col := range result.Columns {
-			value, ok := valueForFrameRow(rowIdx, len(frame.DataTimes), col)
-			if !ok || value == nil {
+		for name, values := range result.Columns {
+			if i >= len(values) || values[i] == nil {
 				continue
 			}
-			floatValue, ok := asFloat64(value)
+			value, ok := asFloat64(values[i])
 			if !ok {
-				return fmt.Errorf("factor column %s returned non-numeric value %T", columnName, value)
+				return fmt.Errorf("factor column %s returned non-numeric value %T", name, values[i])
 			}
-			row.Fields = append(row.Fields, doubleField(columnName, floatValue))
+			row.Fields = append(row.Fields, doubleField(name, value))
 		}
-		rows = append(rows, row)
+		if len(row.Fields) > 0 {
+			rows = append(rows, row)
+		}
 	}
 	if len(rows) == 0 {
 		return nil
@@ -68,21 +62,6 @@ func stringValue(value string) *storagepb.TypedValue {
 	return &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}
 }
 
-func valueForFrameRow(rowIdx int, frameRows int, col engine.FactorColumnResult) (any, bool) {
-	colStart := frameRows - col.Tail
-	if colStart < 0 {
-		colStart = 0
-	}
-	if rowIdx < colStart {
-		return nil, false
-	}
-	valueIdx := rowIdx - colStart
-	if valueIdx < 0 || valueIdx >= len(col.Values) {
-		return nil, false
-	}
-	return col.Values[valueIdx], true
-}
-
 func asFloat64(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
@@ -91,9 +70,23 @@ func asFloat64(value any) (float64, bool) {
 		return float64(v), true
 	case int:
 		return float64(v), true
-	case int64:
+	case int8:
+		return float64(v), true
+	case int16:
 		return float64(v), true
 	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
 		return float64(v), true
 	default:
 		return 0, false

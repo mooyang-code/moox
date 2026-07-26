@@ -75,7 +75,67 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("factor schema sql is empty")
 	}
-	return s.db.Exec(sql).Error
+	tables, err := s.factorSchemaTables()
+	if err != nil {
+		return err
+	}
+	if len(tables) > 0 {
+		if err := s.validateSchemaTables(tables); err != nil {
+			return err
+		}
+	}
+	if err := s.db.Exec(sql).Error; err != nil {
+		return err
+	}
+	return s.validateSchema()
+}
+
+func (s *Store) validateSchema() error {
+	tables, err := s.factorSchemaTables()
+	if err != nil {
+		return err
+	}
+	return s.validateSchemaTables(tables)
+}
+
+func (s *Store) factorSchemaTables() ([]string, error) {
+	var tables []string
+	if err := s.db.Raw(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name",
+	).Scan(&tables).Error; err != nil {
+		return nil, fmt.Errorf("inspect factor schema tables: %w", err)
+	}
+	return tables, nil
+}
+
+func (s *Store) validateSchemaTables(tables []string) error {
+	expected := map[string][]string{
+		"t_factor_defs": {
+			"c_factor_id", "c_name", "c_source_code", "c_source_hash", "c_source_path",
+			"c_periods_json", "c_lookback_bars", "c_depends_json", "c_status", "c_ctime", "c_mtime",
+		},
+		"t_factor_bindings": {
+			"c_binding_id", "c_factor_id", "c_space_id", "c_source_dataset", "c_freq",
+			"c_subject_mode", "c_subjects_json", "c_target_dataset", "c_status", "c_ctime", "c_mtime",
+		},
+	}
+	if len(tables) != len(expected) {
+		return fmt.Errorf("factor database uses an obsolete schema; create a fresh database")
+	}
+	for _, table := range tables {
+		want, ok := expected[table]
+		if !ok {
+			return fmt.Errorf("factor database uses an obsolete schema; create a fresh database")
+		}
+		var columns []string
+		if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("inspect factor schema table %s: %w", table, err)
+		}
+		if strings.Join(columns, "\x00") != strings.Join(want, "\x00") {
+			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", table)
+		}
+	}
+	return nil
 }
 
 // Ping verifies that the database is available.
