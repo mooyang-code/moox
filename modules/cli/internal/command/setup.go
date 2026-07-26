@@ -34,6 +34,7 @@ type setupDeps struct {
 	verifyStorage      func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
 	e2eStorage         func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
 	browserE2EStorage  func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
+	e2eEventBus        func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
 }
 
 func init() {
@@ -60,6 +61,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupVerifyStorageCommand(deps),
 		newSetupE2EStorageCommand(deps),
 		newSetupBrowserE2EStorageCommand(deps),
+		newSetupE2EEventBusCommand(deps),
 	)
 	return cmd
 }
@@ -363,6 +365,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.browserE2EStorage == nil {
 		deps.browserE2EStorage = defaults.browserE2EStorage
 	}
+	if deps.e2eEventBus == nil {
+		deps.e2eEventBus = defaults.e2eEventBus
+	}
 	return deps
 }
 
@@ -387,6 +392,7 @@ func defaultSetupDeps() setupDeps {
 		verifyStorage:      defaultSetupVerifyStorage,
 		e2eStorage:         defaultSetupE2EStorage,
 		browserE2EStorage:  defaultSetupBrowserE2EStorage,
+		e2eEventBus:        defaultSetupE2EEventBus,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))

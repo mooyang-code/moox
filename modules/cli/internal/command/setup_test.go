@@ -86,8 +86,29 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage"} {
+	for _, name := range []string{"hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus"} {
 		require.Contains(t, output.String(), name)
+	}
+}
+
+func TestSetupE2EEventBusWritesOnlyBooleanProof(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		e2eEventBus: func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error) {
+			return eventBusE2EResult{
+				PublicTLS: true, WorkerBindFetchAck: true, WorkerCreateDenied: true, WorkerPublishDenied: true,
+			}, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"e2e-eventbus", "--file", "custom.toml"})
+	require.NoError(t, cmd.Execute())
+	require.JSONEq(t, `{"public_tls":true,"worker_bind_fetch_ack":true,"worker_create_denied":true,"worker_publish_denied":true}`, output.String())
+	for _, secret := range []string{"admin-test-password", "control-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
+		require.NotContains(t, output.String(), secret)
 	}
 }
 

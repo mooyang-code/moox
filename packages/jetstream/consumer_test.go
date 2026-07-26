@@ -33,6 +33,25 @@ func TestNewConsumerCreatesWhenMissing(t *testing.T) {
 	}
 }
 
+func TestDeleteConsumerRemovesDurable(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	consumer, err := client.NewConsumer(context.Background(), testConsumerConfig("delete-me"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = consumer.Close()
+	if err := client.DeleteConsumer(context.Background(), "TEST", "delete-me"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.js.ConsumerInfo("TEST", "delete-me"); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("ConsumerInfo() error = %v, want consumer not found", err)
+	}
+}
+
 func TestNewConsumerBindsMatchingConsumer(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -185,6 +186,19 @@ func (c *Client) Close() error {
 	c.mu.Unlock()
 	if nc != nil {
 		nc.Close()
+	}
+	return nil
+}
+
+func (c *Client) DeleteConsumer(ctx context.Context, stream, durable string) error {
+	if err := c.alive(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(stream) == "" || strings.TrimSpace(durable) == "" {
+		return fmt.Errorf("%w: stream and durable are required", ErrInvalidConsumer)
+	}
+	if err := c.js.DeleteConsumer(stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return fmt.Errorf("%w: delete consumer %s/%s: %w", ErrInvalidConsumer, stream, durable, err)
 	}
 	return nil
 }

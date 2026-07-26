@@ -26,6 +26,7 @@ moox-cli setup validate --file ./custom.toml
 moox-cli setup deploy-control --file ./custom.toml
 moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
+moox-cli setup e2e-eventbus --file ./custom.toml
 ```
 
 `[eventbus]` 只填写 Collector SCF 能访问的公网 IPv4/DNS、端口和
@@ -35,6 +36,8 @@ Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
 
 `deploy-control` 默认保留控制面数据。仅在允许删除 Admin、EventBus 等全部控制面
 数据并重新初始化时使用 `--reset-data`；凭据目录和部署密钥仍会保留。
+`e2e-eventbus` 从本机经公网 TLS 连接 EventBus，验证 CloudNode worker 只能绑定、
+拉取和确认既有作业消费者，不能创建消费者或发布作业事件。
 
 `setup validate` performs the full Tencent Cloud STS identity check. The
 `deploy-control` and `deploy-storage` commands only repeat immutable-config
