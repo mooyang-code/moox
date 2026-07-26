@@ -4,370 +4,155 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"sync/atomic"
+	"math"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/stretchr/testify/require"
 )
 
-func TestHashSubjectKeepsSameSubjectOnSameShard(t *testing.T) {
-	a := HashSubject("BTC-USDT", 8)
-	b := HashSubject("BTC-USDT", 8)
-	if a != b {
-		t.Fatalf("same subject got different shards: %d vs %d", a, b)
-	}
-	if a < 0 || a >= 8 {
-		t.Fatalf("shard out of range: %d", a)
-	}
+func TestSchedulerRejectsNewScopeWhenQueueIsFull(t *testing.T) {
+	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
+	require.NoError(t, svc.Enqueue(context.Background(), oneBarTask("BTC", time.Unix(1, 0))))
+	err := svc.Enqueue(context.Background(), oneBarTask("ETH", time.Unix(1, 0)))
+	require.ErrorIs(t, err, ErrQueueFull)
+	require.EqualValues(t, 1, svc.Status().QueueOverflowCount)
 }
 
-func TestQueueSupersedesPendingTaskByNewerBarTime(t *testing.T) {
-	ctx := context.Background()
-	logs := captureRunLogs(t)
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, &fakeExecutor{})
-	t0 := time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC)
-
-	svc.EnqueueChecked(ctx, taskAt(t0))
-	svc.EnqueueChecked(ctx, taskAt(t0.Add(time.Minute)))
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatalf("Drain() error = %v", err)
-	}
-
-	if len(*logs) != 2 {
-		t.Fatalf("run logs = %+v", *logs)
-	}
-	if !strings.Contains((*logs)[0], "status="+domain.RunStatusSuperseded) || !strings.Contains((*logs)[0], "bar_time="+t0.Format(time.RFC3339)) {
-		t.Fatalf("first log should supersede old task: %s", (*logs)[0])
-	}
-	if !strings.Contains((*logs)[1], "status="+domain.RunStatusSucceeded) || !strings.Contains((*logs)[1], "bar_time="+t0.Add(time.Minute).Format(time.RFC3339)) {
-		t.Fatalf("second log should execute newest task: %s", (*logs)[1])
-	}
+func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {
+	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
+	require.NoError(t, svc.Enqueue(context.Background(), oneBarTask("BTC", time.Unix(1, 0))))
+	require.NoError(t, svc.Enqueue(context.Background(), oneBarTask("BTC", time.Unix(2, 0))))
+	require.Equal(t, 1, svc.Status().QueueDepth)
 }
 
-func TestEnqueueCheckedIsIdempotentForAcceptedTaskID(t *testing.T) {
-	ctx := context.Background()
+func TestSchedulerAcceptsConfiguredNumberOfScopes(t *testing.T) {
+	svc := NewService(Config{Workers: 4, QueueCapacity: 2000}, nil, nil)
+	for i := 0; i < 2000; i++ {
+		require.NoError(t, svc.Enqueue(context.Background(), oneBarTask(
+			fmt.Sprintf("subject-%d", i), time.Unix(1, 0),
+		)))
+	}
+	require.Equal(t, 2000, svc.Status().QueueDepth)
+	require.ErrorIs(t, svc.Enqueue(context.Background(), oneBarTask("overflow", time.Unix(1, 0))), ErrQueueFull)
+}
+
+func TestValidateFactorResultNullAndFiniteContract(t *testing.T) {
+	specs := []engine.FactorSpec{{Name: "Cci", Periods: []int{20}}}
+	require.NoError(t, validateFactorResult(specs, 2, &engine.FactorResult{
+		Columns: map[string][]any{"Cci_20": {nil, 1.25}},
+	}))
+	for _, value := range []any{"bad", math.NaN(), math.Inf(1)} {
+		require.Error(t, validateFactorResult(specs, 1, &engine.FactorResult{
+			Columns: map[string][]any{"Cci_20": {value}},
+		}))
+	}
+	require.Error(t, validateFactorResult(specs, 2, &engine.FactorResult{
+		Columns: map[string][]any{"Cci_20": {1.0}},
+	}))
+}
+
+func TestRunChunksRangeAndWritesInOrder(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	firstTimes := makeTimes(base, 2000)
+	secondTimes := makeTimes(base.Add(2000*time.Minute), 1)
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
+		frameChunk(firstTimes), frameChunk(secondTimes),
+	}}
 	exec := &fakeExecutor{}
-	svc := NewService(Config{Workers: 1, MaxRetry: 1}, &fakeStorage{}, exec)
-	task := taskAt(time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC))
-
-	if err := svc.EnqueueChecked(ctx, task); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.EnqueueChecked(ctx, task); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	if exec.calls != 1 {
-		t.Fatalf("executor calls = %d, want one execution for one TaskID", exec.calls)
-	}
+	svc := NewService(Config{Workers: 1}, storage, exec)
+	task := oneBarTask("BTC", base)
+	task.EndTime = base.Add(3000 * time.Minute)
+	require.NoError(t, svc.Run(context.Background(), task))
+	require.Equal(t, 2, exec.calls)
+	require.Equal(t, []int{2000, 1}, storage.writeSizes)
 }
 
-func TestQueueKeepsDifferentTargetDatasetsSeparate(t *testing.T) {
-	ctx := context.Background()
-	logs := captureRunLogs(t)
-	exec := &fakeExecutor{}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
-	t0 := time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC)
-
-	first := taskAt(t0)
-	second := taskAt(t0.Add(time.Minute))
-	second.TargetDataset = "binance_spot_volume_factor"
-	svc.EnqueueChecked(ctx, first)
-	svc.EnqueueChecked(ctx, second)
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatalf("Drain() error = %v", err)
-	}
-
-	if exec.calls != 2 {
-		t.Fatalf("executor calls = %d, want 2", exec.calls)
-	}
-	if len(*logs) != 2 {
-		t.Fatalf("run logs = %+v", *logs)
-	}
+func TestRunFailsWithoutTargetRows(t *testing.T) {
+	svc := NewService(Config{}, &fakeStorage{chunks: []*storageio.RangeChunk{{Frame: &engine.DataFrame{}}}}, &fakeExecutor{})
+	require.Error(t, svc.Run(context.Background(), oneBarTask("BTC", time.Unix(1, 0))))
 }
 
-func TestRetryableErrorsRetryAtMostMaxRetry(t *testing.T) {
-	ctx := context.Background()
-	exec := &fakeExecutor{retryFailures: 4}
-	logs := captureRunLogs(t)
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
-
-	svc.EnqueueChecked(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
-	if err := svc.Drain(ctx); err == nil {
-		t.Fatal("Drain() error = nil, want failed task error")
-	}
-
-	if exec.calls != 4 {
-		t.Fatalf("executor calls = %d, want initial + 3 retries", exec.calls)
-	}
-	if len(*logs) == 0 || !strings.Contains((*logs)[len(*logs)-1], "status="+domain.RunStatusFailed) {
-		t.Fatalf("final log = %+v", *logs)
-	}
+func TestRunSecondChunkFailureLeavesFirstChunkWritten(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
+		frameChunk(makeTimes(base, 2000)),
+		frameChunk(makeTimes(base.Add(2000*time.Minute), 1)),
+	}}
+	exec := &fakeExecutor{failAt: 2}
+	svc := NewService(Config{}, storage, exec)
+	task := oneBarTask("BTC", base)
+	task.EndTime = base.Add(3000 * time.Minute)
+	require.Error(t, svc.Run(context.Background(), task))
+	require.Equal(t, []int{2000}, storage.writeSizes)
 }
 
-func TestNonRetryableErrorRecordsFailureAndNextTaskContinues(t *testing.T) {
-	ctx := context.Background()
-	exec := &fakeExecutor{nonRetryableOnce: true}
-	logs := captureRunLogs(t)
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
-	t0 := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-
-	svc.EnqueueChecked(ctx, taskAt(t0))
-	if err := svc.Drain(ctx); err == nil {
-		t.Fatal("Drain(first) error = nil, want failed task error")
-	}
-	svc.EnqueueChecked(ctx, taskAt(t0.Add(time.Minute)))
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatalf("Drain(second) error = %v", err)
-	}
-
-	if len(*logs) != 2 {
-		t.Fatalf("run logs = %+v", *logs)
-	}
-	if !strings.Contains((*logs)[0], "status="+domain.RunStatusFailed) {
-		t.Fatalf("first log = %s", (*logs)[0])
-	}
-	if !strings.Contains((*logs)[1], "status="+domain.RunStatusSucceeded) {
-		t.Fatalf("second log = %s", (*logs)[1])
-	}
-}
-
-func TestDrainStopsBeforeNextTaskWhenContextCancelled(t *testing.T) {
+func TestRunHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	exec := &cancelOnFirstExecutor{cancel: cancel}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
-	t0 := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-
-	first := taskAt(t0)
-	second := taskAt(t0.Add(time.Minute))
-	second.TargetDataset = "binance_spot_volume_factor"
-	svc.EnqueueChecked(ctx, first)
-	svc.EnqueueChecked(ctx, second)
-
-	if err := svc.Drain(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Drain() error = %v, want context.Canceled", err)
-	}
-	if exec.calls.Load() != 1 {
-		t.Fatalf("executor calls before cancellation = %d, want 1", exec.calls.Load())
-	}
-	if err := svc.Drain(context.Background()); err != nil {
-		t.Fatalf("Drain(background) error = %v", err)
-	}
-	if exec.calls.Load() != 2 {
-		t.Fatalf("executor calls after background drain = %d, want 2", exec.calls.Load())
-	}
+	cancel()
+	svc := NewService(Config{}, &fakeStorage{}, &fakeExecutor{})
+	require.ErrorIs(t, svc.Run(ctx, oneBarTask("BTC", time.Unix(1, 0))), context.Canceled)
 }
 
-func TestConcurrentDrainWaitRespectsContext(t *testing.T) {
-	ctx := context.Background()
-	exec := &blockingExecutor{
-		started: make(chan struct{}, 1),
-		release: make(chan struct{}),
-	}
-	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
-	svc.EnqueueChecked(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
-
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- svc.Drain(ctx)
-	}()
-	select {
-	case <-exec.started:
-	case <-time.After(time.Second):
-		t.Fatal("first Drain did not start executing")
-	}
-
-	waitCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer cancel()
-	if err := svc.Drain(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("concurrent Drain() error = %v, want context deadline", err)
-	}
-	close(exec.release)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first Drain() error = %v", err)
-	}
-	if exec.calls.Load() != 1 {
-		t.Fatalf("executor calls = %d, want 1", exec.calls.Load())
-	}
+func oneBarTask(subject string, at time.Time) Task {
+	return Task{FactorTask: engine.FactorTask{
+		TaskID: "task-" + subject + at.String(), SpaceID: "crypto",
+		SourceDataset: "bars", TargetDataset: "bars_factor",
+		SubjectID: subject, Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
+		LookbackBars: 20, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Periods: []int{20}}},
+	}, TriggerType: "event"}
 }
 
-func taskAt(barTime time.Time) Task {
-	return Task{
-		FactorTask: engine.FactorTask{
-			TaskID:        "task-" + barTime.Format("1504"),
-			Kind:          "timeseries",
-			SpaceID:       "crypto",
-			SourceDataset: "binance_spot_kline",
-			TargetDataset: "binance_spot_factor",
-			SubjectID:     "BTC-USDT",
-			Freq:          "1m",
-			BarTime:       barTime,
-			LookbackBars:  200,
-			Factors: []engine.FactorSpec{
-				{FactorID: "bias", Name: "Bias", Params: []int{20}, WritebackBars: 5},
-			},
-		},
-		TriggerType: "event",
+type fakeStorage struct {
+	chunks     []*storageio.RangeChunk
+	writeSizes []int
+	writeErr   error
+}
+
+func (s *fakeStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error) {
+	if len(s.chunks) == 0 {
+		return &storageio.RangeChunk{Frame: &engine.DataFrame{}}, nil
 	}
+	chunk := s.chunks[0]
+	s.chunks = s.chunks[1:]
+	return chunk, nil
 }
-
-type fakeStorage struct{}
-
-func (f *fakeStorage) ReadWindow(context.Context, storageio.WindowKey, int, time.Time, []string) (*engine.DataFrame, error) {
-	return &engine.DataFrame{DataTimes: []time.Time{time.Now().UTC()}}, nil
-}
-
-func (f *fakeStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.DataFrame, *engine.FactorResult) error {
-	return nil
+func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, _ *engine.FactorResult) error {
+	s.writeSizes = append(s.writeSizes, len(times))
+	return s.writeErr
 }
 
 type fakeExecutor struct {
-	calls            int
-	retryFailures    int
-	nonRetryableOnce bool
+	calls  int
+	err    error
+	failAt int
 }
 
-func (f *fakeExecutor) Execute(context.Context, *engine.FactorTask, *engine.DataFrame) (*engine.FactorResult, error) {
-	f.calls++
-	if f.nonRetryableOnce {
-		f.nonRetryableOnce = false
-		return nil, engine.NonRetryableError{Err: errors.New("factor failed")}
+func (e *fakeExecutor) Execute(_ context.Context, _ *engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
+	e.calls++
+	if e.failAt > 0 && e.calls == e.failAt {
+		return nil, engine.NonRetryableError{Err: errors.New("planned executor failure")}
 	}
-	if f.retryFailures > 0 {
-		f.retryFailures--
-		return nil, engine.RetryableError{Err: errors.New("worker crashed")}
+	if e.err != nil {
+		return nil, e.err
 	}
-	return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}}}, nil
-}
-
-func (f *fakeExecutor) Close() error { return nil }
-
-type cancelOnFirstExecutor struct {
-	cancel context.CancelFunc
-	calls  atomic.Int32
-}
-
-func (f *cancelOnFirstExecutor) Execute(context.Context, *engine.FactorTask, *engine.DataFrame) (*engine.FactorResult, error) {
-	if f.calls.Add(1) == 1 {
-		f.cancel()
+	targetRows := 0
+	for range frame.DataTimes {
+		targetRows++
 	}
-	return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}}}, nil
+	return &engine.FactorResult{Columns: map[string][]any{"Bias_20": make([]any, targetRows)}}, nil
 }
+func (*fakeExecutor) Close() error { return nil }
 
-func (f *cancelOnFirstExecutor) Close() error { return nil }
-
-type blockingExecutor struct {
-	calls   atomic.Int32
-	started chan struct{}
-	release chan struct{}
-}
-
-func (f *blockingExecutor) Execute(ctx context.Context, task *engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
-	f.calls.Add(1)
-	select {
-	case f.started <- struct{}{}:
-	default:
-	}
-	select {
-	case <-f.release:
-		return &engine.FactorResult{ElapsedMS: 7, Columns: map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}}}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (f *blockingExecutor) Close() error { return nil }
-
-func captureRunLogs(t *testing.T) *[]string {
-	t.Helper()
-	var lines []string
-	old := logRun
-	logRun = func(_ context.Context, line string) {
-		lines = append(lines, line)
-	}
-	t.Cleanup(func() {
-		logRun = old
-	})
-	return &lines
-}
-
-func TestSchedulerLoadDrainsSyntheticEventStorm(t *testing.T) {
-	ctx := context.Background()
-	storage := &loadStorage{}
-	exec := &loadExecutor{latency: 5 * time.Millisecond}
-	svc := NewService(Config{Workers: 8, MaxRetry: 1}, storage, exec)
-	barTime := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	for i, symbol := range testSymbols(120) {
-		task := taskAt(barTime)
-		task.TaskID = fmt.Sprintf("task-%d", i)
-		task.SubjectID = symbol
-		task.Factors = []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Params: []int{20}, WritebackBars: 1}}
-		svc.EnqueueChecked(ctx, task)
-	}
-	started := time.Now()
-	if err := svc.Drain(ctx); err != nil {
-		t.Fatalf("Drain() error = %v", err)
-	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("drain took %s, want <= 2s", elapsed)
-	}
-	if exec.calls.Load() != 120 || storage.writes.Load() != 120 {
-		t.Fatalf("calls/writes = %d/%d, want 120/120", exec.calls.Load(), storage.writes.Load())
-	}
-}
-
-type loadStorage struct {
-	writes atomic.Int64
-}
-
-func (s *loadStorage) ReadWindow(context.Context, storageio.WindowKey, int, time.Time, []string) (*engine.DataFrame, error) {
-	now := time.Now().UTC()
-	return &engine.DataFrame{
-		Columns:   storageio.KLineColumns,
-		DataTimes: []time.Time{now.Add(-time.Minute), now},
-		Rows: [][]any{
-			{now.Add(-time.Minute), 1.0, 2.0, 0.8, 1.6, 100.0, 160.0, int64(10)},
-			{now, 1.6, 2.2, 1.2, 2.0, 120.0, 240.0, int64(12)},
-		},
-	}, nil
-}
-
-func (s *loadStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.DataFrame, *engine.FactorResult) error {
-	s.writes.Add(1)
-	return nil
-}
-
-type loadExecutor struct {
-	latency time.Duration
-	calls   atomic.Int64
-}
-
-func (e *loadExecutor) Execute(context.Context, *engine.FactorTask, *engine.DataFrame) (*engine.FactorResult, error) {
-	e.calls.Add(1)
-	time.Sleep(e.latency)
-	return &engine.FactorResult{
-		Columns:   map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}},
-		ElapsedMS: e.latency.Milliseconds(),
-	}, nil
-}
-
-func (e *loadExecutor) Close() error { return nil }
-
-func testSymbols(n int) []string {
-	out := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		out = append(out, fmt.Sprintf("SYM-%03d", i))
+func makeTimes(start time.Time, count int) []time.Time {
+	out := make([]time.Time, count)
+	for i := range out {
+		out[i] = start.Add(time.Duration(i) * time.Minute)
 	}
 	return out
+}
+func frameChunk(times []time.Time) *storageio.RangeChunk {
+	return &storageio.RangeChunk{Frame: &engine.DataFrame{DataTimes: times}, TargetTimes: times}
 }

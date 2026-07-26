@@ -9,18 +9,16 @@ import (
 
 func factorToPB(f domain.FactorDef) *factorpb.FactorDef {
 	return &factorpb.FactorDef{
-		FactorId:      f.FactorID,
-		Name:          f.Name,
-		Kind:          f.Kind,
-		SourceCode:    f.SourceCode,
-		SourceHash:    f.SourceHash,
-		ParamsJson:    f.ParamsJSON,
-		LookbackBars:  int32(f.LookbackBars),
-		WritebackBars: int32(f.WritebackBars),
-		DependsJson:   f.DependsJSON,
-		Status:        f.Status,
-		CreatedAt:     formatTime(f.CreateTime),
-		UpdatedAt:     formatTime(f.ModifyTime),
+		FactorId:     f.FactorID,
+		Name:         f.Name,
+		SourceCode:   f.SourceCode,
+		SourceHash:   f.SourceHash,
+		Periods:      intsToInt32s(f.Periods),
+		LookbackBars: int32(f.LookbackBars),
+		Depends:      append([]string(nil), f.Depends...),
+		Status:       f.Status,
+		CreatedAt:    formatTime(f.CreateTime),
+		UpdatedAt:    formatTime(f.ModifyTime),
 	}
 }
 
@@ -29,17 +27,31 @@ func factorFromPB(pb *factorpb.FactorDef) domain.FactorDef {
 		return domain.FactorDef{}
 	}
 	return domain.FactorDef{
-		FactorID:      pb.GetFactorId(),
-		Name:          pb.GetName(),
-		Kind:          pb.GetKind(),
-		SourceCode:    pb.GetSourceCode(),
-		SourceHash:    pb.GetSourceHash(),
-		ParamsJSON:    pb.GetParamsJson(),
-		LookbackBars:  int(pb.GetLookbackBars()),
-		WritebackBars: int(pb.GetWritebackBars()),
-		DependsJSON:   pb.GetDependsJson(),
-		Status:        pb.GetStatus(),
+		FactorID:     pb.GetFactorId(),
+		Name:         pb.GetName(),
+		SourceCode:   pb.GetSourceCode(),
+		SourceHash:   pb.GetSourceHash(),
+		Periods:      int32sToInts(pb.GetPeriods()),
+		LookbackBars: int(pb.GetLookbackBars()),
+		Depends:      append([]string(nil), pb.GetDepends()...),
+		Status:       pb.GetStatus(),
 	}
+}
+
+func intsToInt32s(values []int) []int32 {
+	out := make([]int32, len(values))
+	for i, value := range values {
+		out[i] = int32(value)
+	}
+	return out
+}
+
+func int32sToInts(values []int32) []int {
+	out := make([]int, len(values))
+	for i, value := range values {
+		out[i] = int(value)
+	}
+	return out
 }
 
 func bindingToPB(b domain.FactorBinding) *factorpb.FactorBinding {

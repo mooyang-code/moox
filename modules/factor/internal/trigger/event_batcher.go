@@ -2,6 +2,8 @@ package trigger
 
 import (
 	"encoding/json"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,12 +23,7 @@ type Task struct {
 	FirstReceivedAt time.Time
 	LastReceivedAt  time.Time
 	TriggerType     string
-	FactorVersion   string
-	TargetRunID     string
 	FactorIDs       []string
-	// PendingEventIDs are the durable inbox records covered by this task. They
-	// are committed only after the scheduler accepts the task.
-	PendingEventIDs []string
 }
 
 // EventBatcher groups Storage row-update messages into fixed-window per-symbol task requests.
@@ -35,7 +32,6 @@ type EventBatcher struct {
 	window   time.Duration
 	bindings []domain.FactorBinding
 	buckets  map[bucketKey]*bucket
-	inbox    PendingEventStore
 }
 
 type bucketKey struct {
@@ -47,21 +43,14 @@ type bucketKey struct {
 }
 
 type bucket struct {
-	task       Task
-	deadline   time.Time
-	factors    map[string]struct{}
-	messageIDs map[string]struct{}
+	task     Task
+	deadline time.Time
+	factors  map[string]struct{}
 }
 
 // NewEventBatcher creates an event batcher with an initial binding snapshot.
 func NewEventBatcher(window time.Duration, bindings []domain.FactorBinding) *EventBatcher {
 	return &EventBatcher{window: window, bindings: append([]domain.FactorBinding(nil), bindings...), buckets: map[bucketKey]*bucket{}}
-}
-
-func NewDurableEventBatcher(window time.Duration, bindings []domain.FactorBinding, inbox PendingEventStore) *EventBatcher {
-	d := NewEventBatcher(window, bindings)
-	d.inbox = inbox
-	return d
 }
 
 // SetBindings replaces the enabled binding snapshot.
@@ -71,25 +60,13 @@ func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding) {
 	d.bindings = append([]domain.FactorBinding(nil), bindings...)
 }
 
-// Ingest adds one DatasetRowsUpserted event into fixed-window buckets.
-func (d *EventBatcher) Ingest(event *storagepb.DatasetRowsUpserted, now time.Time) {
-	_ = d.ingestMemory("", event, now)
-}
-
-func (d *EventBatcher) ingestMemory(messageID string, event *storagepb.DatasetRowsUpserted, now time.Time) bool {
-	return d.ingestMemoryWithDeadline(messageID, event, now, now)
-}
-
-// ingestMemoryWithDeadline keeps event reception metadata separate from the
-// processing boundary used to close a bucket. Replay uses this to flush a
-// bounded range even when the source event was received much later.
-func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storagepb.DatasetRowsUpserted, receivedAt, processingAt time.Time) bool {
+// Add adds one DatasetRowsUpserted event into fixed-window buckets.
+func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) {
 	if d == nil || event == nil {
-		return false
+		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	matched := false
 	for _, row := range event.GetRows() {
 		if row == nil || row.GetKey() == nil {
 			continue
@@ -107,7 +84,6 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 		if len(matches) == 0 {
 			continue
 		}
-		matched = true
 		for _, binding := range matches {
 			targetDataset := binding.TargetDataset
 			if targetDataset == "" {
@@ -130,30 +106,54 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 						SubjectID:       rowKey.GetSubjectId(),
 						Freq:            rowKey.GetFreq(),
 						BarTime:         dataTime.UTC(),
-						FirstReceivedAt: receivedAt.UTC(),
-						LastReceivedAt:  receivedAt.UTC(),
+						FirstReceivedAt: now.UTC(),
+						LastReceivedAt:  now.UTC(),
 					},
-					deadline: processingAt.Add(d.window),
-					factors:  map[string]struct{}{}, messageIDs: map[string]struct{}{},
+					deadline: now.Add(d.window),
+					factors:  map[string]struct{}{},
 				}
 				d.buckets[bkey] = b
 			}
 			if dataTime.After(b.task.BarTime) {
 				b.task.BarTime = dataTime.UTC()
 			}
-			if receivedAt.Before(b.task.FirstReceivedAt) {
-				b.task.FirstReceivedAt = receivedAt.UTC()
+			if now.Before(b.task.FirstReceivedAt) {
+				b.task.FirstReceivedAt = now.UTC()
 			}
-			if receivedAt.After(b.task.LastReceivedAt) {
-				b.task.LastReceivedAt = receivedAt.UTC()
+			if now.After(b.task.LastReceivedAt) {
+				b.task.LastReceivedAt = now.UTC()
 			}
 			b.factors[binding.FactorID] = struct{}{}
-			if messageID != "" {
-				b.messageIDs[messageID] = struct{}{}
-			}
 		}
 	}
-	return matched
+}
+
+// Flush removes and returns buckets whose fixed window has elapsed.
+func (d *EventBatcher) Flush(now time.Time) []Task {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	keys := make([]bucketKey, 0, len(d.buckets))
+	for key, item := range d.buckets {
+		if !now.Before(item.deadline) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		return strings.Join([]string{a.spaceID, a.sourceDataset, a.targetDataset, a.subjectID, a.freq}, "\x00") <
+			strings.Join([]string{b.spaceID, b.sourceDataset, b.targetDataset, b.subjectID, b.freq}, "\x00")
+	})
+	tasks := make([]Task, 0, len(keys))
+	for _, key := range keys {
+		item := d.buckets[key]
+		item.task.FactorIDs = orderedFactorIDs(item.factors, d.bindings)
+		tasks = append(tasks, item.task)
+		delete(d.buckets, key)
+	}
+	return tasks
 }
 
 func (d *EventBatcher) matchBindings(spaceID, datasetID, subjectID, freq string) []domain.FactorBinding {

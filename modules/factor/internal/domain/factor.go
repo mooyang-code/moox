@@ -3,30 +3,23 @@ package domain
 import "time"
 
 const (
-	FactorKindTimeseries     = "timeseries"
-	FactorKindCrossSection   = "cross_section"
-	FactorStatusEnabled      = "enabled"
-	FactorStatusDisabled     = "disabled"
-	DefaultFactorParamsJSON  = "[]"
-	DefaultFactorDependsJSON = "[]"
+	FactorStatusEnabled  = "enabled"
+	FactorStatusDisabled = "disabled"
 )
 
 // FactorDef is a locally managed factor definition.
 type FactorDef struct {
-	FactorID      string    `gorm:"column:c_factor_id;primaryKey"`
-	Name          string    `gorm:"column:c_name"`
-	Kind          string    `gorm:"column:c_kind"`
-	SourceCode    string    `gorm:"column:c_source_code"`
-	SourceHash    string    `gorm:"column:c_source_hash"`
-	SourcePath    string    `gorm:"column:c_source_path"`
-	ParamsJSON    string    `gorm:"column:c_params_json"`
-	LookbackBars  int       `gorm:"column:c_lookback_bars"`
-	WritebackBars int       `gorm:"column:c_writeback_bars"`
-	AvgRuntimeMS  float64   `gorm:"column:c_avg_runtime_ms"`
-	DependsJSON   string    `gorm:"column:c_depends_json"`
-	Status        string    `gorm:"column:c_status"`
-	CreateTime    time.Time `gorm:"column:c_ctime"`
-	ModifyTime    time.Time `gorm:"column:c_mtime"`
+	FactorID     string    `gorm:"column:c_factor_id;primaryKey"`
+	Name         string    `gorm:"column:c_name"`
+	SourceCode   string    `gorm:"column:c_source_code"`
+	SourceHash   string    `gorm:"column:c_source_hash"`
+	SourcePath   string    `gorm:"column:c_source_path"`
+	Periods      []int     `gorm:"column:c_periods_json;serializer:json"`
+	LookbackBars int       `gorm:"column:c_lookback_bars"`
+	Depends      []string  `gorm:"column:c_depends_json;serializer:json"`
+	Status       string    `gorm:"column:c_status"`
+	CreateTime   time.Time `gorm:"column:c_ctime"`
+	ModifyTime   time.Time `gorm:"column:c_mtime"`
 }
 
 // TableName returns the factor definition table.

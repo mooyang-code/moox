@@ -12,18 +12,20 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
+	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"trpc.group/trpc-go/trpc-go/log"
+	"github.com/mooyang-code/moox/packages/pyruntime/process"
 )
 
 func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
-	if cfg.SpaceID == "" || cfg.DatasetID == "" || cfg.SubjectID == "" || cfg.Freq == "" || cfg.BarTime.IsZero() {
-		return fmt.Errorf("--space, --dataset, --subject, --freq and --bar-time are required")
+	if cfg.SpaceID == "" || cfg.DatasetID == "" || cfg.SubjectID == "" || cfg.Freq == "" ||
+		cfg.StartTime.IsZero() || cfg.EndTime.IsZero() || !cfg.StartTime.Before(cfg.EndTime) {
+		return fmt.Errorf("--space, --dataset, --subject, --freq, --start-time and --end-time are required")
 	}
 	db, err := store.Open(&store.Options{Path: cfg.DBPath})
 	if err != nil {
@@ -33,43 +35,18 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err := db.ApplySchema(factorschema.AllSQL()); err != nil {
 		return fmt.Errorf("apply factor schema: %w", err)
 	}
-	replayClaimed := false
-	if cfg.TargetRunID != "" && cfg.TaskID != "" {
-		claimed, completed, err := db.ClaimReplayTask(ctx, cfg.TaskID, cfg.TargetRunID)
-		if err != nil {
-			return fmt.Errorf("claim replay task: %w", err)
-		}
-		if !claimed {
-			if completed {
-				return json.NewEncoder(out).Encode(map[string]any{"ok": true, "skipped": true, "task_id": cfg.TaskID, "target_run_id": cfg.TargetRunID})
-			}
-			return fmt.Errorf("replay task %s is already running", cfg.TaskID)
-		}
-		replayClaimed = true
-		defer func() {
-			if replayClaimed {
-				_ = db.MarkReplayTask(context.Background(), cfg.TaskID, store.ReplayTaskFailed, "execution did not complete")
-			}
-		}()
-	}
-	markReplaySucceeded := func() error {
-		if replayClaimed {
-			if err := db.MarkReplayTask(ctx, cfg.TaskID, store.ReplayTaskSucceeded, ""); err != nil {
-				return err
-			}
-			replayClaimed = false
-		}
-		return nil
-	}
-
-	factorRepo := db.Factors()
-	factors, err := factorRepo.ListEnabledTimeseries(ctx)
+	factors, err := db.Factors().ListEnabled(ctx)
 	if err != nil {
 		return err
 	}
 	factors = filterFactors(factors, cfg.FactorIDs)
 	if len(factors) == 0 {
 		return fmt.Errorf("no enabled factors selected")
+	}
+	for i := range factors {
+		if override := cfg.FactorSourcePaths[factors[i].FactorID]; override != "" {
+			factors[i].SourcePath = override
+		}
 	}
 
 	appCfg := bootstrap.Default()
@@ -78,124 +55,51 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	metaTarget := gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(appCfg.Storage.GatewayTarget, "11003"))
-	metaProxy := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(metaTarget, appCfg.Storage.GatewayNodeID, credentials)...)
-	syncer := registry.NewMetadataSync(metadataAdapter{proxy: metaProxy}, auth)
-	if err := syncer.SyncResultDataset(ctx, cfg.SpaceID, cfg.DatasetID, cfg.Freq, factors); err != nil {
-		return err
-	}
-
-	task := buildTask(cfg, factors)
-	storageClient := storageio.NewClientWithCredentials(appCfg.Storage.GatewayTarget, appCfg.Storage.GatewayNodeID, credentials, auth)
-	frame, err := storageClient.ReadWindow(ctx, storageio.WindowKey{
-		SpaceID:       cfg.SpaceID,
-		SourceDataset: cfg.DatasetID,
-		SubjectID:     cfg.SubjectID,
-		Freq:          cfg.Freq,
-	}, task.LookbackBars, cfg.BarTime, inputColumns(task.Factors))
-	if err != nil {
-		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), 0)
-		return err
-	}
-
-	exec, err := engine.NewStdioExecutor(engine.StdioConfig{
-		PythonBin:     appCfg.Engine.PythonBin,
-		WorkerPath:    filepath.Join("pyworker", "worker.py"),
-		FactorsDir:    cfg.FactorsDir,
-		SectionsDir:   appCfg.Engine.SectionsDir,
-		Encoding:      "json",
-		TaskTimeout:   time.Duration(appCfg.Engine.TaskTimeoutMS) * time.Millisecond,
-		MaxFrameBytes: 64 << 20,
-	})
-	if err != nil {
-		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), 0)
-		return err
-	}
-	defer exec.Close()
-
-	result, err := exec.Execute(ctx, task, frame)
-	if err != nil {
-		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), 0)
-		return err
-	}
-	if err := storageClient.WriteFactorPatch(ctx, task, frame, result); err != nil {
-		logRunOnce(ctx, task, domain.RunStatusFailed, err.Error(), result.ElapsedMS)
-		return err
-	}
-	logRunOnce(ctx, task, domain.RunStatusSucceeded, "", result.ElapsedMS)
-	if err := markReplaySucceeded(); err != nil {
-		return fmt.Errorf("mark replay task succeeded: %w", err)
-	}
-	return json.NewEncoder(out).Encode(runOncePayload(task, domain.RunStatusSucceeded, len(factors), result.ElapsedMS))
-}
-
-func buildTask(cfg cliConfig, factors []domain.FactorDef) *engine.FactorTask {
-	specs := make([]engine.FactorSpec, 0, len(factors))
-	lookback := 0
-	for _, factor := range factors {
-		params := mustParseParams(factor.ParamsJSON)
-		sourcePath := factor.SourcePath
-		if override, ok := cfg.FactorSourcePaths[factor.FactorID]; ok {
-			sourcePath = override
-		}
-		if sourcePath == "" {
-			sourcePath = filepath.Join(cfg.FactorsDir, factor.Name+".py")
-		}
-		specs = append(specs, engine.FactorSpec{
-			FactorID:      factor.FactorID,
-			Name:          factor.Name,
-			SourceHash:    factor.SourceHash,
-			SourcePath:    sourcePath,
-			EstimatedMS:   int64(factor.AvgRuntimeMS),
-			Params:        params,
-			WritebackBars: factor.WritebackBars,
-			ExtraColumns:  registry.ExtraColumnsFromFactors([]domain.FactorDef{factor}),
-		})
-		if factor.LookbackBars > lookback {
-			lookback = factor.LookbackBars
-		}
-	}
 	targetDataset := cfg.TargetDataset
 	if targetDataset == "" {
 		targetDataset = registry.ResultDataset(cfg.DatasetID)
 	}
-	return &engine.FactorTask{
-		TaskID: func() string {
-			if cfg.TaskID != "" {
-				return cfg.TaskID
-			}
-			return fmt.Sprintf("manual-%d", time.Now().UnixNano())
-		}(),
-		FactorVersion: cfg.FactorVersion,
-		TargetRunID:   cfg.TargetRunID,
-		Kind:          "timeseries",
-		SpaceID:       cfg.SpaceID,
-		SourceDataset: cfg.DatasetID,
-		TargetDataset: targetDataset,
-		SubjectID:     cfg.SubjectID,
-		Freq:          cfg.Freq,
-		BarTime:       cfg.BarTime,
-		LookbackBars:  lookback,
-		Factors:       specs,
+	taskID := cfg.TaskID
+	if taskID == "" {
+		taskID = fmt.Sprintf("manual-%d", time.Now().UnixNano())
 	}
-}
+	task, err := scheduler.BuildTask(scheduler.TaskScope{
+		TaskID: taskID, TriggerType: "manual", SpaceID: cfg.SpaceID,
+		SourceDataset: cfg.DatasetID, TargetDataset: targetDataset,
+		SubjectID: cfg.SubjectID, Freq: cfg.Freq,
+		StartTime: cfg.StartTime, EndTime: cfg.EndTime,
+	}, factors, cfg.FactorsDir)
+	if err != nil {
+		return err
+	}
 
-func inputColumns(specs []engine.FactorSpec) []string {
-	set := map[string]struct{}{}
-	out := append([]string(nil), storageio.KLineColumns...)
-	for _, column := range out {
-		set[column] = struct{}{}
+	storageClient := storageio.NewClientWithCredentials(
+		appCfg.Storage.GatewayTarget, appCfg.Storage.GatewayNodeID, credentials, auth,
+	)
+	pythonExec, err := engine.NewPythonExecutor(ctx, 1, process.Config{
+		PythonBin:   appCfg.Engine.PythonBin,
+		WorkerPath:  filepath.Join("pyworker", "worker.py"),
+		Args:        []string{"--factors-dir", cfg.FactorsDir},
+		TaskTimeout: time.Duration(appCfg.Engine.TaskTimeoutMS) * time.Millisecond,
+		Limits:      process.DefaultLimits(),
+	})
+	if err != nil {
+		return err
 	}
-	for _, spec := range specs {
-		for _, column := range spec.ExtraColumns {
-			if _, ok := set[column]; ok {
-				continue
-			}
-			set[column] = struct{}{}
-			out = append(out, column)
-		}
+	defer pythonExec.Close()
+	runner := scheduler.NewService(scheduler.Config{Workers: 1, QueueCapacity: 1, MaxRetry: appCfg.Scheduler.MaxRetry}, storageClient, pythonExec)
+	started := time.Now()
+	if err := runner.Run(ctx, task); err != nil {
+		return err
 	}
-	return out
+	elapsed := time.Since(started).Milliseconds()
+	return json.NewEncoder(out).Encode(map[string]any{
+		"ok": true, "task_id": task.TaskID, "status": "succeeded",
+		"factor_count": len(factors),
+		"start_time":   cfg.StartTime.UTC().Format(time.RFC3339Nano),
+		"end_time":     cfg.EndTime.UTC().Format(time.RFC3339Nano),
+		"elapsed_ms":   elapsed,
+	})
 }
 
 func filterFactors(factors []domain.FactorDef, ids []string) []domain.FactorDef {
@@ -215,32 +119,9 @@ func filterFactors(factors []domain.FactorDef, ids []string) []domain.FactorDef 
 	return out
 }
 
-func mustParseParams(raw string) []int {
-	var params []int
-	_ = json.Unmarshal([]byte(raw), &params)
-	return params
-}
-
-func logRunOnce(ctx context.Context, task *engine.FactorTask, status string, errMsg string, elapsedMS int64) {
-	log.InfoContextf(ctx, "factor_run_done task_id=%s trigger_type=manual space_id=%s source_dataset=%s target_dataset=%s subject_id=%s freq=%s bar_time=%s factor_count=%d status=%s elapsed_ms=%d error=%q",
-		task.TaskID, task.SpaceID, task.SourceDataset, task.TargetDataset, task.SubjectID, task.Freq,
-		task.BarTime.UTC().Format(time.RFC3339), len(task.Factors), status, elapsedMS, errMsg)
-}
-
-func runOncePayload(task *engine.FactorTask, status string, factorCount int, elapsedMS int64) map[string]any {
-	return map[string]any{
-		"ok":           status == domain.RunStatusSucceeded,
-		"task_id":      task.TaskID,
-		"run_id":       fmt.Sprintf("%s-%s", task.TaskID, status),
-		"factor_count": factorCount,
-		"elapsed_ms":   elapsedMS,
-	}
-}
-
 func serviceAuth() *commonpb.AuthInfo {
 	return &commonpb.AuthInfo{
-		AppId:     "moox-factor",
-		Operator:  "moox-factor",
+		AppId: "moox-factor", Operator: "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
 }
@@ -252,43 +133,33 @@ type metadataAdapter struct {
 func (m metadataAdapter) CreateFactor(ctx context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
 	return m.proxy.CreateFactor(ctx, req)
 }
-
 func (m metadataAdapter) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	return m.proxy.CreateDataset(ctx, req)
 }
-
 func (m metadataAdapter) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
 	return m.proxy.UpdateDataset(ctx, req)
 }
-
 func (m metadataAdapter) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return m.proxy.UpsertDatasetColumn(ctx, req)
 }
-
 func (m metadataAdapter) GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error) {
 	return m.proxy.GetFactor(ctx, req)
 }
-
 func (m metadataAdapter) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	return m.proxy.GetDataset(ctx, req)
 }
-
 func (m metadataAdapter) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
 	return m.proxy.CheckDatasetActivation(ctx, req)
 }
-
 func (m metadataAdapter) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
 	return m.proxy.ActivateDataset(ctx, req)
 }
-
 func (m metadataAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
 	return m.proxy.ListDatasetColumns(ctx, req)
 }
-
 func (m metadataAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
 	return m.proxy.ListDatasetSubjects(ctx, req)
 }
-
 func (m metadataAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
 	return m.proxy.BindDatasetSubject(ctx, req)
 }

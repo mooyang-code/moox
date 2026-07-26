@@ -8,19 +8,6 @@ import (
 	"testing"
 )
 
-func TestFactorParams(t *testing.T) {
-	got, err := factorParams("")
-	require.NoError(t, err)
-	assert.Empty(t, got)
-
-	got, err = factorParams("[1,2,3]")
-	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2, 3}, got)
-
-	_, err = factorParams("{bad")
-	require.Error(t, err)
-}
-
 func TestDataSourceIDFromDataset(t *testing.T) {
 	assert.Equal(t, "binance", DataSourceIDFromDataset("binance_spot_kline"))
 	assert.Equal(t, "alone", DataSourceIDFromDataset("alone"))

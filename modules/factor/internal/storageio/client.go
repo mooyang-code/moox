@@ -43,11 +43,69 @@ func NewClientWithCredentials(accessTarget, targetNode string, credentials gatew
 	}
 }
 
-// ReadWindow reads up to lookbackBars rows ending at endTime.
-func (c *Client) ReadWindow(ctx context.Context, key WindowKey, lookbackBars int, endTime time.Time, columns []string) (*engine.DataFrame, error) {
-	if lookbackBars <= 0 {
-		lookbackBars = 1
+// RangeChunk contains history plus target rows and the exact target timestamps.
+type RangeChunk struct {
+	Frame       *engine.DataFrame
+	TargetTimes []time.Time
+}
+
+// ReadRangeChunk reads a bounded target range and prepends the required history.
+func (c *Client) ReadRangeChunk(
+	ctx context.Context,
+	key WindowKey,
+	startTime, endTime time.Time,
+	lookbackBars, targetLimit int,
+	columns []string,
+) (*RangeChunk, error) {
+	if targetLimit <= 0 {
+		targetLimit = 2000
 	}
+	targetRows, err := c.readRows(ctx, key, &storagepb.TimeRange{
+		StartTime: startTime.UTC().Format(time.RFC3339Nano),
+		EndTime:   endTime.UTC().Format(time.RFC3339Nano),
+	}, storagepb.SortOrder_SORT_ORDER_ASC, targetLimit, columns)
+	if err != nil {
+		return nil, err
+	}
+	targetFrame, err := RowsToDataFrame(targetRows, columns)
+	if err != nil {
+		return nil, err
+	}
+	if len(targetFrame.DataTimes) == 0 {
+		return &RangeChunk{Frame: targetFrame}, nil
+	}
+	historyLimit := lookbackBars - 1
+	var historyFrame *engine.DataFrame
+	if historyLimit > 0 {
+		historyRows, readErr := c.readRows(ctx, key, &storagepb.TimeRange{
+			EndTime: targetFrame.DataTimes[0].UTC().Format(time.RFC3339Nano),
+		}, storagepb.SortOrder_SORT_ORDER_DESC, historyLimit, columns)
+		if readErr != nil {
+			return nil, readErr
+		}
+		historyFrame, err = RowsToDataFrame(historyRows, columns)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		historyFrame = &engine.DataFrame{Columns: append([]string(nil), columns...)}
+	}
+	frame := &engine.DataFrame{
+		Columns:   append([]string(nil), columns...),
+		Rows:      append(append([][]any(nil), historyFrame.Rows...), targetFrame.Rows...),
+		DataTimes: append(append([]time.Time(nil), historyFrame.DataTimes...), targetFrame.DataTimes...),
+	}
+	return &RangeChunk{Frame: frame, TargetTimes: append([]time.Time(nil), targetFrame.DataTimes...)}, nil
+}
+
+func (c *Client) readRows(
+	ctx context.Context,
+	key WindowKey,
+	timeRange *storagepb.TimeRange,
+	order storagepb.SortOrder,
+	limit int,
+	columns []string,
+) ([]*storagepb.TimeSeriesRow, error) {
 	req := &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: c.auth,
 		Keys: []*storagepb.TimeSeriesKey{
@@ -58,10 +116,10 @@ func (c *Client) ReadWindow(ctx context.Context, key WindowKey, lookbackBars int
 				Freq:      key.Freq,
 			},
 		},
-		TimeRange:   &storagepb.TimeRange{EndTime: endTime.UTC().Format(time.RFC3339)},
-		Order:       storagepb.SortOrder_SORT_ORDER_DESC,
+		TimeRange:   timeRange,
+		Order:       order,
 		ColumnNames: columns,
-		Page:        &commonpb.Page{Page: 1, Size: uint32(lookbackBars)},
+		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
 	}
 	// Retry is deliberately attached to this idempotent read call only. The
 	// shared proxy also performs writes, which must never inherit this policy.
@@ -72,7 +130,7 @@ func (c *Client) ReadWindow(ctx context.Context, key WindowKey, lookbackBars int
 	if err := ensureStorageOK("read time-series rows", rsp.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	return RowsToDataFrame(rsp.GetRows(), columns)
+	return rsp.GetRows(), nil
 }
 
 // NormalizeStorageTarget normalizes bare host:port targets to tRPC ip:// targets.

@@ -11,7 +11,3 @@ func HashSubject(subjectID string, workers int) int {
 	_, _ = h.Write([]byte(subjectID))
 	return int(h.Sum32() % uint32(workers))
 }
-
-type queueItem struct {
-	task Task
-}

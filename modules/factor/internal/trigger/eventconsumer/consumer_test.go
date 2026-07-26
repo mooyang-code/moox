@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,67 +15,13 @@ import (
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
 type fakeNATSSession struct {
 	run        func(context.Context) error
 	closeCalls atomic.Int32
-}
-
-type pendingStoreFake struct {
-	mu        sync.Mutex
-	rows      map[string]pendingStoreRow
-	processed map[string]struct{}
-}
-
-type pendingStoreRow struct {
-	event      *storagepb.DatasetRowsUpserted
-	receivedAt time.Time
-}
-
-func (s *pendingStoreFake) pendingCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.rows)
-}
-
-func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event *storagepb.DatasetRowsUpserted, at time.Time) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.rows == nil {
-		s.rows = map[string]pendingStoreRow{}
-	}
-	if _, ok := s.processed[id]; ok {
-		return false, nil
-	}
-	if _, ok := s.rows[id]; ok {
-		return false, nil
-	}
-	s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.DatasetRowsUpserted), receivedAt: at}
-	return true, nil
-}
-
-func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.DatasetRowsUpserted, time.Time) error) error {
-	for id, row := range s.rows {
-		if err := visit(id, proto.Clone(row.event).(*storagepb.DatasetRowsUpserted), row.receivedAt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *pendingStoreFake) CommitPendingEvents(_ context.Context, ids []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.processed == nil {
-		s.processed = map[string]struct{}{}
-	}
-	for _, id := range ids {
-		s.processed[id] = struct{}{}
-		delete(s.rows, id)
-	}
-	return nil
 }
 
 func binding(factorID, sourceDataset, subjectMode, subjectsJSON string) domain.FactorBinding {
@@ -107,6 +52,49 @@ func (s *fakeNATSSession) Run(ctx context.Context) error {
 func (s *fakeNATSSession) Close() error {
 	s.closeCalls.Add(1)
 	return nil
+}
+
+func TestBestEffortHandlerACKsAfterMemoryAdd(t *testing.T) {
+	now := time.Date(2026, 7, 26, 9, 30, 0, 0, time.UTC)
+	batcher := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+	handler := storageEventHandler{eventBatcher: batcher}
+	got := handler.Handle(context.Background(), encodedDelivery(t,
+		event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)))
+	require.Equal(t, jetstream.ACK, got.Decision)
+	require.Len(t, batcher.Flush(time.Now().Add(2*time.Second)), 1)
+}
+
+func TestBestEffortHandlerRetriesWhenBatcherUnavailable(t *testing.T) {
+	got := (storageEventHandler{}).Handle(context.Background(), encodedDelivery(t,
+		event("crypto", "binance_spot_kline", "BTC-USDT", "1m", time.Now())))
+	require.Equal(t, jetstream.RETRY, got.Decision)
+}
+
+func TestBestEffortHandlerACKsUnmatchedDataset(t *testing.T) {
+	batcher := trigger.NewEventBatcher(time.Second, nil)
+	got := (storageEventHandler{eventBatcher: batcher}).Handle(context.Background(), encodedDelivery(t,
+		event("crypto", "unmatched", "BTC-USDT", "1m", time.Now())))
+	require.Equal(t, jetstream.ACK, got.Decision)
+	require.Empty(t, batcher.Flush(time.Now().Add(2*time.Second)))
+}
+
+func encodedDelivery(t *testing.T, payload *storagepb.DatasetRowsUpserted) *jetstream.Delivery {
+	t.Helper()
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	encoded, err := registry.Encode(events.DatasetRowsUpserted, payload, events.PublishOptions{
+		EventID: "factor-best-effort-1", OccurredAt: time.Now().UTC(),
+		SpaceID: payload.GetSpaceId(), SubjectID: payload.GetDatasetId(),
+	})
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	return &jetstream.Delivery{
+		Subject: encoded.Subject, RawData: raw, RawMessageID: "factor-best-effort-1",
+		ContentType: events.ContentType,
+	}
 }
 
 func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
@@ -218,10 +206,9 @@ func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 	nc.Close()
 
 	now := time.Now().UTC().Truncate(time.Second)
-	inbox := &pendingStoreFake{}
-	batcher := trigger.NewDurableEventBatcher(20*time.Millisecond, []domain.FactorBinding{
+	batcher := trigger.NewEventBatcher(20*time.Millisecond, []domain.FactorBinding{
 		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
-	}, inbox)
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	consumer := New(Config{
@@ -250,15 +237,14 @@ func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !eventuallyConsumer(5*time.Second, func() bool { return inbox.pendingCount() == 1 }) {
-		t.Fatal("real EventBus delivery did not reach Factor's durable inbox")
+	var tasks []trigger.Task
+	if !eventuallyConsumer(5*time.Second, func() bool {
+		tasks = batcher.Flush(time.Now().Add(time.Second))
+		return len(tasks) == 1
+	}) {
+		t.Fatal("real EventBus delivery did not reach Factor's memory batcher")
 	}
-	tasks, err := batcher.FlushPending(ctx, time.Now().Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tasks) != 1 || tasks[0].SubjectID != "BTC-USDT" ||
-		len(tasks[0].PendingEventIDs) != 1 || tasks[0].PendingEventIDs[0] != "factor-real-e2e-1" {
+	if len(tasks) != 1 || tasks[0].SubjectID != "BTC-USDT" {
 		t.Fatalf("factor tasks = %+v", tasks)
 	}
 }
@@ -278,11 +264,8 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 		Status:        domain.BindingStatusEnabled,
 	}})
 
-	d.Ingest(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
-	tasks, err := d.FlushPending(context.Background(), now.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
+	d.Add(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
+	tasks := d.Flush(now.Add(time.Second))
 	if len(tasks) != len(symbols) {
 		t.Fatalf("tasks = %d, want %d", len(tasks), len(symbols))
 	}
@@ -325,11 +308,8 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 		},
 	})
 
-	d.Ingest(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
-	tasks, err := d.FlushPending(context.Background(), now.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
+	d.Add(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
+	tasks := d.Flush(now.Add(time.Second))
 	if len(tasks) != 2 {
 		t.Fatalf("tasks = %d, want 2: %+v", len(tasks), tasks)
 	}

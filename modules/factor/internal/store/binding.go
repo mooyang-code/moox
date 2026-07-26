@@ -78,28 +78,19 @@ func (r *BindingRepository) Upsert(ctx context.Context, binding domain.FactorBin
 	}).Create(&binding).Error
 }
 
-// ListEnabledBySource returns enabled bindings for one source dataset/frequency.
-func (r *BindingRepository) ListEnabledBySource(ctx context.Context, spaceID string, sourceDataset string, freq string) ([]domain.FactorBinding, error) {
+// ListExecutable returns bindings whose binding and factor are both enabled.
+func (r *BindingRepository) ListExecutable(ctx context.Context) ([]domain.FactorBinding, error) {
 	var rows []domain.FactorBinding
 	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_source_dataset = ? AND c_freq = ? AND c_status = ?",
-			strings.TrimSpace(spaceID),
-			strings.TrimSpace(sourceDataset),
-			strings.TrimSpace(freq),
+		Table("t_factor_bindings AS b").
+		Select("b.*").
+		Joins("JOIN t_factor_defs AS f ON f.c_factor_id = b.c_factor_id").
+		Where("b.c_status = ? AND f.c_status = ?",
 			domain.BindingStatusEnabled,
+			domain.FactorStatusEnabled,
 		).
-		Order("c_factor_id ASC").
-		Find(&rows).Error
-	return rows, err
-}
-
-// ListEnabled returns all enabled bindings used by the realtime trigger.
-func (r *BindingRepository) ListEnabled(ctx context.Context) ([]domain.FactorBinding, error) {
-	var rows []domain.FactorBinding
-	err := r.db.WithContext(ctx).
-		Where("c_status = ?", domain.BindingStatusEnabled).
-		Order("c_space_id ASC, c_source_dataset ASC, c_freq ASC, c_factor_id ASC").
-		Find(&rows).Error
+		Order("b.c_space_id, b.c_source_dataset, b.c_freq, b.c_factor_id").
+		Scan(&rows).Error
 	return rows, err
 }
 

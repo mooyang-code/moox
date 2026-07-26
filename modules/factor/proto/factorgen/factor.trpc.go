@@ -37,10 +37,6 @@ type FactorMgrService interface {
 
 	RecalcFactor(ctx context.Context, req *RecalcFactorReq) (*RecalcFactorRsp, error)
 
-	GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq) (*GetRecalcProgressRsp, error)
-
-	ListFactorRuns(ctx context.Context, req *ListFactorRunsReq) (*ListFactorRunsRsp, error)
-
 	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error)
 }
 
@@ -206,42 +202,6 @@ func FactorMgrService_RecalcFactor_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
-func FactorMgrService_GetRecalcProgress_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetRecalcProgressReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).GetRecalcProgress(ctx, reqbody.(*GetRecalcProgressReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_ListFactorRuns_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListFactorRunsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).ListFactorRuns(ctx, reqbody.(*ListFactorRunsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func FactorMgrService_GetEngineStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetEngineStatusReq{}
 	filters, err := f(req)
@@ -302,14 +262,6 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_RecalcFactor_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/GetRecalcProgress",
-			Func: FactorMgrService_GetRecalcProgress_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/ListFactorRuns",
-			Func: FactorMgrService_ListFactorRuns_Handler,
-		},
-		{
 			Name: "/trpc.moox.factor.FactorMgr/GetEngineStatus",
 			Func: FactorMgrService_GetEngineStatus_Handler,
 		},
@@ -354,12 +306,6 @@ func (s *UnimplementedFactorMgr) DeleteBinding(ctx context.Context, req *DeleteB
 func (s *UnimplementedFactorMgr) RecalcFactor(ctx context.Context, req *RecalcFactorReq) (*RecalcFactorRsp, error) {
 	return nil, errors.New("rpc RecalcFactor of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq) (*GetRecalcProgressRsp, error) {
-	return nil, errors.New("rpc GetRecalcProgress of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) ListFactorRuns(ctx context.Context, req *ListFactorRunsReq) (*ListFactorRunsRsp, error) {
-	return nil, errors.New("rpc ListFactorRuns of service FactorMgr is not implemented")
-}
 func (s *UnimplementedFactorMgr) GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error) {
 	return nil, errors.New("rpc GetEngineStatus of service FactorMgr is not implemented")
 }
@@ -389,10 +335,6 @@ type FactorMgrClientProxy interface {
 	DeleteBinding(ctx context.Context, req *DeleteBindingReq, opts ...client.Option) (rsp *DeleteBindingRsp, err error)
 
 	RecalcFactor(ctx context.Context, req *RecalcFactorReq, opts ...client.Option) (rsp *RecalcFactorRsp, err error)
-
-	GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq, opts ...client.Option) (rsp *GetRecalcProgressRsp, err error)
-
-	ListFactorRuns(ctx context.Context, req *ListFactorRunsReq, opts ...client.Option) (rsp *ListFactorRunsRsp, err error)
 
 	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq, opts ...client.Option) (rsp *GetEngineStatusRsp, err error)
 }
@@ -580,46 +522,6 @@ func (c *FactorMgrClientProxyImpl) RecalcFactor(ctx context.Context, req *Recalc
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RecalcFactorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq, opts ...client.Option) (*GetRecalcProgressRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetRecalcProgress")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("GetRecalcProgress")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetRecalcProgressRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) ListFactorRuns(ctx context.Context, req *ListFactorRunsReq, opts ...client.Option) (*ListFactorRunsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorRuns")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("ListFactorRuns")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListFactorRunsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -21,28 +21,10 @@ eventbus:
 engine:
   python_bin: python3
   factors_dir: ./factors
-  sections_dir: ./sections
   workers: 8
   task_timeout_ms: 30000
-  encoding: auto
-  arrow_row_threshold: 50000
-  max_batch_parallelism: 8
-  batch_min_estimated_ms: 50
-  snapshot_ttl_seconds: 300
-  shm_dir: ""
 
 scheduler:
   event_batch_window_ms: 2000
-  max_retry: 3
-  reconcile_interval_min: 10
-
-instance:
-  instance_id: factor-01
-  role: primary
-  primary_target: ""
-  heartbeat_interval_ms: 5000
-
-sysdeploy:
-  admin_gateway_url: http://127.0.0.1:11002
-health:
-  addr: ":11414"
+  queue_capacity: 2048
+  max_retry: 1

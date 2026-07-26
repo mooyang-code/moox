@@ -6,17 +6,6 @@ import "github.com/mooyang-code/moox/modules/factor/internal/engine"
 type Task struct {
 	engine.FactorTask
 	TriggerType string
-	FactorIDs   []string
-	Completion  chan<- TaskResult
-}
-
-// TaskResult reports terminal task status to callers that need scoped progress.
-type TaskResult struct {
-	TaskID       string
-	Status       string
-	Error        error
-	ErrorMessage string
-	ElapsedMS    int64
 }
 
 type taskKey struct {

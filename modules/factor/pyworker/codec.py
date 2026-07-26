@@ -1,5 +1,6 @@
 import json
 
+import numpy as np
 import pandas as pd
 
 from moox_pyruntime.protocol import (
@@ -29,18 +30,15 @@ def decode_json_df(meta):
     return df
 
 
-def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms, result_tails=None, logs=None):
-    encoded = {}
-    for name, values in results.items():
-        item_tail = int((result_tails or {}).get(name, tail))
-        encoded[name] = {"tail": item_tail, "values": [_json_value(v) for v in list(values)[-item_tail:]]}
+def encode_json_results(task_id, results, logs=None):
     response = {
         "id": task_id,
         "ok": True,
         "encoding": "json",
-        "results": encoded,
-        "per_factor_ms": per_factor_ms,
-        "elapsed_ms": elapsed_ms,
+        "results": {
+            name: [_json_value(v) for v in list(values)]
+            for name, values in results.items()
+        },
     }
     if logs:
         response["logs"] = logs
@@ -51,7 +49,9 @@ def _json_value(value):
     if pd.isna(value):
         return None
     if hasattr(value, "item"):
-        return value.item()
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
     return value
 
 

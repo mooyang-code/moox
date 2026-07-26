@@ -29,8 +29,8 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	svc := registry.NewService(db.Factors(), nil, registry.Options{
-		FactorsDir:    cfg.FactorsDir,
-		DefaultParams: cfg.DefaultParams,
+		FactorsDir:     cfg.FactorsDir,
+		DefaultPeriods: cfg.DefaultPeriods,
 	})
 	type importedFactor struct {
 		FactorID   string `json:"factor_id"`

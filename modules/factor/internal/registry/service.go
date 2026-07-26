@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,8 +19,8 @@ var factorFilePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.py$`)
 
 // Options controls registry source import behavior.
 type Options struct {
-	FactorsDir    string
-	DefaultParams []int
+	FactorsDir     string
+	DefaultPeriods []int
 }
 
 // Service manages local factor definitions.
@@ -37,8 +36,8 @@ func NewService(factors *store.FactorRepository, meta *MetadataSync, opts Option
 	if opts.FactorsDir == "" {
 		opts.FactorsDir = "./factors"
 	}
-	if len(opts.DefaultParams) == 0 {
-		opts.DefaultParams = []int{20}
+	if len(opts.DefaultPeriods) == 0 {
+		opts.DefaultPeriods = []int{20}
 	}
 	return &Service{factors: factors, meta: meta, opts: opts, publisher: moduleregistry.NewSourcePublisher(filepath.Join(opts.FactorsDir, ".versions"))}
 }
@@ -53,23 +52,21 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string) (*domain.Fa
 	if err != nil {
 		return nil, fmt.Errorf("read factor file %s: %w", path, err)
 	}
-	params := append([]int(nil), s.opts.DefaultParams...)
-	paramsJSON, err := json.Marshal(params)
-	if err != nil {
-		return nil, fmt.Errorf("marshal default params: %w", err)
-	}
+	periods := append([]int(nil), s.opts.DefaultPeriods...)
 	sum := sha256.Sum256(raw)
 	factor := domain.FactorDef{
-		FactorID:      strings.ToLower(name),
-		Name:          name,
-		Kind:          domain.FactorKindTimeseries,
-		SourceCode:    string(raw),
-		SourceHash:    hex.EncodeToString(sum[:]),
-		ParamsJSON:    string(paramsJSON),
-		LookbackBars:  DefaultLookback(params),
-		WritebackBars: 5,
-		DependsJSON:   DependsJSONFromSource(string(raw)),
-		Status:        domain.FactorStatusEnabled,
+		FactorID:     strings.ToLower(name),
+		Name:         name,
+		SourceCode:   string(raw),
+		SourceHash:   hex.EncodeToString(sum[:]),
+		Periods:      periods,
+		LookbackBars: DefaultLookback(periods),
+		Depends:      DependsFromSource(string(raw)),
+		Status:       domain.FactorStatusEnabled,
+	}
+	factor, err = domain.NormalizeFactorDefinition(factor)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.writeSourceBack(name, raw); err != nil {
 		return nil, err

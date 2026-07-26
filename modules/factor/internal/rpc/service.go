@@ -9,11 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
@@ -28,12 +26,7 @@ var pythonModuleNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type schedulerRuntime interface {
 	Status() scheduler.Status
-	EnqueueChecked(context.Context, scheduler.Task) error
-	Drain(context.Context) error
-}
-
-type engineStatusProvider interface {
-	Status() engine.WorkerPoolStatus
+	Run(context.Context, scheduler.Task) error
 }
 
 // Option customizes a FactorMgr service.
@@ -60,23 +53,18 @@ type Service struct {
 	factors    *store.FactorRepository
 	bindings   *store.BindingRepository
 	scheduler  schedulerRuntime
-	engine     engineStatusProvider
 	factorsDir string
 	publisher  *moduleregistry.SourcePublisher
 	meta       *registry.MetadataSync
-	recalcMu   sync.Mutex
-	recalc     map[string]*recalcState
 }
 
-// NewWithRuntime creates a FactorMgr service with optional runtime status providers.
-func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, eng engineStatusProvider, opts ...Option) *Service {
+// NewWithRuntime creates a FactorMgr service with an optional scheduler runtime.
+func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, opts ...Option) *Service {
 	s := &Service{
 		factors:    persistence.Factors(),
 		bindings:   persistence.Bindings(),
 		scheduler:  sched,
-		engine:     eng,
 		factorsDir: "./factors",
-		recalc:     map[string]*recalcState{},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -156,7 +144,7 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
 	page, size := pageParams(req.GetPage())
-	rows, total, err := s.factors.List(ctx, store.FactorFilter{Kind: req.GetKind(), Status: req.GetStatus(), Page: store.Page{Page: int(page), PageSize: int(size)}})
+	rows, total, err := s.factors.List(ctx, store.FactorFilter{Status: req.GetStatus(), Page: store.Page{Page: int(page), PageSize: int(size)}})
 	if err != nil {
 		return &factorpb.ListFactorsRsp{RetInfo: inner(err)}, nil
 	}
@@ -221,28 +209,12 @@ func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBinding
 	return &factorpb.DeleteBindingRsp{RetInfo: success()}, nil
 }
 
-func (s *Service) ListFactorRuns(ctx context.Context, req *factorpb.ListFactorRunsReq) (*factorpb.ListFactorRunsRsp, error) {
-	page, size := pageParams(req.GetPage())
-	return &factorpb.ListFactorRunsRsp{RetInfo: success(), Runs: []*factorpb.FactorRun{}, PageResult: pageResult(page, size, 0)}, nil
-}
-
 func (s *Service) GetEngineStatus(context.Context, *factorpb.GetEngineStatusReq) (*factorpb.GetEngineStatusRsp, error) {
 	rsp := &factorpb.GetEngineStatusRsp{RetInfo: success()}
 	if s.scheduler != nil {
 		status := s.scheduler.Status()
 		rsp.QueueDepth = int32(status.QueueDepth)
-		rsp.SupersedeCount = status.SupersedeCount
-		rsp.WritebackFailures = status.WritebackFailures
-	}
-	if s.engine != nil {
-		status := s.engine.Status()
-		rsp.Workers = make([]*factorpb.WorkerStatus, 0, status.Workers)
-		for i := 0; i < status.Workers; i++ {
-			rsp.Workers = append(rsp.Workers, &factorpb.WorkerStatus{
-				WorkerId: fmt.Sprintf("worker-%d", i+1),
-				State:    "ready",
-			})
-		}
+		rsp.QueueOverflowCount = status.QueueOverflowCount
 	}
 	return rsp, nil
 }
@@ -258,29 +230,15 @@ func (s *Service) normalizeFactor(pb *factorpb.FactorDef) (domain.FactorDef, err
 	if !pythonModuleNamePattern.MatchString(factor.Name) {
 		return domain.FactorDef{}, fmt.Errorf("factor name %q must be a valid Python module name", factor.Name)
 	}
-	if factor.Kind == "" {
-		factor.Kind = domain.FactorKindTimeseries
-	}
-	if factor.ParamsJSON == "" {
-		factor.ParamsJSON = "[]"
-	}
-	if factor.DependsJSON == "" || strings.TrimSpace(factor.DependsJSON) == "[]" {
-		factor.DependsJSON = registry.DependsJSONFromSource(factor.SourceCode)
-	}
+	factor.Depends = registry.DependsFromSource(factor.SourceCode)
 	if factor.LookbackBars == 0 {
-		factor.LookbackBars = registry.DefaultLookback(nil)
-	}
-	if factor.WritebackBars == 0 {
-		factor.WritebackBars = 5
-	}
-	if factor.Status == "" {
-		factor.Status = domain.FactorStatusDisabled
+		factor.LookbackBars = registry.DefaultLookback(factor.Periods)
 	}
 	if factor.SourceHash == "" {
 		sum := sha256.Sum256([]byte(factor.SourceCode))
 		factor.SourceHash = hex.EncodeToString(sum[:])
 	}
-	return factor, nil
+	return domain.NormalizeFactorDefinition(factor)
 }
 
 func (s *Service) normalizeBinding(pb *factorpb.FactorBinding) (domain.FactorBinding, error) {

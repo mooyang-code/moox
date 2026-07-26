@@ -1,49 +1,33 @@
 import io
 import math
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pandas as pd
 
-from codec import TYPE_HELLO, TYPE_RUN, read_frame, write_frame, decode_json_df
+from codec import TYPE_HELLO, TYPE_RUN, _json_value, decode_json_df, read_frame, write_frame
 from worker import FactorWorker
 
 
 def test_frame_round_trip():
     stream = io.BytesIO()
-
     write_frame(stream, TYPE_RUN, {"id": "task-1", "encoding": "json"}, b"payload")
     stream.seek(0)
     frame_type, meta, payload = read_frame(stream)
-
     assert frame_type == TYPE_RUN
-    assert meta == {"id": "task-1", "encoding": "json"}
+    assert meta["id"] == "task-1"
     assert payload == b"payload"
 
 
-def test_worker_writes_ready_with_loaded_factors(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    sections_dir = tmp_path / "sections"
-    factors_dir.mkdir()
-    sections_dir.mkdir()
-    (factors_dir / "Bias.py").write_text(
-        "def signal_multi_params(df, param_list):\n"
-        "    return {str(p): df['close'] for p in param_list}\n",
-        encoding="utf-8",
-    )
-
+def test_worker_writes_json_only_ready_frame(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path, "Bias")
     proc = subprocess.Popen(
         [
             sys.executable,
             str(Path(__file__).with_name("worker.py")),
             "--factors-dir",
             str(factors_dir),
-            "--sections-dir",
-            str(sections_dir),
-            "--encoding",
-            "json",
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -53,164 +37,80 @@ def test_worker_writes_ready_with_loaded_factors(tmp_path: Path):
         frame_type, meta, payload = read_frame(proc.stdout)
         assert frame_type == TYPE_HELLO
         assert payload == b""
-        assert meta["status"] == "ready"
         assert meta["factors"] == ["Bias"]
+        assert meta["encodings"] == ["json"]
+        assert "sections" not in meta
     finally:
         proc.kill()
         proc.wait(timeout=5)
 
 
-def test_worker_requires_canonical_runtime_package(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    sections_dir = tmp_path / "sections"
-    runtime_dir = tmp_path / "missing-runtime"
-    factors_dir.mkdir()
-    sections_dir.mkdir()
-    runtime_dir.mkdir()
-    env = os.environ.copy()
-    env["MOOX_PYTHON_RUNTIME_PATH"] = str(runtime_dir)
-    env["PYTHONPATH"] = ""
-
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).with_name("worker.py")),
-            "--factors-dir",
-            str(factors_dir),
-            "--sections-dir",
-            str(sections_dir),
-        ],
-        env=env,
-        capture_output=True,
-        timeout=5,
-        check=False,
-    )
-
-    assert proc.returncode != 0
-    assert b"moox_pyruntime" in proc.stderr
-
-
-def test_bad_factor_module_does_not_block_worker_ready(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    sections_dir = tmp_path / "sections"
-    factors_dir.mkdir()
-    sections_dir.mkdir()
-    (factors_dir / "Bias.py").write_text(
-        "def signal_multi_params(df, param_list):\n"
-        "    return {str(p): df['close'] for p in param_list}\n",
-        encoding="utf-8",
-    )
-    (factors_dir / "Broken.py").write_text("def signal(:\n", encoding="utf-8")
-
-    worker = FactorWorker(factors_dir=factors_dir, sections_dir=sections_dir, encoding="json")
+def test_execute_returns_values_only_for_target_range(tmp_path: Path):
+    worker = FactorWorker(make_factor_dir(tmp_path, "Bias"))
     worker.load_modules()
+    response = worker.execute_request(
+        request_meta(
+            periods=[2],
+            target_start_time="2026-07-06T14:15:00Z",
+            target_end_time="2026-07-06T14:17:00Z",
+        )
+    )
+    assert response["results"]["Bias_2"] == [5.0, 6.0]
+    assert "result_tails" not in response
+    assert "per_factor_ms" not in response
+    assert "elapsed_ms" not in response
 
-    assert sorted(worker.factors.keys()) == ["Bias"]
+
+def test_bad_factor_module_does_not_block_ready(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path, "Bias")
+    (factors_dir / "Broken.py").write_text("def signal(:\n", encoding="utf-8")
+    worker = FactorWorker(factors_dir)
+    worker.load_modules()
+    assert list(worker.factors) == ["Bias"]
     assert "Broken" in worker.load_errors
 
 
-def test_signal_multi_params_is_preferred(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    factors_dir.mkdir()
-    (factors_dir / "Bias.py").write_text(
-        "def signal(*args):\n"
-        "    raise AssertionError('signal should not be called')\n\n"
-        "def signal_multi_params(df, param_list):\n"
-        "    return {str(p): df['close'] + int(p) for p in param_list}\n",
-        encoding="utf-8",
-    )
-    worker = FactorWorker(factors_dir=factors_dir, sections_dir=tmp_path / "sections", encoding="json")
-    worker.load_modules()
-
-    response = worker.execute_request(request_meta(params=[20, 96], writeback_bars=2))
-
-    assert response["results"]["Bias_20"]["values"] == [23.0, 24.0]
-    assert response["results"]["Bias_96"]["values"] == [99.0, 100.0]
+def test_json_value_normalizes_nan_and_infinity():
+    assert _json_value(float("nan")) is None
+    assert _json_value(float("inf")) is None
+    assert _json_value(float("-inf")) is None
 
 
-def test_signal_path_uses_copy_per_param_and_only_returns_factor_columns(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    factors_dir.mkdir()
-    (factors_dir / "Cci.py").write_text(
-        "def signal(df, n, factor_name):\n"
-        "    if 'temp' in df.columns:\n"
-        "        raise AssertionError('df was reused across params')\n"
-        "    df['temp'] = 100\n"
-        "    df[factor_name] = df['close'] + n\n"
-        "    return df\n",
-        encoding="utf-8",
-    )
-    worker = FactorWorker(factors_dir=factors_dir, sections_dir=tmp_path / "sections", encoding="json")
-    worker.load_modules()
-
-    meta = request_meta(name="Cci", params=[2, 3], writeback_bars=2)
-    response = worker.execute_request(meta)
-
-    assert sorted(response["results"].keys()) == ["Cci_2", "Cci_3"]
-    assert response["results"]["Cci_2"]["values"] == [5.0, 6.0]
-    assert response["results"]["Cci_3"]["values"] == [6.0, 7.0]
-
-
-def test_each_factor_keeps_its_own_writeback_tail(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    factors_dir.mkdir()
-    (factors_dir / "Fast.py").write_text(
-        "def signal(df, n, factor_name):\n"
-        "    df[factor_name] = df['close'] + n\n"
-        "    return df\n", encoding="utf-8"
-    )
-    (factors_dir / "Slow.py").write_text(
-        "def signal(df, n, factor_name):\n"
-        "    df[factor_name] = df['close'] + n\n"
-        "    return df\n", encoding="utf-8"
-    )
-    worker = FactorWorker(factors_dir=factors_dir, sections_dir=tmp_path / "sections", encoding="json")
-    worker.load_modules()
-    meta = request_meta(name="Fast", params=[1], writeback_bars=1)
-    meta["factors"] = [
-        {"name": "Fast", "params": [1], "writeback_bars": 1},
-        {"name": "Slow", "params": [1], "writeback_bars": 3},
-    ]
-    response = worker.execute_request(meta)
-    assert response["results"]["Fast_1"]["tail"] == 1
-    assert response["results"]["Slow_1"]["tail"] == 3
-
-
-def test_decode_json_df_converts_null_to_nan_and_time_to_utc():
+def test_decode_json_df_converts_null_and_time_to_utc():
     df = decode_json_df(
         {
             "df": {
-                "columns": {
-                    "open": [1.0, None],
-                    "close": [2.0, 3.0],
-                },
+                "columns": {"open": [1.0, None], "close": [2.0, 3.0]},
                 "index_ms": [1783347300000, 1783347360000],
             }
         }
     )
-
     assert str(df["candle_begin_time"].dtype) == "datetime64[ns, UTC]"
     assert pd.Timestamp("2026-07-06T14:15:00Z") == df["candle_begin_time"].iloc[0]
     assert math.isnan(df["open"].iloc[1])
 
 
-def request_meta(name="Bias", params=None, writeback_bars=1):
-    if params is None:
-        params = [20]
+def make_factor_dir(tmp_path: Path, name: str) -> Path:
+    factors_dir = tmp_path / "factors"
+    factors_dir.mkdir(exist_ok=True)
+    (factors_dir / f"{name}.py").write_text(
+        "def signal(df, n, factor_name):\n"
+        "    df[factor_name] = df['close'] + n\n"
+        "    return df\n",
+        encoding="utf-8",
+    )
+    return factors_dir
+
+
+def request_meta(periods=None, target_start_time=None, target_end_time=None):
     return {
         "id": "task-1",
         "encoding": "json",
-        "factors": [
-            {
-                "name": name,
-                "params": params,
-                "writeback_bars": writeback_bars,
-            }
-        ],
+        "target_start_time": target_start_time or "2026-07-06T14:15:00Z",
+        "target_end_time": target_end_time or "2026-07-06T14:17:00Z",
+        "factors": [{"name": "Bias", "periods": periods or [20]}],
         "df": {
-            "columns": {
-                "close": [1.0, 2.0, 3.0, 4.0],
-            },
+            "columns": {"close": [1.0, 2.0, 3.0, 4.0]},
             "index_ms": [1783347180000, 1783347240000, 1783347300000, 1783347360000],
         },
     }
