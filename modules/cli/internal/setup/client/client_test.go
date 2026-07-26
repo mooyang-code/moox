@@ -115,13 +115,30 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy(t *testing.T) {
 	t.Parallel()
 	updated := map[string]string{}
+	local := map[string]string{}
 	healthURLs := map[string]string{}
+	createdGatewayNode := ""
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/ListGatewayNodes":
+			response, _ := protojson.Marshal(&pb.ListGatewayNodesRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/CreateGatewayNode":
+			var input pb.CreateGatewayNodeReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			createdGatewayNode = input.GetNode().GetNodeId()
+			response, _ := protojson.Marshal(&pb.CreateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: input.GetNode()})
+			_, _ = w.Write(response)
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			var input pb.GetServiceDeploymentReq
 			body, _ := io.ReadAll(request.Body)
 			_ = protojson.Unmarshal(body, &input)
+			if input.GetNodeId() == "storage" {
+				response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND}})
+				_, _ = w.Write(response)
+				return
+			}
 			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
 				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 				Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: input.GetServiceName(), Host: "127.0.0.1", Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:20210/readyz","monitor_enabled":true}`},
@@ -132,10 +149,18 @@ func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy
 			body, _ := io.ReadAll(request.Body)
 			_ = protojson.Unmarshal(body, &input)
 			updated[input.GetServiceName()] = input.GetDeployment().GetHost()
+			require.Equal(t, "control", input.GetNodeId())
 			var extra map[string]any
 			_ = json.Unmarshal([]byte(input.GetDeployment().GetExtraConfig()), &extra)
 			healthURLs[input.GetServiceName()], _ = extra["health_url"].(string)
 			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/CreateServiceDeployment":
+			var input pb.CreateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			local[input.GetDeployment().GetServiceName()] = input.GetDeployment().GetHost()
+			response, _ := protojson.Marshal(&pb.CreateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
 			_, _ = w.Write(response)
 		default:
 			http.NotFound(w, request)
@@ -146,8 +171,10 @@ func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy
 	require.NoError(t, err)
 	require.Equal(t, len(storageDeploymentNames), result.Deployments)
 	require.Equal(t, "127.0.0.1:11109", forwarder.remote)
+	require.Equal(t, "storage", createdGatewayNode)
 	for _, name := range storageDeploymentNames {
 		require.Equal(t, "203.0.113.9", updated[name], name)
+		require.Equal(t, "127.0.0.1", local[name], name)
 		require.Equal(t, "http://203.0.113.9:20210/readyz", healthURLs[name], name)
 	}
 }

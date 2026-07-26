@@ -28,6 +28,8 @@ var storageDeploymentNames = []string{
 	"storage-primary", "storage-view",
 }
 
+const storageGatewayNodeID = "storage"
+
 type Forwarder interface {
 	ForwardLocal(context.Context, string) (net.Listener, error)
 }
@@ -114,6 +116,9 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, host string) (Storag
 	if c == nil || c.forwarder == nil || host == "" {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
 	}
+	if err := c.ensureStorageGatewayNode(ctx, host); err != nil {
+		return StoragePlacementResult{}, err
+	}
 	for _, serviceName := range storageDeploymentNames {
 		getResponse := &pb.GetServiceDeploymentRsp{}
 		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
@@ -138,8 +143,79 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, host string) (Storag
 		if err := checkRetInfo(updateResponse.GetRetInfo()); err != nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
+		local := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
+		local.NodeId = storageGatewayNodeID
+		local.Host = "127.0.0.1"
+		if err := c.upsertStorageDeployment(ctx, local); err != nil {
+			return StoragePlacementResult{}, err
+		}
 	}
 	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
+}
+
+func (c *Client) ensureStorageGatewayNode(ctx context.Context, host string) error {
+	list := &pb.ListGatewayNodesRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes",
+		&pb.ListGatewayNodesReq{NodeId: storageGatewayNodeID}, list); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	if err := checkRetInfo(list.GetRetInfo()); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	node := &pb.GatewayNode{
+		NodeId: storageGatewayNodeID, Name: "Storage", PublicAddress: "https://" + net.JoinHostPort(host, "11001"), Status: "enabled",
+	}
+	if len(list.GetNodes()) == 0 {
+		response := &pb.CreateGatewayNodeRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateGatewayNode",
+			&pb.CreateGatewayNodeReq{Node: node}, response); err != nil {
+			return fmt.Errorf("storage_placement_failed")
+		}
+		if err := checkRetInfo(response.GetRetInfo()); err != nil {
+			return fmt.Errorf("storage_placement_failed")
+		}
+		return nil
+	}
+	response := &pb.UpdateGatewayNodeRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode",
+		&pb.UpdateGatewayNodeReq{NodeId: storageGatewayNodeID, Node: node}, response); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	if err := checkRetInfo(response.GetRetInfo()); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	return nil
+}
+
+func (c *Client) upsertStorageDeployment(ctx context.Context, deployment *pb.ServiceDeployment) error {
+	get := &pb.GetServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		&pb.GetServiceDeploymentReq{NodeId: storageGatewayNodeID, ServiceName: deployment.GetServiceName()}, get); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	if get.GetRetInfo() != nil && get.GetRetInfo().GetCode() == pb.ErrorCode_NOT_FOUND {
+		response := &pb.CreateServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateServiceDeployment",
+			&pb.CreateServiceDeploymentReq{Deployment: deployment}, response); err != nil {
+			return fmt.Errorf("storage_placement_failed")
+		}
+		if err := checkRetInfo(response.GetRetInfo()); err != nil {
+			return fmt.Errorf("storage_placement_failed")
+		}
+		return nil
+	}
+	if err := checkRetInfo(get.GetRetInfo()); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	response := &pb.UpdateServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment",
+		&pb.UpdateServiceDeploymentReq{NodeId: storageGatewayNodeID, ServiceName: deployment.GetServiceName(), Deployment: deployment}, response); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	if err := checkRetInfo(response.GetRetInfo()); err != nil {
+		return fmt.Errorf("storage_placement_failed")
+	}
+	return nil
 }
 
 func storageExtraConfigForHost(raw, host string) (string, error) {
