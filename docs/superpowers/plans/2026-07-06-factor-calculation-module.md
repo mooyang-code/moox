@@ -1,5 +1,10 @@
 # Factor Calculation Module Implementation Plan
 
+> **状态：历史实施计划，不是当前 Factor 架构事实源。**
+> 该计划中的 durable inbox、FactorRun、Arrow、截面因子、多实例分片和 replay
+> 持久化已经被 2026-07-26 的个人量化简化决策取代。当前实施依据为
+> [Factor Best-Effort Simplification](2026-07-26-factor-best-effort-simplification.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将 `modules/factor` 从健康检查占位服务落地为事件驱动的因子计算服务，支持邢不行风格 Python 时序因子、Storage 事件触发、结果 Dataset 写回、补算与管理面。

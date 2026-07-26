@@ -1,65 +1,41 @@
-# moox-factor
+# MooX Factor
 
-因子计算模块。`moox-factor` 是独立 tRPC 服务进程，负责后续因子定义管理、事件触发计算、Python worker 执行和 Storage 结果写回。
+Factor 是面向个人量化的单实例时序因子服务。它只持久化因子定义与数据集绑定；
+实时触发和计算任务都保存在进程内，不提供持久化调度、运行历史或异步进度。
 
-实时 Storage 触发器启动时创建并持有 `MOOX_STORAGE/factor_calc` Consumer；filter、ACK、DeliverPolicy 和投递限制由 Factor 在代码中明确声明。
-
-传输生命周期位于 `internal/trigger/eventconsumer`；`internal/trigger` 只保留
-`EventBatcher`、重放和 pending inbox 语义。配置统一使用 `eventbus`，不再暴露
-NATS 命名的业务配置。
-
-`factor_calc` 的实时 DeliverPolicy 由 Factor 固定为只接收新消息。需要 replay 时，必须显式创建并使用独立 Consumer，或使用离线的 `run-once`/补算入口；不得修改或复用实时 Consumer 来承载历史重放。
-
-实时 delivery 在 ACK 前先写入 Factor SQLite 的 `t_factor_event_inbox`；进程重启会 replay 未 flush 的 inbox，窗口 flush 后才删除对应记录。这个本地 pending inbox 是实时 Consumer 之外的恢复边界，不替代 `MOOX_STORAGE/factor_calc`，也不把 replay 伪装成实时消费。
-
-调度器当前仍是进程内内存队列：inbox claim、稳定任务 ID 和 writeback 幂等共同提供 durable at-least-once 语义，并让 replay/redelivery 收敛到同一逻辑任务；这不是跨进程 exactly-once。若需要跨进程执行恢复，应另行引入持久化 scheduler/outbox，不在本次修复范围内。
-
-## 现状
+## Build And Run
 
 ```bash
-# 仓库根目录
 ./scripts/build.sh factor
 
-# 模块目录
-go run ./cmd/server
+# 服务端启动方式保持不变
+./bin/moox-factor
 
-# CLI 初始化、导入和单次计算
-go run ./cmd/cli init --db ./data/factor/factor.db
-go run ./cmd/cli import --db ./data/factor/factor.db --factors-dir ./factors --default-params 20,96
-go run ./cmd/cli run-once --space crypto --dataset binance_spot_kline --subject BTC-USDT --freq 1m --bar-time 2026-07-06T09:15:00Z
-# JSONL 每行：{"message_id":"...","received_at":"...","event":{...RowsUpserted protojson...}}
-go run ./cmd/cli replay --db ./data/factor/factor.db --factors-dir ./factors --input ./replay.jsonl --space crypto --dataset binance_spot_kline --start 2026-07-06T09:00:00Z --end 2026-07-06T10:00:00Z --factor-version <immutable-source-hash> --target-run-id run-42
-# factor_version 必须对应 factors/.versions/factor/<factor-name>/<version>/module.py。
+./bin/moox-factor-cli init --db ./data/factor/factor.db
+./bin/moox-factor-cli import \
+  --db ./data/factor/factor.db \
+  --factors-dir ./factors \
+  --default-periods 20,96
+
+./bin/moox-factor-cli run-once \
+  --space crypto \
+  --dataset binance_spot_kline \
+  --subject BTC-USDT \
+  --freq 1m \
+  --start-time 2026-07-26T00:00:00Z \
+  --end-time 2026-07-27T00:00:00Z
 ```
 
-## 目录结构
+## Runtime Contract
 
-```text
-cmd/server/main.go
-config/app.yaml
-config/trpc_go.yaml
-internal/bootstrap/
-internal/engine/
-internal/registry/
-internal/store/
-internal/storageio/
-internal/trigger/eventconsumer/
-pyworker/
-examples/run-once/
-```
+- `periods` 是因子计算周期；`depends` 是源码声明的额外输入列，不表示因子 DAG。
+- `lookback_bars` 是每个目标 chunk 前的输入上下文，不决定输出行数。
+- 实时事件转换为 `[bar_time, bar_time + 1ns)` 的单 bar 范围。
+- 手动补算使用 `[start_time, end_time)`；超过 2000 个目标 bar 时自动分 chunk。
+- Python 每个结果列必须为每个目标 bar 返回一个有限数值或 `null`。
+- `null` 只跳过对应单元格写回，不影响同一行的其他因子列。
 
-## 规划方向
-
-因子定义与结果列已可在 Storage 元数据（`Factor`、`DatasetColumn.origin_type=factor`）中登记；本模块承担：
-
-- 因子任务调度与参数化计算
-- 使用固定窗口 `EventBatcher` 将同一计算范围内的实时 Storage 事件合并为单个任务
-- 结果写回 Storage Access（列级更新）
-- 与 View 物化链路集成
-
-详细存储模型见 [docs/存储概念与设计意图.md](../../docs/存储概念与设计意图.md)；模块整体落地方案见 [docs/因子计算模块设计.md](../../docs/因子计算模块设计.md)。`run-once` 自测流程见 [examples/run-once](./examples/run-once/)。
-
-## 相关模块
-
-- [storage](../storage/) — 因子结果持久化与查询
-- [trade](../trade/) — 交易域（独立）
+实时 Consumer 在事件加入内存 `EventBatcher` 后 ACK。ACK 后若进程退出，尚未计算的
+任务可能丢失；这是个人项目为简洁性接受的边界。使用 `run-once` 或同步
+`RecalcFactor` 修复缺口。补算期间没有持久化进度；失败后可以直接重跑整个范围，
+已完成的字段写回会被覆盖。

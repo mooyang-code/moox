@@ -2,27 +2,25 @@
 
 ## Preconditions
 
-- Storage and Factor use their `eventbus` credential files to reach the same
-  `moox-eventbus` deployment.
-- The EventBus topology is healthy. `packages/events` owns the
-  `DatasetRowsUpserted` event contract and resolves its `MOOX_STORAGE` stream and
-  subject family; neither Storage nor Factor repeats those values in runtime
-  configuration.
-- `moox-factor` is running from `modules/factor` with access to `factors/`, `sections/`, and its SQLite DB.
-- Enabled bindings exist for the source K-line dataset and frequency.
+- Storage 与 Factor 使用同一 EventBus，`factor_calc` Consumer 已由拓扑初始化。
+- `moox-factor` 能访问 `factors/`、SQLite 和 Storage Gateway。
+- source Dataset/freq 存在 enabled Factor 与 enabled Binding。
 
-## Live Checks
+## Live Check
 
-1. Start Storage, NATS, Admin, and Factor.
-2. Import or create factors, then create bindings for `binance_spot_kline` to `binance_spot_factor`.
-3. Let collector write new 1m K-line rows.
-4. Confirm Factor's fixed `factor_calc` Consumer receives governed
-   `DatasetRowsUpserted` events.
-5. Confirm Storage receives tail writes in `binance_spot_factor`.
-6. Confirm Factor does not loop on its own writes because realtime trigger only whitelists source datasets from enabled bindings.
+1. 启动 EventBus、Storage、Factor 与 Collector。
+2. 写入一条新的 1m K 线。
+3. 确认 Factor 收到 `DatasetRowsUpserted`，日志出现 `factor_task_done`。
+4. 在目标 Factor Dataset 查询同一 subject/data_time，确认目标列已写入。
+5. 查看 `GetEngineStatus` 的 `queue_depth` 回到 0。
+6. 制造超过 `queue_capacity` 的不同 scope，确认
+   `queue_overflow_count` 增加并记录 task lost 日志。
 
-## Acceptance
+## Recovery Check
 
-- A 500-symbol event storm produces 500 event-batched tasks, not more.
-- Scheduler drains deterministic 5ms tasks within one bar budget in test mode.
-- Local service logs contain `factor_run_done` lines for success, failed, and superseded terminal states.
+在事件已 ACK、batch 尚未执行时停止 Factor。重启后该 task 不会自动恢复，这是预期的
+best-effort 行为。使用 `moox-factor-cli run-once` 对相同半开范围补算，并确认结果写回。
+
+自动化 `TestRealtimeEventToPythonWritebackE2E` 使用真实 embedded JetStream、
+EventMessage、Factor Consumer、EventBatcher、Scheduler 和 PythonExecutor，但
+StorageIO 是确定性的 fake；真实 Storage RPC 仍按以上步骤人工验证。
