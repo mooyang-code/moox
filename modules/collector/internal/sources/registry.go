@@ -75,25 +75,6 @@ func (r *CollectorRegistry) generateKey(source, market, dataType string) string 
 	return fmt.Sprintf("%s:%s:%s", source, market, dataType)
 }
 
-// GetDataTypes 获取所有已注册的数据类型（去重）
-func (r *CollectorRegistry) GetDataTypes() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	// 使用 map 去重
-	typeSet := make(map[string]struct{})
-	for _, desc := range r.collectors {
-		typeSet[desc.DataType] = struct{}{}
-	}
-
-	// 转换为切片
-	var types []string
-	for t := range typeSet {
-		types = append(types, t)
-	}
-	return types
-}
-
 // CollectorBuilder 构建器模式，简化采集器注册
 type CollectorBuilder struct {
 	descriptor *CollectorDescriptor

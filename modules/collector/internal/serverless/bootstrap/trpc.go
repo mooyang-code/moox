@@ -16,10 +16,6 @@ const (
 	dnsResolveTimerService = "trpc.dnsresolve.timer"
 )
 
-func trpcTimerServiceNames() []string {
-	return []string{heartbeatTimerService, dnsResolveTimerService}
-}
-
 // RegisterTRPCServices registers heartbeat and DNS timers and starts the server.
 func RegisterTRPCServices() error {
 	log.Info("正在初始化TRPC服务...")

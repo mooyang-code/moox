@@ -1,34 +1,16 @@
 # MooX Python Runtime
 
-`packages/pyruntime` is a reusable Go library for worker processes,
-`moox.py/v1` frames, Arrow transport, immutable source publishing and shared
-snapshots; business modules still provide their own task/result codec. The
-current Strategy code imports reusable pieces from this package, but keeps its
-own worker entry point, business codec and state transaction semantics. Factor
-is the only Python runtime included and supported by this Streaming delivery;
-this does not claim that Strategy has no package dependency or imply a
-Strategy migration.
+`packages/pyruntime` provides the reusable process, pool, frame protocol and
+immutable module publishing primitives used by MooX Python workers. Business
+modules keep their own task and result codecs.
 
-## Data API
+The runtime deliberately supports one transport encoding: bounded JSON inside
+the `moox.py/v1` binary frame. Factor and Strategy both use that path today.
+Arrow and shared mmap snapshots were removed because no production caller used
+them; they can be designed again when a measured workload needs them.
 
-```go
-stream, err := transport.EncodeArrowStream(table)
-file, err := transport.EncodeArrowFile(table)
-store := snapshot.NewStore(root)
-handle, err := store.AcquireArrow(ctx, key, table)
-mapped, err := store.Open(ctx, handle)
-defer mapped.Close()
-// mapped.Reader().RecordBatchAt(i) is backed by read-only mmap bytes.
-```
-
-Use Arrow stream for one worker's frame payload. Use `AcquireArrow` plus
-`Store.Open` when multiple workers consume the same immutable table. Release
-records before closing the mapping, then release the snapshot handle.
-
-The Python counterpart is under `python/moox_pyruntime`. It uses standard
-`pyarrow.ipc` and `pyarrow.memory_map`, so Go and Python do not need a private
-serialization format. Install `python/requirements.txt` only for workers that
-negotiate Arrow; JSON remains the explicit fallback when `pyarrow` is absent.
+The Python counterpart under `python/moox_pyruntime` provides the same frame
+contract plus bounded stdout/stderr capture.
 
 Run package tests:
 

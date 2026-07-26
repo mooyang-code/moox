@@ -10,6 +10,17 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+type actionReporterFunc func(context.Context, *Delivery, HandlerResult, error)
+
+func (f actionReporterFunc) ReportAction(
+	ctx context.Context,
+	delivery *Delivery,
+	result HandlerResult,
+	err error,
+) {
+	f(ctx, delivery, result, err)
+}
+
 type runnerFakeConsumer struct {
 	mu      sync.Mutex
 	batches [][]*Delivery
@@ -194,7 +205,7 @@ func TestRunnerReportsActionErrorOnlyThroughActionReporter(t *testing.T) {
 	defer cancel()
 	runner := NewRunner(consumer, &runnerFakeHandler{result: HandlerResult{Decision: ACK, Err: handlerErr}}, RunnerConfig{
 		ErrorReporter: ErrorReporterFunc(func(err error) { reported = append(reported, err) }),
-		ActionReporter: ActionReporterFunc(func(_ context.Context, _ *Delivery, _ HandlerResult, err error) {
+		ActionReporter: actionReporterFunc(func(_ context.Context, _ *Delivery, _ HandlerResult, err error) {
 			actionErrors = append(actionErrors, err)
 		}),
 	})
@@ -270,6 +281,7 @@ func TestActionReporterReportsAckNakAndTerm(t *testing.T) {
 			var actions []string
 			var got []HandlerResult
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			delivery := runnerDelivery(&actions, nil)
 			switch test.decision {
 			case ACK:
@@ -282,7 +294,7 @@ func TestActionReporterReportsAckNakAndTerm(t *testing.T) {
 			runner := NewRunner(
 				&runnerFakeConsumer{batches: [][]*Delivery{{delivery}}},
 				&runnerFakeHandler{result: HandlerResult{Decision: test.decision, Delay: time.Second}},
-				RunnerConfig{ActionReporter: ActionReporterFunc(func(
+				RunnerConfig{ActionReporter: actionReporterFunc(func(
 					_ context.Context, gotDelivery *Delivery, result HandlerResult, err error,
 				) {
 					if gotDelivery != delivery || err != nil {
@@ -308,6 +320,7 @@ func TestActionReporterReportsPendingBatchRetry(t *testing.T) {
 	var reportedDeliveries []*Delivery
 	var reportedResults []HandlerResult
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	first.nakFn = func(context.Context, time.Duration) error {
 		actions = append(actions, "first-nak")
 		cancel()
@@ -316,7 +329,7 @@ func TestActionReporterReportsPendingBatchRetry(t *testing.T) {
 	runner := NewRunner(
 		&runnerFakeConsumer{batches: [][]*Delivery{{first, second}}},
 		&runnerFakeHandler{result: HandlerResult{Decision: RETRY, Delay: 3 * time.Second}},
-		RunnerConfig{ActionReporter: ActionReporterFunc(func(
+		RunnerConfig{ActionReporter: actionReporterFunc(func(
 			_ context.Context, delivery *Delivery, result HandlerResult, _ error,
 		) {
 			reportedDeliveries = append(reportedDeliveries, delivery)
@@ -347,7 +360,7 @@ func TestActionReporterPanicDoesNotStopRunnerAfterAction(t *testing.T) {
 	runner := NewRunner(
 		&runnerFakeConsumer{batches: [][]*Delivery{{first}, {second}}},
 		&runnerFakeHandler{result: HandlerResult{Decision: ACK}},
-		RunnerConfig{ActionReporter: ActionReporterFunc(func(
+		RunnerConfig{ActionReporter: actionReporterFunc(func(
 			context.Context, *Delivery, HandlerResult, error,
 		) {
 			panic("logging observer failed")
@@ -374,7 +387,7 @@ func TestActionReporterPanicDoesNotBlockPendingBatchRetry(t *testing.T) {
 	runner := NewRunner(
 		&runnerFakeConsumer{batches: [][]*Delivery{{first, second}}},
 		&runnerFakeHandler{result: HandlerResult{Decision: RETRY, Delay: time.Second}},
-		RunnerConfig{ActionReporter: ActionReporterFunc(func(
+		RunnerConfig{ActionReporter: actionReporterFunc(func(
 			context.Context, *Delivery, HandlerResult, error,
 		) {
 			panic("logging observer failed")

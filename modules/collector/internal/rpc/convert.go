@@ -141,26 +141,3 @@ func jsonStringFromStruct(value *structpb.Struct) string {
 	}
 	return string(raw)
 }
-
-func stringsFromJSONString(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	var values []string
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil
-	}
-	return values
-}
-
-func jsonStringFromStrings(values []string) string {
-	if len(values) == 0 {
-		return "[]"
-	}
-	raw, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
-	}
-	return string(raw)
-}

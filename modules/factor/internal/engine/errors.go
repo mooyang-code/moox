@@ -1,7 +1,5 @@
 package engine
 
-import "fmt"
-
 // RetryableError marks transient storage/worker errors.
 type RetryableError struct {
 	Err error
@@ -17,11 +15,3 @@ type NonRetryableError struct {
 
 func (e NonRetryableError) Error() string { return e.Err.Error() }
 func (e NonRetryableError) Unwrap() error { return e.Err }
-
-func retryable(format string, args ...any) error {
-	return RetryableError{Err: fmt.Errorf(format, args...)}
-}
-
-func nonRetryable(format string, args ...any) error {
-	return NonRetryableError{Err: fmt.Errorf(format, args...)}
-}

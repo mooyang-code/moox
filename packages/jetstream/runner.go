@@ -72,19 +72,6 @@ type ActionReporter interface {
 	ReportAction(context.Context, *Delivery, HandlerResult, error)
 }
 
-type ActionReporterFunc func(context.Context, *Delivery, HandlerResult, error)
-
-func (f ActionReporterFunc) ReportAction(
-	ctx context.Context,
-	delivery *Delivery,
-	result HandlerResult,
-	err error,
-) {
-	if f != nil {
-		f(ctx, delivery, result, err)
-	}
-}
-
 type RunnerConfig struct {
 	BatchSize          int
 	InProgressInterval time.Duration

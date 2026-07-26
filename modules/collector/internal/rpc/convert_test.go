@@ -73,10 +73,6 @@ func TestStatusAndJSONHelpers(t *testing.T) {
 
 	assert.Equal(t, "", formatTime(time.Time{}))
 	assert.Equal(t, "", formatPtrTime(nil))
-	assert.Equal(t, "[]", jsonStringFromStrings(nil))
-	assert.Equal(t, `["a"]`, jsonStringFromStrings([]string{"a"}))
-	assert.Nil(t, stringsFromJSONString(""))
-	assert.Equal(t, []string{"a"}, stringsFromJSONString(`["a"]`))
 	assert.Equal(t, "{}", jsonStringFromStruct(nil))
 	st := structFromJSONString(`{"k":"v"}`)
 	assert.Equal(t, "v", st.GetFields()["k"].GetStringValue())
