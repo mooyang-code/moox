@@ -334,6 +334,60 @@ func TestActionReporterReportsPendingBatchRetry(t *testing.T) {
 	}
 }
 
+func TestActionReporterPanicDoesNotStopRunnerAfterAction(t *testing.T) {
+	var actions []string
+	first := runnerDelivery(&actions, nil)
+	second := runnerDelivery(&actions, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	second.ackFn = func(context.Context) error {
+		actions = append(actions, "ack")
+		cancel()
+		return nil
+	}
+	runner := NewRunner(
+		&runnerFakeConsumer{batches: [][]*Delivery{{first}, {second}}},
+		&runnerFakeHandler{result: HandlerResult{Decision: ACK}},
+		RunnerConfig{ActionReporter: ActionReporterFunc(func(
+			context.Context, *Delivery, HandlerResult, error,
+		) {
+			panic("logging observer failed")
+		})},
+	)
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(actions) != 2 || actions[0] != "ack" || actions[1] != "ack" {
+		t.Fatalf("actions = %v, want both ACKs despite observer panic", actions)
+	}
+}
+
+func TestActionReporterPanicDoesNotBlockPendingBatchRetry(t *testing.T) {
+	var actions []string
+	first := runnerDelivery(&actions, nil)
+	second := runnerDelivery(&actions, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	second.nakFn = func(context.Context, time.Duration) error {
+		actions = append(actions, "pending-nak")
+		cancel()
+		return nil
+	}
+	runner := NewRunner(
+		&runnerFakeConsumer{batches: [][]*Delivery{{first, second}}},
+		&runnerFakeHandler{result: HandlerResult{Decision: RETRY, Delay: time.Second}},
+		RunnerConfig{ActionReporter: ActionReporterFunc(func(
+			context.Context, *Delivery, HandlerResult, error,
+		) {
+			panic("logging observer failed")
+		})},
+	)
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(actions) != 2 || actions[0] != "nak" || actions[1] != "pending-nak" {
+		t.Fatalf("actions = %v, want primary and pending NAK", actions)
+	}
+}
+
 func containsError(values []error, want error) bool {
 	for _, value := range values {
 		if errors.Is(value, want) {

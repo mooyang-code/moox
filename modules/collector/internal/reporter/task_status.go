@@ -52,6 +52,7 @@ func ReportTaskStatus(
 	spaceID string,
 	taskID string,
 	jobItemID string,
+	deliveryCount uint64,
 	status int,
 	result string,
 ) (reportErr error) {
@@ -61,7 +62,9 @@ func ReportTaskStatus(
 		if reportErr != nil {
 			reportOutcome = "failed"
 		}
-		line := taskStatusLogLine(spaceID, taskID, jobItemID, nodeID, status, reportOutcome, reportErr)
+		line := taskStatusLogLine(
+			spaceID, taskID, jobItemID, nodeID, deliveryCount, status, reportOutcome, reportErr,
+		)
 		if reportErr != nil {
 			log.ErrorContextf(ctx, "%s", line)
 			return
@@ -106,6 +109,7 @@ func taskStatusLogLine(
 	taskID string,
 	jobItemID string,
 	nodeID string,
+	deliveryCount uint64,
 	taskStatus int,
 	reportStatus string,
 	err error,
@@ -116,13 +120,14 @@ func taskStatusLogLine(
 	}
 	return fmt.Sprintf(
 		"event=%s space_id=%s job_item_id=%s task_id=%s runtime_code_package_id=%s "+
-			"node_id=%s task_status=%d status=%s error_code=%s error=%s",
+			"node_id=%s delivery_count=%d task_status=%d status=%s error_code=%s error=%s",
 		strconv.Quote("collector_job_instance_reported"),
 		strconv.Quote(strings.TrimSpace(spaceID)),
 		strconv.Quote(strings.TrimSpace(jobItemID)),
 		strconv.Quote(strings.TrimSpace(taskID)),
 		strconv.Quote(strings.TrimSpace(os.Getenv("MOOX_CODE_PACKAGE_ID"))),
 		strconv.Quote(strings.TrimSpace(nodeID)),
+		deliveryCount,
 		taskStatus,
 		strconv.Quote(strings.TrimSpace(reportStatus)),
 		strconv.Quote(errorCode),

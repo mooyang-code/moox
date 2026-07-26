@@ -97,19 +97,20 @@ type ServiceDeployment struct {
 
 // TaskExecuteEvent 任务立即执行事件（服务端触发）
 type TaskExecuteEvent struct {
-	SpaceID    string   `json:"space_id"`
-	DatasetID  string   `json:"dataset_id"`
-	TaskID     string   `json:"task_id"`
-	JobItemID  string   `json:"job_item_id"`
-	DataType   string   `json:"data_type"`
-	DataSource string   `json:"data_source"`
-	Market     string   `json:"market,omitempty"`
-	InstType   string   `json:"inst_type"`
-	SubjectID  string   `json:"subject_id,omitempty"`
-	Symbol     string   `json:"symbol"`
-	Intervals  []string `json:"intervals"`
-	Immediate  bool     `json:"immediate"` // 是否立即执行
-	Live       bool     `json:"live,omitempty"`
+	SpaceID       string   `json:"space_id"`
+	DatasetID     string   `json:"dataset_id"`
+	TaskID        string   `json:"task_id"`
+	JobItemID     string   `json:"job_item_id"`
+	DeliveryCount uint64   `json:"delivery_count"`
+	DataType      string   `json:"data_type"`
+	DataSource    string   `json:"data_source"`
+	Market        string   `json:"market,omitempty"`
+	InstType      string   `json:"inst_type"`
+	SubjectID     string   `json:"subject_id,omitempty"`
+	Symbol        string   `json:"symbol"`
+	Intervals     []string `json:"intervals"`
+	Immediate     bool     `json:"immediate"` // 是否立即执行
+	Live          bool     `json:"live,omitempty"`
 }
 
 // ProbeResponse 心跳探测响应

@@ -45,6 +45,9 @@ type JobItem struct {
 	ExecuteAt time.Time
 	Consumer  string
 	MessageID string
+	// DeliveryCount is runtime metadata for lifecycle correlation. It is set by
+	// ExecuteJobItem and is not part of the CloudNode status request.
+	DeliveryCount uint64
 }
 
 type Result struct{ Summary map[string]any }
@@ -150,6 +153,7 @@ func (cfg *Config) Validate() error {
 // ExecuteJobItem reports a terminal state before selecting ACK or TERM.
 // Retryable non-final failures are intentionally not reported as terminal.
 func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount uint64, maxDeliver int) jetstream.HandlerResult {
+	item.DeliveryCount = deliveryCount
 	if err := cfg.Validate(); err != nil {
 		logCloudJob(ctx, cloudJobLogFields{
 			Event: "collector_job_done", Config: cfg, Item: item, DeliveryCount: deliveryCount,

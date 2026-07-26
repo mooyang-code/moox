@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/executor"
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
@@ -18,6 +19,16 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestCollectorErrorCodeDistinguishesInstanceReportFailure(t *testing.T) {
+	reportErr := fmt.Errorf("%w: gateway unavailable", executor.ErrTaskInstanceReportFailed)
+	if got := collectorErrorCode(reportErr); got != "TASK_INSTANCE_REPORT_FAILED" {
+		t.Fatalf("report error code = %q", got)
+	}
+	if got := collectorErrorCode(errors.New("binance collect failed")); got != "COLLECT_FAILED" {
+		t.Fatalf("collect error code = %q", got)
+	}
+}
 
 type fakeQueueConsumer struct {
 	results []fakeFetchResult
@@ -118,8 +129,9 @@ func TestExecuteAtDecision(t *testing.T) {
 
 func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 	event, err := taskEventFromJobItem(nodeRuntime.JobItem{
-		SpaceID:   "crypto",
-		JobItemID: "item-123",
+		SpaceID:       "crypto",
+		JobItemID:     "item-123",
+		DeliveryCount: 4,
 		Params: map[string]any{
 			"space_id":   "crypto",
 			"dataset_id": "symbols-custom",
@@ -133,6 +145,9 @@ func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 	}
 	if event.JobItemID != "item-123" {
 		t.Fatalf("job item id = %q, want item-123", event.JobItemID)
+	}
+	if event.DeliveryCount != 4 {
+		t.Fatalf("delivery count = %d, want 4", event.DeliveryCount)
 	}
 	if event.DatasetID != "symbols-custom" {
 		t.Fatalf("dataset id = %q, want symbols-custom", event.DatasetID)

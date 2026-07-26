@@ -73,7 +73,7 @@ func TestExecuteTaskStatusReportCarriesJobItemID(t *testing.T) {
 }
 
 func TestReportTaskStatusRequiresJobItemIDBeforeSkippingUnconfiguredGateway(t *testing.T) {
-	err := ReportTaskStatus(context.Background(), "crypto", "task-1", "", StatusSuccess, `{}`)
+	err := ReportTaskStatus(context.Background(), "crypto", "task-1", "", 2, StatusSuccess, `{}`)
 	if err == nil || !strings.Contains(err.Error(), "job_item_id is required") {
 		t.Fatalf("ReportTaskStatus() error = %v, want required job_item_id", err)
 	}
@@ -81,10 +81,10 @@ func TestReportTaskStatusRequiresJobItemIDBeforeSkippingUnconfiguredGateway(t *t
 
 func TestTaskStatusLogFieldsAreStableAndOmitResult(t *testing.T) {
 	t.Setenv("MOOX_CODE_PACKAGE_ID", "package-1")
-	got := taskStatusLogLine("crypto", "task-1", "item-1", "node-1", StatusSuccess, "success", nil)
+	got := taskStatusLogLine("crypto", "task-1", "item-1", "node-1", 2, StatusSuccess, "success", nil)
 	want := `event="collector_job_instance_reported" space_id="crypto" job_item_id="item-1" ` +
 		`task_id="task-1" runtime_code_package_id="package-1" node_id="node-1" ` +
-		`task_status=3 status="success" error_code="" error=""`
+		`delivery_count=2 task_status=3 status="success" error_code="" error=""`
 	if got != want {
 		t.Fatalf("task status log:\n got: %s\nwant: %s", got, want)
 	}
@@ -97,18 +97,31 @@ func TestTaskStatusLogFieldsAreStableAndOmitResult(t *testing.T) {
 
 func TestTaskStatusLogFailureHasStableErrorCode(t *testing.T) {
 	got := taskStatusLogLine(
-		"crypto", "task-1", "item-1", "node-1", StatusFailed, "failed",
+		"crypto", "task-1", "item-1", "node-1", 3, StatusFailed, "failed",
 		errors.New("gateway unavailable"),
 	)
 	if !strings.Contains(got, `status="failed"`) ||
+		!strings.Contains(got, `delivery_count=3`) ||
 		!strings.Contains(got, `error_code="TASK_INSTANCE_REPORT_FAILED"`) {
 		t.Fatalf("failed task status log = %s", got)
 	}
 }
 
 func TestTaskStatusLogDistinguishesSkippedReport(t *testing.T) {
-	got := taskStatusLogLine("crypto", "task-1", "item-1", "", StatusSuccess, "skipped", nil)
+	got := taskStatusLogLine("crypto", "task-1", "item-1", "", 4, StatusSuccess, "skipped", nil)
 	if !strings.Contains(got, `status="skipped"`) || !strings.Contains(got, `error_code=""`) {
 		t.Fatalf("skipped task status log = %s", got)
+	}
+}
+
+func TestReportTaskStatusRequestDoesNotIncludeDeliveryCount(t *testing.T) {
+	raw, err := json.Marshal(ReportTaskStatusRequest{
+		SpaceID: "crypto", TaskID: "task-1", JobItemID: "item-1", NodeID: "node-1", Status: StatusSuccess,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "delivery_count") {
+		t.Fatalf("request unexpectedly contains delivery_count: %s", raw)
 	}
 }

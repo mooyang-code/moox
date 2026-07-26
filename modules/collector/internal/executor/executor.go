@@ -18,18 +18,19 @@ import (
 
 // collectTask 采集任务定义
 type collectTask struct {
-	SpaceID    string
-	DatasetID  string
-	TaskID     string
-	JobItemID  string
-	DataSource string
-	Market     string
-	DataType   string
-	InstType   string
-	SubjectID  string
-	Symbol     string
-	Interval   string
-	Live       bool
+	SpaceID       string
+	DatasetID     string
+	TaskID        string
+	JobItemID     string
+	DeliveryCount uint64
+	DataSource    string
+	Market        string
+	DataType      string
+	InstType      string
+	SubjectID     string
+	Symbol        string
+	Interval      string
+	Live          bool
 }
 
 // executeResult 执行结果
@@ -39,9 +40,37 @@ type executeResult struct {
 	LastError string
 }
 
-type taskStatusReporter func(ctx context.Context, spaceID string, taskID string, jobItemID string, status int, result string)
+type taskStatusReporter func(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	deliveryCount uint64,
+	status int,
+	result string,
+)
 
 var reportTaskStatus = reporter.ReportTaskStatus
+
+// ErrTaskInstanceReportFailed marks failures at the Collector TaskInstance
+// reporting boundary while preserving the underlying transport/service error.
+var ErrTaskInstanceReportFailed = errors.New("task instance report failed")
+
+type taskInstanceReportError struct {
+	err error
+}
+
+func (e *taskInstanceReportError) Error() string {
+	return fmt.Sprintf("%s: %v", ErrTaskInstanceReportFailed, e.err)
+}
+
+func (e *taskInstanceReportError) Unwrap() error {
+	return e.err
+}
+
+func (e *taskInstanceReportError) Is(target error) bool {
+	return target == ErrTaskInstanceReportFailed
+}
 
 // buildCollectHandler 构建单个采集任务的处理函数
 // reportOnError: 是否在错误时上报状态（定时任务场景使用，立即执行场景不在此上报）
@@ -81,7 +110,10 @@ func buildCollectHandler(
 
 			// 定时任务场景：上报失败后继续执行其他任务
 			if reportStatus != nil {
-				reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, reporter.StatusFailed, err.Error())
+				reportStatus(
+					ctx, task.SpaceID, task.TaskID, task.JobItemID, task.DeliveryCount,
+					reporter.StatusFailed, err.Error(),
+				)
 				return nil
 			}
 
@@ -98,7 +130,10 @@ func buildCollectHandler(
 
 		// 定时任务场景：上报成功状态
 		if reportStatus != nil {
-			reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, reporter.StatusSuccess, "")
+			reportStatus(
+				ctx, task.SpaceID, task.TaskID, task.JobItemID, task.DeliveryCount,
+				reporter.StatusSuccess, "",
+			)
 		}
 
 		return nil
@@ -126,7 +161,7 @@ func executeCollectTasks(
 			log.WarnContextf(ctx, "未找到采集器: source=%s, market=%s, dataType=%s, taskID=%s",
 				task.DataSource, task.Market, task.DataType, task.TaskID)
 			if reportStatus != nil {
-				reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, reporter.StatusFailed,
+				reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, task.DeliveryCount, reporter.StatusFailed,
 					fmt.Sprintf("采集器未找到: source=%s, market=%s, dataType=%s", task.DataSource, task.Market, task.DataType))
 			} else {
 				result.mu.Lock()
@@ -173,18 +208,19 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 	var collectTasks []*collectTask
 	for _, interval := range intervals {
 		collectTasks = append(collectTasks, &collectTask{
-			SpaceID:    taskEvent.SpaceID,
-			DatasetID:  taskEvent.DatasetID,
-			TaskID:     taskEvent.TaskID,
-			JobItemID:  taskEvent.JobItemID,
-			DataSource: taskEvent.DataSource,
-			Market:     normalizeMarket(taskEvent),
-			DataType:   taskEvent.DataType,
-			InstType:   taskEvent.InstType,
-			SubjectID:  taskEvent.SubjectID,
-			Symbol:     taskEvent.Symbol,
-			Interval:   interval,
-			Live:       taskEvent.Live,
+			SpaceID:       taskEvent.SpaceID,
+			DatasetID:     taskEvent.DatasetID,
+			TaskID:        taskEvent.TaskID,
+			JobItemID:     taskEvent.JobItemID,
+			DeliveryCount: taskEvent.DeliveryCount,
+			DataSource:    taskEvent.DataSource,
+			Market:        normalizeMarket(taskEvent),
+			DataType:      taskEvent.DataType,
+			InstType:      taskEvent.InstType,
+			SubjectID:     taskEvent.SubjectID,
+			Symbol:        taskEvent.Symbol,
+			Interval:      interval,
+			Live:          taskEvent.Live,
 		})
 	}
 
@@ -192,7 +228,8 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 		errMsg := "没有需要执行的interval"
 		log.WarnContextf(ctx, "[ExecuteTaskImmediately] %s", errMsg)
 		if err := reportImmediateTaskStatus(
-			ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, reporter.StatusFailed, errMsg,
+			ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount,
+			reporter.StatusFailed, errMsg,
 		); err != nil {
 			return "", err
 		}
@@ -218,7 +255,7 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 		taskEvent.TaskID, status, resultMsg)
 
 	if err := reportImmediateTaskStatus(
-		ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, status, resultMsg,
+		ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount, status, resultMsg,
 	); err != nil {
 		return resultMsg, err
 	}
@@ -249,13 +286,14 @@ func reportImmediateTaskStatus(
 	spaceID string,
 	taskID string,
 	jobItemID string,
+	deliveryCount uint64,
 	status int,
 	result string,
 ) error {
-	if err := reportTaskStatus(ctx, spaceID, taskID, jobItemID, status, result); err != nil {
+	if err := reportTaskStatus(ctx, spaceID, taskID, jobItemID, deliveryCount, status, result); err != nil {
 		log.WarnContextf(ctx, "[ExecuteTaskImmediately] 任务状态上报失败: taskID=%s, status=%d, error=%v",
 			taskID, status, err)
-		return err
+		return &taskInstanceReportError{err: err}
 	}
 	return nil
 }

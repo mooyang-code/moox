@@ -273,7 +273,14 @@ func (r *Runner) reportAction(
 	err error,
 ) {
 	if r.cfg.ActionReporter != nil {
-		r.cfg.ActionReporter.ReportAction(ctx, delivery, result, err)
+		func() {
+			defer func() {
+				// The transport action has already happened; an observer cannot
+				// be allowed to change delivery control flow.
+				_ = recover()
+			}()
+			r.cfg.ActionReporter.ReportAction(ctx, delivery, result, err)
+		}()
 	}
 }
 

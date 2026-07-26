@@ -301,9 +301,16 @@ func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nod
 		_ = json.Unmarshal([]byte(result), &summary)
 	}
 	if err != nil {
-		return nodeRuntime.Result{Summary: summary}, nodeRuntime.Retryable(err, "COLLECT_FAILED")
+		return nodeRuntime.Result{Summary: summary}, nodeRuntime.Retryable(err, collectorErrorCode(err))
 	}
 	return nodeRuntime.Result{Summary: summary}, nil
+}
+
+func collectorErrorCode(err error) string {
+	if errors.Is(err, executor.ErrTaskInstanceReportFailed) {
+		return "TASK_INSTANCE_REPORT_FAILED"
+	}
+	return "COLLECT_FAILED"
 }
 
 func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, error) {
@@ -336,7 +343,7 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 	}
 	return &model.TaskExecuteEvent{
 		SpaceID: stringValue(payload, "space_id"), DatasetID: datasetID,
-		TaskID: taskID, JobItemID: item.JobItemID, DataType: dataType,
+		TaskID: taskID, JobItemID: item.JobItemID, DeliveryCount: item.DeliveryCount, DataType: dataType,
 		DataSource: firstString(stringValue(payload, "exchange"), "binance"), Market: market,
 		InstType: strings.ToUpper(market), SubjectID: subjectID, Symbol: symbol, Intervals: intervals,
 		Immediate: true, Live: boolValue(payload, "live"),

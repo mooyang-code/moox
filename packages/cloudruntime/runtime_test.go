@@ -43,7 +43,9 @@ func resetRegistryForTest() {
 
 func TestExecuteJobItemReportsBeforeAck(t *testing.T) {
 	resetRegistryForTest()
-	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
+	var handledDeliveryCount uint64
+	Register("collect.kline", HandlerFunc(func(_ context.Context, item JobItem) (Result, error) {
+		handledDeliveryCount = item.DeliveryCount
 		return Result{Summary: map[string]any{"rows": 1}}, nil
 	}))
 	reported := false
@@ -61,9 +63,16 @@ func TestExecuteJobItemReportsBeforeAck(t *testing.T) {
 	defer server.Close()
 	result := ExecuteJobItem(context.Background(), testConfig(server.URL), JobItem{
 		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline",
-	}, 1, 3)
-	if !reported || result.Decision != jetstream.ACK {
-		t.Fatalf("reported=%v result=%+v", reported, result)
+	}, 2, 3)
+	if !reported || result.Decision != jetstream.ACK || handledDeliveryCount != 2 {
+		t.Fatalf("reported=%v delivery_count=%d result=%+v", reported, handledDeliveryCount, result)
+	}
+}
+
+func TestClassifyTaskInstanceReportErrorCodeForLifecycleLog(t *testing.T) {
+	kind, code := classifyError(Retryable(errors.New("gateway unavailable"), "TASK_INSTANCE_REPORT_FAILED"))
+	if kind != errorRetryable || code != "TASK_INSTANCE_REPORT_FAILED" {
+		t.Fatalf("classifyError() = kind=%d code=%q", kind, code)
 	}
 }
 
