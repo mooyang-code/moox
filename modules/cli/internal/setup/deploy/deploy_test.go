@@ -73,6 +73,31 @@ func TestControlRollsBackWhenEventServiceIsNotReady(t *testing.T) {
 	require.Contains(t, events, "rollback")
 }
 
+func TestControlPassesResetDataAsBoundedPositionalFlag(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "control.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Control(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
+		TargetGOOS: "linux", TargetGOARCH: "amd64", ResetControlData: true,
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+	}, Dependencies{
+		Packager: &fakePackager{path: archive, events: &events},
+		Probe:    &fakeProbe{events: &events},
+		CAStore:  &fakeCAStore{events: &events},
+	})
+	require.NoError(t, err)
+	var install []string
+	for _, command := range transport.commands {
+		if len(command) >= 5 && strings.Contains(command[2], "install_control") {
+			install = command
+		}
+	}
+	require.NotEmpty(t, install)
+	require.Equal(t, "1", install[len(install)-1], "reset is a bounded positional flag, not shell text")
+}
+
 func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {
 	env, err := eventBusCommandEnv([]string{"PATH=/bin", "HOME=/tmp/home"}, Options{
 		EventBusPublicAddress: "eventbus.example.test",
@@ -180,6 +205,40 @@ func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {
 	require.NoError(t, err, string(output))
 	require.FileExists(t, filepath.Join(deploy, "data", "old.db"))
 	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+}
+
+func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "prod")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "old.db"), []byte("old"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "keep.env"), []byte("secret"), 0o600))
+
+	archiveDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "bin"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "config", "caddy"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "data"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "lib"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "data", "new.db"), []byte("new"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "config", "caddy", "Caddyfile.next"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "bin", "moox-admin-cli"), []byte("#!/bin/sh\nprintf '{\"secret\":\"generated\"}\\n'\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "lib", "caddy-managed.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	archive := filepath.Join(t.TempDir(), "control.tar.gz")
+	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
+	defer os.Remove(remoteArchiveNext)
+	require.NoError(t, copyFileForTest(archive, remoteArchiveNext))
+
+	cmd := exec.Command("bash", "-c", installControlScript, "moox-install-control", "control.example.test", "9527", "amd64", "1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.NoFileExists(t, filepath.Join(deploy, "data", "old.db"))
+	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+	require.Equal(t, "secret", string(requireFile(t, filepath.Join(deploy, "secrets", "keep.env"))))
 }
 
 func TestStorageRollsBackAfterReadinessFailure(t *testing.T) {

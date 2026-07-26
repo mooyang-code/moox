@@ -24,7 +24,7 @@ type setupDeps struct {
 	validate           func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
 	validateDeployment func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
 	trustHost          func(context.Context, *setupconfig.Snapshot, string, string) error
-	deployControl      func(context.Context, *setupconfig.Snapshot) error
+	deployControl      func(context.Context, *setupconfig.Snapshot, bool) error
 	deployService      func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
 	apply              func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
 	status             func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
@@ -144,6 +144,7 @@ func newSetupTrustHostCommand(deps setupDeps) *cobra.Command {
 
 func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 	var file string
+	var resetData bool
 	cmd := &cobra.Command{Use: "deploy-control", Short: "部署 Admin、Gateway 和 Web", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
@@ -157,15 +158,16 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			}
 			return validationErr
 		}
-		if err := deps.deployControl(cmd.Context(), snapshot); err != nil {
+		if err := deps.deployControl(cmd.Context(), snapshot, resetData); err != nil {
 			return err
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
-		return writeSetupJSON(cmd, map[string]string{"host": snapshot.Manifest.ControlHost.Name, "status": "ready"})
+		return writeSetupJSON(cmd, map[string]any{"host": snapshot.Manifest.ControlHost.Name, "status": "ready", "reset_data": resetData})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().BoolVar(&resetData, "reset-data", false, "删除控制面现有数据后重新部署")
 	return cmd
 }
 
@@ -487,7 +489,7 @@ func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, 
 	return setupssh.TrustHost(ctx, sshTarget(host), fingerprint, setupssh.Options{Timeout: 15 * time.Second})
 }
 
-func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot) error {
+func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
 	host := snapshot.Manifest.ControlHost
 	transport, err := dialSetupHost(ctx, host)
 	if err != nil {
@@ -498,7 +500,9 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot) err
 	if err != nil {
 		return fmt.Errorf("control_deploy_invalid")
 	}
-	return setupdeploy.Control(ctx, transport, controlDeployOptions(snapshot, root), setupdeploy.Dependencies{})
+	opts := controlDeployOptions(snapshot, root)
+	opts.ResetControlData = resetData
+	return setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{})
 }
 
 func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {

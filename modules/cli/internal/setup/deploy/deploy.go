@@ -32,6 +32,7 @@ type Options struct {
 	BrowserPort           int
 	TargetGOOS            string
 	TargetGOARCH          string
+	ResetControlData      bool
 	ResetStorageData      bool
 	EventBusPublicAddress string
 	EventBusPort          int
@@ -185,9 +186,13 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteArchiveNext}, nil)
 	}()
 
+	reset := "0"
+	if opts.ResetControlData {
+		reset = "1"
+	}
 	if _, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
-		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH,
+		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset,
 	}, nil); err != nil {
 		return fmt.Errorf("control_install_failed")
 	}
@@ -549,6 +554,8 @@ install_control() {
   public_host="$1"
   browser_port="$2"
   target_arch="$3"
+  reset_data="$4"
+  case "$reset_data" in 0|1) ;; *) echo 'control_reset_invalid' >&2; return 1 ;; esac
   root="$HOME/moox"
   deploy="$root/prod"
   next="$root/prod.next"
@@ -557,7 +564,7 @@ install_control() {
   rm -rf "$next" "$previous"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
-  if [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  if [ "$reset_data" = 0 ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
   mkdir -p "$HOME/.config/moox/credentials" "$next/secrets"
   chmod 700 "$HOME/.config/moox" "$HOME/.config/moox/credentials"
@@ -626,7 +633,7 @@ install_control() {
     return 1
   fi
 }
-install_control "$1" "$2" "$3"`
+install_control "$1" "$2" "$3" "$4"`
 
 const rollbackControlScript = `set -eu
 deploy="$HOME/moox/prod"

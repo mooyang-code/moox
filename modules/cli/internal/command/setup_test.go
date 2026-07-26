@@ -34,7 +34,7 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
 		trustHost:     func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
-		deployControl: func(context.Context, *setupconfig.Snapshot) error { return nil },
+		deployControl: func(context.Context, *setupconfig.Snapshot, bool) error { return nil },
 		apply: func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
 			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1, Hosts: 2}, nil
 		},
@@ -210,6 +210,28 @@ func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T
 	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml"})
 	require.ErrorIs(t, cmd.Execute(), setupvalidate.ErrValidationFailed)
 	require.JSONEq(t, `{"checks":[{"name":"host:control","status":"invalid","code":"host_key_unknown","fingerprint":"SHA256:verified"}]}`, output.String())
+}
+
+func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	reset := false
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		deployControl: func(_ context.Context, _ *setupconfig.Snapshot, selectedReset bool) error {
+			reset = selectedReset
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml", "--reset-data"})
+	require.NoError(t, cmd.Execute())
+	require.True(t, reset)
+	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true}`, output.String())
 }
 
 func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {

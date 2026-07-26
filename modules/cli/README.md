@@ -33,6 +33,9 @@ moox-cli setup status --file ./custom.toml
 `cloudnode-worker.yaml` 由部署流程生成，不写入 `custom.toml`。控制面部署单元包含
 Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
 
+`deploy-control` 默认保留控制面数据。仅在允许删除 Admin、EventBus 等全部控制面
+数据并重新初始化时使用 `--reset-data`；凭据目录和部署密钥仍会保留。
+
 `setup validate` performs the full Tencent Cloud STS identity check. The
 `deploy-control` and `deploy-storage` commands only repeat immutable-config
 and SSH host validation; copying and starting MooX binaries does not require a
