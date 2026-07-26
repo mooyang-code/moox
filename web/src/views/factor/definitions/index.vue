@@ -4,10 +4,6 @@
       <div class="page-head">
         <h2>因子计算</h2>
         <a-space wrap>
-          <a-select v-model="filters.kind" allow-clear placeholder="类型" style="width: 150px" @change="reloadFirstPage">
-            <a-option value="timeseries">timeseries</a-option>
-            <a-option value="cross_section">cross_section</a-option>
-          </a-select>
           <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
             <a-option value="enabled">enabled</a-option>
             <a-option value="disabled">disabled</a-option>
@@ -34,10 +30,13 @@
         <template #columns>
           <a-table-column title="因子ID" data-index="factor_id" :width="150" />
           <a-table-column title="模块名" data-index="name" :width="130" />
-          <a-table-column title="类型" data-index="kind" :width="120" />
-          <a-table-column title="参数" data-index="params_json" :width="180" :ellipsis="true" :tooltip="true" />
+          <a-table-column title="周期" :width="180">
+            <template #cell="{ record }">{{ record.periods.join(", ") }}</template>
+          </a-table-column>
           <a-table-column title="回看" data-index="lookback_bars" :width="90" />
-          <a-table-column title="写回" data-index="writeback_bars" :width="90" />
+          <a-table-column title="依赖列" :width="180" :ellipsis="true" :tooltip="true">
+            <template #cell="{ record }">{{ record.depends.join(", ") || "-" }}</template>
+          </a-table-column>
           <a-table-column title="源码Hash" data-index="source_hash" :width="220" :ellipsis="true" :tooltip="true" />
           <a-table-column title="状态" :width="100">
             <template #cell="{ record }">
@@ -78,12 +77,6 @@
         <a-form-item field="name" label="Python 模块名" required>
           <a-input v-model="form.name" placeholder="Bias" />
         </a-form-item>
-        <a-form-item field="kind" label="类型">
-          <a-select v-model="form.kind">
-            <a-option value="timeseries">timeseries</a-option>
-            <a-option value="cross_section">cross_section</a-option>
-          </a-select>
-        </a-form-item>
         <a-form-item field="status" label="状态">
           <a-select v-model="form.status">
             <a-option value="enabled">enabled</a-option>
@@ -93,14 +86,8 @@
         <a-form-item field="lookback_bars" label="回看K线数" required>
           <a-input-number v-model="form.lookback_bars" :min="1" />
         </a-form-item>
-        <a-form-item field="writeback_bars" label="尾部写回数" required>
-          <a-input-number v-model="form.writeback_bars" :min="1" />
-        </a-form-item>
-        <a-form-item class="form-span-2" field="params_json" label="参数JSON" required>
-          <a-textarea v-model="form.params_json" :auto-size="{ minRows: 3, maxRows: 6 }" placeholder="[20,96,288]" />
-        </a-form-item>
-        <a-form-item class="form-span-2" field="depends_json" label="依赖JSON">
-          <a-textarea v-model="form.depends_json" :auto-size="{ minRows: 2, maxRows: 5 }" placeholder="[]" />
+        <a-form-item class="form-span-2" field="periods" label="计算周期" required>
+          <a-input-tag v-model="periodTags" allow-clear placeholder="输入正整数后回车，例如 20、96" />
         </a-form-item>
         <a-form-item class="form-span-2" field="source_code" label="源码" required>
           <a-textarea class="code-editor" v-model="form.source_code" :auto-size="{ minRows: 16, maxRows: 28 }" />
@@ -124,17 +111,16 @@ const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
 const pagination = reactive(defaultPagination());
-const filters = reactive({ kind: "", status: "" });
+const filters = reactive({ status: "" });
+const periodTags = ref<string[]>(["20"]);
 
 const form = reactive<FactorDef>({
   factor_id: "",
   name: "",
-  kind: "timeseries",
   source_code: "",
-  params_json: "[20]",
+  periods: [20],
   lookback_bars: 200,
-  writeback_bars: 5,
-  depends_json: "[]",
+  depends: [],
   status: "disabled"
 });
 
@@ -144,7 +130,6 @@ async function load() {
   loading.value = true;
   try {
     const rsp = await listFactorDefs({
-      kind: filters.kind || undefined,
       status: filters.status || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
@@ -164,7 +149,6 @@ function resetForm() {
   Object.assign(form, {
     factor_id: "",
     name: "",
-    kind: "timeseries",
     source_code: [
       "def signal(*args):",
       "    df = args[0]",
@@ -174,12 +158,12 @@ function resetForm() {
       "    return df",
       ""
     ].join("\n"),
-    params_json: "[20]",
+    periods: [20],
     lookback_bars: 200,
-    writeback_bars: 5,
-    depends_json: "[]",
+    depends: [],
     status: "disabled"
   });
+  periodTags.value = ["20"];
 }
 
 function openCreate() {
@@ -190,11 +174,8 @@ function openCreate() {
 
 function openEdit(record: FactorDef) {
   editing.value = true;
-  Object.assign(form, {
-    ...record,
-    params_json: record.params_json || "[]",
-    depends_json: record.depends_json || "[]"
-  });
+  Object.assign(form, record);
+  periodTags.value = (record.periods || []).map(String);
   visible.value = true;
 }
 
@@ -203,9 +184,12 @@ async function submit() {
     Message.warning("请补全因子ID、模块名和源码");
     return;
   }
-  JSON.parse(form.params_json || "[]");
-  JSON.parse(form.depends_json || "[]");
-  const payload = { ...form };
+  const periods = periodTags.value.map(Number);
+  if (!periods.length || periods.some(period => !Number.isInteger(period) || period <= 0)) {
+    Message.warning("计算周期必须是正整数");
+    return;
+  }
+  const payload = { ...form, periods };
   if (editing.value) await updateFactorDef(payload);
   else await createFactorDef(payload);
   Message.success("因子已保存");

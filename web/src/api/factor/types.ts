@@ -7,13 +7,11 @@ export type SubjectMode = "all" | "include" | string;
 export interface FactorDef {
   factor_id: string;
   name: string;
-  kind: string;
   source_code: string;
   source_hash?: string;
-  params_json: string;
+  periods: number[];
   lookback_bars: number;
-  writeback_bars: number;
-  depends_json?: string;
+  depends: string[];
   status: FactorStatus;
   created_at?: string;
   updated_at?: string;
@@ -33,43 +31,25 @@ export interface FactorBinding {
   updated_at?: string;
 }
 
-export interface WorkerStatus {
-  worker_id: string;
-  state: string;
-  current_task_id?: string;
-  restart_count?: number | string;
-}
-
 export interface EngineStatus {
   ret_info: RetInfo;
-  queue_depth?: number;
-  supersede_count?: number | string;
-  writeback_failures?: number | string;
-  workers?: WorkerStatus[];
+  queue_depth: number;
+  queue_overflow_count: number | string;
 }
 
 export interface RecalcFactorReq {
   factor_id?: string;
   space_id: string;
   source_dataset: string;
-  subject_id?: string;
+  subject_id: string;
   freq: string;
-  start_time?: string;
-  end_time?: string;
-}
-
-export interface RecalcProgress {
-  ret_info: RetInfo;
-  recalc_id: string;
-  status: string;
-  total?: number;
-  finished?: number;
+  start_time: string;
+  end_time: string;
 }
 
 export type FactorRetRsp<T extends object = Record<string, never>> = T & { ret_info: RetInfo };
 
 export interface ListFactorsReq {
-  kind?: string;
   status?: string;
   page?: Page;
 }

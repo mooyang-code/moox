@@ -8,8 +8,7 @@ import type {
   ListBindingsRsp,
   ListFactorsReq,
   ListFactorsRsp,
-  RecalcFactorReq,
-  RecalcProgress
+  RecalcFactorReq
 } from "./types";
 
 export async function createFactorDef(factor: FactorDef) {
@@ -53,11 +52,7 @@ export function deleteFactorBinding(binding_id: string) {
 }
 
 export function recalcFactor(params: RecalcFactorReq) {
-  return callFactor<RecalcFactorReq, FactorRetRsp<{ recalc_id: string }>>("RecalcFactor", params);
-}
-
-export function getRecalcProgress(recalc_id: string) {
-  return callFactor<{ recalc_id: string }, RecalcProgress>("GetRecalcProgress", { recalc_id });
+  return callFactor<RecalcFactorReq, FactorRetRsp>("RecalcFactor", params);
 }
 
 export function getEngineStatus() {

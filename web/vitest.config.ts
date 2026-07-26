@@ -8,6 +8,12 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    include: ['src/**/*.test.ts', 'tests/**/*.test.ts', 'tests/cloud-node-workflows.spec.ts', 'tests/storage-view-browse.spec.ts'],
+    include: [
+      'src/**/*.test.ts',
+      'src/views/factor/__tests__/factor-contract.spec.ts',
+      'tests/**/*.test.ts',
+      'tests/cloud-node-workflows.spec.ts',
+      'tests/storage-view-browse.spec.ts',
+    ],
   },
 });
