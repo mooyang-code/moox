@@ -119,6 +119,12 @@ func TestFindStream(t *testing.T) {
 	stream, ok := findStream(cfg, "MOOX_STORAGE")
 	require.True(t, ok)
 	assert.Equal(t, "MOOX_STORAGE", stream.Name)
+	assert.EqualValues(t, 1073741824, stream.MaxBytes)
+	for _, name := range []string{"MOOX_METRICS", "MOOX_CLOUDNODE_EXEC", "MOOX_TRADE"} {
+		stream, ok = findStream(cfg, name)
+		require.True(t, ok)
+		assert.EqualValues(t, 268435456, stream.MaxBytes)
+	}
 	_, ok = findStream(cfg, "missing")
 	assert.False(t, ok)
 }

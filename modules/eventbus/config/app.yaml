@@ -40,7 +40,7 @@ streams:
     replicas: 1
     max_age: 72h
     duplicates: 2m
-    max_bytes: 2147483648
+    max_bytes: 1073741824
   - name: MOOX_METRICS
     subjects: ["moox.metrics.>"]
     retention: limits
@@ -49,7 +49,7 @@ streams:
     replicas: 1
     max_age: 24h
     duplicates: 2m
-    max_bytes: 536870912
+    max_bytes: 268435456
   - name: MOOX_CLOUDNODE_EXEC
     subjects: ["moox.cloudnode.job.execution.requested.v1.>"]
     retention: work_queue
@@ -58,7 +58,7 @@ streams:
     replicas: 1
     max_age: 72h
     duplicates: 2m
-    max_bytes: 536870912
+    max_bytes: 268435456
   - name: MOOX_TRADE
     subjects: ["moox.trade.rebalance.requested.v1.>"]
     retention: work_queue
@@ -67,7 +67,7 @@ streams:
     replicas: 1
     max_age: 168h
     duplicates: 2m
-    max_bytes: 536870912
+    max_bytes: 268435456
 
 kv:
   - bucket: MOOX_CLOUDNODE_JOB_ACTIVE
