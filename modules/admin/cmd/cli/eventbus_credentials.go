@@ -32,6 +32,16 @@ import (
 
 var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-hostmetrics-consumer", "monitor-metrics-consumer", "storage-eventbus", "archive-eventbus", "cloudnode-eventbus", "cloudnode-worker", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
 var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-hostmetrics-consumer": "eventbus_monitor_consumer", "monitor-metrics-consumer": "eventbus_monitor_metrics_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "cloudnode-eventbus": "eventbus_cloudnode", "cloudnode-worker": "eventbus_cloudnode_worker", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
+var localEventBusRoles = map[string]bool{
+	"eventbus-internal-admin":      true,
+	"metrics-publisher":            true,
+	"monitor-hostmetrics-consumer": true,
+	"monitor-metrics-consumer":     true,
+	"cloudnode-eventbus":           true,
+	"factor-eventbus":              true,
+	"strategy-eventbus":            true,
+	"trade-eventbus":               true,
+}
 
 type eventbusBundle struct {
 	CA        string    `json:"ca"`
@@ -271,7 +281,11 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 		if role == "monitor-hostmetrics-consumer" || role == "monitor-metrics-consumer" {
 			field = "monitor_eventbus_token"
 		}
-		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: ca.pem\n", natsURL, role, field, tokens[role])
+		roleURL, err := eventBusRoleURL(role, natsURL)
+		if err != nil {
+			return err
+		}
+		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: ca.pem\n", roleURL, role, field, tokens[role])
 		if err := atomicSecretFile(filepath.Join(dir, name), []byte(content)); err != nil {
 			return err
 		}
@@ -301,6 +315,18 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
 }
+
+func eventBusRoleURL(role, publicURL string) (string, error) {
+	if !localEventBusRoles[role] {
+		return publicURL, nil
+	}
+	parsed, err := validateEventBusNATSURL(publicURL)
+	if err != nil {
+		return "", err
+	}
+	return "tls://" + net.JoinHostPort("127.0.0.1", parsed.Port()), nil
+}
+
 func usersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
 	return fmt.Sprintf("users:\n"+
 		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+

@@ -88,6 +88,19 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	info, err := os.Stat(strategyCredential)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	for name, wantURL := range map[string]string{
+		"internal-admin.yaml":      "tls://127.0.0.1:4222",
+		"metrics-publisher.yaml":   "tls://127.0.0.1:4222",
+		"cloudnode-eventbus.yaml":  "tls://127.0.0.1:4222",
+		"cloudnode-worker.yaml":    "tls://203.0.113.10:4222",
+		"hostagent-publisher.yaml": "tls://203.0.113.10:4222",
+		"storage-eventbus.yaml":    "tls://203.0.113.10:4222",
+		"archive-eventbus.yaml":    "tls://203.0.113.10:4222",
+	} {
+		credential, loadErr := jetstream.LoadCredentialFile(filepath.Join(exportDir, name))
+		require.NoError(t, loadErr, name)
+		require.Equal(t, []string{wantURL}, credential.URLs, name)
+	}
 
 	yaml := usersYAML(map[string]string{
 		"eventbus-internal-admin":      "a",

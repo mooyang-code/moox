@@ -147,7 +147,7 @@ func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn
 		if caFile != "" {
 			opts = append(opts, nats.RootCAs(caFile))
 		}
-		opts = append(opts, nats.Secure())
+		opts = append(opts, nats.Secure(), nats.TLSHandshakeFirst())
 	}
 	return nats.Connect(rawURL, opts...)
 }

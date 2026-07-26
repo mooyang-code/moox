@@ -101,6 +101,9 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.TLSCAFile != "" || cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		opts = append(opts, nats.Secure())
 	}
+	if tlsHandshakeFirstRequired(cfg.URLs) {
+		opts = append(opts, nats.TLSHandshakeFirst())
+	}
 	reconnectBuffer := cfg.ReconnectBufferBytes
 	if reconnectBuffer == 0 {
 		reconnectBuffer = -1
@@ -164,6 +167,16 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("%w: create jetstream context: %w", ErrConnection, err)
 	}
 	return &Client{nc: res.nc, js: js, cfg: cfg}, nil
+}
+
+func tlsHandshakeFirstRequired(urls []string) bool {
+	for _, rawURL := range urls {
+		parsed, err := url.Parse(strings.TrimSpace(rawURL))
+		if err == nil && parsed.Scheme == "tls" {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoopbackHost(host string) bool {

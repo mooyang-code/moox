@@ -84,7 +84,8 @@ CloudNode、CLI 和前端都不得再通过 CloudNode RPC 获取明文 SecretID/
 | 概念 | 示例 | 所有者 |
 |---|---|---|
 | Broker bind/listen 地址 | `127.0.0.1:4222`、`0.0.0.0:4222` | EventBus 进程启动配置 |
-| 客户端 advertised/connect URL | `tls://127.0.0.1:4222`、`tls://203.0.113.10:4222` | `t_service_deployments` 中既有 `eventbus` 行的 `extra_config.nats_url` |
+| 客户端 advertised/connect URL | `tls://203.0.113.10:4222` | `t_service_deployments` 中既有 `eventbus` 行的 `extra_config.nats_url` |
+| 同机客户端 URL | `tls://127.0.0.1:4222` | 凭据导出器根据 advertised URL 的端口推导 |
 
 不新增 `eventbus-nats` 服务行，也不把 NATS 地址伪装成第二个 HTTP/tRPC 服务。既有 `eventbus` 行的 `host:127.0.0.1, port:11420` 继续表示 EventBus 控制面，NATS 数据面 URL 放在同一行的 `extra_config`：
 
@@ -97,6 +98,10 @@ extra_config:
 ```
 
 **原因：** 服务部署表当前是一机一实例的静态初始化目录，不是实时注册中心。把客户端 URL 写进去可以形成单一初始化真源，又不必改变服务粒度、协议校验或引入心跳发现。
+
+部署机不能假设能通过自己的公网 IP 回连自身。凭据导出时，同机运行的 EventBus、CloudNode、Factor、Strategy、Trade、Monitor 和指标上报角色写入 loopback TLS URL；HostAgent、Storage、Archive 和 SCF worker 等机外角色写入 advertised URL。两类 URL 共享同一端口、CA 和服务端证书，不增加用户配置项。
+
+启用 TLS 时，NATS 服务端和所有 MooX 客户端统一使用 TLS handshake-first。这样公网端口从第一个字节就是标准 TLS 握手，不依赖中间网络放行 NATS 的明文 `INFO` 前导；该行为由代码根据 TLS 自动启用，不暴露额外开关。
 
 ### 2.4 SCF EventBus 凭据
 
@@ -395,12 +400,13 @@ type TencentCredential struct {
 - [ ] 签证书时使用 URL host：IP 写入 `IPAddresses`，域名写入 `DNSNames`；loopback 仍保留 `localhost/127.0.0.1/::1`。
 - [ ] TLS bundle/secret 的 `extra_config` 记录 `nats_url` 或 advertised host，删除旧 `public_ip` 字段，不做兼容读取。
 - [ ] 已有 TLS bundle 的签名 host 与服务目录不一致时明确失败，要求执行 `--reset-data` 重建；不新增自动重签或证书迁移路径。
-- [ ] 导出的所有角色 YAML 使用同一个 `nats_url`。
+- [ ] 凭据导出器从 advertised URL 推导同端口的 `tls://127.0.0.1:<port>`：同机角色使用 loopback URL，机外角色使用 advertised URL；不得要求用户填写第二个地址。
 - [ ] `packages/jetstream.CredentialFile` 增加 `URLs []string`；`ApplyCredentialFile` 把 YAML URL 写入 `Config.URLs`，并继续把 `token` 归一为 `Password`。
 - [ ] `deploy-moox.sh` 根据 `MOOX_EVENTBUS_PUBLIC_IP` 计算一次 `nats_url`：非空为 `tls://<public-ip>:4222`，否则为 loopback。
 - [ ] 脚本在导出凭据之前调用 `service-deployments import --eventbus-nats-url ... --node-id ...`，随后 `ensure/export --node-id ...`。
 - [ ] 脚本内部根据 URL host 推导 bind host：loopback 用 `127.0.0.1`，其他 host 用 `0.0.0.0`；覆盖并传递内部 `MOOX_EVENTBUS_HOST`，不要求运维填写。
 - [ ] 加脚本契约测试，断言本地和远端路径都传递计算后的 URL、node ID 与 bind host。
+- [ ] EventBus TLS 服务端、内部控制连接和 `packages/jetstream` 客户端统一启用 handshake-first；增加真实 TLS 握手测试，不能只断言配置字段。
 - [ ] 运行：
 
 ```bash
@@ -410,7 +416,7 @@ bash -n scripts/deploy-moox.sh
 (cd packages/jetstream && go test ./... -race)
 ```
 
-**完成条件：** 凭据导出不再读取 `MOOX_EVENTBUS_PUBLIC_IP`；唯一客户端 URL 来自 `eventbus.extra_config.nats_url`。
+**完成条件：** 凭据导出不再读取 `MOOX_EVENTBUS_PUBLIC_IP`；advertised URL 只来自 `eventbus.extra_config.nats_url`，loopback URL 只由其端口确定性推导。
 
 ---
 

@@ -85,6 +85,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 	if cfg.Broker.TLS.Enabled {
 		opts.TLS, opts.TLSCert, opts.TLSKey, opts.TLSCaCert = true, cfg.Broker.TLS.CertFile, cfg.Broker.TLS.KeyFile, cfg.Broker.TLS.CAFile
+		opts.TLSHandshakeFirst = true
 		cert, err := tls.LoadX509KeyPair(cfg.Broker.TLS.CertFile, cfg.Broker.TLS.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load broker tls certificate: %w", err)

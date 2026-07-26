@@ -50,6 +50,15 @@ func TestPublishRawDuplicateUsesNATSMessageID(t *testing.T) {
 	}
 }
 
+func TestTLSURLsRequireHandshakeFirst(t *testing.T) {
+	if !tlsHandshakeFirstRequired([]string{"tls://127.0.0.1:4222"}) {
+		t.Fatal("TLS URL must use handshake-first")
+	}
+	if tlsHandshakeFirstRequired([]string{"nats://127.0.0.1:4222"}) {
+		t.Fatal("plain NATS URL must not use handshake-first")
+	}
+}
+
 func connectTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
