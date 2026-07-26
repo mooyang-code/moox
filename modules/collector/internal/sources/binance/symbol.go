@@ -239,7 +239,14 @@ func (c *SymbolCollector) reportSymbols(
 		}
 
 		// 并发执行当前组
-		_ = trpc.GoAndWait(handlers...)
+		if err := trpc.GoAndWait(handlers...); err != nil {
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("symbol batch worker failed: %w", err)
+			}
+			mu.Unlock()
+			log.ErrorContextf(ctx, "[SymbolCollector] 批次 worker 异常: %v", err)
+		}
 	}
 
 	if firstErr != nil {

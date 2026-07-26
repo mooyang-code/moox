@@ -203,6 +203,23 @@ func TestSymbolCollectorDoesNotDeactivateAfterRegistrationFailure(t *testing.T) 
 	assert.Empty(t, writer.bound)
 }
 
+func TestSymbolCollectorDoesNotDeactivateAfterWorkerPanic(t *testing.T) {
+	writer := &fakeSymbolStorage{
+		listByDataset: map[string][]*storagepb.DatasetSubject{
+			"symbols-custom": {{
+				SpaceId: "space-custom", DatasetId: "symbols-custom", SubjectId: "OLD-USDT", Status: "active",
+			}},
+		},
+		upsertPanic: true,
+	}
+	collector := symbolCollectorWithSymbols(writer, activeSymbol("BTC"))
+
+	err := collector.Collect(context.Background(), symbolCollectParams())
+	require.ErrorContains(t, err, "panic found in call handlers")
+	assert.Empty(t, writer.listCalls)
+	assert.Empty(t, writer.bound)
+}
+
 func TestSymbolCollectorSkipsDeactivationForEmptySnapshot(t *testing.T) {
 	writer := &fakeSymbolStorage{
 		listByDataset: map[string][]*storagepb.DatasetSubject{
@@ -247,12 +264,16 @@ type fakeSymbolStorage struct {
 	bound            []*storagepb.DatasetSubject
 	upsertCalls      int
 	upsertErrAfter   int
+	upsertPanic      bool
 	registerCalls    int
 	registerErrAfter int
 }
 
 func (s *fakeSymbolStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	s.upsertCalls++
+	if s.upsertPanic {
+		panic("fake symbol storage panic")
+	}
 	if s.upsertErrAfter > 0 && s.upsertCalls > s.upsertErrAfter {
 		return errors.New("write failed")
 	}
