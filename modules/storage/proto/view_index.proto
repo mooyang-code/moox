@@ -49,16 +49,15 @@ message ViewIndexStats {
   bool exists = 1;
   uint64 entry_count = 2;
   string min_version = 3;
-	string max_version = 4;
-	string view_schema_hash = 5;
-	reserved 6;
-  string updated_at = 7;
+  string max_version = 4;
+  string view_schema_hash = 5;
+  string updated_at = 6;
   // free_disk_bytes is the owner filesystem's currently available capacity.
-  uint64 free_disk_bytes = 8;
+  uint64 free_disk_bytes = 7;
   // view_version is persisted with the physical index and survives owner restarts.
-  uint64 view_version = 9;
-  string indexed_from = 10;
-  string indexed_to = 11;
+  uint64 view_version = 8;
+  string indexed_from = 9;
+  string indexed_to = 10;
 }
 
 message ViewIndexDescriptor {

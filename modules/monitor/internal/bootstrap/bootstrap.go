@@ -43,11 +43,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
-	if err := mgr.EnsureMetricRuleStateColumns(); err != nil {
-		_ = mgr.Close()
-		log.ErrorContextf(ctx, "升级 monitor metric rule state schema 失败: %v", err)
-		return nil, err
-	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
 

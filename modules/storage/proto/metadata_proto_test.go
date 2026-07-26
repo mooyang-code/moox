@@ -103,23 +103,19 @@ func TestMetadataProtoCleanBreakContract(t *testing.T) {
 	if device := file.Messages().ByName("Device"); device.Fields().ByName("node_id") != nil {
 		t.Fatal("Device.node_id must be removed")
 	} else {
-		if !device.ReservedRanges().Has(2) {
-			t.Fatal("Device must reserve field number 2")
-		}
-		if !device.ReservedNames().Has("node_id") {
-			t.Fatal("Device must reserve field name node_id")
-		}
+		assertFields(t, device, map[string]protoreflect.FieldNumber{
+			"device_id": 1, "name": 2, "engine": 3, "endpoint": 4,
+			"config_json": 5, "status": 6, "created_at": 7, "updated_at": 8,
+			"attributes": 9,
+		})
 	}
 	listDevicesReq := file.Messages().ByName("ListDevicesReq")
 	if listDevicesReq.Fields().ByName("node_id") != nil {
 		t.Fatal("ListDevicesReq.node_id must be removed")
 	}
-	if !listDevicesReq.ReservedRanges().Has(2) {
-		t.Fatal("ListDevicesReq must reserve field number 2")
-	}
-	if !listDevicesReq.ReservedNames().Has("node_id") {
-		t.Fatal("ListDevicesReq must reserve field name node_id")
-	}
+	assertFields(t, listDevicesReq, map[string]protoreflect.FieldNumber{
+		"auth_info": 1, "engine": 2, "page": 3,
+	})
 }
 
 func TestDataNodeRuntimeProtoContract(t *testing.T) {

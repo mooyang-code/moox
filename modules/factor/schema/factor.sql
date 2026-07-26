@@ -1,7 +1,5 @@
 PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS t_factor_runs;
-
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT PRIMARY KEY,
     c_name TEXT NOT NULL,

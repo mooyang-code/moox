@@ -365,12 +365,12 @@ message DatasetColumn {
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   FieldValueType value_type = 6;
-  // required is retained in the wire contract but ignored by field-level upserts.
-  bool required = 7 [deprecated = true];
-  // is_unique is retained for metadata clients and is not used for row identity.
-  bool is_unique = 8 [deprecated = true];
-  // aliases are retained for metadata clients.
-  repeated string aliases = 9 [deprecated = true];
+  // required 表示导入数据时该列是否必须存在。
+  bool required = 7;
+  // is_unique 表示该列值是否应在 Dataset 内保持唯一。
+  bool is_unique = 8;
+  // aliases 是导入数据时可识别的列名别名。
+  repeated string aliases = 9;
   // status 表示启用、停用、构建中、归档或删除等状态。
   string status = 10;
   // created_at 是创建时间，使用项目统一时间字符串格式。
@@ -422,27 +422,24 @@ message DatasetActivationCheck {
 
 // Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
 message Device {
-  reserved 2;
-  reserved "node_id";
-
   // device_id 是设备 ID。
   string device_id = 1;
   // name 是设备名称，通常用于管理台展示。
-  string name = 3;
+  string name = 2;
   // engine 是存储引擎，例如 pebble、duckdb 或 bleve。
-  string engine = 4;
+  string engine = 3;
   // endpoint 是连接地址、文件路径或 URI。
-  string endpoint = 5;
+  string endpoint = 4;
   // config_json 是设备专用配置。
-  string config_json = 6;
+  string config_json = 5;
   // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 7;
+  string status = 6;
   // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 8;
+  string created_at = 7;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 9;
+  string updated_at = 8;
   // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 10;
+  map<string, string> attributes = 9;
 }
 
 // ArchiveFile 表示从 Pebble 主存归档出来的 Parquet 事实文件。
@@ -1439,12 +1436,10 @@ message GetDeviceRsp {
 message ListDevicesReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
-  reserved 2;
-  reserved "node_id";
   // engine 是可选存储引擎过滤条件。
-  string engine = 3;
+  string engine = 2;
   // page 是分页参数。
-  common.Page page = 4;
+  common.Page page = 3;
 }
 
 // ListDevicesRsp 表示列出设备的响应。

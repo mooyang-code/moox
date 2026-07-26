@@ -91,11 +91,6 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("apply trade schema: %w", err)
 		}
 	}
-	if !db.Migrator().HasColumn("t_trade_fill_events", "c_traded_at_ms") {
-		if err = db.Exec("ALTER TABLE t_trade_fill_events ADD COLUMN c_traded_at_ms INTEGER NOT NULL DEFAULT 0").Error; err != nil {
-			return nil, fmt.Errorf("migrate trade fill time: %w", err)
-		}
-	}
 	return &Store{db: db}, nil
 }
 func (s *Store) Close() error {

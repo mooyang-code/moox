@@ -152,15 +152,6 @@ func (d *DAO) ListActive(ctx context.Context, nodeID string) ([]Deployment, erro
 }
 
 func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
-	if err := d.retireLegacyAdminMonitor(ctx); err != nil {
-		return err
-	}
-	if err := d.retireSplitViewDeployments(ctx); err != nil {
-		return err
-	}
-	if err := d.db.WithContext(ctx).Where("c_service_name IN ?", []string{"service_gateway", "service_gateway_internal"}).Delete(&Deployment{}).Error; err != nil {
-		return err
-	}
 	for i := range rows {
 		item := rows[i]
 		normalizeDeployment(&item)
@@ -184,27 +175,12 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 	return nil
 }
 
-func (d *DAO) retireSplitViewDeployments(ctx context.Context) error {
-	return d.db.WithContext(ctx).
-		Where("c_service_name IN ?", []string{"storage_view_builder", "storage_view_query", "storage_view_index"}).
-		Delete(&Deployment{}).Error
-}
-
-func (d *DAO) retireLegacyAdminMonitor(ctx context.Context) error {
-	const where = "c_service_name = ? AND c_service_kind = ? AND c_gateway_path = ? AND c_port = ?"
-	return d.db.WithContext(ctx).
-		Where(where, "monitor", "admin_rpc", "trpc.moox.ops.Monitor", 11103).
-		Delete(&Deployment{}).Error
-}
-
 func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) error {
 	row, err := d.Get(ctx, item.NodeID, item.ServiceName)
 	if err != nil {
 		return err
 	}
-	existingExtra, migrated := migrateUnifiedStorageViewHealth(item.ServiceName, row.ExtraConfig, item.ExtraConfig)
-	next, changed := mergeDefaultExtraConfig(existingExtra, item.ExtraConfig)
-	changed = changed || migrated
+	next, changed := mergeDefaultExtraConfig(row.ExtraConfig, item.ExtraConfig)
 	updates := map[string]interface{}{}
 	if changed {
 		updates["c_extra_config"] = next
@@ -224,25 +200,6 @@ func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) 
 		Updates(updates).Error
 }
 
-func migrateUnifiedStorageViewHealth(serviceName, existingRaw, defaultRaw string) (string, bool) {
-	if serviceName != "storage-view" {
-		return existingRaw, false
-	}
-	existing, defaults := map[string]interface{}{}, map[string]interface{}{}
-	if json.Unmarshal([]byte(existingRaw), &existing) != nil || json.Unmarshal([]byte(defaultRaw), &defaults) != nil {
-		return existingRaw, false
-	}
-	if existing["health_url"] != "http://127.0.0.1:20212/readyz" || defaults["health_url"] == nil {
-		return existingRaw, false
-	}
-	existing["health_url"] = defaults["health_url"]
-	raw, err := json.Marshal(existing)
-	if err != nil {
-		return existingRaw, false
-	}
-	return string(raw), true
-}
-
 func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	defaultRaw = strings.TrimSpace(defaultRaw)
 	if defaultRaw == "" || defaultRaw == "{}" {
@@ -257,7 +214,6 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	if existingRaw != "" {
 		_ = json.Unmarshal([]byte(existingRaw), &existing)
 	}
-	_, originalKindConfigured := existing["health_kind"]
 	changed := false
 	for key, value := range defaults {
 		if _, ok := existing[key]; ok {
@@ -265,14 +221,6 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 		}
 		existing[key] = value
 		changed = true
-	}
-	if existingURL, ok := existing["health_url"].(string); ok {
-		defaultURL, defaultOK := defaults["health_url"].(string)
-		if defaultOK && !originalKindConfigured && strings.HasSuffix(strings.TrimRight(existingURL, "/"), "/healthz") && strings.HasSuffix(strings.TrimRight(defaultURL, "/"), "/readyz") {
-			existing["health_url"] = defaultURL
-			existing["health_kind"] = "readiness"
-			changed = true
-		}
 	}
 	if !changed {
 		return existingRaw, false

@@ -174,43 +174,6 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 	}
 }
 
-func TestSeedDefaultsRemovesPersistedObsoleteGatewayRows(t *testing.T) {
-	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db, "configured-node")
-	ctx := context.Background()
-	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "configured-node", Name: "configured-node", PublicAddress: "https://a.example", Status: "enabled"}))
-	for _, name := range []string{"service_gateway", "service_gateway_internal"} {
-		row := Deployment{NodeID: "configured-node", ServiceName: name, Host: "127.0.0.1", Port: 11001, Status: "active"}
-		require.NoError(t, svc.dao.Create(ctx, &row))
-	}
-	require.NoError(t, svc.SeedDefaults(ctx))
-	var count int64
-	require.NoError(t, db.Model(&Deployment{}).Where("c_service_name IN ?", []string{"service_gateway", "service_gateway_internal"}).Count(&count).Error)
-	assert.Zero(t, count)
-}
-
-func TestSeedDefaultsRemovesSplitViewRowsAndMigratesUnifiedHealth(t *testing.T) {
-	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db, "configured-node")
-	ctx := context.Background()
-	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "configured-node", Name: "configured-node", PublicAddress: "https://a.example", Status: "enabled"}))
-	for _, name := range []string{"storage_view_builder", "storage_view_query", "storage_view_index"} {
-		require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "configured-node", ServiceName: name, Host: "127.0.0.1", Port: 1, Status: "active"}))
-	}
-	require.NoError(t, svc.dao.Create(ctx, &Deployment{
-		NodeID: "configured-node", ServiceName: "storage-view", Host: "127.0.0.1", Port: 20202, Status: "active",
-		ExtraConfig: `{"health_url":"http://127.0.0.1:20212/readyz","health_kind":"readiness","monitor_enabled":true}`,
-	}))
-
-	require.NoError(t, svc.SeedDefaults(ctx))
-	var count int64
-	require.NoError(t, db.Model(&Deployment{}).Where("c_service_name IN ?", []string{"storage_view_builder", "storage_view_query", "storage_view_index"}).Count(&count).Error)
-	assert.Zero(t, count)
-	view, err := svc.dao.Get(ctx, "configured-node", "storage-view")
-	require.NoError(t, err)
-	assert.Equal(t, "http://127.0.0.1:20211/readyz", healthURL(view.ExtraConfig))
-}
-
 func TestReportGatewayStatusExactHeartbeatAndUnknownNode(t *testing.T) {
 	dao := NewDAO(setupEmptySysDeployTestDB(t))
 	ctx := context.Background()

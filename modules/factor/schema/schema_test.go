@@ -21,13 +21,15 @@ func TestAllSQLContainsFactorSchemaObjects(t *testing.T) {
 	}
 }
 
-func TestAllSQLDropsLegacyFactorRunTable(t *testing.T) {
+func TestAllSQLContainsNoFactorRunUpgradePath(t *testing.T) {
 	sql := AllSQL()
-	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS t_factor_runs") {
-		t.Fatal("factor schema must not recreate t_factor_runs")
-	}
-	if !strings.Contains(sql, "DROP TABLE IF EXISTS t_factor_runs") {
-		t.Fatal("factor schema must drop legacy t_factor_runs")
+	for _, statement := range []string{
+		"CREATE TABLE IF NOT EXISTS t_factor_runs",
+		"DROP TABLE IF EXISTS t_factor_runs",
+	} {
+		if strings.Contains(sql, statement) {
+			t.Fatalf("factor schema must not contain retired factor-run statement %q", statement)
+		}
 	}
 }
 

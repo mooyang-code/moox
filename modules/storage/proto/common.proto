@@ -143,7 +143,6 @@ message FilterGroup {
 message FilterSpec {
   repeated FilterGroup groups = 1;
   FilterLogical group_logical = 2;
-  reserved 3;
 }
 
 // DataKind 表示 Dataset 的结构形态。
@@ -154,8 +153,6 @@ enum DataKind {
   DATA_KIND_RECORD = 1;
   // DATA_KIND_TIME_SERIES 表示时序数据，例如 K 线或 tick。
   DATA_KIND_TIME_SERIES = 2;
-  reserved 3, 4, 5, 6;
-  reserved "DATA_KIND_SNAPSHOT", "DATA_KIND_EVENT", "DATA_KIND_DOCUMENT", "DATA_KIND_TABLE";
 }
 
 // FieldValueType 表示字段、因子和查询列的逻辑值类型。

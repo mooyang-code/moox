@@ -35,11 +35,12 @@ func TestMaskingFilterPreservesExplicitRevealResponse(t *testing.T) {
 	}
 }
 
-func TestRevealedSecretPreservesLegacyWireTags(t *testing.T) {
+func TestRevealedSecretUsesContiguousWireTags(t *testing.T) {
 	fields := (&RevealedSecret{}).ProtoReflect().Descriptor().Fields()
 	want := map[string]int32{
-		"secret_id": 2, "name": 3, "description": 4, "provider": 6,
-		"key_id": 8, "secret_value": 9, "extra_config": 10,
+		"secret_id": 1, "name": 2, "description": 3, "category": 4,
+		"provider": 5, "secret_type": 6, "key_id": 7, "secret_value": 8,
+		"extra_config": 9, "status": 10,
 	}
 	for name, number := range want {
 		field := fields.ByName(protoreflect.Name(name))

@@ -1,7 +1,5 @@
 PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS t_collector_execution_logs;
-
 CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',

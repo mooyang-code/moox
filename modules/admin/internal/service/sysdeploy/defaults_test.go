@@ -204,23 +204,6 @@ func TestMergeDefaultExtraConfigBackfillsMissingFields(t *testing.T) {
 	}
 }
 
-func TestMergeDefaultExtraConfigMigratesLegacyHealthzToReadiness(t *testing.T) {
-	merged, changed := mergeDefaultExtraConfig(
-		`{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`,
-		`{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true}`,
-	)
-	if !changed {
-		t.Fatal("changed = false, want legacy health migration")
-	}
-	var extra map[string]interface{}
-	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
-		t.Fatalf("unmarshal merged: %v", err)
-	}
-	if extra["health_url"] != "http://127.0.0.1:11411/readyz" || extra["health_kind"] != "readiness" {
-		t.Fatalf("health metadata = %v", extra)
-	}
-}
-
 func healthURL(raw string) string {
 	var extra struct {
 		HealthURL string `json:"health_url"`

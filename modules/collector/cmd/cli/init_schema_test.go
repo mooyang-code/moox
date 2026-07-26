@@ -40,24 +40,6 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 	}
 }
 
-func TestRunInitCommandDropsLegacyExecutionLogTable(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.Exec("CREATE TABLE t_collector_execution_logs (c_id INTEGER PRIMARY KEY)").Error; err != nil {
-		t.Fatalf("create legacy table: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &stdout, &stderr); err != nil {
-		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
-	}
-	assertTableNotExists(t, dbPath, "t_collector_execution_logs")
-}
-
 func assertTableExists(t *testing.T, dbPath string, tableName string) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})

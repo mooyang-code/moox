@@ -87,13 +87,15 @@ func TestAdminSchemaDefinesGatewayNodes(t *testing.T) {
 	}
 }
 
-func TestAdminSchemaDropsLegacyUserActionsTable(t *testing.T) {
+func TestAdminSchemaContainsNoUserActionsUpgradePath(t *testing.T) {
 	sql := AdminSQL()
-	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS t_user_actions") {
-		t.Fatal("admin schema must not recreate t_user_actions")
-	}
-	if !strings.Contains(sql, "DROP TABLE IF EXISTS t_user_actions") {
-		t.Fatal("admin schema must drop legacy t_user_actions")
+	for _, statement := range []string{
+		"CREATE TABLE IF NOT EXISTS t_user_actions",
+		"DROP TABLE IF EXISTS t_user_actions",
+	} {
+		if strings.Contains(sql, statement) {
+			t.Fatalf("admin schema must not contain retired user-actions statement %q", statement)
+		}
 	}
 }
 

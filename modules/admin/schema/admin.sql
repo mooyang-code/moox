@@ -2,8 +2,6 @@
 
 PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS t_user_actions;
-
 -- ************ 平台空间表 ************
 CREATE TABLE IF NOT EXISTS t_spaces (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
