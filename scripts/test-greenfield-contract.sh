@@ -14,12 +14,12 @@ check_absent() {
   fi
 }
 
-check_absent "protocol reserved declarations are forbidden" \
-  '^[[:space:]]*reserved([[:space:]]|$)' \
-  --glob '*.proto' --glob '*.thrift' modules packages
-check_absent "deprecated protocol fields are forbidden" \
-  '\[[[:space:]]*deprecated[[:space:]]*=[[:space:]]*true[[:space:]]*\]' \
-  --glob '*.proto' --glob '*.thrift' modules packages
+check_absent "reserved protocol declarations and markers are forbidden" \
+  '\b[Rr]eserved\b' \
+  --glob '*.proto' --glob '*.thrift' .
+check_absent "deprecated protocol declarations and markers are forbidden" \
+  '\b[Dd]eprecated\b' \
+  --glob '*.proto' --glob '*.thrift' .
 check_absent "retired compatibility symbols remain" \
   'migrateTaskInstanceSchema|DropLegacyHostSampleTables|EnsureMetricRuleStateColumns|LegacyKVEntry|LEGACY_PACKAGE_TYPE|legacyKey\(|releaseLiveGate|FRAME_READY[[:space:]]*=' \
   --glob '*.go' --glob '*.py' --glob '*.ts' --glob '!**/*_test.go' modules packages web
