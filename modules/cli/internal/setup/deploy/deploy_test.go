@@ -26,7 +26,10 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	packager := &fakePackager{path: archive, events: &events}
 	transport := &fakeTransport{events: &events}
 	probe := &fakeProbe{events: &events}
-	opts := Options{RepositoryRoot: dir, PublicHost: "203.0.113.8", BrowserPort: 9527, TargetGOOS: "linux", TargetGOARCH: "amd64"}
+	opts := Options{
+		RepositoryRoot: dir, PublicHost: "203.0.113.8", BrowserPort: 9527, TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+	}
 
 	err := Control(context.Background(), transport, opts, Dependencies{Packager: packager, Probe: probe, CAStore: &fakeCAStore{events: &events}})
 	require.NoError(t, err)
@@ -46,6 +49,25 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	for _, secret := range []string{"admin-secret", "ssh-secret", "AKID-secret", "cloud-secret"} {
 		require.NotContains(t, captured, secret)
 	}
+}
+
+func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {
+	env, err := eventBusCommandEnv([]string{"PATH=/bin", "HOME=/tmp/home"}, Options{
+		EventBusPublicAddress: "eventbus.example.test",
+		EventBusPort:          4333,
+		EventBusTLSEnabled:    true,
+	})
+	require.NoError(t, err)
+	require.Contains(t, env, "PATH=/bin")
+	require.Contains(t, env, "HOME=/tmp/home")
+	require.Contains(t, env, "MOOX_EVENTBUS_ENABLE_TLS=1")
+	require.Contains(t, env, "MOOX_EVENTBUS_PUBLIC_IP=eventbus.example.test")
+	require.Contains(t, env, "MOOX_EVENTBUS_PORT=4333")
+}
+
+func TestEventBusCommandEnvRejectsIncompleteEndpoint(t *testing.T) {
+	_, err := eventBusCommandEnv(nil, Options{EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222})
+	require.EqualError(t, err, "control_deploy_invalid")
 }
 
 func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
@@ -192,6 +214,7 @@ func TestControlCleansRemoteArchiveAfterFailure(t *testing.T) {
 
 	err := Control(context.Background(), transport, Options{
 		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527, TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
 	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: probe, CAStore: &fakeCAStore{events: &events}})
 	require.EqualError(t, err, "control_deploy_not_ready")
 	require.Contains(t, events, "rollback")
@@ -208,6 +231,7 @@ func TestControlDetectsARM64BeforePackaging(t *testing.T) {
 	transport := &fakeTransport{events: &events, unameOS: "Linux\n", unameArch: "aarch64\n"}
 	err := Control(context.Background(), transport, Options{
 		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
 	}, Dependencies{Packager: packager, Probe: &fakeProbe{events: &events}, CAStore: &fakeCAStore{events: &events}})
 	require.NoError(t, err)
 	require.Equal(t, "linux", packager.opts.TargetGOOS)
@@ -222,6 +246,7 @@ func TestFinalizeResponseLossNeverRollsBackHealthyDeployment(t *testing.T) {
 	err := Control(context.Background(), transport, Options{
 		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
 		TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
 	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events}, CAStore: &fakeCAStore{events: &events}})
 	require.NoError(t, err)
 	require.NotContains(t, events, "rollback")

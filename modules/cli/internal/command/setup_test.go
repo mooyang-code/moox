@@ -212,6 +212,16 @@ func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T
 	require.JSONEq(t, `{"checks":[{"name":"host:control","status":"invalid","code":"host_key_unknown","fingerprint":"SHA256:verified"}]}`, output.String())
 }
 
+func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	opts := controlDeployOptions(snapshot, "/repo")
+	require.Equal(t, "/repo", opts.RepositoryRoot)
+	require.Equal(t, "203.0.113.8", opts.PublicHost)
+	require.Equal(t, "eventbus.example.test", opts.EventBusPublicAddress)
+	require.Equal(t, 4333, opts.EventBusPort)
+	require.True(t, opts.EventBusTLSEnabled)
+}
+
 func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
@@ -293,6 +303,10 @@ password = "admin-test-password"
 [tencent_cloud]
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
+[eventbus]
+public_address = "eventbus.example.test"
+port = 4333
+tls_enabled = true
 [control_host]
 name = "control"
 address = "203.0.113.8"

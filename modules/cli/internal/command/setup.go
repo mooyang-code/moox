@@ -498,7 +498,18 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot) err
 	if err != nil {
 		return fmt.Errorf("control_deploy_invalid")
 	}
-	return setupdeploy.Control(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address, BrowserPort: 9527}, setupdeploy.Dependencies{})
+	return setupdeploy.Control(ctx, transport, controlDeployOptions(snapshot, root), setupdeploy.Dependencies{})
+}
+
+func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {
+	return setupdeploy.Options{
+		RepositoryRoot:        repositoryRoot,
+		PublicHost:            snapshot.Manifest.ControlHost.Address,
+		BrowserPort:           9527,
+		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:          snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
+	}
 }
 
 func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, packagePath, service, deployDir string) (setupdeploy.ServiceResult, error) {

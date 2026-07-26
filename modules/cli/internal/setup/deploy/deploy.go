@@ -27,12 +27,15 @@ const (
 )
 
 type Options struct {
-	RepositoryRoot   string
-	PublicHost       string
-	BrowserPort      int
-	TargetGOOS       string
-	TargetGOARCH     string
-	ResetStorageData bool
+	RepositoryRoot        string
+	PublicHost            string
+	BrowserPort           int
+	TargetGOOS            string
+	TargetGOARCH          string
+	ResetStorageData      bool
+	EventBusPublicAddress string
+	EventBusPort          int
+	EventBusTLSEnabled    bool
 }
 
 type Packager interface {
@@ -131,6 +134,9 @@ type CAStore interface{ Save(string, []byte) error }
 func Control(ctx context.Context, transport setupssh.Client, opts Options, deps Dependencies) (returnErr error) {
 	if transport == nil || strings.TrimSpace(opts.RepositoryRoot) == "" || strings.TrimSpace(opts.PublicHost) == "" {
 		return fmt.Errorf("control_deploy_invalid")
+	}
+	if _, err := eventBusCommandEnv(nil, opts); err != nil {
+		return err
 	}
 	if opts.BrowserPort == 0 {
 		opts.BrowserPort = 9527
@@ -318,11 +324,41 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
 	)
 	command.Dir = root
+	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
+	if err != nil {
+		_ = os.Remove(archive)
+		return "", err
+	}
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
 	}
 	return archive, nil
+}
+
+func eventBusCommandEnv(base []string, opts Options) ([]string, error) {
+	address := strings.TrimSpace(opts.EventBusPublicAddress)
+	if address == "" || opts.EventBusPort < 1 || opts.EventBusPort > 65535 || !opts.EventBusTLSEnabled {
+		return nil, fmt.Errorf("control_deploy_invalid")
+	}
+	const (
+		tlsKey     = "MOOX_EVENTBUS_ENABLE_TLS"
+		addressKey = "MOOX_EVENTBUS_PUBLIC_IP"
+		portKey    = "MOOX_EVENTBUS_PORT"
+	)
+	env := make([]string, 0, len(base)+3)
+	for _, entry := range base {
+		key, _, found := strings.Cut(entry, "=")
+		if found && (key == tlsKey || key == addressKey || key == portKey) {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env,
+		tlsKey+"=1",
+		addressKey+"="+address,
+		portKey+"="+strconv.Itoa(opts.EventBusPort),
+	), nil
 }
 
 type StoragePackager struct{}
