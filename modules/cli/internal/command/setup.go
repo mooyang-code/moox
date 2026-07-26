@@ -418,9 +418,6 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
-	if _, err := setupclient.New(control).ApplyStoragePlacement(ctx, host.Address); err != nil {
-		return err
-	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData,
 		GatewayControlURL:     fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address),
@@ -430,7 +427,8 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
-	return nil
+	_, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Address)
+	return err
 }
 
 func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {
