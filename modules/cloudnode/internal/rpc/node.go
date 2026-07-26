@@ -212,7 +212,7 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 	if req.GetNodeId() != "" {
 		supported, _ := json.Marshal(req.GetSupportedWorkloads())
 		metadata, _ := json.Marshal(req.GetMetadata().AsMap())
-		if err := s.catalog.UpdateHeartbeat(ctx, spaceID, req.GetNodeId(), firstString(req.GetNodeType(), "scf-event"), req.GetRunningVersion(), string(supported), string(metadata)); err != nil {
+		if err := s.catalog.UpdateHeartbeat(ctx, spaceID, req.GetNodeId(), req.GetRunningVersion(), string(supported), string(metadata)); err != nil {
 			log.WarnContextf(ctx, "[CloudNode] heartbeat upsert node failed: %v", err)
 		}
 	}

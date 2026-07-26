@@ -7,6 +7,7 @@ type CollectorType string
 
 const (
 	CollectorTypeBinance CollectorType = "binance"
+	NodeTypeSCFEvent                   = "scf-event"
 )
 
 // EventAction 事件类型

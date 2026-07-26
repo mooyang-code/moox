@@ -126,12 +126,11 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	return q.Updates(updates).Error
 }
 
-func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error {
+func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, version string, supported string, metadata string) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Model(&CloudNode{}).
 		Where("c_space_id = ? AND c_node_id = ? AND c_is_deleted = ?", spaceID, nodeID, false).
 		Updates(map[string]any{
-			"c_node_type":           nodeType,
 			"c_running_version":     version,
 			"c_supported_workloads": supported,
 			"c_metadata":            metadata,

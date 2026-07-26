@@ -51,7 +51,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
-		Region: "ap-guangzhou", Namespace: "default", Status: "online",
+		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default", Status: "online",
 		SupportedWorkloads: `["collect.kline"]`, DeploymentID: "dep-1",
 	}))
 	node, err := repo.GetNode(ctx, "crypto", "node-a")
@@ -73,7 +73,11 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Equal(t, "node-a", matched.NodeID)
 
 	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2"))
-	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "node-a", "scf", "v2", `["collect.kline"]`, `{}`))
+	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "node-a", "v2", `["collect.kline"]`, `{}`))
+	updated, err := repo.GetNode(ctx, "crypto", "node-a")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "scf-event", updated.NodeType)
 	require.NoError(t, repo.DeleteNodes(ctx, "crypto", []string{"node-a"}))
 	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
@@ -123,7 +127,7 @@ func TestCatalogRepository_HeartbeatDoesNotRegisterUnknownNode(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
 
-	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "unknown-function", "scf", "v1", `["collect.kline"]`, `{}`))
+	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "unknown-function", "v1", `["collect.kline"]`, `{}`))
 
 	node, err := repo.GetNode(ctx, "crypto", "unknown-function")
 	require.NoError(t, err)

@@ -144,7 +144,7 @@ func TestBuildPayloadInfo_UsesRuntimeAndEnvSpace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "space-test", payload.SpaceID)
 	assert.Equal(t, "node-payload", payload.NodeID)
-	assert.Equal(t, "scf", payload.NodeType)
+	assert.Equal(t, model.NodeTypeSCFEvent, payload.NodeType)
 	assert.Equal(t, "v9", payload.Metadata["version"])
 	assert.Equal(t, jobs.SupportedJobTypes(), payload.SupportedCollectors)
 	assert.NotNil(t, payload.Metrics)
@@ -172,5 +172,5 @@ func TestCreateNodeInfo_IncludesVersion(t *testing.T) {
 	info := createNodeInfo("node-1", "v2")
 	assert.Equal(t, "node-1", info.NodeID)
 	assert.Equal(t, "v2", info.Version)
-	assert.Equal(t, "scf", info.NodeType)
+	assert.Equal(t, model.NodeTypeSCFEvent, info.NodeType)
 }

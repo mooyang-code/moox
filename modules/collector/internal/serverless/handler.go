@@ -280,7 +280,7 @@ func (h *CloudFunctionHandler) buildKeepaliveResponse(ctx context.Context, event
 	// 构建节点信息。任务执行由 CloudNode JobItem 租约维护，keepalive 不再展示旧本地任务缓存。
 	nodeInfo := &model.NodeInfo{
 		NodeID:       nodeID,
-		NodeType:     "scf",
+		NodeType:     model.NodeTypeSCFEvent,
 		Region:       funcCtx.TencentcloudRegion,
 		Namespace:    funcCtx.Namespace,
 		Version:      funcCtx.FunctionVersion,

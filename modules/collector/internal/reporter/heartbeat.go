@@ -136,7 +136,7 @@ func buildPayloadInfo() (*model.HeartbeatPayload, error) {
 	payload := &model.HeartbeatPayload{
 		SpaceID:             heartbeatSpaceID(),
 		NodeID:              nodeID,
-		NodeType:            "scf",
+		NodeType:            model.NodeTypeSCFEvent,
 		Timestamp:           time.Now(),
 		RunningTasks:        []*model.TaskSummary{},
 		Metrics:             nodeMetrics,
@@ -443,7 +443,7 @@ func getHeartbeatInfo(probeConfig *ProbeResponseConfig) model.HeartbeatInfo {
 func createNodeInfo(nodeID, version string) *model.NodeInfo {
 	return &model.NodeInfo{
 		NodeID:       nodeID,
-		NodeType:     "scf",
+		NodeType:     model.NodeTypeSCFEvent,
 		Version:      version,
 		RunningTasks: make([]string, 0),
 		Capabilities: []model.CollectorType{
