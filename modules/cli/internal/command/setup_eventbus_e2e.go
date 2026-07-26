@@ -56,6 +56,10 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	if err != nil {
 		return eventBusE2EResult{}, err
 	}
+	ownerRaw, err := readRemoteEventBusFile(ctx, transport, ".config/moox/eventbus/cloudnode-eventbus.yaml")
+	if err != nil {
+		return eventBusE2EResult{}, err
+	}
 	workerRaw, err := readRemoteEventBusFile(ctx, transport, ".config/moox/eventbus/cloudnode-worker.yaml")
 	if err != nil {
 		return eventBusE2EResult{}, err
@@ -68,6 +72,10 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	if err != nil {
 		return eventBusE2EResult{}, err
 	}
+	ownerCredential, err := decodeEventBusCredential(ownerRaw)
+	if err != nil {
+		return eventBusE2EResult{}, err
+	}
 	workerCredential, err := decodeEventBusCredential(workerRaw)
 	if err != nil {
 		return eventBusE2EResult{}, err
@@ -77,6 +85,7 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 		return jetstream.Connect(ctx, jetstream.Config{
 			URLs: []string{url}, Name: name, Username: credential.Username, Password: credential.Password,
 			TLSCAPEMBase64: base64.StdEncoding.EncodeToString([]byte(caPEM)), ConnectTimeout: 10 * time.Second,
+			AsyncErrorHandler: func(error) {},
 		})
 	}
 	admin, err := connect("moox-setup-eventbus-admin-e2e", adminCredential)
@@ -84,6 +93,11 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_public_tls_failed")
 	}
 	defer admin.Close()
+	owner, err := connect("moox-setup-eventbus-owner-e2e", ownerCredential)
+	if err != nil {
+		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_connect_failed")
+	}
+	defer owner.Close()
 	worker, err := connect("moox-setup-eventbus-worker-e2e", workerCredential)
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_connect_failed")
@@ -106,47 +120,55 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	consumerConfig := events.SubjectConsumerConfig{
 		ConsumerConfig: events.ConsumerConfig{
 			Name: consumerName, Event: events.CloudJobExecutionRequested, AckWait: 30 * time.Second,
-			MaxDeliver: 2, MaxAckPending: 1, FetchMaxWait: 10 * time.Second, DeliverPolicy: nats.DeliverNewPolicy,
+			MaxDeliver: 2, MaxAckPending: 1, FetchMaxWait: 10 * time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 		},
 		SpaceID: "system", SubjectID: subjectID,
 	}
-	if _, err := events.EnsureSubjectConsumer(ctx, admin, registry, consumerConfig); err != nil {
-		return eventBusE2EResult{}, fmt.Errorf("eventbus_admin_prepare_failed")
+	operationCtx, cancelOperation := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelOperation()
+	if _, err := events.EnsureSubjectConsumer(operationCtx, owner, registry, consumerConfig); err != nil {
+		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_prepare_failed")
 	}
-	defer admin.DeleteConsumer(context.Background(), events.CloudJobExecutionRequested.Stream(), consumerName)
-	workerConsumer, err := events.BindSubjectConsumer(ctx, worker, registry, consumerConfig)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = admin.DeleteConsumer(cleanupCtx, events.CloudJobExecutionRequested.Stream(), consumerName)
+	}()
+	workerConsumer, err := events.BindSubjectConsumer(operationCtx, worker, registry, consumerConfig)
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_bind_failed")
 	}
 	defer workerConsumer.Close()
-	publisher, err := events.NewPublisher(admin, registry)
+	publisher, err := events.NewPublisher(owner, registry)
 	if err != nil {
-		return eventBusE2EResult{}, fmt.Errorf("eventbus_admin_prepare_failed")
+		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_prepare_failed")
 	}
 	eventID := fmt.Sprintf("setup-e2e-%d", time.Now().UnixNano())
-	if _, err := publisher.Publish(ctx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
+	if _, err := publisher.Publish(operationCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
 		JobId: eventID, JobItemId: eventID, JobType: identity.JobType, CodePackageId: identity.CodePackageID,
 	}, events.PublishOptions{
 		EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: identity.SpaceID, SubjectID: subjectID,
 	}); err != nil {
-		return eventBusE2EResult{}, fmt.Errorf("eventbus_admin_publish_failed")
+		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_publish_failed")
 	}
-	deliveries, err := workerConsumer.FetchEvents(ctx, 1)
+	deliveries, err := workerConsumer.FetchEvents(operationCtx, 1)
 	if err != nil || len(deliveries) != 1 || deliveries[0].Err != nil || deliveries[0].Message.GetEventId() != eventID {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_fetch_failed")
 	}
-	if err := deliveries[0].Delivery.Ack(ctx); err != nil {
+	if err := deliveries[0].Delivery.Ack(operationCtx); err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_ack_failed")
 	}
 
+	denialCtx, cancelDenial := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelDenial()
 	forbidden := consumerConfig
 	forbidden.Name += "_forbidden"
-	_, createErr := events.EnsureSubjectConsumer(ctx, worker, registry, forbidden)
+	_, createErr := events.EnsureSubjectConsumer(denialCtx, worker, registry, forbidden)
 	workerPublisher, err := events.NewPublisher(worker, registry)
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_e2e_invalid")
 	}
-	_, publishErr := workerPublisher.Publish(ctx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
+	_, publishErr := workerPublisher.Publish(denialCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
 		JobId: eventID + "-forbidden", JobItemId: eventID + "-forbidden", JobType: identity.JobType, CodePackageId: identity.CodePackageID,
 	}, events.PublishOptions{
 		EventID: eventID + "-forbidden", OccurredAt: time.Now().UTC(), SpaceID: identity.SpaceID, SubjectID: subjectID,

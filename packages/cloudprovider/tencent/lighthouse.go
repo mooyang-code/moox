@@ -57,6 +57,12 @@ type CreateFirewallRulesRequest struct {
 	FirewallVersion *int64         `json:"FirewallVersion,omitempty"`
 }
 
+type EnsureFirewallRuleResult struct {
+	Created    bool
+	InstanceID string
+	RequestID  string
+}
+
 type FirewallRule struct {
 	Protocol                string `json:"Protocol"`
 	Port                    string `json:"Port,omitempty"`
@@ -76,15 +82,22 @@ type describeInstancesRequest struct {
 	Limit   int      `json:"Limit,omitempty"`
 }
 
+type describeFirewallRulesRequest struct {
+	InstanceID string `json:"InstanceId"`
+	Offset     int    `json:"Offset,omitempty"`
+	Limit      int    `json:"Limit,omitempty"`
+}
+
 type apiResponse struct {
 	Response responseBody `json:"Response"`
 }
 
 type responseBody struct {
-	RequestID   string          `json:"RequestId"`
-	Error       *apiError       `json:"Error,omitempty"`
-	TotalCount  int             `json:"TotalCount,omitempty"`
-	InstanceSet []InstanceBrief `json:"InstanceSet,omitempty"`
+	RequestID       string          `json:"RequestId"`
+	Error           *apiError       `json:"Error,omitempty"`
+	TotalCount      int             `json:"TotalCount,omitempty"`
+	InstanceSet     []InstanceBrief `json:"InstanceSet,omitempty"`
+	FirewallRuleSet []FirewallRule  `json:"FirewallRuleSet,omitempty"`
 }
 
 type apiError struct {
@@ -197,6 +210,57 @@ func (c *Client) CreateFirewallRules(ctx context.Context, req CreateFirewallRule
 		return "", err
 	}
 	return resp.Response.RequestID, nil
+}
+
+func (c *Client) EnsureFirewallRule(ctx context.Context, publicIP string, opts CreateFirewallRulesOptions) (EnsureFirewallRuleResult, error) {
+	instanceID, err := c.ResolveInstanceIDByPublicIP(ctx, publicIP)
+	if err != nil {
+		return EnsureFirewallRuleResult{}, err
+	}
+	opts.InstanceID = instanceID
+	request, err := NewCreateFirewallRulesRequest(opts)
+	if err != nil {
+		return EnsureFirewallRuleResult{}, err
+	}
+	rules, err := c.describeFirewallRules(ctx, instanceID)
+	if err != nil {
+		return EnsureFirewallRuleResult{}, err
+	}
+	for _, existing := range rules {
+		if sameFirewallRule(existing, request.FirewallRules[0]) {
+			return EnsureFirewallRuleResult{InstanceID: instanceID}, nil
+		}
+	}
+	requestID, err := c.CreateFirewallRules(ctx, request)
+	if err != nil {
+		return EnsureFirewallRuleResult{}, err
+	}
+	return EnsureFirewallRuleResult{Created: true, InstanceID: instanceID, RequestID: requestID}, nil
+}
+
+func (c *Client) describeFirewallRules(ctx context.Context, instanceID string) ([]FirewallRule, error) {
+	const limit = 100
+	var rules []FirewallRule
+	for offset := 0; ; offset += limit {
+		var response apiResponse
+		if err := c.do(ctx, "DescribeFirewallRules", describeFirewallRulesRequest{
+			InstanceID: instanceID, Offset: offset, Limit: limit,
+		}, &response); err != nil {
+			return nil, err
+		}
+		rules = append(rules, response.Response.FirewallRuleSet...)
+		if len(response.Response.FirewallRuleSet) < limit || len(rules) >= response.Response.TotalCount {
+			return rules, nil
+		}
+	}
+}
+
+func sameFirewallRule(left, right FirewallRule) bool {
+	return strings.EqualFold(strings.TrimSpace(left.Protocol), strings.TrimSpace(right.Protocol)) &&
+		strings.TrimSpace(left.Port) == strings.TrimSpace(right.Port) &&
+		strings.TrimSpace(left.CidrBlock) == strings.TrimSpace(right.CidrBlock) &&
+		strings.TrimSpace(left.IPv6CidrBlock) == strings.TrimSpace(right.IPv6CidrBlock) &&
+		strings.EqualFold(strings.TrimSpace(left.Action), strings.TrimSpace(right.Action))
 }
 
 func (c *Client) ResolveInstanceIDByPublicIP(ctx context.Context, publicIP string) (string, error) {

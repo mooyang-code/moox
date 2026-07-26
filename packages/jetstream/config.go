@@ -30,6 +30,8 @@ type Config struct {
 	// MaxReconnects defaults to -1 (unlimited) when zero, so a central broker restart is recoverable.
 	MaxReconnects int
 	MaxPayload    int
+	// AsyncErrorHandler receives connection-level errors such as permission denials.
+	AsyncErrorHandler func(error)
 }
 
 // ConfigFromEnv applies the deployment-wide EventBus connection contract to a

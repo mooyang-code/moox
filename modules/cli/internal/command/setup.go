@@ -508,7 +508,28 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	}
 	opts := controlDeployOptions(snapshot, root)
 	opts.ResetControlData = resetData
-	return setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{})
+	if err := setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{}); err != nil {
+		return err
+	}
+	return ensureSetupEventBusFirewall(ctx, snapshot)
+}
+
+func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
+	client, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
+		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+		Region: "ap-guangzhou",
+	})
+	if err != nil {
+		return fmt.Errorf("eventbus_firewall_failed")
+	}
+	_, err = client.EnsureFirewallRule(ctx, snapshot.Manifest.EventBus.PublicAddress, cloudtencent.CreateFirewallRulesOptions{
+		Protocol: "TCP", Ports: fmt.Sprint(snapshot.Manifest.EventBus.Port), CidrBlock: "0.0.0.0/0",
+		Action: "ACCEPT", Description: "MooX EventBus TLS",
+	})
+	if err != nil {
+		return fmt.Errorf("eventbus_firewall_failed")
+	}
+	return nil
 }
 
 func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {

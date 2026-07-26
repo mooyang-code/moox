@@ -104,6 +104,11 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if tlsHandshakeFirstRequired(cfg.URLs) {
 		opts = append(opts, nats.TLSHandshakeFirst())
 	}
+	if cfg.AsyncErrorHandler != nil {
+		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			cfg.AsyncErrorHandler(err)
+		}))
+	}
 	reconnectBuffer := cfg.ReconnectBufferBytes
 	if reconnectBuffer == 0 {
 		reconnectBuffer = -1

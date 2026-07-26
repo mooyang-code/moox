@@ -131,3 +131,76 @@ func TestClient_CreateFirewallRules_APIError_ShouldReturnError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "InvalidParameter")
 }
+
+func TestClient_EnsureFirewallRule_ExistingRuleDoesNotCreateDuplicate(t *testing.T) {
+	actions := make([]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.Header.Get("X-TC-Action")
+		actions = append(actions, action)
+		switch action {
+		case "DescribeInstances":
+			_ = json.NewEncoder(w).Encode(apiResponse{Response: responseBody{
+				InstanceSet: []InstanceBrief{{InstanceID: "lhins-abc", PublicAddresses: []string{"1.2.3.4"}}},
+			}})
+		case "DescribeFirewallRules":
+			_ = json.NewEncoder(w).Encode(apiResponse{Response: responseBody{
+				FirewallRuleSet: []FirewallRule{{
+					Protocol: "TCP", Port: "4222", CidrBlock: "0.0.0.0/0",
+					Action: "ACCEPT", FirewallRuleDescription: "MooX EventBus TLS",
+				}},
+			}})
+		default:
+			t.Fatalf("unexpected action %s", action)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(ClientOptions{
+		SecretID: "sid", SecretKey: "skey", Region: "ap-guangzhou",
+		Endpoint: server.URL, HTTPClient: server.Client(),
+	})
+	require.NoError(t, err)
+
+	result, err := client.EnsureFirewallRule(context.Background(), "1.2.3.4", CreateFirewallRulesOptions{
+		Protocol: "TCP", Ports: "4222", CidrBlock: "0.0.0.0/0",
+		Action: "ACCEPT", Description: "MooX EventBus TLS",
+	})
+	require.NoError(t, err)
+	assert.False(t, result.Created)
+	assert.Equal(t, "lhins-abc", result.InstanceID)
+	assert.Equal(t, []string{"DescribeInstances", "DescribeFirewallRules"}, actions)
+}
+
+func TestClient_EnsureFirewallRule_MissingRuleCreatesIt(t *testing.T) {
+	actions := make([]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.Header.Get("X-TC-Action")
+		actions = append(actions, action)
+		switch action {
+		case "DescribeInstances":
+			_ = json.NewEncoder(w).Encode(apiResponse{Response: responseBody{
+				InstanceSet: []InstanceBrief{{InstanceID: "lhins-abc", PublicAddresses: []string{"1.2.3.4"}}},
+			}})
+		case "DescribeFirewallRules":
+			_ = json.NewEncoder(w).Encode(apiResponse{Response: responseBody{FirewallRuleSet: []FirewallRule{}}})
+		case "CreateFirewallRules":
+			_ = json.NewEncoder(w).Encode(apiResponse{Response: responseBody{RequestID: "req-create"}})
+		default:
+			t.Fatalf("unexpected action %s", action)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(ClientOptions{
+		SecretID: "sid", SecretKey: "skey", Region: "ap-guangzhou",
+		Endpoint: server.URL, HTTPClient: server.Client(),
+	})
+	require.NoError(t, err)
+
+	result, err := client.EnsureFirewallRule(context.Background(), "1.2.3.4", CreateFirewallRulesOptions{
+		Protocol: "TCP", Ports: "4222", CidrBlock: "0.0.0.0/0",
+		Action: "ACCEPT", Description: "MooX EventBus TLS",
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Created)
+	assert.Equal(t, "req-create", result.RequestID)
+	assert.Equal(t, []string{"DescribeInstances", "DescribeFirewallRules", "CreateFirewallRules"}, actions)
+}

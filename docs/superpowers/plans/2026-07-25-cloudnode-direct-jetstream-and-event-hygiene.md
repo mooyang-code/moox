@@ -103,6 +103,8 @@ extra_config:
 
 启用 TLS 时，NATS 服务端和所有 MooX 客户端统一使用 TLS handshake-first。这样公网端口从第一个字节就是标准 TLS 握手，不依赖中间网络放行 NATS 的明文 `INFO` 前导；该行为由代码根据 TLS 自动启用，不暴露额外开关。
 
+用户只在仓库根目录的 0600 `custom.toml` 填写 `eventbus.public_address`、`eventbus.port` 和 `eventbus.tls_enabled`。`setup deploy-control` 根据这些值配置 bind、advertised URL、证书和腾讯云 Lighthouse 防火墙；防火墙规则用“查询后缺失才创建”保证重复部署不堆积重复规则。不做公网探测、自动回退或替换地址。
+
 ### 2.4 SCF EventBus 凭据
 
 当前 EventBus 认证不是 NATS JWT `.creds`，而是：
@@ -407,6 +409,7 @@ type TencentCredential struct {
 - [ ] 脚本内部根据 URL host 推导 bind host：loopback 用 `127.0.0.1`，其他 host 用 `0.0.0.0`；覆盖并传递内部 `MOOX_EVENTBUS_HOST`，不要求运维填写。
 - [ ] 加脚本契约测试，断言本地和远端路径都传递计算后的 URL、node ID 与 bind host。
 - [ ] EventBus TLS 服务端、内部控制连接和 `packages/jetstream` 客户端统一启用 handshake-first；增加真实 TLS 握手测试，不能只断言配置字段。
+- [ ] `setup deploy-control --file ./custom.toml` 在服务部署成功后幂等确保 Lighthouse TCP 防火墙允许 EventBus 端口；规则创建失败则部署命令失败，不做探测或回退。
 - [ ] 运行：
 
 ```bash
@@ -974,7 +977,8 @@ git diff --check
 
 ### 14.2 真实 EventBus 验证
 
-- [ ] 用 `cloudnode-worker.yaml` 的 `username/token/ca_file` 做公网 TLS 连接；不得使用 `--creds`：
+- [ ] 运行 `moox-cli setup e2e-eventbus --file ./custom.toml`：由 `cloudnode-eventbus` 创建队列并发布，`cloudnode-worker` 绑定/FETCH/ACK，`eventbus-internal-admin` 只负责清理探针 Consumer。命令只输出四个布尔证明，不输出凭据。
+- [ ] 如需用 NATS CLI 单独诊断，使用 `cloudnode-worker.yaml` 的 `username/token/ca_file`；不得使用 JWT `--creds`：
 
 ```bash
 nats --server 'tls://<public-ip>:4222' \
@@ -1020,18 +1024,17 @@ EnsureJobExecutionQueue
 
 1. 停止上游调度，不再提交新 JobItem。
 2. 在腾讯云删除旧 Collector SCF。当前凭据会在 reset 后轮换，而 publish 对已存在函数明确失败。
-3. 在现有完整部署命令上设置环境变量并追加 reset 参数：
+3. 使用初始化文件中的 EventBus 公网地址执行控制面重置：
 
 ```bash
-MOOX_EVENTBUS_ENABLE_TLS=1 \
-MOOX_EVENTBUS_PUBLIC_IP='<SCF 可达公网 IP>' \
-./scripts/deploy-moox.sh <现有完整参数> --reset-data
+./bin/moox-cli setup deploy-control --file ./custom.toml --reset-data
 ```
 
 4. 确认部署脚本完成以下内部动作：
    - 计算 `tls://<public-ip>:4222`。
    - 把它写入 `eventbus.extra_config.nats_url`。
    - 推导 broker bind 为 `0.0.0.0`。
+   - 幂等确保 Lighthouse 防火墙开放该 TCP 端口。
    - 重签 EventBus 私有 CA 和所有 role token。
    - 导出 `cloudnode-worker.yaml` 及其他角色凭据。
 5. 重建基础资源：
