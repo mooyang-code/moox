@@ -2,12 +2,19 @@ package bootstrap
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 func TestCloudNodeHealthSnapshot(t *testing.T) {
@@ -26,4 +33,66 @@ func TestCloudNodeHealthSnapshot(t *testing.T) {
 	if rsp.Details["queue_backend"] != "jetstream" {
 		t.Fatalf("queue_backend = %v", rsp.Details["queue_backend"])
 	}
+}
+
+func TestSCFHeartbeatTargetsUseEnvironmentAndLocalFallbacks(t *testing.T) {
+	t.Setenv("MOOX_SCF_SERVICE_GATEWAY_TARGET", "")
+	t.Setenv("MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET", "")
+	targets := scfHeartbeatTargetsFromEnv()
+	assert.Equal(t, "http://127.0.0.1:11002", targets.ServiceGatewayTarget)
+	assert.Equal(t, "ip://127.0.0.1:11003", targets.StorageRPCGatewayTarget)
+
+	t.Setenv("MOOX_SCF_SERVICE_GATEWAY_TARGET", " https://gateway.example.com/service ")
+	t.Setenv("MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET", " ip://gateway.example.com:11003 ")
+	targets = scfHeartbeatTargetsFromEnv()
+	assert.Equal(t, "https://gateway.example.com/service", targets.ServiceGatewayTarget)
+	assert.Equal(t, "ip://gateway.example.com:11003", targets.StorageRPCGatewayTarget)
+}
+
+func TestSCFHeartbeatMaintainerTimerConfig(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
+	require.NoError(t, err)
+	text := string(data)
+	for _, want := range []string{
+		"name: " + scfHeartbeatMaintainerTimerService,
+		"port: 11414",
+		"network: \"*/9 * * * * *?startAtOnce=1\"",
+		"protocol: timer",
+		"timeout: 8000",
+	} {
+		assert.Truef(t, strings.Contains(text, want), "timer config missing %q", want)
+	}
+}
+
+func TestSCFHeartbeatMaintainerTimerRegistersStartAtOnceHandler(t *testing.T) {
+	s := newImmediateSCFHeartbeatTimerServer()
+	started := make(chan struct{})
+	require.NoError(t, registerSCFHeartbeatMaintainerHandler(s, func(context.Context) error {
+		close(started)
+		return nil
+	}))
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- s.Serve() }()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("startAtOnce heartbeat maintainer did not run")
+	}
+	select {
+	case err := <-serveDone:
+		t.Fatalf("timer server returned before shutdown: %v", err)
+	default:
+	}
+	require.NoError(t, s.Close(nil))
+	require.NoError(t, <-serveDone)
+}
+
+func newImmediateSCFHeartbeatTimerServer() *server.Server {
+	cfg := &trpc.Config{}
+	cfg.Server.Service = []*trpc.ServiceConfig{{
+		Name: scfHeartbeatMaintainerTimerService, IP: "127.0.0.1", Port: 11414,
+		Network: "*/9 * * * * *?startAtOnce=1", Protocol: "timer", Timeout: 8000,
+	}}
+	return trpc.NewServerWithConfig(cfg)
 }

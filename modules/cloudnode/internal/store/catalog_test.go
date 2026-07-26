@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -77,6 +78,45 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
 	assert.Nil(t, deleted)
+}
+
+func TestCatalogRepository_ListSCFEventNodesReturnsEveryEligibleNodeWithoutPagination(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+
+	nodes := make([]CloudNode, 0, 1007)
+	for i := 0; i < 1002; i++ {
+		status := "online"
+		switch i {
+		case 0:
+			status = "unknown"
+		case 1:
+			status = "new"
+		}
+		nodes = append(nodes, CloudNode{
+			SpaceID:        "crypto",
+			NodeID:         fmt.Sprintf("eligible-%04d", i),
+			Provider:       "tencent-scf",
+			NodeType:       "scf-event",
+			CloudAccountID: "acct-1",
+			Status:         status,
+		})
+	}
+	nodes = append(nodes,
+		CloudNode{SpaceID: "crypto", NodeID: "wrong-provider", Provider: "local", NodeType: "scf-event", Status: "online"},
+		CloudNode{SpaceID: "crypto", NodeID: "wrong-type", Provider: "tencent-scf", NodeType: "scf-polling", Status: "online"},
+		CloudNode{SpaceID: "crypto", NodeID: "deleted", Provider: "tencent-scf", NodeType: "scf-event", Status: "deleted", IsDeleted: true},
+	)
+	require.NoError(t, repo.db.WithContext(ctx).CreateInBatches(nodes, 200).Error)
+
+	got, err := repo.ListSCFEventNodes(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1002)
+	assert.Equal(t, "eligible-0000", got[0].NodeID)
+	assert.Equal(t, "unknown", got[0].Status)
+	assert.Equal(t, "eligible-0001", got[1].NodeID)
+	assert.Equal(t, "new", got[1].Status)
+	assert.Equal(t, "eligible-1001", got[len(got)-1].NodeID)
 }
 
 func TestCatalogRepository_HeartbeatDoesNotRegisterUnknownNode(t *testing.T) {

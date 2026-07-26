@@ -508,6 +508,10 @@ func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tence
 	return &tencentscf.UpdateFunctionConfigurationResponse{RequestID: "config-req"}, nil
 }
 
+func (f *fakeSCFClient) InvokeFunction(_ context.Context, _ tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {
+	return &tencentscf.InvokeFunctionResponse{RequestID: "invoke-req"}, nil
+}
+
 func newNodeSCFTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
