@@ -98,9 +98,21 @@ func TestCollectorService_GetDataTypeConfigs(t *testing.T) {
 
 func TestCollectorService_ReportTaskStatusValidatesInput(t *testing.T) {
 	svc := newCollectorRPCService(t)
-	rsp, err := svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	for _, test := range []struct {
+		name string
+		req  *pb.ReportInstanceStatusReq
+	}{
+		{name: "space", req: &pb.ReportInstanceStatusReq{}},
+		{name: "task", req: &pb.ReportInstanceStatusReq{SpaceId: "crypto"}},
+		{name: "job item", req: &pb.ReportInstanceStatusReq{SpaceId: "crypto", TaskId: "task-1"}},
+		{name: "status", req: &pb.ReportInstanceStatusReq{SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-1"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rsp, err := svc.ReportTaskStatus(context.Background(), test.req)
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+		})
+	}
 }
 
 func TestCollectorService_GetTaskInstanceListRequiresSpaceID(t *testing.T) {
@@ -252,7 +264,8 @@ func TestCollectorService_TaskInstanceFlow(t *testing.T) {
 
 	require.NoError(t, mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{
 		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1", Exchange: "binance",
-		DataType: "symbol", Market: "spot", TaskParams: `{}`,
+		DataType: "symbol", Market: "spot", TaskParams: `{}`, CloudJobItemID: "item-new",
+		LastExecStatus: domain.InstanceStatusPending,
 	}}))
 
 	svc := New(mgr, Dependencies{})
@@ -266,20 +279,51 @@ func TestCollectorService_TaskInstanceFlow(t *testing.T) {
 	assert.Len(t, listRsp.GetInstances(), 1)
 
 	reportRsp, err := svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
-		SpaceId: "crypto", TaskId: "task-1", NodeId: "node-a",
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-new", NodeId: "node-new",
 		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+		Result: mustStruct(t, map[string]any{"state": "new"}),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, reportRsp.GetRetInfo().GetCode())
 
-	missingRsp, err := svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
-		SpaceId: "crypto", TaskId: "missing", Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+	instances, _, err := mgr.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "node-new", instances[0].LastExecNode)
+	assert.Equal(t, domain.InstanceStatusSuccess, instances[0].LastExecStatus)
+	assert.JSONEq(t, `{"state":"new"}`, instances[0].Result)
+
+	reportRsp, err = svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-old", NodeId: "node-old",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED,
+		Result: mustStruct(t, map[string]any{"state": "old"}),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_NOT_FOUND, missingRsp.GetRetInfo().GetCode())
+	assert.Equal(t, pb.ErrorCode_SUCCESS, reportRsp.GetRetInfo().GetCode())
+
+	instances, _, err = mgr.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "node-new", instances[0].LastExecNode)
+	assert.Equal(t, domain.InstanceStatusSuccess, instances[0].LastExecStatus)
+	assert.JSONEq(t, `{"state":"new"}`, instances[0].Result)
+
+	missingRsp, err := svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "missing", JobItemId: "item-missing",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, missingRsp.GetRetInfo().GetCode())
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func mustStruct(t *testing.T, value map[string]any) *structpb.Struct {
+	t.Helper()
+	result, err := structpb.NewStruct(value)
+	require.NoError(t, err)
+	return result
+}
 
 func TestGetDataTypeConfigWithFieldsNormalizesDataType(t *testing.T) {
 	svc := &Service{}

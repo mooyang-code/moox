@@ -24,11 +24,12 @@ const (
 
 // ReportTaskStatusRequest 上报任务状态请求
 type ReportTaskStatusRequest struct {
-	SpaceID string         `json:"space_id"`
-	TaskID  string         `json:"task_id"`
-	NodeID  string         `json:"node_id"`
-	Status  int            `json:"status"`
-	Result  map[string]any `json:"result"`
+	SpaceID   string         `json:"space_id"`
+	TaskID    string         `json:"task_id"`
+	JobItemID string         `json:"job_item_id"`
+	NodeID    string         `json:"node_id"`
+	Status    int            `json:"status"`
+	Result    map[string]any `json:"result"`
 }
 
 // TaskStatusServerResponse 服务端响应结构
@@ -43,47 +44,67 @@ type TaskStatusServerResponse struct {
 }
 
 // ReportTaskStatus 上报任务状态到服务端
-func ReportTaskStatus(ctx context.Context, spaceID string, taskID string, status int, result string) error {
-	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
-	nodeID, _ := runtimeapp.GetNodeInfo()
-
-	// 检查服务端配置
-	if serviceGatewayTarget == "" {
-		log.DebugContextf(ctx, "service gateway target 未配置，跳过任务状态上报: taskID=%s", taskID)
-		return nil
-	}
-
-	// 检查 TaskID
+func ReportTaskStatus(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	status int,
+	result string,
+) error {
 	if taskID == "" {
-		log.WarnContextf(ctx, "TaskID 为空，跳过任务状态上报")
-		return nil
+		return fmt.Errorf("task_id is required for task status report")
 	}
 
 	if spaceID == "" {
 		return fmt.Errorf("space_id is required for task status report")
 	}
 
+	if jobItemID == "" {
+		return fmt.Errorf("job_item_id is required for task status report")
+	}
+
+	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
+	nodeID, _ := runtimeapp.GetNodeInfo()
+
+	// 检查服务端配置
+	if serviceGatewayTarget == "" {
+		log.DebugContextf(ctx, "service gateway target 未配置，跳过任务状态上报: taskID=%s jobItemID=%s",
+			taskID, jobItemID)
+		return nil
+	}
+
 	if nodeID == "" {
 		return fmt.Errorf("node_id is required for task status report")
 	}
 
-	log.DebugContextf(ctx, "开始上报任务状态: spaceID=%s, taskID=%s, nodeID=%s, status=%d, service_gateway_target=%s",
-		spaceID, taskID, nodeID, status, serviceGatewayTarget)
+	log.DebugContextf(ctx, "开始上报任务状态: spaceID=%s, taskID=%s, jobItemID=%s, nodeID=%s, status=%d, service_gateway_target=%s",
+		spaceID, taskID, jobItemID, nodeID, status, serviceGatewayTarget)
 
-	return executeTaskStatusReport(ctx, spaceID, taskID, nodeID, status, result, serviceGatewayTarget)
+	return executeTaskStatusReport(ctx, spaceID, taskID, jobItemID, nodeID, status, result, serviceGatewayTarget)
 }
 
 // executeTaskStatusReport 执行上报请求
-func executeTaskStatusReport(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string, serviceGatewayTarget string) error {
+func executeTaskStatusReport(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	nodeID string,
+	status int,
+	result string,
+	serviceGatewayTarget string,
+) error {
 	url := runtimeapp.ServiceURL(serviceGatewayTarget, "collectmgr", "ReportTaskStatus")
 
 	// 构建请求体
 	reqBody := &ReportTaskStatusRequest{
-		SpaceID: spaceID,
-		TaskID:  taskID,
-		NodeID:  nodeID,
-		Status:  status,
-		Result:  resultMap(result),
+		SpaceID:   spaceID,
+		TaskID:    taskID,
+		JobItemID: jobItemID,
+		NodeID:    nodeID,
+		Status:    status,
+		Result:    resultMap(result),
 	}
 
 	data, err := json.Marshal(reqBody)

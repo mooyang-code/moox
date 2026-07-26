@@ -116,6 +116,40 @@ func TestExecuteAtDecision(t *testing.T) {
 	}
 }
 
+func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
+	event, err := taskEventFromJobItem(nodeRuntime.JobItem{
+		SpaceID:   "crypto",
+		JobItemID: "item-123",
+		Params: map[string]any{
+			"space_id":  "crypto",
+			"task_id":   "task-1",
+			"data_type": "symbol",
+			"exchange":  "binance",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.JobItemID != "item-123" {
+		t.Fatalf("job item id = %q, want item-123", event.JobItemID)
+	}
+}
+
+func TestTaskEventFromJobItemRequiresJobItemID(t *testing.T) {
+	_, err := taskEventFromJobItem(nodeRuntime.JobItem{
+		SpaceID: "crypto",
+		Params: map[string]any{
+			"space_id":  "crypto",
+			"task_id":   "task-1",
+			"data_type": "symbol",
+			"exchange":  "binance",
+		},
+	})
+	if err == nil || err.Error() != "job_item_id is required" {
+		t.Fatalf("taskEventFromJobItem() error = %v, want required job_item_id", err)
+	}
+}
+
 func TestHandleDeliveryAtDefersFutureJobWithoutExecuting(t *testing.T) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 type collectTask struct {
 	SpaceID    string
 	TaskID     string
+	JobItemID  string
 	DataSource string
 	Market     string
 	DataType   string
@@ -37,7 +38,7 @@ type executeResult struct {
 	LastError string
 }
 
-type taskStatusReporter func(ctx context.Context, spaceID string, taskID string, status int, result string)
+type taskStatusReporter func(ctx context.Context, spaceID string, taskID string, jobItemID string, status int, result string)
 
 var reportTaskStatus = reporter.ReportTaskStatus
 
@@ -78,7 +79,7 @@ func buildCollectHandler(
 
 			// 定时任务场景：上报失败后继续执行其他任务
 			if reportStatus != nil {
-				reportStatus(ctx, task.SpaceID, task.TaskID, reporter.StatusFailed, err.Error())
+				reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, reporter.StatusFailed, err.Error())
 				return nil
 			}
 
@@ -95,7 +96,7 @@ func buildCollectHandler(
 
 		// 定时任务场景：上报成功状态
 		if reportStatus != nil {
-			reportStatus(ctx, task.SpaceID, task.TaskID, reporter.StatusSuccess, "")
+			reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, reporter.StatusSuccess, "")
 		}
 
 		return nil
@@ -123,7 +124,7 @@ func executeCollectTasks(
 			log.WarnContextf(ctx, "未找到采集器: source=%s, market=%s, dataType=%s, taskID=%s",
 				task.DataSource, task.Market, task.DataType, task.TaskID)
 			if reportStatus != nil {
-				reportStatus(ctx, task.SpaceID, task.TaskID, reporter.StatusFailed,
+				reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, reporter.StatusFailed,
 					fmt.Sprintf("采集器未找到: source=%s, market=%s, dataType=%s", task.DataSource, task.Market, task.DataType))
 			} else {
 				result.mu.Lock()
@@ -172,6 +173,7 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 		collectTasks = append(collectTasks, &collectTask{
 			SpaceID:    taskEvent.SpaceID,
 			TaskID:     taskEvent.TaskID,
+			JobItemID:  taskEvent.JobItemID,
 			DataSource: taskEvent.DataSource,
 			Market:     normalizeMarket(taskEvent),
 			DataType:   taskEvent.DataType,
@@ -186,7 +188,9 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 	if len(collectTasks) == 0 {
 		errMsg := "没有需要执行的interval"
 		log.WarnContextf(ctx, "[ExecuteTaskImmediately] %s", errMsg)
-		if err := reportImmediateTaskStatus(ctx, taskEvent.SpaceID, taskEvent.TaskID, reporter.StatusFailed, errMsg); err != nil {
+		if err := reportImmediateTaskStatus(
+			ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, reporter.StatusFailed, errMsg,
+		); err != nil {
 			return "", err
 		}
 		return "", errors.New(errMsg)
@@ -210,7 +214,9 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 	log.InfoContextf(ctx, "[ExecuteTaskImmediately] 任务执行完成: taskID=%s, status=%d, result=%s",
 		taskEvent.TaskID, status, resultMsg)
 
-	if err := reportImmediateTaskStatus(ctx, taskEvent.SpaceID, taskEvent.TaskID, status, resultMsg); err != nil {
+	if err := reportImmediateTaskStatus(
+		ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, status, resultMsg,
+	); err != nil {
 		return resultMsg, err
 	}
 	if result.HasError {
@@ -235,8 +241,15 @@ func normalizeMarket(taskEvent *model.TaskExecuteEvent) string {
 	}
 }
 
-func reportImmediateTaskStatus(ctx context.Context, spaceID string, taskID string, status int, result string) error {
-	if err := reportTaskStatus(ctx, spaceID, taskID, status, result); err != nil {
+func reportImmediateTaskStatus(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	status int,
+	result string,
+) error {
+	if err := reportTaskStatus(ctx, spaceID, taskID, jobItemID, status, result); err != nil {
 		log.WarnContextf(ctx, "[ExecuteTaskImmediately] 任务状态上报失败: taskID=%s, status=%d, error=%v",
 			taskID, status, err)
 		return err

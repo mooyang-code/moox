@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -14,9 +13,6 @@ const (
 	defaultPageSize = 50
 	maxPageSize     = 1000
 )
-
-// ErrTaskInstanceNotFound indicates that a task instance does not exist.
-var ErrTaskInstanceNotFound = errors.New("task instance not found")
 
 // TaskInstanceFilter describes task instance list filters.
 type TaskInstanceFilter struct {
@@ -94,8 +90,16 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 	}).Create(&instances).Error
 }
 
-// UpdateStatus updates a task instance by Collector task id.
-func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string) error {
+// UpdateStatus updates a task instance only when the report belongs to its current cloud job item.
+func (r *TaskInstanceRepository) UpdateStatus(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	nodeID string,
+	status int,
+	result string,
+) (bool, error) {
 	now := time.Now().UTC()
 	updates := map[string]any{
 		"c_last_exec_node":   nodeID,
@@ -106,15 +110,17 @@ func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID strin
 	}
 	tx := r.db.WithContext(ctx).
 		Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
+		Where(
+			"c_space_id = ? AND c_task_id = ? AND c_cloud_job_item_id = ?",
+			spaceID,
+			taskID,
+			jobItemID,
+		).
 		Updates(updates)
 	if tx.Error != nil {
-		return tx.Error
+		return false, tx.Error
 	}
-	if tx.RowsAffected == 0 {
-		return ErrTaskInstanceNotFound
-	}
-	return nil
+	return tx.RowsAffected > 0, nil
 }
 
 func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilter) *gorm.DB {

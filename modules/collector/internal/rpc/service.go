@@ -4,7 +4,6 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -256,6 +255,7 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceStatusReq) (*pb.ReportInstanceStatusRsp, error) {
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	taskID := strings.TrimSpace(req.GetTaskId())
+	jobItemID := strings.TrimSpace(req.GetJobItemId())
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if spaceID == "" {
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
@@ -263,20 +263,33 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 	if taskID == "" {
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
+	if jobItemID == "" {
+		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_item_id is required")}, nil
+	}
 	status := fromPBStatus(req.GetStatus())
 	if status == 0 {
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "status is required")}, nil
 	}
 	result := jsonStringFromStruct(req.GetResult())
-	if err := s.instanceRepo.UpdateStatus(ctx, spaceID, taskID, nodeID, status, result); err != nil {
+	updated, err := s.instanceRepo.UpdateStatus(ctx, spaceID, taskID, jobItemID, nodeID, status, result)
+	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] update task status failed: %v", err)
-		if errors.Is(err, store.ErrTaskInstanceNotFound) {
-			return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "task instance not found")}, nil
-		}
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	log.InfoContextf(ctx, "[Collector] task status space_id=%s task_id=%s node_id=%s status=%d",
-		spaceID, taskID, nodeID, status)
+	if !updated {
+		log.InfoContextf(
+			ctx,
+			"[Collector] ignored stale task status space_id=%s task_id=%s job_item_id=%s node_id=%s status=%d",
+			spaceID,
+			taskID,
+			jobItemID,
+			nodeID,
+			status,
+		)
+		return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
+	}
+	log.InfoContextf(ctx, "[Collector] task status space_id=%s task_id=%s job_item_id=%s node_id=%s status=%d",
+		spaceID, taskID, jobItemID, nodeID, status)
 	return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
 }
 

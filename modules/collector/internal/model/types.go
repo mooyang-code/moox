@@ -99,6 +99,7 @@ type ServiceDeployment struct {
 type TaskExecuteEvent struct {
 	SpaceID    string   `json:"space_id"`
 	TaskID     string   `json:"task_id"`
+	JobItemID  string   `json:"job_item_id"`
 	DataType   string   `json:"data_type"`
 	DataSource string   `json:"data_source"`
 	Market     string   `json:"market,omitempty"`

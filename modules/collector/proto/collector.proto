@@ -156,6 +156,7 @@ message ReportInstanceStatusReq {
   google.protobuf.Struct result = 5;
   string error_message = 6;
   int64 duration_ms = 7;
+  string job_item_id = 8;
 }
 
 message ReportInstanceStatusRsp {
