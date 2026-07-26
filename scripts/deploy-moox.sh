@@ -683,12 +683,6 @@ HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
 STAGE_DIR="${STAGE_DIR:-${ROOT}/release/deploy-stage/moox}"
 
-build_storage_node_binary() {
-  [[ "${WITH_STORAGE_NODE}" -eq 1 ]] || return 0
-  TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-    "${ROOT}/scripts/build.sh" storage-node
-}
-
 build_core_binaries() {
   if [[ "${SKIP_BUILD}" -eq 1 ]]; then
     log "skip core build; reuse ./bin"
@@ -696,61 +690,65 @@ build_core_binaries() {
   fi
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
-  if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-    if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" cli
-    fi
-    if [[ "${WITH_ADMIN}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" admin
-    fi
+  local cross_storage=0
+  if [[ "${WITH_STORAGE}" -eq 1 ]] &&
+    [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
+    [[ "${TARGET_GOOS}" == linux ]] || fail "cross-platform Storage build supports only Linux targets"
+    [[ "${TARGET_GOARCH}" == amd64 ]] || fail "cross-platform Storage build supports only linux/amd64"
+    cross_storage=1
+    log "cross build detected; build CGO-enabled Storage on compile host"
+    TARGET_GOOS="${HOST_GOOS}" TARGET_GOARCH="${HOST_GOARCH}" \
+      "${ROOT}/scripts/build.sh" cli
+    "${ROOT}/scripts/build-storage-linux.sh"
+  fi
+
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" cli
+  fi
+  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" admin
+  fi
+  if [[ "${WITH_GATEWAY}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" gateway
-    if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" cloudnode
-    fi
-    if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" eventbus
-    fi
-    if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" collector
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" collector-scf
-    fi
-    if [[ "${WITH_FACTOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" factor
-    fi
-    if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" strategy
-    fi
-    if [[ "${WITH_MONITOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" monitor
-    fi
-    if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" archive
-    fi
-    return
   fi
-
-  if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
-    log "cross build detected; storage requires CGO-enabled DuckDB build"
+  if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build.sh" all
-    build_storage_node_binary
-    return
+      "${ROOT}/scripts/build.sh" cloudnode
+  fi
+  if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" eventbus
+  fi
+  if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" collector
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" collector-scf
+  fi
+  if [[ "${WITH_FACTOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" factor
+  fi
+  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" strategy
+  fi
+  if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" monitor
+  fi
+  if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" archive
   fi
 
+  [[ "${WITH_STORAGE}" -eq 1 ]] || return
+  [[ "${cross_storage}" -eq 0 ]] || return
   TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-    "${ROOT}/scripts/build.sh" all
-  build_storage_node_binary
+    "${ROOT}/scripts/build.sh" storage
 }
 
 build_web_host_binary() {
