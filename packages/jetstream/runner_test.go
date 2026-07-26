@@ -388,15 +388,6 @@ func TestActionReporterPanicDoesNotBlockPendingBatchRetry(t *testing.T) {
 	}
 }
 
-func containsError(values []error, want error) bool {
-	for _, value := range values {
-		if errors.Is(value, want) {
-			return true
-		}
-	}
-	return false
-}
-
 func TestRunnerRetryStopsBatchAndNaksRemainingWithSameDelay(t *testing.T) {
 	var actions []string
 	var delays []time.Duration

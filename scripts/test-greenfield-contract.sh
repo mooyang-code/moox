@@ -56,6 +56,10 @@ check_deadcode() {
     failures=1
     return
   fi
+  if [[ "$*" != *"-test"* ]]; then
+    # Reusable testkit packages are intentionally reachable only from tests.
+    matches=$(printf '%s\n' "${matches}" | rg -v '(^|/)testkit/' || true)
+  fi
   if [[ -n "${matches}" ]]; then
     printf '%s\n%s\n' "${label}" "${matches}" >&2
     failures=1
