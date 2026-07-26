@@ -2410,6 +2410,7 @@ prepare_stage() {
   {
     printf 'MOOX_GATEWAY_NODE_ID=%q\n' "${NODE_ID}"
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\n'
+    printf 'MOOX_GATEWAY_CALLER=admin-gateway\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -3137,11 +3138,11 @@ path=/api/service/sysdeploy/ListActiveServiceDeployments
 expect_status 401 -X POST -H "Content-Type: application/json" --data "{}" "$service$path"
 set -a; source "$service_auth_file"; set +a
 timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
-canonical=$(printf "moox-gateway-auth-v1\nPOST\n%s\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
+canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
 signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
 expected=404; [[ "$with_admin" == 0 ]] || expected=200
 expect_status "$expected" -X POST -H "Content-Type: application/json" \
-  -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Timestamp: $timestamp" \
+  -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Caller: $MOOX_GATEWAY_CALLER" -H "X-Moox-Timestamp: $timestamp" \
   -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
   --data "{}" "$service$path"'
   if is_local_target; then
