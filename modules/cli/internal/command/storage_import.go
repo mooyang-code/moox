@@ -97,22 +97,22 @@ type storageImportStats struct {
 
 // storageImportSummary 汇总数据导入命令的执行结果。
 type storageImportSummary struct {
-	Status                   string `json:"status"`
-	File                     string `json:"file"`
-	Format                   string `json:"format"`
-	AccessURL                string `json:"access_url,omitempty"`
-	MetadataURL              string `json:"metadata_url"`
-	SpaceID                  string `json:"space"`
-	ViewID                   string `json:"view,omitempty"`
-	DatasetID                string `json:"dataset"`
-	SubjectID                string `json:"subject"`
-	Freq                     string `json:"freq,omitempty"`
-	ValidatedRows            int    `json:"validated_rows"`
-	WrittenRows              int    `json:"written_rows,omitempty"`
-	WouldMergeTimeSeriesRows int    `json:"would_write_time_series_rows,omitempty"`
-	Batches                  int    `json:"batches,omitempty"`
-	BoundSubject             bool   `json:"bound_subject,omitempty"`
-	WouldBindSubject         bool   `json:"would_bind_subject,omitempty"`
+	Status            string `json:"status"`
+	File              string `json:"file"`
+	Format            string `json:"format"`
+	AccessURL         string `json:"access_url,omitempty"`
+	MetadataURL       string `json:"metadata_url"`
+	SpaceID           string `json:"space"`
+	ViewID            string `json:"view,omitempty"`
+	DatasetID         string `json:"dataset"`
+	SubjectID         string `json:"subject"`
+	Freq              string `json:"freq,omitempty"`
+	ValidatedRows     int    `json:"validated_rows"`
+	WrittenRows       int    `json:"written_rows,omitempty"`
+	WouldUpsertFields int    `json:"would_upsert_fields,omitempty"`
+	Batches           int    `json:"batches,omitempty"`
+	BoundSubject      bool   `json:"bound_subject,omitempty"`
+	WouldBindSubject  bool   `json:"would_bind_subject,omitempty"`
 }
 
 // storageImportMetadataClient 定义数据导入所需的元数据查询接口。
@@ -127,7 +127,7 @@ type storageImportMetadataClient interface {
 
 // storageDataWriter 定义数据导入写入 Storage 的接口。
 type storageDataWriter interface {
-	MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error
+	UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error
 }
 
 // storageFileImporter 定义一种本地数据文件格式的导入器。
@@ -230,7 +230,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	}
 	if opts.DryRun {
 		summary.Status = "dry_run"
-		summary.WouldMergeTimeSeriesRows = len(result.Rows)
+		summary.WouldUpsertFields = len(result.Rows)
 		summary.WouldBindSubject = needsBind
 		return summary, nil
 	}
@@ -251,7 +251,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		if err := writeStorageImportRows(ctx, writer, &pb.MergeTimeSeriesRowsReq{Rows: result.Rows[start:end]}, true); err != nil {
+		if err := writeStorageImportRows(ctx, writer, &pb.PrimaryUpsertFieldsReq{Rows: storageImportUpserts(result.Rows[start:end])}, true); err != nil {
 			return storageImportSummary{}, err
 		}
 		summary.Batches++
@@ -260,8 +260,8 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 	return summary, nil
 }
 
-func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.MergeTimeSeriesRowsReq, allowMetadataRetry bool) error {
-	err := writer.MergeTimeSeriesRows(ctx, req)
+func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.PrimaryUpsertFieldsReq, allowMetadataRetry bool) error {
+	err := writer.UpsertFields(ctx, req)
 	if err == nil || !allowMetadataRetry || !retryableStorageImportWriteError(err) {
 		return err
 	}
@@ -272,7 +272,7 @@ func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *
 			return ctx.Err()
 		case <-time.After(storageImportRetryDelay):
 		}
-		err = writer.MergeTimeSeriesRows(ctx, req)
+		err = writer.UpsertFields(ctx, req)
 		if err == nil {
 			return nil
 		}
@@ -504,10 +504,9 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 			if err != nil {
 				return storageImportParseResult{}, fmt.Errorf("row %d column %s invalid %s value %q: %w", line, name, storageImportValueTypeName(column.GetValueType()), value, err)
 			}
-			row.Columns = append(row.Columns, &pb.ColumnValue{
-				ColumnName: name,
-				ValueType:  column.GetValueType(),
-				Value:      typed,
+			row.Fields = append(row.Fields, &pb.FieldValue{
+				FieldId: name,
+				Value:   typed,
 			})
 		}
 		result.Rows = append(result.Rows, row)
@@ -744,8 +743,27 @@ func (c httpStorageImportMetadataClient) BindDatasetSubject(ctx context.Context,
 	return postStorage(ctx, c.URL, metadataServiceName, "BindDatasetSubject", &pb.BindDatasetSubjectReq{DatasetSubject: item}, &pb.BindDatasetSubjectRsp{})
 }
 
-func (w httpStorageDataWriter) MergeTimeSeriesRows(ctx context.Context, req *pb.MergeTimeSeriesRowsReq) error {
-	return postStorage(ctx, w.URL, accessServiceName, "MergeTimeSeriesRows", req, &pb.MergeTimeSeriesRowsRsp{})
+func (w httpStorageDataWriter) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) error {
+	return postStorage(ctx, w.URL, accessServiceName, "UpsertFields", req, &pb.PrimaryUpsertFieldsRsp{})
+}
+
+func storageImportUpserts(rows []*pb.TimeSeriesRow) []*pb.RowFieldUpsert {
+	out := make([]*pb.RowFieldUpsert, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := row.GetKey()
+		attributes := make(map[string]*pb.TypedValue, len(row.GetAttributes()))
+		for name, value := range row.GetAttributes() {
+			attributes[name] = &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}
+		}
+		out = append(out, &pb.RowFieldUpsert{
+			Key:    &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime()}}},
+			Fields: row.GetFields(), Attributes: attributes,
+		})
+	}
+	return out
 }
 
 func init() {

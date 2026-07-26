@@ -14,11 +14,11 @@ type FrameType byte
 
 const (
 	FrameTypeReady    FrameType = 0x01
-	FrameTypeRequest  FrameType = 0x02
-	FrameTypeResponse FrameType = 0x03
-	FrameTypeError    FrameType = 0x04
-	FrameTypePing     FrameType = 0x05
-	FrameTypeReload   FrameType = 0x06
+	FrameTypeReload   FrameType = 0x02
+	FrameTypeRequest  FrameType = 0x03
+	FrameTypeResponse FrameType = 0x04
+	FrameTypeError    FrameType = 0x05
+	FrameTypePing     FrameType = 0x06
 )
 
 // Frame is one decoded stdio frame.

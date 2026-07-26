@@ -238,12 +238,6 @@ func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) 
 			if event["service_gateway_target"] != server.URL {
 				t.Fatalf("event service_gateway_target = %#v, want %s", event["service_gateway_target"], server.URL)
 			}
-			if _, ok := event["server_ip"]; ok {
-				t.Fatalf("event should not include server_ip: %#v", event)
-			}
-			if _, ok := event["server_port"]; ok {
-				t.Fatalf("event should not include server_port: %#v", event)
-			}
 			if event["storage_rpc_gateway_target"] != "127.0.0.1:11003" {
 				t.Fatalf("event storage targets = %#v", event)
 			}

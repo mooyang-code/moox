@@ -25,17 +25,6 @@ TYPE_ERROR = 0x05
 TYPE_PING = 0x06
 TYPE_DRAIN = 0x07
 
-# Compatibility aliases for workers that used the old names. New code should
-# use TYPE_* names so control messages cannot be confused with responses.
-FRAME_READY = TYPE_HELLO
-FRAME_LOAD = TYPE_LOAD
-FRAME_RUN = TYPE_RUN
-FRAME_RESULT = TYPE_RESULT
-FRAME_ERROR = TYPE_ERROR
-FRAME_PING = TYPE_PING
-FRAME_DRAIN = TYPE_DRAIN
-
-
 @dataclass(frozen=True)
 class FrameLimits:
     max_meta_bytes: int = 4 * 1024 * 1024

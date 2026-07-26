@@ -49,11 +49,11 @@ func (r *Runtime) EnsureStreams(_ config.JetStreamConfig, _ config.JobItemConfig
 	}
 	return nil
 }
-func (r *Runtime) KeyValue(bucket string) (jetstream.KeyValue, error) {
+func (r *Runtime) BindKV(ctx context.Context, bucket string) (jetstream.KVStore, error) {
 	if r == nil || r.client == nil {
 		return nil, fmt.Errorf("jetstream runtime is not initialized")
 	}
-	return r.client.KeyValue(bucket)
+	return r.client.BindKV(ctx, bucket)
 }
 func (r *Runtime) Close() error {
 	if r == nil || r.client == nil {

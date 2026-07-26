@@ -39,13 +39,13 @@ func (f *fakeMetadata) ListDatasetColumns(context.Context, *storagepb.ListDatase
 }
 
 type fakeAccess struct {
-	writes  []*storagepb.TimeSeriesRow
+	writes  []*storagepb.RowFieldUpsert
 	readReq *storagepb.ReadTimeSeriesRowsReq
 }
 
-func (f *fakeAccess) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (f *fakeAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writes = append(f.writes, req.GetRows()...)
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.readReq = req
@@ -77,8 +77,8 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 	if len(a.writes) != 2 {
 		t.Fatalf("writes=%d, want 2", len(a.writes))
 	}
-	if a.writes[0].GetKey().GetSubjectId() != "s1" {
-		t.Fatalf("subject id=%q", a.writes[0].GetKey().GetSubjectId())
+	if a.writes[0].GetKey().GetTimeSeries().GetSubjectId() != "s1" {
+		t.Fatalf("subject id=%q", a.writes[0].GetKey().GetTimeSeries().GetSubjectId())
 	}
 	if len(a.writes[0].GetAttributes()) != 4 {
 		t.Fatalf("write attributes=%v, want complete metric identity", a.writes[0].GetAttributes())
@@ -88,9 +88,14 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	a := &fakeAccess{}
 	adapter := NewStorageAdapter(a, &fakeMetadata{}, metricsStorageConfig())
-	_, err := adapter.QueryHistorySelectors(context.Background(), []HistorySelector{{SeriesID: "series-1", Dimensions: map[string]string{
-		"service_name": "svc", "instance_id": "instance", "metric_name": "requests_total", "metric_type": "counter",
-	}}}, time.Time{}, time.Time{}, true, 10)
+	_, err := adapter.QueryHistorySelectors(
+		context.Background(),
+		[]HistorySelector{{SeriesID: "series-1"}},
+		time.Time{},
+		time.Time{},
+		true,
+		10,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,16 +145,11 @@ func TestStorageHelpers(t *testing.T) {
 	require.Error(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "fail"}))
 }
 
-func TestCloneStringMapAndHistorySelector(t *testing.T) {
-	assert.Nil(t, cloneStringMap(nil))
-	cloned := cloneStringMap(map[string]string{"a": "1"})
-	cloned["a"] = "2"
-	assert.Equal(t, "1", cloneStringMap(map[string]string{"a": "1"})["a"])
+func TestHistorySelectorForSeries(t *testing.T) {
 	selector := HistorySelectorForSeries(MetricSeries{
 		SeriesID: "s1", ServiceName: "svc", InstanceID: "i", MetricName: "cpu", MetricType: "gauge",
 	})
 	assert.Equal(t, "s1", selector.SeriesID)
-	assert.Equal(t, "svc", selector.Dimensions["service_name"])
 }
 
 func TestSchemaStatusNilAdapter(t *testing.T) {
@@ -174,5 +174,5 @@ func TestSampleRowUsesConfig(t *testing.T) {
 	}
 	row := sampleRow(cfg, sample)
 	assert.Equal(t, cfg.SpaceID, row.GetKey().GetSpaceId())
-	assert.Equal(t, "s1", row.GetKey().GetSubjectId())
+	assert.Equal(t, "s1", row.GetKey().GetTimeSeries().GetSubjectId())
 }

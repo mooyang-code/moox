@@ -62,7 +62,7 @@ func TestEnsureStorageOK(t *testing.T) {
 }
 
 func TestStorageFieldBuilders(t *testing.T) {
-	assert.Equal(t, "name", stringField("name", "v").GetColumnName())
+	assert.Equal(t, "name", stringField("name", "v").GetFieldId())
 	assert.Equal(t, int64(3), intField("n", 3).GetValue().GetIntValue())
 	assert.Equal(t, 1.5, doubleField("d", 1.5).GetValue().GetDoubleValue())
 

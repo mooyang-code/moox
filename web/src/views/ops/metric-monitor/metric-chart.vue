@@ -1,7 +1,7 @@
 <template>
   <div class="metric-chart" ref="chartRoot">
     <div v-if="loading" class="chart-state"><a-spin /></div>
-    <a-empty v-else-if="error || !series.length" description="暂无历史数据" />
+    <a-empty v-else-if="!series.length" description="暂无历史数据" />
   </div>
 </template>
 
@@ -18,7 +18,6 @@ export interface ChartPoint {
 const props = defineProps<{
   series: ChartPoint[];
   loading?: boolean;
-  error?: string;
 }>();
 
 const chartRoot = ref<HTMLElement>();
@@ -32,7 +31,7 @@ function releaseChart() {
 async function renderChart() {
   await nextTick();
   releaseChart();
-  if (!chartRoot.value || props.loading || props.error || !props.series.length) return;
+  if (!chartRoot.value || props.loading || !props.series.length) return;
   const spec = {
     type: "line",
     data: [{ id: "metric-history", values: props.series }],
@@ -53,7 +52,7 @@ async function renderChart() {
   chart.renderSync();
 }
 
-watch(() => [props.series, props.loading, props.error], renderChart, { deep: true });
+watch(() => [props.series, props.loading], renderChart, { deep: true });
 onBeforeUnmount(releaseChart);
 </script>
 

@@ -106,7 +106,7 @@
                 <span class="section-meta">近 1 小时 · 最多 {{ MAX_CHART_SERIES }} 条序列</span>
               </div>
             </div>
-            <metric-chart :series="chartPoints" :loading="historyLoading" :error="historyError" />
+            <metric-chart :series="chartPoints" :loading="historyLoading" />
           </div>
         </section>
       </section>
@@ -245,7 +245,6 @@ const latestLoading = ref(false);
 const historyLoading = ref(false);
 const rulesLoading = ref(false);
 const evaluationLoading = ref(false);
-const historyError = ref("");
 const services = ref<MetricServiceInfo[]>([]);
 const metricOptions = ref<MetricNameInfo[]>([]);
 const series = ref<MetricSeriesInfo[]>([]);
@@ -397,7 +396,6 @@ async function loadLatest() {
 
 async function loadHistory() {
   historyLoading.value = true;
-  historyError.value = "";
   const startAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   try {
     const responses = await Promise.allSettled(

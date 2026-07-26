@@ -57,7 +57,10 @@ func TestReplayRangeDoesNotFlushLiveBucket(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].SubjectID != "BTC-USDT" || tasks[0].TriggerType != "replay" {
 		t.Fatalf("replay tasks=%+v", tasks)
 	}
-	live := batcher.Flush(start.Add(3 * time.Second))
+	live, err := batcher.FlushPending(context.Background(), start.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(live) != 1 || live[0].SubjectID != "ETH-USDT" || live[0].TriggerType == "replay" {
 		t.Fatalf("live tasks after replay=%+v", live)
 	}

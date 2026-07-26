@@ -59,7 +59,7 @@ func TestBuildSymbolRecordRows(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "crypto", rows[0].GetKey().GetSpaceId())
 	assert.Equal(t, "ds-1", rows[0].GetKey().GetDatasetId())
-	assert.Equal(t, "BTC-USDT", rows[0].GetKey().GetRecordId())
-	_, err = time.Parse(time.RFC3339Nano, rows[0].GetKey().GetVersion())
+	assert.Equal(t, "BTC-USDT", rows[0].GetKey().GetRecord().GetRecordId())
+	_, err = time.Parse(time.RFC3339Nano, rows[0].GetKey().GetRecord().GetVersion())
 	assert.NoError(t, err)
 }

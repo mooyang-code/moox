@@ -76,32 +76,13 @@ func (h *CloudFunctionHandler) HandleRequest(ctx context.Context, event json.Raw
 }
 
 func (h *CloudFunctionHandler) applyRuntimeConfig(ctx context.Context, event model.CloudFunctionEvent, funcCtx *functioncontext.FunctionContext) model.CloudFunctionEvent {
-	serverUpdated := false
 	if serviceURL := deploymentBaseURL(event.ServiceDeployments, "service_gateway", "admin_gateway", "moox-admin", "admin"); serviceURL != "" {
-		if ip, port, ok := parseServerFromURL(serviceURL); ok {
-			runtimeapp.UpdateServerInfo(ip, port)
-			event.ServerIP = ip
-			event.ServerPort = port
-			serverUpdated = true
-			log.DebugContextf(ctx, "[CloudFunction] runtime server updated from service_deployments: %s:%d", ip, port)
-		}
-	}
-
-	if !serverUpdated && strings.TrimSpace(event.ServiceGatewayTarget) != "" {
+		event.ServiceGatewayTarget = serviceURL
+		runtimeapp.UpdateServiceGatewayTarget(serviceURL)
+		log.DebugContextf(ctx, "[CloudFunction] runtime service gateway target updated from service_deployments: %s", serviceURL)
+	} else if strings.TrimSpace(event.ServiceGatewayTarget) != "" {
 		runtimeapp.UpdateServiceGatewayTarget(event.ServiceGatewayTarget)
-		if ip, port, ok := parseServerFromURL(event.ServiceGatewayTarget); ok {
-			event.ServerIP = ip
-			event.ServerPort = port
-			serverUpdated = true
-			log.DebugContextf(ctx, "[CloudFunction] runtime service gateway target updated: %s", event.ServiceGatewayTarget)
-		} else {
-			log.DebugContextf(ctx, "[CloudFunction] runtime service gateway target updated without legacy host/port: %s", event.ServiceGatewayTarget)
-		}
-	}
-
-	if !serverUpdated && event.ServerIP != "" && event.ServerPort > 0 {
-		runtimeapp.UpdateServerInfo(event.ServerIP, event.ServerPort)
-		log.DebugContextf(ctx, "[CloudFunction] runtime server updated: %s:%d", event.ServerIP, event.ServerPort)
+		log.DebugContextf(ctx, "[CloudFunction] runtime service gateway target updated: %s", event.ServiceGatewayTarget)
 	}
 
 	metadataTarget := deploymentTRPCTarget(event.ServiceDeployments, "storage-primary")
@@ -265,20 +246,19 @@ func (h *CloudFunctionHandler) processCloudFunctionEvent(ctx context.Context, ev
 //   - service_deployments / service_gateway_target 会先被 applyRuntimeConfig 解析。
 //   - 只要事件携带或解析出了服务网关地址，就尝试 ProcessProbe 和 ReportHeartbeat。
 func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	log.InfoContextf(ctx, "[handleKeepalive] 执行保活探测, source=%s, service_gateway_target=%s, ServerIP=%s, ServerPort=%d, action=%s",
-		event.Source, event.ServiceGatewayTarget, event.ServerIP, event.ServerPort, event.Action)
+	log.InfoContextf(ctx, "[handleKeepalive] 执行保活探测, source=%s, service_gateway_target=%s, action=%s",
+		event.Source, event.ServiceGatewayTarget, event.Action)
 
 	// 判定是否需要走完整心跳回调链路
 	// 1. 探测源标识匹配 → 走完整链路
-	// 2. 探测源标识缺失但携带 service_gateway_target / ServerIP → 仍走完整链路（防御 source 解析回归）
+	// 2. 探测源标识缺失但携带 service_gateway_target → 仍走完整链路（防御 source 解析回归）
 	// 3. 既非探测源也无服务网关地址 → 仅返回保活响应（无法回调，无意义）
 	probeSource := isKeepaliveProbeSource(event.Source)
-	hasServerAddr := event.ServerIP != "" && event.ServerPort > 0
 	hasServiceGatewayTarget := strings.TrimSpace(event.ServiceGatewayTarget) != ""
-	shouldRunHeartbeat := probeSource || hasServiceGatewayTarget || hasServerAddr
+	shouldRunHeartbeat := probeSource || hasServiceGatewayTarget
 
 	if !shouldRunHeartbeat {
-		log.WarnContextf(ctx, "[handleKeepalive] 跳过心跳回调: source=%q 无 service_gateway_target/ServerIP, 仅返回保活响应", event.Source)
+		log.WarnContextf(ctx, "[handleKeepalive] 跳过心跳回调: source=%q 无 service_gateway_target, 仅返回保活响应", event.Source)
 		return h.buildKeepaliveResponse(ctx, event)
 	}
 

@@ -61,11 +61,7 @@ func TestRunOnce_RequiresGatewayAndNodeID(t *testing.T) {
 	assert.Contains(t, err.Error(), "node-id")
 }
 
-func TestIntEnvAndDurationEnv(t *testing.T) {
-	t.Setenv("MOOX_RUNTIME_SERVER_PORT", "not-a-number")
-	assert.Equal(t, 0, intEnv("MOOX_RUNTIME_SERVER_PORT"))
-	t.Setenv("MOOX_RUNTIME_SERVER_PORT", "8080")
-	assert.Equal(t, 8080, intEnv("MOOX_RUNTIME_SERVER_PORT"))
+func TestDurationEnv(t *testing.T) {
 	t.Setenv("MOOX_RUNTIME_ONCE_TIMEOUT", "bad")
 	assert.Equal(t, 90*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second))
 	t.Setenv("MOOX_RUNTIME_ONCE_TIMEOUT", "30s")

@@ -130,17 +130,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { writeRecordRows, writeTimeSeriesRows } from "@/api/storage/access";
+import { upsertFields } from "@/api/storage/access";
 import { listDatasetColumns, listDatasets } from "@/api/storage/metadata";
-import type {
-  ColumnValue,
-  Dataset,
-  DatasetColumn,
-  FieldValueType,
-  RecordRow,
-  TimeSeriesRow,
-  TypedValue
-} from "@/api/storage/types";
+import type { Dataset, DatasetColumn, FieldValue, FieldValueType, RowFieldUpsert, TypedValue } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 
@@ -315,7 +307,7 @@ function typedValue(valueType: FieldValueType, raw: string): TypedValue {
   return { string_value: raw };
 }
 
-function rowColumns(row: CsvRow): ColumnValue[] {
+function rowFields(row: CsvRow): FieldValue[] {
   const map = columnNameMap();
   const keys = keyColumns();
   return headers.value
@@ -324,12 +316,11 @@ function rowColumns(row: CsvRow): ColumnValue[] {
       const column = map.get(header);
       if (!column) return undefined;
       return {
-        column_name: column.column_name,
-        value_type: column.value_type,
+        field_id: column.origin_id,
         value: typedValue(column.value_type, row[header])
-      } satisfies ColumnValue;
+      } satisfies FieldValue;
     })
-    .filter(Boolean) as ColumnValue[];
+    .filter(Boolean) as FieldValue[];
 }
 
 async function dryRun() {
@@ -361,29 +352,37 @@ async function importRows() {
     const space_id = spaceStore.requireSpaceId();
     if (isTimeSeriesDataset.value) {
       const dimensions = parseDimensions();
-      const rows: TimeSeriesRow[] = parsedRows.value.map(row => ({
+      const rows: RowFieldUpsert[] = parsedRows.value.map(row => ({
         key: {
           space_id,
           dataset_id: form.dataset_id,
-          subject_id: form.subject_id,
-          freq: form.freq,
-          dimensions,
-          data_time: row[form.time_column]
+          time_series: {
+            subject_id: form.subject_id,
+            freq: form.freq,
+            data_time: row[form.time_column]
+          }
         },
-        columns: rowColumns(row)
+        fields: rowFields(row),
+        attributes: Object.fromEntries(
+          Object.entries(dimensions).map(([key, value]) => [key, { string_value: value } satisfies TypedValue])
+        ),
+        operation: "ROW_FIELD_OPERATION_UPSERT"
       }));
-      await writeTimeSeriesRows(rows);
+      await upsertFields(rows);
     } else {
-      const rows: RecordRow[] = parsedRows.value.map(row => ({
+      const rows: RowFieldUpsert[] = parsedRows.value.map(row => ({
         key: {
           space_id,
           dataset_id: form.dataset_id,
-          record_id: row[form.record_id_column],
-          version: form.version_column ? row[form.version_column] : ""
+          record: {
+            record_id: row[form.record_id_column],
+            version: form.version_column ? row[form.version_column] : ""
+          }
         },
-        columns: rowColumns(row)
+        fields: rowFields(row),
+        operation: "ROW_FIELD_OPERATION_UPSERT"
       }));
-      await writeRecordRows(rows);
+      await upsertFields(rows);
     }
     Message.success(`导入完成：${parsedRows.value.length} 行`);
   } finally {

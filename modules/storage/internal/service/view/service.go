@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -34,7 +33,6 @@ type Service struct {
 	primary      FieldReader
 	mu           sync.RWMutex
 	byData       map[datasetRef]map[string]struct{}
-	liveWork     atomic.Int64
 	liveGateOnce sync.Once
 	liveGate     *liveLeaseGate
 	metrics      *observability.ViewMetrics

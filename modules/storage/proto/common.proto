@@ -66,34 +66,10 @@ message TypedValue {
   }
 }
 
-// NullValue 是列级显式空值标记，与未提供 ColumnValue 区分。
+// NullValue 是字段级显式空值标记，与未提供 FieldValue 区分。
 enum NullValue {
   NULL_VALUE_UNSPECIFIED = 0;
   NULL_VALUE = 1;
-}
-
-// ColumnValue 表示一列事实数据值。
-message ColumnValue {
-  // column_name 是 DatasetColumn 中登记的列名。
-  string column_name = 1;
-  // value_type 是列值的逻辑类型。
-  FieldValueType value_type = 2;
-  // value 是列实际取值。
-  TypedValue value = 3;
-}
-
-// DimensionValue 表示一个业务维度值，例如复权类型或报告期。
-message DimensionValue {
-  // name 是业务维度名称。
-  string name = 1;
-  // value 是业务维度取值。
-  string value = 2;
-}
-
-// DimensionValues 表示业务维度值集合。
-message DimensionValues {
-  // values 是业务维度值列表。
-  repeated DimensionValue values = 1;
 }
 
 // SortSpec 表示排序条件。

@@ -10,7 +10,7 @@ import (
 const defaultPublicHost = "106.53.107.122"
 
 const storageMetadataGatewayMethods = "[\"CreateSpace\",\"UpdateSpace\",\"GetSpace\",\"ListSpaces\",\"CreateView\",\"UpdateView\",\"GetView\",\"ListViews\",\"UpsertViewColumn\",\"ListViewColumns\",\"CreateDataSource\",\"UpdateDataSource\",\"GetDataSource\",\"ListDataSources\",\"UpsertSubject\",\"UpsertSubjectSymbol\",\"RegisterDataSubject\",\"GetSubject\",\"ListSubjects\",\"ListSubjectSymbols\",\"CreateDataset\",\"UpdateDataset\",\"GetDataset\",\"ListDatasets\",\"BindDatasetSubject\",\"ListDatasetSubjects\",\"CreateFieldGroup\",\"UpdateFieldGroup\",\"GetFieldGroup\",\"ListFieldGroups\",\"CreateField\",\"UpdateField\",\"GetField\",\"ListFields\",\"BatchUpdateFields\",\"DeleteFieldGroup\",\"CreateFactor\",\"UpdateFactor\",\"GetFactor\",\"ListFactors\",\"UpsertDatasetColumn\",\"ListDatasetColumns\",\"GetDataNode\",\"ListDataNodes\",\"UpdateDataNode\",\"DeleteDataNode\",\"CheckDatasetActivation\",\"ActivateDataset\",\"RebindDatasetDataNode\",\"RegisterArchiveFile\",\"ListArchiveFiles\"]"
-const storagePrimaryGatewayMethods = "[\"MergeTimeSeriesRows\",\"ReadTimeSeriesRows\",\"MergeRecordRows\",\"ReadRecordRows\"]"
+const storagePrimaryGatewayMethods = "[\"UpsertFields\",\"ReadFields\",\"ReadTimeSeriesRows\",\"ReadRecordRows\"]"
 const storageViewGatewayMethods = "[\"QueryTimeSeriesRows\",\"SearchRecordRows\"]"
 const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"moox-cli\",\"storage-view\"]"
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"

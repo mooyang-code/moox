@@ -67,13 +67,6 @@ func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Regist
 	return newConsumer(ctx, client, registry, cfg, filter)
 }
 
-func NewSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*Consumer, error) {
-	if _, err := EnsureSubjectConsumer(ctx, client, registry, cfg); err != nil {
-		return nil, err
-	}
-	return BindSubjectConsumer(ctx, client, registry, cfg)
-}
-
 func EnsureSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*jetstream.ConsumerInfo, error) {
 	filter, err := subjectConsumerFilter(registry, cfg)
 	if err != nil {

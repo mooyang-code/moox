@@ -5,6 +5,7 @@ import type {
   RecordKey,
   RecordRow,
   RetInfo,
+  RowFieldUpsert,
   SortOrder,
   TimeRange,
   TimeSeriesKey,
@@ -28,8 +29,8 @@ export interface ReadRecordRowsReq {
   page?: Page;
 }
 
-export function writeTimeSeriesRows(rows: TimeSeriesRow[]) {
-  return callStorage<{ rows: TimeSeriesRow[] }, { ret_info: RetInfo }>("MergeTimeSeriesRows", { rows });
+export function upsertFields(rows: RowFieldUpsert[]) {
+  return callStorage<{ rows: RowFieldUpsert[] }, { ret_info: RetInfo }>("UpsertFields", { rows });
 }
 
 export function readTimeSeriesRows(req: ReadTimeSeriesRowsReq) {
@@ -37,10 +38,6 @@ export function readTimeSeriesRows(req: ReadTimeSeriesRowsReq) {
     "ReadTimeSeriesRows",
     req
   );
-}
-
-export function writeRecordRows(rows: RecordRow[]) {
-  return callStorage<{ rows: RecordRow[] }, { ret_info: RetInfo }>("MergeRecordRows", { rows });
 }
 
 export function readRecordRows(req: ReadRecordRowsReq) {

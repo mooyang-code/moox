@@ -13,9 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Server 实现 trade 模块全部 9 个 tRPC service 接口，委托 service.Service。
@@ -47,10 +45,6 @@ var _ tradepb.PositionSvcService = (*Server)(nil)
 var _ tradepb.RebalanceSvcService = (*Server)(nil)
 var _ tradepb.TradeOpsSvcService = (*Server)(nil)
 
-func withRPCTrace(ctx context.Context) context.Context {
-	return telemetry.WithTrace(ctx, telemetry.Trace{TraceID: string(trpc.GetMetaData(ctx, "trace_id")), RequestID: string(trpc.GetMetaData(ctx, "request_id"))})
-}
-
 func (h *Server) SetPause(ctx context.Context, req *tradepb.SetTradePauseReq) (*tradepb.SetTradePauseRsp, error) {
 	if h.kernel == nil {
 		return &tradepb.SetTradePauseRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
@@ -69,7 +63,6 @@ func (h *Server) SetPause(ctx context.Context, req *tradepb.SetTradePauseReq) (*
 }
 
 func (h *Server) ReconcileNow(ctx context.Context, req *tradepb.ReconcileNowReq) (*tradepb.ReconcileNowRsp, error) {
-	ctx = withRPCTrace(ctx)
 	if h.kernel == nil {
 		return &tradepb.ReconcileNowRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
@@ -98,7 +91,6 @@ func (h *Server) InspectSaga(ctx context.Context, req *tradepb.InspectSagaReq) (
 }
 
 func (h *Server) CreateRebalance(ctx context.Context, req *tradepb.CreateRebalanceReq) (*tradepb.CreateRebalanceRsp, error) {
-	ctx = withRPCTrace(ctx)
 	if h.kernel == nil {
 		return &tradepb.CreateRebalanceRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
 	}
@@ -492,7 +484,6 @@ func (h *Server) ListInstruments(ctx context.Context, req *tradepb.ListInstrumen
 // ===== TradeOpSvc =====
 
 func (h *Server) PlaceOrder(ctx context.Context, req *tradepb.PlaceOrderReq) (*tradepb.PlaceOrderRsp, error) {
-	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
 	if h.kernel == nil {
 		return &tradepb.PlaceOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
@@ -577,7 +568,6 @@ func kernelFillToPB(fill store.FillRecord) *tradepb.Trade {
 }
 
 func (h *Server) CancelOrder(ctx context.Context, req *tradepb.CancelOrderReq) (*tradepb.CancelOrderRsp, error) {
-	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
 	if h.kernel == nil {
 		return &tradepb.CancelOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INNER_ERR, "trade kernel unavailable")}, nil
@@ -609,7 +599,6 @@ func (h *Server) CancelAllOrders(ctx context.Context, req *tradepb.CancelAllOrde
 }
 
 func (h *Server) AmendOrder(ctx context.Context, req *tradepb.AmendOrderReq) (*tradepb.AmendOrderRsp, error) {
-	ctx = withRPCTrace(ctx)
 	sid := spaceID(ctx)
 	if req.GetOrderId() == "" {
 		return &tradepb.AmendOrderRsp{RetInfo: retInfo(tradepb.ErrorCode_INVALID_PARAM, "order_id is required")}, nil

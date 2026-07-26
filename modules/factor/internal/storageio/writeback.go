@@ -27,21 +27,18 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 	if start < 0 {
 		start = 0
 	}
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(frame.DataTimes)-start)
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(frame.DataTimes)-start)
 	computedAt := SnapshotComputedAt()
 	for rowIdx := start; rowIdx < len(frame.DataTimes); rowIdx++ {
-		row := &storagepb.TimeSeriesRow{
-			Key: &storagepb.TimeSeriesKey{
-				SpaceId:   task.SpaceID,
-				DatasetId: task.TargetDataset,
-				SubjectId: task.SubjectID,
-				Freq:      task.Freq,
-				DataTime:  frame.DataTimes[rowIdx].UTC().Format(time.RFC3339),
+		row := &storagepb.RowFieldUpsert{
+			Key: &storagepb.RowKey{
+				SpaceId: task.SpaceID, DatasetId: task.TargetDataset,
+				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: task.SubjectID, Freq: task.Freq, DataTime: frame.DataTimes[rowIdx].UTC().Format(time.RFC3339)}},
 			},
-			Attributes: map[string]string{
-				"factor.parent_task_id": task.TaskID,
-				"factor.snapshot_hash":  task.SnapshotHash,
-				"factor.computed_at":    computedAt,
+			Attributes: map[string]*storagepb.TypedValue{
+				"factor.parent_task_id": stringValue(task.TaskID),
+				"factor.snapshot_hash":  stringValue(task.SnapshotHash),
+				"factor.computed_at":    stringValue(computedAt),
 			},
 		}
 		for columnName, col := range result.Columns {
@@ -53,18 +50,22 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 			if !ok {
 				return fmt.Errorf("factor column %s returned non-numeric value %T", columnName, value)
 			}
-			row.Columns = append(row.Columns, doubleField(columnName, floatValue))
+			row.Fields = append(row.Fields, doubleField(columnName, floatValue))
 		}
 		rows = append(rows, row)
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-	rsp, err := c.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{AuthInfo: c.auth, Rows: rows})
+	rsp, err := c.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: c.auth, Rows: rows})
 	if err != nil {
 		return fmt.Errorf("write factor patch: %w", err)
 	}
 	return ensureStorageOK("write factor patch", rsp.GetRetInfo())
+}
+
+func stringValue(value string) *storagepb.TypedValue {
+	return &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}
 }
 
 func valueForFrameRow(rowIdx int, frameRows int, col engine.FactorColumnResult) (any, bool) {

@@ -109,14 +109,6 @@ func ObserveModuleInputWatermark(module, stage, pipeline string, at time.Time) e
 	return recordModuleMetricError(module, "input_watermark", metrics.AdvanceInputWatermark(stage, pipeline, at))
 }
 
-func ObserveModuleBacklog(module, stage, pipeline string, value float64) error {
-	metrics, err := DefaultModuleMetrics(module)
-	if err != nil {
-		return recordModuleMetricError(module, "backlog", err)
-	}
-	return recordModuleMetricError(module, "backlog", metrics.SetBacklog(stage, pipeline, value))
-}
-
 func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines []string) (*ModuleMetrics, error) {
 	if !allowedModules[module] {
 		return nil, fmt.Errorf("unknown metrics module %q", module)

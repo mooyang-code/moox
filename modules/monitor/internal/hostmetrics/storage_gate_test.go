@@ -278,14 +278,14 @@ type writerAccessFailFake struct {
 	badRet bool
 }
 
-func (f *writerAccessFailFake) MergeTimeSeriesRows(_ context.Context, _ *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (f *writerAccessFailFake) UpsertFields(_ context.Context, _ *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	if f.badRet {
-		return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "no"}}, nil
+		return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "no"}}, nil
 	}
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestStorageWriterIncludesRateColumnsWhenAvailable(t *testing.T) {
@@ -309,8 +309,8 @@ func TestStorageWriterIncludesRateColumnsWhenAvailable(t *testing.T) {
 	foundRate := false
 	for _, req := range fake.requests {
 		for _, row := range req.GetRows() {
-			for _, col := range row.GetColumns() {
-				if col.GetColumnName() == "read_bytes_per_second" || col.GetColumnName() == "receive_bytes_per_second" {
+			for _, field := range row.GetFields() {
+				if field.GetFieldId() == "read_bytes_per_second" || field.GetFieldId() == "receive_bytes_per_second" {
 					foundRate = true
 				}
 			}
@@ -332,12 +332,12 @@ func TestStorageReaderValidationAndMerge(t *testing.T) {
 
 	at := time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339Nano)
 	fake := &readerAccessFake{rows: []*storagepb.TimeSeriesRow{
-		resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{
+		readRow(resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{
 			Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 8, UsagePercent: 11, UsageAvailable: true},
 			Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60, UsagePercent: 40},
-		}, "agent-1", "m1"),
-		diskRow(SpaceID, cfg.DiskDatasetID, "1m", at, &hostmetricpb.DiskMetric{Device: "sda", ReadBytesTotal: 9, RateAvailable: true}, "agent-1", "m1"),
-		networkRow(SpaceID, cfg.NetworkDatasetID, "1m", at, &hostmetricpb.NetworkMetric{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 1}, "agent-1", "m1"),
+		}, "agent-1", "m1")),
+		readRow(diskRow(SpaceID, cfg.DiskDatasetID, "1m", at, &hostmetricpb.DiskMetric{Device: "sda", ReadBytesTotal: 9, RateAvailable: true}, "agent-1", "m1")),
+		readRow(networkRow(SpaceID, cfg.NetworkDatasetID, "1m", at, &hostmetricpb.NetworkMetric{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 1}, "agent-1", "m1")),
 	}}
 	points, err := NewStorageReader(fake, cfg).History(context.Background(), "agent-1", time.Now().Add(-time.Hour), time.Now().UTC(), 0)
 	require.NoError(t, err)

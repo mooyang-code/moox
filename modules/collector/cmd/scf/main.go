@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -91,26 +90,7 @@ func onceOptionsFromEnv() onceOptions {
 		StorageRPCGatewayTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")),
 		Timeout:                 durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second),
 	}
-	if opts.ServiceGatewayTarget == "" {
-		serverIP := strings.TrimSpace(os.Getenv("MOOX_RUNTIME_SERVER_IP"))
-		serverPort := intEnv("MOOX_RUNTIME_SERVER_PORT")
-		if serverIP != "" && serverPort > 0 {
-			opts.ServiceGatewayTarget = fmt.Sprintf("http://%s:%d", serverIP, serverPort)
-		}
-	}
 	return opts
-}
-
-func intEnv(key string) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return 0
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0
-	}
-	return parsed
 }
 
 func durationEnv(key string, fallback time.Duration) time.Duration {

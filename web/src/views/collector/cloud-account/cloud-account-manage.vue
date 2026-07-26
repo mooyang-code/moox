@@ -422,7 +422,6 @@ const formatTime = (time: string | undefined) => {
     second: "2-digit"
   });
 };
-
 </script>
 
 <style scoped>

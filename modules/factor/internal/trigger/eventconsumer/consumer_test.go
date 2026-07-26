@@ -279,7 +279,10 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 	}})
 
 	d.Ingest(testkit.RowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
-	tasks := d.Flush(now.Add(time.Second))
+	tasks, err := d.FlushPending(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tasks) != len(symbols) {
 		t.Fatalf("tasks = %d, want %d", len(tasks), len(symbols))
 	}
@@ -323,7 +326,10 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 	})
 
 	d.Ingest(testkit.RowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
-	tasks := d.Flush(now.Add(time.Second))
+	tasks, err := d.FlushPending(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tasks) != 2 {
 		t.Fatalf("tasks = %d, want 2: %+v", len(tasks), tasks)
 	}

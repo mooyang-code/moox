@@ -117,15 +117,15 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 			return nil, err
 		}
 		columns := map[string]domain.Scalar{}
-		for _, column := range row.GetColumns() {
-			if _, exists := columns[column.GetColumnName()]; exists {
+		for _, field := range row.GetFields() {
+			if _, exists := columns[field.GetFieldId()]; exists {
 				return nil, fmt.Errorf("duplicate column")
 			}
-			scalar, err := domain.ScalarFromColumn(column)
+			scalar, err := domain.ScalarFromField(field.GetFieldId(), field.GetValue())
 			if err != nil {
 				return nil, err
 			}
-			columns[column.GetColumnName()] = scalar
+			columns[field.GetFieldId()] = scalar
 		}
 		attrs := map[string]string{}
 		for k, v := range row.GetAttributes() {
@@ -135,6 +135,7 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 	}
 	return out, nil
 }
+
 func NormalizeTarget(raw string, defaultPort string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

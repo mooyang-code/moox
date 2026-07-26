@@ -122,21 +122,6 @@ func backfillSorts(engine string) []*pb.SortSpec {
 	}
 }
 
-func (s *Service) waitForLiveIdle(ctx context.Context) error {
-	for s.liveWork.Load() > 0 {
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return nil
-}
-
 func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, activeID, nextID string, writes []viewindex.RowWrite) error {
 	s.mu.RLock()
 	activeSchema := s.schemas[activeID]

@@ -9,11 +9,6 @@ import (
 	"sync"
 )
 
-type Result struct {
-	TaskID string
-	Output domain.Output
-	Err    error
-}
 type Service struct {
 	action  *action.Service
 	queues  []chan domain.Task
@@ -21,7 +16,6 @@ type Service struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	mu      sync.RWMutex
-	results chan Result
 	stopped bool
 }
 
@@ -29,7 +23,7 @@ func New(a *action.Service, n int) *Service {
 	if n < 1 {
 		n = 1
 	}
-	return &Service{action: a, queues: make([]chan domain.Task, n), results: make(chan Result, 64)}
+	return &Service{action: a, queues: make([]chan domain.Task, n)}
 }
 func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
@@ -53,16 +47,10 @@ func (s *Service) loop(q <-chan domain.Task) {
 			return
 		case t := <-q:
 			d, err := s.action.Repo.GetDefinition(s.ctx, t.StrategyID, t.Version)
-			result := Result{TaskID: t.RunID, Err: err}
-			if err == nil {
-				result.Output, _, result.Err = s.action.Run(s.ctx, t, d)
+			if err != nil {
+				continue
 			}
-			// Results are an observation channel, not the scheduler's queue. A
-			// slow observer must not stop workers from accepting new bars.
-			select {
-			case s.results <- result:
-			default:
-			}
+			_, _, _ = s.action.Run(s.ctx, t, d)
 		}
 	}
 }
@@ -85,7 +73,6 @@ func (s *Service) Enqueue(ctx context.Context, t domain.Task) error {
 		return workerCtx.Err()
 	}
 }
-func (s *Service) Results() <-chan Result { return s.results }
 func (s *Service) Stop() {
 	s.mu.Lock()
 	s.stopped = true

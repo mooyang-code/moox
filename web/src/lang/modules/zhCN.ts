@@ -20,7 +20,6 @@ export default {
   },
   menu: {
     ["home"]: "首页",
-    ["data-overview"]: "数据概览",
     ["trading"]: "交易管理",
     ["data-assets"]: "数据资产",
     ["data-modeling"]: "数据建模",
@@ -29,7 +28,6 @@ export default {
     ["data-subjects"]: "数据对象",
     ["data-datasets"]: "数据集",
     ["data-fields"]: "字段管理",
-    ["data-factors"]: "因子字典（元数据）",
     ["factor-compute"]: "因子计算",
     ["factor-definitions"]: "因子定义",
     ["factor-bindings"]: "计算绑定",

@@ -67,35 +67,15 @@ func Decrypt(ciphertext, secret string) (string, error) {
 		return "", fmt.Errorf("decode ciphertext: %w", err)
 	}
 	plaintext, err := decryptWithKey(data, deriveKey(secret))
-	if err == nil {
-		return plaintext, nil
+	if err != nil {
+		return "", fmt.Errorf("decrypt ciphertext: %w", err)
 	}
-
-	// Secrets written before the shared crypto package was introduced used the
-	// legacy key normalization. Keep reads backward-compatible so a deployment
-	// can migrate an existing admin database without re-encrypting it blindly.
-	legacyPlaintext, legacyErr := decryptWithKey(data, legacyKey(secret))
-	if legacyErr == nil {
-		return legacyPlaintext, nil
-	}
-	return "", fmt.Errorf("decrypt ciphertext: %w", err)
+	return plaintext, nil
 }
 
 func deriveKey(secret string) []byte {
 	hash := sha256.Sum256([]byte(secret))
 	return hash[:]
-}
-
-func legacyKey(secret string) []byte {
-	switch len(secret) {
-	case 16, 24, 32:
-		return []byte(secret)
-	}
-	if len(secret) > 32 {
-		return []byte(secret[:32])
-	}
-	hash := sha256.Sum256([]byte(secret))
-	return []byte(hex.EncodeToString(hash[:])[:32])
 }
 
 func decryptWithKey(data, key []byte) (string, error) {

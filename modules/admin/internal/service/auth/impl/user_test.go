@@ -11,12 +11,11 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
 )
 
-func TestGetUserInfoAcceptsRequestAccessTokenWhenContextMetadataMissing(t *testing.T) {
+func TestGetUserInfoRejectsRequestAccessTokenWithoutContextMetadata(t *testing.T) {
 	ctx := context.Background()
 	secretKey := "test-secret-for-get-user-info"
 	user := &model.User{
@@ -31,25 +30,12 @@ func TestGetUserInfoAcceptsRequestAccessTokenWhenContextMetadataMissing(t *testi
 		LastPasswordChange: time.Now(),
 	}
 	svc := newAuthServiceForUserTest(t, secretKey, user)
-	accessToken, err := mooxsecurity.SignToken(map[string]any{
-		"user_id":    user.UserID,
-		"username":   user.Username,
-		"role":       user.Role,
-		"token_type": "access",
-	}, secretKey, "moox-admin", time.Hour)
-	if err != nil {
-		t.Fatalf("GenerateAccessToken() error = %v", err)
-	}
-
-	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{AccessToken: accessToken})
+	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{AccessToken: "ignored"})
 	if err != nil {
 		t.Fatalf("GetUserInfo() error = %v", err)
 	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("GetUserInfo ret = %+v, want success", rsp.GetRetInfo())
-	}
-	if rsp.GetUserInfo().GetUserId() != user.UserID {
-		t.Fatalf("user_id = %q, want %q", rsp.GetUserInfo().GetUserId(), user.UserID)
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_AUTH {
+		t.Fatalf("GetUserInfo ret = %+v, want no auth", rsp.GetRetInfo())
 	}
 }
 

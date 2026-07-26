@@ -51,7 +51,9 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 	for i := range tasks {
 		tasks[i].TaskID = fmt.Sprintf("%s-%d", recalcID, i+1)
 		tasks[i].Completion = results
-		s.scheduler.Enqueue(ctx, tasks[i])
+		if err := s.scheduler.EnqueueChecked(ctx, tasks[i]); err != nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("enqueue recalc task: %w", err))}, nil
+		}
 	}
 	asyncCtx := trpc.CloneContext(ctx)
 	go s.drainRecalc(asyncCtx, recalcID, results, len(tasks))

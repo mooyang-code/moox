@@ -1,6 +1,7 @@
 package jobqueue
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestRuntime_NilSafeMethods(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
 
-	_, err = rt.KeyValue("bucket")
+	_, err = rt.BindKV(context.Background(), "bucket")
 	require.Error(t, err)
 
 	assert.NoError(t, rt.Close())

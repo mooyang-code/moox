@@ -151,6 +151,17 @@ func TestStorageRuntimeOnlySupportsFieldUpserts(t *testing.T) {
 			t.Fatalf("ambiguous storage RPC %q is still present on %s", legacyWriteMethod, service.FullName())
 		}
 	}
+	primary := storagepb.File_primary_store_proto.Services().ByName("PrimaryStore")
+	for _, removed := range []protoreflect.Name{"MergeTimeSeriesRows", "MergeRecordRows"} {
+		if primary.Methods().ByName(removed) != nil {
+			t.Fatalf("compatibility RPC %q remains", removed)
+		}
+	}
+	for _, name := range []protoreflect.Name{"TimeSeriesRow", "RecordRow"} {
+		if storagepb.File_rows_proto.Messages().ByName(name).Fields().ByName("columns") != nil {
+			t.Fatalf("%s.columns remains", name)
+		}
+	}
 
 	for _, message := range []struct {
 		file protoreflect.FileDescriptor

@@ -104,7 +104,7 @@ func TestParentTaskReadsOnceAndSharesSnapshot(t *testing.T) {
 	for i := range specs {
 		specs[i] = engine.FactorSpec{FactorID: fmt.Sprintf("f-%03d", i), Name: fmt.Sprintf("Factor%03d", i), Params: []int{1}}
 	}
-	svc.Enqueue(context.Background(), Task{FactorTask: engine.FactorTask{TaskID: "parent-100", Kind: "timeseries", SubjectID: "BTC", Freq: "1m", LookbackBars: 1, Factors: specs}})
+	svc.EnqueueChecked(context.Background(), Task{FactorTask: engine.FactorTask{TaskID: "parent-100", Kind: "timeseries", SubjectID: "BTC", Freq: "1m", LookbackBars: 1, Factors: specs}})
 	if err := svc.Drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}

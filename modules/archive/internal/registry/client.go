@@ -38,10 +38,6 @@ func (c *Client) RegisterPartition(ctx context.Context, key domain.PartitionKey,
 	return c.Register(ctx, BuildArchiveFile("parquet-local", key, manifest, false, domain.COSState{}))
 }
 
-func NewClient(target string) *Client {
-	return NewClientWithCredentials(target, gatewayauth.ServiceGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-}
-
 func NewClientWithCredentials(target, targetNode string, credentials gatewayauth.Credentials) *Client {
 	return &Client{proxy: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...)}
 }

@@ -5,8 +5,8 @@
 
       <section class="management-content">
         <keep-alive>
-          <CollectorViews v-if="activeTab === 'views'" query-key="viewTab" route-path="/collector/data-management" />
-          <CollectorDatasets v-else query-key="datasetTab" route-path="/collector/data-management" />
+          <CollectorViews v-if="activeTab === 'views'" />
+          <CollectorDatasets v-else />
         </keep-alive>
       </section>
     </div>

@@ -1,5 +1,5 @@
 import type {
-  ColumnValue,
+  FieldValue,
   Dataset,
   DatasetColumn,
   DatasetColumnOriginType,
@@ -129,9 +129,9 @@ function isOriginType(value: DatasetColumnOriginType, name: string, alias: numbe
   return value === name || value === alias;
 }
 
-export function columnValueText(column?: ColumnValue) {
-  if (!column?.value) return "-";
-  return typedValueText(column.value);
+export function fieldValueText(field?: FieldValue) {
+  if (!field?.value) return "-";
+  return typedValueText(field.value);
 }
 
 export function typedValueText(value?: TypedValue): string {
@@ -156,10 +156,10 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
     out.push(name);
   }
   for (const row of rows) {
-    for (const column of row.columns || []) {
-      if (!column.column_name || seen.has(column.column_name)) continue;
-      seen.add(column.column_name);
-      out.push(column.column_name);
+    for (const field of row.fields || []) {
+      if (!field.field_id || seen.has(field.field_id)) continue;
+      seen.add(field.field_id);
+      out.push(field.field_id);
     }
   }
   return out;
@@ -170,7 +170,7 @@ export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow
     id: `ts-${index}-${row.key?.subject_id || ""}-${row.key?.data_time || ""}`,
     key: row.key?.subject_id || "-",
     version: row.key?.data_time || "-",
-    values: columnsToValueMap(row.columns || [])
+    values: fieldsToValueMap(row.fields || [])
   }));
 }
 
@@ -179,7 +179,7 @@ export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
     id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
     key: row.key?.record_id || "-",
     version: row.key?.version || "-",
-    values: columnsToValueMap(row.columns || [])
+    values: fieldsToValueMap(row.fields || [])
   }));
 }
 
@@ -199,10 +199,10 @@ function browseSortValue(row: BrowseTableRow, fieldName: string) {
   return row.values[fieldName] || "";
 }
 
-function columnsToValueMap(columns: ColumnValue[]) {
+function fieldsToValueMap(fields: FieldValue[]) {
   const out: Record<string, string> = {};
-  for (const column of columns) {
-    out[column.column_name] = columnValueText(column);
+  for (const field of fields) {
+    out[field.field_id] = fieldValueText(field);
   }
   return out;
 }

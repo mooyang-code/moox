@@ -125,8 +125,7 @@ func TestApplyRuntimeConfig_UpdatesFromDeployments(t *testing.T) {
 	got := h.applyRuntimeConfig(withFunctionContext(context.Background()), event, &functioncontext.FunctionContext{
 		FunctionName: "fallback-fn",
 	})
-	assert.Equal(t, "127.0.0.1", got.ServerIP)
-	assert.Equal(t, 11000, got.ServerPort)
+	assert.Equal(t, "http://127.0.0.1:11000", got.ServiceGatewayTarget)
 	assert.Equal(t, "10.0.0.1:20100", got.StorageRPCGatewayTarget)
 	assert.Equal(t, "10.0.0.1:20100", got.StorageRPCGatewayTarget)
 	nodeID, _ := runtimeapp.GetNodeInfo()

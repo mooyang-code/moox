@@ -71,13 +71,13 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 		cfg.MaxRetry = 3
 	}
 	svc := &Service{
-		cfg:     cfg,
-		storage: storage,
-		exec:    exec,
-		queues:  make([][]queueItem, cfg.Workers),
-		pending: map[taskKey]Task{},
+		cfg:             cfg,
+		storage:         storage,
+		exec:            exec,
+		queues:          make([][]queueItem, cfg.Workers),
+		pending:         map[taskKey]Task{},
 		acceptedTaskIDs: map[string]struct{}{},
-		wake:    make([]chan struct{}, cfg.Workers),
+		wake:            make([]chan struct{}, cfg.Workers),
 	}
 	if cfg.SnapshotDir != "" {
 		svc.snapshotStore = storageio.NewSnapshotStore(cfg.SnapshotDir)
@@ -86,13 +86,6 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 		svc.wake[i] = make(chan struct{}, 1)
 	}
 	return svc
-}
-
-// Enqueue adds a task, replacing older pending work for the same subject scope.
-// It is kept as a compatibility wrapper for RPC/runtime callers that use the
-// fire-and-forget scheduler interface.
-func (s *Service) Enqueue(ctx context.Context, task Task) {
-	_ = s.EnqueueChecked(ctx, task)
 }
 
 // EnqueueChecked is the durable trigger boundary: callers must not commit an

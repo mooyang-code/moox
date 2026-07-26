@@ -12,12 +12,12 @@ import (
 )
 
 type writerAccessFake struct {
-	requests []*storagepb.MergeTimeSeriesRowsReq
+	requests []*storagepb.PrimaryUpsertFieldsReq
 }
 
-func (f *writerAccessFake) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (f *writerAccessFake) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.requests = append(f.requests, req)
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {
@@ -42,18 +42,19 @@ func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {
 			t.Fatal("empty dataset request")
 		}
 		for _, row := range req.GetRows() {
-			if row.GetKey().GetSpaceId() != SpaceID || row.GetKey().GetSubjectId() != "agent-1" || row.GetKey().GetFreq() != "1m" || row.GetKey().GetDataTime() != "2026-07-11T04:34:00Z" {
+			key := row.GetKey().GetTimeSeries()
+			if row.GetKey().GetSpaceId() != SpaceID || key.GetSubjectId() != "agent-1" || key.GetFreq() != "1m" || key.GetDataTime() != "2026-07-11T04:34:00Z" {
 				t.Fatalf("unexpected key: %+v", row.GetKey())
 			}
-			if row.GetAttributes()["message_id"] != "msg-1" || row.GetAttributes()["agent_id"] != "agent-1" {
+			if row.GetAttributes()["message_id"].GetStringValue() != "msg-1" || row.GetAttributes()["agent_id"].GetStringValue() != "agent-1" {
 				t.Fatalf("attributes=%v", row.GetAttributes())
 			}
 		}
 	}
 	for _, req := range fake.requests {
 		for _, row := range req.GetRows() {
-			for _, column := range row.GetColumns() {
-				if column.GetColumnName() == "read_bytes_per_second" || column.GetColumnName() == "receive_bytes_per_second" {
+			for _, field := range row.GetFields() {
+				if field.GetFieldId() == "read_bytes_per_second" || field.GetFieldId() == "receive_bytes_per_second" {
 					t.Fatal("unavailable rate was written")
 				}
 			}

@@ -24,11 +24,7 @@ type PrimaryStoreService interface {
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error)
 
-	MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq) (*MergeTimeSeriesRowsRsp, error)
-
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
-
-	MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq) (*MergeRecordRowsRsp, error)
 
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
 }
@@ -69,24 +65,6 @@ func PrimaryStoreService_ReadFields_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
-func PrimaryStoreService_MergeTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &MergeTimeSeriesRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).MergeTimeSeriesRows(ctx, reqbody.(*MergeTimeSeriesRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func PrimaryStoreService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadTimeSeriesRowsReq{}
 	filters, err := f(req)
@@ -95,24 +73,6 @@ func PrimaryStoreService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func PrimaryStoreService_MergeRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &MergeRecordRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).MergeRecordRows(ctx, reqbody.(*MergeRecordRowsReq))
 	}
 
 	var rsp interface{}
@@ -155,16 +115,8 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_ReadFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/MergeTimeSeriesRows",
-			Func: PrimaryStoreService_MergeTimeSeriesRows_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
 			Func: PrimaryStoreService_ReadTimeSeriesRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.PrimaryStore/MergeRecordRows",
-			Func: PrimaryStoreService_MergeRecordRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadRecordRows",
@@ -191,14 +143,8 @@ func (s *UnimplementedPrimaryStore) UpsertFields(ctx context.Context, req *Prima
 func (s *UnimplementedPrimaryStore) ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq) (*MergeTimeSeriesRowsRsp, error) {
-	return nil, errors.New("rpc MergeTimeSeriesRows of service PrimaryStore is not implemented")
-}
 func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc ReadTimeSeriesRows of service PrimaryStore is not implemented")
-}
-func (s *UnimplementedPrimaryStore) MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq) (*MergeRecordRowsRsp, error) {
-	return nil, errors.New("rpc MergeRecordRows of service PrimaryStore is not implemented")
 }
 func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service PrimaryStore is not implemented")
@@ -217,11 +163,7 @@ type PrimaryStoreClientProxy interface {
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (rsp *PrimaryReadFieldsRsp, err error)
 
-	MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq, opts ...client.Option) (rsp *MergeTimeSeriesRowsRsp, err error)
-
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
-
-	MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq, opts ...client.Option) (rsp *MergeRecordRowsRsp, err error)
 
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
 }
@@ -275,26 +217,6 @@ func (c *PrimaryStoreClientProxyImpl) ReadFields(ctx context.Context, req *Prima
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) MergeTimeSeriesRows(ctx context.Context, req *MergeTimeSeriesRowsReq, opts ...client.Option) (*MergeTimeSeriesRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/MergeTimeSeriesRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("MergeTimeSeriesRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &MergeTimeSeriesRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *PrimaryStoreClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -309,26 +231,6 @@ func (c *PrimaryStoreClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadTimeSeriesRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreClientProxyImpl) MergeRecordRows(ctx context.Context, req *MergeRecordRowsReq, opts ...client.Option) (*MergeRecordRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/MergeRecordRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("MergeRecordRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &MergeRecordRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

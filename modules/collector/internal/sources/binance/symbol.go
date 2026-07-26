@@ -151,7 +151,7 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 	}
 
 	// 分批（一个请求最多25行，分N次请求）
-	var rowBatches [][]*storagepb.RecordRow
+	var rowBatches [][]*storagepb.RowFieldUpsert
 	var symbolBatches [][]*exchange.SymbolInfo
 	for i := 0; i < totalRows; i += batchSize {
 		end := i + batchSize
@@ -215,11 +215,11 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 }
 
 // sendWithRetry 发送单个批次请求（带重试）
-func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, metadataTarget string, accessTarget string, binding StorageBinding, symbols []*exchange.SymbolInfo, rows []*storagepb.RecordRow, batchIdx, totalBatches int) error {
+func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, metadataTarget string, accessTarget string, binding StorageBinding, symbols []*exchange.SymbolInfo, rows []*storagepb.RowFieldUpsert, batchIdx, totalBatches int) error {
 	return retry.Do(
 		func() error {
 			writer := newStorageWriter(accessTarget, metadataTarget, storageAuthInfo(binding))
-			if err := writer.MergeRecordRows(ctx, rows); err != nil {
+			if err := writer.UpsertFields(ctx, rows); err != nil {
 				return err
 			}
 			for _, symbol := range symbols {
@@ -276,12 +276,12 @@ func buildSymbolRegisterRequest(symbol *exchange.SymbolInfo, binding StorageBind
 }
 
 // buildSymbolRecordRows 构建标的结构化记录行列表。
-func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBinding) ([]*storagepb.RecordRow, error) {
-	rows := make([]*storagepb.RecordRow, 0, len(symbols))
+func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBinding) ([]*storagepb.RowFieldUpsert, error) {
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(symbols))
 	version := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, s := range symbols {
 		subjectID := normalizedSubjectID(s)
-		columns := []*storagepb.ColumnValue{
+		fields := []*storagepb.FieldValue{
 			stringField("symbol", subjectID),
 			stringField("external_symbol", binanceapi.FormatSymbol(subjectID)),
 			stringField("base_asset", s.BaseAsset),
@@ -289,31 +289,29 @@ func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBindin
 			stringField("status", s.Status),
 		}
 		var err error
-		columns, err = appendOptionalDoubleField(columns, "min_qty", s.MinQty)
+		fields, err = appendOptionalDoubleField(fields, "min_qty", s.MinQty)
 		if err != nil {
 			return nil, fmt.Errorf("%s min_qty: %w", subjectID, err)
 		}
-		columns, err = appendOptionalDoubleField(columns, "max_qty", s.MaxQty)
+		fields, err = appendOptionalDoubleField(fields, "max_qty", s.MaxQty)
 		if err != nil {
 			return nil, fmt.Errorf("%s max_qty: %w", subjectID, err)
 		}
-		columns, err = appendOptionalDoubleField(columns, "tick_size", s.TickSize)
+		fields, err = appendOptionalDoubleField(fields, "tick_size", s.TickSize)
 		if err != nil {
 			return nil, fmt.Errorf("%s tick_size: %w", subjectID, err)
 		}
-		columns, err = appendOptionalDoubleField(columns, "lot_size", s.LotSize)
+		fields, err = appendOptionalDoubleField(fields, "lot_size", s.LotSize)
 		if err != nil {
 			return nil, fmt.Errorf("%s lot_size: %w", subjectID, err)
 		}
 
-		row := &storagepb.RecordRow{
-			Key: &storagepb.RecordKey{
-				SpaceId:   binding.SpaceID,
-				DatasetId: binding.RecordDatasetID,
-				RecordId:  subjectID,
-				Version:   version,
+		row := &storagepb.RowFieldUpsert{
+			Key: &storagepb.RowKey{
+				SpaceId: binding.SpaceID, DatasetId: binding.RecordDatasetID,
+				Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: subjectID, Version: version}},
 			},
-			Columns: columns,
+			Fields: fields,
 		}
 		rows = append(rows, row)
 	}
@@ -339,13 +337,13 @@ func containsHyphen(value string) bool {
 	return false
 }
 
-func appendOptionalDoubleField(columns []*storagepb.ColumnValue, name, raw string) ([]*storagepb.ColumnValue, error) {
+func appendOptionalDoubleField(fields []*storagepb.FieldValue, name, raw string) ([]*storagepb.FieldValue, error) {
 	if raw == "" {
-		return columns, nil
+		return fields, nil
 	}
 	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		return columns, err
+		return fields, err
 	}
-	return append(columns, doubleField(name, value)), nil
+	return append(fields, doubleField(name, value)), nil
 }

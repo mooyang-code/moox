@@ -87,9 +87,9 @@ func TestDecryptWebCryptoVector(t *testing.T) {
 	}
 }
 
-func TestDecryptLegacyKeyNormalization(t *testing.T) {
-	secret := "moox-admin-secret-key-32bytes"
-	block, err := aes.NewCipher(legacyKey(secret))
+func TestDecryptRejectsNonCanonicalKeyDerivation(t *testing.T) {
+	secret := "0123456789abcdef"
+	block, err := aes.NewCipher([]byte(secret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,13 +101,9 @@ func TestDecryptLegacyKeyNormalization(t *testing.T) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		t.Fatal(err)
 	}
-	payload := gcm.Seal(nonce, nonce, []byte("legacy-secret"), nil)
-	plaintext, err := Decrypt(base64.StdEncoding.EncodeToString(payload), secret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plaintext != "legacy-secret" {
-		t.Fatalf("plaintext=%q", plaintext)
+	payload := gcm.Seal(nonce, nonce, []byte("noncanonical-secret"), nil)
+	if _, err := Decrypt(base64.StdEncoding.EncodeToString(payload), secret); err == nil {
+		t.Fatal("Decrypt accepted a noncanonical key derivation")
 	}
 }
 

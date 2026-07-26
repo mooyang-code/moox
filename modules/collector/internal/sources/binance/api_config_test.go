@@ -37,7 +37,7 @@ func TestKlineCollectorCollectStartsAfterStorageWatermark(t *testing.T) {
 	assert.True(t, requests[0].StartTime.After(watermark))
 	require.Len(t, store.writes, 1)
 	require.Len(t, store.writes[0], 1)
-	assert.Equal(t, "BTC-USDT", store.writes[0][0].GetKey().GetSubjectId())
+	assert.Equal(t, "BTC-USDT", store.writes[0][0].GetKey().GetTimeSeries().GetSubjectId())
 }
 
 func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
@@ -59,14 +59,14 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 type fakeKlineStorage struct {
 	latest time.Time
 	found  bool
-	writes [][]*storagepb.TimeSeriesRow
+	writes [][]*storagepb.RowFieldUpsert
 }
 
 func (s *fakeKlineStorage) LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error) {
 	return s.latest, s.found, nil
 }
 
-func (s *fakeKlineStorage) MergeTimeSeriesRows(_ context.Context, rows []*storagepb.TimeSeriesRow) error {
+func (s *fakeKlineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	s.writes = append(s.writes, rows)
 	return nil
 }
@@ -139,7 +139,7 @@ func TestKlineCollectorLiveAlsoWritesOnlyClosedKlines(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, store.writes, 1)
 	require.Len(t, store.writes[0], 1)
-	assert.Equal(t, formatKlineTime(now.Add(-time.Minute)), store.writes[0][0].GetKey().GetDataTime())
+	assert.Equal(t, formatKlineTime(now.Add(-time.Minute)), store.writes[0][0].GetKey().GetTimeSeries().GetDataTime())
 }
 
 func TestNormalizeFreq_ShouldNormalizeUnits(t *testing.T) {
@@ -180,7 +180,7 @@ func TestBuildKlineRows_ShouldEmitClosedBars(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "crypto", rows[0].GetKey().GetSpaceId())
 	assert.Equal(t, "kline-ds", rows[0].GetKey().GetDatasetId())
-	assert.Equal(t, "BTCUSDT", rows[0].GetKey().GetSubjectId())
+	assert.Equal(t, "BTCUSDT", rows[0].GetKey().GetTimeSeries().GetSubjectId())
 }
 
 func TestSymbolCollector_SourceAndDataType(t *testing.T) {

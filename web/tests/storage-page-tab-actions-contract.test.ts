@@ -29,9 +29,8 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).toContain("只有已禁用且没有 Dataset 的节点才能删除");
     expect(pages.nodes).toContain('title="操作" :width="190"');
     expect(pages.nodes).toContain("display: flex;\n  flex-wrap: wrap;");
-    expect(pages.nodes).toContain(
-      'router.push({ path: "/data/datasets", query: { space_id: summary.space_id, dataset_id: summary.dataset_id } })'
-    );
+    expect(pages.nodes).toContain('path: "/collector/data-management"');
+    expect(pages.nodes).toContain('query: { tab: "datasets", space_id: summary.space_id, dataset_id: summary.dataset_id }');
   });
 
   it("aligns the archive action row to the left", () => {

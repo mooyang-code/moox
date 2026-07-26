@@ -36,8 +36,8 @@ func newStorageWriter(accessTarget string, metadataTarget string, authInfo *stor
 	}
 }
 
-func (w *storageWriter) MergeTimeSeriesRows(ctx context.Context, rows []*storagepb.TimeSeriesRow) error {
-	rsp, err := w.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{
+func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
+	rsp, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: w.authInfo,
 		Rows:     rows,
 	})
@@ -74,17 +74,6 @@ func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, key *storagepb
 	return parsed.UTC(), true, nil
 }
 
-func (w *storageWriter) MergeRecordRows(ctx context.Context, rows []*storagepb.RecordRow) error {
-	rsp, err := w.access.MergeRecordRows(ctx, &storagepb.MergeRecordRowsReq{
-		AuthInfo: w.authInfo,
-		Rows:     rows,
-	})
-	if err != nil {
-		return fmt.Errorf("write record rows: %w", err)
-	}
-	return ensureStorageOK("write record rows", rsp.GetRetInfo())
-}
-
 func (w *storageWriter) RegisterDataSubject(ctx context.Context, req *storagepb.RegisterDataSubjectReq) error {
 	req.AuthInfo = w.authInfo
 	rsp, err := w.metadata.RegisterDataSubject(ctx, req)
@@ -104,27 +93,24 @@ func ensureStorageOK(action string, ret *storagepb.RetInfo) error {
 	return nil
 }
 
-func stringField(name, value string) *storagepb.ColumnValue {
-	return &storagepb.ColumnValue{
-		ColumnName: name,
-		ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING,
-		Value:      &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}},
+func stringField(name, value string) *storagepb.FieldValue {
+	return &storagepb.FieldValue{
+		FieldId: name,
+		Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}},
 	}
 }
 
-func intField(name string, value int64) *storagepb.ColumnValue {
-	return &storagepb.ColumnValue{
-		ColumnName: name,
-		ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
-		Value:      &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}},
+func intField(name string, value int64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{
+		FieldId: name,
+		Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}},
 	}
 }
 
-func doubleField(name string, value float64) *storagepb.ColumnValue {
-	return &storagepb.ColumnValue{
-		ColumnName: name,
-		ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		Value:      &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}},
+func doubleField(name string, value float64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{
+		FieldId: name,
+		Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}},
 	}
 }
 

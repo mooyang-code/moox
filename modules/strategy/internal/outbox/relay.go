@@ -21,9 +21,6 @@ type OutboxStore interface {
 type Relay struct {
 	Store     OutboxStore
 	Publisher Publisher
-	Now       func() time.Time
-	lastErrMu sync.RWMutex
-	lastErr   error
 	mu        sync.Mutex
 }
 
@@ -38,17 +35,16 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	defer r.mu.Unlock()
 	rows, err := r.Store.ListPendingOutbox(ctx, limit)
 	if err != nil {
-		return r.recordError(err)
+		return err
 	}
 	for _, row := range rows {
 		if publishErr := r.Publisher.Publish(ctx, row); publishErr != nil {
-			return r.recordError(publishErr)
+			return publishErr
 		}
 		if deleteErr := r.Store.DeleteOutbox(ctx, row.MessageID); deleteErr != nil {
-			return r.recordError(deleteErr)
+			return deleteErr
 		}
 	}
-	r.recordError(nil)
 	return nil
 }
 
@@ -69,27 +65,4 @@ func (r *Relay) Run(ctx context.Context, interval time.Duration, batchSize int) 
 		case <-ticker.C:
 		}
 	}
-}
-
-func (r *Relay) LastError() error {
-	if r == nil {
-		return nil
-	}
-	r.lastErrMu.RLock()
-	defer r.lastErrMu.RUnlock()
-	return r.lastErr
-}
-
-func (r *Relay) now() time.Time {
-	if r.Now != nil {
-		return r.Now().UTC()
-	}
-	return time.Now().UTC()
-}
-
-func (r *Relay) recordError(err error) error {
-	r.lastErrMu.Lock()
-	r.lastErr = err
-	r.lastErrMu.Unlock()
-	return err
 }

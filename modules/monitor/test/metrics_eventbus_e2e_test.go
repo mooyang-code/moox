@@ -118,18 +118,18 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if latest.Value != 7 || latest.MessageID != messageID {
 		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
-	if len(access.rows) != 1 || access.rows[0].GetKey().GetSubjectId() != series[0].SeriesID {
+	if len(access.rows) != 1 || access.rows[0].GetKey().GetTimeSeries().GetSubjectId() != series[0].SeriesID {
 		t.Fatalf("storage rows=%d row=%+v", len(access.rows), access.rows)
 	}
 }
 
 type metricsE2EAccess struct {
-	rows []*storagepb.TimeSeriesRow
+	rows []*storagepb.RowFieldUpsert
 }
 
-func (a *metricsE2EAccess) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (a *metricsE2EAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	a.rows = append(a.rows, req.GetRows()...)
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {

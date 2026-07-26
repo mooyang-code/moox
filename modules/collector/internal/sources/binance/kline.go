@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -37,7 +36,7 @@ type KlineCollector struct {
 
 type klineStorage interface {
 	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error)
-	MergeTimeSeriesRows(context.Context, []*storagepb.TimeSeriesRow) error
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
 // init 自注册到采集器注册中心
@@ -139,7 +138,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 			if buildErr != nil {
 				return buildErr
 			}
-			if err := writer.MergeTimeSeriesRows(ctx, rows); err != nil {
+			if err := writer.UpsertFields(ctx, rows); err != nil {
 				return fmt.Errorf("K线写入存储失败: %w", err)
 			}
 			total += len(rows)
@@ -200,40 +199,6 @@ func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, inte
 	return klines
 }
 
-func (c *KlineCollector) reportKlines(ctx context.Context, params *sources.CollectParams, klines []*market.Kline) error {
-	if len(klines) == 0 {
-		log.InfoContextf(ctx, "K线写入存储跳过: 无数据, inst_type=%s, symbol=%s, interval=%s",
-			params.InstType, params.Symbol, params.Interval)
-		return nil
-	}
-
-	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
-	if accessTarget == "" {
-		return fmt.Errorf("未配置存储 access tRPC 地址")
-	}
-
-	freq, err := normalizeFreq(params.Interval)
-	if err != nil {
-		return err
-	}
-
-	binding, err := ResolveStorageBinding(params.InstType)
-	if err != nil {
-		return err
-	}
-
-	storageSubjectID := strings.TrimSpace(params.SubjectID)
-	if storageSubjectID == "" {
-		storageSubjectID = params.Symbol
-	}
-	rows, err := buildKlineRows(klines, storageSubjectID, binding, freq)
-	if err != nil {
-		return err
-	}
-
-	return c.sendTimeSeriesRowsWithRetry(ctx, accessTarget, binding, rows)
-}
-
 func normalizeFreq(interval string) (string, error) {
 	if interval == "" {
 		return "", fmt.Errorf("interval 不能为空")
@@ -255,13 +220,13 @@ func normalizeFreq(interval string) (string, error) {
 	}
 }
 
-func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBinding, freq string) ([]*storagepb.TimeSeriesRow, error) {
+func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBinding, freq string) ([]*storagepb.RowFieldUpsert, error) {
 	closedKlines, _ := filterClosedKlines(klines, time.Now())
 	if len(klines) > 0 && len(closedKlines) == 0 {
 		return nil, fmt.Errorf("%w: symbol=%s, freq=%s, latest_close_time=%s", errKlineNotClosed, symbol, freq, latestCloseTime(klines))
 	}
 
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(klines))
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(klines))
 	for _, kline := range closedKlines {
 		openTime := formatKlineTime(kline.OpenTime)
 		openValue, err := kline.Open.Float64()
@@ -289,15 +254,12 @@ func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBindin
 			return nil, fmt.Errorf("解析成交额失败: %w", err)
 		}
 
-		rows = append(rows, &storagepb.TimeSeriesRow{
-			Key: &storagepb.TimeSeriesKey{
-				SpaceId:   binding.SpaceID,
-				DatasetId: binding.KlineDatasetID,
-				SubjectId: symbol,
-				Freq:      freq,
-				DataTime:  openTime,
+		rows = append(rows, &storagepb.RowFieldUpsert{
+			Key: &storagepb.RowKey{
+				SpaceId: binding.SpaceID, DatasetId: binding.KlineDatasetID,
+				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: symbol, Freq: freq, DataTime: openTime}},
 			},
-			Columns: []*storagepb.ColumnValue{
+			Fields: []*storagepb.FieldValue{
 				doubleField("open", openValue),
 				doubleField("high", highValue),
 				doubleField("low", lowValue),
@@ -349,20 +311,4 @@ func latestCloseTime(klines []*market.Kline) string {
 
 func formatKlineTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func (c *KlineCollector) sendTimeSeriesRowsWithRetry(ctx context.Context, accessTarget string, binding StorageBinding, rows []*storagepb.TimeSeriesRow) error {
-	return retry.Do(
-		func() error {
-			writer := newStorageWriter(accessTarget, "", storageAuthInfo(binding))
-			return writer.MergeTimeSeriesRows(ctx, rows)
-		},
-		retry.Attempts(3),
-		retry.Delay(500*time.Millisecond),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "K线写入存储重试第 %d 次: %v", n+1, err)
-		}),
-		retry.Context(ctx),
-	)
 }

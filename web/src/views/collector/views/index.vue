@@ -48,17 +48,6 @@ import ViewBrowse from "@/views/data/view-browse/index.vue";
 
 defineOptions({ name: "CollectorViews" });
 
-const props = withDefaults(
-  defineProps<{
-    queryKey?: string;
-    routePath?: string;
-  }>(),
-  {
-    queryKey: "tab",
-    routePath: "/collector/views"
-  }
-);
-
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -72,20 +61,20 @@ const tabs = [
   { key: "browse", label: "查看数据" }
 ] as const;
 
-const normalizedQuery = computed(() => String(route.query[props.queryKey] || ""));
+const normalizedQuery = computed(() => String(route.query.viewTab || ""));
 const excludedFactorDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
 
 function tabFromRoute() {
-  return route.query[props.queryKey] === "browse" ? "browse" : "definitions";
+  return route.query.viewTab === "browse" ? "browse" : "definitions";
 }
 
 function syncRoute(key: string | number) {
   const tab: CollectorViewTab = key === "browse" ? "browse" : "definitions";
   activeTab.value = tab;
   const query = { ...route.query };
-  if (tab === "browse") query[props.queryKey] = tab;
-  else delete query[props.queryKey];
-  void router.replace({ path: props.routePath, query });
+  if (tab === "browse") query.viewTab = tab;
+  else delete query.viewTab;
+  void router.replace({ path: "/collector/data-management", query });
 }
 
 async function loadBindings() {

@@ -101,7 +101,7 @@
               :key="item.name"
               class="freshness-row"
               :class="`tone-${item.tone}`"
-              @click="go('/collector/views?tab=browse')"
+              @click="go('/collector/data-management?tab=views&viewTab=browse')"
             >
               <span>
                 <strong>{{ item.name }}</strong>
@@ -187,7 +187,7 @@
               <h2>采集任务脉搏</h2>
               <p>用任务实例和最近执行状态判断链路是否在工作。</p>
             </div>
-            <a-button size="small" @click="go('/collector/tasks')">查看任务</a-button>
+            <a-button size="small" @click="go('/collector/rules?tab=instances')">查看任务</a-button>
           </div>
           <div class="pulse-bars">
             <div v-for="bar in taskPulse" :key="bar.label" class="pulse-bar">
@@ -211,7 +211,7 @@
               :key="dep.name"
               class="service-line"
               :class="`tone-${dep.tone}`"
-              @click="go('/settings/service-deployments')"
+              @click="go('/ops/services?tab=instances')"
             >
               <span>{{ dep.name }}</span>
               <b>{{ dep.status }}</b>
@@ -341,9 +341,9 @@ const counts = reactive<Record<string, number | null>>({
 const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
   { key: "rules", stage: "02", label: "采集规则", color: "#0d9488", path: "/collector/rules" },
-  { key: "datasets", stage: "03", label: "数据集合", color: "#059669", path: "/collector/datasets" },
+  { key: "datasets", stage: "03", label: "数据集合", color: "#059669", path: "/collector/data-management?tab=datasets" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
-  { key: "views", stage: "05", label: "数据视图", color: "#ea580c", path: "/collector/views" },
+  { key: "views", stage: "05", label: "数据视图", color: "#ea580c", path: "/collector/data-management?tab=views" },
   { key: "accounts", stage: "06", label: "交易账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
@@ -351,28 +351,28 @@ const workflowLinks = [
   {
     title: "K 线浏览",
     description: "检查最新 bar 是否入库",
-    path: "/collector/views?tab=browse",
+    path: "/collector/data-management?tab=views&viewTab=browse",
     icon: "K",
     tint: "rgba(59, 111, 217, 12%)"
   },
   {
     title: "视图查询",
     description: "查看数据集合生成的视图",
-    path: "/collector/views?tab=browse",
+    path: "/collector/data-management?tab=views&viewTab=browse",
     icon: "Q",
     tint: "rgba(234, 88, 12, 12%)"
   },
   {
     title: "采集实例",
     description: "任务执行状态与失败明细",
-    path: "/collector/tasks",
+    path: "/collector/rules?tab=instances",
     icon: "T",
     tint: "rgba(13, 148, 136, 12%)"
   },
   {
     title: "数据集合",
     description: "定义采集写入的数据契约",
-    path: "/collector/datasets",
+    path: "/collector/data-management?tab=datasets",
     icon: "D",
     tint: "rgba(5, 150, 105, 12%)"
   },
@@ -434,7 +434,7 @@ const dashboardKpis = computed(() => [
     note: "最新 K 线延迟",
     delta: "APT-USDT",
     tone: "ok",
-    path: "/collector/views?tab=browse"
+    path: "/collector/data-management?tab=views&viewTab=browse"
   },
   {
     key: "tasks",
@@ -444,7 +444,7 @@ const dashboardKpis = computed(() => [
     note: "规则展开实例",
     delta: "运行中 18",
     tone: "neutral",
-    path: "/collector/tasks"
+    path: "/collector/rules?tab=instances"
   },
   {
     key: "incidents",
@@ -454,7 +454,7 @@ const dashboardKpis = computed(() => [
     note: "失败 / 超时",
     delta: "需处理",
     tone: "danger",
-    path: "/collector/tasks"
+    path: "/collector/rules?tab=instances"
   },
   {
     key: "nodes",
@@ -474,7 +474,7 @@ const dashboardKpis = computed(() => [
     note: "active 部署",
     delta: "gateway ok",
     tone: "ok",
-    path: "/settings/service-deployments"
+    path: "/ops/services?tab=instances"
   }
 ]);
 
@@ -507,7 +507,7 @@ const incidentItems = [
     title: "7 个采集实例失败",
     meta: "交易所限频 / 网络超时",
     action: "处理任务",
-    path: "/collector/tasks",
+    path: "/collector/rules?tab=instances",
     tone: "warn"
   },
   {

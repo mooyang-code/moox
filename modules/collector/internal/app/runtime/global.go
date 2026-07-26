@@ -1,18 +1,14 @@
 package runtime
 
 import (
-	"fmt"
 	"log"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 )
 
 // Config 全局配置结构
 type Config struct {
-	Server                  ServerConfig
 	ServiceGatewayTarget    string
 	NodeInfo                NodeInfoConfig
 	StorageRPCGatewayTarget string
@@ -20,12 +16,6 @@ type Config struct {
 	// Database DatabaseConfig
 	// Cache CacheConfig
 	// Metrics MetricsConfig
-}
-
-// ServerConfig 服务端配置
-type ServerConfig struct {
-	IP   string
-	Port int
 }
 
 // NodeInfoConfig 节点信息配置
@@ -38,28 +28,6 @@ type NodeInfoConfig struct {
 var GlobalConfig Config
 
 var configMu sync.RWMutex
-
-// UpdateServerInfo 更新服务端配置
-func UpdateServerInfo(ip string, port int) {
-	configMu.Lock()
-	defer configMu.Unlock()
-	if ip != "" {
-		GlobalConfig.Server.IP = ip
-	}
-	if port > 0 {
-		GlobalConfig.Server.Port = port
-	}
-	if GlobalConfig.Server.IP != "" && GlobalConfig.Server.Port > 0 {
-		GlobalConfig.ServiceGatewayTarget = normalizeServiceGatewayTarget(fmt.Sprintf("http://%s:%d", GlobalConfig.Server.IP, GlobalConfig.Server.Port))
-	}
-}
-
-// GetServerInfo 获取服务端配置副本
-func GetServerInfo() (string, int) {
-	configMu.RLock()
-	defer configMu.RUnlock()
-	return GlobalConfig.Server.IP, GlobalConfig.Server.Port
-}
 
 // UpdateServiceGatewayTarget updates the /api/service gateway target used by SCF callbacks.
 func UpdateServiceGatewayTarget(target string) {
@@ -75,9 +43,6 @@ func GetServiceGatewayTarget() string {
 	if GlobalConfig.ServiceGatewayTarget != "" {
 		return GlobalConfig.ServiceGatewayTarget
 	}
-	if GlobalConfig.Server.IP != "" && GlobalConfig.Server.Port > 0 {
-		return normalizeServiceGatewayTarget(fmt.Sprintf("http://%s:%d", GlobalConfig.Server.IP, GlobalConfig.Server.Port))
-	}
 	return ""
 }
 
@@ -87,10 +52,6 @@ func updateServiceGatewayTargetLocked(target string) {
 		return
 	}
 	GlobalConfig.ServiceGatewayTarget = target
-	if host, port := parseServiceGatewayHostPort(target); host != "" && port > 0 {
-		GlobalConfig.Server.IP = host
-		GlobalConfig.Server.Port = port
-	}
 }
 
 func normalizeServiceGatewayTarget(raw string) string {
@@ -102,29 +63,6 @@ func normalizeServiceGatewayTarget(raw string) string {
 		return raw
 	}
 	return "http://" + raw
-}
-
-func parseServiceGatewayHostPort(target string) (string, int) {
-	parsed, err := url.Parse(target)
-	if err != nil {
-		return "", 0
-	}
-	host := parsed.Hostname()
-	if host == "" {
-		return "", 0
-	}
-	port := 0
-	if parsed.Port() != "" {
-		port, _ = strconv.Atoi(parsed.Port())
-	}
-	if port == 0 {
-		if parsed.Scheme == "https" {
-			port = 443
-		} else {
-			port = 80
-		}
-	}
-	return host, port
 }
 
 // UpdateStorageRPCGatewayTarget updates direct tRPC targets for storage metadata/access.

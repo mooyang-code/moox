@@ -15,8 +15,8 @@ describe("collector data management workbench", () => {
     expect(source).toContain('aria-label="数据管理"');
     expect(viewPosition).toBeGreaterThan(0);
     expect(datasetPosition).toBeGreaterThan(viewPosition);
-    expect(source).toContain('query-key="viewTab"');
-    expect(source).toContain('query-key="datasetTab"');
+    expect(source).toContain("<CollectorViews");
+    expect(source).toContain("<CollectorDatasets");
   });
 
   it("uses a compact rounded style for the secondary workbench tabs", () => {
@@ -44,7 +44,7 @@ describe("collector data management workbench", () => {
     );
   });
 
-  it("keeps legacy data routes pointed at the unified workbench", () => {
+  it("exposes only the unified data-management route", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
     const normalizedMenu = normalizeSource(menu);
@@ -53,8 +53,9 @@ describe("collector data management workbench", () => {
     expect(normalizedMenu).toContain('menu("0305","03","/collector/data-management","collector-data-management"');
     expect(normalizedMenu).not.toContain('menu("0306"');
     expect(normalizedRoutes).toContain('component:()=>import("@/views/collector/data-management/index.vue")');
-    expect(normalizedRoutes).toContain("path:collectorDataManagementPath");
-    expect(normalizedRoutes).toContain('datasetTab:to.query?.tab==="browse"?"browse":"definitions"');
-    expect(normalizedRoutes).toContain('viewTab:to.query?.tab==="browse"?"browse":"definitions"');
+    expect(normalizedRoutes).not.toContain('path:"/collector/datasets"');
+    expect(normalizedRoutes).not.toContain('path:"/collector/views"');
+    expect(normalizedRoutes).not.toContain('path:"/data/datasets"');
+    expect(normalizedRoutes).not.toContain('path:"/data/views"');
   });
 });

@@ -77,9 +77,8 @@ export interface TypedValue {
   null_value?: "NULL_VALUE_UNSPECIFIED" | "NULL_VALUE" | number;
 }
 
-export interface ColumnValue {
-  column_name: string;
-  value_type: FieldValueType;
+export interface FieldValue {
+  field_id: string;
   value: TypedValue;
 }
 
@@ -378,7 +377,7 @@ export interface TimeSeriesKey {
 
 export interface TimeSeriesRow {
   key: TimeSeriesKey;
-  columns?: ColumnValue[];
+  fields?: FieldValue[];
   attributes?: Record<string, string>;
 }
 
@@ -391,6 +390,31 @@ export interface RecordKey {
 
 export interface RecordRow {
   key: RecordKey;
-  columns?: ColumnValue[];
+  fields?: FieldValue[];
   attributes?: Record<string, string>;
+}
+
+export interface TimeSeriesRowKey {
+  subject_id: string;
+  freq: string;
+  data_time: string;
+}
+
+export interface RecordRowKey {
+  record_id: string;
+  version: string;
+}
+
+export interface RowKey {
+  space_id: string;
+  dataset_id: string;
+  time_series?: TimeSeriesRowKey;
+  record?: RecordRowKey;
+}
+
+export interface RowFieldUpsert {
+  key: RowKey;
+  fields: FieldValue[];
+  attributes?: Record<string, TypedValue>;
+  operation: "ROW_FIELD_OPERATION_UPSERT" | 1;
 }

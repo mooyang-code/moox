@@ -50,9 +50,9 @@ var storageBFFMethods = map[string]string{
 	"RebindDatasetDataNode":  "storage-primary",
 	"RegisterArchiveFile":    "storage-primary",
 	"ListArchiveFiles":       "storage-primary",
-	"MergeTimeSeriesRows":    "storage-primary",
+	"UpsertFields":           "storage-primary",
+	"ReadFields":             "storage-primary",
 	"ReadTimeSeriesRows":     "storage-primary",
-	"MergeRecordRows":        "storage-primary",
 	"ReadRecordRows":         "storage-primary",
 	"QueryTimeSeriesRows":    "storage-view",
 	"SearchRecordRows":       "storage-view",
@@ -67,7 +67,7 @@ func storageBFFServicePath(serviceID, method string) string {
 	if serviceID == "storage-view" {
 		return "trpc.moox.storage.DataView"
 	}
-	for _, candidate := range []string{"MergeTimeSeriesRows", "ReadTimeSeriesRows", "MergeRecordRows", "ReadRecordRows"} {
+	for _, candidate := range []string{"UpsertFields", "ReadFields", "ReadTimeSeriesRows", "ReadRecordRows"} {
 		if method == candidate {
 			return "trpc.moox.storage.PrimaryStore"
 		}

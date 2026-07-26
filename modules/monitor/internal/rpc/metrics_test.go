@@ -286,21 +286,21 @@ func (f *hostReaderAccessFake) ReadTimeSeriesRows(_ context.Context, req *storag
 func resourceRowForTest(cfg monconfig.HostStorageConfig, at string, snap *hostmetricpb.HostSnapshot, agentID string) *storagepb.TimeSeriesRow {
 	return &storagepb.TimeSeriesRow{
 		Key: &storagepb.TimeSeriesKey{SpaceId: cfg.SpaceID, DatasetId: cfg.ResourceDatasetID, SubjectId: agentID, Freq: cfg.Frequency, DataTime: at},
-		Columns: []*storagepb.ColumnValue{
-			{ColumnName: "logical_cores", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetCpu().GetLogicalCores())}}},
-			{ColumnName: "cpu_usage_percent", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: snap.GetCpu().GetUsagePercent()}}},
-			{ColumnName: "cpu_usage_available", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: true}}},
-			{ColumnName: "memory_total_bytes", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetMemory().GetTotalBytes())}}},
-			{ColumnName: "memory_used_bytes", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetMemory().GetUsedBytes())}}},
-			{ColumnName: "memory_available_bytes", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetMemory().GetAvailableBytes())}}},
-			{ColumnName: "memory_usage_percent", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: snap.GetMemory().GetUsagePercent()}}},
+		Fields: []*storagepb.FieldValue{
+			{FieldId: "logical_cores", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetCpu().GetLogicalCores())}}},
+			{FieldId: "cpu_usage_percent", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: snap.GetCpu().GetUsagePercent()}}},
+			{FieldId: "cpu_usage_available", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: true}}},
+			{FieldId: "memory_total_bytes", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetMemory().GetTotalBytes())}}},
+			{FieldId: "memory_used_bytes", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetMemory().GetUsedBytes())}}},
+			{FieldId: "memory_available_bytes", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(snap.GetMemory().GetAvailableBytes())}}},
+			{FieldId: "memory_usage_percent", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: snap.GetMemory().GetUsagePercent()}}},
 		},
 	}
 }
 
 func TestHostRPCWithInjectedStoreAndReader(t *testing.T) {
 	mgr := openMonitorDB(t)
-	hostStore := hostmetrics.NewStore(nil)
+	hostStore := hostmetrics.NewStore(nil, nil)
 	snap := &hostmetricpb.HostSnapshot{
 		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsagePercent: 12, UsageAvailable: true},
 		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60, UsagePercent: 40},

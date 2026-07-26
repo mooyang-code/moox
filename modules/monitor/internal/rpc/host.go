@@ -13,9 +13,6 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 	if store == nil {
 		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(errors.New("host monitor is unavailable")), StorageAvailable: false}, nil
 	}
-	if err := store.EnsureSchema(); err != nil {
-		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err), StorageAvailable: false}, nil
-	}
 	rows, err := store.ListAgents(ctx)
 	if err != nil {
 		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err), StorageAvailable: false}, nil

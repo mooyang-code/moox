@@ -57,8 +57,7 @@ func Open(opts Options) (*Index, error) {
 	return &Index{root: root, open: make(map[string]*handle)}, nil
 }
 
-func OpenExisting(opts Options) (*Index, error) { return Open(opts) }
-func (i *Index) Engine() string                 { return "bleve" }
+func (i *Index) Engine() string { return "bleve" }
 
 func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndexSchema) error {
 	if err := i.close(id); err != nil {

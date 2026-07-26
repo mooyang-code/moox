@@ -62,7 +62,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
 		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)
 		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
-		hostStore = hostmetrics.NewStoreWithWriterReader(hostWriter, hostReader)
+		hostStore = hostmetrics.NewStore(hostWriter, hostReader)
 		hostStore.SetStorageReady(hostGate.Ready)
 		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: runtime.Repositories.Alerts, RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
 		if err != nil {
@@ -81,11 +81,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			},
 		})
 	} else {
-		hostStore = hostmetrics.NewStoreWithWriter(nil)
-	}
-	if err := hostStore.EnsureSchema(); err != nil {
-		_ = runtime.Close()
-		return nil, err
+		hostStore = hostmetrics.NewStore(nil, nil)
 	}
 
 	var metricsStorage *monmetrics.StorageAdapter

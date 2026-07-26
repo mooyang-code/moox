@@ -8,9 +8,7 @@ MooX Storage 是字段级事实存储和可重建 View 服务。当前实现只�
 | `node` | 单个 DataNode 的 Pebble 字段存储、原子 Outbox、过期时间桶清理 |
 | `view` | 单 JetStream Consumer、DuckDB/Bleve ViewIndex、A/B 重建与 DataView 查询 |
 
-旧的分片执行链、RowsCommitted、Sequence Progress 和
-`legacy_storage` 构建已经删除。Dataset 创建时直接绑定不可修改的
-`data_node_id`。
+Dataset 创建时直接绑定不可修改的 `data_node_id`。
 
 ## 数据模型
 
@@ -140,7 +138,6 @@ MOOX_STORAGE_EVENTBUS_URL=nats://127.0.0.1:4222
 cd modules/storage
 go test ./...
 CGO_ENABLED=1 go test ./...
-go build -tags legacy_storage ./...
 
 cd ../..
 bash scripts/test-storage-boundary-contract.sh

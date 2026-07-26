@@ -17,7 +17,7 @@ describe("collector task management workbench", () => {
     expect(normalized).toContain('typeCollectorTaskTab="rules"|"instances"');
   });
 
-  it("keeps one visible menu and redirects the old task URL to its tab", () => {
+  it("keeps one visible menu and removes the retired task URL", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
     const normalizedMenu = normalizeSource(menu);
@@ -26,7 +26,7 @@ describe("collector task management workbench", () => {
     expect(normalizedMenu).toContain('menu("0303","03","/collector/rules","collector-rules"');
     expect(normalizedMenu).not.toContain('menu("0304"');
     expect(normalizedRoutes).toContain('component:()=>import("@/views/collector/task-management/index.vue")');
-    expect(normalizedRoutes).toContain('redirect:{path:"/collector/rules",query:{tab:"instances"}}');
+    expect(normalizedRoutes).not.toContain('path:"/collector/tasks"');
   });
 
   it("removes the standalone package page and keeps package management on cloud nodes", () => {
@@ -38,8 +38,7 @@ describe("collector task management workbench", () => {
     const normalizedCloudNodes = normalizeSource(cloudNodes);
 
     expect(normalizedMenu).not.toContain('menu("0302"');
-    expect(normalizedRoutes).toContain('path:"/collector/packages"');
-    expect(normalizedRoutes).toContain('redirect:"/collector/cloudnodes"');
+    expect(normalizedRoutes).not.toContain('path:"/collector/packages"');
     expect(normalizedRoutes).not.toContain('component:()=>import("@/views/collector/cloud-node/function-package-manage.vue")');
     expect(normalizedCloudNodes).toContain('importFunctionPackageManagefrom"./function-package-manage.vue"');
   });

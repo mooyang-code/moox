@@ -381,13 +381,6 @@ func encodeProcessedEventTimestamp(at time.Time) []byte {
 	return value[:]
 }
 
-func decodeProcessedEventTimestamp(value []byte) (time.Time, bool) {
-	if len(value) != 8 {
-		return time.Time{}, false
-	}
-	return time.Unix(0, int64(binary.BigEndian.Uint64(value))).UTC(), true
-}
-
 func (s *Store) hasProcessedSourceEvent(sourceEventID string, group datasetGroup) (bool, error) {
 	value, closer, err := s.db.Get(processedSourceEventKey(sourceEventID, group))
 	if errors.Is(err, cpebble.ErrNotFound) {

@@ -6,7 +6,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -15,8 +14,7 @@ import (
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
 	log.InfoContextf(ctx, "[Auth] # GetUserInfo enter:%+v", req)
 
-	// 优先使用网关注入的用户上下文；兼容网关纯 HTTP 转发时仅在请求体传入 access_token 的场景。
-	currentUserID, _, role, err := s.getUserInfoCaller(ctx, req)
+	currentUserID, _, role, err := authutils.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			RetInfo: &pb.RetInfo{
@@ -65,33 +63,6 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		},
 		UserInfo: userInfo,
 	}, nil
-}
-
-func (s *AuthServiceImpl) getUserInfoCaller(ctx context.Context, req *pb.GetUserInfoReq) (userID string, username string, role int32, err error) {
-	userID, username, role, err = authutils.GetUserInfoFromCtx(ctx)
-	if err == nil {
-		return userID, username, role, nil
-	}
-	if req.GetAccessToken() == "" {
-		return "", "", 0, err
-	}
-	if s == nil || s.cfg == nil || s.cfg.JWT.SecretKey == "" {
-		return "", "", 0, err
-	}
-	claims, tokenErr := mooxsecurity.ParseToken(req.GetAccessToken(), s.cfg.JWT.SecretKey)
-	if tokenErr != nil {
-		return "", "", 0, tokenErr
-	}
-	if claims["iss"] != "moox-admin" || claims["token_type"] != "access" {
-		return "", "", 0, err
-	}
-	claimUserID, ok := claims["user_id"].(string)
-	if !ok || claimUserID == "" {
-		return "", "", 0, err
-	}
-	claimUsername, _ := claims["username"].(string)
-	claimRole, _ := claims["role"].(float64)
-	return claimUserID, claimUsername, int32(claimRole), nil
 }
 
 // UpdateUserInfo 更新用户信息

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -15,19 +14,6 @@ var (
 	ErrKVKeyExists   = errors.New("jetstream kv key exists")
 	ErrKVNoKeys      = errors.New("jetstream kv has no keys")
 )
-
-// LegacyKVEntry preserves the synchronous adapter used by existing CloudNode
-// code. New callers should use KVStore and KVEntry below.
-type LegacyKVEntry interface {
-	Value() []byte
-	Revision() uint64
-}
-type KeyValue interface {
-	Create(key string, value []byte) (uint64, error)
-	Get(key string) (LegacyKVEntry, error)
-	Update(key string, value []byte, revision uint64) (uint64, error)
-	Keys() ([]string, error)
-}
 
 // KVEntry is the context-aware, copy-safe representation returned by KVStore.
 type KVEntry struct {
@@ -44,29 +30,7 @@ type KVStore interface {
 	Keys(ctx context.Context) ([]string, error)
 }
 
-type keyValueAdapter struct{ kv nats.KeyValue }
-
 type kvStoreAdapter struct{ kv nats.KeyValue }
-
-func (k keyValueAdapter) Create(key string, value []byte) (uint64, error) {
-	rev, err := k.kv.Create(key, value)
-	return rev, mapKVError(err)
-}
-func (k keyValueAdapter) Get(key string) (LegacyKVEntry, error) {
-	entry, err := k.kv.Get(key)
-	if err != nil {
-		return nil, mapKVError(err)
-	}
-	return entry, nil
-}
-func (k keyValueAdapter) Update(key string, value []byte, rev uint64) (uint64, error) {
-	n, err := k.kv.Update(key, value, rev)
-	return n, mapKVError(err)
-}
-func (k keyValueAdapter) Keys() ([]string, error) {
-	keys, err := k.kv.Keys()
-	return keys, mapKVError(err)
-}
 
 func (k kvStoreAdapter) Create(ctx context.Context, key string, value []byte) (uint64, error) {
 	if err := contextErr(ctx, "before kv create"); err != nil {
@@ -119,17 +83,6 @@ func mapKVError(err error) error {
 	}
 }
 
-func (c *Client) KeyValue(bucket string) (KeyValue, error) {
-	if err := c.alive(); err != nil {
-		return nil, err
-	}
-	kv, err := c.js.KeyValue(bucket)
-	if err != nil {
-		return nil, err
-	}
-	return keyValueAdapter{kv: kv}, nil
-}
-
 // BindKV opens an existing bucket without creating or reconciling it. EventBus owns KV lifecycle.
 func (c *Client) BindKV(ctx context.Context, bucket string) (KVStore, error) {
 	if ctx == nil {
@@ -146,18 +99,4 @@ func (c *Client) BindKV(ctx context.Context, bucket string) (KVStore, error) {
 		return nil, mapKVError(err)
 	}
 	return kvStoreAdapter{kv: kv}, nil
-}
-
-func (c *Client) CreateKeyValue(bucket string, ttl time.Duration) (KeyValue, error) {
-	if err := c.alive(); err != nil {
-		return nil, err
-	}
-	if ttl <= 0 {
-		ttl = 24 * time.Hour
-	}
-	kv, err := c.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, Storage: nats.FileStorage, History: 1, TTL: ttl})
-	if err != nil {
-		return nil, err
-	}
-	return keyValueAdapter{kv: kv}, nil
 }

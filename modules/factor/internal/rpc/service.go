@@ -28,7 +28,7 @@ var pythonModuleNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type schedulerRuntime interface {
 	Status() scheduler.Status
-	Enqueue(context.Context, scheduler.Task)
+	EnqueueChecked(context.Context, scheduler.Task) error
 	Drain(context.Context) error
 }
 

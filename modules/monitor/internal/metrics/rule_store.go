@@ -2,11 +2,9 @@ package metrics
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -172,11 +170,6 @@ func unmarshalMetricRule(raw string) (*monitorpb.MetricRule, error) {
 	return &rule, nil
 }
 
-func metricRuleToJSON(rule *monitorpb.MetricRule) string {
-	b, _ := json.Marshal(rule)
-	return string(b)
-}
-
 type MetricRuleStore struct{ db *gorm.DB }
 
 func NewMetricRuleStore(db *gorm.DB) *MetricRuleStore { return &MetricRuleStore{db: db} }
@@ -314,8 +307,4 @@ func (r *MetricRuleStore) ListEvaluations(ctx context.Context, spaceID, ruleID s
 		return nil, 0, err
 	}
 	return rows, total, nil
-}
-
-func sortConditions(e []*monitorpb.MetricCondition) {
-	sort.Slice(e, func(i, j int) bool { return e[i].GetConditionId() < e[j].GetConditionId() })
 }

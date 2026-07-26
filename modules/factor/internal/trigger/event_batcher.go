@@ -1,7 +1,6 @@
 package trigger
 
 import (
-	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -155,19 +154,6 @@ func (d *EventBatcher) ingestMemoryWithDeadline(messageID string, event *storage
 		}
 	}
 	return matched
-}
-
-// Flush 是纯内存兼容入口。需要持久化的调用方必须使用 FlushPending，
-// 再调用 CommitPending，确保 inbox 错误可以被观察到。
-func (d *EventBatcher) Flush(now time.Time) []Task {
-	if d == nil || d.inbox != nil {
-		return nil
-	}
-	tasks, err := d.FlushPending(context.Background(), now)
-	if err != nil {
-		return nil
-	}
-	return tasks
 }
 
 func (d *EventBatcher) matchBindings(spaceID, datasetID, subjectID, freq string) []domain.FactorBinding {

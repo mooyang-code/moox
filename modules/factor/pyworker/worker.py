@@ -17,13 +17,11 @@ else:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "pyruntime" / "python"))
 
 from codec import (
-    FRAME_ERROR,
-    FRAME_LOAD,
-    FRAME_READY,
-    FRAME_REQUEST,
-    FRAME_RUN,
-    FRAME_RESULT,
-    FRAME_RESPONSE,
+    TYPE_ERROR,
+    TYPE_HELLO,
+    TYPE_LOAD,
+    TYPE_RESULT,
+    TYPE_RUN,
     decode_json_df,
     encode_json_results,
     read_frame,
@@ -103,14 +101,9 @@ class FactorWorker:
 
     def decode_frame(self, meta):
         if meta.get("encoding") == "arrow_mmap" and meta.get("snapshot_path"):
-            try:
-                from moox_pyruntime.arrow import open_mmap
-                with open_mmap(meta["snapshot_path"]) as reader:
-                    return reader.read_all().to_pandas()
-            except Exception:
-                # JSON remains a compatibility fallback for environments that
-                # have not installed the optional pyarrow dependency.
-                pass
+            from moox_pyruntime.arrow import open_mmap
+            with open_mmap(meta["snapshot_path"]) as reader:
+                return reader.read_all().to_pandas()
         return decode_json_df(meta)
 
     def load_one(self, meta):
@@ -170,33 +163,33 @@ def main():
     worker = FactorWorker(args.factors_dir, args.sections_dir, args.encoding)
     try:
         worker.load_modules()
-        write_frame(sys.stdout.buffer, FRAME_READY, worker.ready_meta())
+        write_frame(sys.stdout.buffer, TYPE_HELLO, worker.ready_meta())
         while True:
             frame_type, meta, _payload = read_frame(sys.stdin.buffer)
-            if frame_type == FRAME_LOAD and "path" in meta:
+            if frame_type == TYPE_LOAD and "path" in meta:
                 try:
                     worker.load_one(meta)
-                    write_frame(sys.stdout.buffer, FRAME_RESULT, {"id": meta.get("id", ""), "status": "loaded"})
+                    write_frame(sys.stdout.buffer, TYPE_RESULT, {"id": meta.get("id", ""), "status": "loaded"})
                 except Exception as exc:  # noqa: BLE001
-                    write_frame(sys.stdout.buffer, FRAME_ERROR, {"id": meta.get("id", ""), "error_type": type(exc).__name__, "message": str(exc)})
+                    write_frame(sys.stdout.buffer, TYPE_ERROR, {"id": meta.get("id", ""), "error_type": type(exc).__name__, "message": str(exc)})
                 continue
-            if frame_type not in (FRAME_REQUEST, FRAME_RUN):
+            if frame_type != TYPE_RUN:
                 continue
             try:
                 response = worker.execute_request(meta)
-                write_frame(sys.stdout.buffer, FRAME_RESPONSE if frame_type == FRAME_REQUEST else FRAME_RESULT, response)
+                write_frame(sys.stdout.buffer, TYPE_RESULT, response)
             except Exception as exc:  # noqa: BLE001 - factor errors must be reported to Go.
                 traceback.print_exc(file=sys.stderr)
                 write_frame(
                     sys.stdout.buffer,
-                    FRAME_ERROR,
+                    TYPE_ERROR,
                     {"id": meta.get("id", ""), "error_type": type(exc).__name__, "message": str(exc)},
                 )
     except EOFError:
         return
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc(file=sys.stderr)
-        write_frame(sys.stdout.buffer, FRAME_ERROR, {"id": "", "error_type": type(exc).__name__, "message": str(exc)})
+        write_frame(sys.stdout.buffer, TYPE_ERROR, {"id": "", "error_type": type(exc).__name__, "message": str(exc)})
 
 
 if __name__ == "__main__":

@@ -77,8 +77,6 @@ type CloudFunctionEvent struct {
 	RequestID               string                       `json:"request_id,omitempty"`
 	Source                  string                       `json:"source,omitempty"`                 // 探测来源标识
 	ServiceGatewayTarget    string                       `json:"service_gateway_target,omitempty"` // /api/service gateway target
-	ServerIP                string                       `json:"server_ip,omitempty"`              // Deprecated: use service_gateway_target.
-	ServerPort              int                          `json:"server_port,omitempty"`            // Deprecated: use service_gateway_target.
 	StorageRPCGatewayTarget string                       `json:"storage_rpc_gateway_target,omitempty"`
 	ServiceDeployments      map[string]ServiceDeployment `json:"service_deployments,omitempty"` // 控制面下发的 active 服务部署信息
 }
@@ -156,8 +154,6 @@ type HeartbeatInfo struct {
 	ErrorCount           int64     `json:"error_count"`
 	Interval             string    `json:"interval"`
 	ServiceGatewayTarget string    `json:"service_gateway_target,omitempty"`
-	ServerIP             string    `json:"server_ip,omitempty"`
-	ServerPort           int       `json:"server_port,omitempty"`
 }
 
 // Response 通用响应

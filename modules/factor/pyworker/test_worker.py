@@ -1,23 +1,24 @@
 import io
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pandas as pd
 
-from codec import FRAME_READY, FRAME_REQUEST, read_frame, write_frame, decode_json_df
+from codec import TYPE_HELLO, TYPE_RUN, read_frame, write_frame, decode_json_df
 from worker import FactorWorker
 
 
 def test_frame_round_trip():
     stream = io.BytesIO()
 
-    write_frame(stream, FRAME_REQUEST, {"id": "task-1", "encoding": "json"}, b"payload")
+    write_frame(stream, TYPE_RUN, {"id": "task-1", "encoding": "json"}, b"payload")
     stream.seek(0)
     frame_type, meta, payload = read_frame(stream)
 
-    assert frame_type == FRAME_REQUEST
+    assert frame_type == TYPE_RUN
     assert meta == {"id": "task-1", "encoding": "json"}
     assert payload == b"payload"
 
@@ -50,13 +51,43 @@ def test_worker_writes_ready_with_loaded_factors(tmp_path: Path):
     )
     try:
         frame_type, meta, payload = read_frame(proc.stdout)
-        assert frame_type == FRAME_READY
+        assert frame_type == TYPE_HELLO
         assert payload == b""
         assert meta["status"] == "ready"
         assert meta["factors"] == ["Bias"]
     finally:
         proc.kill()
         proc.wait(timeout=5)
+
+
+def test_worker_requires_canonical_runtime_package(tmp_path: Path):
+    factors_dir = tmp_path / "factors"
+    sections_dir = tmp_path / "sections"
+    runtime_dir = tmp_path / "missing-runtime"
+    factors_dir.mkdir()
+    sections_dir.mkdir()
+    runtime_dir.mkdir()
+    env = os.environ.copy()
+    env["MOOX_PYTHON_RUNTIME_PATH"] = str(runtime_dir)
+    env["PYTHONPATH"] = ""
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("worker.py")),
+            "--factors-dir",
+            str(factors_dir),
+            "--sections-dir",
+            str(sections_dir),
+        ],
+        env=env,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert b"moox_pyruntime" in proc.stderr
 
 
 def test_bad_factor_module_does_not_block_worker_ready(tmp_path: Path):

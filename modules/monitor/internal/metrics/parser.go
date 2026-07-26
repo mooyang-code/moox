@@ -17,8 +17,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -351,18 +349,4 @@ func EncodeSnapshot(raw []byte, interval time.Duration, gzipLevel int, limits Li
 	}
 	sum := sha256.Sum256(raw)
 	return &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: uint32(interval / time.Second), Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_GZIP, Data: compressed.Bytes(), MetricFamilyCount: uint32(len(fams)), SampleCount: uint32(count), UncompressedSha256: sum[:]}, nil
-}
-
-func MarshalSnapshot(snapshot *metricspb.MetricSnapshot) ([]byte, error) {
-	if snapshot == nil {
-		return nil, errors.New("nil snapshot")
-	}
-	return proto.MarshalOptions{Deterministic: true}.Marshal(snapshot)
-}
-
-func snapshotTime(ts *timestamppb.Timestamp) time.Time {
-	if ts == nil {
-		return time.Time{}
-	}
-	return ts.AsTime()
 }

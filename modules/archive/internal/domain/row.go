@@ -99,41 +99,31 @@ func CanonicalStringMap(values map[string]string) (string, error) {
 	return string(raw), err
 }
 
-func ScalarFromColumn(column *storagepb.ColumnValue) (Scalar, error) {
-	if column == nil || column.GetColumnName() == "" || column.GetValue() == nil {
-		return Scalar{}, fmt.Errorf("column and value are required")
+func ScalarFromField(fieldID string, typed *storagepb.TypedValue) (Scalar, error) {
+	if fieldID == "" || typed == nil {
+		return Scalar{}, fmt.Errorf("field and value are required")
 	}
-	s := Scalar{Type: column.GetValueType()}
-	switch value := column.GetValue().GetValue().(type) {
+	var s Scalar
+	switch value := typed.GetValue().(type) {
 	case *storagepb.TypedValue_NullValue:
 		if value.NullValue != storagepb.NullValue_NULL_VALUE {
-			return Scalar{}, fmt.Errorf("unspecified null value for %s", column.GetColumnName())
+			return Scalar{}, fmt.Errorf("unspecified null value for %s", fieldID)
 		}
 		s.Null = true
 	case *storagepb.TypedValue_StringValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
 		s.String = &value.StringValue
 	case *storagepb.TypedValue_IntValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_INT {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
 		s.Int = &value.IntValue
 	case *storagepb.TypedValue_DoubleValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
 		s.Double = &value.DoubleValue
 	case *storagepb.TypedValue_BoolValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL
 		s.Bool = &value.BoolValue
 	case *storagepb.TypedValue_TimeValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME
 		t, err := time.Parse(time.RFC3339Nano, value.TimeValue)
 		if err != nil {
 			return Scalar{}, fmt.Errorf("invalid time value: %w", err)
@@ -141,9 +131,7 @@ func ScalarFromColumn(column *storagepb.ColumnValue) (Scalar, error) {
 		normalized := t.UTC().Format(time.RFC3339Nano)
 		s.Time = &normalized
 	case *storagepb.TypedValue_JsonValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON
 		var raw json.RawMessage
 		if err := json.Unmarshal([]byte(value.JsonValue), &raw); err != nil {
 			return Scalar{}, fmt.Errorf("invalid json value: %w", err)
@@ -151,13 +139,11 @@ func ScalarFromColumn(column *storagepb.ColumnValue) (Scalar, error) {
 		normalized := string(raw)
 		s.JSON = &normalized
 	case *storagepb.TypedValue_BytesValue:
-		if s.Type != storagepb.FieldValueType_FIELD_VALUE_TYPE_BYTES {
-			return Scalar{}, fmt.Errorf("type mismatch for %s", column.GetColumnName())
-		}
+		s.Type = storagepb.FieldValueType_FIELD_VALUE_TYPE_BYTES
 		copied := append([]byte(nil), value.BytesValue...)
 		s.Bytes = &copied
 	default:
-		return Scalar{}, fmt.Errorf("unsupported value branch for %s", column.GetColumnName())
+		return Scalar{}, fmt.Errorf("unsupported value branch for %s", fieldID)
 	}
 	return s, nil
 }

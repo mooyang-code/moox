@@ -127,8 +127,8 @@ describe("storage configuration workbench", () => {
 
     await wrapper.find(".dataset-tag").trigger("click");
     expect(mocks.push).toHaveBeenCalledWith({
-      path: "/data/datasets",
-      query: { space_id: "space-a", dataset_id: "dataset-a" }
+      path: "/collector/data-management",
+      query: { tab: "datasets", space_id: "space-a", dataset_id: "dataset-a" }
     });
 
     await wrapper.find(".dataset-tag").trigger("keydown", { key: "Enter" });
@@ -138,10 +138,9 @@ describe("storage configuration workbench", () => {
     expect(wrapper.find(".dataset-tag").attributes("tabindex")).toBe("0");
   });
 
-  it("preserves Dataset deep-link identifiers through the legacy route redirect", () => {
+  it("does not register the retired Dataset redirect", () => {
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
     const normalized = normalizeSource(routes);
-    expect(normalized).toContain('for(constkeyof["space_id","dataset_id"])');
-    expect(normalized).toContain("query[key]=to.query[key]");
+    expect(normalized).not.toContain('path:"/data/datasets"');
   });
 });

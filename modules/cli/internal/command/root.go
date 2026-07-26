@@ -9,8 +9,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/config"
-
 	"github.com/spf13/cobra"
 )
 
@@ -23,9 +21,6 @@ var (
 
 // 版本标志
 var versionFlag bool
-
-// 全局配置变量
-var AppConfig *config.Config
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -200,19 +195,4 @@ func init() {
 	// 禁用默认的completion命令
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
-}
-
-// loadGlobalConfig 加载全局配置
-func loadGlobalConfig() {
-	var err error
-	AppConfig, err = config.LoadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		fmt.Fprintln(os.Stderr, "\033[93m💡 将使用默认配置，某些功能可能无法正常工作\033[0m")
-		// 创建默认配置，避免panic
-		AppConfig = &config.Config{}
-		if AppConfig.MooX == nil {
-			AppConfig.MooX = &config.MooxConfig{}
-		}
-	}
 }

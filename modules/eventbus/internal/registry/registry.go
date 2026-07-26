@@ -106,13 +106,6 @@ func (r *Registry) JS() nats.JetStreamContext {
 	}
 	return r.js
 }
-func (r *Registry) Config() *config.Config {
-	if r == nil {
-		return nil
-	}
-	return r.cfg
-}
-
 func enabledTopics(c *config.Config) int {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
@@ -299,9 +292,4 @@ func topicMatchesPattern(topic, pattern string) bool {
 		}
 	}
 	return true
-}
-
-func (r *Registry) ValidateTopic(topic string) error {
-	_, _, err := TopicStream(r.cfg, strings.TrimSpace(topic))
-	return err
 }

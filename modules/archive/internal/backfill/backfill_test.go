@@ -32,10 +32,9 @@ func TestRowsToPatches(t *testing.T) {
 			DataTime: "2026-01-02T03:04:05Z",
 		},
 		Attributes: map[string]string{"source": "live"},
-		Columns: []*storagepb.ColumnValue{{
-			ColumnName: "close",
-			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			Value:      &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1.25}},
+		Fields: []*storagepb.FieldValue{{
+			FieldId: "close",
+			Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1.25}},
 		}},
 	}}
 	patches, err := rowsToPatches(rows, writtenAt)

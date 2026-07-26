@@ -18,7 +18,7 @@ func TestRowsToDataFrameOrdersByCandleBeginTime(t *testing.T) {
 	t0 := time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
 	rows := []*storagepb.TimeSeriesRow{
-		klineRow(t1, map[string]*storagepb.ColumnValue{
+		klineRow(t1, map[string]*storagepb.FieldValue{
 			"open":         doubleField("open", 10),
 			"high":         doubleField("high", 11),
 			"low":          doubleField("low", 9),
@@ -27,7 +27,7 @@ func TestRowsToDataFrameOrdersByCandleBeginTime(t *testing.T) {
 			"quote_volume": doubleField("quote_volume", 1000),
 			"trade_num":    intField("trade_num", 7),
 		}),
-		klineRow(t0, map[string]*storagepb.ColumnValue{
+		klineRow(t0, map[string]*storagepb.FieldValue{
 			"open":         doubleField("open", 1),
 			"high":         doubleField("high", 2),
 			"low":          doubleField("low", 0.5),
@@ -80,37 +80,35 @@ func TestWriteFactorPatchMapsTailAndOmitsNilValues(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d", len(rows))
 	}
-	if rows[0].GetKey().GetDataTime() != t1.Format(time.RFC3339) || len(rows[0].GetColumns()) != 0 {
+	if rows[0].GetKey().GetTimeSeries().GetDataTime() != t1.Format(time.RFC3339) || len(rows[0].GetFields()) != 0 {
 		t.Fatalf("nil row should preserve key and omit columns: %+v", rows[0])
 	}
-	if rows[1].GetKey().GetDataTime() != t2.Format(time.RFC3339) {
-		t.Fatalf("second row key = %s", rows[1].GetKey().GetDataTime())
+	if rows[1].GetKey().GetTimeSeries().GetDataTime() != t2.Format(time.RFC3339) {
+		t.Fatalf("second row key = %s", rows[1].GetKey().GetTimeSeries().GetDataTime())
 	}
-	if got := rows[1].GetColumns()[0].GetValue().GetDoubleValue(); got != 1.23 {
+	if got := rows[1].GetFields()[0].GetValue().GetDoubleValue(); got != 1.23 {
 		t.Fatalf("written value = %v", got)
 	}
 }
 
 func TestTypedValueToAnyCoversValueTypesAndFallbacks(t *testing.T) {
 	tests := []struct {
-		name string
-		col  *storagepb.ColumnValue
-		want any
+		name  string
+		value *storagepb.TypedValue
+		want  any
 	}{
-		{name: "nil column", col: nil, want: nil},
-		{name: "nil value", col: &storagepb.ColumnValue{}, want: nil},
-		{name: "int", col: intField("n", 7), want: int64(7)},
-		{name: "double", col: doubleField("n", 1.5), want: 1.5},
-		{name: "string", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "x"}}), want: "x"},
-		{name: "bool", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL, &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: true}}), want: true},
-		{name: "time", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: "2026-07-12T00:00:00Z"}}), want: "2026-07-12T00:00:00Z"},
-		{name: "json", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: `{"a":1}`}}), want: `{"a":1}`},
-		{name: "fallback string", col: columnValue(storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "fallback"}}), want: "fallback"},
+		{name: "nil value", value: nil, want: nil},
+		{name: "int", value: intField("n", 7).GetValue(), want: int64(7)},
+		{name: "double", value: doubleField("n", 1.5).GetValue(), want: 1.5},
+		{name: "string", value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "x"}}, want: "x"},
+		{name: "bool", value: &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: true}}, want: true},
+		{name: "time", value: &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: "2026-07-12T00:00:00Z"}}, want: "2026-07-12T00:00:00Z"},
+		{name: "json", value: &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: `{"a":1}`}}, want: `{"a":1}`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, typedValueToAny(tt.col))
+			assert.Equal(t, tt.want, typedValueToAny(tt.value))
 		})
 	}
 }
@@ -135,20 +133,20 @@ func TestValueForFrameRowAndAsFloat64CoverEdges(t *testing.T) {
 }
 
 type fakeAccessClient struct {
-	writeReqs []*storagepb.MergeTimeSeriesRowsReq
+	writeReqs []*storagepb.PrimaryUpsertFieldsReq
 }
 
 func (f *fakeAccessClient) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: successRet()}, nil
 }
 
-func (f *fakeAccessClient) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (f *fakeAccessClient) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writeReqs = append(f.writeReqs, req)
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: successRet()}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: successRet()}, nil
 }
 
-func klineRow(t time.Time, columns map[string]*storagepb.ColumnValue) *storagepb.TimeSeriesRow {
-	values := make([]*storagepb.ColumnValue, 0, len(columns))
+func klineRow(t time.Time, columns map[string]*storagepb.FieldValue) *storagepb.TimeSeriesRow {
+	values := make([]*storagepb.FieldValue, 0, len(columns))
 	for _, col := range columns {
 		values = append(values, col)
 	}
@@ -160,18 +158,10 @@ func klineRow(t time.Time, columns map[string]*storagepb.ColumnValue) *storagepb
 			Freq:      "1m",
 			DataTime:  t.Format(time.RFC3339),
 		},
-		Columns: values,
+		Fields: values,
 	}
 }
 
 func successRet() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}
-}
-
-func columnValue(valueType storagepb.FieldValueType, value *storagepb.TypedValue) *storagepb.ColumnValue {
-	return &storagepb.ColumnValue{
-		ColumnName: "n",
-		ValueType:  valueType,
-		Value:      value,
-	}
 }

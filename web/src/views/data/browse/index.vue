@@ -705,9 +705,8 @@ function openDetail(row: BrowseTableRow) {
 function rowToSyntheticRecord(row: BrowseTableRow): RecordRow {
   return {
     key: { space_id: "", dataset_id: "", record_id: row.key, version: row.version },
-    columns: Object.keys(row.values).map(name => ({
-      column_name: name,
-      value_type: "FIELD_VALUE_TYPE_STRING",
+    fields: Object.keys(row.values).map(name => ({
+      field_id: name,
       value: { string_value: row.values[name] }
     }))
   };

@@ -19,7 +19,7 @@ import (
 )
 
 type AccessClient interface {
-	MergeTimeSeriesRows(context.Context, *storagepb.MergeTimeSeriesRowsReq, ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
+	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 type MetadataClient interface {
@@ -217,37 +217,12 @@ type HistoryPoint struct {
 	MessageID  string
 }
 
-// HistorySelector carries the complete time-series identity needed by Storage
-// to resolve a fact key. Dimensions are part of the primary key, so callers
-// that have resolved a series from the catalog should pass them here rather
-// than relying on the subject hash alone.
 type HistorySelector struct {
-	SeriesID   string
-	Dimensions map[string]string
+	SeriesID string
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	cloned := make(map[string]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
-}
-
-// HistorySelectorForSeries converts a catalog row into an exact Storage key.
 func HistorySelectorForSeries(series MetricSeries) HistorySelector {
-	return HistorySelector{
-		SeriesID: series.SeriesID,
-		Dimensions: map[string]string{
-			"service_name": series.ServiceName,
-			"instance_id":  series.InstanceID,
-			"metric_name":  series.MetricName,
-			"metric_type":  series.MetricType,
-		},
-	}
+	return HistorySelector{SeriesID: series.SeriesID}
 }
 
 func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) error {
@@ -263,14 +238,14 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 		if end > len(samples) {
 			end = len(samples)
 		}
-		rows := make([]*storagepb.TimeSeriesRow, 0, end-start)
+		rows := make([]*storagepb.RowFieldUpsert, 0, end-start)
 		for _, sample := range samples[start:end] {
 			if sample.ObservedAt.IsZero() {
 				return errors.New("metric sample observed_at is required")
 			}
 			rows = append(rows, sampleRow(a.cfg, sample))
 		}
-		rsp, err := a.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{Rows: rows})
+		rsp, err := a.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{Rows: rows})
 		if err != nil {
 			return fmt.Errorf("write metrics history: %w", err)
 		}
@@ -280,32 +255,23 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 	}
 	return nil
 }
-func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{
-		Key:        &storagepb.TimeSeriesKey{SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID, SubjectId: s.SeriesID, Freq: cfg.Frequency, DataTime: s.ObservedAt.UTC().Format(time.RFC3339Nano)},
-		Attributes: map[string]string{"service_name": s.ServiceName, "instance_id": s.InstanceID, "metric_name": s.MetricName, "metric_type": s.MetricType},
-		Columns: []*storagepb.ColumnValue{
-			{ColumnName: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: s.Value}}},
-			{ColumnName: "labels_json", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: s.LabelsJSON}}},
-			{ColumnName: "producer_node_id", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: s.ProducerNodeID}}},
-			{ColumnName: "producer_version", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: s.ProducerVersion}}},
-			{ColumnName: "message_id", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: s.MessageID}}},
+func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.RowFieldUpsert {
+	return &storagepb.RowFieldUpsert{
+		Key: &storagepb.RowKey{
+			SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: s.SeriesID, Freq: cfg.Frequency, DataTime: s.ObservedAt.UTC().Format(time.RFC3339Nano)}},
+		},
+		Attributes: map[string]*storagepb.TypedValue{"service_name": metricStringValue(s.ServiceName), "instance_id": metricStringValue(s.InstanceID), "metric_name": metricStringValue(s.MetricName), "metric_type": metricStringValue(s.MetricType)},
+		Fields: []*storagepb.FieldValue{
+			{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: s.Value}}},
+			{FieldId: "labels_json", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: s.LabelsJSON}}},
+			{FieldId: "producer_node_id", Value: metricStringValue(s.ProducerNodeID)},
+			{FieldId: "producer_version", Value: metricStringValue(s.ProducerVersion)},
+			{FieldId: "message_id", Value: metricStringValue(s.MessageID)},
 		},
 	}
 }
 
-func (a *StorageAdapter) QueryHistory(ctx context.Context, seriesIDs []string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
-	selectors := make([]HistorySelector, 0, len(seriesIDs))
-	for _, id := range seriesIDs {
-		selectors = append(selectors, HistorySelector{SeriesID: id})
-	}
-	return a.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
-}
-
-// QueryHistorySelectors reads exact keys including dimensions. The legacy
-// QueryHistory method remains for callers that use subject-only datasets; new
-// metric dashboard/rule code should resolve MetricSeries first and use this
-// method.
 func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []HistorySelector, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
 	if a == nil || a.access == nil {
 		return nil, errors.New("metrics storage-primary client is not initialized")
@@ -353,14 +319,14 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		if t, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime()); err == nil {
 			p.ObservedAt = t
 		}
-		for _, col := range row.GetColumns() {
-			switch col.GetColumnName() {
+		for _, field := range row.GetFields() {
+			switch field.GetFieldId() {
 			case "value":
-				p.Value = col.GetValue().GetDoubleValue()
+				p.Value = field.GetValue().GetDoubleValue()
 			case "labels_json":
-				p.LabelsJSON = col.GetValue().GetJsonValue()
+				p.LabelsJSON = field.GetValue().GetJsonValue()
 			case "message_id":
-				p.MessageID = col.GetValue().GetStringValue()
+				p.MessageID = field.GetValue().GetStringValue()
 			}
 		}
 		out = append(out, p)
@@ -372,4 +338,8 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		return out[i].ObservedAt.Before(out[j].ObservedAt)
 	})
 	return out, nil
+}
+
+func metricStringValue(value string) *storagepb.TypedValue {
+	return &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}
 }

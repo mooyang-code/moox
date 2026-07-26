@@ -38,17 +38,6 @@ import DatasetBrowse from "@/views/data/browse/index.vue";
 
 defineOptions({ name: "CollectorDatasets" });
 
-const props = withDefaults(
-  defineProps<{
-    queryKey?: string;
-    routePath?: string;
-  }>(),
-  {
-    queryKey: "tab",
-    routePath: "/collector/datasets"
-  }
-);
-
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref(tabFromRoute());
@@ -59,19 +48,19 @@ const tabs = [
   { key: "browse", label: "查看数据" }
 ] as const;
 
-const normalizedQuery = computed(() => String(route.query[props.queryKey] || ""));
+const normalizedQuery = computed(() => String(route.query.datasetTab || ""));
 
 function tabFromRoute() {
-  return route.query[props.queryKey] === "browse" ? "browse" : "definitions";
+  return route.query.datasetTab === "browse" ? "browse" : "definitions";
 }
 
 function syncRoute(key: string | number) {
   const tab: CollectorDatasetTab = key === "browse" ? "browse" : "definitions";
   activeTab.value = tab;
   const query = { ...route.query };
-  if (tab === "browse") query[props.queryKey] = tab;
-  else delete query[props.queryKey];
-  void router.replace({ path: props.routePath, query });
+  if (tab === "browse") query.datasetTab = tab;
+  else delete query.datasetTab;
+  void router.replace({ path: "/collector/data-management", query });
 }
 
 watch(normalizedQuery, () => {

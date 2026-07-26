@@ -1,7 +1,6 @@
 package pebble
 
 import (
-	"bytes"
 	"fmt"
 	"time"
 
@@ -154,10 +153,6 @@ func decodePart(data []byte) (string, []byte, error) {
 	return "", nil, fmt.Errorf("invalid key component")
 }
 
-func isNamespaceKey(key []byte, namespace byte) bool {
-	return len(key) > 0 && key[0] == namespace
-}
-
 func nextPrefix(prefix []byte) []byte {
 	result := append([]byte(nil), prefix...)
 	for i := len(result) - 1; i >= 0; i-- {
@@ -168,5 +163,3 @@ func nextPrefix(prefix []byte) []byte {
 	}
 	return nil
 }
-
-func sameRowPrefix(a, b []byte) bool { return bytes.Equal(a, b) }

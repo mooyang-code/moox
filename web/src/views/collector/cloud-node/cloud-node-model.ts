@@ -11,26 +11,20 @@ export interface CloudNode {
   region: string;
   tag: string;
   ip_address: string;
-  version: string;
   package_id?: string;
   package_version?: string;
   running_version?: string;
   supported_workloads: string[] | string;
-  capacity: string;
-  current_load: string;
   metadata: string | Record<string, unknown>;
   status: string | number;
-  enabled: number;
   timeout_threshold: number;
   heartbeat_interval: number;
   probe_enabled: boolean;
   probe_url?: string;
   cls_topic_id?: string;
   last_heartbeat?: string;
-  created_at: string;
   create_time?: string;
   modify_time?: string;
-  updated_at: string;
 }
 
 export interface RegionInfo {
@@ -73,26 +67,20 @@ export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode
     region: String(item.region || ""),
     tag: String(item.tag || ""),
     ip_address: String(item.ip_address || ""),
-    version: String(item.version || item.package_version || item.running_version || ""),
     package_id: String(item.package_id || ""),
     package_version: String(item.package_version || ""),
     running_version: String(item.running_version || ""),
     supported_workloads: normalizeSupportedWorkloads(item.supported_workloads as string[] | string | undefined),
-    capacity: String(item.capacity || ""),
-    current_load: String(item.current_load || ""),
     metadata: (item.metadata as string | Record<string, unknown>) || "",
-    status: (item.status as string | number) || "offline",
-    enabled: Number(item.enabled ?? 1),
+    status: (item.status as string | number) || "NODE_STATUS_OFFLINE",
     timeout_threshold: Number(item.timeout_threshold || 0),
     heartbeat_interval: Number(item.heartbeat_interval || 0),
     probe_enabled: Boolean(item.probe_enabled ?? false),
     probe_url: String(item.probe_url || ""),
     cls_topic_id: String(item.cls_topic_id || ""),
     last_heartbeat: String(item.last_heartbeat || ""),
-    created_at: String(item.created_at || item.create_time || ""),
     create_time: String(item.create_time || ""),
-    modify_time: String(item.modify_time || ""),
-    updated_at: String(item.updated_at || item.modify_time || "")
+    modify_time: String(item.modify_time || "")
   }));
 }
 
@@ -149,17 +137,25 @@ export const getNodeTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
 
 export function getStatusColor(status: string | number) {
-  if (status === "online") return "green";
-  if (status === "offline") return "red";
-  if (status === "timeout") return "orange";
-  if (status === "abnormal") return "orangered";
-  return ({ 2: "green", 1: "red", 3: "orange", 4: "orangered" } as Record<number, string>)[Number(status)] || "gray";
+  return (
+    (
+      {
+        1: "red",
+        2: "green",
+        3: "orange",
+        4: "orangered",
+        NODE_STATUS_OFFLINE: "red",
+        NODE_STATUS_ONLINE: "green",
+        NODE_STATUS_TIMEOUT: "orange",
+        NODE_STATUS_ABNORMAL: "orangered"
+      } as Record<string, string>
+    )[String(status)] || "gray"
+  );
 }
 
 export function getStatusText(status: string | number) {
   if (typeof status === "string" && status) {
-    const legacy = ({ online: "在线", offline: "离线", timeout: "超时", abnormal: "异常" } as Record<string, string>)[status];
-    return legacy || NODE_STATUS_LABEL[status] || status;
+    return NODE_STATUS_LABEL[status] || status;
   }
   const key =
     (
@@ -185,9 +181,7 @@ export function getPackageTypeColor(value: number | string) {
         "3": "gray",
         PACKAGE_TYPE_COLLECTOR: "blue",
         PACKAGE_TYPE_FACTOR: "green",
-        PACKAGE_TYPE_CUSTOM: "gray",
-        data_collector: "blue",
-        factor_calculator: "green"
+        PACKAGE_TYPE_CUSTOM: "gray"
       } as Record<string, string>
     )[String(value)] || "gray"
   );

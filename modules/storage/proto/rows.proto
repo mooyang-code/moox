@@ -84,21 +84,17 @@ message RecordKey {
 message TimeSeriesRow {
   TimeSeriesKey key = 1;
   repeated FieldValue fields = 2;
-  // Deprecated compatibility projection for downstream archive/factor code.
-  repeated ColumnValue columns = 3;
-  map<string, string> attributes = 4;
+  map<string, string> attributes = 3;
 }
 
 message RecordRow {
   RecordKey key = 1;
   repeated FieldValue fields = 2;
-  repeated ColumnValue columns = 3;
-  map<string, string> attributes = 4;
+  map<string, string> attributes = 3;
 }
 
-// The read wrappers are retained only so independently deployed Archive/Factor
-// clients can migrate to PrimaryStore field reads. New writes use
-// RowFieldUpsert and never use these messages.
+// Range and version queries use row-shaped read contracts. Point reads use
+// PrimaryStore.ReadFields; all writes use RowFieldUpsert.
 message ReadTimeSeriesRowsReq {
   common.AuthInfo auth_info = 1;
   repeated TimeSeriesKey keys = 2;
@@ -116,29 +112,6 @@ message ReadTimeSeriesRowsRsp {
   repeated TimeSeriesRow rows = 2;
   common.PageResult page_result = 3;
   string next_page_token = 4;
-}
-
-message MergeTimeSeriesRowsReq {
-  common.AuthInfo auth_info = 1;
-  repeated TimeSeriesRow rows = 2;
-  // Source EventMessage ID used to make the DataNode write/outbox idempotent
-  // when the caller is redelivered after a successful write and failed ACK.
-  string source_event_id = 3;
-}
-
-message MergeTimeSeriesRowsRsp {
-  common.RetInfo ret_info = 1;
-  repeated string written_keys = 2;
-}
-
-message MergeRecordRowsReq {
-  common.AuthInfo auth_info = 1;
-  repeated RecordRow rows = 2;
-}
-
-message MergeRecordRowsRsp {
-  common.RetInfo ret_info = 1;
-  repeated RecordKey keys = 2;
 }
 
 message ReadRecordRowsReq {

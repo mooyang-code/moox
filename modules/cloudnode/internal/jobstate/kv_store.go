@@ -31,12 +31,12 @@ type Store interface {
 }
 
 type KVStore struct {
-	kv            jetstream.KeyValue
+	kv            jetstream.KVStore
 	clock         Clock
 	maxCASRetries int
 }
 
-func NewKVStore(kv jetstream.KeyValue, opts Options) *KVStore {
+func NewKVStore(kv jetstream.KVStore, opts Options) *KVStore {
 	retries := opts.MaxCASRetries
 	if retries <= 0 {
 		retries = 5
@@ -58,7 +58,7 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.kv.Create(JobKey(state.SpaceID, state.JobItemID), raw); err != nil {
+	if _, err := s.kv.Create(ctx, JobKey(state.SpaceID, state.JobItemID), raw); err != nil {
 		if !errors.Is(err, jetstream.ErrKVKeyExists) {
 			return nil, mapKVError(err)
 		}
@@ -96,15 +96,15 @@ func (s *KVStore) MarkEnqueueFailed(ctx context.Context, spaceID, jobItemID, mes
 	return err
 }
 
-func (s *KVStore) Get(_ context.Context, spaceID, jobItemID string) (*State, error) {
+func (s *KVStore) Get(ctx context.Context, spaceID, jobItemID string) (*State, error) {
 	if s == nil || s.kv == nil {
 		return nil, ErrInvalid
 	}
-	entry, err := s.kv.Get(JobKey(spaceID, jobItemID))
+	entry, err := s.kv.Get(ctx, JobKey(spaceID, jobItemID))
 	if err != nil {
 		return nil, mapKVError(err)
 	}
-	state, err := decodeState(entry.Value())
+	state, err := decodeState(entry.Value)
 	return &state, err
 }
 
@@ -140,8 +140,8 @@ func (s *KVStore) MarkReported(ctx context.Context, event ReportEvent) (*State, 
 	return &updated, changed, nil
 }
 
-func (s *KVStore) List(_ context.Context, req *pb.ListJobItemsReq) ([]*pb.JobItemDetail, *commonpb.PageResult, error) {
-	keys, err := s.kv.Keys()
+func (s *KVStore) List(ctx context.Context, req *pb.ListJobItemsReq) ([]*pb.JobItemDetail, *commonpb.PageResult, error) {
+	keys, err := s.kv.Keys(ctx)
 	if errors.Is(err, jetstream.ErrKVNoKeys) {
 		return nil, pageResult(req.GetPage(), 0), nil
 	}
@@ -150,11 +150,11 @@ func (s *KVStore) List(_ context.Context, req *pb.ListJobItemsReq) ([]*pb.JobIte
 	}
 	states := make([]State, 0, len(keys))
 	for _, key := range keys {
-		entry, getErr := s.kv.Get(key)
+		entry, getErr := s.kv.Get(ctx, key)
 		if getErr != nil {
 			continue
 		}
-		state, decodeErr := decodeState(entry.Value())
+		state, decodeErr := decodeState(entry.Value)
 		if decodeErr == nil && matchesListFilter(state, req) {
 			states = append(states, state)
 		}
@@ -176,16 +176,16 @@ func (s *KVStore) List(_ context.Context, req *pb.ListJobItemsReq) ([]*pb.JobIte
 	return out, pageResult(req.GetPage(), uint32(len(states))), nil
 }
 
-func (s *KVStore) withStateCAS(_ context.Context, key string, mutate func(State) (State, bool, error)) (State, bool, error) {
+func (s *KVStore) withStateCAS(ctx context.Context, key string, mutate func(State) (State, bool, error)) (State, bool, error) {
 	if s == nil || s.kv == nil {
 		return State{}, false, ErrInvalid
 	}
 	for i := 0; i < s.maxCASRetries; i++ {
-		entry, err := s.kv.Get(key)
+		entry, err := s.kv.Get(ctx, key)
 		if err != nil {
 			return State{}, false, mapKVError(err)
 		}
-		state, err := decodeState(entry.Value())
+		state, err := decodeState(entry.Value)
 		if err != nil {
 			return State{}, false, err
 		}
@@ -198,7 +198,7 @@ func (s *KVStore) withStateCAS(_ context.Context, key string, mutate func(State)
 		if err != nil {
 			return State{}, false, err
 		}
-		if _, err := s.kv.Update(key, raw, entry.Revision()); err == nil {
+		if _, err := s.kv.Update(ctx, key, raw, entry.Revision); err == nil {
 			return next, true, nil
 		} else if !errors.Is(err, jetstream.ErrKVKeyExists) {
 			return State{}, false, mapKVError(err)

@@ -96,16 +96,8 @@ func ProcessProbe(ctx context.Context, event model.CloudFunctionEvent) (*model.R
 	if event.ServiceGatewayTarget != "" {
 		log.DebugContextf(ctx, "[ProcessProbe] 更新 service gateway target %s", event.ServiceGatewayTarget)
 		runtimeapp.UpdateServiceGatewayTarget(event.ServiceGatewayTarget)
-		verifyIP, verifyPort := runtimeapp.GetServerInfo()
-		log.DebugContextf(ctx, "[ProcessProbe] 验证更新后的服务端地址: %s:%d", verifyIP, verifyPort)
-	} else if event.ServerIP != "" && event.ServerPort > 0 {
-		log.DebugContextf(ctx, "[ProcessProbe] 更新兼容服务端地址 %s:%d", event.ServerIP, event.ServerPort)
-		runtimeapp.UpdateServerInfo(event.ServerIP, event.ServerPort)
-		verifyIP, verifyPort := runtimeapp.GetServerInfo()
-		log.DebugContextf(ctx, "[ProcessProbe] 验证更新后的服务端地址: %s:%d", verifyIP, verifyPort)
 	} else {
-		log.WarnContextf(ctx, "[ProcessProbe] service gateway 信息缺失 ServiceGatewayTarget=%s ServerIP=%s ServerPort=%d",
-			event.ServiceGatewayTarget, event.ServerIP, event.ServerPort)
+		log.WarnContextf(ctx, "[ProcessProbe] service gateway target 缺失")
 	}
 
 	// 构建响应数据
@@ -441,7 +433,6 @@ func getTaskStatistics() model.TaskStatsInfo {
 // getHeartbeatInfo 获取心跳统计信息
 func getHeartbeatInfo(probeConfig *ProbeResponseConfig) model.HeartbeatInfo {
 	// 从全局配置获取服务器信息
-	serverIP, serverPort := runtimeapp.GetServerInfo()
 	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
 
 	return model.HeartbeatInfo{
@@ -450,8 +441,6 @@ func getHeartbeatInfo(probeConfig *ProbeResponseConfig) model.HeartbeatInfo {
 		ErrorCount:           probeConfig.ErrorCount,
 		Interval:             probeConfig.Interval,
 		ServiceGatewayTarget: serviceGatewayTarget,
-		ServerIP:             serverIP,
-		ServerPort:           serverPort,
 	}
 }
 

@@ -7,10 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gorilla/mux"
-	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
@@ -26,7 +24,6 @@ import (
 var (
 	gatewayHandleInstance *GatewayHandle
 	gatewayHandleOnce     sync.Once
-	gatewayStartedAt      = time.Now()
 )
 
 // GatewayHandle 网关处理器（保留单例以承载 HTTPRequestHandler）。
@@ -259,11 +256,6 @@ func canonicalAdminSegment(value string) string {
 			return r
 		}
 	}, strings.ToLower(strings.TrimSpace(value)))
-}
-
-// handleHealthCheck 处理健康检查请求
-func (hr *HTTPRouter) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	adminhealth.Handler(gatewayStartedAt).ServeHTTP(w, r)
 }
 
 // ============================================================================

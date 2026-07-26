@@ -199,7 +199,9 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | u
     }
     out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `%${value}%` }] });
   }
-  return out.length === 0 ? undefined : { groups: [{ conds: out, logical: "FILTER_LOGICAL_AND" }], group_logical: "FILTER_LOGICAL_AND" };
+  return out.length === 0
+    ? undefined
+    : { groups: [{ conds: out, logical: "FILTER_LOGICAL_AND" }], group_logical: "FILTER_LOGICAL_AND" };
 }
 
 export function klineSubjectIdFromFilters(filters: ViewFilterState[]) {

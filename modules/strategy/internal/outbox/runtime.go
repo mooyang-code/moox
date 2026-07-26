@@ -30,7 +30,6 @@ type Runtime struct {
 	cfg       RuntimeConfig
 	mu        sync.RWMutex
 	client    JetStreamClient
-	lastError error
 	cancel    context.CancelFunc
 	done      chan struct{}
 	started   bool
@@ -77,7 +76,6 @@ func (r *Runtime) run(ctx context.Context) {
 			r.dropClient(client)
 			connected, err := r.cfg.Connector(ctx)
 			if err != nil {
-				r.setError(err)
 				if !waitFor(ctx, r.cfg.ReconnectInterval) {
 					return
 				}
@@ -88,7 +86,6 @@ func (r *Runtime) run(ctx context.Context) {
 		}
 		if !r.isValidated() {
 			if err := r.cfg.Probe(ctx, client); err != nil {
-				r.setError(err)
 				r.dropClient(client)
 				if !waitFor(ctx, r.cfg.ReconnectInterval) {
 					return
@@ -99,8 +96,6 @@ func (r *Runtime) run(ctx context.Context) {
 		}
 		eventPublisher := client.EventPublisher()
 		if eventPublisher == nil {
-			err := errors.New("strategy EventBus event publisher is unavailable")
-			r.setError(err)
 			r.dropClient(client)
 			if !waitFor(ctx, r.cfg.ReconnectInterval) {
 				return
@@ -109,14 +104,12 @@ func (r *Runtime) run(ctx context.Context) {
 		}
 		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Publisher: eventPublisher, InstanceID: r.cfg.InstanceID}}
 		if err := relay.PublishPending(ctx, r.cfg.BatchSize); err != nil {
-			r.setError(err)
 			r.dropClient(client)
 			if !waitFor(ctx, r.cfg.ReconnectInterval) {
 				return
 			}
 			continue
 		}
-		r.setError(nil)
 		if !waitFor(ctx, r.cfg.RelayInterval) {
 			return
 		}
@@ -126,12 +119,6 @@ func (r *Runtime) run(ctx context.Context) {
 func (r *Runtime) Connected() bool {
 	client := r.currentClient()
 	return client != nil && client.Ready() && r.isValidated()
-}
-
-func (r *Runtime) LastError() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.lastError
 }
 
 func (r *Runtime) Close() error {
@@ -205,12 +192,6 @@ func (r *Runtime) isValidated() bool {
 func (r *Runtime) setValidated(validated bool) {
 	r.mu.Lock()
 	r.validated = validated
-	r.mu.Unlock()
-}
-
-func (r *Runtime) setError(err error) {
-	r.mu.Lock()
-	r.lastError = err
 	r.mu.Unlock()
 }
 

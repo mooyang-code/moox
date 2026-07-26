@@ -3,11 +3,9 @@ package primarystore
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 )
 
 // These RPC handlers preserve the public PrimaryStore row contract while
@@ -36,7 +34,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	}
 	rows := make([]*pb.TimeSeriesRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
-		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields(), Columns: columnsFromFields(row.GetFields())})
+		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
 }
@@ -65,7 +63,7 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	}
 	rows := make([]*pb.RecordRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
-		rows = append(rows, &pb.RecordRow{Key: recordKeyFromRowKey(row.GetKey()), Fields: row.GetFields(), Columns: columnsFromFields(row.GetFields())})
+		rows = append(rows, &pb.RecordRow{Key: recordKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
 }
@@ -91,9 +89,7 @@ func (s *Service) readTimeSeriesView(ctx context.Context, req *pb.ReadTimeSeries
 		if row == nil {
 			continue
 		}
-		clone := proto.Clone(row).(*pb.TimeSeriesRow)
-		clone.Columns = columnsFromFields(clone.GetFields())
-		rows = append(rows, clone)
+		rows = append(rows, row)
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult()}, nil
 }
@@ -119,26 +115,9 @@ func (s *Service) readRecordView(ctx context.Context, req *pb.ReadRecordRowsReq)
 		if row == nil {
 			continue
 		}
-		clone := proto.Clone(row).(*pb.RecordRow)
-		clone.Columns = columnsFromFields(clone.GetFields())
-		rows = append(rows, clone)
+		rows = append(rows, row)
 	}
 	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows, PageResult: rsp.GetPageResult()}, nil
-}
-
-func columnsFromFields(fields []*pb.FieldValue) []*pb.ColumnValue {
-	out := make([]*pb.ColumnValue, 0, len(fields))
-	for _, field := range fields {
-		if field == nil {
-			continue
-		}
-		name := field.GetFieldId()
-		if index := strings.LastIndexByte(name, '.'); index >= 0 {
-			name = name[index+1:]
-		}
-		out = append(out, &pb.ColumnValue{ColumnName: name, Value: field.GetValue()})
-	}
-	return out
 }
 
 func timeSeriesDataset(keys []*pb.TimeSeriesKey) (string, string, error) {
@@ -178,4 +157,19 @@ func timeSeriesKeyFromRowKey(key *pb.RowKey) *pb.TimeSeriesKey {
 		return nil
 	}
 	return &pb.TimeSeriesKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime()}
+}
+
+func timeSeriesRowKey(key *pb.TimeSeriesKey) *pb.RowKey {
+	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime()}}}
+}
+
+func recordRowKey(key *pb.RecordKey) *pb.RowKey {
+	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: key.GetRecordId(), Version: key.GetVersion()}}}
+}
+
+func recordKeyFromRowKey(key *pb.RowKey) *pb.RecordKey {
+	if key == nil || key.GetRecord() == nil {
+		return nil
+	}
+	return &pb.RecordKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), RecordId: key.GetRecord().GetRecordId(), Version: key.GetRecord().GetVersion()}
 }

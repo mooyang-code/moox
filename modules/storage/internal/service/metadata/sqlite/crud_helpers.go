@@ -42,13 +42,6 @@ var ErrViewIndexBuildConflict = errors.New("view index build conflict")
 
 const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
-func buildLeaseTTL(seconds uint32) time.Duration {
-	if seconds == 0 {
-		seconds = 90
-	}
-	return time.Duration(seconds) * time.Second
-}
-
 func requireChangedRow(result sql.Result) error {
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -210,30 +203,6 @@ func marshalJSON(v any) (string, error) {
 	return string(data), nil
 }
 
-func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
-	pageNo := uint32(1)
-	size := uint32(1000)
-	if page != nil {
-		if page.GetPage() > 0 {
-			pageNo = page.GetPage()
-		}
-		if page.GetSize() > 0 {
-			size = page.GetSize()
-		}
-	}
-	offset64 := uint64(pageNo-1) * uint64(size)
-	maxInt := int(^uint(0) >> 1)
-	start := int(offset64)
-	if offset64 > uint64(maxInt) || start > len(items) {
-		start = len(items)
-	}
-	end := start + int(size)
-	if end > len(items) {
-		end = len(items)
-	}
-	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(items)), HasMore: end < len(items)}, nil
-}
-
 func defaultStatus(status string) string {
 	if status == "" {
 		return "active"
@@ -306,23 +275,6 @@ func datasetOriginSQL(origin pb.DatasetColumnOriginType) string {
 	default:
 		return "field"
 	}
-}
-
-func stringSet(values []string) map[string]bool {
-	out := make(map[string]bool, len(values))
-	for _, value := range values {
-		out[value] = true
-	}
-	return out
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func mapsEqual(left map[string]string, right map[string]string) bool {

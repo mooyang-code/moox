@@ -9,11 +9,11 @@ import {
 } from "./cloud-node-model";
 
 describe("cloud node model", () => {
-  it("normalizes legacy node payloads without sharing mutable workload arrays", () => {
+  it("normalizes canonical node payloads without sharing mutable workload arrays", () => {
     const workloads = ["kline"];
     const [node] = normalizeCloudNodes([{ node_id: "n1", package_version: "v2", supported_workloads: workloads }]);
-    expect(node.version).toBe("v2");
-    expect(node.status).toBe("offline");
+    expect(node.package_version).toBe("v2");
+    expect(node.status).toBe("NODE_STATUS_OFFLINE");
     expect(node.supported_workloads).toEqual(["kline"]);
     expect(node.supported_workloads).not.toBe(workloads);
   });
@@ -33,5 +33,6 @@ describe("cloud node model", () => {
     expect(status.batch_change_status).toBe(BatchChangeStatus.PARTIAL);
     expect(status.total_count).toBe(3);
     expect(getStatusText(2)).toBe("在线");
+    expect(getStatusText("online")).toBe("online");
   });
 });

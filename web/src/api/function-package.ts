@@ -93,24 +93,19 @@ export const PACKAGE_TYPE_OPTIONS = [
   { label: "自定义", value: 3 }
 ];
 
-export const LEGACY_PACKAGE_TYPE: Record<string, number> = {
-  data_collector: 1,
-  factor_calculator: 2,
-  collector: 1,
-  factor: 2,
-  custom: 3
+const PACKAGE_TYPE_VALUE: Record<PackageType, number> = {
+  PACKAGE_TYPE_UNSPECIFIED: 0,
+  PACKAGE_TYPE_COLLECTOR: 1,
+  PACKAGE_TYPE_FACTOR: 2,
+  PACKAGE_TYPE_CUSTOM: 3
 };
 
 export const resolvePackageType = (value?: string | number): number => {
   if (typeof value === "number" && value > 0) {
     return value;
   }
-  if (typeof value === "string" && value) {
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric) && numeric > 0) {
-      return numeric;
-    }
-    return LEGACY_PACKAGE_TYPE[value] ?? 1;
+  if (typeof value === "string" && value in PACKAGE_TYPE_VALUE) {
+    return PACKAGE_TYPE_VALUE[value as PackageType] || 1;
   }
   return 1;
 };

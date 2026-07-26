@@ -20,7 +20,6 @@ export default {
   },
   menu: {
     ["home"]: "home",
-    ["data-overview"]: "data overview",
     ["trading"]: "trading",
     ["data-assets"]: "data assets",
     ["data-modeling"]: "data modeling",
@@ -31,7 +30,6 @@ export default {
     ["data-fields"]: "fields",
     ["data-browse"]: "data browse",
     ["data-import"]: "data import",
-    ["data-factors"]: "factor dictionary",
     ["factor-compute"]: "factor compute",
     ["factor-definitions"]: "factor definitions",
     ["factor-bindings"]: "bindings",

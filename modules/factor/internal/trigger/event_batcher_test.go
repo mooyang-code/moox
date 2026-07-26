@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func TestEventBatcherDropsNonBoundAndResultDatasets(t *testing.T) {
 	d.Ingest(event("crypto", "unbound_kline", "BTC-USDT", "1m", now), now)
 	d.Ingest(event("crypto", "binance_spot_factor", "BTC-USDT", "1m", now), now)
 
-	if tasks := d.Flush(now.Add(3 * time.Second)); len(tasks) != 0 {
+	if tasks := flushPending(t, d, now.Add(3*time.Second)); len(tasks) != 0 {
 		t.Fatalf("tasks = %+v", tasks)
 	}
 }
@@ -45,7 +46,7 @@ func TestEventBatcherKeepsCompleteScopeSeparate(t *testing.T) {
 	d.Ingest(event("crypto", "source-a", "BTC-USDT", "1m", now), now)
 	d.Ingest(event("equities", "source-b", "BTC-USDT", "1m", now), now)
 
-	tasks := d.Flush(now.Add(3 * time.Second))
+	tasks := flushPending(t, d, now.Add(3*time.Second))
 	if len(tasks) != 3 {
 		t.Fatalf("tasks=%+v, want three complete scopes", tasks)
 	}
@@ -72,12 +73,12 @@ func TestEventBatcherSchedulesOlderBarWithoutExtraLateState(t *testing.T) {
 	start := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")})
 	batcher.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", start), start)
-	if tasks := batcher.Flush(start.Add(time.Second)); len(tasks) != 1 {
+	if tasks := flushPending(t, batcher, start.Add(time.Second)); len(tasks) != 1 {
 		t.Fatalf("first tasks=%+v", tasks)
 	}
 	older := start.Add(-time.Minute)
 	batcher.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", older), start.Add(2*time.Second))
-	tasks := batcher.Flush(start.Add(3 * time.Second))
+	tasks := flushPending(t, batcher, start.Add(3*time.Second))
 	if len(tasks) != 1 || !tasks[0].BarTime.Equal(older) {
 		t.Fatalf("older-bar tasks=%+v", tasks)
 	}
@@ -92,7 +93,7 @@ func TestEventBatcherHonorsIncludeModeSubjects(t *testing.T) {
 	d.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now), now)
 	d.Ingest(event("crypto", "binance_spot_kline", "ETH-USDT", "1m", now), now)
 
-	tasks := d.Flush(now.Add(3 * time.Second))
+	tasks := flushPending(t, d, now.Add(3*time.Second))
 	if len(tasks) != 1 || tasks[0].SubjectID != "ETH-USDT" {
 		t.Fatalf("tasks = %+v", tasks)
 	}
@@ -108,13 +109,22 @@ func TestEventBatcherUsesFixedWindowFromFirstEvent(t *testing.T) {
 	d.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now), now)
 	d.Ingest(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now.Add(time.Minute)), now.Add(window-time.Millisecond))
 
-	tasks := d.Flush(now.Add(window))
+	tasks := flushPending(t, d, now.Add(window))
 	if len(tasks) != 1 {
 		t.Fatalf("tasks len = %d, want 1", len(tasks))
 	}
 	if tasks[0].BarTime != now.Add(time.Minute) {
 		t.Fatalf("bar time = %s", tasks[0].BarTime)
 	}
+}
+
+func flushPending(t *testing.T, batcher *EventBatcher, now time.Time) []Task {
+	t.Helper()
+	tasks, err := batcher.FlushPending(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tasks
 }
 
 func binding(factorID string, sourceDataset string, subjectMode string, subjectsJSON string) domain.FactorBinding {

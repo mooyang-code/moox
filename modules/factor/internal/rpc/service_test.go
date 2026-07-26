@@ -322,10 +322,11 @@ func (f *fakeRPCScheduler) Status() scheduler.Status {
 	return scheduler.Status{QueueDepth: len(f.tasks)}
 }
 
-func (f *fakeRPCScheduler) Enqueue(_ context.Context, task scheduler.Task) {
+func (f *fakeRPCScheduler) EnqueueChecked(_ context.Context, task scheduler.Task) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tasks = append(f.tasks, task)
+	return nil
 }
 
 func (f *fakeRPCScheduler) Drain(ctx context.Context) error {
@@ -380,10 +381,11 @@ func (s *externallyDrainedScheduler) Status() scheduler.Status {
 	return scheduler.Status{QueueDepth: len(s.tasks)}
 }
 
-func (s *externallyDrainedScheduler) Enqueue(_ context.Context, task scheduler.Task) {
+func (s *externallyDrainedScheduler) EnqueueChecked(_ context.Context, task scheduler.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tasks = append(s.tasks, task)
+	return nil
 }
 
 func (s *externallyDrainedScheduler) Drain(context.Context) error {

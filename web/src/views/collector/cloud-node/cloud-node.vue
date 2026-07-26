@@ -566,12 +566,6 @@
           <a-descriptions-item label="代码包版本">
             {{ selectedNodeDetail.package_version || "-" }}
           </a-descriptions-item>
-          <a-descriptions-item label="容量">
-            {{ selectedNodeDetail.capacity || "-" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="当前负载">
-            {{ selectedNodeDetail.current_load || "-" }}
-          </a-descriptions-item>
           <a-descriptions-item label="状态">
             <a-tag bordered size="small" :color="getStatusColor(selectedNodeDetail.status)">
               {{ getStatusText(selectedNodeDetail.status) }}
@@ -1159,8 +1153,6 @@ const buildCreateNodeBatchChange = (region: string, index: number) => ({
     package_id: batchAddForm.packageId,
     config: optionalRecord(batchAddForm.config),
     environment: optionalRecord(batchAddForm.environment),
-    version: "1.0.0",
-    capacity: "100",
     metadata: JSON.stringify({ env: "prod", index }),
     // 新增心跳配置字段
     timeout_threshold: batchAddForm.timeoutThreshold,

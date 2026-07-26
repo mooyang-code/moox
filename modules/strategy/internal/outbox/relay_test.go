@@ -49,7 +49,7 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher := &recordingPublisher{}
-	relay := &Relay{Store: repo, Publisher: publisher, Now: func() time.Time { return time.Unix(100, 0).UTC() }}
+	relay := &Relay{Store: repo, Publisher: publisher}
 	if err := relay.PublishPending(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}

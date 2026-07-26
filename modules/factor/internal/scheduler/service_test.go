@@ -31,8 +31,8 @@ func TestQueueSupersedesPendingTaskByNewerBarTime(t *testing.T) {
 	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, &fakeExecutor{})
 	t0 := time.Date(2026, 7, 6, 9, 14, 0, 0, time.UTC)
 
-	svc.Enqueue(ctx, taskAt(t0))
-	svc.Enqueue(ctx, taskAt(t0.Add(time.Minute)))
+	svc.EnqueueChecked(ctx, taskAt(t0))
+	svc.EnqueueChecked(ctx, taskAt(t0.Add(time.Minute)))
 	if err := svc.Drain(ctx); err != nil {
 		t.Fatalf("Drain() error = %v", err)
 	}
@@ -82,8 +82,8 @@ func TestQueueKeepsDifferentTargetDatasetsSeparate(t *testing.T) {
 	first := taskAt(t0)
 	second := taskAt(t0.Add(time.Minute))
 	second.TargetDataset = "binance_spot_volume_factor"
-	svc.Enqueue(ctx, first)
-	svc.Enqueue(ctx, second)
+	svc.EnqueueChecked(ctx, first)
+	svc.EnqueueChecked(ctx, second)
 	if err := svc.Drain(ctx); err != nil {
 		t.Fatalf("Drain() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRetryableErrorsRetryAtMostMaxRetry(t *testing.T) {
 	logs := captureRunLogs(t)
 	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 
-	svc.Enqueue(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
+	svc.EnqueueChecked(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
 	if err := svc.Drain(ctx); err == nil {
 		t.Fatal("Drain() error = nil, want failed task error")
 	}
@@ -122,11 +122,11 @@ func TestNonRetryableErrorRecordsFailureAndNextTaskContinues(t *testing.T) {
 	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
 	t0 := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 
-	svc.Enqueue(ctx, taskAt(t0))
+	svc.EnqueueChecked(ctx, taskAt(t0))
 	if err := svc.Drain(ctx); err == nil {
 		t.Fatal("Drain(first) error = nil, want failed task error")
 	}
-	svc.Enqueue(ctx, taskAt(t0.Add(time.Minute)))
+	svc.EnqueueChecked(ctx, taskAt(t0.Add(time.Minute)))
 	if err := svc.Drain(ctx); err != nil {
 		t.Fatalf("Drain(second) error = %v", err)
 	}
@@ -152,8 +152,8 @@ func TestDrainStopsBeforeNextTaskWhenContextCancelled(t *testing.T) {
 	first := taskAt(t0)
 	second := taskAt(t0.Add(time.Minute))
 	second.TargetDataset = "binance_spot_volume_factor"
-	svc.Enqueue(ctx, first)
-	svc.Enqueue(ctx, second)
+	svc.EnqueueChecked(ctx, first)
+	svc.EnqueueChecked(ctx, second)
 
 	if err := svc.Drain(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Drain() error = %v, want context.Canceled", err)
@@ -176,7 +176,7 @@ func TestConcurrentDrainWaitRespectsContext(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	svc := NewService(Config{Workers: 1, MaxRetry: 3}, &fakeStorage{}, exec)
-	svc.Enqueue(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
+	svc.EnqueueChecked(ctx, taskAt(time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)))
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -313,7 +313,7 @@ func TestSchedulerLoadDrainsSyntheticEventStorm(t *testing.T) {
 		task.TaskID = fmt.Sprintf("task-%d", i)
 		task.SubjectID = symbol
 		task.Factors = []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Params: []int{20}, WritebackBars: 1}}
-		svc.Enqueue(ctx, task)
+		svc.EnqueueChecked(ctx, task)
 	}
 	started := time.Now()
 	if err := svc.Drain(ctx); err != nil {

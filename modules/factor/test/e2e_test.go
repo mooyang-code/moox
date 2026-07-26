@@ -34,7 +34,7 @@ func TestFactorSchedulerRunsPythonFactor(t *testing.T) {
 	}
 	defer s.Stop()
 	done := make(chan scheduler.TaskResult, 1)
-	s.Enqueue(context.Background(), scheduler.Task{FactorTask: engine.FactorTask{TaskID: "e2e-factor", Kind: "timeseries", SpaceID: "s", SourceDataset: "kline", TargetDataset: "factor", SubjectID: "BTC-USDT", Freq: "1m", BarTime: time.Now().UTC(), LookbackBars: 2, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", SourcePath: filepath.Join(root, "factors", "Bias.py"), Params: []int{2}, WritebackBars: 1}}}, Completion: done})
+	s.EnqueueChecked(context.Background(), scheduler.Task{FactorTask: engine.FactorTask{TaskID: "e2e-factor", Kind: "timeseries", SpaceID: "s", SourceDataset: "kline", TargetDataset: "factor", SubjectID: "BTC-USDT", Freq: "1m", BarTime: time.Now().UTC(), LookbackBars: 2, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", SourcePath: filepath.Join(root, "factors", "Bias.py"), Params: []int{2}, WritebackBars: 1}}}, Completion: done})
 	if err := s.WaitIdle(context.Background()); err != nil {
 		t.Fatal(err)
 	}

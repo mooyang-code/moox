@@ -458,19 +458,6 @@ func validateStorageSubtreeStrict(raw []byte, config interface{}) error {
 	return yaml.UnmarshalStrict(subtree, config)
 }
 
-// LoadConfigStrict rejects unknown keys for business configuration files.
-func (c *ConfigLoader) LoadConfigStrict(filename string, config interface{}) error {
-	configPath := filepath.Join(c.baseDir, filename)
-	yamlFile, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("读取配置文件失败 %s: %w", configPath, err)
-	}
-	if err := yaml.UnmarshalStrict(yamlFile, config); err != nil {
-		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
-	}
-	return nil
-}
-
 // LoadConfigWithDefaults 加载配置并应用默认值
 func (c *ConfigLoader) LoadConfigWithDefaults(filename string, config interface{}, defaultsFunc func()) error {
 	err := c.LoadConfig(filename, config)

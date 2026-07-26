@@ -14,9 +14,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-type fakeStorage struct{ rows []*storagepb.TimeSeriesRow }
+type fakeStorage struct{ rows []*storagepb.RowFieldUpsert }
 
-func (f *fakeStorage) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (f *fakeStorage) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	for _, incoming := range req.GetRows() {
 		replaced := false
 		for i, existing := range f.rows {
@@ -30,14 +30,25 @@ func (f *fakeStorage) MergeTimeSeriesRows(_ context.Context, req *storagepb.Merg
 			f.rows = append(f.rows, incoming)
 		}
 	}
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeStorage) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	dataset := req.GetKeys()[0].GetDatasetId()
 	rows := make([]*storagepb.TimeSeriesRow, 0)
 	for _, row := range f.rows {
 		if row.GetKey().GetDatasetId() == dataset {
-			rows = append(rows, row)
+			key := row.GetKey()
+			attributes := make(map[string]string, len(row.GetAttributes()))
+			for name, value := range row.GetAttributes() {
+				attributes[name] = value.GetStringValue()
+			}
+			rows = append(rows, &storagepb.TimeSeriesRow{
+				Key: &storagepb.TimeSeriesKey{
+					SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+					SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(),
+				},
+				Fields: row.GetFields(), Attributes: attributes,
+			})
 		}
 	}
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: rows}, nil

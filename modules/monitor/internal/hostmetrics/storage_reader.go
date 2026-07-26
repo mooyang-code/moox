@@ -155,10 +155,10 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 }
 
 func mergeRow(snapshot *hostmetricpb.HostSnapshot, dataset string, cfg monconfig.HostStorageConfig, row *storagepb.TimeSeriesRow) error {
-	values := make(map[string]*storagepb.TypedValue, len(row.GetColumns()))
-	for _, column := range row.GetColumns() {
-		if column != nil {
-			values[column.GetColumnName()] = column.GetValue()
+	values := make(map[string]*storagepb.TypedValue, len(row.GetFields()))
+	for _, field := range row.GetFields() {
+		if field != nil {
+			values[field.GetFieldId()] = field.GetValue()
 		}
 	}
 	getInt := func(name string) uint64 { return uint64(values[name].GetIntValue()) }

@@ -125,17 +125,3 @@ func reserveTestPort(t *testing.T) int {
 	}
 	return port
 }
-
-func startTestServerAt(t *testing.T, port int, storeDir string) *natsserver.Server {
-	t.Helper()
-	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: storeDir, NoLog: true, NoSigs: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go srv.Start()
-	if !srv.ReadyForConnections(5 * time.Second) {
-		srv.Shutdown()
-		t.Fatal("nats server not ready")
-	}
-	return srv
-}

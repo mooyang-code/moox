@@ -18,10 +18,8 @@ type Input struct {
 // Snapshot is an immutable point-in-time input. Data returns a detached copy
 // so a strategy cannot mutate data reused by another binding.
 type Snapshot struct {
-	data     []map[string]any
-	revision string
-	cutoff   string
-	hash     string
+	data []map[string]any
+	hash string
 }
 
 func Capture(in Input) (Snapshot, error) {
@@ -37,16 +35,14 @@ func Capture(in Input) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	h := sha256.Sum256(b)
-	return Snapshot{data: data, revision: in.Revision, cutoff: in.Cutoff, hash: hex.EncodeToString(h[:])}, nil
+	return Snapshot{data: data, hash: hex.EncodeToString(h[:])}, nil
 }
 
 func (s Snapshot) Data() []map[string]any {
 	data, _ := cloneRows(s.data)
 	return data
 }
-func (s Snapshot) Revision() string { return s.revision }
-func (s Snapshot) Cutoff() string   { return s.cutoff }
-func (s Snapshot) Hash() string     { return s.hash }
+func (s Snapshot) Hash() string { return s.hash }
 
 func Normalize(in Input) ([]map[string]any, string, error) {
 	s, err := Capture(in)

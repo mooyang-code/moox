@@ -102,9 +102,9 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	startHostStorageGate(ctx, &disabled, rt, &hostmetrics.StorageGate{})
 
 	startHostMetricsConsumer(ctx, nil, rt, nil)
-	startHostMetricsConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil))
+	startHostMetricsConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil, nil))
 	cfg.Metrics.Enabled = false
-	startHostMetricsConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil))
+	startHostMetricsConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil, nil))
 	cfg.Metrics.Enabled = true
 
 	startMetricsConsumer(ctx, nil, rt, nil)

@@ -5,7 +5,6 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 )
@@ -286,8 +285,4 @@ func canonicalJSON(raw string) string {
 		return raw
 	}
 	return string(b)
-}
-
-func sortedSeries(rows []MetricSeries) {
-	sort.Slice(rows, func(i, j int) bool { return rows[i].SeriesID < rows[j].SeriesID })
 }

@@ -25,7 +25,7 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 		{method: "CheckDatasetActivation", service: "storage-primary", allowed: true},
 		{method: "ActivateDataset", service: "storage-primary", allowed: true},
 		{method: "RebindDatasetDataNode", service: "storage-primary", allowed: true},
-		{method: "MergeRecordRows", service: "storage-primary", allowed: true},
+		{method: "UpsertFields", service: "storage-primary", allowed: true},
 		{method: "SearchRecordRows", service: "storage-view", allowed: true},
 		{method: "ClaimViewIndexBuild", allowed: false},
 		{method: "ScanRecordRows", allowed: false},

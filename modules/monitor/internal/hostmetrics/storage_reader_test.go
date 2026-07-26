@@ -49,9 +49,9 @@ func TestStorageReaderPaginatesAndRebuildsEntities(t *testing.T) {
 	cfg := monconfig.Default().Metrics.HostStorage
 	at := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
 	fake := &readerAccessFake{rows: []*storagepb.TimeSeriesRow{
-		resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100}}, "agent-1", "m1"),
-		filesystemRow(SpaceID, cfg.FilesystemDatasetID, "1m", at, &hostmetricpb.FilesystemMetric{Device: "sda1", Mountpoint: "/", UsagePercent: 70}, "agent-1", "m1"),
-		filesystemRow(SpaceID, cfg.FilesystemDatasetID, "1m", at, &hostmetricpb.FilesystemMetric{Device: "sdb1", Mountpoint: "/data", UsagePercent: 20}, "agent-1", "m1"),
+		readRow(resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100}}, "agent-1", "m1")),
+		readRow(filesystemRow(SpaceID, cfg.FilesystemDatasetID, "1m", at, &hostmetricpb.FilesystemMetric{Device: "sda1", Mountpoint: "/", UsagePercent: 70}, "agent-1", "m1")),
+		readRow(filesystemRow(SpaceID, cfg.FilesystemDatasetID, "1m", at, &hostmetricpb.FilesystemMetric{Device: "sdb1", Mountpoint: "/data", UsagePercent: 20}, "agent-1", "m1")),
 	}}
 	reader := NewStorageReader(fake, cfg)
 	points, err := reader.History(context.Background(), "agent-1", time.Unix(0, 0), time.Now().UTC(), 10)
@@ -65,5 +65,20 @@ func TestStorageReaderPaginatesAndRebuildsEntities(t *testing.T) {
 	end, _ := time.Parse(time.RFC3339Nano, fake.lastEnd)
 	if end.Sub(start) > 7*24*time.Hour {
 		t.Fatalf("reader exceeded seven-day bound: %s to %s", fake.lastStart, fake.lastEnd)
+	}
+}
+
+func readRow(row *storagepb.RowFieldUpsert) *storagepb.TimeSeriesRow {
+	key := row.GetKey()
+	attributes := make(map[string]string, len(row.GetAttributes()))
+	for name, value := range row.GetAttributes() {
+		attributes[name] = value.GetStringValue()
+	}
+	return &storagepb.TimeSeriesRow{
+		Key: &storagepb.TimeSeriesKey{
+			SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+			SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(),
+		},
+		Fields: row.GetFields(), Attributes: attributes,
 	}
 }

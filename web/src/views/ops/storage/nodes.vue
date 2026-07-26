@@ -272,7 +272,10 @@ async function remove(record: DataNodeListItem) {
 }
 
 function openDataset(summary: DatasetSummary) {
-  void router.push({ path: "/data/datasets", query: { space_id: summary.space_id, dataset_id: summary.dataset_id } });
+  void router.push({
+    path: "/collector/data-management",
+    query: { tab: "datasets", space_id: summary.space_id, dataset_id: summary.dataset_id }
+  });
 }
 
 function onPageChange(page: number) {

@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -41,12 +40,6 @@ func InactiveViewIndexID(spaceID, viewID, active string) string {
 		return ViewIndexID(spaceID, viewID, SlotB)
 	}
 	return ViewIndexID(spaceID, viewID, SlotA)
-}
-func DuckDBPath(root string, ref ViewIndexRef) string {
-	return filepath.Join(root, "duckdb", ViewIndexID(ref.SpaceID, ref.ViewID, ref.Slot)+".duckdb")
-}
-func BlevePath(root string, ref ViewIndexRef) string {
-	return filepath.Join(root, "bleve", ViewIndexID(ref.SpaceID, ref.ViewID, ref.Slot))
 }
 func encode(v string) string { return hex.EncodeToString([]byte(v)) }
 func decode(v string) string {

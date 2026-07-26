@@ -104,42 +104,20 @@ func decodeRow(event *sharedpb.DatasetRowsUpserted, row *sharedpb.RowUpsert, wri
 	}
 	columns := make(map[string]domain.Scalar, len(row.GetFields()))
 	for _, field := range row.GetFields() {
-		column := &localpb.ColumnValue{ColumnName: field.GetFieldId(), Value: toLocalTypedValue(field.GetValue()), ValueType: typedValueType(field.GetValue())}
-		if _, exists := columns[column.GetColumnName()]; exists {
-			return domain.RowPatch{}, fmt.Errorf("duplicate column %q", column.GetColumnName())
+		if _, exists := columns[field.GetFieldId()]; exists {
+			return domain.RowPatch{}, fmt.Errorf("duplicate field %q", field.GetFieldId())
 		}
-		scalar, err := domain.ScalarFromColumn(column)
+		scalar, err := domain.ScalarFromField(field.GetFieldId(), toLocalTypedValue(field.GetValue()))
 		if err != nil {
 			return domain.RowPatch{}, err
 		}
-		columns[column.GetColumnName()] = scalar
+		columns[field.GetFieldId()] = scalar
 	}
 	attributes := make(map[string]string, len(row.GetAttributes()))
 	for k, v := range row.GetAttributes() {
 		attributes[k] = typedValueString(v)
 	}
 	return domain.RowPatch{Partition: domain.PartitionKey{SpaceID: event.GetSpaceId(), DatasetID: event.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), Month: domain.MonthOf(dataTime)}, DataTime: dataTime, DimensionsJSON: dimensions, Attributes: attributes, WrittenAt: writtenAt, Columns: columns}, nil
-}
-
-func typedValueType(value *sharedpb.TypedValue) localpb.FieldValueType {
-	switch value.GetValue().(type) {
-	case *sharedpb.TypedValue_StringValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_STRING
-	case *sharedpb.TypedValue_IntValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_INT
-	case *sharedpb.TypedValue_DoubleValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-	case *sharedpb.TypedValue_BoolValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_BOOL
-	case *sharedpb.TypedValue_TimeValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_TIME
-	case *sharedpb.TypedValue_JsonValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_JSON
-	case *sharedpb.TypedValue_BytesValue:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_BYTES
-	default:
-		return localpb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
-	}
 }
 
 func typedValueString(value *sharedpb.TypedValue) string {

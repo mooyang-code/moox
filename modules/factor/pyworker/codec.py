@@ -1,64 +1,16 @@
 import json
-import struct
 
 import pandas as pd
 
-
-MAGIC = b"MX"
-MAX_META_BYTES = 4 * 1024 * 1024
-MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
-FRAME_READY = 0x01
-FRAME_REQUEST = 0x02
-FRAME_RESPONSE = 0x03
-FRAME_LOAD = 0x02
-FRAME_RUN = 0x03
-FRAME_RESULT = 0x04
-FRAME_ERROR = 0x05
-FRAME_PING = 0x05
-FRAME_RELOAD = 0x06
-
-
-def _read_exact(stream, n):
-    data = stream.read(n)
-    if data == b"" and n > 0:
-        raise EOFError("end of stream")
-    if len(data) != n:
-        raise ValueError(f"truncated frame: expected {n} bytes, got {len(data)}")
-    return data
-
-
-def _read_frame_legacy(stream):
-    magic = _read_exact(stream, 2)
-    if magic != MAGIC:
-        raise ValueError("invalid frame magic")
-    frame_type = _read_exact(stream, 1)[0]
-    meta_len = struct.unpack(">I", _read_exact(stream, 4))[0]
-    if meta_len > MAX_META_BYTES:
-        raise ValueError("frame meta too large")
-    meta = json.loads(_read_exact(stream, meta_len).decode("utf-8"))
-    payload_len = struct.unpack(">Q", _read_exact(stream, 8))[0]
-    if payload_len > MAX_PAYLOAD_BYTES:
-        raise ValueError("frame payload too large")
-    payload = _read_exact(stream, payload_len) if payload_len else b""
-    return frame_type, meta, payload
-
-
-def _write_frame_legacy(stream, frame_type, meta, payload=b""):
-    meta_bytes = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    stream.write(MAGIC)
-    stream.write(bytes([frame_type]))
-    stream.write(struct.pack(">I", len(meta_bytes)))
-    stream.write(meta_bytes)
-    stream.write(struct.pack(">Q", len(payload)))
-    if payload:
-        stream.write(payload)
-    stream.flush()
-
-try:
-    from moox_pyruntime.protocol import read_frame as read_frame, write_frame as write_frame
-except ImportError:
-    read_frame = _read_frame_legacy
-    write_frame = _write_frame_legacy
+from moox_pyruntime.protocol import (
+    TYPE_ERROR,
+    TYPE_HELLO,
+    TYPE_LOAD,
+    TYPE_RESULT,
+    TYPE_RUN,
+    read_frame,
+    write_frame,
+)
 
 
 def decode_json_df(meta):

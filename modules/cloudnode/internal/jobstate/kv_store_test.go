@@ -10,54 +10,46 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-type memoryEntry struct {
-	value []byte
-	rev   uint64
-}
-
-func (e memoryEntry) Value() []byte    { return append([]byte(nil), e.value...) }
-func (e memoryEntry) Revision() uint64 { return e.rev }
-
 type memoryKV struct {
 	mu   sync.Mutex
-	data map[string]memoryEntry
+	data map[string]jetstream.KVEntry
 }
 
-func newMemoryKV() *memoryKV { return &memoryKV{data: map[string]memoryEntry{}} }
-func (m *memoryKV) Create(key string, value []byte) (uint64, error) {
+func newMemoryKV() *memoryKV { return &memoryKV{data: map[string]jetstream.KVEntry{}} }
+func (m *memoryKV) Create(_ context.Context, key string, value []byte) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.data[key]; ok {
 		return 0, jetstream.ErrKVKeyExists
 	}
-	m.data[key] = memoryEntry{value: append([]byte(nil), value...), rev: 1}
+	m.data[key] = jetstream.KVEntry{Value: append([]byte(nil), value...), Revision: 1}
 	return 1, nil
 }
-func (m *memoryKV) Get(key string) (jetstream.LegacyKVEntry, error) {
+func (m *memoryKV) Get(_ context.Context, key string) (*jetstream.KVEntry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry, ok := m.data[key]
 	if !ok {
 		return nil, jetstream.ErrKVKeyNotFound
 	}
-	return entry, nil
+	return &jetstream.KVEntry{Value: append([]byte(nil), entry.Value...), Revision: entry.Revision}, nil
 }
-func (m *memoryKV) Update(key string, value []byte, revision uint64) (uint64, error) {
+func (m *memoryKV) Update(_ context.Context, key string, value []byte, revision uint64) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry, ok := m.data[key]
 	if !ok {
 		return 0, jetstream.ErrKVKeyNotFound
 	}
-	if entry.rev != revision {
+	if entry.Revision != revision {
 		return 0, jetstream.ErrKVKeyExists
 	}
-	entry.rev++
-	entry.value = append([]byte(nil), value...)
+	entry.Revision++
+	entry.Value = append([]byte(nil), value...)
 	m.data[key] = entry
-	return entry.rev, nil
+	return entry.Revision, nil
 }
-func (m *memoryKV) Keys() ([]string, error) {
+func (m *memoryKV) Keys(_ context.Context) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	keys := make([]string, 0, len(m.data))

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -223,9 +222,4 @@ func RunFromConfig(ctx context.Context, path, version, commit string) error {
 		return err
 	}
 	return app.Run(ctx)
-}
-
-func mainContext() context.Context {
-	ctx, _ := signal.NotifyContext(trpc.BackgroundContext(), os.Interrupt)
-	return ctx
 }
