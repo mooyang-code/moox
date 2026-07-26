@@ -137,6 +137,57 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 examples/e2e/run.sh --target localhost --dir /tmp/moox-e2e
 ```
 
+`run.sh` 是本地或指定主机上的运行时诊断入口。它会显式启动
+`run-scf-resident.sh`，适合验证 JetStream consumer、延期投递和 Gateway 配置，
+但它不能证明任务由腾讯云 SCF 节点执行。
+
+真实腾讯 SCF 验收使用独立入口，并要求先完成 SCF 包发布、至少两个真实节点部署和
+心跳上线：
+
+```bash
+# 在 106 的 /home/ubuntu/moox/prod 中执行
+read -rsp 'E2E admin password: ' MOOX_E2E_ADMIN_PASSWORD && echo
+export MOOX_E2E_ADMIN_PASSWORD
+printf '%s\n' "${MOOX_E2E_ADMIN_PASSWORD}" | \
+  ./bin/moox-admin-cli user ensure \
+    --db-path ./data/admin.db \
+    --username "${MOOX_E2E_ADMIN_USERNAME:-mooxe2eadmin}" \
+    --password-stdin
+
+examples/e2e/run-real-scf.sh \
+  --gateway http://127.0.0.1:11000 \
+  --web http://127.0.0.1:9527 \
+  --host 106.53.107.122 \
+  --e2e-node control \
+  --timeout-seconds 240
+```
+
+`run-real-scf.sh` 依次执行 `verify.mjs` 的 `setup`、`schedule`、`assert`，
+退出时再执行 `cleanup`；它不启动本地 wrapper 或 `moox-collector-scf` 进程。真实环境的 `setup`
+传入 `--skip-cloud-node-setup`，因此不会写入假的 `e2e-local` CloudNode；它直接复用
+已发布并上线的云函数节点。脚本成功或失败都会保留 state 和完整日志，路径在输出中显示。
+默认使用独立规则 `moox_real_scf_e2e_kline_1h`，不会覆盖正式规则
+`binance_spot_kline_1h`。state 包含 `scheduled_job_ids`、`immediate_job_item_id` 和
+`failure_job_item_id`，日志同时输出逐个 `job_item_id` 的 CLS 查询提示。
+setup 会先要求至少两个状态在线、心跳在两分钟内的 `tencent-scf/scf-event`
+节点，要求它们都支持 `collect.kline` 且来自不同 `package_id`；节点、代码包版本、
+支持的 workload 和心跳会写入 state
+作为验收证据。所有任务终态还会校验 `execution_node` 必须属于这些真实节点。schedule
+持续检查任务在 `execute_at` 到来前保持 pending；是否发生过提前消费后的
+`deferred/RETRY` 则以随后 CLS 查询为准。
+
+`assert` 还会提交一个小型受控失败 JobItem。该任务使用稳定的非法 Binance symbol，
+不包含凭据或大体积参数，并等待 CloudNode 记录最终失败，同时校验
+`COLLECT_FAILED`、retryable error kind、简短的 HTTP 400 错误以及真实
+`execution_node`。生产 `max_deliver=3`，使用它在 CLS 中确认三轮
+`received/started/instance_reported/done`、两次 `delivery_action(RETRY)`，
+以及最终 `cloudnode_reported` 和 `delivery_action(TERM)`；它不写入生产 DSL，
+也不依赖 JetStream testkit。schedule 捕获本次 JobItem 后会立即禁用 E2E 规则，
+避免生产 Timer 改写 TaskInstance 绑定；无论测试成功还是中途失败，runner 仍会执行 cleanup，
+禁用独立 E2E 规则，避免生产环境继续每 30 秒生成采集任务。
+
+### 本地诊断 E2E
+
 脚本默认会调用 `scripts/deploy-moox.sh --reset-data`，然后导入：
 
 ```text

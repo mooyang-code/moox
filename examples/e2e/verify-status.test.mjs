@@ -5,9 +5,14 @@ import * as verify from "./verify.mjs";
 import {
   JOB_STATUS,
   assertFutureExecutionTimes,
+  assertRealExecutionNodes,
+  assertRealSCFFleet,
+  controlledFailureJob,
+  currentRealSCFNodes,
   currentScheduledJobItems,
   currentScheduledTaskInstances,
   failedJobItems,
+  parseArgs,
   scheduleLeadDelay,
   statusName,
 } from "./verify.mjs";
@@ -83,4 +88,83 @@ test("scheduled jobs require a valid future execute_at", () => {
 test("schedule lead delay avoids a near-boundary E2E race", () => {
   assert.equal(scheduleLeadDelay(5_000, 30_000, 10_000), 0);
   assert.equal(scheduleLeadDelay(25_000, 30_000, 10_000), 5_025);
+});
+
+test("production setup can skip the synthetic local CloudNode", () => {
+  const args = parseArgs([
+    "--phase", "setup",
+    "--state-file", "/tmp/moox-e2e-state.json",
+    "--skip-cloud-node-setup",
+  ]);
+  assert.equal(args.skipCloudNodeSetup, true);
+});
+
+test("real SCF nodes must be online Tencent functions with a recent heartbeat", () => {
+  const now = Date.parse("2026-07-27T04:00:00Z");
+  const base = {
+    provider: "tencent-scf",
+    node_type: "scf-event",
+    status: 2,
+    last_heartbeat: "2026-07-27T03:59:30Z",
+    supported_workloads: ["collect.kline", "collect.symbol"],
+  };
+  const nodes = [
+    { ...base, node_id: "real" },
+    { ...base, node_id: "local", provider: "local" },
+    { ...base, node_id: "offline", status: 1 },
+    { ...base, node_id: "stale", last_heartbeat: "2026-07-27T03:50:00Z" },
+    { ...base, node_id: "wrong-type", node_type: "scf-polling" },
+    { ...base, node_id: "wrong-workload", supported_workloads: ["collect.symbol"] },
+  ];
+  assert.deepEqual(
+    currentRealSCFNodes(nodes, now, 120_000).map((node) => node.node_id),
+    ["real"],
+  );
+});
+
+test("job execution must belong to a verified Tencent SCF node", () => {
+  assert.doesNotThrow(() => assertRealExecutionNodes(
+    [{ job_item_id: "one", execution_node: "scf-a" }],
+    ["scf-a", "scf-b"],
+  ));
+  assert.throws(() => assertRealExecutionNodes(
+    [{ job_item_id: "local", execution_node: "e2e-local" }],
+    ["scf-a"],
+  ), /not executed by verified Tencent SCF/);
+  assert.throws(() => assertRealExecutionNodes(
+    [{ job_item_id: "missing" }],
+    ["scf-a"],
+  ), /not executed by verified Tencent SCF/);
+});
+
+test("real SCF acceptance requires two distinct code packages", () => {
+  assert.doesNotThrow(() => assertRealSCFFleet([
+    { node_id: "a", package_id: "package-a" },
+    { node_id: "b", package_id: "package-b" },
+  ]));
+  assert.throws(() => assertRealSCFFleet([
+    { node_id: "a", package_id: "package-a" },
+  ]), /two online tencent-scf nodes/);
+  assert.throws(() => assertRealSCFFleet([
+    { node_id: "a", package_id: "package-a" },
+    { node_id: "b", package_id: "package-a" },
+  ]), /different packages/);
+});
+
+test("controlled failure job is deterministic, small, and contains no credentials", () => {
+  const item = controlledFailureJob(
+    { space: "crypto", rule: "rule-1", dataset: "dataset-1" },
+    { data_type: "kline", dataset_id: "dataset-1" },
+    "fixed-run",
+  );
+  assert.equal(item.job_item_id, "e2e-failure-fixed-run");
+  assert.equal(item.job_type, "collect.kline");
+  assert.equal(item.params.symbol, "INVALID-E2E-SYMBOL");
+  assert.equal(item.params.task_id, "e2e-failure-fixed-run");
+  assert.equal(item.execute_at, undefined);
+  const encoded = JSON.stringify(item);
+  assert.ok(encoded.length < 700, `controlled failure payload is too large: ${encoded.length}`);
+  for (const forbidden of ["secret", "credential", "password", "access_key", "authorization"]) {
+    assert.equal(encoded.toLowerCase().includes(forbidden), false, `payload contains ${forbidden}`);
+  }
 });

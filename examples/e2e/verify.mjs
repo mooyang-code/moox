@@ -24,6 +24,18 @@ export const JOB_STATUS = {
   6: "JOB_ITEM_STATUS_ENQUEUE_FAILED",
 };
 
+const NODE_STATUS = {
+  1: "NODE_STATUS_OFFLINE",
+  2: "NODE_STATUS_ONLINE",
+  3: "NODE_STATUS_TIMEOUT",
+  4: "NODE_STATUS_ABNORMAL",
+};
+
+const JOB_ERROR_KIND = {
+  1: "JOB_ITEM_ERROR_KIND_RETRYABLE",
+  2: "JOB_ITEM_ERROR_KIND_PERMANENT",
+};
+
 const TASK_STATUS = {
   1: "TASK_INSTANCE_STATUS_PENDING",
   2: "TASK_INSTANCE_STATUS_SUCCESS",
@@ -32,7 +44,7 @@ const TASK_STATUS = {
 
 class FatalAssertionError extends Error {}
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     phase: "setup",
     gateway: "http://127.0.0.1:11000",
@@ -49,6 +61,7 @@ function parseArgs(argv) {
     password: "MooxE2E#20260704!",
     stateFile: "",
     timeoutSeconds: 120,
+    skipCloudNodeSetup: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -85,6 +98,9 @@ function parseArgs(argv) {
         args.timeoutSeconds = Number(value);
         i += 1;
         break;
+      case "--skip-cloud-node-setup":
+        args.skipCloudNodeSetup = true;
+        break;
       case "-h":
       case "--help":
         usage();
@@ -107,7 +123,7 @@ function parseArgs(argv) {
 
 function usage() {
   console.log(`Usage:
-  node examples/e2e/verify.mjs --phase sysdeploy|setup|schedule|assert [options]
+  node examples/e2e/verify.mjs --phase sysdeploy|setup|schedule|assert|cleanup [options]
 
 Options:
   --gateway <url>          Admin gateway URL. Default: http://127.0.0.1:11000
@@ -120,6 +136,7 @@ Options:
   --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline_1h
   --e2e-node <node_id>     Admin Gateway node used by SysDeploy checks.
   --state-file <path>      Local state shared by setup/schedule/assert phases.
+  --skip-cloud-node-setup  Reuse real deployed CloudNodes; do not create e2e-local.
   --timeout-seconds <n>    Assertion timeout. Default: 120`);
 }
 
@@ -147,6 +164,10 @@ async function main() {
     await assertAfterSCF(args);
     return;
   }
+  if (args.phase === "cleanup") {
+    await cleanup(args);
+    return;
+  }
   throw new Error(`unsupported phase: ${args.phase}`);
 }
 
@@ -167,14 +188,66 @@ async function setup(args) {
   await ensureDatasetSubject(args, token);
 
   await assertManagementRequests(args, token);
-  await ensureCloudNode(args, token);
+  let realSCFNodeIDs = [];
+  let realSCFNodes = [];
+  if (args.skipCloudNodeSetup) {
+    realSCFNodes = await waitFor("online Tencent SCF nodes", 60_000, async () => {
+      const rsp = await adminPost(args, token, "cloudnode", "GetNodeList", {
+        node_type: "scf-event",
+        page: { page: 1, size: 200 },
+      }, { spaceId: args.space });
+      const eligible = currentRealSCFNodes(rsp.items || [], Date.now(), 120_000);
+      assertRealSCFFleet(eligible);
+      return eligible;
+    });
+    realSCFNodeIDs = realSCFNodes.map((node) => node.node_id);
+    log(`cloudnode setup skipped: using real SCF nodes ${realSCFNodeIDs.join(",")}`);
+  } else {
+    await ensureCloudNode(args, token);
+  }
   await ensureCollectorRule(args, token);
-  await writeState(args, { setup_complete: true });
+  await writeState(args, {
+    setup_complete: true,
+    require_real_scf: args.skipCloudNodeSetup,
+    real_scf_node_ids: realSCFNodeIDs,
+    real_scf_nodes: realSCFNodes.map((node) => ({
+      node_id: node.node_id,
+      package_id: node.package_id,
+      package_version: node.package_version,
+      last_heartbeat: node.last_heartbeat,
+      supported_workloads: node.supported_workloads,
+    })),
+  });
   log("setup ok: queue topology and collector rule are ready");
+}
+
+async function cleanup(args) {
+  const token = await login(args);
+  await disableCollectorRule(args, token);
+}
+
+async function disableCollectorRule(args, token) {
+  const rsp = await adminPost(args, token, "collectmgr", "DisableTaskRule", {
+    space_id: args.space,
+    rule_id: args.rule,
+  }, { raw: true });
+  if (retOK(rsp.ret_info)) {
+    log(`disabled collector rule: ${args.rule}`);
+    return;
+  }
+  const message = retMsg(rsp.ret_info);
+  if (/not found|不存在/i.test(message)) {
+    log(`collector rule was not present: ${args.rule}`);
+    return;
+  }
+  throw new Error(`cleanup collector rule failed: ${message}`);
 }
 
 async function schedule(args) {
   const token = await login(args);
+  const previousState = await readState(args);
+  const storageBefore = await waitFor("storage target Dataset view ready", 60_000, async () =>
+    datasetRowSnapshot(args, token));
   const scheduleDelay = scheduleLeadDelay(Date.now(), 30_000, 15_000);
   if (scheduleDelay > 0) {
     log(`waiting ${scheduleDelay}ms for a deterministic future schedule window`);
@@ -208,15 +281,25 @@ async function schedule(args) {
     return current;
   });
 
-  const storageBefore = await waitFor("storage target Dataset view ready", 60_000, async () =>
-    datasetRowSnapshot(args, token));
   await writeState(args, {
+    ...previousState,
     setup_complete: true,
     scheduled_job_ids: jobItems.map((item) => item.job_item_id),
     execute_at: jobItems.map((item) => item.execute_at),
     storage_before: storageBefore.fingerprint,
   });
-  log(`schedule ok: instances=${instances.length}, job_items=${jobItems.length}, pending_before_due=true`);
+  await disableCollectorRule(args, token);
+  await assertScheduledJobsRemainPendingUntilDue(args, token, instances, jobItems);
+  await writeState(args, {
+    ...previousState,
+    setup_complete: true,
+    scheduled_job_ids: jobItems.map((item) => item.job_item_id),
+    execute_at: jobItems.map((item) => item.execute_at),
+    storage_before: storageBefore.fingerprint,
+    pending_until_due: true,
+    rule_disabled_after_schedule: true,
+  });
+  log(`schedule ok: instances=${instances.length}, job_items=${jobItems.length}, pending_until_due=true`);
   logLifecycleQueries(jobItems, "scheduled");
 }
 
@@ -246,6 +329,9 @@ async function assertAfterSCF(args) {
     }
     return current;
   });
+  if (state.require_real_scf) {
+    assertRealExecutionNodes(jobItems, state.real_scf_node_ids);
+  }
 
   const instances = await waitFor("collector task instances success", timeoutMs, async () => {
     const rows = await listTaskInstances(args, token);
@@ -267,6 +353,10 @@ async function assertAfterSCF(args) {
   });
 
   const immediateJob = await submitImmediateJob(args, token, instances[0]);
+  await writeState(args, {
+    ...state,
+    immediate_job_item_id: immediateJob.job_item_id,
+  });
   const immediate = await waitFor("immediate job item success", timeoutMs, async () => {
     const rows = await listJobItems(args, token, immediateJob.job_id);
     const item = rows.find((row) => row.job_item_id === immediateJob.job_item_id);
@@ -279,6 +369,54 @@ async function assertAfterSCF(args) {
     }
     return item;
   });
+  if (state.require_real_scf) {
+    assertRealExecutionNodes([immediate], state.real_scf_node_ids);
+  }
+  await writeState(args, {
+    ...state,
+    immediate_job_item_id: immediate.job_item_id,
+  });
+  logLifecycleQueries([immediate], "immediate");
+
+  const failureJob = await submitControlledFailureJob(args, token, instances[0]);
+  await writeState(args, {
+    ...state,
+    immediate_job_item_id: immediate.job_item_id,
+    failure_job_item_id: failureJob.job_item_id,
+  });
+  const terminalFailure = await waitFor("controlled failure job item terminal", timeoutMs, async () => {
+    const rows = await listJobItems(args, token, failureJob.job_id);
+    const item = rows.find((row) => row.job_item_id === failureJob.job_item_id);
+    if (!item) throw new Error(`controlled failure job item ${failureJob.job_item_id} is not visible`);
+    if (isJobStatus(item.status, "JOB_ITEM_STATUS_SUCCESS")) {
+      throw new FatalAssertionError(`controlled failure unexpectedly succeeded: ${item.job_item_id}`);
+    }
+    if (!isJobStatus(item.status, "JOB_ITEM_STATUS_FAILED")) {
+      throw new Error(`controlled failure job ${item.job_item_id} is not terminal yet`);
+    }
+    if (item.last_error_code !== "COLLECT_FAILED") {
+      throw new FatalAssertionError(`controlled failure error_code=${item.last_error_code || "missing"}, want COLLECT_FAILED`);
+    }
+    const errorMessage = String(item.last_error_message || "");
+    if (!errorMessage || errorMessage.length > 1024 || !/HTTP[^0-9]*400|400/.test(errorMessage)) {
+      throw new FatalAssertionError(`controlled failure has unexpected error message: ${errorMessage.slice(0, 160) || "missing"}`);
+    }
+    if (statusName(item.last_error_kind, JOB_ERROR_KIND) !== "JOB_ITEM_ERROR_KIND_RETRYABLE") {
+      throw new FatalAssertionError(`controlled failure error_kind=${statusName(item.last_error_kind, JOB_ERROR_KIND) || "missing"}, want retryable`);
+    }
+    return item;
+  });
+  if (state.require_real_scf) {
+    assertRealExecutionNodes([terminalFailure], state.real_scf_node_ids);
+  }
+  await writeState(args, {
+    ...state,
+    immediate_job_item_id: immediate.job_item_id,
+    failure_job_item_id: terminalFailure.job_item_id,
+    failure_status: statusName(terminalFailure.status, JOB_STATUS),
+    failure_error_code: terminalFailure.last_error_code,
+  });
+  logLifecycleQueries([terminalFailure], "failure");
 
   if (!state.storage_before) {
     throw new FatalAssertionError("E2E state does not contain the target Dataset baseline");
@@ -312,8 +450,7 @@ async function assertAfterSCF(args) {
     if ((rsp.rows || []).length === 0) throw new Error("storage view has no rows for the sampled fact");
     return rsp.rows;
   });
-  logLifecycleQueries([immediate], "immediate");
-  log(`assert ok: scheduled_job_items=${jobItems.length}, immediate_job_item=${immediate.job_item_id}, instances=${instances.length}, storage_rows=${rows.length}, view_rows=${queryRows.length}, target=${args.space}/${args.dataset}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
+  log(`assert ok: scheduled_job_items=${jobItems.length}, immediate_job_item=${immediate.job_item_id}, failure_job_item=${terminalFailure.job_item_id}, instances=${instances.length}, storage_rows=${rows.length}, view_rows=${queryRows.length}, target=${args.space}/${args.dataset}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
 }
 
 async function assertWebHost(webURL) {
@@ -749,6 +886,47 @@ async function submitImmediateJob(args, token, instance) {
   return item;
 }
 
+export function controlledFailureJob(args, instance, suffix) {
+  const id = `e2e-failure-${suffix}`;
+  return {
+    space_id: args.space,
+    job_id: `${args.rule}-failure-e2e`,
+    job_item_id: id,
+    job_type: "collect.kline",
+    params: {
+      space_id: args.space,
+      task_id: id,
+      dataset_id: instance?.dataset_id || args.dataset,
+      data_type: "kline",
+      exchange: "binance",
+      market: "spot",
+      subject_id: "INVALID-E2E-SYMBOL",
+      symbol: "INVALID-E2E-SYMBOL",
+      interval: "1h",
+    },
+    priority: 100,
+  };
+}
+
+async function submitControlledFailureJob(args, token, instance) {
+  const suffix = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const item = controlledFailureJob(args, instance, suffix);
+  const rsp = await adminPost(args, token, "cloudnode", "SubmitJobItems", {
+    items: [item],
+  }, { spaceId: args.space });
+  const ack = (rsp.acks || []).find((candidate) => candidate.job_item_id === item.job_item_id);
+  const ackStatus = statusName(ack?.status, {
+    1: "JOB_ITEM_ACK_STATUS_CREATED",
+    2: "JOB_ITEM_ACK_STATUS_DEDUPLICATED",
+    3: "JOB_ITEM_ACK_STATUS_REJECTED",
+  });
+  if (!ack || !["JOB_ITEM_ACK_STATUS_CREATED", "JOB_ITEM_ACK_STATUS_DEDUPLICATED"].includes(ackStatus)) {
+    throw new FatalAssertionError(`controlled failure job rejected: ${ack?.reject_reason || ackStatus || "missing ack"}`);
+  }
+  log(`submitted controlled failure job: ${item.job_item_id}; expected_terminal=JOB_ITEM_STATUS_FAILED`);
+  return item;
+}
+
 async function storagePost(args, token, group, method, body) {
   const service = {
     metadata: "storage-primary",
@@ -898,6 +1076,56 @@ export function assertFutureExecutionTimes(items, nowMs) {
   }
 }
 
+export function currentRealSCFNodes(nodes, nowMs, maxAgeMs, requiredJobType = "collect.kline") {
+  return nodes.filter((node) => {
+    if (node.provider !== "tencent-scf" || node.node_type !== "scf-event") return false;
+    if (statusName(node.status, NODE_STATUS) !== "NODE_STATUS_ONLINE") return false;
+    if (!(node.supported_workloads || []).includes(requiredJobType)) return false;
+    const heartbeat = Date.parse(node.last_heartbeat || "");
+    return Number.isFinite(heartbeat) && heartbeat <= nowMs && nowMs - heartbeat <= maxAgeMs;
+  });
+}
+
+export function assertRealSCFFleet(nodes) {
+  const packageIDs = new Set(nodes.map((node) => node.package_id).filter(Boolean));
+  if (nodes.length < 2 || packageIDs.size < 2) {
+    throw new Error(`need two online tencent-scf nodes from different packages; nodes=${nodes.length} packages=${packageIDs.size}`);
+  }
+}
+
+export function assertRealExecutionNodes(items, realNodeIDs) {
+  const allowed = new Set(realNodeIDs || []);
+  if (allowed.size === 0) {
+    throw new FatalAssertionError("E2E state does not contain verified Tencent SCF nodes");
+  }
+  const invalid = items.filter((item) => !item.execution_node || !allowed.has(item.execution_node));
+  if (invalid.length > 0) {
+    throw new FatalAssertionError(`job items were not executed by verified Tencent SCF nodes: ${invalid.map((item) => `${item.job_item_id || "-"}:${item.execution_node || "missing"}`).join(", ")}`);
+  }
+}
+
+async function assertScheduledJobsRemainPendingUntilDue(args, token, instances, jobItems) {
+  const dueAt = Math.min(...jobItems.map((item) => Date.parse(item.execute_at || "")));
+  const guardUntil = dueAt - 100;
+  while (Date.now() < guardUntil) {
+    const rows = await listJobItems(args, token);
+    const current = currentScheduledJobItems(instances, rows);
+    if (current.length !== jobItems.length) {
+      throw new Error(`cloudnode has ${current.length}/${jobItems.length} scheduled job items during pre-due guard`);
+    }
+    const executed = current.filter((item) => !isJobStatus(item.status, "JOB_ITEM_STATUS_PENDING"));
+    if (executed.length > 0) {
+      throw new FatalAssertionError(`scheduled job completed before execute_at: ${executed.map((item) => item.job_item_id).join(", ")}`);
+    }
+    const currentInstances = currentScheduledTaskInstances(await listTaskInstances(args, token), new Set(current.map((item) => item.job_item_id)));
+    const completed = currentInstances.filter((item) => !isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_PENDING"));
+    if (completed.length > 0) {
+      throw new FatalAssertionError(`task instance completed before execute_at: ${completed.map((item) => item.task_id).join(", ")}`);
+    }
+    await sleep(Math.min(250, Math.max(1, guardUntil - Date.now())));
+  }
+}
+
 export function scheduleLeadDelay(nowMs, intervalMs, minimumLeadMs) {
   const remaining = intervalMs - (nowMs % intervalMs);
   return remaining >= minimumLeadMs ? 0 : remaining + 25;
@@ -907,7 +1135,9 @@ function logLifecycleQueries(items, kind) {
   for (const item of items) {
     const expected = kind === "scheduled"
       ? "received,deferred,delivery_action(RETRY),received,started,instance_reported,done,cloudnode_reported,delivery_action(ACK)"
-      : "received,started,instance_reported(stale_task_binding),done,cloudnode_reported,delivery_action(ACK)";
+      : kind === "failure"
+        ? "received,started,instance_reported,done,delivery_action(RETRY),received,started,instance_reported,done,delivery_action(RETRY),received,started,instance_reported,done,cloudnode_reported,delivery_action(TERM)"
+        : "received,started,instance_reported(stale_task_binding),done,cloudnode_reported,delivery_action(ACK)";
     const note = kind === "immediate" ? " task_instance_update=not_expected" : "";
     log(`CLS query: job_item_id="${item.job_item_id}" kind=${kind} expected_events=${expected}${note}`);
   }
