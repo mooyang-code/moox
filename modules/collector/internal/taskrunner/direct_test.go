@@ -121,10 +121,11 @@ func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 		SpaceID:   "crypto",
 		JobItemID: "item-123",
 		Params: map[string]any{
-			"space_id":  "crypto",
-			"task_id":   "task-1",
-			"data_type": "symbol",
-			"exchange":  "binance",
+			"space_id":   "crypto",
+			"dataset_id": "symbols-custom",
+			"task_id":    "task-1",
+			"data_type":  "symbol",
+			"exchange":   "binance",
 		},
 	})
 	if err != nil {
@@ -133,11 +134,31 @@ func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 	if event.JobItemID != "item-123" {
 		t.Fatalf("job item id = %q, want item-123", event.JobItemID)
 	}
+	if event.DatasetID != "symbols-custom" {
+		t.Fatalf("dataset id = %q, want symbols-custom", event.DatasetID)
+	}
 }
 
 func TestTaskEventFromJobItemRequiresJobItemID(t *testing.T) {
 	_, err := taskEventFromJobItem(nodeRuntime.JobItem{
 		SpaceID: "crypto",
+		Params: map[string]any{
+			"space_id":   "crypto",
+			"dataset_id": "symbols-custom",
+			"task_id":    "task-1",
+			"data_type":  "symbol",
+			"exchange":   "binance",
+		},
+	})
+	if err == nil || err.Error() != "job_item_id is required" {
+		t.Fatalf("taskEventFromJobItem() error = %v, want required job_item_id", err)
+	}
+}
+
+func TestTaskEventFromJobItemRequiresDatasetID(t *testing.T) {
+	_, err := taskEventFromJobItem(nodeRuntime.JobItem{
+		SpaceID:   "crypto",
+		JobItemID: "item-123",
 		Params: map[string]any{
 			"space_id":  "crypto",
 			"task_id":   "task-1",
@@ -145,8 +166,8 @@ func TestTaskEventFromJobItemRequiresJobItemID(t *testing.T) {
 			"exchange":  "binance",
 		},
 	})
-	if err == nil || err.Error() != "job_item_id is required" {
-		t.Fatalf("taskEventFromJobItem() error = %v, want required job_item_id", err)
+	if err == nil || err.Error() != "dataset_id is required" {
+		t.Fatalf("taskEventFromJobItem() error = %v, want required dataset_id", err)
 	}
 }
 

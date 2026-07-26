@@ -24,11 +24,15 @@ func TestReportImmediateTaskStatusReturnsReporterError(t *testing.T) {
 	}
 }
 
-type stubCollector struct{ err error }
+type stubCollector struct {
+	err    error
+	params *sources.CollectParams
+}
 
 func (s *stubCollector) Source() string   { return "stub" }
 func (s *stubCollector) DataType() string { return "symbol" }
-func (s *stubCollector) Collect(context.Context, *sources.CollectParams) error {
+func (s *stubCollector) Collect(_ context.Context, params *sources.CollectParams) error {
+	s.params = params
 	return s.err
 }
 
@@ -53,17 +57,20 @@ func TestExecuteTaskImmediately_WithStubCollector(t *testing.T) {
 	}
 	t.Cleanup(func() { reportTaskStatus = old })
 
+	collector := &stubCollector{}
 	require.NoError(t, sources.GetRegistry().Register(&sources.CollectorDescriptor{
-		Source: "stubex", Market: "spot", DataType: "symbol", Collector: &stubCollector{},
+		Source: "stubex", Market: "spot", DataType: "symbol", Collector: collector,
 	}))
 
 	msg, err := ExecuteTaskImmediately(context.Background(), &model.TaskExecuteEvent{
-		SpaceID: "crypto", TaskID: "task-1", JobItemID: "item-1", DataSource: "stubex", DataType: "symbol",
-		InstType: "SPOT", Symbol: "BTCUSDT",
+		SpaceID: "crypto", DatasetID: "symbols-custom", TaskID: "task-1", JobItemID: "item-1",
+		DataSource: "stubex", DataType: "symbol", InstType: "SPOT", Symbol: "BTCUSDT",
 	})
 	require.NoError(t, err)
 	assert.Contains(t, msg, "成功")
 	assert.Equal(t, "item-1", reportedJobItemID)
+	require.NotNil(t, collector.params)
+	assert.Equal(t, "symbols-custom", collector.params.DatasetID)
 }
 
 func TestExecuteCollectTasks_EmptyAndMissingCollector(t *testing.T) {

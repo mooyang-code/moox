@@ -19,6 +19,7 @@ import (
 // collectTask 采集任务定义
 type collectTask struct {
 	SpaceID    string
+	DatasetID  string
 	TaskID     string
 	JobItemID  string
 	DataSource string
@@ -54,6 +55,7 @@ func buildCollectHandler(
 	return func() error {
 		params := &sources.CollectParams{
 			SpaceID:   task.SpaceID,
+			DatasetID: task.DatasetID,
 			InstType:  task.InstType,
 			Symbol:    task.Symbol,
 			SubjectID: task.SubjectID,
@@ -172,6 +174,7 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 	for _, interval := range intervals {
 		collectTasks = append(collectTasks, &collectTask{
 			SpaceID:    taskEvent.SpaceID,
+			DatasetID:  taskEvent.DatasetID,
 			TaskID:     taskEvent.TaskID,
 			JobItemID:  taskEvent.JobItemID,
 			DataSource: taskEvent.DataSource,

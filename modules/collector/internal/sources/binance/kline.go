@@ -84,8 +84,16 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	if params == nil {
 		return fmt.Errorf("K线采集参数不能为空")
 	}
-	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
-		params.InstType, params.Symbol, params.Interval)
+	spaceID := strings.TrimSpace(params.SpaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id 不能为空")
+	}
+	datasetID := strings.TrimSpace(params.DatasetID)
+	if datasetID == "" {
+		return fmt.Errorf("dataset_id 不能为空")
+	}
+	log.InfoContextf(ctx, "K线采集开始: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s",
+		spaceID, datasetID, params.InstType, params.Symbol, params.Interval)
 
 	freq, err := normalizeFreq(params.Interval)
 	if err != nil {
@@ -108,7 +116,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding))
 	}
 	watermark, found, err := writer.LatestTimeSeriesTime(ctx, &storagepb.TimeSeriesKey{
-		SpaceId: binding.SpaceID, DatasetId: binding.KlineDatasetID, SubjectId: storageSubjectID, Freq: freq,
+		SpaceId: spaceID, DatasetId: datasetID, SubjectId: storageSubjectID, Freq: freq,
 	})
 	if err != nil {
 		return fmt.Errorf("读取K线水位线失败: %w", err)
@@ -131,10 +139,11 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 		klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
 		closed, skipped := filterClosedKlines(klines, c.currentTime())
 		if skipped > 0 {
-			log.InfoContextf(ctx, "跳过未闭合K线: inst_type=%s, symbol=%s, interval=%s, skipped=%d", params.InstType, params.Symbol, params.Interval, skipped)
+			log.InfoContextf(ctx, "跳过未闭合K线: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s, skipped=%d",
+				spaceID, datasetID, params.InstType, params.Symbol, params.Interval, skipped)
 		}
 		if len(closed) > 0 {
-			rows, buildErr := buildKlineRows(closed, storageSubjectID, binding, freq)
+			rows, buildErr := buildKlineRows(closed, spaceID, datasetID, storageSubjectID, freq)
 			if buildErr != nil {
 				return buildErr
 			}
@@ -151,7 +160,8 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 			break
 		}
 	}
-	log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d", params.InstType, params.Symbol, params.Interval, total)
+	log.InfoContextf(ctx, "K线采集完成: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s, count=%d",
+		spaceID, datasetID, params.InstType, params.Symbol, params.Interval, total)
 	return nil
 }
 
@@ -220,7 +230,7 @@ func normalizeFreq(interval string) (string, error) {
 	}
 }
 
-func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBinding, freq string) ([]*storagepb.RowFieldUpsert, error) {
+func buildKlineRows(klines []*market.Kline, spaceID string, datasetID string, symbol string, freq string) ([]*storagepb.RowFieldUpsert, error) {
 	closedKlines, _ := filterClosedKlines(klines, time.Now())
 	if len(klines) > 0 && len(closedKlines) == 0 {
 		return nil, fmt.Errorf("%w: symbol=%s, freq=%s, latest_close_time=%s", errKlineNotClosed, symbol, freq, latestCloseTime(klines))
@@ -256,7 +266,7 @@ func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBindin
 
 		rows = append(rows, &storagepb.RowFieldUpsert{
 			Key: &storagepb.RowKey{
-				SpaceId: binding.SpaceID, DatasetId: binding.KlineDatasetID,
+				SpaceId: spaceID, DatasetId: datasetID,
 				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: symbol, Freq: freq, DataTime: openTime}},
 			},
 			Fields: []*storagepb.FieldValue{

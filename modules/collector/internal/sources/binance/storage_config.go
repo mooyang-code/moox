@@ -11,14 +11,11 @@ import (
 )
 
 type StorageBinding struct {
-	SpaceID         string          `yaml:"space_id"`
-	DataSourceID    string          `yaml:"data_source_id"`
-	SubjectType     string          `yaml:"subject_type"`
-	SubjectMarket   string          `yaml:"subject_market"`
-	RecordDatasetID string          `yaml:"record_dataset_id"`
-	KlineDatasetID  string          `yaml:"kline_dataset_id"`
-	BindDatasetIDs  []string        `yaml:"bind_dataset_ids"`
-	AuthInfo        StorageAuthInfo `yaml:"auth_info"`
+	DataSourceID      string          `yaml:"data_source_id"`
+	SubjectType       string          `yaml:"subject_type"`
+	SubjectMarket     string          `yaml:"subject_market"`
+	SubjectDatasetIDs []string        `yaml:"subject_dataset_ids"`
+	AuthInfo          StorageAuthInfo `yaml:"auth_info"`
 }
 
 type StorageAuthInfo struct {
@@ -93,7 +90,7 @@ func applyBindingDefaults(binding *StorageBinding, subjectMarket string) {
 	if binding.SubjectMarket == "" {
 		binding.SubjectMarket = subjectMarket
 	}
-	binding.BindDatasetIDs = appendMissingDatasetIDs(binding.BindDatasetIDs, binding.RecordDatasetID, binding.KlineDatasetID)
+	binding.SubjectDatasetIDs = appendMissingDatasetIDs(binding.SubjectDatasetIDs)
 }
 
 func appendMissingDatasetIDs(ids []string, defaults ...string) []string {

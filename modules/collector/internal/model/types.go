@@ -98,6 +98,7 @@ type ServiceDeployment struct {
 // TaskExecuteEvent 任务立即执行事件（服务端触发）
 type TaskExecuteEvent struct {
 	SpaceID    string   `json:"space_id"`
+	DatasetID  string   `json:"dataset_id"`
 	TaskID     string   `json:"task_id"`
 	JobItemID  string   `json:"job_item_id"`
 	DataType   string   `json:"data_type"`

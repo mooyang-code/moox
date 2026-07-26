@@ -31,12 +31,20 @@ func TestKlineCollectorCollectStartsAfterStorageWatermark(t *testing.T) {
 		now: func() time.Time { return watermark.Add(time.Hour) },
 	}
 
-	err := c.Collect(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT, Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m"})
+	err := c.Collect(context.Background(), &sources.CollectParams{
+		SpaceID: "space-custom", DatasetID: "kline-custom", InstType: InstTypeSPOT,
+		Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
+	})
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
 	assert.True(t, requests[0].StartTime.After(watermark))
+	require.NotNil(t, store.latestKey)
+	assert.Equal(t, "space-custom", store.latestKey.GetSpaceId())
+	assert.Equal(t, "kline-custom", store.latestKey.GetDatasetId())
 	require.Len(t, store.writes, 1)
 	require.Len(t, store.writes[0], 1)
+	assert.Equal(t, "space-custom", store.writes[0][0].GetKey().GetSpaceId())
+	assert.Equal(t, "kline-custom", store.writes[0][0].GetKey().GetDatasetId())
 	assert.Equal(t, "BTC-USDT", store.writes[0][0].GetKey().GetTimeSeries().GetSubjectId())
 }
 
@@ -51,18 +59,23 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 		now: func() time.Time { return now },
 	}
 
-	err := c.Collect(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT, Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m"})
+	err := c.Collect(context.Background(), &sources.CollectParams{
+		SpaceID: "crypto", DatasetID: "kline", InstType: InstTypeSPOT,
+		Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
+	})
 	require.NoError(t, err)
 	assert.Empty(t, store.writes)
 }
 
 type fakeKlineStorage struct {
-	latest time.Time
-	found  bool
-	writes [][]*storagepb.RowFieldUpsert
+	latest    time.Time
+	found     bool
+	latestKey *storagepb.TimeSeriesKey
+	writes    [][]*storagepb.RowFieldUpsert
 }
 
-func (s *fakeKlineStorage) LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+func (s *fakeKlineStorage) LatestTimeSeriesTime(_ context.Context, key *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+	s.latestKey = key
 	return s.latest, s.found, nil
 }
 
@@ -134,7 +147,8 @@ func TestKlineCollectorLiveAlsoWritesOnlyClosedKlines(t *testing.T) {
 	}
 
 	err := collector.Collect(context.Background(), &sources.CollectParams{
-		Live: true, InstType: InstTypeSPOT, SpaceID: "crypto", Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
+		Live: true, InstType: InstTypeSPOT, SpaceID: "crypto", DatasetID: "kline",
+		Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
 	})
 	require.NoError(t, err)
 	require.Len(t, store.writes, 1)
@@ -173,9 +187,7 @@ func TestBuildKlineRows_ShouldEmitClosedBars(t *testing.T) {
 		Close: common.NewDecimal("105"), Volume: common.NewDecimal("12"), QuoteVolume: common.NewDecimal("1200"),
 		TradeCount: 7,
 	}}
-	rows, err := buildKlineRows(klines, "BTCUSDT", StorageBinding{
-		SpaceID: "crypto", KlineDatasetID: "kline-ds",
-	}, "1H")
+	rows, err := buildKlineRows(klines, "crypto", "kline-ds", "BTCUSDT", "1H")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "crypto", rows[0].GetKey().GetSpaceId())

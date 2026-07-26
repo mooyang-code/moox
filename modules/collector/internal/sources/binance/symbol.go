@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,9 +28,16 @@ const (
 
 // SymbolCollector 标的同步采集器
 type SymbolCollector struct {
-	client  *binanceapi.Client
-	spotAPI *binanceapi.SpotAPI
-	swapAPI *binanceapi.SwapAPI
+	client          *binanceapi.Client
+	spotAPI         *binanceapi.SpotAPI
+	swapAPI         *binanceapi.SwapAPI
+	storage         symbolStorage
+	fetchSymbolPage func(context.Context, *sources.CollectParams) ([]*exchange.SymbolInfo, error)
+}
+
+type symbolStorage interface {
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
 }
 
 // Source 返回数据源标识
@@ -72,7 +80,19 @@ func init() {
 
 // Collect 执行标的同步采集
 func (c *SymbolCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
-	log.InfoContextf(ctx, "[SymbolCollector] 开始采集标的, InstType=%s", params.InstType)
+	if params == nil {
+		return fmt.Errorf("标的采集参数不能为空")
+	}
+	spaceID := strings.TrimSpace(params.SpaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id 不能为空")
+	}
+	datasetID := strings.TrimSpace(params.DatasetID)
+	if datasetID == "" {
+		return fmt.Errorf("dataset_id 不能为空")
+	}
+	log.InfoContextf(ctx, "[SymbolCollector] 开始采集标的, space_id=%s, dataset_id=%s, InstType=%s",
+		spaceID, datasetID, params.InstType)
 
 	// 根据产品类型获取标的列表
 	symbols, err := c.fetchSymbols(ctx, params)
@@ -90,17 +110,21 @@ func (c *SymbolCollector) Collect(ctx context.Context, params *sources.CollectPa
 		len(filteredSymbols), len(symbols), params.InstType)
 
 	// 上报标的到 Server
-	if err := c.reportSymbols(ctx, params.InstType, filteredSymbols); err != nil {
+	if err := c.reportSymbols(ctx, spaceID, datasetID, params.InstType, filteredSymbols); err != nil {
 		log.ErrorContextf(ctx, "[SymbolCollector] 上报标的失败: %v", err)
 		return err
 	}
 
-	log.InfoContextf(ctx, "[SymbolCollector] 标的采集完成, InstType=%s", params.InstType)
+	log.InfoContextf(ctx, "[SymbolCollector] 标的采集完成, space_id=%s, dataset_id=%s, InstType=%s",
+		spaceID, datasetID, params.InstType)
 	return nil
 }
 
 // fetchSymbols 获取标的列表
 func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+	if c.fetchSymbolPage != nil {
+		return c.fetchSymbolPage(ctx, params)
+	}
 	switch params.InstType {
 	case InstTypeSPOT:
 		return c.spotAPI.GetExchangeInfo(ctx)
@@ -126,21 +150,30 @@ func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*excha
 }
 
 // reportSymbols 上报标的到存储服务。
-// 分批并发上报，每批最多 25 条，最大并发 20
-func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, symbols []*exchange.SymbolInfo) error {
+// 每批最多 25 条；当前串行发送，避免并发刷新 metadata snapshot。
+func (c *SymbolCollector) reportSymbols(
+	ctx context.Context,
+	spaceID string,
+	datasetID string,
+	instType string,
+	symbols []*exchange.SymbolInfo,
+) error {
 	binding, err := ResolveStorageBinding(instType)
 	if err != nil {
 		return err
 	}
 
-	metadataTarget := runtimeapp.GetStorageRPCGatewayTarget()
-	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
-	if metadataTarget == "" || accessTarget == "" {
-		return fmt.Errorf("未配置存储服务 tRPC 地址")
+	writer := c.storage
+	if writer == nil {
+		target := runtimeapp.GetStorageRPCGatewayTarget()
+		if target == "" {
+			return fmt.Errorf("未配置存储服务 tRPC 地址")
+		}
+		writer = newStorageWriter(target, target, storageAuthInfo(binding))
 	}
 
 	// 构建所有对象行
-	allRows, err := buildSymbolRecordRows(symbols, binding)
+	allRows, err := buildSymbolRecordRows(symbols, spaceID, datasetID)
 	if err != nil {
 		return err
 	}
@@ -164,7 +197,7 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 
 	totalBatches := len(rowBatches)
 	log.InfoContextf(ctx, "[SymbolCollector] 开始上报标的, 总数=%d, 批次数=%d, datasetID=%s",
-		totalRows, totalBatches, binding.RecordDatasetID)
+		totalRows, totalBatches, datasetID)
 
 	// 结果收集
 	var mu sync.Mutex
@@ -185,7 +218,9 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 			rows := rowBatches[j]
 			batchSymbols := symbolBatches[j]
 			handlers = append(handlers, func() error {
-				err := c.sendSymbolBatchWithRetry(ctx, metadataTarget, accessTarget, binding, batchSymbols, rows, idx, totalBatches)
+				err := c.sendSymbolBatchWithRetry(
+					ctx, writer, spaceID, datasetID, binding, batchSymbols, rows, idx, totalBatches,
+				)
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
@@ -210,20 +245,29 @@ func (c *SymbolCollector) reportSymbols(ctx context.Context, instType string, sy
 		return fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
-	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, binding.RecordDatasetID)
+	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, datasetID)
 	return nil
 }
 
-// sendWithRetry 发送单个批次请求（带重试）
-func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, metadataTarget string, accessTarget string, binding StorageBinding, symbols []*exchange.SymbolInfo, rows []*storagepb.RowFieldUpsert, batchIdx, totalBatches int) error {
+// sendSymbolBatchWithRetry 发送单个批次请求（带重试）。
+func (c *SymbolCollector) sendSymbolBatchWithRetry(
+	ctx context.Context,
+	writer symbolStorage,
+	spaceID string,
+	datasetID string,
+	binding StorageBinding,
+	symbols []*exchange.SymbolInfo,
+	rows []*storagepb.RowFieldUpsert,
+	batchIdx int,
+	totalBatches int,
+) error {
 	return retry.Do(
 		func() error {
-			writer := newStorageWriter(accessTarget, metadataTarget, storageAuthInfo(binding))
 			if err := writer.UpsertFields(ctx, rows); err != nil {
 				return err
 			}
 			for _, symbol := range symbols {
-				if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, binding)); err != nil {
+				if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, spaceID, datasetID, binding)); err != nil {
 					return err
 				}
 			}
@@ -240,13 +284,19 @@ func (c *SymbolCollector) sendSymbolBatchWithRetry(ctx context.Context, metadata
 	)
 }
 
-func buildSymbolRegisterRequest(symbol *exchange.SymbolInfo, binding StorageBinding) *storagepb.RegisterDataSubjectReq {
+func buildSymbolRegisterRequest(
+	symbol *exchange.SymbolInfo,
+	spaceID string,
+	targetDatasetID string,
+	binding StorageBinding,
+) *storagepb.RegisterDataSubjectReq {
 	subjectID := normalizedSubjectID(symbol)
 	externalSymbol := binanceapi.FormatSymbol(subjectID)
-	bindings := make([]*storagepb.DatasetSubject, 0, len(binding.BindDatasetIDs))
-	for _, datasetID := range binding.BindDatasetIDs {
+	datasetIDs := appendMissingDatasetIDs([]string{targetDatasetID}, binding.SubjectDatasetIDs...)
+	bindings := make([]*storagepb.DatasetSubject, 0, len(datasetIDs))
+	for _, datasetID := range datasetIDs {
 		bindings = append(bindings, &storagepb.DatasetSubject{
-			SpaceId:     binding.SpaceID,
+			SpaceId:     spaceID,
 			DatasetId:   datasetID,
 			SubjectId:   subjectID,
 			SubjectRole: "normal",
@@ -254,11 +304,11 @@ func buildSymbolRegisterRequest(symbol *exchange.SymbolInfo, binding StorageBind
 		})
 	}
 	return &storagepb.RegisterDataSubjectReq{
-		SpaceId:        binding.SpaceID,
+		SpaceId:        spaceID,
 		DataSourceId:   binding.DataSourceID,
 		ExternalSymbol: externalSymbol,
 		Subject: &storagepb.Subject{
-			SpaceId:     binding.SpaceID,
+			SpaceId:     spaceID,
 			SubjectId:   subjectID,
 			SubjectType: binding.SubjectType,
 			Name:        subjectID,
@@ -276,7 +326,7 @@ func buildSymbolRegisterRequest(symbol *exchange.SymbolInfo, binding StorageBind
 }
 
 // buildSymbolRecordRows 构建标的结构化记录行列表。
-func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBinding) ([]*storagepb.RowFieldUpsert, error) {
+func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, spaceID string, datasetID string) ([]*storagepb.RowFieldUpsert, error) {
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(symbols))
 	version := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, s := range symbols {
@@ -308,7 +358,7 @@ func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, binding StorageBindin
 
 		row := &storagepb.RowFieldUpsert{
 			Key: &storagepb.RowKey{
-				SpaceId: binding.SpaceID, DatasetId: binding.RecordDatasetID,
+				SpaceId: spaceID, DatasetId: datasetID,
 				Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: subjectID, Version: version}},
 			},
 			Fields: fields,

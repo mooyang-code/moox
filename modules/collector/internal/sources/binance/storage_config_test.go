@@ -41,12 +41,12 @@ func TestStorageBindingHelpers(t *testing.T) {
 	_, _, err = storageBindingKey("UNKNOWN")
 	assert.Error(t, err)
 
-	binding := &StorageBinding{RecordDatasetID: "rec-1", KlineDatasetID: "kline-1"}
+	binding := &StorageBinding{SubjectDatasetIDs: []string{"rec-1", "rec-1", "", "kline-1"}}
 	applyBindingDefaults(binding, "spot")
 	assert.Equal(t, "binance", binding.DataSourceID)
 	assert.Equal(t, "crypto_pair", binding.SubjectType)
 	assert.Equal(t, "spot", binding.SubjectMarket)
-	assert.ElementsMatch(t, []string{"rec-1", "kline-1"}, binding.BindDatasetIDs)
+	assert.Equal(t, []string{"rec-1", "kline-1"}, binding.SubjectDatasetIDs)
 
 	ids := appendMissingDatasetIDs([]string{"a", "a", ""}, "b", "a", "c")
 	assert.Equal(t, []string{"a", "b", "c"}, ids)

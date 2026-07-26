@@ -257,12 +257,16 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 	market := strings.ToLower(firstString(stringValue(payload, "market"), "spot"))
 	symbol := stringValue(payload, "symbol")
 	subjectID := firstString(stringValue(payload, "subject_id"), symbol)
+	datasetID := stringValue(payload, "dataset_id")
 	interval := stringValue(payload, "interval")
 	if taskID == "" {
 		return nil, fmt.Errorf("task_id is required")
 	}
 	if strings.TrimSpace(item.JobItemID) == "" {
 		return nil, fmt.Errorf("job_item_id is required")
+	}
+	if datasetID == "" {
+		return nil, fmt.Errorf("dataset_id is required")
 	}
 	if dataType != "symbol" && symbol == "" {
 		return nil, fmt.Errorf("symbol is required")
@@ -275,7 +279,8 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 		intervals = []string{""}
 	}
 	return &model.TaskExecuteEvent{
-		SpaceID: stringValue(payload, "space_id"), TaskID: taskID, JobItemID: item.JobItemID, DataType: dataType,
+		SpaceID: stringValue(payload, "space_id"), DatasetID: datasetID,
+		TaskID: taskID, JobItemID: item.JobItemID, DataType: dataType,
 		DataSource: firstString(stringValue(payload, "exchange"), "binance"), Market: market,
 		InstType: strings.ToUpper(market), SubjectID: subjectID, Symbol: symbol, Intervals: intervals,
 		Immediate: true, Live: boolValue(payload, "live"),

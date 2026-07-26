@@ -14,26 +14,20 @@ api:
 storage:
   bindings:
     spot:
-      space_id: "crypto"
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "spot"
-      record_dataset_id: "binance_spot_symbols"
-      kline_dataset_id: "binance_spot_kline_1h"
-      bind_dataset_ids:
+      subject_dataset_ids:
         - "binance_spot_symbols"
         - "binance_spot_kline_1h"
       auth_info:
         app_id: "moox-collector"
         app_key: "binance-spot-collector"
     swap:
-      space_id: "crypto"
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "swap"
-      record_dataset_id: "binance_swap_symbols"
-      kline_dataset_id: "binance_swap_kline"
-      bind_dataset_ids:
+      subject_dataset_ids:
         - "binance_swap_symbols"
         - "binance_swap_kline"
       auth_info:
