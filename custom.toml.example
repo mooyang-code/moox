@@ -6,6 +6,11 @@ password = ""
 secret_id = ""
 secret_key = ""
 
+[eventbus]
+public_address = ""
+port = 4222
+tls_enabled = true
+
 [control_host]
 name = "control"
 address = ""

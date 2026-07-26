@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -27,6 +29,12 @@ type TencentCloud struct {
 	SecretKey string `toml:"secret_key"`
 }
 
+type EventBus struct {
+	PublicAddress string `toml:"public_address"`
+	Port          int    `toml:"port"`
+	TLSEnabled    bool   `toml:"tls_enabled"`
+}
+
 type Host struct {
 	Name     string `toml:"name"`
 	Address  string `toml:"address"`
@@ -38,6 +46,7 @@ type Host struct {
 type Manifest struct {
 	Admin        Admin        `toml:"admin"`
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
+	EventBus     EventBus     `toml:"eventbus"`
 	ControlHost  Host         `toml:"control_host"`
 	CompileHost  Host         `toml:"compile_host"`
 	OtherHosts   []Host       `toml:"other_hosts"`
@@ -150,6 +159,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if out.ControlHost.Port == 0 {
 		out.ControlHost.Port = 22
 	}
+	if out.EventBus.Port == 0 {
+		out.EventBus.Port = 4222
+	}
 	if out.HasCompileHost() && out.CompileHost.Port == 0 {
 		out.CompileHost.Port = 22
 	}
@@ -179,6 +191,16 @@ func validate(manifest *Manifest) error {
 	if manifest.TencentCloud.SecretKey == "" {
 		return fmt.Errorf("config_invalid: tencent_cloud.secret_key is required")
 	}
+	manifest.EventBus.PublicAddress = strings.TrimSpace(manifest.EventBus.PublicAddress)
+	if !validEventBusAddress(manifest.EventBus.PublicAddress) {
+		return fmt.Errorf("config_invalid: eventbus.public_address must be an IPv4 address or DNS hostname")
+	}
+	if manifest.EventBus.Port < 1 || manifest.EventBus.Port > 65535 {
+		return fmt.Errorf("config_invalid: eventbus.port must be between 1 and 65535")
+	}
+	if !manifest.EventBus.TLSEnabled {
+		return fmt.Errorf("config_invalid: eventbus.tls_enabled must be true")
+	}
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
@@ -198,6 +220,27 @@ func validate(manifest *Manifest) error {
 		}
 	}
 	return nil
+}
+
+var dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+func validEventBusAddress(address string) bool {
+	if address == "" {
+		return false
+	}
+	if ip := net.ParseIP(address); ip != nil {
+		return ip.To4() != nil
+	}
+	if len(address) > 253 || strings.Contains(address, "..") {
+		return false
+	}
+	labels := strings.Split(address, ".")
+	for _, label := range labels {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func hostConfigured(host Host) bool {
