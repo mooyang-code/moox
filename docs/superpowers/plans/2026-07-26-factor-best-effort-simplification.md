@@ -210,6 +210,8 @@ modules/factor/internal/trigger/
 
 modules/factor/internal/scheduler/
   task.go                   可执行任务和完成结果
+  builder.go                realtime、RPC、CLI 共用的任务构造器
+  builder_test.go
   queue.go                  subject hash 和 queue key
   service.go                有界队列、supersede、执行和有限重试
   service_test.go
@@ -219,10 +221,6 @@ modules/factor/internal/engine/
   json_codec.go             唯一 JSON columnar 编码
   runtime_pool_executor.go  唯一执行器
   errors.go
-
-modules/factor/internal/calculation/
-  builder.go                realtime、RPC、CLI 共用的任务构造器
-  builder_test.go
 
 modules/factor/internal/storageio/
   client.go
@@ -1210,11 +1208,11 @@ git commit -m "refactor(factor): use one JSON runtime contract"
 
 ---
 
-### Task 6: 建立唯一 Task Builder 并简化手动补算
+### Task 6: 在 Scheduler 建立唯一 Task Builder 并简化手动补算
 
 **Files:**
-- Create: `modules/factor/internal/calculation/builder.go`
-- Create: `modules/factor/internal/calculation/builder_test.go`
+- Create: `modules/factor/internal/scheduler/builder.go`
+- Create: `modules/factor/internal/scheduler/builder_test.go`
 - Modify: `modules/factor/internal/bootstrap/bootstrap.go`
 - Modify: `modules/factor/internal/bootstrap/bootstrap_test.go`
 - Modify: `modules/factor/internal/rpc/recalc.go`
@@ -1234,11 +1232,11 @@ git commit -m "refactor(factor): use one JSON runtime contract"
 
 - [ ] **Step 1: 写共享 builder 测试**
 
-`calculation/builder_test.go`：
+`scheduler/builder_test.go`：
 
 ```go
 func TestBuildTaskUsesAllFactorsAndMaximumLookback(t *testing.T) {
-	task, err := BuildTask(Scope{
+	task, err := BuildTask(TaskScope{
 		TaskID: "task-1", TriggerType: "recalc",
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC-USDT", Freq: "1m", BarTime: time.Unix(1, 0),
@@ -1260,7 +1258,7 @@ func TestBuildTaskUsesAllFactorsAndMaximumLookback(t *testing.T) {
 核心 API：
 
 ```go
-type Scope struct {
+type TaskScope struct {
 	TaskID        string
 	TriggerType   string
 	SpaceID       string
@@ -1271,7 +1269,7 @@ type Scope struct {
 	BarTime       time.Time
 }
 
-func BuildTask(scope Scope, factors []domain.FactorDef, factorsDir string) (scheduler.Task, error)
+func BuildTask(scope TaskScope, factors []domain.FactorDef, factorsDir string) (Task, error)
 ```
 
 该函数负责：
@@ -1285,7 +1283,7 @@ writeback bars
 FactorSpec creation
 ```
 
-Bootstrap、RPC 和 CLI 不再各自解析 periods 或拼接 version path。
+Builder 与目标 `scheduler.Task` 位于同一包，不引入 `calculation`、`taskbuilder` 或 `engine -> scheduler` 反向依赖。Bootstrap、RPC 和 CLI 不再各自解析 periods 或拼接 version path。
 
 - [ ] **Step 3: 将 RecalcFactor 改为同步**
 
@@ -1329,7 +1327,7 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 
 `run-once`：
 
-- 使用 `calculation.BuildTask`。
+- 使用 `scheduler.BuildTask`。
 - 使用 `NewRuntimePoolExecutor(ctx, 1, process.Config{...})`。
 - 不再创建 Factor-local `StdioExecutor`。
 - 不再 claim replay task。
@@ -1383,7 +1381,7 @@ Run:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/factor
-go test ./internal/calculation ./internal/rpc ./cmd/cli -count=1
+go test ./internal/scheduler ./internal/rpc ./cmd/cli -count=1
 go test -race ./internal/rpc -count=1
 ```
 
@@ -1392,7 +1390,7 @@ Expected: PASS。
 - [ ] **Step 7: 提交补算收敛**
 
 ```bash
-git add -A modules/factor/internal/calculation modules/factor/internal/bootstrap \
+git add -A modules/factor/internal/scheduler modules/factor/internal/bootstrap \
   modules/factor/internal/rpc modules/factor/internal/trigger \
   modules/factor/internal/store modules/factor/cmd/cli \
   modules/factor/examples/run-once/README.md
