@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 
 const APP_INFO = {
   app_id: "moox_frontend",
@@ -15,12 +16,11 @@ const PUBLIC_DEPLOYMENTS = new Set([
   "storage-view",
 ]);
 
-const JOB_STATUS = {
+export const JOB_STATUS = {
   1: "JOB_ITEM_STATUS_PENDING",
-  2: "JOB_ITEM_STATUS_RUNNING",
   3: "JOB_ITEM_STATUS_SUCCESS",
   4: "JOB_ITEM_STATUS_FAILED",
-  5: "JOB_ITEM_STATUS_CANCELED",
+  6: "JOB_ITEM_STATUS_ENQUEUE_FAILED",
 };
 
 const TASK_STATUS = {
@@ -46,7 +46,7 @@ function parseArgs(argv) {
     e2eNodeId: "e2e-gateway",
     username: "mooxe2eadmin",
     password: "MooxE2E#20260704!",
-    timeoutSeconds: 180,
+    timeoutSeconds: 120,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -105,7 +105,7 @@ Options:
   --package <package_id>   Code package ID. Default: moox-collector_dev
   --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline_1h
   --e2e-node <node_id>     Admin Gateway node used by SysDeploy checks.
-  --timeout-seconds <n>    Poll timeout for assert phase. Default: 180`);
+  --timeout-seconds <n>    Assertion timeout. Default: 120`);
 }
 
 function trimRight(value, suffix) {
@@ -181,7 +181,7 @@ async function assertAfterSCF(args) {
   const jobItems = await waitFor("cloudnode job items success", timeoutMs, async () => {
     const rows = await listJobItems(args, token);
     if (rows.length === 0) throw new Error("cloudnode job items are empty");
-    const failed = rows.filter((item) => isJobStatus(item.status, "JOB_ITEM_STATUS_FAILED") || isJobStatus(item.status, "JOB_ITEM_STATUS_CANCELED"));
+    const failed = failedJobItems(rows);
     if (failed.length > 0) {
       throw new FatalAssertionError(`job item failed: ${failed.map((item) => `${item.job_item_id}:${statusName(item.status, JOB_STATUS)}:${item.last_error_message || ""}`).join(", ")}`);
     }
@@ -545,7 +545,7 @@ async function ensureCollectorRule(args, token) {
       source: { kind: "dataset_subjects", dataset_id: args.dataset },
       collector: { exchange: "binance", market: "spot", data_type: "kline", intervals: ["1h"] },
       target: { dataset_id: args.dataset, job_type: "collect.kline" },
-      schedule: { interval: "1h", timezone: "Asia/Shanghai" },
+      schedule: { interval: "2s", timezone: "Asia/Shanghai" },
     },
     enabled: true,
     creator: "moox-e2e",
@@ -702,7 +702,7 @@ function retMsg(retInfo) {
   return retInfo.msg || `code=${retInfo.code}`;
 }
 
-function statusName(value, table) {
+export function statusName(value, table) {
   if (typeof value === "number") return table[value] || String(value);
   if (typeof value === "string" && /^\d+$/.test(value)) return table[Number(value)] || value;
   return String(value || "");
@@ -712,11 +712,19 @@ function isJobStatus(value, expected) {
   return statusName(value, JOB_STATUS) === expected;
 }
 
+export function failedJobItems(rows) {
+  return rows.filter((item) =>
+    isJobStatus(item.status, "JOB_ITEM_STATUS_FAILED") ||
+    isJobStatus(item.status, "JOB_ITEM_STATUS_ENQUEUE_FAILED"));
+}
+
 function isTaskStatus(value, expected) {
   return statusName(value, TASK_STATUS) === expected;
 }
 
-main().catch((err) => {
-  console.error(`[e2e] ERROR: ${err.message}`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(`[e2e] ERROR: ${err.message}`);
+    process.exit(1);
+  });
+}

@@ -87,6 +87,12 @@ func Run(ctx context.Context) error {
 	return run(ctx, false)
 }
 
+// RunConfigured consumes jobs until ctx ends using identity and targets supplied
+// by a controlled diagnostic environment instead of a keepalive.
+func RunConfigured(ctx context.Context) error {
+	return run(ctx, false)
+}
+
 // RunOnce binds the same queues as Run but exits after one empty fetch round.
 func RunOnce(ctx context.Context) error {
 	return run(ctx, true)

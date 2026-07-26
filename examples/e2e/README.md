@@ -144,7 +144,10 @@ examples/platform-local.seed.yaml
 examples/metadata-quant-initial.seed.yaml --spaces crypto
 ```
 
-随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建 `crypto` Space、登记测试 Subject 和本地逻辑 SCF 节点、创建 Binance 现货 1H K 线规则、触发 collector 重算任务实例，再运行一次 `moox-collector-scf -once` 拉取 JobItem 并执行采集。最后断言：
+随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建 `crypto` Space、登记测试 Subject 和本地逻辑 SCF 节点、创建 Binance 现货 1H K 线规则、触发 collector 重算任务实例，再启动常驻 `moox-collector-scf`，由 JetStream delivery 驱动未来 `execute_at` 到期后执行。脚本退出时会清理该进程。最后断言：
+
+这里的 `-resident` 是为本地/远端 E2E 提供显式节点身份和网关地址的诊断模式，用于验证
+与生产一致的常驻 taskrunner；它不替代 Tencent SCF 发布、keepalive 或云端运行验收。
 
 - `9527` 管理台静态页面可访问；
 - `11000` admin gateway health 可访问；

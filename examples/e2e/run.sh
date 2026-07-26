@@ -7,7 +7,7 @@ DEPLOY_DIR="${MOOX_E2E_DEPLOY_DIR:-/tmp/moox-e2e}"
 PUBLIC_HOST="${MOOX_E2E_PUBLIC_HOST:-}"
 DEPLOY=1
 RESET_DATA=1
-TIMEOUT_SECONDS=180
+TIMEOUT_SECONDS=120
 SPACE_ID="crypto"
 RULE_ID="binance_spot_kline_1h"
 NODE_ID="e2e-scf-node"
@@ -20,11 +20,31 @@ E2E_NODE_ID="${MOOX_E2E_NODE_ID:-e2e-gateway}"
 E2E_MONITOR_INSTANCE_ID="${MOOX_E2E_MONITOR_INSTANCE_ID:-e2e-monitor}"
 E2E_GATEWAY_CONTROL_URL="${MOOX_E2E_GATEWAY_CONTROL_URL:-http://127.0.0.1:11000}"
 E2E_GATEWAY_INPUT_DIR=""
+SCF_RUNTIME_PID=""
+SCF_RUNTIME_REMOTE=0
 
-cleanup_gateway_inputs() {
+cleanup_e2e() {
+  if [[ "${SCF_RUNTIME_REMOTE}" -eq 1 ]]; then
+    ssh "${TARGET}" bash -s -- "${DEPLOY_DIR}" <<'EOF' >/dev/null 2>&1 || true
+deploy=$1
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+pid_file="${deploy}/run/e2e-collector-scf.pid"
+if [[ -r "${pid_file}" ]]; then
+  pid="$(cat "${pid_file}")"
+  kill "${pid}" 2>/dev/null || true
+  rm -f "${pid_file}"
+fi
+EOF
+  elif [[ -n "${SCF_RUNTIME_PID}" ]]; then
+    kill "${SCF_RUNTIME_PID}" 2>/dev/null || true
+    wait "${SCF_RUNTIME_PID}" 2>/dev/null || true
+  fi
   [[ -z "${E2E_GATEWAY_INPUT_DIR}" ]] || rm -rf "${E2E_GATEWAY_INPUT_DIR}"
 }
-trap cleanup_gateway_inputs EXIT
+trap cleanup_e2e EXIT
 
 export MOOX_ADMIN_JWT_SECRET_KEY="${MOOX_ADMIN_JWT_SECRET_KEY:-moox-e2e-jwt-secret-key-20260713-safe}"
 export MOOX_EVENTBUS_STREAM_MAX_BYTES="${MOOX_EVENTBUS_STREAM_MAX_BYTES:-104857600}"
@@ -40,7 +60,7 @@ Options:
   --host <host>                   Public host used by browser/gateway checks.
   --skip-deploy                   Reuse an already running deployment.
   --preserve-data                 Do not pass --reset-data to deploy-moox.sh.
-  --timeout-seconds <n>           SCF/assert timeout. Default: 180.
+  --timeout-seconds <n>           Runtime/assert timeout. Default: 120.
   --sysdeploy-only                Stop after the service-directory browser/API lifecycle.
   -h, --help                      Show this help.
 
@@ -230,16 +250,34 @@ ensure_admin_user() {
   run_remote "printf '%s\\n' $(shell_quote "${E2E_ADMIN_PASSWORD}") | ./bin/moox-admin-cli user ensure --db-path ./data/admin.db --username $(shell_quote "${E2E_ADMIN_USERNAME}") --password-stdin"
 }
 
-run_scf_once() {
-  local timeout="${TIMEOUT_SECONDS}s"
+start_scf_runtime() {
   if is_local_target; then
     local deploy_dir
     deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
-    "${ROOT}/examples/e2e/run-scf-once.sh" "${deploy_dir}" "${timeout}" "${NODE_ID}" "${SPACE_ID}"
+    mkdir -p "${deploy_dir}/log"
+    "${ROOT}/examples/e2e/run-scf-resident.sh" "${deploy_dir}" "${NODE_ID}" "${SPACE_ID}" \
+      >"${deploy_dir}/log/e2e-collector-scf.log" 2>&1 &
+    SCF_RUNTIME_PID=$!
+    sleep 1
+    kill -0 "${SCF_RUNTIME_PID}" 2>/dev/null || fail "resident collector SCF runtime exited during startup"
     return
   fi
-  ssh "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${timeout}" "${NODE_ID}" "${SPACE_ID}" \
-    <"${ROOT}/examples/e2e/run-scf-once.sh"
+  ssh "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${NODE_ID}" "${SPACE_ID}" <<'EOF'
+deploy=$1
+node_id=$2
+space_id=$3
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+mkdir -p "${deploy}/run" "${deploy}/log"
+nohup "${deploy}/examples/e2e/run-scf-resident.sh" "${deploy}" "${node_id}" "${space_id}" \
+  >"${deploy}/log/e2e-collector-scf.log" 2>&1 &
+echo "$!" >"${deploy}/run/e2e-collector-scf.pid"
+sleep 1
+kill -0 "$(cat "${deploy}/run/e2e-collector-scf.pid")"
+EOF
+  SCF_RUNTIME_REMOTE=1
 }
 
 verify_phase() {
@@ -291,8 +329,8 @@ log "prepare management/backend state"
 ensure_admin_user
 verify_phase "prepare"
 
-log "run collector SCF runtime once"
-run_scf_once
+log "start resident collector SCF runtime"
+start_scf_runtime
 
 log "assert collector/cloudnode/storage results"
 verify_phase "assert"

@@ -55,6 +55,22 @@ func TestRunOnce_RequiresGatewayAndNodeID(t *testing.T) {
 	assert.Contains(t, err.Error(), "node-id")
 }
 
+func TestConfigureResidentRuntimeFromExplicitOptions(t *testing.T) {
+	configureResidentRuntime(onceOptions{
+		ServiceGatewayTarget:    "http://127.0.0.1:11002",
+		NodeID:                  "e2e-scf-node",
+		StorageRPCGatewayTarget: "127.0.0.1:11003",
+	})
+
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	assert.Equal(t, "e2e-scf-node", nodeID)
+	assert.Equal(t, "http://127.0.0.1:11002", runtimeapp.GetServiceGatewayTarget())
+	assert.Equal(t, "127.0.0.1:11003", runtimeapp.GetStorageRPCGatewayTarget())
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, runtimeapp.WaitForReadiness(waitCtx), context.DeadlineExceeded)
+}
+
 func TestStartProductionRuntimeRequiresSpaceID(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "")
 

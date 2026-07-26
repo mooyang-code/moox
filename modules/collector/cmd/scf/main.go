@@ -32,16 +32,21 @@ var (
 	registerTRPCServices  = runtimebootstrap.RegisterTRPCServices
 	registerCloudFunction = serverless.RegisterCloudFunction
 	runTaskRunner         = taskrunner.Run
+	runConfiguredRunner   = taskrunner.RunConfigured
 )
 
 func main() {
-	once := flag.Bool("once", false, "poll and execute CloudNode JobItems once, then exit")
+	once := flag.Bool("once", false, "diagnostically fetch and execute available CloudNode JobItems, then exit")
+	resident := flag.Bool("resident", false, "diagnostically consume CloudNode JobItems until interrupted")
 	opts := onceOptionsFromEnv()
 	flag.StringVar(&opts.ServiceGatewayTarget, "service-gateway-target", opts.ServiceGatewayTarget, "service gateway target for CloudRuntime callbacks")
 	flag.StringVar(&opts.NodeID, "node-id", opts.NodeID, "runtime node id")
 	flag.StringVar(&opts.StorageRPCGatewayTarget, "storage-rpc-gateway-target", opts.StorageRPCGatewayTarget, "storage tRPC gateway target")
 	flag.DurationVar(&opts.Timeout, "timeout", opts.Timeout, "one-shot execution timeout")
 	flag.Parse()
+	if *once && *resident {
+		panic("-once and -resident cannot be used together")
+	}
 
 	cfg := runtimeapp.DefaultConfig()
 	if Version != "" {
@@ -64,6 +69,17 @@ func main() {
 		}
 		return
 	}
+	if *resident {
+		ctx := trpc.BackgroundContext()
+		if err := initializeRuntime(ctx, cfg, false); err != nil {
+			panic("failed to initialize resident collector runtime: " + err.Error())
+		}
+		configureResidentRuntime(opts)
+		if err := runConfiguredRunner(ctx); err != nil {
+			panic("failed to run resident collector runtime: " + err.Error())
+		}
+		return
+	}
 
 	if err := startProductionRuntime(trpc.BackgroundContext(), cfg); err != nil {
 		panic("failed to initialize bootstrap: " + err.Error())
@@ -71,6 +87,19 @@ func main() {
 
 	log.Info("数据采集器 SCF runtime 启动完成")
 	select {}
+}
+
+func configureResidentRuntime(opts onceOptions) {
+	if strings.TrimSpace(opts.ServiceGatewayTarget) != "" {
+		runtimeapp.UpdateServiceGatewayTarget(opts.ServiceGatewayTarget)
+	}
+	if strings.TrimSpace(opts.NodeID) != "" {
+		_, version := runtimeapp.GetNodeInfo()
+		runtimeapp.UpdateNodeInfo(opts.NodeID, version)
+	}
+	if strings.TrimSpace(opts.StorageRPCGatewayTarget) != "" {
+		runtimeapp.UpdateStorageRPCGatewayTarget(opts.StorageRPCGatewayTarget)
+	}
 }
 
 func initializeRuntime(ctx context.Context, cfg *runtimeapp.AppConfig, startTRPC bool) error {
