@@ -17,7 +17,7 @@
 1. Factor 是 best-effort realtime，不承诺进程退出后的任务恢复。
 2. JetStream delivery 在事件成功解码并放入内存 batcher 后 ACK。
 3. 内存窗口、待执行任务和正在执行任务都不写 SQLite。
-4. 队列满时拒绝新 scope，记录 dropped counter 和结构化日志，不阻塞 NATS 消费。
+4. 队列满时拒绝新 scope，增加 `queue_overflow_count` 并记录结构化日志，不阻塞 NATS 消费。
 5. 同一 `(space, source, target, subject, freq)` 的待执行任务只保留最新 bar。
 6. Storage 读取、Python 执行或写回失败只进行本进程内有限重试；重试耗尽后记录失败，不进入 DLQ。
 7. 手动补算只处理一个 subject 的一个 bar；小范围补算由调用方逐 bar 调用。
@@ -30,6 +30,7 @@
 14. 服务端二进制继续使用 `moox-factor`，现有启动命令和部署入口保持不变。
 15. CLI 继续作为独立二进制 `moox-factor-cli`，不与服务端合并。
 16. `FactorDef.Depends` 保持现有名称；它只表达标准 K 线字段之外的额外输入列，不表示因子 DAG。
+17. realtime 和手动补算都只写目标 `bar_time`；输入历史由 `lookback_bars` 控制，不再配置 `writeback_bars`。
 
 明确不做：
 
@@ -51,14 +52,14 @@
 Storage DatasetRowsUpserted
   -> Factor JetStream durable Consumer
   -> validate envelope and payload
-  -> EventBatcher.Ingest
+  -> EventBatcher.Add
   -> ACK
   -> fixed 2s per-scope window
   -> reload executable bindings
   -> Scheduler.Enqueue
   -> bounded per-subject shard queue
   -> Storage.ReadWindow
-  -> RuntimePoolExecutor.Execute (JSON, all factors)
+  -> PythonExecutor.Execute (JSON, all factors)
   -> validate result (null allowed)
   -> Storage.WriteFactorPatch
   -> log and metrics
@@ -89,7 +90,7 @@ RecalcFactor or moox-factor-cli run-once
   -> build the same scheduler task shape
   -> enqueue with completion channel
   -> wait for this task only
-  -> return terminal success/failure and elapsed_ms
+  -> return terminal success/failure
 ```
 
 补算不写进度表、不生成 run ID、不后台执行。调用超时即返回失败；是否再次调用由用户决定。
@@ -108,11 +109,10 @@ message FactorDef {
   string source_hash = 4;
   repeated int32 periods = 5;
   int32 lookback_bars = 6;
-  int32 writeback_bars = 7;
-  repeated string depends = 8;
-  string status = 9;
-  string created_at = 10;
-  string updated_at = 11;
+  repeated string depends = 7;
+  string status = 8;
+  string created_at = 9;
+  string updated_at = 10;
 }
 ```
 
@@ -121,11 +121,11 @@ message FactorDef {
 - `factor_id` 和 Python `name` 必填。
 - `periods` 必须非空、全部大于零、去重并升序保存。
 - `lookback_bars >= max(periods)`。
-- `1 <= writeback_bars <= lookback_bars`。
 - `status` 只能为 `enabled` 或 `disabled`。
 - `depends` 由源码分析生成，API 输入值不作为权威来源。
 
 `depends` 的业务含义固定为额外输入列集合。例如 `["funding_rate", "open_interest"]` 表示任务读取标准 K 线列之外，还要从 Storage 请求这两列。字段名保持 `Depends`/`depends`，不扩展为因子间依赖关系。
+每个任务只计算并写入目标 `bar_time`。`lookback_bars` 仅表示计算该 bar 所需的历史输入窗口，不表示写回行数。
 
 ### 3.2 RecalcFactor
 
@@ -141,13 +141,10 @@ message RecalcFactorReq {
 
 message RecalcFactorRsp {
   common.RetInfo ret_info = 1;
-  string status = 2;
-  int64 elapsed_ms = 3;
-  int32 factor_count = 4;
 }
 ```
 
-`factor_id` 为空时计算该 scope 下所有 enabled factors；非空时只计算指定且 enabled 的因子。
+`factor_id` 为空时计算该 scope 下所有 enabled factors；非空时只计算指定且 enabled 的因子。该 RPC 是同步终态接口：`ret_info = SUCCESS` 表示计算和写回均已完成，其他错误码表示校验、入队、计算、写回或等待失败。task ID、因子数和耗时只进入结构化日志；CLI 可继续输出这些面向人的诊断信息。
 
 ### 3.3 EngineStatus
 
@@ -181,6 +178,7 @@ t_factor_bindings
 c_kind
 c_params_json
 c_avg_runtime_ms
+c_writeback_bars
 ```
 
 删除整表：
@@ -219,7 +217,8 @@ modules/factor/internal/scheduler/
 modules/factor/internal/engine/
   types.go                  精简任务和结果类型
   json_codec.go             唯一 JSON columnar 编码
-  runtime_pool_executor.go  唯一执行器
+  executor.go               唯一 Python 执行器
+  executor_test.go
   errors.go
 
 modules/factor/internal/storageio/
@@ -300,7 +299,7 @@ Expected: Go 测试、race 和 vet PASS；Python 环境缺少 pytest 时先按 `
 
 ```text
 TestDisabledFactorIsExcludedFromRealtimeTask
-TestBestEffortHandlerACKsAfterMemoryIngest
+TestBestEffortHandlerACKsAfterMemoryAdd
 TestSchedulerRejectsNewScopeWhenQueueIsFull
 TestValidateFactorResultAllowsNull
 ```
@@ -332,8 +331,22 @@ Expected: 仅提交本计划文档。
 - Modify: `modules/factor/internal/store/binding_test.go`
 - Modify: `modules/factor/internal/registry/source.go`
 - Create: `modules/factor/internal/registry/source_test.go`
+- Modify: `modules/factor/internal/registry/service.go`
+- Modify: `modules/factor/internal/registry/service_test.go`
+- Modify: `modules/factor/internal/registry/metadata_sync.go`
 - Modify: `modules/factor/internal/rpc/convert.go`
 - Modify: `modules/factor/internal/rpc/convert_test.go`
+- Modify: `modules/factor/internal/rpc/service.go`
+- Modify: `modules/factor/internal/rpc/service_test.go`
+- Modify: `modules/factor/internal/rpc/recalc.go`
+- Modify: `modules/factor/internal/bootstrap/bootstrap.go`
+- Modify: `modules/factor/internal/bootstrap/bootstrap_test.go`
+- Modify: `modules/factor/cmd/cli/import.go`
+- Modify: `modules/factor/cmd/cli/main.go`
+- Modify: `modules/factor/cmd/cli/main_test.go`
+- Modify: `modules/factor/cmd/cli/run_once.go`
+- Modify: `modules/factor/cmd/cli/run_once_test.go`
+- Modify: `modules/factor/test/e2e_test.go`
 
 - [ ] **Step 1: 先写新 schema 契约测试**
 
@@ -354,6 +367,7 @@ func TestFactorSchemaContainsOnlyDefinitionAndBindingState(t *testing.T) {
 		"c_kind",
 		"c_params_json",
 		"c_avg_runtime_ms",
+		"c_writeback_bars",
 		"t_factor_event_inbox",
 		"t_factor_event_processed",
 		"t_factor_replay_tasks",
@@ -399,7 +413,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/factor/p
 make clean all
 ```
 
-Expected: `factor.pb.go` 和 `factor.trpc.go` 不再包含 CrossSection、FactorRun、WorkerStatus、GetRecalcProgress 或 ListFactorRuns。
+Expected: `factor.pb.go` 和 `factor.trpc.go` 不再包含 CrossSection、FactorRun、WorkerStatus、WritebackBars、GetRecalcProgress 或 ListFactorRuns；`RecalcFactorRsp` 只生成 `RetInfo`。
 
 - [ ] **Step 3: 改写领域模型**
 
@@ -414,7 +428,6 @@ type FactorDef struct {
 	SourcePath    string    `gorm:"column:c_source_path"`
 	Periods       []int     `gorm:"column:c_periods_json;serializer:json"`
 	LookbackBars  int       `gorm:"column:c_lookback_bars"`
-	WritebackBars int       `gorm:"column:c_writeback_bars"`
 	Depends       []string  `gorm:"column:c_depends_json;serializer:json"`
 	Status        string    `gorm:"column:c_status"`
 	CreateTime    time.Time `gorm:"column:c_ctime"`
@@ -431,7 +444,7 @@ const (
 )
 ```
 
-删除 kind、generic params JSON、平均运行时间和 cross-section 常量。
+删除 kind、generic params JSON、writeback bars、平均运行时间和 cross-section 常量。
 
 - [ ] **Step 4: 增加定义归一化测试**
 
@@ -441,7 +454,7 @@ const (
 func TestNormalizeFactorDefinitionSortsAndValidatesPeriods(t *testing.T) {
 	got, err := NormalizeFactorDefinition(domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "def signal(): pass",
-		Periods: []int{20, 5, 20}, LookbackBars: 30, WritebackBars: 2,
+		Periods: []int{20, 5, 20}, LookbackBars: 30,
 		Status: domain.FactorStatusEnabled,
 	})
 	require.NoError(t, err)
@@ -451,7 +464,7 @@ func TestNormalizeFactorDefinitionSortsAndValidatesPeriods(t *testing.T) {
 func TestNormalizeFactorDefinitionRejectsInvalidWindow(t *testing.T) {
 	_, err := NormalizeFactorDefinition(domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x",
-		Periods: []int{20}, LookbackBars: 10, WritebackBars: 11,
+		Periods: []int{20}, LookbackBars: 10,
 	})
 	require.Error(t, err)
 }
@@ -473,8 +486,6 @@ Expected validation:
 period <= 0                    -> error
 periods empty                  -> error
 lookback < max(periods)        -> error
-writeback < 1                  -> error
-writeback > lookback           -> error
 invalid factor status          -> error
 ```
 
@@ -492,7 +503,7 @@ func DependsJSONFromSource(source string) string
 func DependsFromSource(source string) []string
 ```
 
-返回去重、升序的列名数组。`ExtraColumnsFromFactors` 直接读取 `FactorDef.Depends`，不再重复 JSON 解析。
+返回去重、升序的列名数组。删除 `DependsInfo`、`ExtraColumnsFromSource`、`ExtraColumnsFromFactors` 和 `extraColumnsFromDepends`；任务 builder 直接把 `FactorDef.Depends` 复制为 `FactorSpec.Depends`，不再引入 `extra_columns` 中间名称或重复 JSON 解析。
 
 `metadata_sync.go` 遍历 `factor.Periods` 创建 Storage 列；只有调用 Storage Metadata 的 `CreateFactorReq.ParamsJson` 时才通过 `json.Marshal(factor.Periods)` 适配 Storage 公共协议。删除 Factor 模块自己的 `factorParams`、`paramsFromJSON`、`recalcParams` 和 `mustParseParams`。
 
@@ -505,7 +516,7 @@ Schema 必须符合根 `AGENTS.md` 的 SQLite 格式。执行：
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 sqlite3 :memory: < modules/factor/schema/factor.sql
-(cd modules/factor && go test ./schema ./internal/store ./internal/registry ./internal/rpc -count=1)
+(cd modules/factor && go test ./... -count=1)
 git diff --check
 ```
 
@@ -516,7 +527,9 @@ Expected: PASS；新空库只有 definition/binding 两张 Factor 业务表。
 ```bash
 git add modules/factor/proto modules/factor/schema \
   modules/factor/internal/domain modules/factor/internal/store \
-  modules/factor/internal/registry modules/factor/internal/rpc
+  modules/factor/internal/registry modules/factor/internal/rpc \
+  modules/factor/internal/bootstrap modules/factor/cmd/cli \
+  modules/factor/test
 git commit -m "refactor(factor): narrow definition and persistence contracts"
 ```
 
@@ -542,7 +555,7 @@ git commit -m "refactor(factor): narrow definition and persistence contracts"
 将 pending store fake 从 `consumer_test.go` 删除，新增直接内存断言：
 
 ```go
-func TestBestEffortHandlerACKsAfterMemoryIngest(t *testing.T) {
+func TestBestEffortHandlerACKsAfterMemoryAdd(t *testing.T) {
 	now := time.Date(2026, 7, 26, 9, 30, 0, 0, time.UTC)
 	batcher := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{
 		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
@@ -595,7 +608,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/factor
 go test ./internal/trigger/eventconsumer -run 'TestBestEffortHandler' -count=1
 ```
 
-Expected: FAIL because handler 仍要求 `IngestMessage` 和 durable store。
+Expected: FAIL because handler 仍要求 `IngestMessage` 和 durable store，且 EventBatcher 尚未提供 `Add`。
 
 - [ ] **Step 2: 将 EventBatcher 改为纯内存**
 
@@ -611,7 +624,7 @@ type EventBatcher struct {
 
 func NewEventBatcher(window time.Duration, bindings []domain.FactorBinding) *EventBatcher
 func (d *EventBatcher) SetBindings(bindings []domain.FactorBinding)
-func (d *EventBatcher) Ingest(event *storagepb.DatasetRowsUpserted, now time.Time)
+func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time)
 func (d *EventBatcher) Flush(now time.Time) []Task
 ```
 
@@ -631,23 +644,21 @@ TargetRunID
 
 - [ ] **Step 3: 简化 handler**
 
-`storageEventHandler.ingest` 改为：
+删除只被调用一次的 `storageEventHandler.ingest`。`Handle` 完成解码和身份校验后直接执行：
 
 ```go
-func (h storageEventHandler) ingest(_ context.Context, _ *jetstream.Delivery, event *storagepb.DatasetRowsUpserted) jetstream.HandlerResult {
-	if h.eventBatcher == nil {
-		return jetstream.HandlerResult{
-			Decision: jetstream.RETRY,
-			Delay:    time.Second,
-			Err:      errors.New("factor event batcher is unavailable"),
-		}
+if h.eventBatcher == nil {
+	return jetstream.HandlerResult{
+		Decision: jetstream.RETRY,
+		Delay:    time.Second,
+		Err:      errors.New("factor event batcher is unavailable"),
 	}
-	h.eventBatcher.Ingest(event, time.Now().UTC())
-	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
+h.eventBatcher.Add(payload, time.Now().UTC())
+return jetstream.HandlerResult{Decision: jetstream.ACK}
 ```
 
-解码失败继续 `TERM`；不要依据 message ID 去重。
+解码失败继续 `TERM`；不要依据 message ID 去重，也不要为一次调用保留 `ingest` 或 `acceptEvent` 包装方法。
 
 - [ ] **Step 4: 简化 bootstrap**
 
@@ -714,7 +725,7 @@ Expected: PASS。
 ```bash
 git add -A modules/factor/internal/trigger modules/factor/internal/store \
   modules/factor/internal/bootstrap
-git commit -m "refactor(factor): use best-effort realtime ingestion"
+git commit -m "refactor(factor): use best-effort realtime batching"
 ```
 
 ---
@@ -1019,13 +1030,14 @@ git commit -m "refactor(factor): bound scheduler and remove factor batching"
 
 ---
 
-### Task 5: 统一 JSON Runtime 和空值结果契约
+### Task 5: 统一 Python Executor、单 Bar 结果和空值契约
 
 **Files:**
 - Modify: `modules/factor/internal/engine/types.go`
 - Modify: `modules/factor/internal/engine/json_codec.go`
 - Modify: `modules/factor/internal/engine/json_codec_test.go`
-- Modify: `modules/factor/internal/engine/runtime_pool_executor.go`
+- Move: `modules/factor/internal/engine/runtime_pool_executor.go` -> `modules/factor/internal/engine/executor.go`
+- Create: `modules/factor/internal/engine/executor_test.go`
 - Modify: `modules/factor/internal/engine/errors_test.go`
 - Delete: `modules/factor/internal/engine/stdio_executor.go`
 - Delete: `modules/factor/internal/engine/worker_pool.go`
@@ -1036,10 +1048,13 @@ git commit -m "refactor(factor): bound scheduler and remove factor batching"
 - Modify: `modules/factor/internal/storageio/client_test.go`
 - Modify: `modules/factor/internal/scheduler/service.go`
 - Modify: `modules/factor/internal/scheduler/service_test.go`
+- Modify: `modules/factor/internal/bootstrap/bootstrap.go`
+- Modify: `modules/factor/internal/bootstrap/bootstrap_test.go`
 - Modify: `modules/factor/pyworker/codec.py`
 - Modify: `modules/factor/pyworker/worker.py`
 - Modify: `modules/factor/pyworker/test_worker.py`
 - Modify: `modules/factor/pyworker/requirements.txt`
+- Modify: `modules/factor/test/e2e_test.go`
 - Delete: `modules/factor/sections/.gitkeep`
 
 - [ ] **Step 1: 写 null 契约失败测试**
@@ -1049,8 +1064,8 @@ Go：
 ```go
 func TestValidateFactorResultAllowsNull(t *testing.T) {
 	specs := []engine.FactorSpec{{Name: "Cci", Periods: []int{20}}}
-	result := &engine.FactorResult{Columns: map[string]engine.FactorColumnResult{
-		"Cci_20": {Tail: 2, Values: []any{nil, 1.25}},
+	result := &engine.FactorResult{Columns: map[string]any{
+		"Cci_20": nil,
 	}}
 	require.NoError(t, validateFactorResult(specs, result))
 }
@@ -1059,8 +1074,8 @@ func TestValidateFactorResultRejectsNonNumericAndNonFinite(t *testing.T) {
 	for _, value := range []any{"bad", math.NaN(), math.Inf(1)} {
 		err := validateFactorResult(
 			[]engine.FactorSpec{{Name: "Cci", Periods: []int{20}}},
-			&engine.FactorResult{Columns: map[string]engine.FactorColumnResult{
-				"Cci_20": {Tail: 1, Values: []any{value}},
+			&engine.FactorResult{Columns: map[string]any{
+				"Cci_20": value,
 			}},
 		)
 		require.Error(t, err)
@@ -1075,9 +1090,23 @@ def test_json_value_normalizes_nan_and_infinity():
     assert _json_value(float("nan")) is None
     assert _json_value(float("inf")) is None
     assert _json_value(float("-inf")) is None
+
+def test_execute_returns_one_value_per_factor_column():
+    response = worker.execute_request(request_meta(periods=[2]))
+    assert not isinstance(response["results"]["Bias_2"], list)
+    assert "result_tails" not in response
 ```
 
-Expected: Go null test和 Python infinity test FAIL。
+同时增加：
+
+```text
+storageio/client_test.go: TestWriteFactorPatchWritesOnlyTaskBarTime
+scheduler/service_test.go: TestExecuteRejectsFrameMissingTaskBarTime
+```
+
+前者输入一个数值列和一个 `nil` 列，断言只提交一个以 `task.BarTime` 为 key 的 row，并且只包含数值列。后者让 Storage 返回的最后时间早于 `task.BarTime`，断言 executor 和 writeback 都不会被调用。
+
+Expected: Go null、单 bar writeback 和 Python 单值结果测试 FAIL。
 
 - [ ] **Step 2: 精简 Engine 类型**
 
@@ -1096,21 +1125,56 @@ Kind
 
 ```go
 type FactorSpec struct {
-	FactorID      string
-	Name          string
-	SourceHash    string
-	SourcePath    string
-	Periods       []int
-	WritebackBars int
-	ExtraColumns  []string
+	FactorID   string
+	Name       string
+	SourceHash string
+	SourcePath string
+	Periods    []int
+	Depends    []string
+}
+
+type FactorResult struct {
+	Columns     map[string]any
+	PerFactorMS map[string]int64
+	ElapsedMS   int64
 }
 ```
 
-JSON meta 使用 `"periods"`；Python worker 同步读取该字段。
+JSON meta 使用 `"periods"`，不再发送 `"writeback_bars"` 或 `"extra_columns"`；Python worker 同步读取该字段。scheduler 读取 Storage 时使用“标准 K 线列与所有 `FactorSpec.Depends` 的去重并集”。
 
-- [ ] **Step 3: 删除 Arrow 和 snapshot**
+- [ ] **Step 3: 重命名唯一执行器并删除 Arrow/snapshot**
 
-`RuntimePoolExecutor`：
+将 concrete executor 从 `RuntimePoolExecutor` 重命名为 `PythonExecutor`，文件改为 `executor.go`：
+
+```go
+type Executor interface {
+	Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error)
+	Close() error
+}
+
+type PythonExecutor struct {
+	workers int
+	pool    *pool.Pool
+	hello   protocol.Hello
+}
+
+type ExecutorStatus struct {
+	Workers        int
+	Ready          bool
+	WorkerVersion  string
+	PythonVersion  string
+	RuntimeEnvHash string
+}
+
+func NewPythonExecutor(ctx context.Context, workers int, cfg process.Config) (*PythonExecutor, error)
+func (e *PythonExecutor) Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error)
+func (e *PythonExecutor) Status() ExecutorStatus
+func (e *PythonExecutor) Close() error
+```
+
+将 `Executor` 接口从 `types.go` 移到 `executor.go`，继续供 scheduler 和测试 fake 使用。`PythonExecutor` 内部保留 `pyruntime/pool`，但公共命名不暴露 pool 实现细节。所有 `runtimeExec` 局部变量同步改为 `pythonExec`，原有 pool executor 测试移入 `executor_test.go`。
+
+`PythonExecutor`：
 
 - 删除 `arrow bool`。
 - 删除独立 `python -c import pyarrow` 探测。
@@ -1123,6 +1187,7 @@ Python worker：
 - 删除 `cross_section` 分支。
 - 删除 `arrow_mmap` decode 分支。
 - `load_one` 永远加载到 factors map。
+- 每个因子列只返回目标 `bar_time` 对应的最后一个值，不再返回 tail 数组或 `result_tails`。
 
 `pyworker/requirements.txt` 只保留：
 
@@ -1132,7 +1197,7 @@ numpy>=2,<3
 pytest>=8,<9
 ```
 
-- [ ] **Step 4: 归一化缺失值**
+- [ ] **Step 4: 归一化缺失值并固定单 bar 写回**
 
 `codec.py`：
 
@@ -1167,7 +1232,15 @@ func validFactorValue(value any) bool {
 }
 ```
 
-`WriteFactorPatch` 保持 `nil` 不写列；移除 `factor.snapshot_hash` attribute，只保留：
+Go codec 将 Python 的单值结果解码为 `FactorResult.Columns map[string]any`；删除 `FactorColumnResult`、`Tail` 和 tail-to-frame-row 映射。scheduler 在调用 executor 前必须确认 `frame.DataTimes` 非空且最后一个时间等于 `task.BarTime`；否则按 Storage 窗口不完整处理，在 `max_retry` 范围内重试，绝不能把前一根 bar 的结果写到目标时间。
+
+`WriteFactorPatch` 改为：
+
+```go
+func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, result *engine.FactorResult) error
+```
+
+它只创建一个以 `task.BarTime` 为 key 的 `RowFieldUpsert`，`nil` 结果列跳过写入。移除 `factor.snapshot_hash` attribute，只保留：
 
 ```text
 factor.parent_task_id
@@ -1176,13 +1249,15 @@ factor.computed_at
 
 - [ ] **Step 5: 删除旧执行器和无调用缓存**
 
-删除 Target File Map 中的 stdio executor、worker pool、WindowCache 和 SnapshotStore。
+删除 Target File Map 中的 stdio executor、worker pool、WindowCache 和 SnapshotStore，同时删除 `WritebackBars`、`ExtraColumns`、`FactorColumnResult`、`result_tails` 和旧 runtime executor 名称。
 
 确认：
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-! rg -n 'StdioExecutor|WorkerPool|SnapshotStore|SnapshotPath|arrow_mmap|cross_section|sections-dir' modules/factor
+! rg -n \
+  'StdioExecutor|WorkerPool|SnapshotStore|SnapshotPath|arrow_mmap|cross_section|sections-dir|WritebackBars|writeback_bars|ExtraColumns|extra_columns|FactorColumnResult|result_tails|RuntimePoolExecutor|NewRuntimePoolExecutor|runtime_pool_executor' \
+  modules/factor/internal modules/factor/proto modules/factor/pyworker modules/factor/cmd modules/factor/test
 ```
 
 Expected: 命令退出 0。
@@ -1191,8 +1266,8 @@ Expected: 命令退出 0。
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/factor
-go test ./internal/engine ./internal/scheduler ./internal/storageio -count=1
-go test -race ./internal/engine ./internal/scheduler -count=1
+go test ./internal/engine ./internal/scheduler ./internal/storageio ./internal/bootstrap ./test -count=1
+go test -race ./internal/engine ./internal/scheduler ./internal/bootstrap -count=1
 PYTHONPATH=../../packages/pyruntime/python python3 -m pytest -q pyworker
 ```
 
@@ -1202,8 +1277,9 @@ Expected: PASS；平盘 `Cci` 返回 null 结果，不再使整个实时任务�
 
 ```bash
 git add -A modules/factor/internal/engine modules/factor/internal/storageio \
-  modules/factor/internal/scheduler modules/factor/pyworker modules/factor/sections
-git commit -m "refactor(factor): use one JSON runtime contract"
+  modules/factor/internal/scheduler modules/factor/internal/bootstrap \
+  modules/factor/pyworker modules/factor/sections modules/factor/test
+git commit -m "refactor(factor): simplify Python executor and single-bar output"
 ```
 
 ---
@@ -1213,6 +1289,7 @@ git commit -m "refactor(factor): use one JSON runtime contract"
 **Files:**
 - Create: `modules/factor/internal/scheduler/builder.go`
 - Create: `modules/factor/internal/scheduler/builder_test.go`
+- Modify: `modules/factor/internal/scheduler/task.go`
 - Modify: `modules/factor/internal/bootstrap/bootstrap.go`
 - Modify: `modules/factor/internal/bootstrap/bootstrap_test.go`
 - Modify: `modules/factor/internal/rpc/recalc.go`
@@ -1241,13 +1318,14 @@ func TestBuildTaskUsesAllFactorsAndMaximumLookback(t *testing.T) {
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC-USDT", Freq: "1m", BarTime: time.Unix(1, 0),
 	}, []domain.FactorDef{
-		{FactorID: "bias", Name: "Bias", SourceHash: "h1", Periods: []int{20}, LookbackBars: 100, WritebackBars: 2},
-		{FactorID: "cci", Name: "Cci", SourceHash: "h2", Periods: []int{14}, LookbackBars: 200, WritebackBars: 3},
+		{FactorID: "bias", Name: "Bias", SourceHash: "h1", Periods: []int{20}, LookbackBars: 100, Depends: []string{"funding_rate"}},
+		{FactorID: "cci", Name: "Cci", SourceHash: "h2", Periods: []int{14}, LookbackBars: 200},
 	}, "/factor")
 	require.NoError(t, err)
 	require.Equal(t, 200, task.LookbackBars)
 	require.Len(t, task.Factors, 2)
 	require.Equal(t, []int{20}, task.Factors[0].Periods)
+	require.Equal(t, []string{"funding_rate"}, task.Factors[0].Depends)
 }
 ```
 
@@ -1277,9 +1355,8 @@ func BuildTask(scope TaskScope, factors []domain.FactorDef, factorsDir string) (
 ```text
 source version path
 periods
-depends -> extra columns
+depends
 maximum lookback
-writeback bars
 FactorSpec creation
 ```
 
@@ -1287,7 +1364,7 @@ Builder 与目标 `scheduler.Task` 位于同一包，不引入 `calculation`、`
 
 - [ ] **Step 3: 将 RecalcFactor 改为同步**
 
-删除 `recalcState`、`recalc map`、`GetRecalcProgress` 和后台 goroutine。
+删除 `recalcState`、`recalc map`、`GetRecalcProgress` 和后台 goroutine。`scheduler.TaskResult` 同时删除不再被同步响应消费的 `ElapsedMS`；耗时仍由 scheduler 结构化日志和 CLI terminal JSON 记录。
 
 实现结构：
 
@@ -1311,10 +1388,7 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 			}
 			return &factorpb.RecalcFactorRsp{RetInfo: inner(resultErr)}, nil
 		}
-		return &factorpb.RecalcFactorRsp{
-			RetInfo: success(), Status: result.Status,
-			ElapsedMs: result.ElapsedMS, FactorCount: int32(len(task.Factors)),
-		}, nil
+		return &factorpb.RecalcFactorRsp{RetInfo: success()}, nil
 	case <-ctx.Done():
 		return &factorpb.RecalcFactorRsp{RetInfo: inner(ctx.Err())}, nil
 	}
@@ -1328,7 +1402,7 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 `run-once`：
 
 - 使用 `scheduler.BuildTask`。
-- 使用 `NewRuntimePoolExecutor(ctx, 1, process.Config{...})`。
+- 使用 `engine.NewPythonExecutor(ctx, 1, process.Config{...})`。
 - 不再创建 Factor-local `StdioExecutor`。
 - 不再 claim replay task。
 - CLI import 将 `--default-params` 改名为 `--default-periods`，`cliConfig.DefaultParams` 改名为 `DefaultPeriods`。
@@ -1373,7 +1447,7 @@ factor_id empty -> all executable factors
 explicit disabled factor -> invalid
 queue full -> immediate error
 task failure -> synchronous error
-task success -> status/elapsed/factor_count
+task success -> SUCCESS ret_info
 request context cancelled -> context error
 ```
 
@@ -1498,7 +1572,7 @@ queue_depth
 queue_overflow_count
 ```
 
-同时删除 RPC 层的 `engineStatusProvider`、`Service.engine` 和 `NewWithRuntime` 的 engine 参数，并更新 bootstrap 与测试调用点。`RuntimePoolExecutor.Status()` 继续供 `/readyz` 使用；不得在 RPC 中构造虚假的 `worker-1 ready` 列表或复制健康状态。
+同时删除 RPC 层的 `engineStatusProvider`、`Service.engine` 和 `NewWithRuntime` 的 engine 参数，并更新 bootstrap 与测试调用点。`PythonExecutor.Status()` 继续供 `/readyz` 使用；不得在 RPC 中构造虚假的 `worker-1 ready` 列表或复制健康状态。
 
 - [ ] **Step 5: 验证严格 YAML 和服务启动**
 
@@ -1536,8 +1610,8 @@ git commit -m "refactor(factor): remove unused runtime configuration"
 
 ```text
 FactorDef 使用 periods: number[]
-FactorDef 不含 kind/params_json
-RecalcFactor 返回 terminal status
+FactorDef 不含 kind/params_json/writeback_bars
+RecalcFactorRsp 只包含 ret_info
 API 不导出 getRecalcProgress
 EngineStatus 只包含 queue_depth/queue_overflow_count
 ```
@@ -1552,15 +1626,14 @@ it("uses explicit periods and synchronous recalc", () => {
     source_code: "def signal(): pass",
     periods: [5, 20],
     lookback_bars: 100,
-    writeback_bars: 2,
-    depends: ["close"],
+    depends: ["funding_rate"],
     status: "enabled"
   };
   expect(factor.periods).toEqual([5, 20]);
 });
 ```
 
-- [ ] **Step 2: 删除 cross-section UI**
+- [ ] **Step 2: 删除多余定义字段 UI**
 
 Definitions 页面删除：
 
@@ -1569,6 +1642,8 @@ kind filter
 kind table column
 kind form field
 cross_section option
+writeback_bars table column
+writeback_bars form field
 ```
 
 将参数 JSON textarea 替换为数字 tags/input，提交时发送 `periods: number[]`。
@@ -1579,14 +1654,11 @@ cross_section option
 
 ```ts
 export function recalcFactor(params: RecalcFactorReq) {
-  return callFactor<RecalcFactorReq, FactorRetRsp<RecalcFactorResult>>(
-    "RecalcFactor",
-    params
-  );
+  return callFactor<RecalcFactorReq, FactorRetRsp>("RecalcFactor", params);
 }
 ```
 
-删除 `getRecalcProgress` 和 `RecalcProgress`。
+删除 `getRecalcProgress`、`RecalcProgress` 和 `RecalcFactorResult`。
 
 如果页面提供补算操作，弹窗只包含：
 
@@ -1606,10 +1678,8 @@ optional factor_id
 `results/index.vue` 不展示 FactorRun 历史或异步进度。保留 Storage 结果数据集查询，并在状态区域显示：
 
 ```text
-queue depth / capacity
-dropped tasks
-writeback failures
-worker ready
+queue depth
+queue overflow count
 ```
 
 - [ ] **Step 5: 运行前端验证**
@@ -1661,9 +1731,10 @@ git commit -m "refactor(web): align factor UI with simple timeseries runtime"
 ```text
 single instance
 timeseries only
-best-effort after memory ingest
+best-effort ACK after `EventBatcher.Add`
 bounded queue
 one read / one Python call / one write per task
+single-bar writeback
 null result contract
 manual single-bar recalc
 no durable scheduler/inbox/DLQ/exactly-once
@@ -1704,7 +1775,7 @@ real packages/events publish
 real Factor eventconsumer
 real EventBatcher
 real Scheduler
-real RuntimePoolExecutor
+real PythonExecutor
 fake StorageIO with deterministic candle frame
 ```
 
@@ -1779,8 +1850,10 @@ git commit -m "test(factor): prove best-effort realtime pipeline"
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 ! rg -n \
-  'cross_section|params_json|ParamsJSON|default-params|sections_dir|arrow_row_threshold|max_batch_parallelism|snapshot_ttl_seconds|reconcile_interval_min|primary_target|heartbeat_interval_ms|t_factor_event_inbox|t_factor_event_processed|t_factor_replay_tasks|GetRecalcProgress|ListFactorRuns|StdioExecutor|WorkerPool|SnapshotStore' \
-  modules/factor web/src/api/factor web/src/views/factor
+  'cross_section|params_json|ParamsJSON|default-params|sections_dir|arrow_row_threshold|max_batch_parallelism|snapshot_ttl_seconds|reconcile_interval_min|primary_target|heartbeat_interval_ms|t_factor_event_inbox|t_factor_event_processed|t_factor_replay_tasks|GetRecalcProgress|ListFactorRuns|StdioExecutor|WorkerPool|SnapshotStore|WritebackBars|writeback_bars|ExtraColumns|extra_columns|FactorColumnResult|result_tails|RuntimePoolExecutor|NewRuntimePoolExecutor|runtime_pool_executor|IngestMessage' \
+  modules/factor/internal modules/factor/proto modules/factor/schema modules/factor/cmd \
+  modules/factor/pyworker modules/factor/config modules/factor/test \
+  web/src/api/factor web/src/views/factor
 ! rg -n \
   'dropped_tasks|DroppedTasks|supersede_count|SupersedeCount|writeback_failures|WritebackFailures|WorkerStatus' \
   modules/factor/proto modules/factor/internal/rpc modules/factor/internal/scheduler web/src/api/factor
@@ -1848,6 +1921,8 @@ best-effort ACK 边界与 README 一致
 队列容量有上限且 supersede 不制造 stale item
 一个 subject 任务只有一次 executor call
 null 被允许且跳过写回
+每个任务只写目标 bar_time
+FactorDef 和 FactorSpec 都使用 Depends，不存在 ExtraColumns 别名
 Metadata 不在实时热路径
 run-once 和 realtime 使用同一 builder/runtime
 Proto/DB/UI 不再暴露删除能力
@@ -1886,9 +1961,9 @@ Expected: local HEAD 与远端 `feature/mooyang` 完全一致；工作树只允�
 2. 文档明确承认 ACK 后进程退出会漏算。
 3. 因子和 Binding 任一禁用都不会进入新的实时任务。
 4. scheduler 的待执行 scope 数受 `queue_capacity` 限制；每次因容量不足而失败的入队操作只增加一次 `queue_overflow_count`。
-5. 一个任务只进行一次 Storage read、一次 Python execute、一次 Storage write。
+5. 一个任务只进行一次 Storage read、一次 Python execute、一次 Storage write，并且只写目标 `bar_time`。
 6. 平盘 Cci 的 null 输出不会导致整任务失败。
-7. `run-once` 和 `RecalcFactor` 可同步返回单 bar 补算结果。
-8. Proto、Schema、Go、Python 和 Web 中不再存在 cross-section、Arrow、FactorRun、异步补算进度或 durable inbox 能力。
+7. `run-once` 和 `RecalcFactor` 可同步完成单 bar 补算；`RecalcFactorRsp` 只通过 `ret_info` 表达成功或失败。
+8. Proto、Schema、Go、Python 和 Web 中不再存在 cross-section、Arrow、FactorRun、异步补算进度、durable inbox、`writeback_bars`、`ExtraColumns` 或旧 runtime executor 名称。
 9. Factor Go tests、race、vet、Python tests、build、event contracts、workspace tests 和 Web build 全部通过。
 10. 独立审查无未处理发现，local/remote SHA 完全一致。
