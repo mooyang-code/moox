@@ -745,8 +745,12 @@ build_core_binaries() {
       "${ROOT}/scripts/build.sh" archive
   fi
 
-  [[ "${WITH_STORAGE}" -eq 1 ]] || return
-  [[ "${cross_storage}" -eq 0 ]] || return
+  if [[ "${WITH_STORAGE}" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "${cross_storage}" -eq 1 ]]; then
+    return 0
+  fi
   TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
     "${ROOT}/scripts/build.sh" storage
 }
