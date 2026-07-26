@@ -12,6 +12,10 @@ grep -Fq 'chmod 0600 ./custom.toml' "${REFERENCE}"
 grep -Fq '用户必须在部署前填写' "${REFERENCE}"
 grep -Fq '明文凭据' "${REFERENCE}"
 grep -Fq '保持不变' "${REFERENCE}"
+grep -Fq '[eventbus]' "${REFERENCE}"
+grep -Fq 'public_address = ""' "${REFERENCE}"
+grep -Fq '公网连接事实' "${REFERENCE}"
+grep -Fq 'cloudnode-worker.yaml' "${REFERENCE}"
 
 validate_line=$(grep -nF './bin/moox-cli setup validate --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
 deploy_line=$(grep -nF './bin/moox-cli setup deploy-control --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)

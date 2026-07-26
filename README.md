@@ -25,6 +25,11 @@ CLI，不再是占位模块。
 
 macOS 不直接交叉编译启用 DuckDB CGO 的 Storage Linux 二进制。配置根目录 `custom.toml` 的 `[compile_host]` 后，运行 `make build-storage-linux`，脚本会通过 `moox-cli setup hosts` 获取脱敏主机信息，同步源码到该 Linux 主机并在那里使用原生 Go、GCC/G++ 编译；不会同步 `custom.toml`。
 
+新系统初始化时，根目录 `custom.toml` 的 `[eventbus]` 只填写 SCF 可访问的公网
+IPv4/DNS、端口和 TLS 开关。`setup deploy-control` 在控制节点部署 Admin、Gateway、
+Web、EventBus、CloudNode 和 Collector；EventBus token、私有 CA 与
+`cloudnode-worker.yaml` 均由系统生成，不属于用户配置。
+
 部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
 
 提交前统一运行 `make verify`。它会检查模块和 package 依赖边界、tRPC Context、gofmt、Prettier 与零 warning ESLint，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway/Strategy 部署和 Caddy 契约检查；所有格式与 lint 门禁都是只读检查，不在 CI 中执行 `--fix` 或 `--write`。

@@ -28,6 +28,11 @@ moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
 ```
 
+`[eventbus]` 只填写 Collector SCF 能访问的公网 IPv4/DNS、端口和
+`tls_enabled = true`。EventBus 用户名、token、私有 CA 和
+`cloudnode-worker.yaml` 由部署流程生成，不写入 `custom.toml`。控制面部署单元包含
+Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
+
 `setup validate` performs the full Tencent Cloud STS identity check. The
 `deploy-control` and `deploy-storage` commands only repeat immutable-config
 and SSH host validation; copying and starting MooX binaries does not require a
@@ -59,8 +64,8 @@ moox-cli setup deploy-service \
 进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`custom.toml`
 是用户维护的只读输入，CLI 不修改或删除该文件。
 
-控制面初始化完成后，再单独选择 Storage 主机和业务元数据。Admin、Gateway、
-Web 固定部署在 `control_host`；Storage 的四个初始组件作为一个单元部署到明确
+控制面初始化完成后，再单独选择 Storage 主机和业务元数据。Admin、Gateway、Web、
+EventBus、CloudNode 和 Collector 固定部署在 `control_host`；Storage 的四个初始组件作为一个单元部署到明确
 选择的 `control_host` 或 `other_hosts` 主机：
 
 ```bash

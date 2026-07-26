@@ -27,6 +27,11 @@ password = ""
 secret_id = ""
 secret_key = ""
 
+[eventbus]
+public_address = ""
+port = 4222
+tls_enabled = true
+
 [control_host]
 name = "control"
 address = ""
@@ -48,6 +53,10 @@ port = 22
 username = "ubuntu"
 password = ""
 ```
+
+`eventbus` 只包含公网连接事实：SCF 可访问的 IPv4 或 DNS 地址、监听端口和必须开启的
+TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料以及
+`cloudnode-worker.yaml`。
 
 Only `control_host` determines the first control-plane deployment. `compile_host`
 is optional, is used only by `scripts/build-storage-linux.sh` for native Linux
@@ -76,8 +85,8 @@ reported it.
 `apply` is successful only when its JSON includes `login_api: valid`. Ask the
 user to confirm browser login when interactive browser acceptance is required.
 Do not ask about Storage or business metadata until status 返回 `completed`.
-This phase ends after Admin, Gateway, and Web are ready, the manifest records are
-written, and the public login API is valid.
+This phase ends after Admin, Gateway, Web, EventBus, CloudNode, and Collector are
+ready, the manifest records are written, and the public login API is valid.
 
 ## Phase 2: Storage Host Selection
 
