@@ -35,7 +35,8 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"package", "upload", "install", "start", "admin_ready", "setup_ready",
-		"gateway_ready", "web_ready", "browser_https_ready", "ca", "finalize", "cleanup",
+		"gateway_ready", "eventbus_ready", "cloudnode_ready", "collector_ready",
+		"web_ready", "browser_https_ready", "ca", "finalize", "cleanup",
 	}, events)
 	require.Equal(t, remoteArchiveNext, transport.uploadPath)
 	require.Equal(t, fs.FileMode(0o600), transport.uploadMode)
@@ -49,6 +50,27 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	for _, secret := range []string{"admin-secret", "ssh-secret", "AKID-secret", "cloud-secret"} {
 		require.NotContains(t, captured, secret)
 	}
+}
+
+func TestControlRollsBackWhenEventServiceIsNotReady(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "control.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Control(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "control.example.test", BrowserPort: 9527,
+		TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+	}, Dependencies{
+		Packager: &fakePackager{path: archive, events: &events},
+		Probe:    &fakeProbe{events: &events, failAt: CloudNodeReady},
+		CAStore:  &fakeCAStore{events: &events},
+	})
+	require.EqualError(t, err, "control_deploy_not_ready")
+	require.Contains(t, events, "eventbus_ready")
+	require.Contains(t, events, "cloudnode_ready")
+	require.NotContains(t, events, "collector_ready")
+	require.Contains(t, events, "rollback")
 }
 
 func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {

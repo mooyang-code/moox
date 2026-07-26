@@ -38,6 +38,8 @@ grep -Fq 'MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls}' "${ROOT}/scrip
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PORT="${MOOX_EVENTBUS_PORT:-4222}"' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PORT=${quoted_eventbus_port}' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_EVENTBUS_ENABLE_TLS="${MOOX_EVENTBUS_ENABLE_TLS:-__EVENTBUS_ENABLE_TLS__}"' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 's#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq '${MOOX_EVENTBUS_PUBLIC_IP}:${MOOX_EVENTBUS_PORT}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'EVENTBUS_PORT="${MOOX_EVENTBUS_PORT}" perl -0pi' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP requires MOOX_EVENTBUS_ENABLE_TLS=1' "${ROOT}/scripts/deploy-moox.sh"
@@ -62,6 +64,10 @@ if MOOX_EVENTBUS_PORT=not-a-number "${ROOT}/scripts/deploy-moox.sh" --help >/dev
 fi
 if MOOX_EVENTBUS_PORT=70000 "${ROOT}/scripts/deploy-moox.sh" --help >/dev/null 2>&1; then
   echo "out-of-range EventBus port must be rejected" >&2
+  exit 1
+fi
+if MOOX_EVENTBUS_PORT=18446744073709551617 "${ROOT}/scripts/deploy-moox.sh" --help >/dev/null 2>&1; then
+  echo "overflowing EventBus port must be rejected" >&2
   exit 1
 fi
 

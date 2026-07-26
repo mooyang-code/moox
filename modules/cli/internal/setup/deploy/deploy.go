@@ -48,6 +48,9 @@ const (
 	AdminReady          ReadinessStage = "admin_ready"
 	SetupReady          ReadinessStage = "setup_ready"
 	GatewayReady        ReadinessStage = "gateway_ready"
+	EventBusReady       ReadinessStage = "eventbus_ready"
+	CloudNodeReady      ReadinessStage = "cloudnode_ready"
+	CollectorReady      ReadinessStage = "collector_ready"
 	WebReady            ReadinessStage = "web_ready"
 	BrowserHTTPSReady   ReadinessStage = "browser_https_ready"
 	StoragePrimaryReady ReadinessStage = "storage_primary_ready"
@@ -196,7 +199,10 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript}, nil)
 		}
 	}()
-	for _, stage := range []ReadinessStage{AdminReady, SetupReady, GatewayReady, WebReady, BrowserHTTPSReady} {
+	for _, stage := range []ReadinessStage{
+		AdminReady, SetupReady, GatewayReady, EventBusReady, CloudNodeReady,
+		CollectorReady, WebReady, BrowserHTTPSReady,
+	} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
 			return fmt.Errorf("control_deploy_not_ready")
 		}
@@ -473,6 +479,12 @@ func probeCommand(stage ReadinessStage) string {
 		return `curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:11110/trpc.moox.admin.Setup/GetSetupStatus >/dev/null`
 	case GatewayReady:
 		return `"$HOME/moox/prod/status.sh" gateway >/dev/null`
+	case EventBusReady:
+		return `"$HOME/moox/prod/status.sh" eventbus >/dev/null`
+	case CloudNodeReady:
+		return `"$HOME/moox/prod/status.sh" cloudnode >/dev/null`
+	case CollectorReady:
+		return `"$HOME/moox/prod/status.sh" collector >/dev/null`
 	case WebReady:
 		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
 	case BrowserHTTPSReady:

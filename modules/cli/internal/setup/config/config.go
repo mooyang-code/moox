@@ -159,7 +159,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if out.ControlHost.Port == 0 {
 		out.ControlHost.Port = 22
 	}
-	if out.EventBus.Port == 0 {
+	if !md.IsDefined("eventbus", "port") {
 		out.EventBus.Port = 4222
 	}
 	if out.HasCompileHost() && out.CompileHost.Port == 0 {
@@ -191,10 +191,11 @@ func validate(manifest *Manifest) error {
 	if manifest.TencentCloud.SecretKey == "" {
 		return fmt.Errorf("config_invalid: tencent_cloud.secret_key is required")
 	}
-	manifest.EventBus.PublicAddress = strings.TrimSpace(manifest.EventBus.PublicAddress)
-	if !validEventBusAddress(manifest.EventBus.PublicAddress) {
+	eventBusAddress := strings.TrimSpace(manifest.EventBus.PublicAddress)
+	if eventBusAddress != manifest.EventBus.PublicAddress || !validEventBusAddress(eventBusAddress) {
 		return fmt.Errorf("config_invalid: eventbus.public_address must be an IPv4 address or DNS hostname")
 	}
+	manifest.EventBus.PublicAddress = eventBusAddress
 	if manifest.EventBus.Port < 1 || manifest.EventBus.Port > 65535 {
 		return fmt.Errorf("config_invalid: eventbus.port must be between 1 and 65535")
 	}

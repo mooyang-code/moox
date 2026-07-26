@@ -92,6 +92,7 @@ password = "compute-e2e-password"
 	require.NoError(t, err)
 	require.Equal(t, []setupdeploy.ReadinessStage{
 		setupdeploy.AdminReady, setupdeploy.SetupReady, setupdeploy.GatewayReady,
+		setupdeploy.EventBusReady, setupdeploy.CloudNodeReady, setupdeploy.CollectorReady,
 		setupdeploy.WebReady, setupdeploy.BrowserHTTPSReady,
 	}, events)
 
