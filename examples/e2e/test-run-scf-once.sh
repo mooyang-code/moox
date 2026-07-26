@@ -11,12 +11,16 @@ MOOX_GATEWAY_NODE_ID=gateway-test
 MOOX_GATEWAY_SERVICE_KEY_ID=test-key
 MOOX_GATEWAY_SERVICE_SECRET_KEY=test-secret-never-print
 EOF
+cat >"${deploy}/secrets/gateway-collector.key" <<'EOF'
+test-secret-never-print
+EOF
+chmod 0600 "${deploy}/secrets/gateway-collector.key"
 printf '%s\n' '-----BEGIN CERTIFICATE-----' 'Y2VydA==' '-----END CERTIFICATE-----' >"${deploy}/certs/gateway/peers.pem"
 cat >"${deploy}/bin/moox-collector-scf" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "${MOOX_GATEWAY_NODE_ID}" == gateway-test ]]
-[[ "${MOOX_GATEWAY_SERVICE_KEY_ID}" == test-key ]]
+[[ "${MOOX_GATEWAY_SERVICE_KEY_ID}" == collector ]]
 [[ "${MOOX_GATEWAY_SERVICE_SECRET_KEY}" == test-secret-never-print ]]
 [[ "${MOOX_SPACE_ID}" == crypto ]]
 [[ -n "${MOOX_GATEWAY_CA_PEM_B64}" ]]
@@ -32,7 +36,7 @@ grep -Fq -- '-node-id collector-node' "${args}"
 grep -Fq -- '-timeout 120s' "${args}"
 ! grep -Rq -- 'test-secret-never-print' "${TMP}/output"
 
-sed -i.bak '/MOOX_GATEWAY_SERVICE_SECRET_KEY/d' "${deploy}/secrets/gateway-service.env"
+: >"${deploy}/secrets/gateway-collector.key"
 if MOOX_E2E_TEST_ARGS="${args}" "${ROOT}/examples/e2e/run-scf-once.sh" "${deploy}" 120s collector-node crypto >"${TMP}/missing-output" 2>&1; then
   echo 'missing Gateway secret unexpectedly accepted' >&2
   exit 1
