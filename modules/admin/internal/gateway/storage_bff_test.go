@@ -136,3 +136,33 @@ func TestAdminRouterStorageBFFRejectsInternalMethodBeforeResolvingService(t *tes
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 	assert.Empty(t, provider.lastNode)
 }
+
+func TestAdminRouterRejectsDirectStorageServiceIDsAndAliases(t *testing.T) {
+	SetConfig(&Config{
+		CORS: CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{
+			"/api/admin/storage-primary/DeleteDataset",
+			"/api/admin/storage-view/ClaimViewIndexBuild",
+			"/api/admin/storage_alias/DeleteDataset",
+		}},
+	})
+	upstreamCalls := 0
+	provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
+		"admin-node-test:storage_alias": {
+			Address: "127.0.0.1:1",
+			Path:    "trpc.moox.storage.Metadata",
+		},
+	}}
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+
+	for _, path := range []string{
+		"/api/admin/storage-primary/DeleteDataset",
+		"/api/admin/storage-view/ClaimViewIndexBuild",
+		"/api/admin/storage_alias/DeleteDataset",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{}`)))
+		assert.Equal(t, http.StatusNotFound, recorder.Code, path)
+	}
+	assert.Equal(t, 0, upstreamCalls)
+}

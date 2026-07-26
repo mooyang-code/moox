@@ -102,12 +102,15 @@ func TestStartProductionRuntimeStartsServicesFunctionAndOneRunner(t *testing.T) 
 	registerCloudFunction = func() {
 		functionStarts++
 	}
-	runTaskRunner = func(context.Context) error {
+	runTaskRunner = func(ctx context.Context) error {
 		runnerStarts <- struct{}{}
-		return nil
+		<-ctx.Done()
+		return ctx.Err()
 	}
 
-	require.NoError(t, startProductionRuntime(context.Background(), runtimeapp.DefaultConfig()))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, startProductionRuntime(ctx, runtimeapp.DefaultConfig()))
 	select {
 	case <-runnerStarts:
 	case <-time.After(time.Second):
@@ -120,6 +123,26 @@ func TestStartProductionRuntimeStartsServicesFunctionAndOneRunner(t *testing.T) 
 	}
 	assert.Equal(t, 1, trpcStarts)
 	assert.Equal(t, 1, functionStarts)
+}
+
+func TestResidentTaskRunnerRestartsAfterTransportFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan int, 2)
+	count := 0
+	run := func(context.Context) error {
+		count++
+		calls <- count
+		if count == 1 {
+			return errors.New("temporary NATS failure")
+		}
+		cancel()
+		return context.Canceled
+	}
+
+	runResidentTaskRunner(ctx, run, time.Millisecond)
+
+	assert.Equal(t, 1, <-calls)
+	assert.Equal(t, 2, <-calls)
 }
 
 func TestStartProductionRuntimeReturnsTRPCStartFailure(t *testing.T) {

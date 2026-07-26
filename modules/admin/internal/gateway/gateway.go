@@ -131,6 +131,9 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		serviceID = mappedServiceID
+	} else if isInternalStorageService(serviceID) {
+		http.NotFound(w, r)
+		return
 	}
 	if isMachineOnlyAdminMethod(serviceID, method) {
 		http.NotFound(w, r)
@@ -218,7 +221,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		writeForwardError(ctx, w, err, headers)
 		return
 	}
-	if isMachineOnlyResolvedMethod(detail, method) {
+	if isMachineOnlyResolvedMethod(detail, method) || isInternalStorageServicePath(detail.Path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -247,6 +250,24 @@ func isMachineOnlyAdminMethod(serviceID, method string) bool {
 func isMachineOnlyResolvedMethod(detail ServiceDetail, method string) bool {
 	return canonicalAdminSegment(method) == "revealsecret" &&
 		canonicalAdminSegment(detail.Path) == "trpcmooxopssecretmgr"
+}
+
+func isInternalStorageService(serviceID string) bool {
+	switch canonicalAdminSegment(serviceID) {
+	case "storageprimary", "storageview":
+		return true
+	default:
+		return false
+	}
+}
+
+func isInternalStorageServicePath(servicePath string) bool {
+	switch canonicalAdminSegment(servicePath) {
+	case "trpcmooxstoragemetadata", "trpcmooxstorageprimarystore", "trpcmooxstoragedataview":
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalAdminSegment(value string) string {

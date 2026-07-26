@@ -73,19 +73,32 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			{Name: "c_space_id"},
 			{Name: "c_task_id"},
 		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"c_cloud_job_item_id",
-			"c_rule_id",
-			"c_exchange",
-			"c_market",
-			"c_data_type",
-			"c_dataset_id",
-			"c_subject_id",
-			"c_symbol",
-			"c_interval",
-			"c_task_params",
-			"c_is_deleted",
-			"c_mtime",
+		DoUpdates: clause.Assignments(map[string]any{
+			"c_cloud_job_item_id": clause.Expr{SQL: "excluded.c_cloud_job_item_id"},
+			"c_rule_id":           clause.Expr{SQL: "excluded.c_rule_id"},
+			"c_exchange":          clause.Expr{SQL: "excluded.c_exchange"},
+			"c_market":            clause.Expr{SQL: "excluded.c_market"},
+			"c_data_type":         clause.Expr{SQL: "excluded.c_data_type"},
+			"c_dataset_id":        clause.Expr{SQL: "excluded.c_dataset_id"},
+			"c_subject_id":        clause.Expr{SQL: "excluded.c_subject_id"},
+			"c_symbol":            clause.Expr{SQL: "excluded.c_symbol"},
+			"c_interval":          clause.Expr{SQL: "excluded.c_interval"},
+			"c_task_params":       clause.Expr{SQL: "excluded.c_task_params"},
+			"c_is_deleted":        clause.Expr{SQL: "excluded.c_is_deleted"},
+			"c_mtime":             clause.Expr{SQL: "excluded.c_mtime"},
+			"c_last_exec_node": clause.Expr{
+				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '' ELSE c_last_exec_node END",
+			},
+			"c_last_exec_status": clause.Expr{
+				SQL:  "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN ? ELSE c_last_exec_status END",
+				Vars: []any{domain.InstanceStatusPending},
+			},
+			"c_last_exec_time": clause.Expr{
+				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN NULL ELSE c_last_exec_time END",
+			},
+			"c_result": clause.Expr{
+				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '{}' ELSE c_result END",
+			},
 		}),
 	}).Create(&instances).Error
 }

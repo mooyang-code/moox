@@ -18,6 +18,7 @@ import (
 )
 
 const defaultOnceTimeout = 120 * time.Second
+const residentRunnerRetryDelay = time.Second
 
 var Version string
 
@@ -124,11 +125,30 @@ func startProductionRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) erro
 	}
 	registerCloudFunction()
 	go func() {
-		if err := runTaskRunner(ctx); err != nil && ctx.Err() == nil {
-			log.Errorf("resident CloudNode JobItem taskrunner stopped: %v", err)
-		}
+		runResidentTaskRunner(ctx, runTaskRunner, residentRunnerRetryDelay)
 	}()
 	return nil
+}
+
+func runResidentTaskRunner(ctx context.Context, run func(context.Context) error, retryDelay time.Duration) {
+	for ctx.Err() == nil {
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			log.Errorf("resident CloudNode JobItem taskrunner stopped: %v", err)
+		} else {
+			log.Error("resident CloudNode JobItem taskrunner stopped unexpectedly")
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func onceOptionsFromEnv() onceOptions {

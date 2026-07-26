@@ -107,6 +107,18 @@ func TestTaskInstanceRepository_UpsertManyUpdatesCloudJobItemID(t *testing.T) {
 		TaskParams: `{}`, CloudJobItemID: "task-1:2026-07-26T10:30:00Z",
 	}
 	require.NoError(t, repo.UpsertMany(ctx, []domain.TaskInstance{base}))
+	updated, err := repo.UpdateStatus(
+		ctx,
+		"crypto",
+		"task-1",
+		base.CloudJobItemID,
+		"node-old",
+		domain.InstanceStatusSuccess,
+		`{"state":"old"}`,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+
 	base.CloudJobItemID = "task-1:2026-07-26T11:00:00Z"
 	require.NoError(t, repo.UpsertMany(ctx, []domain.TaskInstance{base}))
 
@@ -114,6 +126,30 @@ func TestTaskInstanceRepository_UpsertManyUpdatesCloudJobItemID(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
 	assert.Equal(t, "task-1:2026-07-26T11:00:00Z", instances[0].CloudJobItemID)
+	assert.Equal(t, domain.InstanceStatusPending, instances[0].LastExecStatus)
+	assert.Empty(t, instances[0].LastExecNode)
+	assert.Nil(t, instances[0].LastExecTime)
+	assert.JSONEq(t, `{}`, instances[0].Result)
+
+	updated, err = repo.UpdateStatus(
+		ctx,
+		"crypto",
+		"task-1",
+		base.CloudJobItemID,
+		"node-current",
+		domain.InstanceStatusSuccess,
+		`{"state":"current"}`,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NoError(t, repo.UpsertMany(ctx, []domain.TaskInstance{base}))
+	instances, _, err = repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, domain.InstanceStatusSuccess, instances[0].LastExecStatus)
+	assert.Equal(t, "node-current", instances[0].LastExecNode)
+	assert.NotNil(t, instances[0].LastExecTime)
+	assert.JSONEq(t, `{"state":"current"}`, instances[0].Result)
 }
 
 func TestTaskInstanceRepository_NormalizeHelpers(t *testing.T) {

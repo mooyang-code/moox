@@ -6,6 +6,7 @@ import {
   JOB_STATUS,
   assertFutureExecutionTimes,
   currentScheduledJobItems,
+  currentScheduledTaskInstances,
   failedJobItems,
   scheduleLeadDelay,
   statusName,
@@ -51,6 +52,18 @@ test("currentScheduledJobItems follows the task-instance job binding", () => {
   assert.deepEqual(
     currentScheduledJobItems(instances, rows).map((item) => item.job_item_id),
     ["current-1", "current-2"],
+  );
+});
+
+test("currentScheduledTaskInstances excludes stale successful executions", () => {
+  const instances = [
+    { task_id: "stale", cloud_job_item_id: "old", last_exec_status: 2 },
+    { task_id: "one", cloud_job_item_id: "current-1", last_exec_status: 2 },
+    { task_id: "two", cloud_job_item_id: "current-2", last_exec_status: 1 },
+  ];
+  assert.deepEqual(
+    currentScheduledTaskInstances(instances, new Set(["current-1", "current-2"])).map((item) => item.task_id),
+    ["one", "two"],
   );
 });
 

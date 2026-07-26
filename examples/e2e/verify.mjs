@@ -250,15 +250,20 @@ async function assertAfterSCF(args) {
   const instances = await waitFor("collector task instances success", timeoutMs, async () => {
     const rows = await listTaskInstances(args, token);
     if (rows.length === 0) throw new Error("collector task instances are empty");
-    const failed = rows.filter((item) => isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_FAILED"));
+    const current = currentScheduledTaskInstances(rows, scheduledIDs);
+    const currentIDs = new Set(current.map((item) => item.cloud_job_item_id));
+    if (current.length !== scheduledIDs.size || currentIDs.size !== scheduledIDs.size) {
+      throw new Error(`collector has ${currentIDs.size}/${scheduledIDs.size} task instances bound to this E2E run`);
+    }
+    const failed = current.filter((item) => isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_FAILED"));
     if (failed.length > 0) {
       throw new FatalAssertionError(`task instance failed: ${failed.map((item) => `${item.task_id}:${statusName(item.last_exec_status, TASK_STATUS)}`).join(", ")}`);
     }
-    const pending = rows.filter((item) => !isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_SUCCESS"));
+    const pending = current.filter((item) => !isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_SUCCESS"));
     if (pending.length > 0) {
-      throw new Error(`${pending.length}/${rows.length} task instances are not success yet`);
+      throw new Error(`${pending.length}/${current.length} current task instances are not success yet`);
     }
-    return rows;
+    return current;
   });
 
   const immediateJob = await submitImmediateJob(args, token, instances[0]);
@@ -877,6 +882,11 @@ export function failedJobItems(rows) {
 export function currentScheduledJobItems(instances, jobItems) {
   const ids = new Set(instances.map((item) => item.cloud_job_item_id).filter(Boolean));
   return jobItems.filter((item) => ids.has(item.job_item_id));
+}
+
+export function currentScheduledTaskInstances(instances, scheduledIDs) {
+  const ids = scheduledIDs instanceof Set ? scheduledIDs : new Set(scheduledIDs || []);
+  return instances.filter((item) => ids.has(item.cloud_job_item_id));
 }
 
 export function assertFutureExecutionTimes(items, nowMs) {
