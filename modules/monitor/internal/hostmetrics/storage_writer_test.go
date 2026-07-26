@@ -31,13 +31,16 @@ func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {
 		Disks:    []*hostmetricpb.DiskMetric{{Device: "sdb", ReadBytesTotal: 1, RateAvailable: false}},
 		Networks: []*hostmetricpb.NetworkMetric{{Device: "eth0", ReceiveBytesTotal: 2, RateAvailable: false}},
 	}
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", at); err != nil {
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", at, "event-1"); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.requests) != 3 {
 		t.Fatalf("requests=%d, want populated datasets", len(fake.requests))
 	}
 	for _, req := range fake.requests {
+		if req.GetSourceEventId() != "event-1" {
+			t.Fatalf("source_event_id=%q, want event-1", req.GetSourceEventId())
+		}
 		if len(req.GetRows()) == 0 {
 			t.Fatal("empty dataset request")
 		}

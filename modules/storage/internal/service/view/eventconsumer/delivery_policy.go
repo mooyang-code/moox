@@ -11,17 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-func (c *Consumer) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
-	return c.processDeliveryWithPolicy(ctx, delivery, firstHeartbeat(queued), defaultMaxRetryAttempts)
-}
-
-func firstHeartbeat(queued []*deliveryHeartbeat) *deliveryHeartbeat {
-	if len(queued) == 0 {
-		return nil
-	}
-	return queued[0]
-}
-
 func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
 	return c.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, func(ctx context.Context, delivery *jetstream.Delivery) error {
 		return c.applyDelivery(ctx, delivery)
@@ -63,10 +52,6 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 	defer func() { metrics.ObserveDeliveryDuration(time.Since(started)) }()
 	if delivery != nil && delivery.DeliveryCount > 1 {
 		metrics.IncRedelivery()
-	}
-	if c.config.WorkDelta != nil {
-		c.config.WorkDelta(1)
-		defer c.config.WorkDelta(-1)
 	}
 	if maxRetryAttempts < 1 {
 		maxRetryAttempts = defaultMaxRetryAttempts

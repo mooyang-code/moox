@@ -4,7 +4,6 @@ package view
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -399,23 +398,6 @@ func TestBackfillReadsNewDatasetColumnsByExistingGrain(t *testing.T) {
 	})
 	if err != nil || result.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(result.GetRows()) != 1 || len(result.GetRows()[0].GetFields()) != 2 {
 		t.Fatalf("result=%v err=%v", result, err)
-	}
-}
-
-func TestBackfillWaitsForLiveWorkToDrain(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc.liveWork.Store(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if err := svc.waitForLiveIdle(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err=%v", err)
-	}
-	svc.liveWork.Store(0)
-	if err := svc.waitForLiveIdle(context.Background()); err != nil {
-		t.Fatal(err)
 	}
 }
 

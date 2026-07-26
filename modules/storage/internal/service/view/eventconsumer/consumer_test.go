@@ -13,6 +13,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type datasetRowsHandlerFunc func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error
+
+func (f datasetRowsHandlerFunc) HandleDatasetRows(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
+	return f(ctx, message, payload)
+}
+
 func TestConfigDefaults(t *testing.T) {
 	config, err := (Config{}).withDefaults()
 	if err != nil {
@@ -30,7 +36,7 @@ func TestConfigRejectsNegativeRetryAttempts(t *testing.T) {
 }
 
 func TestApplyDeliveryRejectsMalformedAndMismatchedEvents(t *testing.T) {
-	consumer := testConsumer(t, DatasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
 		return nil
 	}))
 	for _, delivery := range []*jetstream.Delivery{
@@ -50,7 +56,7 @@ func TestApplyDeliveryRejectsMalformedAndMismatchedEvents(t *testing.T) {
 
 func TestApplyDeliveryPassesGovernedEventToHandler(t *testing.T) {
 	var handled bool
-	consumer := testConsumer(t, DatasetRowsHandlerFunc(func(_ context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(_ context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
 		handled = message.GetSpaceId() == "foo" && payload.GetDatasetId() == "bar"
 		return nil
 	}))

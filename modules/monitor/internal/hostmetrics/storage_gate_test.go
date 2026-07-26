@@ -255,21 +255,22 @@ func TestHasHostColumnsIgnoresInactive(t *testing.T) {
 
 func TestStorageWriterNilAndErrorPaths(t *testing.T) {
 	cfg := monconfig.Default().Metrics.HostStorage
-	require.Error(t, (*StorageWriter)(nil).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now()))
-	require.Error(t, NewStorageWriter(nil, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now()))
-	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), nil, "a", time.Now()))
-	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "", time.Now()))
+	require.Error(t, (*StorageWriter)(nil).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now(), "event-1"))
+	require.Error(t, NewStorageWriter(nil, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now(), "event-1"))
+	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), nil, "a", time.Now(), "event-1"))
+	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "", time.Now(), "event-1"))
+	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now(), ""))
 
 	failing := &writerAccessFailFake{err: errors.New("write failed")}
 	err := NewStorageWriter(failing, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{
 		Cpu: &hostmetricpb.CpuMetric{}, Memory: &hostmetricpb.MemoryMetric{},
-	}, "agent-1", time.Now().UTC())
+	}, "agent-1", time.Now().UTC(), "event-1")
 	require.Error(t, err)
 
 	failing = &writerAccessFailFake{badRet: true}
 	err = NewStorageWriter(failing, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{
 		Cpu: &hostmetricpb.CpuMetric{}, Memory: &hostmetricpb.MemoryMetric{},
-	}, "agent-1", time.Now().UTC())
+	}, "agent-1", time.Now().UTC(), "event-1")
 	require.Error(t, err)
 }
 
@@ -304,7 +305,7 @@ func TestStorageWriterIncludesRateColumnsWhenAvailable(t *testing.T) {
 		}},
 		Filesystems: []*hostmetricpb.FilesystemMetric{{Device: "sda1", Mountpoint: "/", FsType: "ext4"}},
 	}
-	require.NoError(t, writer.WriteSnapshot(context.Background(), snapshot, "agent-1", time.Now().UTC()))
+	require.NoError(t, writer.WriteSnapshot(context.Background(), snapshot, "agent-1", time.Now().UTC(), "event-1"))
 	require.Len(t, fake.requests, 4)
 	foundRate := false
 	for _, req := range fake.requests {

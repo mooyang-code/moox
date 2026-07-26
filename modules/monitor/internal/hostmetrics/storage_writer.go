@@ -27,12 +27,12 @@ func NewStorageWriter(access hostStorageAccess, cfg monconfig.HostStorageConfig)
 	return &StorageWriter{access: access, cfg: cfg}
 }
 
-func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time) error {
+func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time, messageID string) error {
 	if w == nil || w.access == nil {
 		return fmt.Errorf("host storage-primary client is nil")
 	}
-	if snapshot == nil || agentID == "" {
-		return fmt.Errorf("host snapshot and agent id are required")
+	if snapshot == nil || agentID == "" || messageID == "" {
+		return fmt.Errorf("host snapshot, agent id, and message id are required")
 	}
 	bucket := observedAt.UTC().Truncate(time.Minute).Format(time.RFC3339Nano)
 	rows := []struct {
@@ -65,7 +65,7 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		if w.cfg.WriteTimeout > 0 {
 			writeCtx, cancel = context.WithTimeout(ctx, w.cfg.WriteTimeout)
 		}
-		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{Rows: group})
+		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{Rows: group, SourceEventId: messageID})
 		cancel()
 		if err != nil {
 			return fmt.Errorf("write host dataset %q: %w", group[0].GetKey().GetDatasetId(), err)

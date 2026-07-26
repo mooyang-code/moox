@@ -35,9 +35,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	}
 	s.metrics = opts.Metrics
 	opts.Lease = liveDeliveryLease{service: s}
-	opts.WorkDelta = func(delta int64) {
-		s.liveWork.Add(delta)
-	}
 	consumer, err := eventconsumer.New(client, s, opts)
 	if err != nil {
 		return nil, err

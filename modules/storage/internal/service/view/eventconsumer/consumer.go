@@ -28,7 +28,6 @@ type Config struct {
 	Metrics          *observability.ViewMetrics
 	BeforeProcess    func(context.Context, *jetstream.Delivery) error
 	Lease            DeliveryLease
-	WorkDelta        func(int64)
 }
 
 func (c Config) withDefaults() (Config, error) {
