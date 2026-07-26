@@ -67,6 +67,21 @@ func TestServiceAuthSignsConstructedEscapedPathWithBasePrefix(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServiceAuthUsesConfiguredHTTPTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+	}))
+	defer server.Close()
+	c := New(server.URL)
+	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
+	c.HTTPClient = &http.Client{Timeout: 10 * time.Millisecond}
+
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
+
+	require.ErrorContains(t, err, "deadline exceeded")
+}
+
 func TestIsRetInfoSuccess(t *testing.T) {
 	assert.True(t, isRetInfoSuccess(0))
 	assert.False(t, isRetInfoSuccess(1))

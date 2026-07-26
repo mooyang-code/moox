@@ -78,17 +78,22 @@ func ReportHeartbeat(ctx context.Context) error {
 
 // ProcessProbe 处理心跳探测请求【服务端来的探测请求】
 func ProcessProbe(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	// 从上下文获取云函数信息，更新NodeID
-	funcCtx, ok := functioncontext.FromContext(ctx)
-	if ok && funcCtx.FunctionName != "" {
-		currentNodeID, currentVersion := runtimeapp.GetNodeInfo()
-		log.WithContextFields(ctx, "func", "ProcessProbe", "version", currentVersion, "nodeID", currentNodeID)
-
-		// 无条件更新 NodeID 为云函数名称
-		runtimeapp.UpdateNodeInfo(funcCtx.FunctionName, currentVersion)
-		log.DebugContextf(ctx, "[ProcessProbe] NodeID 已更新为 %s", funcCtx.FunctionName)
+	currentNodeID, currentVersion := runtimeapp.GetNodeInfo()
+	nodeID := currentNodeID
+	if event.Data != nil {
+		if value, ok := event.Data["node_id"].(string); ok && strings.TrimSpace(value) != "" {
+			nodeID = strings.TrimSpace(value)
+		}
+	}
+	funcCtx, hasFunctionContext := functioncontext.FromContext(ctx)
+	if nodeID == "" && hasFunctionContext {
+		nodeID = strings.TrimSpace(funcCtx.FunctionName)
+	}
+	if nodeID != "" {
+		runtimeapp.UpdateNodeInfo(nodeID, currentVersion)
+		log.WithContextFields(ctx, "func", "ProcessProbe", "version", currentVersion, "nodeID", nodeID)
 	} else {
-		log.WarnContextf(ctx, "[ProcessProbe] 无法从上下文获取云函数信息, ok=%v", ok)
+		log.WarnContextf(ctx, "[ProcessProbe] 无法确定节点 ID, has_function_context=%v", hasFunctionContext)
 	}
 
 	// 更新 service gateway 配置（用于本节点主动上报心跳和拉取任务）。

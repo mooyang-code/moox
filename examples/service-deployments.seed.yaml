@@ -188,6 +188,7 @@ services:
       health_url: http://127.0.0.1:11411/readyz
       health_kind: readiness
       monitor_enabled: true
+      timeout_ms: 120000
       gateway_methods: ["*"]
       gateway_callers: ["*"]
   - name: moox_factor

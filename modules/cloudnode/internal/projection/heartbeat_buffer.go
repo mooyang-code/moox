@@ -20,7 +20,7 @@ const (
 
 // HeartbeatWriter is the catalog write surface needed by heartbeat buffering.
 type HeartbeatWriter interface {
-	UpsertHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error
+	UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error
 }
 
 // HeartbeatSink accepts heartbeats on the RPC path and persists them later.
@@ -119,7 +119,7 @@ func (b *HeartbeatBuffer) Flush(ctx context.Context) error {
 		if b.writer == nil {
 			continue
 		}
-		if err := b.writer.UpsertHeartbeat(ctx, event.spaceID, event.nodeID, nodeType, event.runningVersion, string(supported), string(metadata)); err != nil {
+		if err := b.writer.UpdateHeartbeat(ctx, event.spaceID, event.nodeID, nodeType, event.runningVersion, string(supported), string(metadata)); err != nil {
 			b.requeue(events[i:])
 			return err
 		}

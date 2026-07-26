@@ -72,11 +72,22 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Equal(t, "node-a", matched.NodeID)
 
 	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2"))
-	require.NoError(t, repo.UpsertHeartbeat(ctx, "crypto", "node-a", "scf", "v2", `["collect.kline"]`, `{}`))
+	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "node-a", "scf", "v2", `["collect.kline"]`, `{}`))
 	require.NoError(t, repo.DeleteNodes(ctx, "crypto", []string{"node-a"}))
 	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
 	assert.Nil(t, deleted)
+}
+
+func TestCatalogRepository_HeartbeatDoesNotRegisterUnknownNode(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+
+	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "unknown-function", "scf", "v1", `["collect.kline"]`, `{}`))
+
+	node, err := repo.GetNode(ctx, "crypto", "unknown-function")
+	require.NoError(t, err)
+	assert.Nil(t, node)
 }
 
 func TestPageFromCommon_NormalizesBounds(t *testing.T) {

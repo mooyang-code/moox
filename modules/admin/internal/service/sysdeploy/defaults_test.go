@@ -88,6 +88,15 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/readyz" {
 		t.Fatalf("cloudnode extra_config = %s", byName["moox_cloudnode"].ExtraConfig)
 	}
+	var cloudNodeExtra struct {
+		TimeoutMS int64 `json:"timeout_ms"`
+	}
+	if err := json.Unmarshal([]byte(byName["moox_cloudnode"].ExtraConfig), &cloudNodeExtra); err != nil {
+		t.Fatalf("unmarshal cloudnode extra_config: %v", err)
+	}
+	if cloudNodeExtra.TimeoutMS != 120000 {
+		t.Fatalf("cloudnode gateway timeout = %d, want 120000", cloudNodeExtra.TimeoutMS)
+	}
 	for name, want := range map[string]string{
 		"moox_strategy":  "http://127.0.0.1:11431/readyz",
 		"moox_archive":   "http://127.0.0.1:11416/readyz",

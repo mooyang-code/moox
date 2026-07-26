@@ -100,7 +100,7 @@ type heartbeatWriteCall struct {
 	metadata  string
 }
 
-func (w *fakeHeartbeatWriter) UpsertHeartbeat(_ context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error {
+func (w *fakeHeartbeatWriter) UpdateHeartbeat(_ context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error {
 	if w.failures > 0 {
 		w.failures--
 		return errFakeHeartbeatWrite

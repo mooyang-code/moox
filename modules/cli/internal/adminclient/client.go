@@ -84,7 +84,11 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 	}
 	client := c.HTTPClient
 	if c.ServiceAuth != nil {
-		client, err = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: 30 * time.Second, CAFile: c.ServiceAuth.CAFile})
+		timeout := 30 * time.Second
+		if c.HTTPClient != nil && c.HTTPClient.Timeout > 0 {
+			timeout = c.HTTPClient.Timeout
+		}
+		client, err = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: c.ServiceAuth.CAFile})
 		if err != nil {
 			return nil, err
 		}

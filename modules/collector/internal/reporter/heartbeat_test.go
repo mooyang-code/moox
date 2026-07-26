@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/scf-go-lib/functioncontext"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -87,6 +88,22 @@ func TestProcessProbe_UpdatesGatewayAndReturnsResponse(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, rsp.Success)
 	assert.Contains(t, rsp.Message, "probe handled")
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	assert.Equal(t, "node-probe", nodeID)
+}
+
+func TestProcessProbe_PreservesCatalogNodeIDInsteadOfFunctionName(t *testing.T) {
+	runtimeapp.UpdateNodeInfo("collector-scf-0", "v1")
+	t.Cleanup(func() { runtimeapp.UpdateNodeInfo("", "") })
+	ctx := functioncontext.NewContext(context.Background(), &functioncontext.FunctionContext{
+		FunctionName: "moox-collector-ap-guangzhou-0",
+	})
+
+	_, err := ProcessProbe(ctx, model.CloudFunctionEvent{})
+
+	require.NoError(t, err)
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	assert.Equal(t, "collector-scf-0", nodeID)
 }
 
 func TestSendSingleHeartbeat_Success(t *testing.T) {

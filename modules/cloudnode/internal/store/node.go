@@ -114,29 +114,19 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	return q.Updates(updates).Error
 }
 
-func (r *CatalogRepository) UpsertHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error {
+func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error {
 	now := time.Now().UTC()
-	node := CloudNode{
-		SpaceID:            spaceID,
-		NodeID:             nodeID,
-		NodeType:           nodeType,
-		FunctionName:       nodeID,
-		RunningVersion:     version,
-		SupportedWorkloads: supported,
-		Metadata:           metadata,
-		Status:             "online",
-		LastHeartbeatAt:    &now,
-		IsDeleted:          false,
-		CreateTime:         now,
-		ModifyTime:         now,
-	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_node_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"c_node_type", "c_function_name", "c_running_version", "c_supported_workloads",
-			"c_metadata", "c_status", "c_last_heartbeat_at", "c_is_deleted", "c_mtime",
-		}),
-	}).Create(&node).Error
+	return r.db.WithContext(ctx).Model(&CloudNode{}).
+		Where("c_space_id = ? AND c_node_id = ? AND c_is_deleted = ?", spaceID, nodeID, false).
+		Updates(map[string]any{
+			"c_node_type":           nodeType,
+			"c_running_version":     version,
+			"c_supported_workloads": supported,
+			"c_metadata":            metadata,
+			"c_status":              "online",
+			"c_last_heartbeat_at":   now,
+			"c_mtime":               now,
+		}).Error
 }
 
 func nodeStatusFromPB(status pb.NodeStatusCode) string {

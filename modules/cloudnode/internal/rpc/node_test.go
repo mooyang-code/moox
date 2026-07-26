@@ -189,9 +189,12 @@ func TestBatchDeleteNodes_ShouldSoftDelete(t *testing.T) {
 	assert.Equal(t, int32(1), rsp.GetProcessedCount())
 }
 
-func TestReportHeartbeatWithoutSink_ShouldUpsertCatalog(t *testing.T) {
+func TestReportHeartbeatWithoutSink_ShouldUpdateRegisteredNode(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
 	svc := &Service{catalog: catalog}
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "node-hb", CloudAccountID: "account-a", Status: "unknown",
+	}))
 	meta, err := structpb.NewStruct(map[string]any{"probe_enabled": true})
 	require.NoError(t, err)
 
@@ -207,6 +210,7 @@ func TestReportHeartbeatWithoutSink_ShouldUpsertCatalog(t *testing.T) {
 	require.NotNil(t, node)
 	assert.Equal(t, "online", node.Status)
 	assert.Equal(t, "v1", node.RunningVersion)
+	assert.Equal(t, "account-a", node.CloudAccountID)
 }
 
 func TestNodeConversionHelpers(t *testing.T) {
