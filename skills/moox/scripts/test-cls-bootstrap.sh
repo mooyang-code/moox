@@ -23,7 +23,8 @@ new_stage() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${MOOX_TEST_CALLS}"
-[[ "${MOOX_GATEWAY_NODE_ID:-}" == "gateway-test" ]]
+[[ "${MOOX_GATEWAY_TARGET_NODE:-}" == "gateway-test" ]]
+[[ "${MOOX_GATEWAY_CALLER:-}" == "moox-cli" ]]
 [[ "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" == "svc""-ak" ]]
 [[ "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" == "svc""-sk" ]]
 [[ "${MOOX_GATEWAY_CA_FILE:-}" == */certs/gateway/peers.pem ]]
@@ -75,12 +76,12 @@ CLI
 new_deploy() {
   local deploy=$1
   mkdir -p "${deploy}/secrets" "${deploy}/certs/gateway"
-  printf 'MOOX_GATEWAY_NODE_ID=gateway-test\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\n' \
-    >"${deploy}/secrets/gateway-service.env"
+  printf 'MOOX_GATEWAY_TARGET_NODE=gateway-test\nMOOX_GATEWAY_CALLER=moox-cli\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\n' \
+    >"${deploy}/secrets/gateway-moox-cli.env"
   printf '%s\n' '-----BEGIN CERTIFICATE-----' 'Y2VydA==' '-----END CERTIFICATE-----' \
     >"${deploy}/certs/gateway/peers.pem"
   printf 'old-cls-env\n' >"${deploy}/secrets/cls.env"
-  chmod 0600 "${deploy}/secrets/gateway-service.env" "${deploy}/secrets/cls.env"
+  chmod 0600 "${deploy}/secrets/gateway-moox-cli.env" "${deploy}/secrets/cls.env"
 }
 
 file_mode() {

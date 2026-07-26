@@ -69,7 +69,9 @@ ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-cad
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
+ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
+ln -s "${ROOT}/packages" "${FIXTURE_ROOT}/packages"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 cat >"${FIXTURE_ROOT}/skills/moox/scripts/cls-bootstrap.sh" <<'EOF'
 #!/usr/bin/env bash
