@@ -4,6 +4,7 @@ import * as verify from "./verify.mjs";
 
 import {
   JOB_STATUS,
+  PUBLIC_DEPLOYMENTS,
   assertFutureExecutionTimes,
   assertRealExecutionNodes,
   assertRealSCFFleet,
@@ -16,6 +17,13 @@ import {
   scheduleLeadDelay,
   statusName,
 } from "./verify.mjs";
+
+test("public deployment rewrite excludes internal Storage routes", () => {
+  assert.deepEqual(
+    [...PUBLIC_DEPLOYMENTS].sort(),
+    ["admin_gateway", "service_gateway", "web_host"],
+  );
+});
 
 test("storage snapshot queries the target View without an empty subject selector", () => {
   assert.equal(typeof verify.datasetSnapshotRequest, "function");

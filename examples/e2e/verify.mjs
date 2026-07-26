@@ -9,12 +9,10 @@ const APP_INFO = {
   app_key: "2521e0d21b6be0347b72bca93904a0dd",
 };
 
-const PUBLIC_DEPLOYMENTS = new Set([
+export const PUBLIC_DEPLOYMENTS = new Set([
   "admin_gateway",
   "service_gateway",
   "web_host",
-  "storage-primary",
-  "storage-view",
 ]);
 
 export const JOB_STATUS = {
