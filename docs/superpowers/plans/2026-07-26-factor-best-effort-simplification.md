@@ -27,6 +27,9 @@
 11. 因子结果允许 `null`，写回时跳过对应值；非数值、NaN 和 Infinity 不允许穿过 JSON 边界。
 12. Metadata 只在因子或绑定变更时同步，绝不放在实时计算热路径。
 13. 新项目不保留旧 Proto 字段、旧配置项、旧表、旧命令或兼容包装。
+14. 服务端二进制继续使用 `moox-factor`，现有启动命令和部署入口保持不变。
+15. CLI 继续作为独立二进制 `moox-factor-cli`，不与服务端合并。
+16. `FactorDef.Depends` 保持现有名称；它只表达标准 K 线字段之外的额外输入列，不表示因子 DAG。
 
 明确不做：
 
@@ -37,6 +40,8 @@
 - 不实现自动扫描缺口并补算。
 - 不保留 FactorRun 历史表和异步补算进度表。
 - 不为未经测量的性能问题保留 Arrow、共享 snapshot 或任务内因子并行。
+- 不把 `moox-factor` 改成带 `serve` 子命令的统一二进制。
+- 不把 `Depends` 重命名为 `extra_columns` 或引入因子依赖编排。
 
 ## 2. 目标运行语义
 
@@ -78,7 +83,7 @@ Storage DatasetRowsUpserted
 ### 2.3 手动补算路径
 
 ```text
-RecalcFactor or factor-cli run-once
+RecalcFactor or moox-factor-cli run-once
   -> validate exact space/source/subject/freq/bar_time
   -> load enabled executable bindings
   -> build the same scheduler task shape
@@ -119,6 +124,8 @@ message FactorDef {
 - `1 <= writeback_bars <= lookback_bars`。
 - `status` 只能为 `enabled` 或 `disabled`。
 - `depends` 由源码分析生成，API 输入值不作为权威来源。
+
+`depends` 的业务含义固定为额外输入列集合。例如 `["funding_rate", "open_interest"]` 表示任务读取标准 K 线列之外，还要从 Storage 请求这两列。字段名保持 `Depends`/`depends`，不扩展为因子间依赖关系。
 
 ### 3.2 RecalcFactor
 
@@ -1328,6 +1335,7 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 - 不再创建 Factor-local `StdioExecutor`。
 - 不再 claim replay task。
 - CLI import 将 `--default-params` 改名为 `--default-periods`，`cliConfig.DefaultParams` 改名为 `DefaultPeriods`。
+- 构建产物继续命名为 `moox-factor-cli`；服务端产物继续命名为 `moox-factor`，不得合并入口。
 - 输出 terminal JSON：
 
 ```json
@@ -1679,10 +1687,12 @@ README 包含：
 ```bash
 ./scripts/build.sh factor
 
-cd modules/factor
-go run ./cmd/cli init --db ./data/factor/factor.db
-go run ./cmd/cli import --db ./data/factor/factor.db --factors-dir ./factors --default-periods 20,96
-go run ./cmd/cli run-once \
+# 服务端启动方式保持不变
+./bin/moox-factor
+
+./bin/moox-factor-cli init --db ./data/factor/factor.db
+./bin/moox-factor-cli import --db ./data/factor/factor.db --factors-dir ./factors --default-periods 20,96
+./bin/moox-factor-cli run-once \
   --space crypto \
   --dataset binance_spot_kline \
   --subject BTC-USDT \
@@ -1813,9 +1823,11 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 ./scripts/build.sh factor
 ./scripts/verify-event-contracts.sh
 ./scripts/test-go-workspace.sh
+test -x /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/bin/moox-factor
+test -x /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/bin/moox-factor-cli
 ```
 
-Expected: 全部 PASS。
+Expected: 全部 PASS，且服务端与 CLI 构建产物名称保持不变。
 
 - [ ] **Step 5: Web 验证**
 
