@@ -889,7 +889,7 @@ git commit -m "fix(collector): honor rule target datasets"
 - Modify: `modules/collector/internal/sources/binance/symbol.go`
 - Modify: `modules/collector/internal/sources/binance/symbol_test.go`
 
-- [ ] **Step 1: 先写 active/inactive 对账测试**
+- [x] **Step 1: 先写 active/inactive 对账测试**
 
 覆盖：
 
@@ -902,7 +902,7 @@ func TestSymbolCollectorSkipsDeactivationForEmptySnapshot(t *testing.T)
 
 输入 active 集合 `{BTC-USDT}`，Storage 现有 active 集合 `{BTC-USDT, OLD-USDT}`。期望只对 `OLD-USDT` 调用 `BindDatasetSubject(status=inactive)`。
 
-- [ ] **Step 2: 给 storageWriter 增加两个窄接口**
+- [x] **Step 2: 给 storageWriter 增加两个窄接口**
 
 ```go
 ListDatasetSubjects(ctx, spaceID, datasetID) ([]*storagepb.DatasetSubject, error)
@@ -911,7 +911,7 @@ BindDatasetSubject(ctx, binding *storagepb.DatasetSubject) error
 
 分页大小复用 Collector planner 的约定或在 Binance 包内使用固定 `200`，不建立通用 metadata repository。
 
-- [ ] **Step 3: active 上报全部成功后再执行停用**
+- [x] **Step 3: active 上报全部成功后再执行停用**
 
 顺序必须是：
 
@@ -927,7 +927,7 @@ BindDatasetSubject(ctx, binding *storagepb.DatasetSubject) error
 `ListDatasetSubjects` 返回的完整 binding，仅修改 `status`（以及确有语义时的
 结束时间）；不得用只含 ID/status 的新对象覆盖 role、起止时间和 attributes。
 
-- [ ] **Step 4: 运行 Symbol 测试**
+- [x] **Step 4: 运行 Symbol 测试**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/sources/binance -run 'TestSymbol')
@@ -935,7 +935,7 @@ BindDatasetSubject(ctx, binding *storagepb.DatasetSubject) error
 
 Expected: 缺失标的被停用；active 标的不变；上游部分失败时不做批量停用。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add modules/collector/internal/sources/binance
@@ -1136,13 +1136,31 @@ git commit -m "feat(collector): log complete job lifecycle to cls"
 - Delete: `modules/collector/internal/jobs/kline/handler.go`
 - Delete: `modules/collector/internal/jobs/symbol/handler.go`
 - Modify: `modules/collector/internal/model/types.go`
+- Modify: `modules/collector/internal/model/types_test.go`
 - Modify: `modules/collector/internal/reporter/task_status.go`
 - Modify: `modules/collector/internal/reporter/task_status_test.go`
 - Modify: `modules/collector/internal/serverless/handler.go`
+- Modify: `modules/collector/internal/serverless/handler_test.go`
 - Modify: `modules/collector/internal/taskrunner/direct.go`
+- Modify: `modules/collector/internal/taskrunner/direct_test.go`
+- Modify: `modules/collector/internal/executor/executor.go`
+- Modify: `modules/collector/internal/executor/executor_test.go`
+- Modify: `modules/collector/cmd/scf/main.go`
+- Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue.go`
+- Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue_test.go`
+- Modify: `modules/cloudnode/internal/jobqueue/jetstream_client_test.go`
+- Modify: `modules/cloudnode/internal/bootstrap/bootstrap.go`
+- Modify: `modules/cloudnode/internal/rpc/node.go`
+- Modify: `modules/cloudnode/internal/rpc/node_test.go`
+- Modify: `modules/cli/internal/command/collector.go`
+- Modify: `modules/cli/internal/command/collector_test.go`
+- Modify: `packages/cloudruntime/runtime.go`
+- Modify: `packages/cloudruntime/runtime_test.go`
 - Modify: `web/src/views/collector/collector-rules/collector-rules.vue`
+- Modify: `web/src/views/collector/task-instances/task-instances.vue`
 - Modify: `examples/e2e/verify.mjs`
 - Modify: `examples/e2e/README.md`
+- Modify: `examples/e2e/test-run-scf-once.sh`
 - Modify: `modules/collector/README.md`
 - Modify: `docs/采集任务管理.md`
 - Modify: `docs/云节点管理.md`
@@ -1168,12 +1186,13 @@ node_tags
 只保留：
 
 ```text
-PENDING
-SUCCESS
-FAILED
+PENDING = 1
+SUCCESS = 2
+FAILED = 3
 ```
 
 删除 `RUNNING`、`PART_FAILED` 及 reporter/domain/前端/E2E 映射。任务中间态由 JetStream delivery 表达，不复制到 TaskInstance。
+这是新项目，直接压紧枚举编号，不保留无意义的数值空洞。
 
 - [ ] **Step 3: 删除空壳和已禁用的直接执行概念**
 
@@ -1183,6 +1202,7 @@ FAILED
 - 只有注释的 `jobs/symbol/handler.go`
 - 已明确禁用的 `EventActionTask`
 - 从未读取的 `TaskExecuteEvent.Immediate`
+- 已不再表示真实语义的 `ExecuteTaskImmediately` / `reportImmediateTaskStatus` 命名，分别收敛为 `ExecuteTask` / `reportTaskStatus`
 - 文档和日志中的“JobItem polling”“逐节点分配”等旧说法
 
 保留 taskrunner 作为“JetStream delivery 到 Collector executor”的明确适配层，不为两个 job type 复制 Handler。
@@ -1201,6 +1221,8 @@ FAILED
 | 普通可重试错误 NAK delay | 1s |
 
 代码中为 100s 和 120s 使用具名常量；README 不再出现 45s、110s、115s、作业 timer 或“keepalive 执行任务”。
+CloudNode 创建 SCF 的默认平台 timeout、Collector CLI 创建参数和本地 `-once`
+诊断外层 timeout 都统一到 120s；不要把 HTTP idle timeout 等无关配置机械替换。
 
 - [ ] **Step 5: 更新文档和 Web**
 
@@ -1222,7 +1244,7 @@ FAILED
 
 ```bash
 make -C modules/collector/proto all
-rg -n "assignment_type|assigned_nodes|node_pattern|node_tags|TASK_INSTANCE_STATUS_RUNNING|TASK_INSTANCE_STATUS_PART_FAILED|EventActionTask|Immediate:|collectorJobSchedule|trpc.collectorjob.timer|ScheduledRunJobItems" modules/collector web examples/e2e docs --glob '!docs/superpowers/plans/**'
+rg -n "assignment_type|assigned_nodes|node_pattern|node_tags|AssignmentType|AssignedNodes|NodePattern|NodeTags|TASK_INSTANCE_STATUS_RUNNING|TASK_INSTANCE_STATUS_PART_FAILED|InstanceStatusRunning|StatusRunning|EventActionTask|Immediate:|\\.Immediate|ExecuteTaskImmediately|reportImmediateTaskStatus|collectorJobSchedule|trpc.collectorjob.timer|ScheduledRunJobItems|JobItem polling|PollWorkItems|ReportWorkItemStatus|work_item" modules/collector modules/cloudnode modules/cli web examples/e2e docs/采集任务管理.md docs/云节点管理.md skills/debug/references/scf-e2e-debug.md
 ```
 
 Expected: 零命中。
