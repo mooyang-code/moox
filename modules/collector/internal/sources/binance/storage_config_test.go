@@ -95,6 +95,46 @@ func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
 	assert.Equal(t, uint32(1), proxy.req.GetPage().GetSize())
 }
 
+func TestStorageWriterListsAllDatasetSubjectPages(t *testing.T) {
+	proxy := &datasetSubjectProxy{}
+	writer := &storageWriter{
+		metadata: proxy,
+		authInfo: &storagepb.AuthInfo{AppId: "collector"},
+	}
+
+	got, err := writer.ListDatasetSubjects(context.Background(), "space-a", "dataset-a")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "BTC-USDT", got[0].GetSubjectId())
+	assert.Equal(t, "OLD-USDT", got[1].GetSubjectId())
+	assert.Equal(t, []uint32{1, 2}, proxy.pages)
+	assert.Equal(t, []uint32{200, 200}, proxy.sizes)
+	for _, req := range proxy.listRequests {
+		assert.Equal(t, "collector", req.GetAuthInfo().GetAppId())
+		assert.Equal(t, "space-a", req.GetSpaceId())
+		assert.Equal(t, "dataset-a", req.GetDatasetId())
+	}
+}
+
+func TestStorageWriterBindsCompleteDatasetSubject(t *testing.T) {
+	proxy := &datasetSubjectProxy{}
+	writer := &storageWriter{
+		metadata: proxy,
+		authInfo: &storagepb.AuthInfo{AppId: "collector"},
+	}
+	item := &storagepb.DatasetSubject{
+		SpaceId: "space-a", DatasetId: "dataset-a", SubjectId: "OLD-USDT",
+		SubjectRole: "benchmark", EffectiveStartTime: "2026-01-01T00:00:00Z",
+		EffectiveEndTime: "2026-12-31T00:00:00Z", Status: "inactive",
+		CreatedAt: "created", UpdatedAt: "updated", Attributes: map[string]string{"source": "binance"},
+	}
+
+	require.NoError(t, writer.BindDatasetSubject(context.Background(), item))
+	require.NotNil(t, proxy.bindRequest)
+	assert.Equal(t, "collector", proxy.bindRequest.GetAuthInfo().GetAppId())
+	assert.Same(t, item, proxy.bindRequest.GetDatasetSubject())
+}
+
 type latestTimeSeriesProxy struct {
 	storagepb.PrimaryStoreClientProxy
 	req *storagepb.ReadTimeSeriesRowsReq
@@ -104,4 +144,52 @@ type latestTimeSeriesProxy struct {
 func (p *latestTimeSeriesProxy) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	p.req = req
 	return p.rsp, nil
+}
+
+type datasetSubjectProxy struct {
+	storagepb.MetadataClientProxy
+	pages        []uint32
+	sizes        []uint32
+	listRequests []*storagepb.ListDatasetSubjectsReq
+	bindRequest  *storagepb.BindDatasetSubjectReq
+}
+
+func (p *datasetSubjectProxy) ListDatasetSubjects(
+	_ context.Context,
+	req *storagepb.ListDatasetSubjectsReq,
+	_ ...client.Option,
+) (*storagepb.ListDatasetSubjectsRsp, error) {
+	p.pages = append(p.pages, req.GetPage().GetPage())
+	p.sizes = append(p.sizes, req.GetPage().GetSize())
+	p.listRequests = append(p.listRequests, req)
+	switch req.GetPage().GetPage() {
+	case 1:
+		return &storagepb.ListDatasetSubjectsRsp{
+			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+			DatasetSubjects: []*storagepb.DatasetSubject{{
+				SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), SubjectId: "BTC-USDT", Status: "active",
+			}},
+			PageResult: &storagepb.PageResult{Page: 1, Size: 200, HasMore: true},
+		}, nil
+	default:
+		return &storagepb.ListDatasetSubjectsRsp{
+			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+			DatasetSubjects: []*storagepb.DatasetSubject{{
+				SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), SubjectId: "OLD-USDT", Status: "active",
+			}},
+			PageResult: &storagepb.PageResult{Page: 2, Size: 200},
+		}, nil
+	}
+}
+
+func (p *datasetSubjectProxy) BindDatasetSubject(
+	_ context.Context,
+	req *storagepb.BindDatasetSubjectReq,
+	_ ...client.Option,
+) (*storagepb.BindDatasetSubjectRsp, error) {
+	p.bindRequest = req
+	return &storagepb.BindDatasetSubjectRsp{
+		RetInfo:        &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		DatasetSubject: req.GetDatasetSubject(),
+	}, nil
 }

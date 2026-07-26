@@ -14,6 +14,7 @@ import (
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -38,6 +39,8 @@ type SymbolCollector struct {
 type symbolStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
+	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
+	BindDatasetSubject(context.Context, *storagepb.DatasetSubject) error
 }
 
 // Source 返回数据源标识
@@ -245,7 +248,66 @@ func (c *SymbolCollector) reportSymbols(
 		return fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
+	datasetIDs := appendMissingDatasetIDs([]string{datasetID}, binding.SubjectDatasetIDs...)
+	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetIDs, symbols); err != nil {
+		return err
+	}
+
 	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, datasetID)
+	return nil
+}
+
+func reconcileInactiveSymbolMemberships(
+	ctx context.Context,
+	writer symbolStorage,
+	spaceID string,
+	datasetIDs []string,
+	activeSymbols []*exchange.SymbolInfo,
+) error {
+	if len(activeSymbols) == 0 {
+		return nil
+	}
+	activeSubjectIDs := make(map[string]struct{}, len(activeSymbols))
+	for _, symbol := range activeSymbols {
+		subjectID := strings.TrimSpace(normalizedSubjectID(symbol))
+		if subjectID != "" {
+			activeSubjectIDs[subjectID] = struct{}{}
+		}
+	}
+	if len(activeSubjectIDs) == 0 {
+		return nil
+	}
+
+	for _, datasetID := range datasetIDs {
+		memberships, err := writer.ListDatasetSubjects(ctx, spaceID, datasetID)
+		if err != nil {
+			return fmt.Errorf("list symbol memberships for dataset %s: %w", datasetID, err)
+		}
+		for _, membership := range memberships {
+			if membership == nil ||
+				strings.TrimSpace(membership.GetSpaceId()) != spaceID ||
+				strings.TrimSpace(membership.GetDatasetId()) != datasetID ||
+				!strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
+				continue
+			}
+			if _, ok := activeSubjectIDs[strings.TrimSpace(membership.GetSubjectId())]; ok {
+				continue
+			}
+			inactive := proto.Clone(membership).(*storagepb.DatasetSubject)
+			inactive.Status = "inactive"
+			if err := writer.BindDatasetSubject(ctx, inactive); err != nil {
+				return fmt.Errorf(
+					"deactivate symbol membership %s/%s/%s: %w",
+					spaceID, datasetID, inactive.GetSubjectId(), err,
+				)
+			}
+			log.InfoContextf(
+				ctx,
+				"[SymbolCollector] 停用已下架标的 membership, space_id=%s, dataset_id=%s, subject_id=%s",
+				spaceID, datasetID, inactive.GetSubjectId(),
+			)
+		}
+	}
 	return nil
 }
 

@@ -12,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
+const datasetSubjectPageSize = 200
+
 type storageWriter struct {
 	access   storagepb.PrimaryStoreClientProxy
 	metadata storagepb.MetadataClientProxy
@@ -79,6 +81,43 @@ func (w *storageWriter) RegisterDataSubject(ctx context.Context, req *storagepb.
 		return fmt.Errorf("register data subject: %w", err)
 	}
 	return ensureStorageOK("register data subject", rsp.GetRetInfo())
+}
+
+func (w *storageWriter) ListDatasetSubjects(
+	ctx context.Context,
+	spaceID string,
+	datasetID string,
+) ([]*storagepb.DatasetSubject, error) {
+	var all []*storagepb.DatasetSubject
+	for page := uint32(1); ; page++ {
+		rsp, err := w.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
+			AuthInfo:  w.authInfo,
+			SpaceId:   spaceID,
+			DatasetId: datasetID,
+			Page:      &storagepb.Page{Page: page, Size: datasetSubjectPageSize},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list dataset subjects: %w", err)
+		}
+		if err := ensureStorageOK("list dataset subjects", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		all = append(all, rsp.GetDatasetSubjects()...)
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			return all, nil
+		}
+	}
+}
+
+func (w *storageWriter) BindDatasetSubject(ctx context.Context, item *storagepb.DatasetSubject) error {
+	rsp, err := w.metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{
+		AuthInfo:       w.authInfo,
+		DatasetSubject: item,
+	})
+	if err != nil {
+		return fmt.Errorf("bind dataset subject: %w", err)
+	}
+	return ensureStorageOK("bind dataset subject", rsp.GetRetInfo())
 }
 
 func ensureStorageOK(action string, ret *storagepb.RetInfo) error {
