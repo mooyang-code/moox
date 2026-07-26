@@ -1,4 +1,3 @@
-
 -- ============ MooX Admin 本地基础数据库表设计 ============
 
 PRAGMA foreign_keys = ON;
@@ -22,7 +21,7 @@ CREATE TABLE IF NOT EXISTS t_spaces (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_deleted
-ON t_spaces(c_space_id, c_is_deleted);
+ON t_spaces (c_space_id, c_is_deleted);
 
 CREATE TABLE IF NOT EXISTS t_space_members (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -36,9 +35,9 @@ CREATE TABLE IF NOT EXISTS t_space_members (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_space_members_space_user
-ON t_space_members(c_space_id, c_user_id);
+ON t_space_members (c_space_id, c_user_id);
 CREATE INDEX IF NOT EXISTS idx_space_members_user_id
-ON t_space_members(c_user_id);
+ON t_space_members (c_user_id);
 
 -- ************ 用户表 ************
 CREATE TABLE IF NOT EXISTS t_users (
@@ -46,13 +45,13 @@ CREATE TABLE IF NOT EXISTS t_users (
     c_user_id TEXT NOT NULL,                                   -- 用户UUID (对应代码中的string类型)
     c_username TEXT NOT NULL,                                  -- 用户名
     c_password_hash TEXT NOT NULL,                             -- 密码哈希
-    c_nickname TEXT DEFAULT '',                                -- 昵称 
-    c_email TEXT DEFAULT '',                                   -- 邮箱 
-    c_avatar TEXT DEFAULT '',                                  -- 头像URL 
+    c_nickname TEXT DEFAULT '',                                -- 昵称
+    c_email TEXT DEFAULT '',                                   -- 邮箱
+    c_avatar TEXT DEFAULT '',                                  -- 头像URL
     c_role INTEGER NOT NULL DEFAULT 1,                        -- 用户角色: 0-GUEST, 1-USER, 2-ADMIN, 3-SUPER_ADMIN
     c_status INTEGER NOT NULL DEFAULT 1,                      -- 用户状态: 0-INACTIVE, 1-ACTIVE, 2-SUSPENDED, 3-BANNED
-    c_last_login_at DATETIME,                                  -- 最后登录时间 
-    c_last_login_ip TEXT DEFAULT '',                           -- 最后登录IP 
+    c_last_login_at DATETIME,                                  -- 最后登录时间
+    c_last_login_ip TEXT DEFAULT '',                           -- 最后登录IP
     c_last_password_change DATETIME DEFAULT CURRENT_TIMESTAMP, -- 最后密码修改时间
     c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 创建时间
@@ -73,29 +72,32 @@ CREATE TABLE IF NOT EXISTS t_login_history (
     c_failure_reason TEXT DEFAULT '',                          -- 失败原因
     c_session_duration INTEGER DEFAULT 0,                     -- 会话时长(秒) (登出时更新)
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 登录时间
-    
-    FOREIGN KEY (c_user_id) REFERENCES t_users(c_user_id) ON DELETE CASCADE
+
+    FOREIGN KEY (c_user_id) REFERENCES t_users (c_user_id) ON DELETE CASCADE
 );
 
 -- ************ 创建索引 ************
 -- 用户表索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id ON t_users(c_user_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON t_users(c_username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON t_users(c_email);
-CREATE INDEX IF NOT EXISTS idx_users_status ON t_users(c_status);
-CREATE INDEX IF NOT EXISTS idx_users_role ON t_users(c_role);
-CREATE INDEX IF NOT EXISTS idx_users_last_login ON t_users(c_last_login_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id ON t_users (c_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON t_users (c_username);
+CREATE INDEX IF NOT EXISTS idx_users_email ON t_users (c_email);
+CREATE INDEX IF NOT EXISTS idx_users_status ON t_users (c_status);
+CREATE INDEX IF NOT EXISTS idx_users_role ON t_users (c_role);
+CREATE INDEX IF NOT EXISTS idx_users_last_login ON t_users (c_last_login_at);
 
 -- 登录历史索引
-CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON t_login_history(c_user_id);
-CREATE INDEX IF NOT EXISTS idx_login_history_ip ON t_login_history(c_client_ip);
-CREATE INDEX IF NOT EXISTS idx_login_history_time ON t_login_history(c_ctime);
-CREATE INDEX IF NOT EXISTS idx_login_history_result ON t_login_history(c_login_result);
+CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON t_login_history (c_user_id);
+CREATE INDEX IF NOT EXISTS idx_login_history_ip ON t_login_history (c_client_ip);
+CREATE INDEX IF NOT EXISTS idx_login_history_time ON t_login_history (c_ctime);
+CREATE INDEX IF NOT EXISTS idx_login_history_result ON t_login_history (c_login_result);
 
 -- ************ 创建触发器，自动更新修改时间 ************
 -- 用户表触发器 - 更新时间
-CREATE TRIGGER IF NOT EXISTS update_users_mtime AFTER UPDATE ON t_users BEGIN 
-    UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_users_mtime
+AFTER UPDATE ON t_users
+BEGIN
+    UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 -- ============ SSH 主机管理系统表设计 ============
 
@@ -143,19 +145,22 @@ CREATE TABLE IF NOT EXISTS t_gateway_nodes (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (c_host_id) REFERENCES t_ssh_host(c_id)
+    FOREIGN KEY (c_host_id) REFERENCES t_ssh_host (c_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_gateway_nodes_host_id
-ON t_gateway_nodes(c_host_id);
+ON t_gateway_nodes (c_host_id);
 CREATE INDEX IF NOT EXISTS idx_gateway_nodes_status
-ON t_gateway_nodes(c_status);
+ON t_gateway_nodes (c_status);
 CREATE INDEX IF NOT EXISTS idx_gateway_nodes_last_seen_at
-ON t_gateway_nodes(c_last_seen_at);
+ON t_gateway_nodes (c_last_seen_at);
 
 DROP TRIGGER IF EXISTS update_gateway_nodes_mtime;
-CREATE TRIGGER IF NOT EXISTS update_gateway_nodes_mtime AFTER UPDATE ON t_gateway_nodes BEGIN
-    UPDATE t_gateway_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_gateway_nodes_mtime
+AFTER UPDATE ON t_gateway_nodes
+BEGIN
+    UPDATE t_gateway_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 -- ************ 系统服务部署信息表 ************
 CREATE TABLE IF NOT EXISTS t_service_deployments (
@@ -176,30 +181,33 @@ CREATE TABLE IF NOT EXISTS t_service_deployments (
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0),
-    FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes(c_node_id)
+    FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes (c_node_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_node_name
-ON t_service_deployments(c_node_id, c_service_name);
+ON t_service_deployments (c_node_id, c_service_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_node_gateway_service
-ON t_service_deployments(c_node_id, c_gateway_service_id)
+ON t_service_deployments (c_node_id, c_gateway_service_id)
 WHERE c_gateway_enabled = 1 AND c_gateway_service_id <> '';
 CREATE INDEX IF NOT EXISTS idx_service_deployments_node_id
-ON t_service_deployments(c_node_id);
+ON t_service_deployments (c_node_id);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_gateway_enabled
-ON t_service_deployments(c_gateway_enabled);
+ON t_service_deployments (c_gateway_enabled);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_gateway_service_id
-ON t_service_deployments(c_gateway_service_id);
+ON t_service_deployments (c_gateway_service_id);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_kind
-ON t_service_deployments(c_service_kind);
+ON t_service_deployments (c_service_kind);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_scope
-ON t_service_deployments(c_scope);
+ON t_service_deployments (c_scope);
 CREATE INDEX IF NOT EXISTS idx_service_deployments_status
-ON t_service_deployments(c_status);
+ON t_service_deployments (c_status);
 
 DROP TRIGGER IF EXISTS update_service_deployments_mtime;
-CREATE TRIGGER IF NOT EXISTS update_service_deployments_mtime AFTER UPDATE ON t_service_deployments BEGIN
-    UPDATE t_service_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_service_deployments_mtime
+AFTER UPDATE ON t_service_deployments
+BEGIN
+    UPDATE t_service_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 -- ************ SSH 会话表（用于会话管理） ************
 CREATE TABLE IF NOT EXISTS t_ssh_session (
@@ -218,21 +226,24 @@ CREATE TABLE IF NOT EXISTS t_ssh_session (
 );
 
 -- ************ 创建SSH相关索引 ************
-CREATE INDEX IF NOT EXISTS idx_ssh_host_space_id ON t_ssh_host(c_space_id);
-CREATE INDEX IF NOT EXISTS idx_ssh_host_name ON t_ssh_host(c_name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host(c_address);
-CREATE INDEX IF NOT EXISTS idx_ssh_host_mtime ON t_ssh_host(c_mtime);
+CREATE INDEX IF NOT EXISTS idx_ssh_host_space_id ON t_ssh_host (c_space_id);
+CREATE INDEX IF NOT EXISTS idx_ssh_host_name ON t_ssh_host (c_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host (c_address);
+CREATE INDEX IF NOT EXISTS idx_ssh_host_mtime ON t_ssh_host (c_mtime);
 
-CREATE INDEX IF NOT EXISTS idx_ssh_session_space_id ON t_ssh_session(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_session_session_id ON t_ssh_session(c_session_id);
-CREATE INDEX IF NOT EXISTS idx_ssh_session_host_id ON t_ssh_session(c_host_id);
-CREATE INDEX IF NOT EXISTS idx_ssh_session_status ON t_ssh_session(c_status);
-CREATE INDEX IF NOT EXISTS idx_ssh_session_connect_time ON t_ssh_session(c_connect_time);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_space_id ON t_ssh_session (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_session_session_id ON t_ssh_session (c_session_id);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_host_id ON t_ssh_session (c_host_id);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_status ON t_ssh_session (c_status);
+CREATE INDEX IF NOT EXISTS idx_ssh_session_connect_time ON t_ssh_session (c_connect_time);
 
 -- ************ 创建SSH相关触发器 ************
 DROP TRIGGER IF EXISTS update_ssh_host_mtime;
-CREATE TRIGGER IF NOT EXISTS update_ssh_host_mtime AFTER UPDATE ON t_ssh_host BEGIN
-    UPDATE t_ssh_host SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_ssh_host_mtime
+AFTER UPDATE ON t_ssh_host
+BEGIN
+    UPDATE t_ssh_host SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 -- ============ 秘钥管理系统表设计 ============
 
@@ -263,19 +274,22 @@ CREATE TABLE IF NOT EXISTS t_secrets (
 );
 
 -- ************ 秘钥管理相关索引 ************
-CREATE INDEX IF NOT EXISTS idx_secrets_space_id ON t_secrets(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_secret_id_deleted ON t_secrets(c_secret_id, c_is_deleted);
-CREATE INDEX IF NOT EXISTS idx_secrets_category ON t_secrets(c_category);
-CREATE INDEX IF NOT EXISTS idx_secrets_provider ON t_secrets(c_provider);
-CREATE INDEX IF NOT EXISTS idx_secrets_status ON t_secrets(c_status);
-CREATE INDEX IF NOT EXISTS idx_secrets_name ON t_secrets(c_name);
-CREATE INDEX IF NOT EXISTS idx_secrets_deleted ON t_secrets(c_is_deleted);
-CREATE INDEX IF NOT EXISTS idx_secrets_ctime ON t_secrets(c_ctime DESC);
+CREATE INDEX IF NOT EXISTS idx_secrets_space_id ON t_secrets (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_secret_id_deleted ON t_secrets (c_secret_id, c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_secrets_category ON t_secrets (c_category);
+CREATE INDEX IF NOT EXISTS idx_secrets_provider ON t_secrets (c_provider);
+CREATE INDEX IF NOT EXISTS idx_secrets_status ON t_secrets (c_status);
+CREATE INDEX IF NOT EXISTS idx_secrets_name ON t_secrets (c_name);
+CREATE INDEX IF NOT EXISTS idx_secrets_deleted ON t_secrets (c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_secrets_ctime ON t_secrets (c_ctime DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_eventbus_active_key
-    ON t_secrets(c_space_id, c_category, c_provider, c_key_id)
-    WHERE c_is_deleted = 0 AND c_status = 'active' AND c_category = 'eventbus';
+ON t_secrets (c_space_id, c_category, c_provider, c_key_id)
+WHERE c_is_deleted = 0 AND c_status = 'active' AND c_category = 'eventbus';
 
 -- ************ 秘钥管理触发器 ************
 DROP TRIGGER IF EXISTS update_secrets_mtime;
-CREATE TRIGGER IF NOT EXISTS update_secrets_mtime AFTER UPDATE ON t_secrets BEGIN
-    UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_secrets_mtime
+AFTER UPDATE ON t_secrets
+BEGIN
+    UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;

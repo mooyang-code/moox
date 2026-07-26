@@ -18,14 +18,16 @@ CREATE TABLE IF NOT EXISTS t_trade_sync_cursors (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_sync_cursors_unique
-ON t_trade_sync_cursors(c_space_id, c_account_id, c_sync_type, c_symbol);
+ON t_trade_sync_cursors (c_space_id, c_account_id, c_sync_type, c_symbol);
 
 CREATE INDEX IF NOT EXISTS idx_trade_sync_cursors_account
-ON t_trade_sync_cursors(c_space_id, c_account_id, c_channel_id);
+ON t_trade_sync_cursors (c_space_id, c_account_id, c_channel_id);
 
 CREATE INDEX IF NOT EXISTS idx_trade_sync_cursors_type
-ON t_trade_sync_cursors(c_space_id, c_sync_type, c_is_enabled);
+ON t_trade_sync_cursors (c_space_id, c_sync_type, c_is_enabled);
 
-CREATE TRIGGER IF NOT EXISTS update_trade_sync_cursors_mtime AFTER UPDATE ON t_trade_sync_cursors BEGIN
+CREATE TRIGGER IF NOT EXISTS update_trade_sync_cursors_mtime
+AFTER UPDATE ON t_trade_sync_cursors
+BEGIN
     UPDATE t_trade_sync_cursors SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;

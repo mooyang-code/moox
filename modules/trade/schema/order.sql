@@ -1,4 +1,3 @@
-
 -- ============ MooX Trade 模块 - 交易域（Order）表设计 ============
 -- 风格约定（与 admin.sql / account.sql 一致）：
 --   表名 t_xxx / 列名 c_xxx；软删除 c_is_deleted（0=有效,1=删除）；多空间隔离 c_space_id；
@@ -30,12 +29,12 @@ CREATE TABLE IF NOT EXISTS t_trade_channels (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
-CREATE INDEX IF NOT EXISTS idx_trade_channels_space_id ON t_trade_channels(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_channels_space_channel_id ON t_trade_channels(c_space_id, c_channel_id);
-CREATE INDEX IF NOT EXISTS idx_trade_channels_exchange ON t_trade_channels(c_exchange);
-CREATE INDEX IF NOT EXISTS idx_trade_channels_account ON t_trade_channels(c_account_id);
-CREATE INDEX IF NOT EXISTS idx_trade_channels_status ON t_trade_channels(c_status);
-CREATE INDEX IF NOT EXISTS idx_trade_channels_deleted ON t_trade_channels(c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_trade_channels_space_id ON t_trade_channels (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_channels_space_channel_id ON t_trade_channels (c_space_id, c_channel_id);
+CREATE INDEX IF NOT EXISTS idx_trade_channels_exchange ON t_trade_channels (c_exchange);
+CREATE INDEX IF NOT EXISTS idx_trade_channels_account ON t_trade_channels (c_account_id);
+CREATE INDEX IF NOT EXISTS idx_trade_channels_status ON t_trade_channels (c_status);
+CREATE INDEX IF NOT EXISTS idx_trade_channels_deleted ON t_trade_channels (c_is_deleted);
 
 -- ============ 操作审计 ============
 
@@ -61,19 +60,25 @@ CREATE TABLE IF NOT EXISTS t_order_operations (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间（结果回填时更新）
 );
 
-CREATE INDEX IF NOT EXISTS idx_order_ops_space_id ON t_order_operations(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_order_ops_op_id ON t_order_operations(c_op_id);
-CREATE INDEX IF NOT EXISTS idx_order_ops_account ON t_order_operations(c_account_id);
-CREATE INDEX IF NOT EXISTS idx_order_ops_order_id ON t_order_operations(c_order_id);
-CREATE INDEX IF NOT EXISTS idx_order_ops_type ON t_order_operations(c_op_type);
-CREATE INDEX IF NOT EXISTS idx_order_ops_status ON t_order_operations(c_op_status);
-CREATE INDEX IF NOT EXISTS idx_order_ops_ctime ON t_order_operations(c_ctime DESC);
+CREATE INDEX IF NOT EXISTS idx_order_ops_space_id ON t_order_operations (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_ops_op_id ON t_order_operations (c_op_id);
+CREATE INDEX IF NOT EXISTS idx_order_ops_account ON t_order_operations (c_account_id);
+CREATE INDEX IF NOT EXISTS idx_order_ops_order_id ON t_order_operations (c_order_id);
+CREATE INDEX IF NOT EXISTS idx_order_ops_type ON t_order_operations (c_op_type);
+CREATE INDEX IF NOT EXISTS idx_order_ops_status ON t_order_operations (c_op_status);
+CREATE INDEX IF NOT EXISTS idx_order_ops_ctime ON t_order_operations (c_ctime DESC);
 
 -- ============ 触发器：自动更新 mtime ============
 DROP TRIGGER IF EXISTS update_trade_channels_mtime;
-CREATE TRIGGER IF NOT EXISTS update_trade_channels_mtime AFTER UPDATE ON t_trade_channels BEGIN
-    UPDATE t_trade_channels SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_trade_channels_mtime
+AFTER UPDATE ON t_trade_channels
+BEGIN
+    UPDATE t_trade_channels SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 DROP TRIGGER IF EXISTS update_order_operations_mtime;
-CREATE TRIGGER IF NOT EXISTS update_order_operations_mtime AFTER UPDATE ON t_order_operations BEGIN
-    UPDATE t_order_operations SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_order_operations_mtime
+AFTER UPDATE ON t_order_operations
+BEGIN
+    UPDATE t_order_operations SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;

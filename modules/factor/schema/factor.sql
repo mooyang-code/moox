@@ -20,14 +20,14 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_factor_defs_kind_status
-ON t_factor_defs(c_kind, c_status);
+ON t_factor_defs (c_kind, c_status);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_factor_defs_name_unique
-ON t_factor_defs(c_name);
+ON t_factor_defs (c_name);
 
 CREATE TABLE IF NOT EXISTS t_factor_bindings (
     c_binding_id TEXT PRIMARY KEY,
-    c_factor_id TEXT NOT NULL REFERENCES t_factor_defs(c_factor_id),
+    c_factor_id TEXT NOT NULL REFERENCES t_factor_defs (c_factor_id),
     c_space_id TEXT NOT NULL,
     c_source_dataset TEXT NOT NULL,
     c_freq TEXT NOT NULL,
@@ -40,10 +40,10 @@ CREATE TABLE IF NOT EXISTS t_factor_bindings (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_factor_bindings_unique
-ON t_factor_bindings(c_factor_id, c_space_id, c_source_dataset, c_freq);
+ON t_factor_bindings (c_factor_id, c_space_id, c_source_dataset, c_freq);
 
 CREATE INDEX IF NOT EXISTS idx_factor_bindings_source
-ON t_factor_bindings(c_space_id, c_source_dataset, c_freq, c_status);
+ON t_factor_bindings (c_space_id, c_source_dataset, c_freq, c_status);
 
 CREATE TABLE IF NOT EXISTS t_factor_event_inbox (
     c_message_id TEXT PRIMARY KEY,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS t_factor_event_inbox (
 );
 
 CREATE INDEX IF NOT EXISTS idx_factor_event_inbox_received
-ON t_factor_event_inbox(c_received_at, c_message_id);
+ON t_factor_event_inbox (c_received_at, c_message_id);
 
 CREATE TABLE IF NOT EXISTS t_factor_event_processed (
     c_message_id TEXT PRIMARY KEY,
@@ -69,15 +69,17 @@ CREATE TABLE IF NOT EXISTS t_factor_replay_tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_factor_replay_tasks_run
-ON t_factor_replay_tasks(c_target_run_id, c_status);
+ON t_factor_replay_tasks (c_target_run_id, c_status);
 
-CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime AFTER UPDATE ON t_factor_defs
+CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime
+AFTER UPDATE ON t_factor_defs
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
 
-CREATE TRIGGER IF NOT EXISTS update_factor_bindings_mtime AFTER UPDATE ON t_factor_bindings
+CREATE TRIGGER IF NOT EXISTS update_factor_bindings_mtime
+AFTER UPDATE ON t_factor_bindings
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_bindings SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;

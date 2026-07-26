@@ -1,4 +1,3 @@
-
 -- ============ MooX Trade 模块 - 账户域（Account）表设计 ============
 -- 风格约定（与 admin.sql 一致）：
 --   表名 t_xxx / 列名 c_xxx；软删除 c_is_deleted（0=有效,1=删除）；
@@ -29,12 +28,12 @@ CREATE TABLE IF NOT EXISTS t_accounts (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
-CREATE INDEX IF NOT EXISTS idx_accounts_space_id ON t_accounts(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_space_account_id ON t_accounts(c_space_id, c_account_id);
-CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON t_accounts(c_user_id);
-CREATE INDEX IF NOT EXISTS idx_accounts_channel_id ON t_accounts(c_channel_id);
-CREATE INDEX IF NOT EXISTS idx_accounts_status ON t_accounts(c_status);
-CREATE INDEX IF NOT EXISTS idx_accounts_deleted ON t_accounts(c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_accounts_space_id ON t_accounts (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_space_account_id ON t_accounts (c_space_id, c_account_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON t_accounts (c_user_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_channel_id ON t_accounts (c_channel_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_status ON t_accounts (c_status);
+CREATE INDEX IF NOT EXISTS idx_accounts_deleted ON t_accounts (c_is_deleted);
 
 -- ************ 账户资产余额表（按账户+币种维度）************
 CREATE TABLE IF NOT EXISTS t_account_balances (
@@ -51,9 +50,9 @@ CREATE TABLE IF NOT EXISTS t_account_balances (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
-CREATE INDEX IF NOT EXISTS idx_account_balances_space_id ON t_account_balances(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_account_balances_account_currency ON t_account_balances(c_account_id, c_currency, c_is_deleted);
-CREATE INDEX IF NOT EXISTS idx_account_balances_currency ON t_account_balances(c_currency);
+CREATE INDEX IF NOT EXISTS idx_account_balances_space_id ON t_account_balances (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_balances_account_currency ON t_account_balances (c_account_id, c_currency, c_is_deleted);
+CREATE INDEX IF NOT EXISTS idx_account_balances_currency ON t_account_balances (c_currency);
 
 -- ************ 资金流水表（充值/提现/划转/交易结算引起的余额变动）************
 -- 说明：流水只追加不修改，是余额的权威账本，余额表是其物化结果。
@@ -73,12 +72,12 @@ CREATE TABLE IF NOT EXISTS t_account_fund_flows (
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 发生时间（流水不可变，无 mtime）
 );
 
-CREATE INDEX IF NOT EXISTS idx_fund_flows_space_id ON t_account_fund_flows(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_fund_flows_flow_id ON t_account_fund_flows(c_flow_id);
-CREATE INDEX IF NOT EXISTS idx_fund_flows_account ON t_account_fund_flows(c_account_id, c_currency);
-CREATE INDEX IF NOT EXISTS idx_fund_flows_biz_type ON t_account_fund_flows(c_biz_type);
-CREATE INDEX IF NOT EXISTS idx_fund_flows_ref ON t_account_fund_flows(c_ref_type, c_ref_id);
-CREATE INDEX IF NOT EXISTS idx_fund_flows_ctime ON t_account_fund_flows(c_ctime DESC);
+CREATE INDEX IF NOT EXISTS idx_fund_flows_space_id ON t_account_fund_flows (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fund_flows_flow_id ON t_account_fund_flows (c_flow_id);
+CREATE INDEX IF NOT EXISTS idx_fund_flows_account ON t_account_fund_flows (c_account_id, c_currency);
+CREATE INDEX IF NOT EXISTS idx_fund_flows_biz_type ON t_account_fund_flows (c_biz_type);
+CREATE INDEX IF NOT EXISTS idx_fund_flows_ref ON t_account_fund_flows (c_ref_type, c_ref_id);
+CREATE INDEX IF NOT EXISTS idx_fund_flows_ctime ON t_account_fund_flows (c_ctime DESC);
 
 -- ************ 账户 API 凭证表（对接交易所的密钥，敏感字段加密存储）************
 -- 说明：与交易通道解耦——一个账户可持有多套 API Key（不同权限/不同子账户）。
@@ -98,20 +97,29 @@ CREATE TABLE IF NOT EXISTS t_account_api_keys (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
-CREATE INDEX IF NOT EXISTS idx_api_keys_space_id ON t_account_api_keys(c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_api_key_id ON t_account_api_keys(c_api_key_id);
-CREATE INDEX IF NOT EXISTS idx_api_keys_account ON t_account_api_keys(c_account_id);
-CREATE INDEX IF NOT EXISTS idx_api_keys_exchange ON t_account_api_keys(c_exchange);
+CREATE INDEX IF NOT EXISTS idx_api_keys_space_id ON t_account_api_keys (c_space_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_api_key_id ON t_account_api_keys (c_api_key_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_account ON t_account_api_keys (c_account_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_exchange ON t_account_api_keys (c_exchange);
 
 -- ============ 触发器：自动更新 mtime ============
 DROP TRIGGER IF EXISTS update_accounts_mtime;
-CREATE TRIGGER IF NOT EXISTS update_accounts_mtime AFTER UPDATE ON t_accounts BEGIN
-    UPDATE t_accounts SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_accounts_mtime
+AFTER UPDATE ON t_accounts
+BEGIN
+    UPDATE t_accounts SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 DROP TRIGGER IF EXISTS update_account_balances_mtime;
-CREATE TRIGGER IF NOT EXISTS update_account_balances_mtime AFTER UPDATE ON t_account_balances BEGIN
-    UPDATE t_account_balances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_account_balances_mtime
+AFTER UPDATE ON t_account_balances
+BEGIN
+    UPDATE t_account_balances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
 
 DROP TRIGGER IF EXISTS update_account_api_keys_mtime;
-CREATE TRIGGER IF NOT EXISTS update_account_api_keys_mtime AFTER UPDATE ON t_account_api_keys BEGIN
-    UPDATE t_account_api_keys SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid; END;
+CREATE TRIGGER IF NOT EXISTS update_account_api_keys_mtime
+AFTER UPDATE ON t_account_api_keys
+BEGIN
+    UPDATE t_account_api_keys SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;
