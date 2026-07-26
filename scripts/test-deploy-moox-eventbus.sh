@@ -36,6 +36,10 @@ grep -Fq \
 grep -Fq 'missing EventBus TLS credential' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip}' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_EVENTBUS_PORT="${MOOX_EVENTBUS_PORT:-4222}"' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_EVENTBUS_PORT=${quoted_eventbus_port}' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq '${MOOX_EVENTBUS_PUBLIC_IP}:${MOOX_EVENTBUS_PORT}' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'EVENTBUS_PORT="${MOOX_EVENTBUS_PORT}" perl -0pi' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP requires MOOX_EVENTBUS_ENABLE_TLS=1' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env' "${ROOT}/scripts/deploy-moox.sh"
@@ -46,6 +50,15 @@ for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
 done
 grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
 grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
+
+if MOOX_EVENTBUS_PORT=not-a-number "${ROOT}/scripts/deploy-moox.sh" --help >/dev/null 2>&1; then
+  echo "non-numeric EventBus port must be rejected" >&2
+  exit 1
+fi
+if MOOX_EVENTBUS_PORT=70000 "${ROOT}/scripts/deploy-moox.sh" --help >/dev/null 2>&1; then
+  echo "out-of-range EventBus port must be rejected" >&2
+  exit 1
+fi
 
 if ! awk '/start_eventbus\(\)/ { start=NR } /start_storage\(\)/ { storage=NR } END { exit !(start < storage) }' "${ROOT}/scripts/deploy-moox.sh"; then
   echo "eventbus must start before storage" >&2
