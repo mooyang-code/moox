@@ -47,6 +47,58 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 	}
 }
 
+func TestDuckDBQualifiedViewColumn(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	const column = "prices.close"
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
+		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{ColumnName: column, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.RowKey{
+		SpaceId: "s", DatasetId: "prices",
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-07-20T00:00:00Z",
+		}},
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{{
+			Key: viewindex.RowKey{Key: key},
+			Fields: []*pb.FieldValue{{
+				FieldId: column,
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 123.5}},
+			}},
+		}},
+		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, total, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+		Groups: []viewindex.FilterGroup{{Conds: []viewindex.Filter{{
+			Column: column,
+			Op:     pb.FilterOp_FILTER_OP_GTE,
+			Values: []*pb.TypedValue{{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}},
+		}}}},
+		Sorts:    []*pb.SortSpec{{FieldName: column, Desc: true}},
+		Includes: []string{column},
+		Limit:    1, TotalMode: pb.TotalMode_FORCE_EXACT,
+	})
+	if err != nil || total != 1 || len(rows) != 1 {
+		t.Fatalf("qualified query: rows=%v total=%d err=%v", rows, total, err)
+	}
+	fields := rows[0].GetFields()
+	if len(fields) != 1 || fields[0].GetFieldId() != column || fields[0].GetValue().GetDoubleValue() != 123.5 {
+		t.Fatalf("qualified field not retained: %v", fields)
+	}
+}
+
 func TestDuckTypeMapping(t *testing.T) {
 	cases := map[pb.FieldValueType]string{
 		pb.FieldValueType_FIELD_VALUE_TYPE_INT:         "BIGINT",

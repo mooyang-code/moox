@@ -34,7 +34,7 @@ type IndexManager struct {
 	space   map[string]string
 }
 
-var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
 
 func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 	if strings.TrimSpace(opts.Root) == "" {

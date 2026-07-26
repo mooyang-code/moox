@@ -50,6 +50,7 @@ trap cleanup_e2e EXIT
 
 export MOOX_ADMIN_JWT_SECRET_KEY="${MOOX_ADMIN_JWT_SECRET_KEY:-moox-e2e-jwt-secret-key-20260713-safe}"
 export MOOX_EVENTBUS_STREAM_MAX_BYTES="${MOOX_EVENTBUS_STREAM_MAX_BYTES:-104857600}"
+export MOOX_EVENTBUS_ENABLE_TLS="${MOOX_EVENTBUS_ENABLE_TLS:-1}"
 
 usage() {
   cat <<'EOF'
@@ -239,6 +240,38 @@ import_seed() {
   return 1
 }
 
+activate_storage_datasets() {
+  if is_local_target; then
+    local deploy_dir
+    deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
+    [[ -r "${deploy_dir}/secrets/storage-node-auth.env" ]] ||
+      fail "missing storage-node-auth.env"
+    (
+      set -a
+      # shellcheck disable=SC1091
+      source "${deploy_dir}/secrets/storage-node-auth.env"
+      set +a
+      "${deploy_dir}/bin/moox-storage-cli" activate-datasets \
+        --metadata-target "ip://127.0.0.1:20100"
+    )
+    return
+  fi
+  ssh "${TARGET}" bash -s -- "${DEPLOY_DIR}" <<'EOF'
+set -euo pipefail
+deploy=$1
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+[[ -r "${deploy}/secrets/storage-node-auth.env" ]]
+set -a
+source "${deploy}/secrets/storage-node-auth.env"
+set +a
+"${deploy}/bin/moox-storage-cli" activate-datasets \
+  --metadata-target "ip://127.0.0.1:20100"
+EOF
+}
+
 ensure_admin_user() {
   if is_local_target; then
     local deploy_dir
@@ -289,9 +322,15 @@ scf_log_has() {
   if is_local_target; then
     local deploy_dir
     deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
-    grep -F "job_item_id=\"${item_id}\"" "${deploy_dir}/log/e2e-collector-scf.log" 2>/dev/null |
-      grep -F "event=\"${event}\"" |
-      { [[ -z "${decision}" ]] || grep -F "decision=\"${decision}\""; } >/dev/null
+    awk -v item_id="${item_id}" -v event="${event}" -v decision="${decision}" '
+      index($0, "job_item_id=\"" item_id "\"") &&
+      index($0, "event=\"" event "\"") &&
+      (decision == "" || index($0, "decision=\"" decision "\"")) {
+        found = 1
+        exit
+      }
+      END { exit(found ? 0 : 1) }
+    ' "${deploy_dir}/log/e2e-collector-scf.log" 2>/dev/null
     return
   fi
   ssh "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${item_id}" "${event}" "${decision}" <<'EOF'
@@ -303,15 +342,21 @@ case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
 esac
-grep -F "job_item_id=\"${item_id}\"" "${deploy}/log/e2e-collector-scf.log" 2>/dev/null |
-  grep -F "event=\"${event}\"" |
-  { [[ -z "${decision}" ]] || grep -F "decision=\"${decision}\""; } >/dev/null
+awk -v item_id="${item_id}" -v event="${event}" -v decision="${decision}" '
+  index($0, "job_item_id=\"" item_id "\"") &&
+  index($0, "event=\"" event "\"") &&
+  (decision == "" || index($0, "decision=\"" decision "\"")) {
+    found = 1
+    exit
+  }
+  END { exit(found ? 0 : 1) }
+' "${deploy}/log/e2e-collector-scf.log" 2>/dev/null
 EOF
 }
 
 assert_scf_deferred() {
   local item_id
-  item_id="$(node -e 'const s=require(process.argv[1]); process.stdout.write(s.scheduled_job_ids?.[0] || "")' "${E2E_STATE_FILE}")"
+  item_id="$(node -e 'const fs=require("node:fs"); const s=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(s.scheduled_job_ids?.[0] || "")' "${E2E_STATE_FILE}")"
   [[ -n "${item_id}" ]] || fail "scheduled job id missing from E2E state"
   local deadline=$((SECONDS + 15))
   while (( SECONDS < deadline )); do
@@ -370,6 +415,9 @@ if [[ "${SYSDEPLOY_ONLY}" -eq 1 ]]; then
 fi
 import_seed "platform-local.seed.yaml"
 import_seed "metadata-quant-initial.seed.yaml" "${SPACE_ID}"
+
+log "activate imported storage Datasets"
+activate_storage_datasets
 
 log "prepare management/backend state and queue topology"
 ensure_admin_user

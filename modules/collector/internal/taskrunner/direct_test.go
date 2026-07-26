@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,9 +22,66 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+type directTestActionReporterFunc func(
+	context.Context,
+	*jetstream.Delivery,
+	jetstream.HandlerResult,
+	error,
+)
+
+func (f directTestActionReporterFunc) ReportAction(
+	ctx context.Context,
+	delivery *jetstream.Delivery,
+	result jetstream.HandlerResult,
+	err error,
+) {
+	f(ctx, delivery, result, err)
+}
+
 func TestCollectorWorkloadTimeout(t *testing.T) {
 	if collectorWorkloadTimeout != 100*time.Second {
 		t.Fatalf("collectorWorkloadTimeout = %v, want 100s", collectorWorkloadTimeout)
+	}
+}
+
+func TestEventBusConfigLoadsRoleCredentialFile(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, []byte("test-ca"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credentialPath := filepath.Join(dir, "cloudnode-worker.yaml")
+	if err := os.WriteFile(credentialPath, []byte(
+		"version: 1\nurls: [tls://eventbus.example:4222]\nusername: cloudnode-worker\ntoken: worker-token\nca_file: ca.pem\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_EVENTBUS_CREDENTIAL_FILE", credentialPath)
+
+	cfg, err := eventBusConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.URLs) != 1 || cfg.URLs[0] != "tls://eventbus.example:4222" {
+		t.Fatalf("URLs = %v", cfg.URLs)
+	}
+	if cfg.Username != "cloudnode-worker" || cfg.Password != "worker-token" {
+		t.Fatalf("credentials = %q/%q", cfg.Username, cfg.Password)
+	}
+	if cfg.TLSCAFile != caPath {
+		t.Fatalf("TLSCAFile = %q, want %q", cfg.TLSCAFile, caPath)
+	}
+}
+
+func TestEventBusConfigRejectsInvalidRoleCredentialFile(t *testing.T) {
+	credentialPath := filepath.Join(t.TempDir(), "cloudnode-worker.yaml")
+	if err := os.WriteFile(credentialPath, []byte("username: cloudnode-worker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_EVENTBUS_CREDENTIAL_FILE", credentialPath)
+
+	if _, err := eventBusConfig(); err == nil {
+		t.Fatal("eventBusConfig() accepted an invalid role credential file")
 	}
 }
 
@@ -414,7 +473,7 @@ func TestDirectWorkerJetStreamExecuteAtTiming(t *testing.T) {
 			}),
 			jetstream.RunnerConfig{
 				BatchSize: 1,
-				ActionReporter: jetstream.ActionReporterFunc(func(
+				ActionReporter: directTestActionReporterFunc(func(
 					_ context.Context,
 					delivery *jetstream.Delivery,
 					result jetstream.HandlerResult,

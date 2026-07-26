@@ -1,5 +1,15 @@
 package gateway
 
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+)
+
 // storageBFFMethods is the browser-facing Storage contract. The target
 // service IDs are existing HTTP deployments; the BFF does not create a new
 // Storage backend or expose the internal service names to the browser.
@@ -73,4 +83,42 @@ func storageBFFServicePath(serviceID, method string) string {
 		}
 	}
 	return "trpc.moox.storage.Metadata"
+}
+
+func storageBFFBody(serviceID string, body []byte) ([]byte, error) {
+	var secret string
+	switch serviceID {
+	case "storage-primary":
+		secret = strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
+	case "storage-view":
+		secret = strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET"))
+	default:
+		return nil, errors.New("unsupported Storage BFF service")
+	}
+	if secret == "" {
+		return nil, errors.New("Storage BFF internal auth is not configured")
+	}
+	payload := make(map[string]json.RawMessage)
+	if len(body) != 0 {
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, err
+		}
+	}
+	const appID = "admin-gateway"
+	authPayload := make(map[string]json.RawMessage)
+	if raw := payload["auth_info"]; len(raw) != 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &authPayload); err != nil {
+			return nil, err
+		}
+	}
+	authPayload["app_id"], _ = json.Marshal(appID)
+	authPayload["app_key"], _ = json.Marshal(storageServiceAuthKey(secret, appID))
+	payload["auth_info"], _ = json.Marshal(authPayload)
+	return json.Marshal(payload)
+}
+
+func storageServiceAuthKey(secret, appID string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(appID))
+	return hex.EncodeToString(mac.Sum(nil))
 }

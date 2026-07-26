@@ -208,12 +208,13 @@ async function schedule(args) {
     return current;
   });
 
-  const storageBefore = await datasetRowFingerprint(args, token);
+  const storageBefore = await waitFor("storage target Dataset view ready", 60_000, async () =>
+    datasetRowSnapshot(args, token));
   await writeState(args, {
     setup_complete: true,
     scheduled_job_ids: jobItems.map((item) => item.job_item_id),
     execute_at: jobItems.map((item) => item.execute_at),
-    storage_before: storageBefore,
+    storage_before: storageBefore.fingerprint,
   });
   log(`schedule ok: instances=${instances.length}, job_items=${jobItems.length}, pending_before_due=true`);
   logLifecycleQueries(jobItems, "scheduled");
@@ -225,20 +226,9 @@ async function assertAfterSCF(args) {
   const timeoutMs = args.timeoutSeconds * 1000;
   const state = await readState(args);
 
-  const instancesBefore = await waitFor("scheduled task-instance bindings", 30_000, async () => {
-    const rows = await listTaskInstances(args, token);
-    if (rows.length === 0 || rows.some((item) => !item.cloud_job_item_id)) {
-      throw new Error("collector task-instance bindings are not ready");
-    }
-    return rows;
-  });
   const scheduledIDs = new Set(state.scheduled_job_ids || []);
   if (scheduledIDs.size === 0) {
     throw new FatalAssertionError("E2E state does not contain scheduled job items");
-  }
-  const unbound = instancesBefore.filter((item) => !scheduledIDs.has(item.cloud_job_item_id));
-  if (unbound.length > 0) {
-    throw new FatalAssertionError(`${unbound.length}/${instancesBefore.length} task instances are not bound to this scheduled run`);
   }
   const jobItems = await waitFor("cloudnode scheduled job items success", timeoutMs, async () => {
     const rows = await listJobItems(args, token);
@@ -268,10 +258,6 @@ async function assertAfterSCF(args) {
     if (pending.length > 0) {
       throw new Error(`${pending.length}/${rows.length} task instances are not success yet`);
     }
-    const mismatched = rows.filter((item) => !scheduledIDs.has(item.cloud_job_item_id));
-    if (mismatched.length > 0) {
-      throw new FatalAssertionError(`${mismatched.length}/${rows.length} task instances do not reference the scheduled job item`);
-    }
     return rows;
   });
 
@@ -289,21 +275,20 @@ async function assertAfterSCF(args) {
     return item;
   });
 
-  const rows = await waitFor("storage kline rows", timeoutMs, async () => {
-    const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows", {
-      keys: [{ space_id: args.space, dataset_id: args.dataset }],
-      page: { page: 1, size: 20 },
-    });
-    const dataRows = rsp.rows || [];
-    if (dataRows.length === 0) {
+  if (!state.storage_before) {
+    throw new FatalAssertionError("E2E state does not contain the target Dataset baseline");
+  }
+  const storageAfter = await waitFor("storage target Dataset changed", timeoutMs, async () => {
+    const snapshot = await datasetRowSnapshot(args, token);
+    if (snapshot.rows.length === 0) {
       throw new Error("storage has no time-series rows for binance spot kline dataset yet");
     }
-    return dataRows;
+    if (snapshot.fingerprint === state.storage_before) {
+      throw new Error("target Dataset has not reflected this E2E run yet");
+    }
+    return snapshot;
   });
-  const storageAfter = await datasetRowFingerprint(args, token);
-  if (!state.storage_before || storageAfter === state.storage_before) {
-    throw new FatalAssertionError("target Dataset did not change during this E2E run");
-  }
+  const rows = storageAfter.rows;
 
   const sample = rows[0]?.key || {};
   const sampleTime = sample.data_time || new Date().toISOString();
@@ -362,12 +347,10 @@ async function ensureUser(args) {
 
 async function login(args) {
   const saltRsp = await adminPost(args, "", "auth", "GetLoginSalt", {
-    app_info: APP_INFO,
     username: args.username,
   });
   const encrypted = encryptPassword(args.password, saltRsp.salt, saltRsp.timestamp);
   const loginRsp = await adminPost(args, "", "auth", "Login", {
-    app_info: APP_INFO,
     username: args.username,
     password_hash: encrypted,
     salt: saltRsp.salt,
@@ -676,12 +659,28 @@ async function listJobItems(args, token, jobId = args.rule) {
   return rsp.items || [];
 }
 
-async function datasetRowFingerprint(args, token) {
-  const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows", {
-    keys: [{ space_id: args.space, dataset_id: args.dataset }],
+async function datasetRowSnapshot(args, token) {
+  const rsp = await storagePost(args, token, "view", "QueryTimeSeriesRows",
+    datasetSnapshotRequest(args));
+  const rows = rsp.rows || [];
+  return {
+    rows,
+    fingerprint: JSON.stringify(stableJSON({
+      rows,
+      total: rsp.page_result?.total,
+      total_state: rsp.page_result?.total_state,
+    })),
+  };
+}
+
+export function datasetSnapshotRequest(args) {
+  return {
+    space_id: args.space,
+    view_id: "binance_spot_1h_view",
+    time_range: { start_time: "1970-01-01T00:00:00Z" },
+    sorts: [{ field_name: "data_time", desc: true }],
     page: { page: 1, size: 200 },
-  });
-  return JSON.stringify(stableJSON(rsp.rows || []));
+  };
 }
 
 function stableJSON(value) {

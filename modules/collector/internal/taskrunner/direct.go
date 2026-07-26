@@ -105,7 +105,11 @@ func run(ctx context.Context, stopOnIdle bool) error {
 	if spaceID == "" || nodeID == "" || gatewayTarget == "" {
 		return fmt.Errorf("job execution requires MOOX_SPACE_ID, node_id and service gateway target")
 	}
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(nil, "collector-cloudjob-worker"))
+	eventBusCfg, err := eventBusConfig()
+	if err != nil {
+		return err
+	}
+	client, err := jetstream.Connect(ctx, eventBusCfg)
 	if err != nil {
 		return err
 	}
@@ -175,6 +179,18 @@ func run(ctx context.Context, stopOnIdle bool) error {
 		}),
 		ActionReporter: actionReporter,
 	}).Run(ctx)
+}
+
+func eventBusConfig() (jetstream.Config, error) {
+	cfg := jetstream.ConfigFromEnv(nil, "collector-cloudjob-worker")
+	credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE"))
+	if credentialFile == "" {
+		return cfg, nil
+	}
+	if err := cfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(credentialFile)); err != nil {
+		return jetstream.Config{}, fmt.Errorf("load EventBus credential file: %w", err)
+	}
+	return cfg, nil
 }
 
 func handleDelivery(ctx context.Context, registry *events.Registry, bindings []queueBinding, cfg nodeRuntime.Config, delivery *jetstream.Delivery) jetstream.HandlerResult {

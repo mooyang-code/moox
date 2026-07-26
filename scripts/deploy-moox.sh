@@ -1251,6 +1251,7 @@ PY
 nats_endpoint() {
   local url="$1"
   url="${url#nats://}"
+  url="${url#tls://}"
   url="${url%%,*}"
   url="${url%%/*}"
   local host="${url%%:*}"
@@ -1367,9 +1368,9 @@ apply_metrics_metadata() {
   fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
   if [[ "${WITH_STORAGE}" == "1" ]]; then
-    "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+    "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
   fi
-  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
 }
 
 apply_host_metadata() {
@@ -1381,7 +1382,7 @@ apply_host_metadata() {
     return 0
   fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
-  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
 }
 
 init_storage_schema() {
@@ -1426,7 +1427,10 @@ run_storage_doctor() {
   fi
   local report="${ROOT}/logs/storage/doctor-bootstrap.json"
   echo "running read-only Doctor bootstrap before Dataset activation"
-  if ! "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"; then
+  if ! (
+    cd "${ROOT}"
+    "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"
+  ); then
     echo "defer Dataset activation: Doctor bootstrap failed"
     return 1
   fi
@@ -1621,7 +1625,7 @@ start_admin() {
       --db-path "${ROOT}/data/admin.db" \
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}" \
-      --public-host "${PUBLIC_HOST}" \
+      --public-host "${PUBLIC_HOST:-127.0.0.1}" \
       --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
       service_seed_args+=(--with-storage-shard)
@@ -2350,7 +2354,6 @@ prepare_stage() {
     "${STAGE_DIR}/collector/configs" \
     "${STAGE_DIR}/factor/config" \
     "${STAGE_DIR}/factor/factors" \
-    "${STAGE_DIR}/factor/sections" \
     "${STAGE_DIR}/strategy/config" \
     "${STAGE_DIR}/strategy/pyworker" \
     "${STAGE_DIR}/strategy/pysdk" \
@@ -2552,7 +2555,6 @@ EOF
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/factor/config/." "${STAGE_DIR}/factor/config/"
     cp -R "${ROOT}/modules/factor/factors/." "${STAGE_DIR}/factor/factors/"
-    cp -R "${ROOT}/modules/factor/sections/." "${STAGE_DIR}/factor/sections/"
     cp -R "${ROOT}/modules/factor/pyworker" "${STAGE_DIR}/factor/pyworker"
     find "${STAGE_DIR}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
   fi
@@ -2759,8 +2761,9 @@ sync_local_stage() {
   install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
+    install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   else
-    rm -f "${deploy_dir}/secrets/storage-node-auth.env"
+    rm -f "${deploy_dir}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"

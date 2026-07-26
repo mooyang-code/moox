@@ -196,6 +196,11 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if storageFacade {
+		body, err = storageBFFBody(serviceID, body)
+		if err != nil {
+			writeForwardError(ctx, w, err, headers)
+			return
+		}
 		response, _, err := forwardStorageToNodeGateway(ctx, serviceID, method, body, headers)
 		if err != nil {
 			writeForwardError(ctx, w, err, headers)

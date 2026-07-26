@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as verify from "./verify.mjs";
 
 import {
   JOB_STATUS,
@@ -9,6 +10,20 @@ import {
   scheduleLeadDelay,
   statusName,
 } from "./verify.mjs";
+
+test("storage snapshot queries the target View without an empty subject selector", () => {
+  assert.equal(typeof verify.datasetSnapshotRequest, "function");
+  assert.deepEqual(
+    verify.datasetSnapshotRequest({ space: "crypto" }),
+    {
+      space_id: "crypto",
+      view_id: "binance_spot_1h_view",
+      time_range: { start_time: "1970-01-01T00:00:00Z" },
+      sorts: [{ field_name: "data_time", desc: true }],
+      page: { page: 1, size: 200 },
+    },
+  );
+});
 
 test("CloudNode JobItem status values match the protobuf contract", () => {
   assert.equal(statusName(1, JOB_STATUS), "JOB_ITEM_STATUS_PENDING");

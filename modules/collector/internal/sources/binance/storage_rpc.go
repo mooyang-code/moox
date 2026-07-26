@@ -10,6 +10,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
 const datasetSubjectPageSize = 200
@@ -21,19 +22,23 @@ type storageWriter struct {
 }
 
 func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo) *storageWriter {
-	target := gatewayauth.ServiceGatewayTarget(accessTarget)
-	if strings.TrimSpace(target) == "" {
-		target = metadataTarget
-	}
-	if strings.TrimSpace(target) == "" {
-		target = "ip://127.0.0.1:11003"
-	}
+	target := storageGatewayTarget(accessTarget, metadataTarget)
 	serviceOptions := gatewayauth.NewTRPCClientOptions(normalizeStorageTarget(target, "11003"), strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
 		access:   storagepb.NewPrimaryStoreClientProxy(serviceOptions...),
 		metadata: storagepb.NewMetadataClientProxy(serviceOptions...),
 		authInfo: authInfo,
 	}
+}
+
+func storageGatewayTarget(accessTarget, metadataTarget string) string {
+	if target := strings.TrimSpace(accessTarget); target != "" {
+		return target
+	}
+	if target := strings.TrimSpace(metadataTarget); target != "" {
+		return target
+	}
+	return "ip://127.0.0.1:11003"
 }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
@@ -152,9 +157,13 @@ func doubleField(name string, value float64) *storagepb.FieldValue {
 }
 
 func storageAuthInfo(binding StorageBinding) *storagepb.AuthInfo {
+	appKey := binding.AuthInfo.AppKey
+	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
+		appKey = mooxsecurity.HMACSHA256Hex(secret, []byte(binding.AuthInfo.AppID))
+	}
 	return &storagepb.AuthInfo{
 		AppId:     binding.AuthInfo.AppID,
-		AppKey:    binding.AuthInfo.AppKey,
+		AppKey:    appKey,
 		Operator:  binding.AuthInfo.Operator,
 		RequestId: binding.AuthInfo.RequestID,
 	}

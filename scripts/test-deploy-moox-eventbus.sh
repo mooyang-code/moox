@@ -21,10 +21,14 @@ grep -q 'data/eventbus/jetstream' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'logs/eventbus' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'apply_metrics_metadata' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'metadata-monitor-metrics.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
+sed -n '/^apply_metrics_metadata()/,/^}/p' "${ROOT}/scripts/deploy-moox.sh" |
+  grep -q 'metadata import.*--if-not-exists'
 ! grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED|local-route' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_METRICS_STORAGE_METADATA_URL' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'apply_host_metadata' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'metadata-monitor-host.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
+sed -n '/^apply_host_metadata()/,/^}/p' "${ROOT}/scripts/deploy-moox.sh" |
+  grep -q 'metadata import.*--if-not-exists'
 grep -q 'secrets/health-auth.env' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'moox-admin-cli.*random-secret.*--bytes 32' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_HEALTH_AUTH_SECRET_KEY' "${ROOT}/scripts/deploy-moox.sh"
@@ -40,9 +44,11 @@ grep -Fq 'MOOX_EVENTBUS_PORT="${MOOX_EVENTBUS_PORT:-4222}"' "${ROOT}/scripts/dep
 grep -Fq 'MOOX_EVENTBUS_PORT=${quoted_eventbus_port}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_ENABLE_TLS="${MOOX_EVENTBUS_ENABLE_TLS:-__EVENTBUS_ENABLE_TLS__}"' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 's#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq -- '--public-host "${PUBLIC_HOST:-127.0.0.1}"' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq '${MOOX_EVENTBUS_PUBLIC_IP}:${MOOX_EVENTBUS_PORT}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'EVENTBUS_PORT="${MOOX_EVENTBUS_PORT}" perl -0pi' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP requires MOOX_EVENTBUS_ENABLE_TLS=1' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'url="${url#tls://}"' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq '"${STAGE_DIR}"/secrets/gateway-cloudnode.key' "${ROOT}/scripts/deploy-moox.sh"

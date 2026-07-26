@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -70,11 +72,31 @@ func TestStorageFieldBuilders(t *testing.T) {
 	assert.Equal(t, "app", auth.GetAppId())
 }
 
+func TestStorageAuthInfoUsesRuntimePrimarySecret(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "runtime-primary-secret")
+
+	auth := storageAuthInfo(StorageBinding{AuthInfo: StorageAuthInfo{
+		AppID: "moox-collector", AppKey: "packaged-fallback",
+	}})
+	assert.Equal(t, "moox-collector", auth.GetAppId())
+	assert.Equal(t,
+		mooxsecurity.HMACSHA256Hex("runtime-primary-secret", []byte("moox-collector")),
+		auth.GetAppKey(),
+	)
+}
+
 func TestNormalizeStorageTarget(t *testing.T) {
 	assert.Equal(t, "ip://127.0.0.1:20102", normalizeStorageTarget("", "20102"))
 	assert.Equal(t, "ip://10.0.0.1:20102", normalizeStorageTarget("10.0.0.1:20102", "20102"))
 	assert.Equal(t, "ip://host:20100", normalizeStorageTarget("ip://host:20100", "20100"))
 	assert.Equal(t, "http://svc:8080", normalizeStorageTarget("http://svc:8080", "20102"))
+}
+
+func TestStorageGatewayTargetDoesNotUseHTTPCallbackGateway(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "http://127.0.0.1:11002")
+
+	assert.Equal(t, "ip://127.0.0.1:11003", storageGatewayTarget("ip://127.0.0.1:11003", ""))
+	assert.Equal(t, "ip://metadata:20100", storageGatewayTarget("", "ip://metadata:20100"))
 }
 
 func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {

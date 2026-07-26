@@ -73,7 +73,6 @@ mkdir -p \
   "${RELEASE_ROOT}/factor/bin" \
   "${RELEASE_ROOT}/factor/config" \
   "${RELEASE_ROOT}/factor/factors" \
-  "${RELEASE_ROOT}/factor/sections" \
   "${RELEASE_ROOT}/factor/python-runtime" \
   "${RELEASE_ROOT}/strategy/bin" \
   "${RELEASE_ROOT}/strategy/config" \
@@ -162,7 +161,6 @@ cp -R "${ROOT}/modules/cloudnode/config/." "${RELEASE_ROOT}/cloudnode/config/"
 cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/collector/config/"
 cp -R "${ROOT}/modules/factor/config/." "${RELEASE_ROOT}/factor/config/"
 cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/factor/factors/"
-cp -R "${ROOT}/modules/factor/sections/." "${RELEASE_ROOT}/factor/sections/"
 cp -R "${ROOT}/packages/pyruntime/python/." "${RELEASE_ROOT}/factor/python-runtime/"
 cp -R "${ROOT}/modules/strategy/config/." "${RELEASE_ROOT}/strategy/config/"
 cp -R "${ROOT}/modules/strategy/pyworker/." "${RELEASE_ROOT}/strategy/pyworker/"
