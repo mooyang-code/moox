@@ -51,6 +51,11 @@ done
 grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
 grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
 
+control_profile=$(sed -n '/^    control)/,/^    storage)/p' "${ROOT}/scripts/deploy-moox.sh")
+grep -Fq 'WITH_EVENTBUS=1' <<<"${control_profile}"
+grep -Fq 'WITH_CLOUDNODE=1' <<<"${control_profile}"
+grep -Fq 'WITH_COLLECTOR=1' <<<"${control_profile}"
+
 if MOOX_EVENTBUS_PORT=not-a-number "${ROOT}/scripts/deploy-moox.sh" --help >/dev/null 2>&1; then
   echo "non-numeric EventBus port must be rejected" >&2
   exit 1
