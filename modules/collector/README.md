@@ -107,6 +107,11 @@ keepalive 会下发真实的 `service_gateway_target`，完成首次通信初始
 JobType。`execute_at` 缺失或已到期时立即执行；未来时间通过 JetStream 延迟重投。
 查询接口和 `moox-cli init` 不在 SCF 中执行。
 
+SCF 包中的 CLS writer 使用 `info` 级别。每次 JobItem delivery 都记录
+`collector_job_received`、校验/延期/开始、TaskInstance 与 CloudNode 上报、
+`collector_job_done` 和实际 ACK/NAK/TERM 结果。日志使用稳定的 `key=value` 字段，
+依靠 `job_item_id + delivery_count` 关联重投，不输出完整任务参数或认证信息。
+
 关键字段：
 
 - `system.storage_rpc.gateway_target` — Node Service Gateway 原生 tRPC 地址。

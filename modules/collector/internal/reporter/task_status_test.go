@@ -3,6 +3,7 @@ package reporter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,5 +76,39 @@ func TestReportTaskStatusRequiresJobItemIDBeforeSkippingUnconfiguredGateway(t *t
 	err := ReportTaskStatus(context.Background(), "crypto", "task-1", "", StatusSuccess, `{}`)
 	if err == nil || !strings.Contains(err.Error(), "job_item_id is required") {
 		t.Fatalf("ReportTaskStatus() error = %v, want required job_item_id", err)
+	}
+}
+
+func TestTaskStatusLogFieldsAreStableAndOmitResult(t *testing.T) {
+	t.Setenv("MOOX_CODE_PACKAGE_ID", "package-1")
+	got := taskStatusLogLine("crypto", "task-1", "item-1", "node-1", StatusSuccess, "success", nil)
+	want := `event="collector_job_instance_reported" space_id="crypto" job_item_id="item-1" ` +
+		`task_id="task-1" runtime_code_package_id="package-1" node_id="node-1" ` +
+		`task_status=3 status="success" error_code="" error=""`
+	if got != want {
+		t.Fatalf("task status log:\n got: %s\nwant: %s", got, want)
+	}
+	for _, sensitive := range []string{"result=", "params=", "secret_key", "access_key"} {
+		if strings.Contains(strings.ToLower(got), sensitive) {
+			t.Fatalf("task status log contains %q: %s", sensitive, got)
+		}
+	}
+}
+
+func TestTaskStatusLogFailureHasStableErrorCode(t *testing.T) {
+	got := taskStatusLogLine(
+		"crypto", "task-1", "item-1", "node-1", StatusFailed, "failed",
+		errors.New("gateway unavailable"),
+	)
+	if !strings.Contains(got, `status="failed"`) ||
+		!strings.Contains(got, `error_code="TASK_INSTANCE_REPORT_FAILED"`) {
+		t.Fatalf("failed task status log = %s", got)
+	}
+}
+
+func TestTaskStatusLogDistinguishesSkippedReport(t *testing.T) {
+	got := taskStatusLogLine("crypto", "task-1", "item-1", "", StatusSuccess, "skipped", nil)
+	if !strings.Contains(got, `status="skipped"`) || !strings.Contains(got, `error_code=""`) {
+		t.Fatalf("skipped task status log = %s", got)
 	}
 }

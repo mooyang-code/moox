@@ -157,7 +157,16 @@ func run(ctx context.Context, stopOnIdle bool) error {
 	handler := jetstream.DeliveryHandlerFunc(func(handleCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		return handleDelivery(handleCtx, registry, bindings, runtimeCfg, delivery)
 	})
-	return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{BatchSize: 1, InProgressInterval: 0}).Run(ctx)
+	actionReporter := &jobActionReporter{
+		registry: registry, bindings: bindings, spaceID: spaceID, nodeID: nodeID,
+	}
+	return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{
+		BatchSize: 1, InProgressInterval: 0,
+		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+			reportTransportError(ctx, nodeID, err)
+		}),
+		ActionReporter: actionReporter,
+	}).Run(ctx)
 }
 
 func handleDelivery(ctx context.Context, registry *events.Registry, bindings []queueBinding, cfg nodeRuntime.Config, delivery *jetstream.Delivery) jetstream.HandlerResult {
@@ -172,6 +181,19 @@ func handleDeliveryAt(
 	delivery *jetstream.Delivery,
 	now func() time.Time,
 ) jetstream.HandlerResult {
+	receivedFields := baseDeliveryLogFields(delivery, cfg.NodeID)
+
+	if delivery == nil {
+		err := jetstream.ErrInvalidDelivery
+		receivedFields.Event = "collector_job_received"
+		writeJobLog(ctx, receivedFields, false)
+		receivedFields.Event = "collector_job_rejected"
+		receivedFields.Decision = "TERM"
+		receivedFields.ErrorCode = "INVALID_DELIVERY"
+		receivedFields.Err = err
+		writeJobLog(ctx, receivedFields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
 	var binding *queueBinding
 	for i := range bindings {
 		if bindings[i].name == delivery.Consumer {
@@ -180,25 +202,59 @@ func handleDeliveryAt(
 		}
 	}
 	if binding == nil || delivery.Subject != binding.subject {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("job execution queue identity mismatch")}
+		err := fmt.Errorf("job execution queue identity mismatch")
+		receivedFields.Event = "collector_job_received"
+		writeJobLog(ctx, receivedFields, false)
+		receivedFields.Event = "collector_job_rejected"
+		receivedFields.Decision = "TERM"
+		receivedFields.ErrorCode = "QUEUE_IDENTITY_MISMATCH"
+		receivedFields.Err = err
+		writeJobLog(ctx, receivedFields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
 	decoded := events.DecodeDelivery(registry, delivery)
 	payload, ok := decoded.Payload.(*cloudjobpb.JobExecutionRequested)
 	if decoded.Err != nil || !ok || decoded.Message.GetSpaceId() != cfg.SpaceID ||
 		decoded.Message.GetSubjectId() != binding.subjectID ||
 		payload.GetJobType() != binding.jobType {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("invalid job execution delivery: %v", decoded.Err)}
+		err := fmt.Errorf("invalid job execution delivery: %v", decoded.Err)
+		receivedFields.Event = "collector_job_received"
+		writeJobLog(ctx, receivedFields, false)
+		receivedFields.Event = "collector_job_rejected"
+		receivedFields.Decision = "TERM"
+		receivedFields.ErrorCode = "INVALID_DELIVERY"
+		receivedFields.Err = err
+		writeJobLog(ctx, receivedFields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
+	fields := validatedDeliveryLogFields(registry, bindings, cfg.SpaceID, cfg.NodeID, delivery)
+	fields.Event = "collector_job_received"
+	writeJobLog(ctx, fields, false)
 	executeAt, err := requestedExecutionTime(payload)
 	if err != nil {
+		fields.Event = "collector_job_rejected"
+		fields.Decision = "TERM"
+		fields.ErrorCode = "INVALID_EXECUTE_AT"
+		fields.Err = err
+		writeJobLog(ctx, fields, true)
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
 	if decision := executeAtDecision(executeAt, now().UTC()); decision.Decision == jetstream.RETRY {
+		fields.Event = "collector_job_deferred"
+		fields.Decision = "RETRY"
+		fields.Delay = decision.Delay
+		fields.Status = "deferred"
+		writeJobLog(ctx, fields, false)
 		return decision
 	}
+	fields.Event = "collector_job_started"
+	fields.Decision = "EXECUTE"
+	fields.Status = "running"
+	writeJobLog(ctx, fields, false)
 	item := nodeRuntime.JobItem{
 		SpaceID: decoded.Message.GetSpaceId(), JobID: payload.GetJobId(), JobItemID: payload.GetJobItemId(),
 		JobType: payload.GetJobType(), Params: payload.GetParams().AsMap(), ExecuteAt: executeAt,
+		Consumer: delivery.Consumer, MessageID: delivery.RawMessageID,
 	}
 	return nodeRuntime.ExecuteJobItem(ctx, cfg, item, delivery.DeliveryCount, binding.maxDeliver)
 }

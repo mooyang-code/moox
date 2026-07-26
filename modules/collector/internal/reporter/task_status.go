@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/avast/retry-go"
@@ -51,7 +54,21 @@ func ReportTaskStatus(
 	jobItemID string,
 	status int,
 	result string,
-) error {
+) (reportErr error) {
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	reportOutcome := "success"
+	defer func() {
+		if reportErr != nil {
+			reportOutcome = "failed"
+		}
+		line := taskStatusLogLine(spaceID, taskID, jobItemID, nodeID, status, reportOutcome, reportErr)
+		if reportErr != nil {
+			log.ErrorContextf(ctx, "%s", line)
+			return
+		}
+		log.InfoContextf(ctx, "%s", line)
+	}()
+
 	if taskID == "" {
 		return fmt.Errorf("task_id is required for task status report")
 	}
@@ -65,10 +82,10 @@ func ReportTaskStatus(
 	}
 
 	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
-	nodeID, _ := runtimeapp.GetNodeInfo()
 
 	// 检查服务端配置
 	if serviceGatewayTarget == "" {
+		reportOutcome = "skipped"
 		log.DebugContextf(ctx, "service gateway target 未配置，跳过任务状态上报: taskID=%s jobItemID=%s",
 			taskID, jobItemID)
 		return nil
@@ -82,6 +99,47 @@ func ReportTaskStatus(
 		spaceID, taskID, jobItemID, nodeID, status, serviceGatewayTarget)
 
 	return executeTaskStatusReport(ctx, spaceID, taskID, jobItemID, nodeID, status, result, serviceGatewayTarget)
+}
+
+func taskStatusLogLine(
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	nodeID string,
+	taskStatus int,
+	reportStatus string,
+	err error,
+) string {
+	errorCode := ""
+	if err != nil {
+		errorCode = "TASK_INSTANCE_REPORT_FAILED"
+	}
+	return fmt.Sprintf(
+		"event=%s space_id=%s job_item_id=%s task_id=%s runtime_code_package_id=%s "+
+			"node_id=%s task_status=%d status=%s error_code=%s error=%s",
+		strconv.Quote("collector_job_instance_reported"),
+		strconv.Quote(strings.TrimSpace(spaceID)),
+		strconv.Quote(strings.TrimSpace(jobItemID)),
+		strconv.Quote(strings.TrimSpace(taskID)),
+		strconv.Quote(strings.TrimSpace(os.Getenv("MOOX_CODE_PACKAGE_ID"))),
+		strconv.Quote(strings.TrimSpace(nodeID)),
+		taskStatus,
+		strconv.Quote(strings.TrimSpace(reportStatus)),
+		strconv.Quote(errorCode),
+		strconv.Quote(taskStatusError(err)),
+	)
+}
+
+func taskStatusError(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := strings.Join(strings.Fields(err.Error()), " ")
+	const maxErrorBytes = 256
+	if len(value) > maxErrorBytes {
+		value = value[:maxErrorBytes]
+	}
+	return value
 }
 
 // executeTaskStatusReport 执行上报请求
@@ -166,8 +224,7 @@ func sendRequest(ctx context.Context, url string, data []byte, httpClient *http.
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respData, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("请求失败, status: %d, response: %s", resp.StatusCode, string(respData))
+		return fmt.Errorf("请求失败, status: %d", resp.StatusCode)
 	}
 
 	// 解析响应验证是否成功

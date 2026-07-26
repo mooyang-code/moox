@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestBuildSCFPackage_MissingBinaryPath_ShouldReturnError(t *testing.T) {
@@ -57,6 +58,7 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 			require.NoError(t, readErr)
 			require.NoError(t, stream.Close())
 			assert.Contains(t, string(content), "writer: cls")
+			assert.Contains(t, string(content), "level: info")
 			assert.Contains(t, string(content), "topic_id: topic-unified")
 			assert.Contains(t, string(content), "secret_id: ${MOOX_CLS_SECRET_ID}")
 		}
@@ -154,4 +156,41 @@ func TestCLSTopicIDFromTRPCConfigRejectsMultipleWriters(t *testing.T) {
 `)
 	_, err := clsTopicIDFromTRPCConfig(config)
 	require.ErrorContains(t, err, "exactly one CLS writer")
+}
+
+func TestSCFPackageCLSWriterUsesInfoLevel(t *testing.T) {
+	source := []byte(`plugins:
+  log:
+    default:
+      - writer: console
+        level: warn
+      - writer: cls
+        level: error
+        remote_config:
+          topic_id: stale-topic
+`)
+	rendered, err := renderTRPCConfigWithCLS(source, "topic-unified")
+	require.NoError(t, err)
+
+	var document map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &document))
+	plugins := document["plugins"].(map[string]any)
+	logs := plugins["log"].(map[string]any)
+	writers := logs["default"].([]any)
+	var clsWriters, consoleWriters int
+	for _, writer := range writers {
+		config := writer.(map[string]any)
+		switch config["writer"] {
+		case "cls":
+			clsWriters++
+			assert.Equal(t, "info", config["level"])
+			remote := config["remote_config"].(map[string]any)
+			assert.Equal(t, "topic-unified", remote["topic_id"])
+		case "console":
+			consoleWriters++
+			assert.Equal(t, "warn", config["level"], "console level must remain unchanged")
+		}
+	}
+	assert.Equal(t, 1, clsWriters)
+	assert.Equal(t, 1, consoleWriters)
 }

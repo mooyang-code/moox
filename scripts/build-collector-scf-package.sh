@@ -72,7 +72,7 @@ logs = plugins.setdefault("log", {})
 writers = [item for item in logs.get("default", []) if not isinstance(item, dict) or item.get("writer") != "cls"]
 writers.append({
     "writer": "cls",
-    "level": "warn",
+    "level": "info",
     "remote_config": {
         "topic_id": topic_id,
         "host": "${MOOX_CLS_HOST}",

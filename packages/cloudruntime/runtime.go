@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,8 @@ type JobItem struct {
 	JobType   string
 	Params    map[string]any
 	ExecuteAt time.Time
+	Consumer  string
+	MessageID string
 }
 
 type Result struct{ Summary map[string]any }
@@ -147,14 +151,25 @@ func (cfg *Config) Validate() error {
 // Retryable non-final failures are intentionally not reported as terminal.
 func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount uint64, maxDeliver int) jetstream.HandlerResult {
 	if err := cfg.Validate(); err != nil {
+		logCloudJob(ctx, cloudJobLogFields{
+			Event: "collector_job_done", Config: cfg, Item: item, DeliveryCount: deliveryCount,
+			Status: "failed", ErrorCode: "INVALID_RUNTIME_CONFIG", Err: err,
+		}, true)
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
 	started := time.Now()
 	result, execErr := invokeHandler(ctx, item)
 	duration := time.Since(started)
-	logCompletion(ctx, cfg, item, deliveryCount, duration, execErr)
 
 	kind, code := classifyError(execErr)
+	status := "success"
+	if execErr != nil {
+		status = "failed"
+	}
+	logCloudJob(ctx, cloudJobLogFields{
+		Event: "collector_job_done", Config: cfg, Item: item, DeliveryCount: deliveryCount,
+		Status: status, Duration: duration, ErrorCode: code, Err: execErr,
+	}, execErr != nil)
 	if execErr != nil && kind == errorRetryable && maxDeliver > 0 && deliveryCount < uint64(maxDeliver) {
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: execErr}
 	}
@@ -171,8 +186,19 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 		req.ErrorMessage = execErr.Error()
 		decision = jetstream.TERM
 	}
-	if err := reportJobItem(ctx, cfg, req); err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	reportErr := reportJobItem(ctx, cfg, req)
+	reportLogErr := execErr
+	reportErrorCode := code
+	if reportErr != nil {
+		reportLogErr = reportErr
+		reportErrorCode = "CLOUDNODE_REPORT_FAILED"
+	}
+	logCloudJob(ctx, cloudJobLogFields{
+		Event: "collector_job_cloudnode_reported", Config: cfg, Item: item, DeliveryCount: deliveryCount,
+		Status: status, Duration: duration, ErrorCode: reportErrorCode, Err: reportLogErr,
+	}, reportLogErr != nil)
+	if reportErr != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: reportErr}
 	}
 	return jetstream.HandlerResult{Decision: decision, Err: execErr}
 }
@@ -221,20 +247,81 @@ func classifyError(err error) (int, string) {
 	return errorPermanent, "HANDLER_ERROR"
 }
 
-func logCompletion(ctx context.Context, cfg Config, item JobItem, deliveryCount uint64, duration time.Duration, execErr error) {
-	status := "success"
-	if execErr != nil {
-		status = "failed"
+type cloudJobLogFields struct {
+	Event         string
+	Config        Config
+	Item          JobItem
+	DeliveryCount uint64
+	Status        string
+	Duration      time.Duration
+	ErrorCode     string
+	Err           error
+}
+
+func (fields cloudJobLogFields) String() string {
+	return fmt.Sprintf(
+		"event=%s space_id=%s job_id=%s job_item_id=%s task_id=%s job_type=%s "+
+			"runtime_code_package_id=%s node_id=%s consumer=%s message_id=%s "+
+			"delivery_count=%d execute_at=%s "+
+			"dataset_id=%s subject_id=%s symbol=%s interval=%s status=%s "+
+			"duration_ms=%d error_code=%s error=%s",
+		quotedLogValue(fields.Event),
+		quotedLogValue(fields.Item.SpaceID),
+		quotedLogValue(fields.Item.JobID),
+		quotedLogValue(fields.Item.JobItemID),
+		quotedLogValue(paramString(fields.Item.Params, "task_id")),
+		quotedLogValue(fields.Item.JobType),
+		quotedLogValue(os.Getenv("MOOX_CODE_PACKAGE_ID")),
+		quotedLogValue(fields.Config.NodeID),
+		quotedLogValue(fields.Item.Consumer),
+		quotedLogValue(fields.Item.MessageID),
+		fields.DeliveryCount,
+		quotedLogValue(formatLogTime(fields.Item.ExecuteAt)),
+		quotedLogValue(paramString(fields.Item.Params, "dataset_id")),
+		quotedLogValue(paramString(fields.Item.Params, "subject_id")),
+		quotedLogValue(paramString(fields.Item.Params, "symbol")),
+		quotedLogValue(paramString(fields.Item.Params, "interval")),
+		quotedLogValue(fields.Status),
+		fields.Duration.Milliseconds(),
+		quotedLogValue(fields.ErrorCode),
+		quotedLogValue(errorString(fields.Err)),
+	)
+}
+
+func logCloudJob(ctx context.Context, fields cloudJobLogFields, failed bool) {
+	if failed {
+		log.ErrorContextf(ctx, "%s", fields.String())
+		return
 	}
-	log.InfoContextf(ctx, "collector_job_done space_id=%s job_item_id=%s node_id=%s job_type=%s delivery_count=%d status=%s duration_ms=%d error=%q",
-		item.SpaceID, item.JobItemID, cfg.NodeID, item.JobType, deliveryCount, status, duration.Milliseconds(), errorString(execErr))
+	log.InfoContextf(ctx, "%s", fields.String())
+}
+
+func quotedLogValue(value string) string {
+	return strconv.Quote(strings.TrimSpace(value))
+}
+
+func formatLogTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func paramString(params map[string]any, key string) string {
+	value, _ := params[key].(string)
+	return value
 }
 
 func errorString(err error) string {
 	if err == nil {
 		return ""
 	}
-	return err.Error()
+	value := strings.Join(strings.Fields(err.Error()), " ")
+	const maxErrorBytes = 256
+	if len(value) > maxErrorBytes {
+		value = value[:maxErrorBytes]
+	}
+	return value
 }
 
 func normalizeMap(value map[string]any) map[string]any {
@@ -277,7 +364,7 @@ func postService(ctx context.Context, cfg Config, module, method string, body, o
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("service request failed with status %d: %s", response.StatusCode, string(rawResponse))
+		return fmt.Errorf("service request failed with status %d", response.StatusCode)
 	}
 	if err := json.Unmarshal(rawResponse, out); err != nil {
 		return fmt.Errorf("decode service response: %w", err)

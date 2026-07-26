@@ -250,6 +250,7 @@ func clsTopicIDFromTRPCConfig(source []byte) (string, error) {
 	writers, _ := logs["default"].([]any)
 	var topicID string
 	clsWriters := 0
+	var clsLevel string
 	for _, writer := range writers {
 		config, _ := writer.(map[string]any)
 		if config["writer"] != "cls" {
@@ -262,9 +263,13 @@ func clsTopicIDFromTRPCConfig(source []byte) (string, error) {
 			return "", fmt.Errorf("CLS writer topic_id is missing")
 		}
 		topicID = value
+		clsLevel, _ = config["level"].(string)
 	}
 	if clsWriters != 1 {
 		return "", fmt.Errorf("trpc_go.yaml must contain exactly one CLS writer, got %d", clsWriters)
+	}
+	if !strings.EqualFold(strings.TrimSpace(clsLevel), "info") {
+		return "", fmt.Errorf("trpc_go.yaml CLS writer level must be info")
 	}
 	return topicID, nil
 }
@@ -314,7 +319,7 @@ func renderTRPCConfigWithCLS(source []byte, topicID string) ([]byte, error) {
 	}
 	filtered = append(filtered, map[string]any{
 		"writer": "cls",
-		"level":  "warn",
+		"level":  "info",
 		"remote_config": map[string]any{
 			"topic_id":      topicID,
 			"host":          "${MOOX_CLS_HOST}",
