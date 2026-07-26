@@ -299,6 +299,9 @@ git commit -m "feat(cloudjob): add optional execution time"
 - Modify: `modules/collector/internal/rpc/service_test.go`
 - Modify: `modules/collector/internal/rpc/schedule.go`
 - Modify: `modules/collector/internal/rpc/schedule_test.go`
+- Modify: `modules/collector/internal/domain/task_instance.go`
+- Modify: `modules/collector/internal/store/task_instance.go`
+- Modify: `modules/collector/internal/store/task_instance_test.go`
 - Modify: `modules/collector/internal/taskpublisher/client.go`
 - Modify: `modules/collector/internal/taskpublisher/client_test.go`
 - Modify: `modules/cloudnode/internal/jobstate/kv_store.go`
@@ -362,6 +365,13 @@ func scheduledJobItemID(taskID string, executeAt time.Time) string {
 - 默认非法或空周期仍按现有 `30m` 处理。
 - 每个实例只提交下一时间边界，不建立 schedule cursor 表。
 - 手工直接调用 CloudNode `SubmitJobItems` 时不填 `execute_at`，自然获得立即执行语义。
+- 调度器必须先为全部实例预计算 `execute_at` 和确定性的 `job_item_id`，在发布前将
+  `cloud_job_item_id` 写入 TaskInstance。发布与回写顺序不能留下“SCF 已完成、控制面尚未
+  绑定 JobItem ID”的竞态窗口。
+- `TaskInstance` 可增加 `gorm:"-"` 的瞬态调度字段承载本轮 `execute_at`；publisher
+  必须消费预计算值，不能在逐条构造消息时再次调用 `time.Now()`。
+- `UpsertMany` 必须更新 `c_cloud_job_item_id`。发布后只处理 ACK 状态，不再把 ACK
+  当作首次获得 JobItem ID 的来源。
 
 同一 `job_item_id` 已处于 pending 时，CloudNode 返回 `DEDUPLICATED` 且 `ShouldPublish=false`；只有 `enqueue_failed` 才重新发布。这样控制面每分钟重复规划同一个未来窗口不会系统性制造多份消息，也没有增加新的去重存储。
 
@@ -414,6 +424,8 @@ git commit -m "refactor(collector): schedule future jobs without wakeups"
 
 - Modify: `packages/cloudjobqueue/identity.go`
 - Modify: `packages/cloudjobqueue/identity_test.go`
+- Modify: `packages/events/validation.go`
+- Modify: `packages/events/validation_test.go`
 - Modify: `packages/cloudjobpb/job_events.proto`
 - Modify: `packages/cloudjobpb/job_events.pb.go`
 - Modify: `packages/cloudruntime/runtime.go`
@@ -445,14 +457,18 @@ git commit -m "refactor(collector): schedule future jobs without wakeups"
 - Modify: `modules/collector/internal/reporter/heartbeat.go`
 - Modify: `modules/collector/internal/reporter/heartbeat_test.go`
 - Modify: `modules/collector/internal/serverless/bootstrap/trpc.go`
+- Modify: `modules/collector/internal/app/runtime/global.go`
+- Modify: `modules/collector/internal/app/runtime/global_test.go`
 - Modify: `modules/collector/internal/serverless/handler.go`
 - Modify: `modules/collector/internal/serverless/handler_test.go`
 - Modify: `modules/collector/cmd/scf/main.go`
 - Modify: `modules/collector/cmd/scf/main_test.go`
-- Modify: `modules/collector/configs/trpc_go.yaml`
+- Modify: `modules/collector/config/trpc_go.yaml`
 - Modify: `modules/collector/configs/example_trpc_go.yaml`
 - Modify: `modules/cli/internal/command/collector.go`
 - Modify: `modules/cli/internal/command/collector_test.go`
+- Modify: `modules/cli/internal/command/setup_eventbus_e2e.go`
+- Modify: `modules/cli/internal/command/setup_eventbus_e2e_test.go`
 - Modify: `modules/cloudnode/internal/rpc/node.go`
 - Modify: `modules/cloudnode/internal/rpc/node_test.go`
 - Modify: `modules/cloudnode/internal/config/config.go`
@@ -553,6 +569,10 @@ type Identity struct {
 
 `MOOX_CODE_PACKAGE_ID`、CloudNode 节点记录和发布命令中的 package ID 继续保留，因为它们描述“当前 SCF 部署了哪个产物”；taskrunner 不读取它来选择任务或验证消息。需要记录部署版本时，CLS 使用可选字段 `runtime_code_package_id`，不得重新写回 JobItem。
 
+事件拓扑校验和 CLI 的 eventbus E2E 声明也必须改为新的两段队列身份；不能只改
+`cloudjobqueue.Identity` 而让 `packages/events/validation.go` 或
+`setup_eventbus_e2e.go` 继续要求 package 维度。
+
 执行：
 
 ```bash
@@ -591,7 +611,13 @@ if allBindingsTimedOut {
 }
 ```
 
-`RunJobItems` 改名为 `Run`，语义是“一直运行到 context 取消或不可恢复错误”。不要在外层再写 tick、sleep 或重复连接循环。
+`RunJobItems` 拆为：
+
+- `Run`：一直运行到 context 取消或不可恢复错误，供生产 SCF 使用；
+- `RunOnce`：一轮队列为空后退出，仅供本地诊断和 E2E 使用。
+
+两者复用相同的 binding、handler 和单个 NATS 连接。不要在外层再写 tick、sleep
+或重复连接循环；也不能让现有 `--once` 因改成常驻语义后永久挂起。
 
 - [ ] **Step 6: CloudNode 在发布节点时提前准备 durable**
 
@@ -613,6 +639,9 @@ space_id + supported_workloads
 修正当前 Go 注册的 `trpc.reporter.timer` 与 YAML `trpc.heartbeat.timer` 不一致。不得增加 `trpc.collectorjob.timer`。
 
 SCF bootstrap 只启动一次 `taskrunner.Run(ctx)`。它等待 runtime communication readiness 后进入常驻 JetStream Runner；readiness 只表达 NodeID 和 Service Gateway 已由首次 keepalive 初始化，不让心跳模块调用、轮询或管理任务。
+
+readiness 在 `internal/app/runtime` 提供进程级、可等待且可测试的窄接口；首次
+keepalive 初始化通信信息后将其置为 ready。它不是第二套调度状态，也不承载任务队列。
 
 `--once` 模式保留为本地诊断入口，复用同一套 binding 和 handler，但一轮队列为空后退出；生产 SCF 只调用常驻 `Run`。
 
@@ -889,6 +918,10 @@ BindDatasetSubject(ctx, binding *storagepb.DatasetSubject) error
 
 空 active 快照跳过停用，避免异常响应导致一次性停用全部标的。只停用 Dataset membership，不删除 Subject、历史 Kline 或 record 历史。重复执行同一个 inactive 更新允许成功。
 
+`BindDatasetSubject` 是完整 upsert，不是 patch。停用时必须复制
+`ListDatasetSubjects` 返回的完整 binding，仅修改 `status`（以及确有语义时的
+结束时间）；不得用只含 ID/status 的新对象覆盖 role、起止时间和 attributes。
+
 - [ ] **Step 4: 运行 Symbol 测试**
 
 ```bash
@@ -922,6 +955,8 @@ git commit -m "fix(collector): reconcile inactive symbols"
 - Modify: `packages/jetstream/runner_test.go`
 - Modify: `modules/cli/internal/collectorpackager/scf.go`
 - Modify: `modules/cli/internal/collectorpackager/scf_test.go`
+- Modify: `scripts/build-collector-scf-package.sh`
+- Modify: `scripts/build-collector-scf-package_test.sh`
 - Modify: `modules/collector/README.md`
 
 - [ ] **Step 1: 先锁定 JobItem 日志事件和固定字段**
@@ -1033,7 +1068,10 @@ Runner 每次调用 `ApplyHandlerResult` 后都通知 observer，包括因同批
 - 只有 `ApplyHandlerResult` 返回 nil 才表示 transport action 成功；
 - action 失败写 error，并额外写 `collector_job_transport_error`。
 
-`ErrorReporter` 继续处理没有具体 JobItem 的 fetch/in-progress 错误。通用 JetStream 包不依赖 tRPC log 或 CLS。
+`ErrorReporter` 只处理没有具体 JobItem 的 fetch/in-progress 传输错误，不再把
+workload 返回的业务错误重复标成 transport error。业务成功/失败由
+`collector_job_done` 表达，ACK/NAK/TERM 及其失败由 `ActionReporter` 表达。
+通用 JetStream 包不依赖 tRPC log 或 CLS。
 
 - [ ] **Step 6: 将 SCF CLS writer 调整为 info**
 
@@ -1051,7 +1089,10 @@ writer: cls
 level: info
 ```
 
-测试同时断言打包结果中只有一个 CLS writer、topic ID 正确、writer 级别为 info。控制台 writer 保持现状。这样正常的 `received`、`started`、`done` 和 `ACK` 才会进入 CLS；不新建日志 topic、outbox 或旁路数据库。
+测试同时断言打包结果中只有一个 CLS writer、topic ID 正确、writer 级别为 info。
+CLI packager 与 `scripts/build-collector-scf-package.sh` 两条真实打包路径都必须修改并
+锁定测试。控制台 writer 保持现状。这样正常的 `received`、`started`、`done` 和
+`ACK` 才会进入 CLS；不新建日志 topic、outbox 或旁路数据库。
 
 - [ ] **Step 7: 运行日志与打包测试**
 
@@ -1090,6 +1131,8 @@ git commit -m "feat(collector): log complete job lifecycle to cls"
 - Delete: `modules/collector/internal/jobs/kline/handler.go`
 - Delete: `modules/collector/internal/jobs/symbol/handler.go`
 - Modify: `modules/collector/internal/model/types.go`
+- Modify: `modules/collector/internal/reporter/task_status.go`
+- Modify: `modules/collector/internal/reporter/task_status_test.go`
 - Modify: `modules/collector/internal/serverless/handler.go`
 - Modify: `modules/collector/internal/taskrunner/direct.go`
 - Modify: `web/src/views/collector/collector-rules/collector-rules.vue`
@@ -1098,6 +1141,7 @@ git commit -m "feat(collector): log complete job lifecycle to cls"
 - Modify: `modules/collector/README.md`
 - Modify: `docs/采集任务管理.md`
 - Modify: `docs/云节点管理.md`
+- Modify: `skills/debug/references/scf-e2e-debug.md`
 
 - [ ] **Step 1: 删除未生效的节点分配字段**
 
@@ -1200,6 +1244,8 @@ git commit -m "refactor(collector): remove unused scheduling concepts"
 
 **Files:**
 
+- Create: `packages/jetstream/testkit/server.go`
+- Create: `packages/jetstream/testkit/server_test.go`
 - Modify: `modules/collector/internal/taskrunner/direct_test.go`
 - Modify: `modules/cloudnode/internal/rpc/job_item_test.go`
 - Modify: `packages/jetstream/runner_test.go`
@@ -1216,6 +1262,10 @@ git commit -m "refactor(collector): remove unused scheduling concepts"
 3. `execute_at = now + 300ms`，首次 delivery 被 `NakWithDelay`，到期前 workload 未运行，到期后执行并 ACK。
 
 测试使用真实 JetStream，不 mock `Delivery.Nak`。
+
+将 embedded NATS/JetStream 的启动、stream 创建和清理提取到最小
+`packages/jetstream/testkit`。testkit 只提供 broker/topology 测试基础设施；
+`execute_at` 业务断言继续留在 Collector taskrunner 测试中，不建立通用场景 DSL。
 
 - [ ] **Step 2: 增加提交到执行的契约测试**
 
@@ -1273,12 +1323,19 @@ node examples/e2e/verify.mjs --help
 ```
 
 先确认参数说明无旧 RPC/assignment/status，再按 `examples/e2e/README.md` 启动本地全链路运行。
+文档必须明确区分：
+
+- 在目标机运行 `moox-collector-scf -once` 的本地诊断 E2E；
+- 通过 `moox-cli collector function publish` 发布到腾讯云并由真实 SCF 消费的远端验收。
+
+前者不能作为“腾讯云 SCF 已发布并执行”的证据。
 
 - [ ] **Step 6: SCF 部署验收**
 
 按新项目切换方式执行，不做兼容部署：
 
-1. 部署新 CloudNode 和 Collector 控制面。
+1. 部署新 CloudNode 和 Collector 控制面；生产目录运行 E2E 时使用
+   `--preserve-data`，除非本次验收明确安排了重建数据。
 2. 重建 Collector DB，并清理旧 Collector Job Execution Queue。
 3. 在同一 Space 发布至少两个支持相同 JobType 的 SCF 节点，其中至少两个节点使用不同代码包构建。
 4. 验证每个新发布节点开始 keepalive 和 9s 心跳。
