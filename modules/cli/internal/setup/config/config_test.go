@@ -49,6 +49,7 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, "eventbus.example.test", snapshot.Manifest.EventBus.PublicAddress)
 	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
 	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
+	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
@@ -61,6 +62,15 @@ func TestLoadDefaultsEventBusPort(t *testing.T) {
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
+}
+
+func TestLoadTencentCloudRegion(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \"ap-shanghai\"", 1)
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "ap-shanghai", snapshot.Manifest.TencentCloud.Region)
 }
 
 func TestLoadDefaultsHostPorts(t *testing.T) {
@@ -105,6 +115,7 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "bcrypt password too long", body: strings.Replace(validManifest, "admin-password", strings.Repeat("x", 73), 1), want: "72 bytes"},
 		{name: "missing secret id", body: strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), want: "tencent_cloud.secret_id"},
 		{name: "missing secret key", body: strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), want: "tencent_cloud.secret_key"},
+		{name: "empty region", body: strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), want: "tencent_cloud.region"},
 		{name: "missing eventbus address", body: strings.Replace(validManifest, `public_address = "eventbus.example.test"`, `public_address = ""`, 1), want: "eventbus.public_address"},
 		{name: "eventbus address with surrounding whitespace", body: strings.Replace(validManifest, `eventbus.example.test`, ` eventbus.example.test `, 1), want: "eventbus.public_address"},
 		{name: "eventbus address with scheme", body: strings.Replace(validManifest, `eventbus.example.test`, `tls://eventbus.example.test`, 1), want: "eventbus.public_address"},

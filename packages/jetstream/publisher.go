@@ -16,6 +16,13 @@ type PublishAck struct {
 	Duplicate bool
 }
 
+// ProbePublishPermission is reserved for deployment tooling that verifies a
+// credential cannot publish to an exact NATS API subject.
+func (c *Client) ProbePublishPermission(ctx context.Context, subject, probeID string) error {
+	_, err := c.PublishRaw(ctx, subject, probeID, []byte("{}"), "application/json")
+	return err
+}
+
 // PublishRaw publishes a caller-owned protobuf envelope without making the
 // transport package depend on a business event schema. packages/events uses
 // this boundary for EventMessage; business modules must not call it directly.

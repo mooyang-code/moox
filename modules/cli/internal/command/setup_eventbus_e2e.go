@@ -81,24 +81,30 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 		return eventBusE2EResult{}, err
 	}
 	url := fmt.Sprintf("tls://%s:%d", snapshot.Manifest.EventBus.PublicAddress, snapshot.Manifest.EventBus.Port)
-	connect := func(name string, credential jetstream.CredentialFile) (*jetstream.Client, error) {
+	connect := func(name string, credential jetstream.CredentialFile, onAsyncError func(error)) (*jetstream.Client, error) {
 		return jetstream.Connect(ctx, jetstream.Config{
 			URLs: []string{url}, Name: name, Username: credential.Username, Password: credential.Password,
 			TLSCAPEMBase64: base64.StdEncoding.EncodeToString([]byte(caPEM)), ConnectTimeout: 10 * time.Second,
-			AsyncErrorHandler: func(error) {},
+			AsyncErrorHandler: onAsyncError,
 		})
 	}
-	admin, err := connect("moox-setup-eventbus-admin-e2e", adminCredential)
+	admin, err := connect("moox-setup-eventbus-admin-e2e", adminCredential, func(error) {})
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_public_tls_failed")
 	}
 	defer admin.Close()
-	owner, err := connect("moox-setup-eventbus-owner-e2e", ownerCredential)
+	owner, err := connect("moox-setup-eventbus-owner-e2e", ownerCredential, func(error) {})
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_connect_failed")
 	}
 	defer owner.Close()
-	worker, err := connect("moox-setup-eventbus-worker-e2e", workerCredential)
+	workerAsyncErrors := make(chan error, 8)
+	worker, err := connect("moox-setup-eventbus-worker-e2e", workerCredential, func(err error) {
+		select {
+		case workerAsyncErrors <- err:
+		default:
+		}
+	})
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_connect_failed")
 	}
@@ -108,7 +114,8 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_e2e_invalid")
 	}
-	identity := cloudjobqueue.Identity{SpaceID: "system", CodePackageID: "setup-probe", JobType: "eventbus.e2e"}
+	eventID := fmt.Sprintf("setup-e2e-%d", time.Now().UnixNano())
+	identity := cloudjobqueue.Identity{SpaceID: "system", CodePackageID: eventID, JobType: "eventbus.e2e"}
 	consumerName, err := identity.ConsumerName()
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_e2e_invalid")
@@ -143,7 +150,6 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_prepare_failed")
 	}
-	eventID := fmt.Sprintf("setup-e2e-%d", time.Now().UnixNano())
 	if _, err := publisher.Publish(operationCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
 		JobId: eventID, JobItemId: eventID, JobType: identity.JobType, CodePackageId: identity.CodePackageID,
 	}, events.PublishOptions{
@@ -159,28 +165,58 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_ack_failed")
 	}
 
-	denialCtx, cancelDenial := context.WithTimeout(ctx, 3*time.Second)
-	defer cancelDenial()
-	forbidden := consumerConfig
-	forbidden.Name += "_forbidden"
-	_, createErr := events.EnsureSubjectConsumer(denialCtx, worker, registry, forbidden)
+	forbiddenConsumer := consumerName + "_forbidden"
+	forbiddenCreateSubject := "$JS.API.CONSUMER.CREATE." +
+		events.CloudJobExecutionRequested.Stream() + "." + forbiddenConsumer
+	createDenialCtx, cancelCreateDenial := context.WithTimeout(ctx, 3*time.Second)
+	createErr := worker.ProbePublishPermission(
+		createDenialCtx,
+		forbiddenCreateSubject,
+		eventID+"-forbidden-create",
+	)
+	cancelCreateDenial()
+	createDenied := createErr != nil && hasPermissionViolation(
+		workerAsyncErrors,
+		forbiddenCreateSubject,
+	)
 	workerPublisher, err := events.NewPublisher(worker, registry)
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_e2e_invalid")
 	}
-	_, publishErr := workerPublisher.Publish(denialCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
+	publishDenialCtx, cancelPublishDenial := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelPublishDenial()
+	_, publishErr := workerPublisher.Publish(publishDenialCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
 		JobId: eventID + "-forbidden", JobItemId: eventID + "-forbidden", JobType: identity.JobType, CodePackageId: identity.CodePackageID,
 	}, events.PublishOptions{
 		EventID: eventID + "-forbidden", OccurredAt: time.Now().UTC(), SpaceID: identity.SpaceID, SubjectID: subjectID,
 	})
+	publishDenied := publishErr != nil && hasPermissionViolation(workerAsyncErrors, "moox.cloudnode.job.execution.requested")
 	result := eventBusE2EResult{
 		PublicTLS: true, WorkerBindFetchAck: true,
-		WorkerCreateDenied: createErr != nil, WorkerPublishDenied: publishErr != nil,
+		WorkerCreateDenied: createDenied, WorkerPublishDenied: publishDenied,
 	}
 	if !result.WorkerCreateDenied || !result.WorkerPublishDenied {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_worker_acl_failed")
 	}
 	return result, nil
+}
+
+func hasPermissionViolation(errors <-chan error, subjectFragments ...string) bool {
+	for {
+		select {
+		case err := <-errors:
+			message := strings.ToLower(err.Error())
+			if strings.Contains(message, "permissions violation") {
+				for _, fragment := range subjectFragments {
+					if strings.Contains(message, strings.ToLower(fragment)) {
+						return true
+					}
+				}
+			}
+		default:
+			return false
+		}
+	}
 }
 
 func readRemoteEventBusFile(ctx context.Context, transport setupssh.Client, relativePath string) (string, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -515,14 +516,18 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, res
 }
 
 func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
+	publicIP, err := eventBusFirewallIP(ctx, snapshot.Manifest.EventBus.PublicAddress, net.DefaultResolver.LookupIP)
+	if err != nil {
+		return fmt.Errorf("eventbus_firewall_failed")
+	}
 	client, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
 		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-		Region: "ap-guangzhou",
+		Region: snapshot.Manifest.TencentCloud.Region,
 	})
 	if err != nil {
 		return fmt.Errorf("eventbus_firewall_failed")
 	}
-	_, err = client.EnsureFirewallRule(ctx, snapshot.Manifest.EventBus.PublicAddress, cloudtencent.CreateFirewallRulesOptions{
+	_, err = client.EnsureFirewallRule(ctx, publicIP, cloudtencent.CreateFirewallRulesOptions{
 		Protocol: "TCP", Ports: fmt.Sprint(snapshot.Manifest.EventBus.Port), CidrBlock: "0.0.0.0/0",
 		Action: "ACCEPT", Description: "MooX EventBus TLS",
 	})
@@ -530,6 +535,36 @@ func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snap
 		return fmt.Errorf("eventbus_firewall_failed")
 	}
 	return nil
+}
+
+func eventBusFirewallIP(
+	ctx context.Context,
+	address string,
+	lookup func(context.Context, string, string) ([]net.IP, error),
+) (string, error) {
+	if ip := net.ParseIP(address); ip != nil {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			return ipv4.String(), nil
+		}
+		return "", fmt.Errorf("EventBus firewall requires IPv4")
+	}
+	ips, err := lookup(ctx, "ip4", address)
+	if err != nil {
+		return "", err
+	}
+	unique := make(map[string]struct{}, len(ips))
+	for _, ip := range ips {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			unique[ipv4.String()] = struct{}{}
+		}
+	}
+	if len(unique) != 1 {
+		return "", fmt.Errorf("EventBus DNS address must resolve to exactly one IPv4 address")
+	}
+	for ip := range unique {
+		return ip, nil
+	}
+	return "", fmt.Errorf("EventBus DNS address has no IPv4 address")
 }
 
 func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {

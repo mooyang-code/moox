@@ -27,6 +27,7 @@ type Admin struct {
 type TencentCloud struct {
 	SecretID  string `toml:"secret_id"`
 	SecretKey string `toml:"secret_key"`
+	Region    string `toml:"region"`
 }
 
 type EventBus struct {
@@ -162,6 +163,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("eventbus", "port") {
 		out.EventBus.Port = 4222
 	}
+	if !md.IsDefined("tencent_cloud", "region") {
+		out.TencentCloud.Region = "ap-guangzhou"
+	}
 	if out.HasCompileHost() && out.CompileHost.Port == 0 {
 		out.CompileHost.Port = 22
 	}
@@ -190,6 +194,10 @@ func validate(manifest *Manifest) error {
 	}
 	if manifest.TencentCloud.SecretKey == "" {
 		return fmt.Errorf("config_invalid: tencent_cloud.secret_key is required")
+	}
+	manifest.TencentCloud.Region = strings.TrimSpace(manifest.TencentCloud.Region)
+	if manifest.TencentCloud.Region == "" {
+		return fmt.Errorf("config_invalid: tencent_cloud.region is required")
 	}
 	eventBusAddress := strings.TrimSpace(manifest.EventBus.PublicAddress)
 	if eventBusAddress != manifest.EventBus.PublicAddress || !validEventBusAddress(eventBusAddress) {

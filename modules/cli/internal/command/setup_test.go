@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,6 +112,15 @@ func TestSetupE2EEventBusWritesOnlyBooleanProof(t *testing.T) {
 	for _, secret := range []string{"admin-test-password", "control-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
 		require.NotContains(t, output.String(), secret)
 	}
+}
+
+func TestEventBusE2ERequiresMatchingPermissionViolation(t *testing.T) {
+	errorsCh := make(chan error, 2)
+	errorsCh <- errors.New(`nats: permissions violation for publish to "$JS.API.CONSUMER.CREATE.MOOX"`)
+	assert.True(t, hasPermissionViolation(errorsCh, "$JS.API.CONSUMER.CREATE.MOOX"))
+
+	errorsCh <- errors.New("context deadline exceeded")
+	assert.False(t, hasPermissionViolation(errorsCh, "moox.cloudnode.job.execution.requested"))
 }
 
 func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
@@ -263,6 +274,25 @@ func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	require.Equal(t, "eventbus.example.test", opts.EventBusPublicAddress)
 	require.Equal(t, 4333, opts.EventBusPort)
 	require.True(t, opts.EventBusTLSEnabled)
+}
+
+func TestEventBusFirewallIPResolvesDNSWithoutChangingAdvertisedAddress(t *testing.T) {
+	lookup := func(_ context.Context, network, host string) ([]net.IP, error) {
+		require.Equal(t, "ip4", network)
+		require.Equal(t, "eventbus.example.test", host)
+		return []net.IP{net.ParseIP("203.0.113.10")}, nil
+	}
+	ip, err := eventBusFirewallIP(context.Background(), "eventbus.example.test", lookup)
+	require.NoError(t, err)
+	require.Equal(t, "203.0.113.10", ip)
+}
+
+func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
+	lookup := func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("203.0.113.11")}, nil
+	}
+	_, err := eventBusFirewallIP(context.Background(), "eventbus.example.test", lookup)
+	require.ErrorContains(t, err, "exactly one IPv4")
 }
 
 func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
