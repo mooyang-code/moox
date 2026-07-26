@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 `modules/factor` 收敛为适合个人量化的单机时序因子服务：实时链路采用明确的 best-effort 语义，失败后通过同步单点补算修复，并删除未形成完整能力的高可靠、截面、Arrow 和多实例设计。
+**Goal:** 将 `modules/factor` 收敛为适合个人量化的单机时序因子服务：实时链路采用明确的 best-effort 语义，失败后通过同步范围补算修复，并删除未形成完整能力的高可靠、截面、Arrow 和多实例设计。
 
-**Architecture:** Factor 只持久化因子定义和绑定；Storage 新行事件进入内存固定窗口，形成按标的分片的有界任务队列，单个任务读取一次窗口、调用一次 Python worker、写回一次结果。实时事件进入内存后立即 ACK，进程退出、队列满或重试耗尽都允许丢失；系统通过日志、计数器和显式 `run-once`/`RecalcFactor` 补算暴露并修复这些损失，不引入持久化调度器、Inbox、DLQ 或 exactly-once。
+**Architecture:** Factor 只持久化因子定义和绑定；Storage 新行事件进入内存固定窗口，形成按标的分片的有界实时任务队列。实时事件进入内存后立即 ACK，进程退出、队列满或重试耗尽都允许丢失；系统通过日志、计数器和同步 `run-once`/`RecalcFactor` 范围补算修复这些损失。实时单 bar 与手动时间范围使用同一个 range runtime；每个执行 chunk 读取目标数据及 `lookback_bars - 1` 条历史上下文、调用一次 Python worker、写回一次目标范围结果，不引入持久化调度器、Inbox、DLQ 或 exactly-once。
 
 **Tech Stack:** Go 1.25, tRPC-Go, GORM + SQLite, NATS JetStream, `packages/events`, `packages/jetstream`, `packages/pyruntime`, Python 3 + pandas/numpy, Vue 3 + TypeScript + Arco Design.
 
@@ -20,9 +20,9 @@
 4. 队列满时拒绝新 scope，增加 `queue_overflow_count` 并记录结构化日志，不阻塞 NATS 消费。
 5. 同一 `(space, source, target, subject, freq)` 的待执行任务只保留最新 bar。
 6. Storage 读取、Python 执行或写回失败只进行本进程内有限重试；重试耗尽后记录失败，不进入 DLQ。
-7. 手动补算只处理一个 subject 的一个 bar；小范围补算由调用方逐 bar 调用。
+7. 手动补算一次只处理一个 subject 的左闭右开时间范围 `[start_time, end_time)`；服务端按目标 bar 分块同步执行，不逐 bar 调用 Python。
 8. Factor V1 只支持时序因子，不保留 `cross_section` 类型、目录或协议字段。
-9. 每个 subject 任务只发起一次 Python 请求，任务内所有因子顺序执行。
+9. 每个 range chunk 只发起一次 Python 请求，chunk 内所有因子顺序执行；范围补算可由多个有序 chunk 组成。
 10. JSON columnar 是唯一 Go/Python 数据传输编码；本轮删除 Arrow snapshot。
 11. 因子结果允许 `null`，写回时跳过对应值；非数值、NaN 和 Infinity 不允许穿过 JSON 边界。
 12. Metadata 只在因子或绑定变更时同步，绝不放在实时计算热路径。
@@ -30,7 +30,8 @@
 14. 服务端二进制继续使用 `moox-factor`，现有启动命令和部署入口保持不变。
 15. CLI 继续作为独立二进制 `moox-factor-cli`，不与服务端合并。
 16. `FactorDef.Depends` 保持现有名称；它只表达标准 K 线字段之外的额外输入列，不表示因子 DAG。
-17. realtime 和手动补算都只写目标 `bar_time`；输入历史由 `lookback_bars` 控制，不再配置 `writeback_bars`。
+17. realtime 只写事件对应的单个 bar；手动补算写请求范围内的全部目标 bar。`lookback_bars` 保持现有名称，表示第一个目标 bar 所需的最小完整输入窗口，因此每个执行 chunk 最多额外读取 `lookback_bars - 1` 条前置历史，不表示写回行数。
+18. `FactorResult` 只承载目标结果列；`PerFactorMS` 和 `ElapsedMS` 不进入结果契约。总任务耗时由 scheduler 或 CLI 在最外层统一测量并写日志。
 
 明确不做：
 
@@ -43,6 +44,7 @@
 - 不为未经测量的性能问题保留 Arrow、共享 snapshot 或任务内因子并行。
 - 不把 `moox-factor` 改成带 `serve` 子命令的统一二进制。
 - 不把 `Depends` 重命名为 `extra_columns` 或引入因子依赖编排。
+- 不为范围补算增加持久化进度、事务回滚或可恢复 chunk 状态；后续 chunk 失败时保留此前已写入结果，用户可幂等重跑同一范围。
 
 ## 2. 目标运行语义
 
@@ -58,9 +60,10 @@ Storage DatasetRowsUpserted
   -> reload executable bindings
   -> Scheduler.Enqueue
   -> bounded per-subject shard queue
-  -> Storage.ReadWindow
+  -> build one-bar range [bar_time, bar_time + 1ns)
+  -> Storage.ReadRangeChunk
   -> PythonExecutor.Execute (JSON, all factors)
-  -> validate result (null allowed)
+  -> validate target-range columns (null allowed)
   -> Storage.WriteFactorPatch
   -> log and metrics
 ```
@@ -85,15 +88,17 @@ Storage DatasetRowsUpserted
 
 ```text
 RecalcFactor or moox-factor-cli run-once
-  -> validate exact space/source/subject/freq/bar_time
+  -> validate exact space/source/subject/freq/[start_time,end_time)
   -> load enabled executable bindings
-  -> build the same scheduler task shape
-  -> enqueue with completion channel
-  -> wait for this task only
+  -> build the same range task shape
+  -> synchronously call Scheduler.Run
+  -> split target rows into at most 2000 bars per chunk
+  -> for each chunk: read lookback context, execute once, validate, write once
   -> return terminal success/failure
 ```
 
-补算不写进度表、不生成 run ID、不后台执行。调用超时即返回失败；是否再次调用由用户决定。
+补算不进入实时有界队列，不写进度表、不生成 run ID、不后台执行。调用超时或任一 chunk 失败即返回失败；此前已经完成的 chunk 不回滚，重复调用同一范围通过 Storage field upsert 幂等覆盖。
+`RecalcFactor` 适合调用方可控制 timeout 的中小范围；较长的离线计算优先使用 `moox-factor-cli run-once`，避免 RPC gateway timeout，但二者必须复用相同 builder、chunk runner 和写回语义。
 
 ## 3. 目标数据契约
 
@@ -125,7 +130,8 @@ message FactorDef {
 - `depends` 由源码分析生成，API 输入值不作为权威来源。
 
 `depends` 的业务含义固定为额外输入列集合。例如 `["funding_rate", "open_interest"]` 表示任务读取标准 K 线列之外，还要从 Storage 请求这两列。字段名保持 `Depends`/`depends`，不扩展为因子间依赖关系。
-每个任务只计算并写入目标 `bar_time`。`lookback_bars` 仅表示计算该 bar 所需的历史输入窗口，不表示写回行数。
+
+`lookback_bars` 保持现有名称，含义固定为“计算第一个目标 bar 所需的最小完整输入窗口”，其中包含该目标 bar 本身。执行 `[start_time, end_time)` 时，在第一条目标数据之前最多读取 `lookback_bars - 1` 条历史记录；目标范围和写回行数始终由运行时请求决定，不放入 `FactorDef`。
 
 ### 3.2 RecalcFactor
 
@@ -136,7 +142,8 @@ message RecalcFactorReq {
   string source_dataset = 3;
   string subject_id = 4;
   string freq = 5;
-  string bar_time = 6;
+  string start_time = 6;
+  string end_time = 7;
 }
 
 message RecalcFactorRsp {
@@ -144,7 +151,9 @@ message RecalcFactorRsp {
 }
 ```
 
-`factor_id` 为空时计算该 scope 下所有 enabled factors；非空时只计算指定且 enabled 的因子。该 RPC 是同步终态接口：`ret_info = SUCCESS` 表示计算和写回均已完成，其他错误码表示校验、入队、计算、写回或等待失败。task ID、因子数和耗时只进入结构化日志；CLI 可继续输出这些面向人的诊断信息。
+`start_time` 是包含下界，`end_time` 是不包含上界，二者都必须是 RFC3339/RFC3339Nano 且 `start_time < end_time`，语义与 Storage `TimeRange` 完全一致。`factor_id` 为空时计算该 scope 下所有 enabled factors；非空时只计算指定且 enabled 的因子。
+
+该 RPC 是同步终态接口：`ret_info = SUCCESS` 表示范围内全部 chunk 均完成计算和写回，其他错误码表示参数校验、读取、计算、结果校验、写回或 context 失败。task ID、因子数、chunk 数和总耗时只进入结构化日志；CLI 可继续输出这些面向人的诊断信息。
 
 ### 3.3 EngineStatus
 
@@ -228,7 +237,7 @@ modules/factor/internal/storageio/
 
 modules/factor/internal/rpc/
   service.go
-  recalc.go                 同步单 bar 补算
+  recalc.go                 同步范围补算
   convert.go
 ```
 
@@ -301,7 +310,7 @@ Expected: Go 测试、race 和 vet PASS；Python 环境缺少 pytest 时先按 `
 TestDisabledFactorIsExcludedFromRealtimeTask
 TestBestEffortHandlerACKsAfterMemoryAdd
 TestSchedulerRejectsNewScopeWhenQueueIsFull
-TestValidateFactorResultAllowsNull
+TestValidateFactorResultAllowsNullElements
 ```
 
 - [ ] **Step 4: 提交计划基线**
@@ -894,12 +903,21 @@ git commit -m "fix(factor): derive realtime work from executable bindings"
 加入：
 
 ```go
+func oneBarTaskAt(at time.Time) Task {
+	return Task{FactorTask: engine.FactorTask{
+		TaskID: "task-" + at.UTC().Format(time.RFC3339Nano),
+		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
+		SubjectID: "BTC-USDT", Freq: "1m",
+		StartTime: at, EndTime: at.Add(time.Nanosecond),
+	}}
+}
+
 func TestSchedulerRejectsNewScopeWhenQueueIsFull(t *testing.T) {
 	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, &fakeStorage{}, &fakeExecutor{})
-	first := taskAt(time.Unix(1, 0))
+	first := oneBarTaskAt(time.Unix(1, 0))
 	first.SubjectID = "BTC-USDT"
 	require.NoError(t, svc.Enqueue(context.Background(), first))
-	second := taskAt(time.Unix(1, 0))
+	second := oneBarTaskAt(time.Unix(1, 0))
 	second.SubjectID = "ETH-USDT"
 	err := svc.Enqueue(context.Background(), second)
 	require.ErrorIs(t, err, ErrQueueFull)
@@ -908,9 +926,9 @@ func TestSchedulerRejectsNewScopeWhenQueueIsFull(t *testing.T) {
 
 func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {
 	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, &fakeStorage{}, &fakeExecutor{})
-	first := taskAt(time.Unix(1, 0))
+	first := oneBarTaskAt(time.Unix(1, 0))
 	first.SubjectID = "BTC-USDT"
-	second := taskAt(time.Unix(2, 0))
+	second := oneBarTaskAt(time.Unix(2, 0))
 	second.SubjectID = "BTC-USDT"
 	require.NoError(t, svc.Enqueue(context.Background(), first))
 	require.NoError(t, svc.Enqueue(context.Background(), second))
@@ -960,19 +978,20 @@ new key + capacity exhausted   -> queue_overflow_count++，返回 ErrQueueFull
 ```
 
 `QueueDepth` 必须等于 `len(pending)`，不统计 stale item。
+realtime task 使用 `[bar_time, bar_time + 1ns)`，因此新旧判断比较 `task.EndTime`；手动范围补算不进入该队列，也不参与 supersede。
 删除 `supersedeCount` 和 `writebackFailures` 原子计数；supersede 是正常合并行为，最终执行或写回失败通过结构化任务日志记录。
 
 - [ ] **Step 4: 删除任务内因子分批**
 
-`executeOnce` 只调用一次：
+每个 `executeChunk` 只调用一次：
 
 ```go
 result, err := s.exec.Execute(ctx, &task.FactorTask, frame)
 if err != nil {
-	return 0, err
+	return err
 }
-if err := validateFactorResult(task.Factors, result); err != nil {
-	return 0, engine.NonRetryableError{Err: err}
+if err := validateFactorResult(task.Factors, len(targetTimes), result); err != nil {
+	return engine.NonRetryableError{Err: err}
 }
 ```
 
@@ -1017,7 +1036,7 @@ same scope supersede -> depth remains 1
 different target -> separate task
 queue full -> deterministic ErrQueueFull
 queue full -> queue_overflow_count increments exactly once
-one task -> one Storage read, one executor call, one write
+one realtime task -> one range-chunk read, one executor call, one write
 ```
 
 - [ ] **Step 7: 提交 scheduler 收敛**
@@ -1030,7 +1049,7 @@ git commit -m "refactor(factor): bound scheduler and remove factor batching"
 
 ---
 
-### Task 5: 统一 Python Executor、单 Bar 结果和空值契约
+### Task 5: 统一 Python Executor、范围结果和空值契约
 
 **Files:**
 - Modify: `modules/factor/internal/engine/types.go`
@@ -1044,6 +1063,8 @@ git commit -m "refactor(factor): bound scheduler and remove factor batching"
 - Delete: `modules/factor/internal/storageio/cache.go`
 - Delete: `modules/factor/internal/storageio/snapshot.go`
 - Delete: `modules/factor/internal/storageio/snapshot_test.go`
+- Modify: `modules/factor/internal/storageio/client.go`
+- Modify: `modules/factor/internal/storageio/dataframe.go`
 - Modify: `modules/factor/internal/storageio/writeback.go`
 - Modify: `modules/factor/internal/storageio/client_test.go`
 - Modify: `modules/factor/internal/scheduler/service.go`
@@ -1057,29 +1078,41 @@ git commit -m "refactor(factor): bound scheduler and remove factor batching"
 - Modify: `modules/factor/test/e2e_test.go`
 - Delete: `modules/factor/sections/.gitkeep`
 
-- [ ] **Step 1: 写 null 契约失败测试**
+- [ ] **Step 1: 写范围结果和 null 契约失败测试**
 
 Go：
 
 ```go
-func TestValidateFactorResultAllowsNull(t *testing.T) {
+func TestValidateFactorResultAllowsNullElements(t *testing.T) {
 	specs := []engine.FactorSpec{{Name: "Cci", Periods: []int{20}}}
-	result := &engine.FactorResult{Columns: map[string]any{
-		"Cci_20": nil,
+	result := &engine.FactorResult{Columns: map[string][]any{
+		"Cci_20": []any{nil, 1.25},
 	}}
-	require.NoError(t, validateFactorResult(specs, result))
+	require.NoError(t, validateFactorResult(specs, 2, result))
 }
 
 func TestValidateFactorResultRejectsNonNumericAndNonFinite(t *testing.T) {
 	for _, value := range []any{"bad", math.NaN(), math.Inf(1)} {
 		err := validateFactorResult(
 			[]engine.FactorSpec{{Name: "Cci", Periods: []int{20}}},
-			&engine.FactorResult{Columns: map[string]any{
-				"Cci_20": value,
+			1,
+			&engine.FactorResult{Columns: map[string][]any{
+				"Cci_20": []any{value},
 			}},
 		)
 		require.Error(t, err)
 	}
+}
+
+func TestValidateFactorResultRejectsWrongTargetLength(t *testing.T) {
+	err := validateFactorResult(
+		[]engine.FactorSpec{{Name: "Cci", Periods: []int{20}}},
+		2,
+		&engine.FactorResult{Columns: map[string][]any{
+			"Cci_20": []any{1.0},
+		}},
+	)
+	require.Error(t, err)
 }
 ```
 
@@ -1091,22 +1124,31 @@ def test_json_value_normalizes_nan_and_infinity():
     assert _json_value(float("inf")) is None
     assert _json_value(float("-inf")) is None
 
-def test_execute_returns_one_value_per_factor_column():
-    response = worker.execute_request(request_meta(periods=[2]))
-    assert not isinstance(response["results"]["Bias_2"], list)
+def test_execute_returns_values_only_for_target_range():
+    response = worker.execute_request(
+        request_meta(
+            periods=[2],
+            target_start_time="2026-07-26T00:02:00Z",
+            target_end_time="2026-07-26T00:04:00Z",
+        )
+    )
+    assert len(response["results"]["Bias_2"]) == 2
     assert "result_tails" not in response
+    assert "per_factor_ms" not in response
+    assert "elapsed_ms" not in response
 ```
 
 同时增加：
 
 ```text
-storageio/client_test.go: TestWriteFactorPatchWritesOnlyTaskBarTime
-scheduler/service_test.go: TestExecuteRejectsFrameMissingTaskBarTime
+storageio/client_test.go: TestReadRangeChunkPrependsLookbackAndReturnsTargetTimes
+storageio/client_test.go: TestWriteFactorPatchWritesTargetRangeAndSkipsNullCells
+scheduler/service_test.go: TestRunRejectsChunkWithoutTargetRows
 ```
 
-前者输入一个数值列和一个 `nil` 列，断言只提交一个以 `task.BarTime` 为 key 的 row，并且只包含数值列。后者让 Storage 返回的最后时间早于 `task.BarTime`，断言 executor 和 writeback 都不会被调用。
+读取测试固定目标范围内 2 条数据和范围前 3 条历史，设置 `lookback_bars=4`，断言返回顺序为“3 条历史 + 2 条目标”，并且 `TargetTimes` 只包含后 2 条。写回测试提供两列两行结果，其中一个单元格为 `nil`，断言只跳过该单元格，不丢弃同一行的其他有效列。scheduler 测试返回空 `TargetTimes`，断言 executor 和 writeback 都不会被调用。
 
-Expected: Go null、单 bar writeback 和 Python 单值结果测试 FAIL。
+Expected: Go 范围长度、逐单元格 null 写回和 Python 范围数组测试 FAIL。
 
 - [ ] **Step 2: 精简 Engine 类型**
 
@@ -1134,13 +1176,23 @@ type FactorSpec struct {
 }
 
 type FactorResult struct {
-	Columns     map[string]any
-	PerFactorMS map[string]int64
-	ElapsedMS   int64
+	Columns map[string][]any
 }
 ```
 
-JSON meta 使用 `"periods"`，不再发送 `"writeback_bars"` 或 `"extra_columns"`；Python worker 同步读取该字段。scheduler 读取 Storage 时使用“标准 K 线列与所有 `FactorSpec.Depends` 的去重并集”。
+`FactorTask` 使用：
+
+```go
+StartTime    time.Time // inclusive
+EndTime      time.Time // exclusive
+LookbackBars int
+```
+
+删除 `BarTime`。`StartTime` 和 `EndTime` 必须非零且 `StartTime.Before(EndTime)`；realtime 将事件时间转换为 `[bar_time, bar_time + 1ns)`。
+
+JSON meta 使用 `"periods"`、`"target_start_time"` 和 `"target_end_time"`，不再发送 `"writeback_bars"` 或 `"extra_columns"`；Python worker 同步读取这些字段。scheduler 读取 Storage 时使用“标准 K 线列与所有 `FactorSpec.Depends` 的去重并集”。
+
+`FactorResult` 只承载业务结果。删除 Go/Python 协议中的 `PerFactorMS`、`ElapsedMS`、`per_factor_ms` 和 `elapsed_ms`；scheduler/CLI 在最外层用 `time.Since(started)` 测量包含读取、计算、校验和写回的完整任务耗时。
 
 - [ ] **Step 3: 重命名唯一执行器并删除 Arrow/snapshot**
 
@@ -1187,7 +1239,29 @@ Python worker：
 - 删除 `cross_section` 分支。
 - 删除 `arrow_mmap` decode 分支。
 - `load_one` 永远加载到 factors map。
-- 每个因子列只返回目标 `bar_time` 对应的最后一个值，不再返回 tail 数组或 `result_tails`。
+- 对完整输入 frame 计算因子，但每个结果列只返回 `[target_start_time, target_end_time)` 对应的数组。
+- 删除 tail、`result_tails`、`per_factor_ms` 和 `elapsed_ms`；结果数组顺序必须与目标 `DataTimes` 升序一致。
+
+核心筛选和响应形状固定为：
+
+```python
+target_start = pd.Timestamp(meta["target_start_time"])
+target_end = pd.Timestamp(meta["target_end_time"])
+target_mask = (
+    (df["candle_begin_time"] >= target_start)
+    & (df["candle_begin_time"] < target_end)
+)
+
+values = out_df.loc[target_mask, column].tolist()
+results[column] = [_json_value(value) for value in values]
+
+return {
+    "id": meta.get("id", ""),
+    "ok": True,
+    "encoding": "json",
+    "results": results,
+}
+```
 
 `pyworker/requirements.txt` 只保留：
 
@@ -1197,7 +1271,7 @@ numpy>=2,<3
 pytest>=8,<9
 ```
 
-- [ ] **Step 4: 归一化缺失值并固定单 bar 写回**
+- [ ] **Step 4: 增加范围读取、归一化缺失值并固定范围写回**
 
 `codec.py`：
 
@@ -1232,15 +1306,70 @@ func validFactorValue(value any) bool {
 }
 ```
 
-Go codec 将 Python 的单值结果解码为 `FactorResult.Columns map[string]any`；删除 `FactorColumnResult`、`Tail` 和 tail-to-frame-row 映射。scheduler 在调用 executor 前必须确认 `frame.DataTimes` 非空且最后一个时间等于 `task.BarTime`；否则按 Storage 窗口不完整处理，在 `max_retry` 范围内重试，绝不能把前一根 bar 的结果写到目标时间。
+Go codec 将 Python 结果解码为 `FactorResult.Columns map[string][]any`；删除 `FactorColumnResult`、`Tail` 和 tail-to-frame-row 映射。
+
+`storageio` 增加一个明确的逻辑读取契约：
+
+```go
+type RangeChunk struct {
+	Frame       *engine.DataFrame
+	TargetTimes []time.Time
+}
+
+func (c *Client) ReadRangeChunk(
+	ctx context.Context,
+	key WindowKey,
+	startTime time.Time,
+	endTime time.Time,
+	lookbackBars int,
+	targetLimit int,
+	columns []string,
+) (*RangeChunk, error)
+```
+
+同步更新 scheduler 的依赖接口，删除 `ReadWindow`：
+
+```go
+type StorageIO interface {
+	ReadRangeChunk(
+		ctx context.Context,
+		key storageio.WindowKey,
+		startTime time.Time,
+		endTime time.Time,
+		lookbackBars int,
+		targetLimit int,
+		columns []string,
+	) (*storageio.RangeChunk, error)
+	WriteFactorPatch(
+		ctx context.Context,
+		task *engine.FactorTask,
+		targetTimes []time.Time,
+		result *engine.FactorResult,
+	) error
+}
+```
+
+实现顺序：
+
+1. 使用 Storage `TimeRange[startTime,endTime)`、升序和 `targetLimit` 读取目标行。
+2. 没有目标行时返回空 `TargetTimes`，不调用 Python。
+3. 使用第一个目标时间作为右开上界，倒序读取最多 `lookback_bars - 1` 条历史行。
+4. 将历史行反转为升序，与目标行拼成 `Frame`；`TargetTimes` 只保存目标行时间。
+
+每个 chunk 调用 executor 后，`validateFactorResult` 必须确认结果列集合准确、每列长度等于 `len(TargetTimes)`，并逐单元格验证 `nil` 或有限数值。
 
 `WriteFactorPatch` 改为：
 
 ```go
-func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, result *engine.FactorResult) error
+func (c *Client) WriteFactorPatch(
+	ctx context.Context,
+	task *engine.FactorTask,
+	targetTimes []time.Time,
+	result *engine.FactorResult,
+) error
 ```
 
-它只创建一个以 `task.BarTime` 为 key 的 `RowFieldUpsert`，`nil` 结果列跳过写入。移除 `factor.snapshot_hash` attribute，只保留：
+它按 `TargetTimes` 与各结果列的相同下标创建 `RowFieldUpsert`；`nil` 只跳过对应单元格，整行没有有效值时不提交空 upsert。移除 `factor.snapshot_hash` attribute，只保留：
 
 ```text
 factor.parent_task_id
@@ -1249,15 +1378,18 @@ factor.computed_at
 
 - [ ] **Step 5: 删除旧执行器和无调用缓存**
 
-删除 Target File Map 中的 stdio executor、worker pool、WindowCache 和 SnapshotStore，同时删除 `WritebackBars`、`ExtraColumns`、`FactorColumnResult`、`result_tails` 和旧 runtime executor 名称。
+删除 Target File Map 中的 stdio executor、worker pool、WindowCache 和 SnapshotStore，同时删除 `WritebackBars`、`ExtraColumns`、`FactorColumnResult`、`result_tails`、`PerFactorMS`、`ElapsedMS` 和旧 runtime executor 名称。
 
 确认：
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 ! rg -n \
-  'StdioExecutor|WorkerPool|SnapshotStore|SnapshotPath|arrow_mmap|cross_section|sections-dir|WritebackBars|writeback_bars|ExtraColumns|extra_columns|FactorColumnResult|result_tails|RuntimePoolExecutor|NewRuntimePoolExecutor|runtime_pool_executor' \
-  modules/factor/internal modules/factor/proto modules/factor/pyworker modules/factor/cmd modules/factor/test
+  'StdioExecutor|WorkerPool|SnapshotStore|SnapshotPath|arrow_mmap|cross_section|sections-dir|WritebackBars|writeback_bars|ExtraColumns|extra_columns|FactorColumnResult|PerFactorMS|ElapsedMS|RuntimePoolExecutor|NewRuntimePoolExecutor|runtime_pool_executor' \
+  modules/factor/internal modules/factor/proto modules/factor/cmd modules/factor/test
+! rg -n \
+  'arrow_mmap|cross_section|result_tails|per_factor_ms|elapsed_ms' \
+  modules/factor/pyworker --glob '!test_*.py'
 ```
 
 Expected: 命令退出 0。
@@ -1279,7 +1411,7 @@ Expected: PASS；平盘 `Cci` 返回 null 结果，不再使整个实时任务�
 git add -A modules/factor/internal/engine modules/factor/internal/storageio \
   modules/factor/internal/scheduler modules/factor/internal/bootstrap \
   modules/factor/pyworker modules/factor/sections modules/factor/test
-git commit -m "refactor(factor): simplify Python executor and single-bar output"
+git commit -m "refactor(factor): simplify Python executor and range output"
 ```
 
 ---
@@ -1316,7 +1448,8 @@ func TestBuildTaskUsesAllFactorsAndMaximumLookback(t *testing.T) {
 	task, err := BuildTask(TaskScope{
 		TaskID: "task-1", TriggerType: "recalc",
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
-		SubjectID: "BTC-USDT", Freq: "1m", BarTime: time.Unix(1, 0),
+		SubjectID: "BTC-USDT", Freq: "1m",
+		StartTime: time.Unix(1, 0), EndTime: time.Unix(3, 0),
 	}, []domain.FactorDef{
 		{FactorID: "bias", Name: "Bias", SourceHash: "h1", Periods: []int{20}, LookbackBars: 100, Depends: []string{"funding_rate"}},
 		{FactorID: "cci", Name: "Cci", SourceHash: "h2", Periods: []int{14}, LookbackBars: 200},
@@ -1329,7 +1462,7 @@ func TestBuildTaskUsesAllFactorsAndMaximumLookback(t *testing.T) {
 }
 ```
 
-另加 invalid empty factors、missing source hash 和 zero bar time 测试。
+另加 invalid empty factors、missing source hash、zero range endpoint 和 `start_time >= end_time` 测试。
 
 - [ ] **Step 2: 实现唯一 builder**
 
@@ -1344,7 +1477,8 @@ type TaskScope struct {
 	TargetDataset string
 	SubjectID     string
 	Freq          string
-	BarTime       time.Time
+	StartTime     time.Time
+	EndTime       time.Time
 }
 
 func BuildTask(scope TaskScope, factors []domain.FactorDef, factorsDir string) (Task, error)
@@ -1360,11 +1494,48 @@ maximum lookback
 FactorSpec creation
 ```
 
-Builder 与目标 `scheduler.Task` 位于同一包，不引入 `calculation`、`taskbuilder` 或 `engine -> scheduler` 反向依赖。Bootstrap、RPC 和 CLI 不再各自解析 periods 或拼接 version path。
+Builder 与目标 `scheduler.Task` 位于同一包，不引入 `calculation`、`taskbuilder` 或 `engine -> scheduler` 反向依赖。Bootstrap、RPC 和 CLI 不再各自解析 periods 或拼接 version path。realtime builder 将事件 `bar_time` 转换为 `[bar_time, bar_time + 1ns)`；RPC 和 CLI 直接使用请求的半开范围。
 
-- [ ] **Step 3: 将 RecalcFactor 改为同步**
+- [ ] **Step 3: 增加同步 range runner**
 
-删除 `recalcState`、`recalc map`、`GetRecalcProgress` 和后台 goroutine。`scheduler.TaskResult` 同时删除不再被同步响应消费的 `ElapsedMS`；耗时仍由 scheduler 结构化日志和 CLI terminal JSON 记录。
+删除 `scheduler.TaskResult`、`Task.Completion` 以及 completion channel。scheduler 增加：
+
+```go
+const maxTargetBarsPerChunk = 2000
+
+func (s *Service) Run(ctx context.Context, task Task) error
+```
+
+`Run` 是 realtime worker、RPC 和 CLI 共用的唯一同步执行入口：
+
+```text
+cursor = task.StartTime
+processed = 0
+while cursor < task.EndTime:
+    ReadRangeChunk(cursor, task.EndTime, task.LookbackBars, 2000)
+    no target rows and processed == 0 -> error
+    no target rows and processed > 0  -> done
+    derive chunk task range from first/last TargetTimes
+    execute Python once
+    validate every column length against TargetTimes
+    write this chunk once
+    cursor = last target time + 1ns
+```
+
+每个 chunk 沿用 `max_retry` 的本进程有限重试。总耗时在 `Run` 外层从读取开始计到最后一次写回结束，写入结构化日志；不放入 `FactorResult`。任一后续 chunk 最终失败时立即返回错误，已完成 chunk 不回滚。
+
+终态日志固定包含：
+
+```text
+task_id trigger_type space_id source_dataset target_dataset subject_id freq
+start_time end_time factor_count chunk_count status task_elapsed_ms error
+```
+
+`task_elapsed_ms` 是完整范围调用耗时；不再用含义不清的 Python `elapsed_ms` 冒充任务总耗时。
+
+- [ ] **Step 4: 将 RecalcFactor 改为同步范围补算**
+
+删除 `recalcState`、`recalc map`、`GetRecalcProgress` 和后台 goroutine。
 
 实现结构：
 
@@ -1374,34 +1545,22 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 	if err != nil {
 		return &factorpb.RecalcFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	done := make(chan scheduler.TaskResult, 1)
-	task.Completion = done
-	if err := s.scheduler.Enqueue(ctx, task); err != nil {
+	if err := s.scheduler.Run(ctx, task); err != nil {
 		return &factorpb.RecalcFactorRsp{RetInfo: inner(err)}, nil
 	}
-	select {
-	case result := <-done:
-		if result.Status != domain.RunStatusSucceeded {
-			resultErr := result.Error
-			if resultErr == nil {
-				resultErr = errors.New(result.ErrorMessage)
-			}
-			return &factorpb.RecalcFactorRsp{RetInfo: inner(resultErr)}, nil
-		}
-		return &factorpb.RecalcFactorRsp{RetInfo: success()}, nil
-	case <-ctx.Done():
-		return &factorpb.RecalcFactorRsp{RetInfo: inner(ctx.Err())}, nil
-	}
+	return &factorpb.RecalcFactorRsp{RetInfo: success()}, nil
 }
 ```
 
-只接受精确 `bar_time`；删除 `start_time/end_time` 解析。
+只接受合法 `start_time/end_time` 半开范围。补算直接调用 `Run`，不占用 realtime queue capacity；request context 取消会停止当前 chunk 并返回失败。
 
-- [ ] **Step 4: 统一 CLI run-once runtime**
+- [ ] **Step 5: 统一 CLI run-once runtime**
 
 `run-once`：
 
 - 使用 `scheduler.BuildTask`。
+- 接受必填 `--start-time` 和 `--end-time`，删除 `--bar-time`。
+- 通过 `scheduler.Service.Run` 同步处理范围，不自行逐 bar 循环。
 - 使用 `engine.NewPythonExecutor(ctx, 1, process.Config{...})`。
 - 不再创建 Factor-local `StdioExecutor`。
 - 不再 claim replay task。
@@ -1410,10 +1569,12 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 - 输出 terminal JSON：
 
 ```json
-{"ok":true,"task_id":"manual-...","status":"succeeded","factor_count":2,"elapsed_ms":12}
+{"ok":true,"task_id":"manual-...","status":"succeeded","factor_count":2,"start_time":"2026-07-26T00:00:00Z","end_time":"2026-07-27T00:00:00Z","elapsed_ms":12}
 ```
 
-- [ ] **Step 5: 删除 replay 命令和持久状态**
+这里的 `elapsed_ms` 由 CLI 包围整个 `Run` 调用测量，是读取、全部 chunk 计算和写回的总耗时，不来自 `FactorResult`。
+
+- [ ] **Step 6: 删除 replay 命令和持久状态**
 
 从 CLI 参数解析和 README 删除：
 
@@ -1435,19 +1596,21 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 
 Expected: 命令退出 0。
 
-- [ ] **Step 6: 补算行为测试**
+- [ ] **Step 7: 补算行为测试**
 
 必须覆盖：
 
 ```text
 missing subject -> invalid
-missing bar_time -> invalid
-bad RFC3339 -> invalid
+missing start_time/end_time -> invalid
+bad RFC3339/RFC3339Nano -> invalid
+start_time >= end_time -> invalid
 factor_id empty -> all executable factors
 explicit disabled factor -> invalid
-queue full -> immediate error
-task failure -> synchronous error
-task success -> SUCCESS ret_info
+manual range bypasses realtime queue capacity
+2001 target bars -> two ordered chunks
+second chunk failure -> synchronous error and first chunk remains written
+all chunks succeed -> SUCCESS ret_info
 request context cancelled -> context error
 ```
 
@@ -1461,7 +1624,7 @@ go test -race ./internal/rpc -count=1
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交补算收敛**
+- [ ] **Step 8: 提交补算收敛**
 
 ```bash
 git add -A modules/factor/internal/scheduler modules/factor/internal/bootstrap \
@@ -1612,6 +1775,7 @@ git commit -m "refactor(factor): remove unused runtime configuration"
 FactorDef 使用 periods: number[]
 FactorDef 不含 kind/params_json/writeback_bars
 RecalcFactorRsp 只包含 ret_info
+RecalcFactorReq 使用 start_time/end_time，不含 bar_time
 API 不导出 getRecalcProgress
 EngineStatus 只包含 queue_depth/queue_overflow_count
 ```
@@ -1650,6 +1814,20 @@ writeback_bars form field
 
 - [ ] **Step 3: 收敛补算 API**
 
+`api/factor/types.ts`：
+
+```ts
+export interface RecalcFactorReq {
+  factor_id?: string;
+  space_id: string;
+  source_dataset: string;
+  subject_id: string;
+  freq: string;
+  start_time: string;
+  end_time: string;
+}
+```
+
 `api/factor/index.ts`：
 
 ```ts
@@ -1667,11 +1845,12 @@ space_id
 source_dataset
 subject_id
 freq
-bar_time
+start_time
+end_time
 optional factor_id
 ```
 
-点击确认后等待单次响应，成功或失败使用已有 Message feedback；不轮询。
+前端校验 `start_time < end_time`，并明确按 `[start_time,end_time)` 提交。点击确认后等待单次响应，成功或失败使用已有 Message feedback；不轮询。
 
 - [ ] **Step 4: Results 页面只展示 Storage 结果**
 
@@ -1733,10 +1912,12 @@ single instance
 timeseries only
 best-effort ACK after `EventBatcher.Add`
 bounded queue
-one read / one Python call / one write per task
-single-bar writeback
+one logical read / one Python call / one write per chunk
+realtime one-bar range
+manual half-open range recalc
+lookback_bars is input context, not output length
+range result columns have one value per target bar
 null result contract
-manual single-bar recalc
 no durable scheduler/inbox/DLQ/exactly-once
 no Arrow/cross-section/multi-instance
 ```
@@ -1760,10 +1941,11 @@ README 包含：
   --dataset binance_spot_kline \
   --subject BTC-USDT \
   --freq 1m \
-  --bar-time 2026-07-26T09:30:00Z
+  --start-time 2026-07-26T00:00:00Z \
+  --end-time 2026-07-27T00:00:00Z
 ```
 
-README 必须直说：ACK 后进程退出可能漏算，使用 `run-once` 或 `RecalcFactor` 修复。
+README 必须直说：ACK 后进程退出可能漏算，使用 `run-once` 或 `RecalcFactor` 修复。范围采用 `[start_time,end_time)`；大于 2000 个目标 bar 时在进程内自动分 chunk，同步调用期间没有持久化进度，失败后可重跑整个范围。
 
 - [ ] **Step 4: 扩展实时 E2E**
 
@@ -1785,7 +1967,7 @@ fake StorageIO with deterministic candle frame
 one DatasetRowsUpserted is ACKed
 batch window creates one task
 task contains enabled Bias and excludes disabled Cci
-fake Storage receives one read and one write
+fake Storage receives one range-chunk read and one write
 write contains Bias_20
 queue and worker return idle
 ```
@@ -1850,9 +2032,9 @@ git commit -m "test(factor): prove best-effort realtime pipeline"
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 ! rg -n \
-  'cross_section|params_json|ParamsJSON|default-params|sections_dir|arrow_row_threshold|max_batch_parallelism|snapshot_ttl_seconds|reconcile_interval_min|primary_target|heartbeat_interval_ms|t_factor_event_inbox|t_factor_event_processed|t_factor_replay_tasks|GetRecalcProgress|ListFactorRuns|StdioExecutor|WorkerPool|SnapshotStore|WritebackBars|writeback_bars|ExtraColumns|extra_columns|FactorColumnResult|result_tails|RuntimePoolExecutor|NewRuntimePoolExecutor|runtime_pool_executor|IngestMessage' \
+  'cross_section|params_json|ParamsJSON|default-params|sections_dir|arrow_row_threshold|max_batch_parallelism|snapshot_ttl_seconds|reconcile_interval_min|primary_target|heartbeat_interval_ms|t_factor_event_inbox|t_factor_event_processed|t_factor_replay_tasks|GetRecalcProgress|ListFactorRuns|StdioExecutor|WorkerPool|SnapshotStore|WritebackBars|writeback_bars|ExtraColumns|extra_columns|FactorColumnResult|PerFactorMS|RuntimePoolExecutor|NewRuntimePoolExecutor|runtime_pool_executor|IngestMessage' \
   modules/factor/internal modules/factor/proto modules/factor/schema modules/factor/cmd \
-  modules/factor/pyworker modules/factor/config modules/factor/test \
+  modules/factor/config modules/factor/test \
   web/src/api/factor web/src/views/factor
 ! rg -n \
   'dropped_tasks|DroppedTasks|supersede_count|SupersedeCount|writeback_failures|WritebackFailures|WorkerStatus' \
@@ -1860,6 +2042,12 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 ! rg -n \
   'queue_capacity|QueueCapacity|worker_count|WorkerCount|worker_ready|WorkerReady' \
   modules/factor/proto web/src/api/factor
+! rg -n \
+  'ElapsedMS|PerFactorMS' \
+  modules/factor/internal/engine
+! rg -n \
+  'result_tails|per_factor_ms|elapsed_ms' \
+  modules/factor/pyworker --glob '!test_*.py'
 ```
 
 Expected: 命令退出 0。若命中 generated code，说明 Proto 未正确重新生成。
@@ -1919,9 +2107,12 @@ Expected: 全部 PASS。
 Factor disable 最迟一个 batch window 后停止执行
 best-effort ACK 边界与 README 一致
 队列容量有上限且 supersede 不制造 stale item
-一个 subject 任务只有一次 executor call
+每个 range chunk 只有一次 executor call，任务内因子不再二次分批
 null 被允许且跳过写回
-每个任务只写目标 bar_time
+realtime 只写事件对应的单 bar range
+手动补算严格写 `[start_time,end_time)` 内的目标 bar
+每个 chunk 最多 2000 个目标 bar，并补充 `lookback_bars - 1` 条前置历史
+FactorResult 只包含等长结果列，不包含性能计时字段
 FactorDef 和 FactorSpec 都使用 Depends，不存在 ExtraColumns 别名
 Metadata 不在实时热路径
 run-once 和 realtime 使用同一 builder/runtime
@@ -1961,9 +2152,10 @@ Expected: local HEAD 与远端 `feature/mooyang` 完全一致；工作树只允�
 2. 文档明确承认 ACK 后进程退出会漏算。
 3. 因子和 Binding 任一禁用都不会进入新的实时任务。
 4. scheduler 的待执行 scope 数受 `queue_capacity` 限制；每次因容量不足而失败的入队操作只增加一次 `queue_overflow_count`。
-5. 一个任务只进行一次 Storage read、一次 Python execute、一次 Storage write，并且只写目标 `bar_time`。
+5. 一个 realtime task 只产生一个单 bar chunk；每个 chunk 只进行一次逻辑 Storage range read、一次 Python execute 和一次 Storage write，并且只写该 chunk 的 `TargetTimes`。
 6. 平盘 Cci 的 null 输出不会导致整任务失败。
-7. `run-once` 和 `RecalcFactor` 可同步完成单 bar 补算；`RecalcFactorRsp` 只通过 `ret_info` 表达成功或失败。
-8. Proto、Schema、Go、Python 和 Web 中不再存在 cross-section、Arrow、FactorRun、异步补算进度、durable inbox、`writeback_bars`、`ExtraColumns` 或旧 runtime executor 名称。
-9. Factor Go tests、race、vet、Python tests、build、event contracts、workspace tests 和 Web build 全部通过。
-10. 独立审查无未处理发现，local/remote SHA 完全一致。
+7. `run-once` 和 `RecalcFactor` 可同步完成 `[start_time,end_time)` 范围补算；超过 2000 个目标 bar 时自动分 chunk，任一失败返回错误且不回滚已成功 chunk；`RecalcFactorRsp` 只通过 `ret_info` 表达成功或失败。
+8. `FactorResult` 只包含 `Columns map[string][]any`，每列长度与当前 chunk 的目标 bar 数一致；性能耗时由外层日志测量。
+9. Proto、Schema、Go、Python 和 Web 中不再存在 cross-section、Arrow、FactorRun、异步补算进度、durable inbox、`writeback_bars`、`ExtraColumns`、结果内性能计时字段或旧 runtime executor 名称。
+10. Factor Go tests、race、vet、Python tests、build、event contracts、workspace tests 和 Web build 全部通过。
+11. 独立审查无未处理发现，local/remote SHA 完全一致。
