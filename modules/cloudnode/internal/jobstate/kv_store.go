@@ -85,7 +85,7 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 		}
 		return &CreateResult{
 			JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED,
-			Deduplicated: true, ShouldPublish: updated.Status == StatusPending,
+			Deduplicated: true, ShouldPublish: false,
 		}, nil
 	}
 	return &CreateResult{JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED, Created: true, ShouldPublish: true}, nil

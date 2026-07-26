@@ -93,7 +93,7 @@ func TestMarkReportedMissingIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestCreatePendingRepublishesOnlyNonterminalDuplicate(t *testing.T) {
+func TestCreatePendingRepublishesOnlyEnqueueFailedDuplicate(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
 	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
 	first, err := store.CreatePending(context.Background(), item)
@@ -101,8 +101,15 @@ func TestCreatePendingRepublishesOnlyNonterminalDuplicate(t *testing.T) {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
 	duplicate, err := store.CreatePending(context.Background(), item)
-	if err != nil || !duplicate.Deduplicated || !duplicate.ShouldPublish {
+	if err != nil || !duplicate.Deduplicated || duplicate.ShouldPublish {
 		t.Fatalf("pending duplicate=%+v err=%v", duplicate, err)
+	}
+	if err := store.MarkEnqueueFailed(context.Background(), "crypto", "item-1", "publish failed"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreatePending(context.Background(), item)
+	if err != nil || !retry.Created || !retry.ShouldPublish {
+		t.Fatalf("enqueue_failed retry=%+v err=%v", retry, err)
 	}
 	if _, _, err := store.MarkReported(context.Background(), ReportEvent{
 		SpaceID: "crypto", JobItemID: "item-1", Status: StatusSuccess,

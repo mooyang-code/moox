@@ -117,7 +117,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
 }
 ```
 
-创建规则后，调用 `/api/admin/collectmgr/RecalculateAllTaskInstances`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline_1h` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode JobItem。
+创建规则后，调用 `/api/admin/collectmgr/ScheduleTasks`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline_1h` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode JobItem。
 
 ## 最小可演示闭环
 

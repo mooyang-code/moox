@@ -47,17 +47,18 @@ func (s *orderedStore) Get(context.Context, string, string) (*jobstate.State, er
 	return &s.state, nil
 }
 
-func TestSubmitRepublishesDeduplicatedPendingItem(t *testing.T) {
+func TestSubmitDoesNotRepublishDeduplicatedPendingItem(t *testing.T) {
 	queue := &orderedQueue{}
 	store := &orderedStore{create: &jobstate.CreateResult{
 		JobItemID: "item-1", Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED,
-		Deduplicated: true, ShouldPublish: true,
+		Deduplicated: true, ShouldPublish: false,
 	}}
 	svc := &Service{executionQueue: queue, jobState: store}
 	rsp, err := svc.SubmitJobItems(context.Background(), &pb.SubmitJobItemsReq{Items: []*pb.JobItem{{
 		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
 	}}})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(queue.steps) != 2 || queue.steps[1] != "publish" {
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS ||
+		len(queue.steps) != 1 || queue.steps[0] != "ensure" {
 		t.Fatalf("rsp=%+v err=%v queue=%v", rsp, err, queue.steps)
 	}
 }

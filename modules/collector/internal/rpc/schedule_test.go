@@ -12,10 +12,10 @@ type fakeScheduleService struct {
 	spaceID string
 }
 
-func (f *fakeScheduleService) RecalculateAllTaskInstances(ctx context.Context, req *pb.RecalculateAllTaskInstancesReq) (*pb.RecalculateAllTaskInstancesRsp, error) {
+func (f *fakeScheduleService) ScheduleTasks(ctx context.Context, req *pb.ScheduleTasksReq) (*pb.ScheduleTasksRsp, error) {
 	f.calls++
 	f.spaceID = req.GetSpaceId()
-	return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retOK()}, nil
+	return &pb.ScheduleTasksRsp{RetInfo: retOK()}, nil
 }
 
 func TestParseScheduleParamsSupportsSpaceID(t *testing.T) {

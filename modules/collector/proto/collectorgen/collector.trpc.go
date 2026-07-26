@@ -37,8 +37,8 @@ type CollectMgrService interface {
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error)
 
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error)
-	// RecalculateAllTaskInstances ----- 任务规划器 -----
-	RecalculateAllTaskInstances(ctx context.Context, req *RecalculateAllTaskInstancesReq) (*RecalculateAllTaskInstancesRsp, error)
+	// ScheduleTasks ----- 任务规划器 -----
+	ScheduleTasks(ctx context.Context, req *ScheduleTasksReq) (*ScheduleTasksRsp, error)
 }
 
 func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -203,14 +203,14 @@ func CollectMgrService_GetDataTypeConfigWithFields_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
-func CollectMgrService_RecalculateAllTaskInstances_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RecalculateAllTaskInstancesReq{}
+func CollectMgrService_ScheduleTasks_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ScheduleTasksReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).RecalculateAllTaskInstances(ctx, reqbody.(*RecalculateAllTaskInstancesReq))
+		return svr.(CollectMgrService).ScheduleTasks(ctx, reqbody.(*ScheduleTasksReq))
 	}
 
 	var rsp interface{}
@@ -263,8 +263,8 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_GetDataTypeConfigWithFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/RecalculateAllTaskInstances",
-			Func: CollectMgrService_RecalculateAllTaskInstances_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/ScheduleTasks",
+			Func: CollectMgrService_ScheduleTasks_Handler,
 		},
 	},
 }
@@ -313,9 +313,9 @@ func (s *UnimplementedCollectMgr) GetDataTypeConfigWithFields(ctx context.Contex
 	return nil, errors.New("rpc GetDataTypeConfigWithFields of service CollectMgr is not implemented")
 }
 
-// RecalculateAllTaskInstances ----- 任务规划器 -----
-func (s *UnimplementedCollectMgr) RecalculateAllTaskInstances(ctx context.Context, req *RecalculateAllTaskInstancesReq) (*RecalculateAllTaskInstancesRsp, error) {
-	return nil, errors.New("rpc RecalculateAllTaskInstances of service CollectMgr is not implemented")
+// ScheduleTasks ----- 任务规划器 -----
+func (s *UnimplementedCollectMgr) ScheduleTasks(ctx context.Context, req *ScheduleTasksReq) (*ScheduleTasksRsp, error) {
+	return nil, errors.New("rpc ScheduleTasks of service CollectMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -344,8 +344,8 @@ type CollectMgrClientProxy interface {
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq, opts ...client.Option) (rsp *GetDataTypeConfigsRsp, err error)
 
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq, opts ...client.Option) (rsp *GetDataTypeConfigWithFieldsRsp, err error)
-	// RecalculateAllTaskInstances ----- 任务规划器 -----
-	RecalculateAllTaskInstances(ctx context.Context, req *RecalculateAllTaskInstancesReq, opts ...client.Option) (rsp *RecalculateAllTaskInstancesRsp, err error)
+	// ScheduleTasks ----- 任务规划器 -----
+	ScheduleTasks(ctx context.Context, req *ScheduleTasksReq, opts ...client.Option) (rsp *ScheduleTasksRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -537,20 +537,20 @@ func (c *CollectMgrClientProxyImpl) GetDataTypeConfigWithFields(ctx context.Cont
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) RecalculateAllTaskInstances(ctx context.Context, req *RecalculateAllTaskInstancesReq, opts ...client.Option) (*RecalculateAllTaskInstancesRsp, error) {
+func (c *CollectMgrClientProxyImpl) ScheduleTasks(ctx context.Context, req *ScheduleTasksReq, opts ...client.Option) (*ScheduleTasksRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/RecalculateAllTaskInstances")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ScheduleTasks")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("RecalculateAllTaskInstances")
+	msg.WithCalleeMethod("ScheduleTasks")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &RecalculateAllTaskInstancesRsp{}
+	rsp := &ScheduleTasksRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

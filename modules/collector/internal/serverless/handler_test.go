@@ -44,7 +44,7 @@ func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
 	})
 	rsp, err := NewCloudFunctionHandler().handleKeepalive(ctx, model.CloudFunctionEvent{
 		Action:               model.EventActionKeepalive,
-		Source:               "collector_schedule",
+		Source:               "process_probe",
 		ServiceGatewayTarget: "http://127.0.0.1:11000",
 	})
 	if err != nil {
@@ -81,7 +81,7 @@ func TestHandleKeepaliveRunsPollWhenHeartbeatFails(t *testing.T) {
 	h := NewCloudFunctionHandler()
 	rsp, err := h.handleKeepalive(withFunctionContext(context.Background()), model.CloudFunctionEvent{
 		Action:               "keepalive",
-		Source:               "collector_schedule",
+		Source:               "process_probe",
 		ServiceGatewayTarget: "http://127.0.0.1:11000",
 		Data:                 map[string]any{"node_id": "node-scf-1"},
 	})

@@ -30,11 +30,6 @@ func TestTaskInstanceRepository_UpsertListAndStatus(t *testing.T) {
 	require.Len(t, instances, 1)
 	assert.Equal(t, "task-1", instances[0].TaskID)
 
-	require.NoError(t, repo.UpdateCloudJobItemIDs(ctx, "crypto", map[string]string{
-		"task-1": "job-1",
-		"":       "skip",
-		"task-2": "",
-	}))
 	require.NoError(t, repo.UpdateStatus(ctx, "crypto", "task-1", "node-a", 2, `{"ok":true}`))
 
 	status := 2
@@ -46,6 +41,26 @@ func TestTaskInstanceRepository_UpsertListAndStatus(t *testing.T) {
 
 	err = repo.UpdateStatus(ctx, "crypto", "missing", "node-a", 2, `{}`)
 	assert.ErrorIs(t, err, ErrTaskInstanceNotFound)
+}
+
+func TestTaskInstanceRepository_UpsertManyUpdatesCloudJobItemID(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.TaskInstances()
+	ctx := context.Background()
+
+	base := domain.TaskInstance{
+		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
+		Exchange: "binance", Market: "spot", DataType: "kline",
+		TaskParams: `{}`, CloudJobItemID: "task-1:2026-07-26T10:30:00Z",
+	}
+	require.NoError(t, repo.UpsertMany(ctx, []domain.TaskInstance{base}))
+	base.CloudJobItemID = "task-1:2026-07-26T11:00:00Z"
+	require.NoError(t, repo.UpsertMany(ctx, []domain.TaskInstance{base}))
+
+	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "task-1:2026-07-26T11:00:00Z", instances[0].CloudJobItemID)
 }
 
 func TestTaskInstanceRepository_NormalizeHelpers(t *testing.T) {

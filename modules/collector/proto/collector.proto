@@ -213,11 +213,11 @@ message GetDataTypeConfigWithFieldsRsp {
   DataTypeConfigDetail detail = 2;
 }
 
-message RecalculateAllTaskInstancesReq {
+message ScheduleTasksReq {
   string space_id = 1;
 }
 
-message RecalculateAllTaskInstancesRsp {
+message ScheduleTasksRsp {
   common.RetInfo ret_info = 1;
 }
 
@@ -238,5 +238,5 @@ service CollectMgr {
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
 
   // ----- 任务规划器 -----
-  rpc RecalculateAllTaskInstances(RecalculateAllTaskInstancesReq) returns (RecalculateAllTaskInstancesRsp);
+  rpc ScheduleTasks(ScheduleTasksReq) returns (ScheduleTasksRsp);
 }

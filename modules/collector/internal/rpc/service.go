@@ -23,11 +23,10 @@ import (
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
 	AdminGatewayURL         string
-	ServiceGatewayTarget    string
 	ServiceAuth             taskpublisher.AuthConfig
 	StorageRPCGatewayTarget string
 	// PlannerStorageRPCGatewayTarget is the control-plane's local metadata target.
-	// The public target remains in StorageRPCGatewayTarget for SCF wake events.
+	// It overrides the runtime Storage target when both are available.
 	PlannerStorageRPCGatewayTarget string
 }
 
@@ -39,6 +38,7 @@ type Service struct {
 	builder      *planner.TaskBuilder
 	datasetSrc   *storagesource.DatasetSource
 	cloudJobs    *taskpublisher.Client
+	now          func() time.Time
 }
 
 // New creates a collector management service.
@@ -53,11 +53,10 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		builder:      planner.NewTaskBuilder(),
 		datasetSrc:   storagesource.NewDatasetSource(plannerMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
-			ServiceGatewayTarget:      deps.AdminGatewayURL,
-			EventServiceGatewayTarget: deps.ServiceGatewayTarget,
-			StorageRPCGatewayTarget:   deps.StorageRPCGatewayTarget,
-			Auth:                      deps.ServiceAuth,
+			ServiceGatewayTarget: deps.AdminGatewayURL,
+			Auth:                 deps.ServiceAuth,
 		}),
+		now: time.Now,
 	}
 }
 
@@ -281,31 +280,35 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 	return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
 }
 
-// RecalculateAllTaskInstances rebuilds task instances for all enabled rules in one space.
-func (s *Service) RecalculateAllTaskInstances(ctx context.Context, req *pb.RecalculateAllTaskInstancesReq) (*pb.RecalculateAllTaskInstancesRsp, error) {
+// ScheduleTasks plans and submits the next execution of every enabled task in one space.
+func (s *Service) ScheduleTasks(ctx context.Context, req *pb.ScheduleTasksReq) (*pb.ScheduleTasksRsp, error) {
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	if spaceID == "" {
-		return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
+		return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	rules, err := s.ruleRepo.ListEnabled(ctx, spaceID)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] list enabled rules failed: %v", err)
-		return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	now := time.Now().UTC()
+	if s.now != nil {
+		now = s.now().UTC()
 	}
 	total := 0
 	for i := range rules {
-		created, err := s.recalculateRule(ctx, &rules[i])
+		created, err := s.scheduleRule(ctx, &rules[i], now)
 		if err != nil {
-			log.ErrorContextf(ctx, "[Collector] recalculate rule %s failed: %v", rules[i].RuleID, err)
-			return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+			log.ErrorContextf(ctx, "[Collector] schedule rule %s failed: %v", rules[i].RuleID, err)
+			return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 		total += created
 	}
-	log.InfoContextf(ctx, "[Collector] recalculated task instances space_id=%s rules=%d instances=%d", spaceID, len(rules), total)
-	return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retOK()}, nil
+	log.InfoContextf(ctx, "[Collector] scheduled tasks space_id=%s rules=%d instances=%d", spaceID, len(rules), total)
+	return &pb.ScheduleTasksRsp{RetInfo: retOK()}, nil
 }
 
-func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (int, error) {
+func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now time.Time) (int, error) {
 	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
 	if err != nil {
 		return 0, fmt.Errorf("parse rule %s params: %w", rule.RuleID, err)
@@ -321,60 +324,15 @@ func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (i
 	if err != nil {
 		return 0, fmt.Errorf("build instances for rule %s: %w", rule.RuleID, err)
 	}
+	instances = taskpublisher.PrepareScheduledInstances(instances, now)
 	if err := s.instanceRepo.UpsertMany(ctx, instances); err != nil {
 		return 0, fmt.Errorf("upsert instances for rule %s: %w", rule.RuleID, err)
 	}
-	jobItemIDs, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
-	if err := s.instanceRepo.UpdateCloudJobItemIDs(ctx, rule.SpaceID, jobItemIDs); err != nil {
-		return 0, fmt.Errorf("record cloud job items for rule %s: %w", rule.RuleID, err)
-	}
-	var wakeErr error
-	if len(jobItemIDs) > 0 {
-		woken, err := s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{
-			SpaceID:  rule.SpaceID,
-			JobTypes: jobTypesFromInstances(instances),
-		})
-		if err != nil {
-			wakeErr = err
-			log.WarnContextf(ctx, "[Collector] wake collector nodes failed rule_id=%s: %v", rule.RuleID, err)
-		} else if woken == 0 {
-			log.WarnContextf(ctx, "[Collector] no collector nodes woken rule_id=%s", rule.RuleID)
-		} else {
-			log.InfoContextf(ctx, "[Collector] woken collector nodes rule_id=%s count=%d", rule.RuleID, woken)
-		}
-	}
+	_, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
 	if submitErr != nil {
-		err := fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
-		if wakeErr != nil {
-			err = errors.Join(err, fmt.Errorf("wake submitted cloud job items: %w", wakeErr))
-		}
-		return 0, err
+		return 0, fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
 	}
 	return len(instances), nil
-}
-
-func jobTypesFromInstances(instances []domain.TaskInstance) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(instances))
-	for _, instance := range instances {
-		payload := map[string]any{}
-		_ = json.Unmarshal([]byte(instance.TaskParams), &payload)
-		jobType, _ := payload["job_type"].(string)
-		jobType = strings.TrimSpace(jobType)
-		if jobType == "" {
-			dataType, _ := payload["data_type"].(string)
-			jobType = "collect." + strings.TrimSpace(dataType)
-		}
-		if jobType == "collect." || jobType == "" {
-			continue
-		}
-		if _, ok := seen[jobType]; ok {
-			continue
-		}
-		seen[jobType] = struct{}{}
-		out = append(out, jobType)
-	}
-	return out
 }
 
 // GetDataTypeConfigs returns the currently supported collector rule data types.

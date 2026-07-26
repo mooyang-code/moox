@@ -152,7 +152,7 @@ async function prepare(args) {
   await assertManagementRequests(args, token);
   await ensureCloudNode(args, token);
   await ensureCollectorRule(args, token);
-  await adminPost(args, token, "collectmgr", "RecalculateAllTaskInstances", { space_id: args.space });
+  await adminPost(args, token, "collectmgr", "ScheduleTasks", { space_id: args.space });
 
   const instances = await waitFor("collector task instances", 60_000, async () => {
     const rows = await listTaskInstances(args, token);
