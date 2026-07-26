@@ -21,7 +21,7 @@ import (
 type CloudFunctionHandler struct{}
 
 const keepaliveHeartbeatTimeout = 8 * time.Second
-const keepaliveTaskExecutionTimeout = 55 * time.Second
+const keepaliveTaskExecutionTimeout = 115 * time.Second
 
 var reportHeartbeatAfterProbe = reporter.ReportHeartbeat
 var pollJobItemsAfterHeartbeat = func(ctx context.Context) error {

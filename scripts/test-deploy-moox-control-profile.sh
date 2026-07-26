@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-control-profile.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/control.tar.gz"
+DEFAULT_ARCHIVE="${TMP_ROOT}/default-control.tar.gz"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 file_mode() {
@@ -84,5 +85,16 @@ done
 grep -q 'native_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
 grep -Fq -- '--disable-storage-shard' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq -- '--disable-storage-node' "${TMP_ROOT}/unpacked/start.sh"
+
+PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+  --package-only --archive "${DEFAULT_ARCHIVE}" \
+  --target localhost --dir "${TMP_ROOT}/deploy-default" --stage "${TMP_ROOT}/stage-default" \
+  --goos linux --goarch amd64 --skip-build --reuse-web-assets \
+  --no-storage --no-archive --no-factor --no-strategy --no-monitor \
+  --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
+
+mkdir "${TMP_ROOT}/unpacked-default"
+tar -C "${TMP_ROOT}/unpacked-default" -xzf "${DEFAULT_ARCHIVE}"
+grep -q 'native_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked-default/gateway/config/app.yaml"
 
 echo 'control deployment profile contract passed'

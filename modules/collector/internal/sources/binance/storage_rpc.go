@@ -10,8 +10,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type storageWriter struct {
@@ -31,7 +29,7 @@ func newStorageWriter(accessTarget string, metadataTarget string, authInfo *stor
 	serviceOptions := gatewayauth.NewTRPCClientOptions(normalizeStorageTarget(target, "11003"), strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
 		access:   storagepb.NewPrimaryStoreClientProxy(serviceOptions...),
-		metadata: storagepb.NewMetadataClientProxy(append(serviceOptions, client.WithTransport(transport.DefaultClientTransport))...),
+		metadata: storagepb.NewMetadataClientProxy(serviceOptions...),
 		authInfo: authInfo,
 	}
 }

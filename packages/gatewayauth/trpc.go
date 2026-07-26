@@ -45,7 +45,11 @@ func NewTRPCClientFilter(credentials Credentials, targetNode string, now func() 
 			}
 		}
 		msg.WithClientMetaData(metadata)
-		return next(ctx, req, rsp)
+		rawRsp := &codec.Body{}
+		if err := next(ctx, &codec.Body{Data: body}, rawRsp); err != nil {
+			return err
+		}
+		return codec.Unmarshal(msg.SerializationType(), rawRsp.Data, rsp)
 	}
 }
 
@@ -61,6 +65,7 @@ func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
 		client.WithTransport(transport.DefaultClientTransport),
+		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
 		client.WithFilter(NewTRPCClientFilter(credentials, strings.TrimSpace(targetNode), nil)),
 	}
 }

@@ -79,6 +79,70 @@ func TestBuildSCFPackage_MissingCLSTopicID_ShouldReturnError(t *testing.T) {
 	require.ErrorContains(t, err, "CLS topic ID is required")
 }
 
+func TestBuildSCFPackage_RendersStorageAuthKeyWithoutPackagingSecret(t *testing.T) {
+	tmp := t.TempDir()
+	binaryPath := filepath.Join(tmp, "collector")
+	require.NoError(t, os.WriteFile(binaryPath, []byte("binary"), 0o755))
+	configDir := filepath.Join(tmp, "config")
+	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "sources", "market"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("storage: {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "sources", "market", "binance.yaml"), []byte(`
+storage:
+  bindings:
+    spot:
+      auth_info:
+        app_id: moox-collector
+        app_key: stale-key
+`), 0o644))
+
+	outPath := filepath.Join(tmp, "package.zip")
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{
+		BinaryPath: binaryPath, ConfigDir: configDir, OutPath: outPath,
+		CLSTopicID: "topic-unified", StoragePrimaryAuthSecret: "storage-secret",
+	})
+	require.NoError(t, err)
+	reader, err := zip.OpenReader(outPath)
+	require.NoError(t, err)
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name != "sources/market/binance.yaml" {
+			continue
+		}
+		stream, err := file.Open()
+		require.NoError(t, err)
+		content, err := io.ReadAll(stream)
+		require.NoError(t, err)
+		require.NoError(t, stream.Close())
+		assert.NotContains(t, string(content), "stale-key")
+		assert.NotContains(t, string(content), "storage-secret")
+		assert.Contains(t, string(content), "app_key: 455dd0d9d5bf0130a27b70bc6805d5b0a2059d6ff68677f914576e0c5c092e32")
+		return
+	}
+	t.Fatal("rendered Binance config not found")
+}
+
+func TestBuildSCFPackage_RejectsBinanceConfigWithoutStorageSecret(t *testing.T) {
+	tmp := t.TempDir()
+	binaryPath := filepath.Join(tmp, "collector")
+	require.NoError(t, os.WriteFile(binaryPath, []byte("binary"), 0o755))
+	configDir := filepath.Join(tmp, "config")
+	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "sources", "market"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("storage: {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "sources", "market", "binance.yaml"), []byte(`
+storage:
+  auth_info:
+    app_id: moox-collector
+    app_key: stale-key
+`), 0o644))
+
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{
+		BinaryPath: binaryPath, ConfigDir: configDir,
+		OutPath: filepath.Join(tmp, "package.zip"), CLSTopicID: "topic-unified",
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+}
+
 func TestCLSTopicIDFromTRPCConfigRejectsMultipleWriters(t *testing.T) {
 	config := []byte(`plugins:
   log:

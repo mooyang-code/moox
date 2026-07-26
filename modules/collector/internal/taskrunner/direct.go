@@ -191,7 +191,7 @@ func runtimeSpaceID() string {
 }
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
-	execCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	execCtx, cancel := context.WithTimeout(ctx, 105*time.Second)
 	defer cancel()
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {

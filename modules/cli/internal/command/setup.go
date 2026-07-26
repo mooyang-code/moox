@@ -538,14 +538,25 @@ func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snap
 	if err != nil {
 		return fmt.Errorf("eventbus_firewall_failed")
 	}
-	_, err = client.EnsureFirewallRule(ctx, publicIP, cloudtencent.CreateFirewallRulesOptions{
-		Protocol: "TCP", Ports: fmt.Sprint(snapshot.Manifest.EventBus.Port), CidrBlock: "0.0.0.0/0",
-		Action: "ACCEPT", Description: "MooX EventBus TLS",
-	})
-	if err != nil {
-		return fmt.Errorf("eventbus_firewall_failed")
+	for _, rule := range setupControlFirewallRules(snapshot.Manifest.EventBus.Port) {
+		if _, err := client.EnsureFirewallRule(ctx, publicIP, rule); err != nil {
+			return fmt.Errorf("eventbus_firewall_failed")
+		}
 	}
 	return nil
+}
+
+func setupControlFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
+	return []cloudtencent.CreateFirewallRulesOptions{
+		{
+			Protocol: "TCP", Ports: fmt.Sprint(eventBusPort), CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX EventBus TLS",
+		},
+		{
+			Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX service gateway native",
+		},
+	}
 }
 
 func eventBusFirewallIP(

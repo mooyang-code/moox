@@ -295,6 +295,20 @@ func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
 	require.ErrorContains(t, err, "exactly one IPv4")
 }
 
+func TestSetupControlFirewallRulesIncludeEventBusAndNativeGateway(t *testing.T) {
+	rules := setupControlFirewallRules(4222)
+	require.Len(t, rules, 2)
+	assert.Equal(t, "4222", rules[0].Ports)
+	assert.Equal(t, "MooX EventBus TLS", rules[0].Description)
+	assert.Equal(t, "11003", rules[1].Ports)
+	assert.Equal(t, "MooX service gateway native", rules[1].Description)
+	for _, rule := range rules {
+		assert.Equal(t, "TCP", rule.Protocol)
+		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
+		assert.Equal(t, "ACCEPT", rule.Action)
+	}
+}
+
 func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)

@@ -845,7 +845,7 @@ patch_configs() {
   gateway_control_url_yaml=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "${GATEWAY_CONTROL_URL}")
   GATEWAY_CONTROL_URL_YAML="${gateway_control_url_yaml}" perl -0pi -e 's#id:\s*gateway-gz-122#id: '"${NODE_ID}"'#; s#base_url:\s*https://admin\.example\.com#base_url: $ENV{GATEWAY_CONTROL_URL_YAML}#; s#hmac_key_file:\s*\./secrets/gateway-control\.key#hmac_key_file: ../../secrets/gateway-control.key#; s#hmac_key_file:\s*\./secrets/gateway-service\.key#hmac_key_file: ../../secrets/gateway-service.key#; s#path:\s*\./data/gateway#path: ../../data/gateway#' \
     "${STAGE_DIR}/gateway/config/app.yaml"
-  if [[ "${DEPLOY_PROFILE}" == "control" ]]; then
+  if [[ "${WITH_GATEWAY}" -eq 1 && "${WITH_CLOUDNODE}" -eq 1 ]]; then
     perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#' \
       "${STAGE_DIR}/gateway/config/app.yaml"
   fi

@@ -24,12 +24,13 @@ import (
 )
 
 type collectorPackageOptions struct {
-	CollectorRoot string
-	Version       string
-	Out           string
-	ConfigDir     string
-	CLSLogsetID   string
-	CLSTopicID    string
+	CollectorRoot            string
+	Version                  string
+	Out                      string
+	ConfigDir                string
+	CLSLogsetID              string
+	CLSTopicID               string
+	StoragePrimaryAuthSecret string
 }
 
 type collectorPublishOptions struct {
@@ -224,10 +225,11 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		return nil, err
 	}
 	return collectorpackager.BuildSCFPackage(collectorpackager.BuildSCFPackageOptions{
-		BinaryPath: binaryPath,
-		ConfigDir:  configDir,
-		OutPath:    outPath,
-		CLSTopicID: clsTopicID,
+		BinaryPath:               binaryPath,
+		ConfigDir:                configDir,
+		OutPath:                  outPath,
+		CLSTopicID:               clsTopicID,
+		StoragePrimaryAuthSecret: firstNonEmpty(opts.StoragePrimaryAuthSecret, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")),
 	})
 }
 
@@ -348,7 +350,9 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if config == nil {
 		config = make(map[string]string)
 	}
-	config["timeout"] = "60"
+	if strings.TrimSpace(config["timeout"]) == "" {
+		config["timeout"] = "120"
+	}
 	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
 	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)
 	return adminclient.NodeCreateItem{
