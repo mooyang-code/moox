@@ -188,7 +188,7 @@ func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "data", "new.db"), []byte("new"), 0o600))
 	start := filepath.Join(archiveDir, "start.sh")
-	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nset -eu\ntest -s \"$(dirname \"$0\")/secrets/health-auth.env\"\n"), 0o700))
 	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
 	command := exec.Command("tar", "-C", archiveDir, "-czf", archive, ".")
 	require.NoError(t, command.Run())

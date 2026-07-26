@@ -539,6 +539,13 @@ install_storage() {
   tar -C "$next" -xzf "$archive"
   if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
+  mkdir -p "$next/secrets"
+  if [ ! -s "$next/secrets/health-auth.env" ]; then
+    umask 077
+    secret=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+    printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$secret" >"$next/secrets/health-auth.env"
+  fi
+  chmod 600 "$next/secrets/health-auth.env"
   if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
   mv "$next" "$deploy"
