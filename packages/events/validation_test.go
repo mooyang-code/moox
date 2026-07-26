@@ -33,14 +33,14 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 	}{
 		{
 			name: "cloud job route", event: CloudJobExecutionRequested,
-			payload: &cloudjobpb.JobExecutionRequested{JobId: "job-1", JobItemId: "item-1", CodePackageId: "package-1", JobType: "collect"},
-			opts:    validationOptions("item-1", "space", "package-1/collect"),
-			mutate:  func(value proto.Message) { value.(*cloudjobpb.JobExecutionRequested).CodePackageId = "other" },
+			payload: &cloudjobpb.JobExecutionRequested{JobId: "job-1", JobItemId: "item-1", JobType: "collect"},
+			opts:    validationOptions("item-1", "space", "collect"),
+			mutate:  func(value proto.Message) { value.(*cloudjobpb.JobExecutionRequested).JobType = "other" },
 		},
 		{
 			name: "cloud job event id", event: CloudJobExecutionRequested,
-			payload: &cloudjobpb.JobExecutionRequested{JobId: "job-1", JobItemId: "item-1", CodePackageId: "package-1", JobType: "collect"},
-			opts:    validationOptions("item-1", "space", "package-1/collect"),
+			payload: &cloudjobpb.JobExecutionRequested{JobId: "job-1", JobItemId: "item-1", JobType: "collect"},
+			opts:    validationOptions("item-1", "space", "collect"),
 			mutate:  func(value proto.Message) { value.(*cloudjobpb.JobExecutionRequested).JobItemId = "other" },
 		},
 		{
@@ -130,17 +130,17 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := &cloudjobpb.JobExecutionRequested{
-		JobId: "job-1", JobItemId: "item-1", CodePackageId: "package-1", JobType: "collect",
+		JobId: "job-1", JobItemId: "item-1", JobType: "collect",
 	}
 	encoded, err := registry.Encode(
 		CloudJobExecutionRequested,
 		payload,
-		validationOptions("item-1", "space", "package-1/collect"),
+		validationOptions("item-1", "space", "collect"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload.CodePackageId = "other"
+	payload.JobType = "other"
 	encoded.Message.Payload, err = proto.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)

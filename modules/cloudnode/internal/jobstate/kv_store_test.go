@@ -63,7 +63,7 @@ func (m *memoryKV) Keys(_ context.Context) ([]string, error) {
 
 func TestMarkReportedFirstTerminalWins(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
-	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline"}
 	if _, err := store.CreatePending(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestMarkReportedMissingIsIdempotent(t *testing.T) {
 
 func TestCreatePendingRepublishesOnlyEnqueueFailedDuplicate(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
-	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline"}
 	first, err := store.CreatePending(context.Background(), item)
 	if err != nil || !first.ShouldPublish {
 		t.Fatalf("first=%+v err=%v", first, err)
@@ -127,7 +127,7 @@ func TestCreatePendingPersistsExecuteAt(t *testing.T) {
 	executeAt := time.Date(2026, 7, 26, 9, 30, 0, 123, time.FixedZone("CST", 8*60*60))
 	item := &pb.JobItem{
 		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
-		CodePackageId: "pkg", ExecuteAt: timestamppb.New(executeAt),
+		ExecuteAt: timestamppb.New(executeAt),
 	}
 	if _, err := store.CreatePending(context.Background(), item); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestCreatePendingPersistsExecuteAt(t *testing.T) {
 func TestCreatePendingWithoutExecuteAtMeansImmediate(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
 	item := &pb.JobItem{
-		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
 	}
 	if _, err := store.CreatePending(context.Background(), item); err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestJobItemDetailReturnsExecuteAt(t *testing.T) {
 func TestCreatePendingRejectsInvalidExecuteAt(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
 	item := &pb.JobItem{
-		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
 		ExecuteAt: &timestamppb.Timestamp{Seconds: 253402300800},
 	}
 	if _, err := store.CreatePending(context.Background(), item); !errors.Is(err, ErrInvalid) {

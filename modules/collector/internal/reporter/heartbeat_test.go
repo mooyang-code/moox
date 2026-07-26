@@ -3,15 +3,17 @@ package reporter
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
-	"net/http"
-	"net/http/httptest"
-	"testing"
 )
 
 func TestDetermineNodeState_PrefersCustom(t *testing.T) {
@@ -144,6 +146,7 @@ func TestBuildPayloadInfo_UsesRuntimeAndEnvSpace(t *testing.T) {
 	assert.Equal(t, "node-payload", payload.NodeID)
 	assert.Equal(t, "scf", payload.NodeType)
 	assert.Equal(t, "v9", payload.Metadata["version"])
+	assert.Equal(t, jobs.SupportedJobTypes(), payload.SupportedCollectors)
 	assert.NotNil(t, payload.Metrics)
 	assert.Nil(t, payload.LocalDNSRecords)
 }

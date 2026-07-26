@@ -10,7 +10,7 @@
 |------|------|
 | `moox-collector` | 采集规则、任务实例、任务规划、状态上报（CollectMgr RPC） |
 | `moox-collector-scf` | 腾讯云 SCF 入口，执行 CloudNode 下发的采集 JobItem |
-| `modules/cloudnode` | 云账户、代码包、异步 JobItem、SCF 唤醒/直调 |
+| `modules/cloudnode` | 云账户、代码包、异步 JobItem 队列和 SCF 执行状态 |
 | `modules/admin` | 网关转发 `/api/admin/collectmgr/*`，不承载采集业务表 |
 
 ## 目录结构
@@ -33,7 +33,7 @@ internal/
   jobs/                   JobItem job_type 与任务 payload 定义
   executor/               采集任务即时执行编排
   planner/                规则 + dataset subjects → 任务实例
-  taskrunner/             CloudNode JobItem 到采集任务的 poll/execute 适配
+  taskrunner/             JetStream JobItem delivery 到采集任务的执行适配
   serverless/             SCF runtime 事件入口
   sources/                采集器注册、交易所客户端与执行
   planner/storagesource/  从 moox-storage metadata tRPC 加载规划输入
@@ -64,7 +64,6 @@ SCF 打包会通过腾讯云 API 查询固定的 `moox/moox-application` 资源�
 - CollectMgr HTTP：`:11402`（`config/trpc_go.yaml`）
 - 管理台路径：`/api/admin/collectmgr/{Method}`（admin 网关 JWT）
 - CloudNode JobItem 提交：`/api/service/cloudnode/SubmitJobItems`（Collector 控制面，经 admin 网关 HMAC 鉴权）
-- SCF 唤醒：`/api/service/cloudnode/InvokeFunction`（Collector 控制面用 keepalive event 唤醒节点去 poll）
 - CloudNode JobItem 运行时：直连 JetStream Job Execution Queue，并通过
   `/api/service/cloudnode/ReportJobItemStatus` 上报终态
 - 采集任务实例状态：`/api/service/collectmgr/ReportTaskStatus`（HMAC，经网关）
@@ -77,8 +76,8 @@ SCF 打包会通过腾讯云 API 查询固定的 `moox/moox-application` 资源�
 admin 网关
   → moox-collector（规划任务）
   → moox-admin `/api/service/cloudnode/SubmitJobItems`（HMAC 鉴权）
-  → moox-cloudnode（提交 JobItem / 唤醒 SCF）
-  → moox-collector-scf（bind 对应作业路由 Consumer 后执行采集）
+  → moox-cloudnode（提前提交带 execute_at 的 JobItem）
+  → moox-collector-scf（常驻 bind space_id + job_type durable，竞争消费）
   → moox-storage Access（写入 K 线等）
   → 回报 cloudnode ReportJobItemStatus + collectmgr ReportTaskStatus
 ```
@@ -98,11 +97,15 @@ admin 网关
 
 ## SCF runtime 配置
 
-`configs/config.yaml` 是 `moox-collector-scf` 打包进代码包的默认配置。控制面唤醒 SCF 时会在 keepalive event 中下发真实的 `service_gateway_target`；本地默认值指向 Node Service Gateway，仅用于开发调试。
+`configs/config.yaml` 是 `moox-collector-scf` 打包进代码包的默认配置。CloudNode
+keepalive 会下发真实的 `service_gateway_target`，完成首次通信初始化；keepalive 不
+拉取或执行任务。本地默认值指向 Node Service Gateway，仅用于开发调试。
 
 目标市场架构把 SCF 定位为无状态、有界、可重试的执行器。所有 Market Module 复用同一代码包，但按 Space 分别部署 `stock_cn`、`stock_us`、`crypto_binance`、`crypto_okx` 函数，并以 `MOOX_SPACE_ID` 固定执行范围。Provider 路由、全局限频和缺口规划留在 `moox-collector` 控制面；SCF 达到时间、页数或行数预算时返回 `continuation_cursor`，由控制面创建后续 JobItem。
 
-当前 keepalive 执行窗口为 45 秒。目标 JobItem 应在 20 到 30 秒内完成，并至少预留 10 秒用于来源数据集、统一数据集的幂等写入和任务状态上报。查询接口和 `moox-cli init` 不在 SCF 中执行。
+每个 SCF 进程只有一个 NATS 连接和一个常驻 taskrunner，内部绑定 registry 声明的多个
+JobType。`execute_at` 缺失或已到期时立即执行；未来时间通过 JetStream 延迟重投。
+查询接口和 `moox-cli init` 不在 SCF 中执行。
 
 关键字段：
 

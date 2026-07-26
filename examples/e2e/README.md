@@ -106,7 +106,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
     "biz_type": "data_collector",
     "data_type": "kline",
     "data_source": "binance",
-    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\",\"job_type\":\"collect.kline\",\"code_package_id\":\"moox-collector_dev\"},\"schedule\":{\"interval\":\"1h\",\"timezone\":\"Asia/Shanghai\"}}",
+    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\",\"job_type\":\"collect.kline\"},\"schedule\":{\"interval\":\"1h\",\"timezone\":\"Asia/Shanghai\"}}",
     "assignment_type": "auto",
     "assigned_nodes": "[]",
     "node_pattern": "",

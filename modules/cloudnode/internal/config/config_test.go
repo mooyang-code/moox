@@ -17,10 +17,19 @@ func TestValidateRejectsNonPositiveMaxDeliver(t *testing.T) {
 	assert.Contains(t, err.Error(), "max_deliver")
 }
 
+func TestValidateRejectsNonPositiveMaxAckPending(t *testing.T) {
+	cfg := Default()
+	cfg.JetStream.MaxAckPending = 0
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max_ack_pending")
+}
+
 func TestDefaultQueueConfigIsValid(t *testing.T) {
 	cfg := Default()
 	require.NoError(t, cfg.Validate())
 	assert.Equal(t, 3, cfg.JetStream.MaxDeliver)
+	assert.Equal(t, 32, cfg.JetStream.MaxAckPending)
 }
 
 func TestLoadRejectsRemovedLeaseTiming(t *testing.T) {

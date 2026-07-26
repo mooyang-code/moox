@@ -9,32 +9,28 @@ import (
 )
 
 type Identity struct {
-	SpaceID       string
-	CodePackageID string
-	JobType       string
+	SpaceID string
+	JobType string
 }
 
 func (i Identity) ConsumerName() (string, error) {
-	if err := validateIdentity(i.SpaceID, i.CodePackageID, i.JobType); err != nil {
+	if err := validateIdentity(i.SpaceID, i.JobType); err != nil {
 		return "", err
 	}
-	identity := fmt.Sprintf("%d:%s%d:%s%d:%s", len(i.SpaceID), i.SpaceID, len(i.CodePackageID), i.CodePackageID, len(i.JobType), i.JobType)
+	identity := fmt.Sprintf("%d:%s%d:%s", len(i.SpaceID), i.SpaceID, len(i.JobType), i.JobType)
 	sum := sha256.Sum256([]byte(identity))
 	return "cn_exec_" + hex.EncodeToString(sum[:])[:24], nil
 }
 
 func (i Identity) SubjectID() (string, error) {
-	if err := validateIdentity(i.SpaceID, i.CodePackageID, i.JobType); err != nil {
+	if err := validateIdentity(i.SpaceID, i.JobType); err != nil {
 		return "", err
 	}
-	return i.CodePackageID + "/" + i.JobType, nil
+	return i.JobType, nil
 }
 
-func validateIdentity(spaceID, codePackageID, jobType string) error {
+func validateIdentity(spaceID, jobType string) error {
 	if err := validateField("space_id", spaceID); err != nil {
-		return err
-	}
-	if err := validateField("code_package_id", codePackageID); err != nil {
 		return err
 	}
 	return validateField("job_type", jobType)

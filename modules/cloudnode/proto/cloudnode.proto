@@ -428,10 +428,9 @@ message JobItem {
   string job_id = 2;
   string job_item_id = 3;
   string job_type = 4;
-  string code_package_id = 5;
-  google.protobuf.Struct params = 6;
-  int32 priority = 7;
-  google.protobuf.Timestamp execute_at = 8;
+  google.protobuf.Struct params = 5;
+  int32 priority = 6;
+  google.protobuf.Timestamp execute_at = 7;
 }
 
 message SubmitJobItemsReq {
@@ -478,19 +477,18 @@ message JobItemDetail {
   string job_id = 2;
   string job_item_id = 3;
   string job_type = 4;
-  string code_package_id = 5;
-  google.protobuf.Struct params = 6;
-  int32 priority = 7;
-  JobItemStatus status = 8;
-  google.protobuf.Struct result_summary = 9;
-  JobItemErrorKind last_error_kind = 10;
-  string last_error_code = 11;
-  string last_error_message = 12;
-  int64 duration_ms = 13;
-  string execution_node = 14;
-  google.protobuf.Timestamp create_time = 15;
-  google.protobuf.Timestamp finish_time = 16;
-  google.protobuf.Timestamp execute_at = 17;
+  google.protobuf.Struct params = 5;
+  int32 priority = 6;
+  JobItemStatus status = 7;
+  google.protobuf.Struct result_summary = 8;
+  JobItemErrorKind last_error_kind = 9;
+  string last_error_code = 10;
+  string last_error_message = 11;
+  int64 duration_ms = 12;
+  string execution_node = 13;
+  google.protobuf.Timestamp create_time = 14;
+  google.protobuf.Timestamp finish_time = 15;
+  google.protobuf.Timestamp execute_at = 16;
 }
 
 message GetJobItemRsp {

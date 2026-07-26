@@ -37,5 +37,5 @@ func TestNewJetStreamQueue_AppliesDefaults(t *testing.T) {
 	q := NewJetStreamQueue(nil, QueueConfig{})
 	assert.Equal(t, time.Minute, q.cfg.AckWait)
 	assert.Equal(t, 3, q.cfg.MaxDeliver)
-	assert.Equal(t, 1, q.cfg.MaxAckPending)
+	assert.Equal(t, 32, q.cfg.MaxAckPending)
 }

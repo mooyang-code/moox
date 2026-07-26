@@ -14,9 +14,8 @@ import (
 	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -96,7 +95,7 @@ func ProcessProbe(ctx context.Context, event model.CloudFunctionEvent) (*model.R
 		log.WarnContextf(ctx, "[ProcessProbe] 无法确定节点 ID, has_function_context=%v", hasFunctionContext)
 	}
 
-	// 更新 service gateway 配置（用于本节点主动上报心跳和拉取任务）。
+	// 更新 service gateway 配置（用于本节点主动上报心跳）。
 	log.DebugContextf(ctx, "[ProcessProbe] event.ServiceGatewayTarget=%s", event.ServiceGatewayTarget)
 	if event.ServiceGatewayTarget != "" {
 		log.DebugContextf(ctx, "[ProcessProbe] 更新 service gateway target %s", event.ServiceGatewayTarget)
@@ -104,6 +103,7 @@ func ProcessProbe(ctx context.Context, event model.CloudFunctionEvent) (*model.R
 	} else {
 		log.WarnContextf(ctx, "[ProcessProbe] service gateway target 缺失")
 	}
+	runtimeapp.SignalReadinessIfConfigured()
 
 	// 构建响应数据
 	probeResponse, err := buildProbeResponse()
@@ -129,9 +129,6 @@ func buildPayloadInfo() (*model.HeartbeatPayload, error) {
 	// 获取节点指标
 	nodeMetrics := collectNodeMetrics()
 
-	// 获取已注册的采集器数据类型
-	supportedCollectors := sources.GetRegistry().GetDataTypes()
-
 	// 获取本地解析的 DNS 记录（用于心跳上报）
 	localDNSRecords := buildLocalDNSRecords()
 
@@ -143,7 +140,7 @@ func buildPayloadInfo() (*model.HeartbeatPayload, error) {
 		Timestamp:           time.Now(),
 		RunningTasks:        []*model.TaskSummary{},
 		Metrics:             nodeMetrics,
-		SupportedCollectors: supportedCollectors,
+		SupportedCollectors: jobs.SupportedJobTypes(),
 		LocalDNSRecords:     localDNSRecords,
 		Metadata: map[string]interface{}{
 			"version":    version,
@@ -156,14 +153,7 @@ func buildPayloadInfo() (*model.HeartbeatPayload, error) {
 }
 
 func heartbeatSpaceID() string {
-	if value := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); value != "" {
-		return value
-	}
-	binding, err := binance.ResolveStorageBinding(binance.InstTypeSPOT)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(binding.SpaceID)
+	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 }
 
 func collectNodeMetrics() *model.NodeMetrics {

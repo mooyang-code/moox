@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeQueueConsumer struct {
@@ -71,14 +72,100 @@ func TestRoundRobinConsumerReturnsDeliveryAndErrorTogether(t *testing.T) {
 	}
 }
 
-func TestRoundRobinConsumerClosesEmptyRound(t *testing.T) {
+func TestRoundRobinConsumerResidentModeKeepsWaitingAfterEmptyRound(t *testing.T) {
 	consumer := &roundRobinConsumer{bindings: []queueBinding{
 		{consumer: &fakeQueueConsumer{}},
 		{consumer: &fakeQueueConsumer{}},
 	}}
 	rows, err := consumer.Fetch(context.Background(), 1)
+	if len(rows) != 0 || !errors.Is(err, nats.ErrTimeout) {
+		t.Fatalf("fetch = %+v, %v", rows, err)
+	}
+}
+
+func TestRoundRobinConsumerDiagnosticModeStopsAfterEmptyRound(t *testing.T) {
+	consumer := &roundRobinConsumer{
+		bindings:   []queueBinding{{consumer: &fakeQueueConsumer{}}},
+		stopOnIdle: true,
+	}
+	rows, err := consumer.Fetch(context.Background(), 1)
 	if len(rows) != 0 || !errors.Is(err, jetstream.ErrClosed) {
 		t.Fatalf("fetch = %+v, %v", rows, err)
+	}
+}
+
+func TestExecuteAtDecision(t *testing.T) {
+	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		executeAt time.Time
+		decision  jetstream.HandlerDecision
+		delay     time.Duration
+	}{
+		{name: "missing executes immediately", decision: jetstream.ACK},
+		{name: "past executes immediately", executeAt: now.Add(-time.Second), decision: jetstream.ACK},
+		{name: "equal executes immediately", executeAt: now, decision: jetstream.ACK},
+		{name: "future retries until due", executeAt: now.Add(17 * time.Second), decision: jetstream.RETRY, delay: 17 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeAtDecision(test.executeAt, now)
+			if result.Decision != test.decision || result.Delay != test.delay {
+				t.Fatalf("executeAtDecision() = %+v, want decision=%v delay=%s", result, test.decision, test.delay)
+			}
+		})
+	}
+}
+
+func TestHandleDeliveryAtDefersFutureJobWithoutExecuting(t *testing.T) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
+	jobType := "test.execute-at.future"
+	itemID := "future-1"
+	identity := cloudjobqueue.Identity{SpaceID: "crypto", JobType: jobType}
+	consumerName, err := identity.ConsumerName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectID, err := identity.SubjectID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := registry.RenderSubject(events.CloudJobExecutionRequested, "crypto", subjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := registry.MarshalMessage(events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
+		JobId: "job-1", JobItemId: itemID, JobType: jobType,
+		ExecuteAt: timestamppb.New(now.Add(20 * time.Second)),
+	}, events.PublishOptions{
+		EventID: itemID, SpaceID: "crypto", SubjectID: subjectID, OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executed := false
+	nodeRuntime.Register(jobType, nodeRuntime.HandlerFunc(func(context.Context, nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+		executed = true
+		return nodeRuntime.Result{}, nil
+	}))
+	binding := queueBinding{
+		name: consumerName, subject: subject, subjectID: subjectID, jobType: jobType, maxDeliver: 3,
+	}
+	result := handleDeliveryAt(context.Background(), registry, []queueBinding{binding}, nodeRuntime.Config{
+		ServiceGatewayTarget: "http://127.0.0.1:1", SpaceID: "crypto", NodeID: "node-1",
+	}, &jetstream.Delivery{
+		Consumer: consumerName, Subject: subject, RawData: raw, RawMessageID: itemID,
+		ContentType: events.ContentType, DeliveryCount: 1,
+	}, func() time.Time { return now })
+
+	if result.Decision != jetstream.RETRY || result.Delay != 20*time.Second {
+		t.Fatalf("result = %+v", result)
+	}
+	if executed {
+		t.Fatal("future job executed before execute_at")
 	}
 }
 
@@ -138,7 +225,7 @@ func TestDirectWorkerJetStreamAckRetryAndTerm(t *testing.T) {
 	}))
 	defer gateway.Close()
 	cfg := nodeRuntime.Config{
-		ServiceGatewayTarget: gateway.URL, SpaceID: "crypto", NodeID: "scf-1", CodePackageID: "pkg-1",
+		ServiceGatewayTarget: gateway.URL, SpaceID: "crypto", NodeID: "scf-1",
 		Auth: nodeRuntime.AuthConfig{AccessKey: "collector", SecretKey: "secret", TargetNode: "node-1"},
 	}
 
@@ -210,7 +297,7 @@ func TestDirectWorkerJetStreamAckRetryAndTerm(t *testing.T) {
 
 func bindDirectTestQueue(t *testing.T, ctx context.Context, client *jetstream.Client, registry *events.Registry, jobType string) queueBinding {
 	t.Helper()
-	identity := cloudjobqueue.Identity{SpaceID: "crypto", CodePackageID: "pkg-1", JobType: jobType}
+	identity := cloudjobqueue.Identity{SpaceID: "crypto", JobType: jobType}
 	name, _ := identity.ConsumerName()
 	subjectID, _ := identity.SubjectID()
 	subject, _ := registry.RenderSubject(events.CloudJobExecutionRequested, "crypto", subjectID)
@@ -235,7 +322,7 @@ func bindDirectTestQueue(t *testing.T, ctx context.Context, client *jetstream.Cl
 func publishDirectTestJob(t *testing.T, ctx context.Context, publisher *events.Publisher, binding queueBinding, itemID string) {
 	t.Helper()
 	_, err := publisher.Publish(ctx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
-		JobId: "job-1", JobItemId: itemID, JobType: binding.jobType, CodePackageId: "pkg-1",
+		JobId: "job-1", JobItemId: itemID, JobType: binding.jobType,
 	}, events.PublishOptions{EventID: itemID, SpaceID: "crypto", SubjectID: binding.subjectID, OccurredAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)

@@ -26,6 +26,12 @@ type onceOptions struct {
 	Timeout                 time.Duration
 }
 
+var (
+	registerTRPCServices  = runtimebootstrap.RegisterTRPCServices
+	registerCloudFunction = serverless.RegisterCloudFunction
+	runTaskRunner         = taskrunner.Run
+)
+
 func main() {
 	once := flag.Bool("once", false, "poll and execute CloudNode JobItems once, then exit")
 	opts := onceOptionsFromEnv()
@@ -57,10 +63,9 @@ func main() {
 		return
 	}
 
-	if err := initializeServerlessRuntime(trpc.BackgroundContext(), cfg); err != nil {
+	if err := startProductionRuntime(trpc.BackgroundContext(), cfg); err != nil {
 		panic("failed to initialize bootstrap: " + err.Error())
 	}
-	serverless.RegisterCloudFunction()
 
 	log.Info("数据采集器 SCF runtime 启动完成")
 	select {}
@@ -74,13 +79,25 @@ func initializeRuntime(ctx context.Context, cfg *runtimeapp.AppConfig, startTRPC
 		return err
 	}
 	if startTRPC {
-		return runtimebootstrap.RegisterTRPCServices()
+		return registerTRPCServices()
 	}
 	return nil
 }
 
-func initializeServerlessRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) error {
-	return initializeRuntime(ctx, cfg, false)
+func startProductionRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) error {
+	if strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")) == "" {
+		return fmt.Errorf("MOOX_SPACE_ID is required")
+	}
+	if err := initializeRuntime(ctx, cfg, true); err != nil {
+		return err
+	}
+	registerCloudFunction()
+	go func() {
+		if err := runTaskRunner(ctx); err != nil && ctx.Err() == nil {
+			log.Errorf("resident CloudNode JobItem taskrunner stopped: %v", err)
+		}
+	}()
+	return nil
 }
 
 func onceOptionsFromEnv() onceOptions {
@@ -116,5 +133,5 @@ func runOnce(ctx context.Context, opts onceOptions) error {
 	runtimeapp.UpdateServiceGatewayTarget(opts.ServiceGatewayTarget)
 	runtimeapp.UpdateNodeInfo(opts.NodeID, version)
 	runtimeapp.UpdateStorageRPCGatewayTarget(opts.StorageRPCGatewayTarget)
-	return taskrunner.RunJobItems(ctx)
+	return taskrunner.RunOnce(ctx)
 }

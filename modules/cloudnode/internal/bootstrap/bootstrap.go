@@ -132,7 +132,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
 			AckWait:       time.Minute,
 			MaxDeliver:    cfg.JetStream.MaxDeliver,
-			MaxAckPending: 1,
+			MaxAckPending: cfg.JetStream.MaxAckPending,
 		})
 		catalog := dbm.Catalog()
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{

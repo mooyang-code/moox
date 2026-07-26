@@ -337,9 +337,9 @@ func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now t
 
 // GetDataTypeConfigs returns the currently supported collector rule data types.
 func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeConfigsReq) (*pb.GetDataTypeConfigsRsp, error) {
-	definitions := jobs.ListDefinitions()
-	configs := make([]*pb.DataTypeConfig, 0, len(definitions))
-	for _, definition := range definitions {
+	jobDefinitions := jobs.ListJobDefinitions()
+	configs := make([]*pb.DataTypeConfig, 0, len(jobDefinitions))
+	for _, definition := range jobDefinitions {
 		configs = append(configs, dataTypeConfigFromDefinition(definition))
 	}
 	return &pb.GetDataTypeConfigsRsp{
@@ -350,7 +350,7 @@ func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeCon
 
 // GetDataTypeConfigWithFields returns field metadata for the rule form.
 func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDataTypeConfigWithFieldsReq) (*pb.GetDataTypeConfigWithFieldsRsp, error) {
-	definition, ok := jobs.DefinitionByDataType(req.GetDataType())
+	definition, ok := jobs.JobDefinitionByDataType(req.GetDataType())
 	if !ok {
 		return &pb.GetDataTypeConfigWithFieldsRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "unsupported data_type")}, nil
 	}
@@ -402,7 +402,7 @@ func validateTaskRule(rule domain.TaskRule) error {
 	return nil
 }
 
-func dataTypeConfigFromDefinition(definition jobs.Definition) *pb.DataTypeConfig {
+func dataTypeConfigFromDefinition(definition jobs.JobDefinition) *pb.DataTypeConfig {
 	return &pb.DataTypeConfig{
 		Id:                definition.ID,
 		DataType:          definition.DataType,
@@ -414,7 +414,7 @@ func dataTypeConfigFromDefinition(definition jobs.Definition) *pb.DataTypeConfig
 	}
 }
 
-func dataTypeFieldsFromDefinition(definition jobs.Definition) []*pb.DataTypeFieldConfig {
+func dataTypeFieldsFromDefinition(definition jobs.JobDefinition) []*pb.DataTypeFieldConfig {
 	fields := make([]*pb.DataTypeFieldConfig, 0, len(definition.Fields))
 	for _, field := range definition.Fields {
 		fields = append(fields, &pb.DataTypeFieldConfig{

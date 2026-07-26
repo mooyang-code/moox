@@ -130,7 +130,7 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 			CollectParams: `{
 				"source":{"kind":"none"},
 				"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},
-				"target":{"dataset_id":"symbols","job_type":"collect.symbol","code_package_id":"pkg"},
+				"target":{"dataset_id":"symbols","job_type":"collect.symbol"},
 				"schedule":{"interval":"30m"}
 			}`,
 			Enabled: true,
@@ -302,7 +302,7 @@ func TestGetDataTypeConfigWithFieldsNormalizesDataType(t *testing.T) {
 }
 
 func TestDataTypeConfigFromDefinition(t *testing.T) {
-	def := symbol.Definition(jobs.JobTypeCollectSymbol)
+	def := symbol.NewJobDefinition()
 	cfg := dataTypeConfigFromDefinition(def)
 	assert.Equal(t, "symbol", cfg.GetDataType())
 	assert.Equal(t, "标的", cfg.GetTypeName())
@@ -321,6 +321,6 @@ func TestStructFromAnyAndValueFromAny(t *testing.T) {
 	assert.Equal(t, "", valueFromAny(make(chan int)).GetStringValue())
 }
 
-func TestJobsListDefinitionsNotEmpty(t *testing.T) {
-	assert.NotEmpty(t, jobs.ListDefinitions())
+func TestJobsListJobDefinitionsNotEmpty(t *testing.T) {
+	assert.NotEmpty(t, jobs.ListJobDefinitions())
 }

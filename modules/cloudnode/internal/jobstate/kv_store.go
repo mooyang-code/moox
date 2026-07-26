@@ -59,7 +59,7 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 	now := s.now()
 	state := State{
 		SchemaVersion: 1, SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(),
-		JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()),
+		JobType: item.GetJobType(), Params: structToMap(item.GetParams()),
 		Priority: item.GetPriority(), ExecuteAt: executeAt, Status: StatusPending, CreatedAt: now, UpdatedAt: now,
 	}
 	raw, err := encodeState(state)
@@ -248,7 +248,7 @@ func ValidateJobItem(item *pb.JobItem) error {
 	if item == nil {
 		return ErrInvalid
 	}
-	for _, value := range []string{item.GetSpaceId(), item.GetJobId(), item.GetJobItemId(), item.GetJobType(), item.GetCodePackageId()} {
+	for _, value := range []string{item.GetSpaceId(), item.GetJobId(), item.GetJobItemId(), item.GetJobType()} {
 		if value == "" || strings.TrimSpace(value) != value {
 			return ErrInvalid
 		}

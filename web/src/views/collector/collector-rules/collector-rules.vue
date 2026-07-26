@@ -529,7 +529,6 @@ const buildStandardCollectParams = () => {
   const normalizedIntervals = dataType === "symbol" ? [] : intervals.length > 0 ? intervals : ["1m"];
   const defaultDatasetId = inferCollectDatasetId(exchange, market, dataType);
   const defaultJobType = `collect.${dataType}`;
-  const defaultCodePackageId = "moox-collector_dev";
   const sameCollectShape =
     normalizeCollectToken(existingCollector.exchange, exchange) === exchange &&
     normalizeCollectToken(existingCollector.market, market) === market &&
@@ -544,7 +543,6 @@ const buildStandardCollectParams = () => {
         ? normalizeCollectToken(existingSource.kind, "dataset_subjects")
         : "dataset_subjects";
   const jobType = sameCollectShape ? String(existingTarget.job_type || defaultJobType) : defaultJobType;
-  const codePackageId = sameCollectShape ? String(existingTarget.code_package_id || defaultCodePackageId) : defaultCodePackageId;
 
   return {
     source: {
@@ -559,8 +557,7 @@ const buildStandardCollectParams = () => {
     },
     target: {
       dataset_id: datasetId,
-      job_type: jobType,
-      code_package_id: codePackageId
+      job_type: jobType
     },
     schedule: {
       interval: sameCollectShape ? String(existingSchedule.interval || "30m") : "30m",

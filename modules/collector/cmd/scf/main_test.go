@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"testing"
+	"time"
+
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestOnceOptionsFromEnv(t *testing.T) {
@@ -34,14 +36,6 @@ func TestInitializeRuntimeOnceDoesNotRequireTRPCConfig(t *testing.T) {
 	}
 }
 
-func TestInitializeServerlessRuntimeDoesNotRequireTRPCConfig(t *testing.T) {
-	t.Chdir(t.TempDir())
-
-	if err := initializeServerlessRuntime(context.Background(), runtimeapp.DefaultConfig()); err != nil {
-		t.Fatalf("initializeServerlessRuntime() error = %v", err)
-	}
-}
-
 func TestOnceOptionsFromEnv_EmptyDefaults(t *testing.T) {
 	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "")
 	t.Setenv("MOOX_RUNTIME_NODE_ID", "")
@@ -59,6 +53,70 @@ func TestRunOnce_RequiresGatewayAndNodeID(t *testing.T) {
 	err = runOnce(context.Background(), onceOptions{ServiceGatewayTarget: "http://127.0.0.1:11000"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "node-id")
+}
+
+func TestStartProductionRuntimeRequiresSpaceID(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "")
+
+	err := startProductionRuntime(context.Background(), runtimeapp.DefaultConfig())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MOOX_SPACE_ID")
+}
+
+func TestStartProductionRuntimeStartsServicesFunctionAndOneRunner(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Chdir(t.TempDir())
+	oldRegisterTRPC := registerTRPCServices
+	oldRegisterFunction := registerCloudFunction
+	oldRun := runTaskRunner
+	t.Cleanup(func() {
+		registerTRPCServices = oldRegisterTRPC
+		registerCloudFunction = oldRegisterFunction
+		runTaskRunner = oldRun
+	})
+
+	trpcStarts := 0
+	functionStarts := 0
+	runnerStarts := make(chan struct{}, 2)
+	registerTRPCServices = func() error {
+		trpcStarts++
+		return nil
+	}
+	registerCloudFunction = func() {
+		functionStarts++
+	}
+	runTaskRunner = func(context.Context) error {
+		runnerStarts <- struct{}{}
+		return nil
+	}
+
+	require.NoError(t, startProductionRuntime(context.Background(), runtimeapp.DefaultConfig()))
+	select {
+	case <-runnerStarts:
+	case <-time.After(time.Second):
+		t.Fatal("resident taskrunner did not start")
+	}
+	select {
+	case <-runnerStarts:
+		t.Fatal("resident taskrunner started more than once")
+	case <-time.After(10 * time.Millisecond):
+	}
+	assert.Equal(t, 1, trpcStarts)
+	assert.Equal(t, 1, functionStarts)
+}
+
+func TestStartProductionRuntimeReturnsTRPCStartFailure(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Chdir(t.TempDir())
+	oldRegisterTRPC := registerTRPCServices
+	t.Cleanup(func() { registerTRPCServices = oldRegisterTRPC })
+	registerTRPCServices = func() error { return errors.New("bad timer config") }
+
+	err := startProductionRuntime(context.Background(), runtimeapp.DefaultConfig())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad timer config")
 }
 
 func TestDurationEnv(t *testing.T) {

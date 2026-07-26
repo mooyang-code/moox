@@ -29,8 +29,7 @@ func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
 			"exchange":"binance",
 			"data_type":"symbol",
 			"job_type":"collect.symbol",
-				"code_package_id":"moox-collector_dev",
-				"schedule_interval":"30m"
+			"schedule_interval":"30m"
 			}`,
 	}}, now)
 	item := buildJobItem(instances[0])
@@ -40,9 +39,6 @@ func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
 	}
 	if item.GetJobType() != "collect.symbol" {
 		t.Fatalf("job_type = %q, want collect.symbol", item.GetJobType())
-	}
-	if item.GetCodePackageId() != "moox-collector_dev" {
-		t.Fatalf("code_package_id = %q, want moox-collector_dev", item.GetCodePackageId())
 	}
 	if item.GetParams().GetFields()["task_id"].GetStringValue() != "task-1" {
 		t.Fatalf("params.task_id = %q, want task-1", item.GetParams().GetFields()["task_id"].GetStringValue())
@@ -91,9 +87,6 @@ func TestBuildJobItemDefaultsRoutingFromDataType(t *testing.T) {
 
 	if item.GetJobType() != "collect.kline" {
 		t.Fatalf("job_type = %q, want collect.kline", item.GetJobType())
-	}
-	if item.GetCodePackageId() != "moox-collector_dev" {
-		t.Fatalf("code_package_id = %q, want moox-collector_dev", item.GetCodePackageId())
 	}
 }
 
@@ -161,7 +154,7 @@ func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
 			SpaceID:    "crypto",
 			RuleID:     "binance_spot_kline_1m",
 			TaskID:     fmt.Sprintf("task-%d", i),
-			TaskParams: `{"data_type":"kline","job_type":"collect.kline","code_package_id":"moox-collector_dev","schedule_interval":"1m"}`,
+			TaskParams: `{"data_type":"kline","job_type":"collect.kline","schedule_interval":"1m"}`,
 		})
 	}
 	instances = PrepareScheduledInstances(instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
@@ -207,7 +200,7 @@ func TestSubmitCollectorJobItemsReturnsSuccessfulBatchesWithError(t *testing.T) 
 
 	instances := make([]domain.TaskInstance, 0, submitJobItemBatchSize+1)
 	for i := 0; i < submitJobItemBatchSize+1; i++ {
-		instances = append(instances, domain.TaskInstance{SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i), TaskParams: `{"job_type":"collect.kline","code_package_id":"pkg"}`})
+		instances = append(instances, domain.TaskInstance{SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i), TaskParams: `{"job_type":"collect.kline"}`})
 	}
 	instances = PrepareScheduledInstances(instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
@@ -244,8 +237,8 @@ func TestSubmitCollectorJobItemsKeepsSuccessfulIDsFromRejectedAckBatch(t *testin
 	defer server.Close()
 
 	instances := PrepareScheduledInstances([]domain.TaskInstance{
-		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-ok", TaskParams: `{"job_type":"collect.kline","code_package_id":"pkg"}`},
-		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-bad", TaskParams: `{"job_type":"collect.unknown","code_package_id":"pkg"}`},
+		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-ok", TaskParams: `{"job_type":"collect.kline"}`},
+		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-bad", TaskParams: `{"job_type":"collect.unknown"}`},
 	}, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
 

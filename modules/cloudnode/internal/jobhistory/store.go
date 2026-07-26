@@ -64,16 +64,16 @@ func (s *Store) WriteTerminal(ctx context.Context, state jobstate.State) error {
 	result := jsonString(state.ResultSummary)
 	if err := db.WithContext(ctx).Exec(`
 INSERT INTO t_cloud_job_items (
-	c_space_id, c_job_id, c_job_item_id, c_job_type, c_code_package_id, c_params, c_priority,
+	c_space_id, c_job_id, c_job_item_id, c_job_type, c_params, c_priority, c_execute_at,
 	c_status, c_result_summary, c_last_error_kind, c_last_error_code, c_last_error_message,
 	c_duration_ms, c_execution_node, c_finish_time, c_ctime, c_mtime
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(c_space_id, c_job_item_id) DO UPDATE SET
 	c_job_id = excluded.c_job_id,
 	c_job_type = excluded.c_job_type,
-	c_code_package_id = excluded.c_code_package_id,
 	c_params = excluded.c_params,
 	c_priority = excluded.c_priority,
+	c_execute_at = excluded.c_execute_at,
 	c_status = excluded.c_status,
 	c_result_summary = excluded.c_result_summary,
 	c_last_error_kind = excluded.c_last_error_kind,
@@ -83,7 +83,7 @@ ON CONFLICT(c_space_id, c_job_item_id) DO UPDATE SET
 	c_execution_node = excluded.c_execution_node,
 	c_finish_time = excluded.c_finish_time,
 	c_mtime = excluded.c_mtime
-`, state.SpaceID, state.JobID, state.JobItemID, state.JobType, state.CodePackageID, params, state.Priority,
+`, state.SpaceID, state.JobID, state.JobItemID, state.JobType, params, state.Priority, state.ExecuteAt,
 		state.Status, result, state.LastErrorKind, state.LastErrorCode, state.LastErrorMessage,
 		state.DurationMS, state.ExecutionNode, state.FinishedAt, state.CreatedAt, state.UpdatedAt).Error; err != nil {
 		return fmt.Errorf("upsert job history item: %w", err)

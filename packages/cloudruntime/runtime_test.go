@@ -20,8 +20,16 @@ func TestJobItemExecuteAtZeroMeansMissing(t *testing.T) {
 
 func testConfig(target string) Config {
 	return Config{
-		ServiceGatewayTarget: target, SpaceID: "crypto", NodeID: "node-1", CodePackageID: "pkg",
+		ServiceGatewayTarget: target, SpaceID: "crypto", NodeID: "node-1",
 		Auth: AuthConfig{AccessKey: "key", SecretKey: "secret", TargetNode: "gateway-1"},
+	}
+}
+
+func TestConfigDoesNotRequireCodePackageIdentity(t *testing.T) {
+	cfg := testConfig("http://127.0.0.1:11000")
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -50,7 +58,7 @@ func TestExecuteJobItemReportsBeforeAck(t *testing.T) {
 	}))
 	defer server.Close()
 	result := ExecuteJobItem(context.Background(), testConfig(server.URL), JobItem{
-		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline", CodePackageID: "pkg",
+		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline",
 	}, 1, 3)
 	if !reported || result.Decision != jetstream.ACK {
 		t.Fatalf("reported=%v result=%+v", reported, result)
@@ -68,7 +76,7 @@ func TestExecuteJobItemRetryableFailureOnlyReportsOnLastDelivery(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
 	}))
 	defer server.Close()
-	item := JobItem{SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline", CodePackageID: "pkg"}
+	item := JobItem{SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline"}
 	first := ExecuteJobItem(context.Background(), testConfig(server.URL), item, 1, 3)
 	if first.Decision != jetstream.RETRY || reports != 0 {
 		t.Fatalf("first=%+v reports=%d", first, reports)
@@ -89,7 +97,7 @@ func TestExecuteJobItemReportFailureRetriesDelivery(t *testing.T) {
 	}))
 	defer server.Close()
 	result := ExecuteJobItem(context.Background(), testConfig(server.URL), JobItem{
-		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline", CodePackageID: "pkg",
+		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline",
 	}, 1, 3)
 	if result.Decision != jetstream.RETRY || result.Err == nil {
 		t.Fatalf("result=%+v", result)

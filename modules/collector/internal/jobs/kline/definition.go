@@ -8,11 +8,15 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 )
 
-// Definition returns the K-line collector job definition.
-func Definition(jobType string) jobdef.Definition {
+// JobType is the queue routing type for K-line collection.
+const JobType = "collect.kline"
+
+// NewJobDefinition returns the K-line collector job definition.
+func NewJobDefinition() jobdef.JobDefinition {
 	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}}}
-	return jobdef.Definition{
+	return jobdef.JobDefinition{
 		ID:                1,
+		JobType:           JobType,
 		DataType:          "kline",
 		TypeName:          "K线",
 		TypeDesc:          "交易所K线行情采集",

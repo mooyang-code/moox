@@ -24,14 +24,13 @@ func validateCloudJobExecutionRequested(message *eventpb.EventMessage, value pro
 		return fmt.Errorf("cloud job payload has type %T", value)
 	}
 	if strings.TrimSpace(payload.GetJobItemId()) == "" ||
-		strings.TrimSpace(payload.GetCodePackageId()) == "" ||
 		strings.TrimSpace(payload.GetJobType()) == "" {
 		return fmt.Errorf("cloud job identity is incomplete")
 	}
 	if payload.GetJobItemId() != message.GetEventId() {
 		return fmt.Errorf("cloud job item_id does not match event_id")
 	}
-	if message.GetSubjectId() != payload.GetCodePackageId()+"/"+payload.GetJobType() {
+	if message.GetSubjectId() != payload.GetJobType() {
 		return fmt.Errorf("cloud job route does not match subject_id")
 	}
 	return nil

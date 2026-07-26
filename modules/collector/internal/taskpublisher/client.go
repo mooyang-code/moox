@@ -212,13 +212,12 @@ func buildJobItem(instance domain.TaskInstance) *pb.JobItem {
 	}
 	payloadStruct, _ := structpb.NewStruct(payload)
 	item := &pb.JobItem{
-		SpaceId:       instance.SpaceID,
-		JobId:         instance.RuleID,
-		JobItemId:     strings.TrimSpace(instance.CloudJobItemID),
-		JobType:       jobType(payload),
-		CodePackageId: valueString(payload, "code_package_id", defaultCodePackageID(payload)),
-		Params:        payloadStruct,
-		Priority:      100,
+		SpaceId:   instance.SpaceID,
+		JobId:     instance.RuleID,
+		JobItemId: strings.TrimSpace(instance.CloudJobItemID),
+		JobType:   jobType(payload),
+		Params:    payloadStruct,
+		Priority:  100,
 	}
 	if item.JobItemId == "" {
 		item.JobItemId = strings.TrimSpace(instance.TaskID)
@@ -293,10 +292,6 @@ func jobType(payload map[string]any) string {
 	}
 	dataType := valueString(payload, "data_type", "kline")
 	return "collect." + dataType
-}
-
-func defaultCodePackageID(_ map[string]any) string {
-	return domain.DefaultCollectorCodePackageID
 }
 
 func parsePayload(raw string) map[string]any {

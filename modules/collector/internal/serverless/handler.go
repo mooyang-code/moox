@@ -11,7 +11,6 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
-	"github.com/mooyang-code/moox/modules/collector/internal/taskrunner"
 	"github.com/tencentyun/scf-go-lib/cloudfunction"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -21,12 +20,8 @@ import (
 type CloudFunctionHandler struct{}
 
 const keepaliveHeartbeatTimeout = 8 * time.Second
-const keepaliveTaskExecutionTimeout = 115 * time.Second
 
 var reportHeartbeatAfterProbe = reporter.ReportHeartbeat
-var pollJobItemsAfterHeartbeat = func(ctx context.Context) error {
-	return taskrunner.RunJobItems(ctx)
-}
 
 // NewCloudFunctionHandler 创建云函数处理器
 func NewCloudFunctionHandler() *CloudFunctionHandler {
@@ -256,13 +251,6 @@ func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.
 			log.WarnContextf(ctx, "[handleKeepalive] 心跳上报失败: %v", err)
 		} else {
 			log.InfoContextf(ctx, "[handleKeepalive] 心跳上报成功")
-		}
-		executeCtx, cancel := context.WithTimeout(ctx, keepaliveTaskExecutionTimeout)
-		defer cancel()
-		if err := pollJobItemsAfterHeartbeat(executeCtx); err != nil {
-			log.WarnContextf(ctx, "[handleKeepalive] CloudNode JobItem 拉取/执行失败: %v", err)
-		} else {
-			log.InfoContextf(ctx, "[handleKeepalive] CloudNode JobItem 拉取/执行完成")
 		}
 	}
 

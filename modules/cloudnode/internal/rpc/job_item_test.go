@@ -12,12 +12,14 @@ import (
 )
 
 type orderedQueue struct {
-	steps []string
-	err   error
+	steps      []string
+	identities []cloudjobqueue.Identity
+	err        error
 }
 
-func (q *orderedQueue) EnsureJobExecutionQueue(context.Context, cloudjobqueue.Identity) error {
+func (q *orderedQueue) EnsureJobExecutionQueue(_ context.Context, identity cloudjobqueue.Identity) error {
 	q.steps = append(q.steps, "ensure")
+	q.identities = append(q.identities, identity)
 	return q.err
 }
 func (q *orderedQueue) Publish(context.Context, *pb.JobItem) error {
@@ -55,7 +57,7 @@ func TestSubmitDoesNotRepublishDeduplicatedPendingItem(t *testing.T) {
 	}}
 	svc := &Service{executionQueue: queue, jobState: store}
 	rsp, err := svc.SubmitJobItems(context.Background(), &pb.SubmitJobItemsReq{Items: []*pb.JobItem{{
-		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
 	}}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS ||
 		len(queue.steps) != 1 || queue.steps[0] != "ensure" {
@@ -68,7 +70,7 @@ func TestSubmitReturnsStateFailureWhenPublishAndMarkFail(t *testing.T) {
 	store := &orderedStore{markErr: errors.New("state failed")}
 	svc := &Service{executionQueue: queue, jobState: store}
 	rsp, err := svc.SubmitJobItems(context.Background(), &pb.SubmitJobItemsReq{Items: []*pb.JobItem{{
-		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
 	}}})
 	if err != nil || rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		t.Fatalf("rsp=%+v err=%v", rsp, err)
@@ -86,7 +88,7 @@ func TestSubmitEnsuresBeforeCreatingAndPublishing(t *testing.T) {
 	store := &orderedStore{}
 	svc := &Service{executionQueue: queue, jobState: store}
 	rsp, err := svc.SubmitJobItems(context.Background(), &pb.SubmitJobItemsReq{Items: []*pb.JobItem{{
-		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
 	}}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("rsp=%+v err=%v", rsp, err)
@@ -101,7 +103,7 @@ func TestSubmitEnsureFailureHasNoStateSideEffect(t *testing.T) {
 	store := &orderedStore{}
 	svc := &Service{executionQueue: queue, jobState: store}
 	_, _ = svc.SubmitJobItems(context.Background(), &pb.SubmitJobItemsReq{Items: []*pb.JobItem{{
-		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg",
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
 	}}})
 	if len(store.steps) != 0 {
 		t.Fatalf("state side effects = %v", store.steps)

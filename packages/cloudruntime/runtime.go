@@ -30,19 +30,17 @@ type Config struct {
 	ServiceGatewayTarget string
 	SpaceID              string
 	NodeID               string
-	CodePackageID        string
 	Auth                 AuthConfig
 	HTTPTimeout          time.Duration
 }
 
 type JobItem struct {
-	SpaceID       string
-	JobID         string
-	JobItemID     string
-	JobType       string
-	CodePackageID string
-	Params        map[string]any
-	ExecuteAt     time.Time
+	SpaceID   string
+	JobID     string
+	JobItemID string
+	JobType   string
+	Params    map[string]any
+	ExecuteAt time.Time
 }
 
 type Result struct{ Summary map[string]any }
@@ -133,11 +131,10 @@ func (cfg *Config) Validate() error {
 	cfg.ServiceGatewayTarget = normalizeGatewayTarget(cfg.ServiceGatewayTarget)
 	cfg.SpaceID = strings.TrimSpace(cfg.SpaceID)
 	cfg.NodeID = strings.TrimSpace(cfg.NodeID)
-	cfg.CodePackageID = strings.TrimSpace(cfg.CodePackageID)
-	if cfg.ServiceGatewayTarget == "" || cfg.SpaceID == "" || cfg.NodeID == "" || cfg.CodePackageID == "" {
-		return fmt.Errorf("cloud runtime requires service_gateway_target, space_id, node_id and code_package_id")
+	if cfg.ServiceGatewayTarget == "" || cfg.SpaceID == "" || cfg.NodeID == "" {
+		return fmt.Errorf("cloud runtime requires service_gateway_target, space_id and node_id")
 	}
-	if _, err := (cloudjobqueue.Identity{SpaceID: cfg.SpaceID, CodePackageID: cfg.CodePackageID, JobType: "validation"}).ConsumerName(); err != nil {
+	if _, err := (cloudjobqueue.Identity{SpaceID: cfg.SpaceID, JobType: "validation"}).ConsumerName(); err != nil {
 		return err
 	}
 	if cfg.HTTPTimeout <= 0 {

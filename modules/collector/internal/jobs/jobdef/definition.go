@@ -22,7 +22,7 @@ type OptionList struct {
 	Options []Option `json:"options"`
 }
 
-// Support describes an exchange/market/data_type tuple handled by a definition.
+// Support describes an exchange/market/data_type tuple handled by a job definition.
 type Support struct {
 	Exchange   string
 	Market     string
@@ -44,9 +44,10 @@ type FieldDefinition struct {
 	SortOrder         int32
 }
 
-// Definition describes one collector data type.
-type Definition struct {
+// JobDefinition describes one collector job type and its rule-planning metadata.
+type JobDefinition struct {
 	ID                int32
+	JobType           string
 	DataType          string
 	TypeName          string
 	TypeDesc          string
@@ -58,8 +59,8 @@ type Definition struct {
 	Planner           Planner
 }
 
-// Matches returns whether params can be planned by this definition.
-func (d Definition) Matches(params *domain.CollectParams) bool {
+// Matches returns whether params can be planned by this job definition.
+func (d JobDefinition) Matches(params *domain.CollectParams) bool {
 	if params == nil {
 		return false
 	}

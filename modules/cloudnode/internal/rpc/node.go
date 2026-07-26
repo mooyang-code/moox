@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -55,6 +56,9 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
 	}
+	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	if err := s.catalog.UpsertNode(ctx, node); err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -82,6 +86,9 @@ func (s *Service) BatchCreateNodes(ctx context.Context, req *pb.BatchCreateNodes
 		if node.Region == "" {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes.region is required")}, nil
 		}
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 		if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
@@ -95,6 +102,21 @@ func (s *Service) BatchCreateNodes(ctx context.Context, req *pb.BatchCreateNodes
 		BatchId:        directBatchID("create_nodes"),
 		ProcessedCount: int32(created),
 	}, nil
+}
+
+func (s *Service) ensureNodeExecutionQueues(ctx context.Context, spaceID string, workloads []string) error {
+	if s == nil || s.executionQueue == nil {
+		return nil
+	}
+	for _, jobType := range compactStrings(workloads) {
+		if err := s.executionQueue.EnsureJobExecutionQueue(ctx, cloudjobqueue.Identity{
+			SpaceID: spaceID,
+			JobType: jobType,
+		}); err != nil {
+			return fmt.Errorf("ensure execution queue for workload %s: %w", jobType, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchChangeResult, error) {
@@ -139,6 +161,9 @@ func (s *Service) BatchDeployNodes(ctx context.Context, req *pb.BatchDeployNodes
 		}
 		if node == nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found")}, nil
+		}
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 		pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
 		if err != nil {

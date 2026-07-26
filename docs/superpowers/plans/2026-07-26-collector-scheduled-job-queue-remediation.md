@@ -483,7 +483,7 @@ git commit -m "refactor(collector): schedule future jobs without wakeups"
 - Modify: `modules/cloudnode/README.md`
 - Modify: `docs/采集任务管理.md`
 
-- [ ] **Step 1: 先写常驻消费和到期判断测试**
+- [x] **Step 1: 先写常驻消费和到期判断测试**
 
 覆盖：
 
@@ -512,7 +512,7 @@ result.Delay == executeAt.Sub(now)
 
 允许毫秒级容差，但不得改成固定 1 秒轮询。
 
-- [ ] **Step 2: 从现有 jobs registry 导出支持的 JobType**
+- [x] **Step 2: 从现有 jobs registry 导出支持的 JobType**
 
 ```go
 type JobDefinition struct {
@@ -545,7 +545,7 @@ symbol.Definition             -> symbol.NewJobDefinition
 
 Kline、Symbol `JobDefinition` 显式声明各自 `JobType`。taskrunner 和心跳从 registry 读取该清单，不再各自硬编码。CLI 发布元数据继续声明相同的两个值并用测试锁定，因为 CLI 不应为两个字符串反向依赖整个 Collector module。不要建立插件系统或动态 manifest。
 
-- [ ] **Step 3: 将执行队列与具体代码包彻底解耦**
+- [x] **Step 3: 将执行队列与具体代码包彻底解耦**
 
 `packages/cloudjobqueue.Identity` 改为：
 
@@ -582,7 +582,7 @@ make -C packages/cloudjobpb all
 
 这是新项目，不保留 protobuf 旧字段、旧 JSON 参数或 job history 数据库兼容；部署时重建 CloudNode JobItem KV/history 和旧 durable。
 
-- [ ] **Step 4: 在 delivery adapter 判断 execute_at**
+- [x] **Step 4: 在 delivery adapter 判断 execute_at**
 
 解码事件后、调用 `cloudruntime.ExecuteJobItem` 前执行：
 
@@ -601,7 +601,7 @@ if executeAt != nil {
 
 `handleDelivery` 接收 `now func() time.Time`，生产调用传 `time.Now`。判断只看 `delay > 0`，不得使用 `due.Equal(now)` 作为触发条件；`delay <= 0` 一律立即执行。测试不要依赖真实长时间 sleep。未来任务不写 Collector 状态，也不写 CloudNode 终态。
 
-- [ ] **Step 5: 将一次性扫描改为常驻等待**
+- [x] **Step 5: 将一次性扫描改为常驻等待**
 
 当前 `roundRobinConsumer.Fetch` 在所有队列一轮为空时返回 `jetstream.ErrClosed`，导致通用 Runner 正常退出。改为返回 `nats.ErrTimeout`，让既有 `jetstream.Runner` 继续下一轮阻塞 Fetch：
 
@@ -619,7 +619,7 @@ if allBindingsTimedOut {
 两者复用相同的 binding、handler 和单个 NATS 连接。不要在外层再写 tick、sleep
 或重复连接循环；也不能让现有 `--once` 因改成常驻语义后永久挂起。
 
-- [ ] **Step 6: CloudNode 在发布节点时提前准备 durable**
+- [x] **Step 6: CloudNode 在发布节点时提前准备 durable**
 
 CloudNode 已经拥有作业执行队列。创建或发布 SCF 节点时，根据：
 
@@ -629,14 +629,19 @@ space_id + supported_workloads
 
 幂等调用 `EnsureJobExecutionQueue`。这样即使尚未提交第一条任务，SCF 启动后也能 bind 全部受支持 durable。不要让 SCF 自己创建 Consumer。
 
-- [ ] **Step 7: 启动心跳/DNS tRPC services 和一个 NATS runner**
+- [x] **Step 7: 启动心跳/DNS tRPC services 和一个 NATS runner**
 
-`initializeServerlessRuntime` 必须启动 tRPC services，但 `RegisterTRPCServices` 只注册：
+`initializeServerlessRuntime` 必须启动 SCF tRPC services，但 `RegisterTRPCServices` 只注册：
 
 - `trpc.heartbeat.timer`
 - `trpc.dnsresolve.timer`
 
 修正当前 Go 注册的 `trpc.reporter.timer` 与 YAML `trpc.heartbeat.timer` 不一致。不得增加 `trpc.collectorjob.timer`。
+
+这里的“无 job timer”只针对 SCF 打包使用的
+`modules/collector/configs/example_trpc_go.yaml`。控制面服务使用的
+`modules/collector/config/trpc_go.yaml` 仍需保留调用 `ScheduleTasks` 的调度 timer，
+不能把控制面规划定时器误删。
 
 SCF bootstrap 只启动一次 `taskrunner.Run(ctx)`。它等待 runtime communication readiness 后进入常驻 JetStream Runner；readiness 只表达 NodeID 和 Service Gateway 已由首次 keepalive 初始化，不让心跳模块调用、轮询或管理任务。
 
@@ -645,15 +650,15 @@ keepalive 初始化通信信息后将其置为 ready。它不是第二套调度�
 
 `--once` 模式保留为本地诊断入口，复用同一套 binding 和 handler，但一轮队列为空后退出；生产 SCF 只调用常驻 `Run`。
 
-- [ ] **Step 8: 统一使用发布时注入的 Space**
+- [x] **Step 8: 统一使用发布时注入的 Space**
 
 SCF taskrunner 和 heartbeat 都只读取 `MOOX_SPACE_ID`。缺失时 runtime 初始化明确失败，不再从 Binance Storage binding 推导 Space。`collector function publish/deploy` 已负责注入该环境变量，补测试锁定该契约。
 
-- [ ] **Step 9: 将 keepalive handler 收窄为纯心跳**
+- [x] **Step 9: 将 keepalive handler 收窄为纯心跳**
 
 删除 `pollJobItemsAfterHeartbeat`、`keepaliveTaskExecutionTimeout` 和相关日志。keepalive 调用只执行 `ProcessProbe`、有界 `ReportHeartbeat` 和响应构造。
 
-- [ ] **Step 10: 放开 durable 的简单固定并发**
+- [x] **Step 10: 放开 durable 的简单固定并发**
 
 CloudNode 配置增加：
 
@@ -664,7 +669,7 @@ jetstream:
 
 默认值和校验均为正整数，bootstrap 不再硬编码 `1`。不做根据节点数自动扩缩或运行时调参。
 
-- [ ] **Step 11: 运行 SCF 与 CloudNode 测试**
+- [x] **Step 11: 运行 SCF 与 CloudNode 测试**
 
 ```bash
 (cd packages/cloudjobqueue && go test -count=1 ./...)
@@ -678,11 +683,11 @@ jetstream:
 
 Expected: 队列身份只包含 Space 和 JobType，不同代码包的兼容 SCF 共享 durable；一个 SCF 只建立一个 NATS 连接和一个常驻 Runner；空队列不会退出；立即任务直接执行；未来任务返回精确延迟；keepalive 测试证明没有任务消费；默认 `MaxAckPending=32`。
 
-- [ ] **Step 12: 做零残留检查并提交**
+- [x] **Step 12: 做零残留检查并提交**
 
 ```bash
 rg -n "code_package_id|CodePackageID|DefaultCollectorCodePackageID" packages/cloudjobqueue packages/cloudjobpb packages/cloudruntime modules/collector/internal modules/cloudnode/internal modules/cloudnode/proto web/src/views/collector/collector-rules examples/e2e docs/采集任务管理.md modules/cloudnode/README.md
-rg -n "\\bDefinition\\b|ListDefinitions|DefinitionByDataType" modules/collector/internal/jobs modules/collector/internal/rpc
+rg -n "\\bDefinition\\b|\\bListDefinitions\\b|\\bDefinitionByDataType\\b" modules/collector/internal/jobs modules/collector/internal/rpc
 git add packages/cloudjobqueue packages/cloudjobpb packages/cloudruntime modules/collector modules/cloudnode modules/cli web examples/e2e docs
 git commit -m "feat(collector): decouple scf queues from code packages"
 ```

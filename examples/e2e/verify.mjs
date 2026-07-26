@@ -549,7 +549,7 @@ async function ensureCollectorRule(args, token) {
     collect_params: {
       source: { kind: "dataset_subjects", dataset_id: args.dataset },
       collector: { exchange: "binance", market: "spot", data_type: "kline", intervals: ["1h"] },
-      target: { dataset_id: args.dataset, job_type: "collect.kline", code_package_id: args.package },
+      target: { dataset_id: args.dataset, job_type: "collect.kline" },
       schedule: { interval: "1h", timezone: "Asia/Shanghai" },
     },
     assignment_type: "auto",

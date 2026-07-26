@@ -13,37 +13,46 @@ import (
 )
 
 const (
-	JobTypeCollectKline  = "collect.kline"
-	JobTypeCollectSymbol = "collect.symbol"
+	JobTypeCollectKline  = kline.JobType
+	JobTypeCollectSymbol = symbol.JobType
 )
 
-// Definition describes one collector data type.
-type Definition = jobdef.Definition
+// JobDefinition describes one collector job type.
+type JobDefinition = jobdef.JobDefinition
 
 // FieldDefinition describes one rule form field for a collector data type.
 type FieldDefinition = jobdef.FieldDefinition
 
-var definitions = []Definition{
-	kline.Definition(JobTypeCollectKline),
-	symbol.Definition(JobTypeCollectSymbol),
+var jobDefinitions = []JobDefinition{
+	kline.NewJobDefinition(),
+	symbol.NewJobDefinition(),
 }
 
-// ListDefinitions returns collector data type definitions in UI sort order.
-func ListDefinitions() []Definition {
-	out := make([]Definition, len(definitions))
-	copy(out, definitions)
+// ListJobDefinitions returns collector job definitions in UI sort order.
+func ListJobDefinitions() []JobDefinition {
+	out := make([]JobDefinition, len(jobDefinitions))
+	copy(out, jobDefinitions)
 	return out
 }
 
-// DefinitionByDataType returns one collector data type definition.
-func DefinitionByDataType(dataType string) (Definition, bool) {
+// SupportedJobTypes returns stable queue routing types handled by Collector SCF.
+func SupportedJobTypes() []string {
+	out := make([]string, 0, len(jobDefinitions))
+	for _, definition := range jobDefinitions {
+		out = append(out, definition.JobType)
+	}
+	return out
+}
+
+// JobDefinitionByDataType returns one collector job definition.
+func JobDefinitionByDataType(dataType string) (JobDefinition, bool) {
 	dataType = strings.ToLower(strings.TrimSpace(dataType))
-	for _, definition := range definitions {
+	for _, definition := range jobDefinitions {
 		if definition.DataType == dataType {
 			return definition, true
 		}
 	}
-	return Definition{}, false
+	return JobDefinition{}, false
 }
 
 // BuildTaskSpecs dispatches atomic task planning to the matching job definition.
@@ -51,7 +60,7 @@ func BuildTaskSpecs(ctx context.Context, rule *domain.TaskRule, params *domain.C
 	if params == nil {
 		return nil, fmt.Errorf("collect params are required")
 	}
-	for _, definition := range definitions {
+	for _, definition := range jobDefinitions {
 		if definition.Matches(params) {
 			return definition.Planner(ctx, rule, params, subjects)
 		}
