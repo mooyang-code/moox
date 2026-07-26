@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	ServiceAddress             = "127.0.0.1:11002"
-	NativeServiceAddress       = "127.0.0.1:11003"
-	HealthAddress              = "127.0.0.1:11012"
-	DefaultMaxBodyBytes  int64 = 4 << 20
+	ServiceAddress                   = "127.0.0.1:11002"
+	NativeServiceAddress             = "127.0.0.1:11003"
+	PublicNativeServiceAddress       = "0.0.0.0:11003"
+	HealthAddress                    = "127.0.0.1:11012"
+	DefaultMaxBodyBytes        int64 = 4 << 20
 )
 
 type Config struct {
@@ -125,8 +126,8 @@ func Validate(cfg Config) error {
 	if cfg.Server.ServiceAddr != ServiceAddress {
 		return fmt.Errorf("server.service_addr must be %s", ServiceAddress)
 	}
-	if cfg.Server.NativeAddr != NativeServiceAddress {
-		return fmt.Errorf("server.native_addr must be %s", NativeServiceAddress)
+	if cfg.Server.NativeAddr != NativeServiceAddress && cfg.Server.NativeAddr != PublicNativeServiceAddress {
+		return fmt.Errorf("server.native_addr must be %s or %s", NativeServiceAddress, PublicNativeServiceAddress)
 	}
 	if cfg.Server.HealthAddr != HealthAddress {
 		return fmt.Errorf("server.health_addr must be %s", HealthAddress)

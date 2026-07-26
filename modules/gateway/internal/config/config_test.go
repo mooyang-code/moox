@@ -21,7 +21,9 @@ func TestLoadAppliesDefaultsAndValidatesRequiredConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Server.ServiceAddr != "127.0.0.1:11002" || cfg.Server.HealthAddr != "127.0.0.1:11012" {
+	if cfg.Server.ServiceAddr != "127.0.0.1:11002" ||
+		cfg.Server.NativeAddr != "127.0.0.1:11003" ||
+		cfg.Server.HealthAddr != "127.0.0.1:11012" {
 		t.Fatalf("addresses = %+v", cfg.Server)
 	}
 
@@ -60,7 +62,30 @@ func TestCheckedInConfigDoesNotOwnRouteRefreshSchedule(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsWildcardListenersAndInsecureKeys(t *testing.T) {
+func TestLoadAcceptsExplicitPublicNativeListener(t *testing.T) {
+	dir := t.TempDir()
+	control := writeKey(t, dir, "control.key", 0o600)
+	service := writeKey(t, dir, "service.key", 0o600)
+	path := filepath.Join(dir, "app.yaml")
+	yaml := strings.Replace(
+		validYAML(control, service, filepath.Join(dir, "data"), ""),
+		"  service_addr: 127.0.0.1:11002\n",
+		"  service_addr: 127.0.0.1:11002\n  native_addr: 0.0.0.0:11003\n",
+		1,
+	)
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.NativeAddr != PublicNativeServiceAddress {
+		t.Fatalf("native address = %s", cfg.Server.NativeAddr)
+	}
+}
+
+func TestLoadRejectsInvalidListenersAndInsecureKeys(t *testing.T) {
 	dir := t.TempDir()
 	control := writeKey(t, dir, "control.key", 0o600)
 	service := writeKey(t, dir, "service.key", 0o600)
@@ -70,6 +95,7 @@ func TestLoadRejectsWildcardListenersAndInsecureKeys(t *testing.T) {
 		"wildcard service":   "service_addr: 0.0.0.0:11002",
 		"wildcard health":    "health_addr: :11012",
 		"wrong service port": "service_addr: 127.0.0.1:12002",
+		"wrong native port":  "native_addr: 0.0.0.0:12003",
 		"insecure key":       "control_key: " + insecure,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -144,5 +170,9 @@ func validYAML(control, service, store, override string) string {
 	if strings.HasPrefix(override, "health_addr:") {
 		healthAddr = strings.TrimSpace(strings.TrimPrefix(override, "health_addr:"))
 	}
-	return "node:\n  id: gateway-test\nserver:\n  service_addr: " + serviceAddr + "\n  health_addr: " + healthAddr + "\ncontrol_plane:\n  base_url: https://admin.example\n  hmac_key_file: " + control + "\nauth:\n  hmac_key_file: " + service + "\n  caller: service\nstore:\n  path: " + store + "\nproxy:\n  max_body_bytes: 4194304\n"
+	nativeAddr := ""
+	if strings.HasPrefix(override, "native_addr:") {
+		nativeAddr = "  native_addr: " + strings.TrimSpace(strings.TrimPrefix(override, "native_addr:")) + "\n"
+	}
+	return "node:\n  id: gateway-test\nserver:\n  service_addr: " + serviceAddr + "\n" + nativeAddr + "  health_addr: " + healthAddr + "\ncontrol_plane:\n  base_url: https://admin.example\n  hmac_key_file: " + control + "\nauth:\n  hmac_key_file: " + service + "\n  caller: service\nstore:\n  path: " + store + "\nproxy:\n  max_body_bytes: 4194304\n"
 }

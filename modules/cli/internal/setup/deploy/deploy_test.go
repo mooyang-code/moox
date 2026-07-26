@@ -147,10 +147,12 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "custom.toml"), []byte("placeholder"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntouch ./compiled\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
 
 	archive, err := (StoragePackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+		UseControlGateway: true, EventBusPublicAddress: "eventbus.example.test",
+		EventBusPort: 4222, EventBusTLSEnabled: true,
 	})
 	require.NoError(t, err)
 	defer os.Remove(archive)
@@ -173,7 +175,8 @@ func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, install)
-	require.Equal(t, "1", install[len(install)-1], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "1", install[len(install)-2], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "0", install[len(install)-1])
 }
 
 func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
@@ -195,7 +198,7 @@ func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	previousArchive := remoteStorageArchiveNext
 	defer os.Remove(previousArchive)
 	require.NoError(t, copyFileForTest(archive, previousArchive))
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1")
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1", "0")
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -220,12 +223,44 @@ func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {
 	previousArchive := remoteStorageArchiveNext
 	defer os.Remove(previousArchive)
 	require.NoError(t, copyFileForTest(archive, previousArchive))
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0")
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0")
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.FileExists(t, filepath.Join(deploy, "data", "old.db"))
 	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+}
+
+func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
+	home := t.TempDir()
+	controlSecrets := filepath.Join(home, "moox", "prod", "secrets")
+	require.NoError(t, os.MkdirAll(controlSecrets, 0o700))
+	for name, contents := range map[string]string{
+		"gateway-service.env":         "MOOX_GATEWAY_NODE_ID=control\n",
+		"gateway-storage-primary.key": "primary-key\n",
+		"gateway-storage-view.key":    "view-key\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(controlSecrets, name), []byte(contents), 0o600))
+	}
+	archiveDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
+	defer os.Remove(remoteStorageArchiveNext)
+	require.NoError(t, copyFileForTest(archive, remoteStorageArchiveNext))
+
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	for name, contents := range map[string]string{
+		"gateway-service.env":         "MOOX_GATEWAY_NODE_ID=control\n",
+		"gateway-storage-primary.key": "primary-key\n",
+		"gateway-storage-view.key":    "view-key\n",
+	} {
+		require.Equal(t, contents, string(requireFile(t, filepath.Join(home, "moox", "storage", "secrets", name))))
+	}
 }
 
 func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {

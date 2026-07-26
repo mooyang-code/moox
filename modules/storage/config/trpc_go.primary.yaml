@@ -57,12 +57,6 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
-    - name: trpc.moox.storage.host_metrics_cleanup.timer
-      port: 20308
-      network: "0 0 * * * *?startAtOnce=1"
-      protocol: timer
-      timeout: 60000
-
 plugins:
   metrics:
     prometheus:

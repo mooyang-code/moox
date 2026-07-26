@@ -18,7 +18,7 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
-	require.Len(t, seed.Services, 31)
+	require.Len(t, seed.Services, 33)
 	processes := 0
 	for _, service := range seed.Services {
 		if service.DeploymentMode == "process" {
@@ -64,21 +64,21 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	dbPath := filepath.Join(tmp, "admin.db")
 	seedPath := filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml")
 	var first, second bytes.Buffer
-	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &first, &bytes.Buffer{}))
-	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &second, &bytes.Buffer{}))
+	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--public-host", "127.0.0.1", "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &first, &bytes.Buffer{}))
+	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--public-host", "127.0.0.1", "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &second, &bytes.Buffer{}))
 	var result struct {
 		Created int `json:"created"`
 		Updated int `json:"updated"`
 	}
 	require.NoError(t, json.Unmarshal(second.Bytes(), &result))
 	require.Equal(t, 0, result.Created)
-	require.Equal(t, 31, result.Updated)
+	require.Equal(t, 33, result.Updated)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
-	require.Equal(t, int64(31), count)
+	require.Equal(t, int64(33), count)
 }
 
 func TestSetSeedEventBusNATSURLPreservesExtraConfig(t *testing.T) {
@@ -94,6 +94,27 @@ func TestSetSeedEventBusNATSURLPreservesExtraConfig(t *testing.T) {
 	require.Equal(t, "tls://203.0.113.10:4222", seed.Services[0].ExtraConfig["nats_url"])
 	require.Equal(t, "http://127.0.0.1:11419/readyz", seed.Services[0].ExtraConfig["health_url"])
 	require.Equal(t, true, seed.Services[0].ExtraConfig["monitor_enabled"])
+}
+
+func TestSetSeedPublicHostUpdatesOnlyPublicEndpoints(t *testing.T) {
+	seed := serviceDeploymentSeed{
+		Node: serviceDeploymentNode{PublicAddress: "https://127.0.0.1"},
+		Services: []serviceDeploymentEntry{
+			{Name: "admin_gateway", Scope: "public", Host: "127.0.0.1"},
+			{Name: "service_gateway", Scope: "public", Host: "127.0.0.1"},
+			{Name: "service_gateway_native", Scope: "public", Host: "127.0.0.1"},
+			{Name: "storage-primary", Scope: "public", Host: "127.0.0.1", GatewayEnabled: true},
+			{Name: "moox_gateway", Scope: "internal", Host: "127.0.0.1"},
+		},
+	}
+	require.NoError(t, setSeedPublicHost(&seed, "203.0.113.10"))
+	require.Equal(t, "https://203.0.113.10", seed.Node.PublicAddress)
+	require.Equal(t, "203.0.113.10", seed.Services[0].Host)
+	require.Equal(t, "203.0.113.10", seed.Services[1].Host)
+	require.Equal(t, "203.0.113.10", seed.Services[2].Host)
+	require.Equal(t, "127.0.0.1", seed.Services[3].Host)
+	require.Equal(t, "127.0.0.1", seed.Services[4].Host)
+	require.Error(t, setSeedPublicHost(&seed, "https://203.0.113.10"))
 }
 
 func TestValidateEventBusNATSURLRejectsIncompleteOrNonTLS(t *testing.T) {
@@ -128,7 +149,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 32)
+	require.Len(t, seed.Services, 34)
 
 	var primary, shard serviceDeploymentEntry
 	for _, item := range seed.Services {
@@ -157,7 +178,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 32)
+	require.Len(t, seed.Services, 34)
 	shard := seed.Services[len(seed.Services)-1]
 	require.Equal(t, "storage-shard", shard.Name)
 	require.False(t, shard.GatewayEnabled)
@@ -170,7 +191,7 @@ func TestImportWithOptionalStorageShardCompilesOnlyIndependentDataShardRoute(t *
 	seedPath := filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml")
 	var output bytes.Buffer
 	require.NoError(t, runServiceDeploymentsCommand([]string{
-		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--node-id", "gateway-node-1", "--eventbus-nats-url", "tls://127.0.0.1:4222", "--with-storage-shard",
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--node-id", "gateway-node-1", "--public-host", "127.0.0.1", "--eventbus-nats-url", "tls://127.0.0.1:4222", "--with-storage-shard",
 	}, &output, &bytes.Buffer{}))
 	db, err := openAdminCLIDB(dbPath)
 	require.NoError(t, err)

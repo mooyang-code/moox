@@ -38,6 +38,29 @@ services:
       health_url: http://127.0.0.1:19527/readyz
       health_kind: readiness
       monitor_enabled: true
+  - name: service_gateway
+    kind: gateway
+    deployment_mode: endpoint
+    protocol: https
+    host: 127.0.0.1
+    port: 11001
+    gateway_path: /api/service
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: 后台和 SCF HTTPS 服务入口，使用 HMAC 鉴权访问 /api/service/*
+    extra_config: {}
+  - name: service_gateway_native
+    kind: gateway
+    deployment_mode: endpoint
+    protocol: trpc
+    host: 127.0.0.1
+    port: 11003
+    gateway_enabled: false
+    scope: public
+    status: active
+    description: 公网原生服务网关，供 SCF 访问 Storage
+    extra_config: {}
   - name: storage-primary
     kind: storage
     deployment_mode: process
@@ -332,7 +355,7 @@ services:
       gateway_methods:
         - ListActiveServiceDeployments
         - ListServiceDeployments
-      gateway_callers: [admin-gateway, monitor, moox-cli]
+      gateway_callers: [admin-gateway, collector, monitor, moox-cli]
   - name: trade_account
     kind: trade
     deployment_mode: endpoint

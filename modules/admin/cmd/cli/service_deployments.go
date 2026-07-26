@@ -75,12 +75,14 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	dbPath, seedPath := defaultInitDBPath, ""
 	nodeID := ""
 	eventBusNATSURL := ""
+	publicHost := ""
 	withStorageShard := false
 	disableStorageShard := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&seedPath, "file", seedPath, "service deployment seed YAML")
 	fs.StringVar(&nodeID, "node-id", nodeID, "override the seed node ID")
 	fs.StringVar(&eventBusNATSURL, "eventbus-nats-url", "", "EventBus client URL for this node")
+	fs.StringVar(&publicHost, "public-host", "", "public IP or DNS name for public endpoints")
 	fs.BoolVar(&withStorageShard, "with-storage-shard", false, "enable the independent DataShard route")
 	fs.BoolVar(&disableStorageShard, "disable-storage-shard", false, "disable the independent DataShard route")
 	if err := fs.Parse(args[2:]); err != nil {
@@ -112,6 +114,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		return err
 	}
 	if err := setSeedEventBusNATSURL(&seed, eventBusNATSURL); err != nil {
+		return err
+	}
+	if err := setSeedPublicHost(&seed, publicHost); err != nil {
 		return err
 	}
 	if withStorageShard {
@@ -176,6 +181,27 @@ func setSeedEventBusNATSURL(seed *serviceDeploymentSeed, raw string) error {
 	}
 	if found != 1 {
 		return fmt.Errorf("service deployment seed must contain exactly one eventbus service, got %d", found)
+	}
+	return nil
+}
+
+func setSeedPublicHost(seed *serviceDeploymentSeed, raw string) error {
+	if seed == nil {
+		return errors.New("service deployment seed is required")
+	}
+	if raw == "" || raw != strings.TrimSpace(raw) {
+		return errors.New("--public-host is required and must not contain surrounding whitespace")
+	}
+	parsed, err := url.Parse("https://" + raw)
+	if err != nil || parsed.Hostname() == "" || parsed.Port() != "" ||
+		parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("--public-host must be an IP address or DNS name without scheme or port")
+	}
+	seed.Node.PublicAddress = "https://" + parsed.Host
+	for i := range seed.Services {
+		if seed.Services[i].Scope == "public" && !seed.Services[i].GatewayEnabled {
+			seed.Services[i].Host = parsed.Hostname()
+		}
 	}
 	return nil
 }

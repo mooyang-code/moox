@@ -73,7 +73,7 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	// gateway endpoint. A deployment without a native target leaves the local
 	// gateway configuration intact rather than silently falling back to a
 	// physical Storage listener.
-	if v := endpointTRPCTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
+	if v := endpointTRPCTarget(active, "service_gateway_native"); v != "" {
 		deps.StorageRPCGatewayTarget = v
 	}
 	return deps, nil

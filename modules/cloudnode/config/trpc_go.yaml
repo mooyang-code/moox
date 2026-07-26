@@ -7,7 +7,7 @@ server:
     - recovery
     - validation
     - prometheus
-  timeout: 5000
+  timeout: 60000
   admin:
     ip: 127.0.0.1
     port: 11941
@@ -19,7 +19,7 @@ server:
       port: 11401
       network: tcp
       protocol: http
-      timeout: 30000
+      timeout: 60000
     - name: trpc.moox.cloudnode.Health
       ip: 127.0.0.1
       port: 11411

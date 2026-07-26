@@ -415,7 +415,14 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
-	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData}, setupdeploy.Dependencies{}); err != nil {
+	useControlGateway := host.Name == snapshot.Manifest.ControlHost.Name
+	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
+		RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData,
+		UseControlGateway:     useControlGateway,
+		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:          snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
+	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
 	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
@@ -423,7 +430,11 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	defer control.Close()
-	_, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Address)
+	placementHost := host.Address
+	if useControlGateway {
+		placementHost = "127.0.0.1"
+	}
+	_, err = setupclient.New(control).ApplyStoragePlacement(ctx, placementHost)
 	return err
 }
 

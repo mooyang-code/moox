@@ -178,6 +178,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, cloudnodeACL, "$JS.ACK.MOOX_CLOUDNODE_EXEC.>")
 	assert.Contains(t, cloudnodeACL, "$JS.API.STREAM.INFO.KV_MOOX_CLOUDNODE_JOB_ACTIVE")
 	assert.Contains(t, cloudnodeACL, "$JS.API.STREAM.MSG.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE")
+	assert.Contains(t, cloudnodeACL, "$JS.API.DIRECT.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>")
 	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.CREATE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>")
 	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.DELETE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>")
 	assert.Contains(t, cloudnodeACL, "$KV.MOOX_CLOUDNODE_JOB_ACTIVE.>")
@@ -343,6 +344,11 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.job.execution.requested.v1.>"},
 	})
 	require.NoError(t, err)
+	adminKV, err := adminJS.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket: "MOOX_CLOUDNODE_JOB_ACTIVE",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, adminKV)
 
 	strategy, err := nats.Connect(
 		server.ClientURL(),
@@ -405,6 +411,13 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	defer cloudRaw.Close()
 	cloudJS, err := cloudRaw.JetStream()
 	require.NoError(t, err)
+	cloudKV, err := cloudJS.KeyValue("MOOX_CLOUDNODE_JOB_ACTIVE")
+	require.NoError(t, err)
+	_, err = cloudKV.Put("job.space.item", []byte("pending"))
+	require.NoError(t, err)
+	cloudEntry, err := cloudKV.Get("job.space.item")
+	require.NoError(t, err)
+	require.Equal(t, "pending", string(cloudEntry.Value()))
 	message := nats.NewMsg("moox.cloudnode.job.execution.requested.v1.space.package.job")
 	message.Header.Set(nats.MsgIdHdr, "worker-auth-e2e")
 	message.Data = []byte("payload")

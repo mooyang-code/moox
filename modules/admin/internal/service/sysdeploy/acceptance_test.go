@@ -157,7 +157,7 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 			require.NoError(t, err)
 			enabledIDs := map[string]bool{}
 			for _, row := range rows {
-				assert.NotContains(t, []string{"service_gateway", "service_gateway_internal"}, row.ServiceName)
+				assert.NotEqual(t, "service_gateway_internal", row.ServiceName)
 				if row.GatewayEnabled {
 					assert.Equal(t, "127.0.0.1", row.Host)
 					assert.NotEmpty(t, row.GatewayServiceID)
@@ -285,6 +285,7 @@ func TestDefaultSysdeployRouteAllowsBoundedInventoryLookup(t *testing.T) {
 	assert.True(t, sysdeployRoute.AllowsMethod("ListActiveServiceDeployments"))
 	assert.True(t, sysdeployRoute.AllowsMethod("ListServiceDeployments"))
 	assert.False(t, sysdeployRoute.AllowsMethod("CreateGatewayNode"))
+	assert.True(t, sysdeployRoute.AllowsCaller("collector"))
 	assert.Equal(t, []string{"ListActiveServiceDeployments", "ListServiceDeployments"}, sysdeployRoute.AllowedMethods)
 	rsp, err := svc.GetGatewayNodeRoutes(ctx, &pb.GetGatewayNodeRoutesReq{NodeId: "node-a"})
 	require.NoError(t, err)

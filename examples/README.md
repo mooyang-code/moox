@@ -54,12 +54,13 @@ moox-admin-cli service-deployments import \
   --db-path ./data/admin.db \
   --file examples/service-deployments.seed.yaml \
   --node-id gateway-node-1 \
+  --public-host 203.0.113.10 \
   --eventbus-nats-url tls://127.0.0.1:4222
 ```
 
 该命令以 `node.id + service.name` 为幂等键，重复执行会更新清单中的地址、端口、网关
-路由和健康检查配置。示例默认全部使用 `127.0.0.1`；多主机部署前请先替换节点的
-`public_address` 以及需要对外暴露的服务 `host`。配置中的独立进程包括 Storage 的
+路由和健康检查配置。`--public-host` 会统一设置节点地址以及公开入口，不需要手工修改
+seed 中的 `127.0.0.1`。配置中的独立进程包括 Storage 的
 `storage-primary`、`storage-view`，以及 Collector、CloudNode、
 Factor、Strategy、Monitor、EventBus、Archive、HostAgent、Trade 等服务；Admin、
 Storage、Trade 内部 RPC 则以 `endpoint` 端点登记，不会被误认为独立进程。

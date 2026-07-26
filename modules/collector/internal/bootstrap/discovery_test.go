@@ -22,19 +22,19 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 			"deployment_map": map[string]any{
 				"service_gateway": map[string]any{
 					"service_name": "service_gateway",
-					"protocol":     "http",
+					"protocol":     "https",
 					"host":         "gw.example.com",
-					"port":         11000,
+					"port":         11001,
 					"gateway_path": "/api/service",
 					"scope":        "public",
 					"status":       "active",
 				},
-				"service_gateway_internal": map[string]any{
-					"service_name": "service_gateway_internal",
+				"service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native",
 					"protocol":     "trpc",
-					"host":         "127.0.0.1",
+					"host":         "gw.example.com",
 					"port":         11003,
-					"scope":        "internal",
+					"scope":        "public",
 					"status":       "active",
 				},
 				"storage-primary": map[string]any{
@@ -61,37 +61,34 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deps.ServiceGatewayTarget != "http://gw.example.com:11000" {
+	if deps.ServiceGatewayTarget != "https://gw.example.com:11001" {
 		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
 	}
-	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
-		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
-	}
-	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
+	if deps.StorageRPCGatewayTarget != "gw.example.com:11003" {
 		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
 	}
 }
 
-func TestResolvePrefersInternalServiceGateway(t *testing.T) {
+func TestResolveUsesPublicGatewayEndpoints(t *testing.T) {
 	items := map[string]endpoint{
 		"service_gateway": {
 			ServiceName: "service_gateway",
-			Protocol:    "http",
+			Protocol:    "https",
 			Host:        "106.53.107.122",
-			Port:        11000,
+			Port:        11001,
 			Scope:       "public",
 		},
-		"service_gateway_internal": {
-			ServiceName: "service_gateway_internal",
-			Protocol:    "http",
-			Host:        "127.0.0.1",
-			Port:        11002,
-			Scope:       "internal",
+		"service_gateway_native": {
+			ServiceName: "service_gateway_native",
+			Protocol:    "trpc",
+			Host:        "106.53.107.122",
+			Port:        11003,
+			Scope:       "public",
 		},
 	}
 
-	got := endpointGatewayTarget(items, "service_gateway_internal", "service_gateway")
-	assert.Equal(t, "http://127.0.0.1:11002", got)
+	assert.Equal(t, "https://106.53.107.122:11001", endpointGatewayTarget(items, "service_gateway"))
+	assert.Equal(t, "106.53.107.122:11003", endpointTRPCTarget(items, "service_gateway_native"))
 }
 
 func TestIsHTTPURL(t *testing.T) {

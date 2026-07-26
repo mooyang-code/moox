@@ -6,10 +6,11 @@
 Browser --HTTPS--> 中央 Caddy --HTTP loopback--> web-host:9528 or Admin:11000
 Gateway --HTTPS + control HMAC--> 中央 Caddy --HTTP loopback--> Admin:11000
 Backend/SCF --HTTPS + service HMAC--> 节点 Caddy --HTTP loopback--> Gateway:11002
+SCF --native tRPC + service HMAC--> 控制节点 Gateway:11003
 Monitor --health HMAC--> dedicated internal health ports
 ```
 
-Caddy 是每台服务器唯一公开边缘。中央节点允许站点、`/api/admin/*`、`/api/gateway-control/*` 和本机 `/api/service/*`；`--no-admin` 节点只允许 `/api/service/*`。其他 API 与诊断路由返回 `404`。web-host 只提供静态文件，不代理 API。端口由 `--browser-https-port` 和 `--service-https-port` 决定；它们相同时由路径完成分流。
+Caddy 是 HTTP/HTTPS 的唯一公开边缘。中央节点允许站点、`/api/admin/*`、`/api/gateway-control/*` 和本机 `/api/service/*`；`--no-admin` 节点只允许 `/api/service/*`。控制节点另公开 `11003` 原生 tRPC Gateway，强制 Service HMAC 与 Caller ACL，用于 SCF 访问 Storage。其他 API 与诊断路由返回 `404`。web-host 只提供静态文件，不代理 API。端口由 `--browser-https-port` 和 `--service-https-port` 决定；它们相同时由路径完成分流。
 
 | 组件 | 默认监听 | 可见性 | 鉴权/用途 |
 | --- | --- | --- | --- |
@@ -18,6 +19,7 @@ Caddy 是每台服务器唯一公开边缘。中央节点允许站点、`/api/ad
 | web-host | `127.0.0.1:9528` HTTP | loopback | Caddy 静态上游 |
 | Admin control | `127.0.0.1:11000` HTTP | loopback | Caddy browser 上游 |
 | Node Gateway | `127.0.0.1:11002` HTTP | loopback | Caddy service 上游/同机调用 |
+| Node Gateway native | `0.0.0.0:11003` tRPC | 控制节点公开 | SCF Storage 调用；Service HMAC + Caller ACL |
 | Node Gateway diagnostics | `127.0.0.1:11012` HTTP | loopback | `healthz`、`readyz`、`metrics` |
 | web-host health | `127.0.0.1:19527` HTTP | 内部 | health HMAC |
 | Admin health | `127.0.0.1:11010` HTTP | 内部 | health HMAC |

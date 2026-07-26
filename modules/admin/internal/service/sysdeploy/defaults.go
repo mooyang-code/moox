@@ -20,6 +20,8 @@ func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("web_host", "frontend", "https", defaultPublicHost, 9527, "", "public", "Caddy 管理台 HTTPS 页面入口；web-host 上游仅绑定 loopback"), `{"health_url":"http://127.0.0.1:19527/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		deployment("service_gateway", "gateway", "https", defaultPublicHost, 11001, "/api/service", "public", "后台和 SCF HTTPS 服务入口，使用 HMAC 鉴权访问 /api/service/*"),
+		deployment("service_gateway_native", "gateway", "trpc", defaultPublicHost, 11003, "", "public", "公网原生服务网关，供 SCF 访问 Storage"),
 		withExtra(deployment("storage-primary", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage.Metadata", "public", "moox-storage PrimaryStore + Metadata 服务"), storagePrimaryExtraConfig()),
 		withExtra(deployment("storage-view", "storage", "http", defaultPublicHost, 20202, "trpc.moox.storage.DataView", "public", "moox-storage DataView + ViewBuilder 服务"), storageViewExtraConfig()),
 		deployment("admin_auth", "admin_rpc", "http", "127.0.0.1", 11100, "trpc.moox.infra.Auth", "internal", "认证 RPC 服务"),
@@ -70,7 +72,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 			rows[i].GatewayServiceID, rows[i].GatewayEnabled = serviceID, true
 		}
 		if rows[i].ServiceName == "sysdeploy" {
-			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments","ListServiceDeployments"],"gateway_callers":["admin-gateway","monitor","moox-cli"]}`
+			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments","ListServiceDeployments"],"gateway_callers":["admin-gateway","collector","monitor","moox-cli"]}`
 		}
 		if rows[i].ServiceName == "secret" {
 			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"],"gateway_callers":["admin-gateway","cloudnode","moox-cli"]}`

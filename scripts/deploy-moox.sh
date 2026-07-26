@@ -111,6 +111,7 @@ Options:
   --no-factor                     Do not package/start moox-factor.
   --no-strategy                   Do not package/start moox-strategy.
   --no-monitor                    Do not package/start moox-monitor.
+  --no-gateway                    Do not package/start moox-gateway; use an existing same-host gateway.
   --no-admin                      Build a data-plane node without Admin, browser assets, schema, or credentials.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
@@ -466,6 +467,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-monitor)
       WITH_MONITOR=0
+      shift
+      ;;
+    --no-gateway)
+      WITH_GATEWAY=0
       shift
       ;;
     --no-admin)
@@ -840,6 +845,10 @@ patch_configs() {
   gateway_control_url_yaml=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "${GATEWAY_CONTROL_URL}")
   GATEWAY_CONTROL_URL_YAML="${gateway_control_url_yaml}" perl -0pi -e 's#id:\s*gateway-gz-122#id: '"${NODE_ID}"'#; s#base_url:\s*https://admin\.example\.com#base_url: $ENV{GATEWAY_CONTROL_URL_YAML}#; s#hmac_key_file:\s*\./secrets/gateway-control\.key#hmac_key_file: ../../secrets/gateway-control.key#; s#hmac_key_file:\s*\./secrets/gateway-service\.key#hmac_key_file: ../../secrets/gateway-service.key#; s#path:\s*\./data/gateway#path: ../../data/gateway#' \
     "${STAGE_DIR}/gateway/config/app.yaml"
+  if [[ "${DEPLOY_PROFILE}" == "control" ]]; then
+    perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#' \
+      "${STAGE_DIR}/gateway/config/app.yaml"
+  fi
   if grep -q '^  ca_file:' "${STAGE_DIR}/gateway/config/app.yaml"; then
     perl -0pi -e 's#^  ca_file:.*#  ca_file: ../../certs/gateway/peers.pem#m' "${STAGE_DIR}/gateway/config/app.yaml"
   else
@@ -967,6 +976,9 @@ source "${ROOT}/secrets/health-auth.env"
 if [[ -r "${ROOT}/secrets/storage-node-auth.env" ]]; then
   source "${ROOT}/secrets/storage-node-auth.env"
 fi
+if [[ -r "${ROOT}/secrets/storage-internal-auth.env" ]]; then
+  source "${ROOT}/secrets/storage-internal-auth.env"
+fi
 if [[ -r "${ROOT}/secrets/cls.env" ]]; then
   source "${ROOT}/secrets/cls.env"
 fi
@@ -1033,6 +1045,7 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+PUBLIC_HOST="${MOOX_PUBLIC_HOST:-__PUBLIC_HOST__}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
   echo "storage-node requires storage" >&2
   exit 2
@@ -1397,11 +1410,13 @@ import_storage_metadata() {
   local seed="${ROOT}/storage/config/metadata.seed.yaml"
   [[ -f "${seed}" ]] || { echo "storage metadata seed not found: ${seed}" >&2; exit 1; }
   echo "importing storage metadata seed after DataNode registration"
-  "${ROOT}/bin/moox-storage-cli" import-seed \
-    --storage-conf="${ROOT}/storage/config/storage.yaml" \
-    --schema-path="${ROOT}/storage/schema/metadata.sql" \
-    --seed="${seed}" \
-    >>"${ROOT}/logs/storage/stdout.log" 2>&1
+  (
+    cd "${ROOT}/storage"
+    "${ROOT}/bin/moox-storage-cli" import-seed \
+      --storage-conf=config/storage.yaml \
+      --schema-path=schema/metadata.sql \
+      --seed="${seed}"
+  ) >>"${ROOT}/logs/storage/stdout.log" 2>&1
 }
 
 run_storage_doctor() {
@@ -1606,6 +1621,7 @@ start_admin() {
       --db-path "${ROOT}/data/admin.db" \
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}" \
+      --public-host "${PUBLIC_HOST}" \
       --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
       service_seed_args+=(--with-storage-shard)
@@ -1661,6 +1677,7 @@ start_cloudnode() {
   start_service "cloudnode" "${ROOT}/cloudnode" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+      "MOOX_SERVICE_GATEWAY_HTTP_URL=http://127.0.0.1:11002" \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
       "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
 }
@@ -1742,7 +1759,9 @@ case "${SERVICE}" in
     if [[ "${WITH_ADMIN}" == "1" ]]; then
       start_admin
     fi
-    start_gateway
+    if [[ "${WITH_GATEWAY}" == "1" ]]; then
+      start_gateway
+    fi
     if [[ "${WITH_EVENTBUS}" == "1" ]]; then
       start_eventbus
     fi
@@ -2314,7 +2333,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -2390,12 +2409,28 @@ prepare_stage() {
   } >"${STAGE_DIR}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     local storage_node_auth_secret="${MOOX_STORAGE_NODE_AUTH_SECRET:-}"
+    local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
+    local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
     if [[ -z "${storage_node_auth_secret}" ]]; then
       storage_node_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-node-auth)"
     fi
+    if [[ -z "${storage_primary_auth_secret}" ]]; then
+      storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
+    fi
+    if [[ -z "${storage_view_auth_secret}" ]]; then
+      storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
+    fi
     [[ "${storage_node_auth_secret}" != *$'\n'* && "${storage_node_auth_secret}" != *$'\r'* ]] || \
       fail "storage DataNode auth secret must contain exactly one line"
+    [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* && \
+       "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
+      fail "storage internal auth secrets must contain exactly one line"
     (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
+    {
+      printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=%q\n' "${storage_primary_auth_secret}"
+      printf 'MOOX_STORAGE_VIEW_AUTH_SECRET=%q\n' "${storage_view_auth_secret}"
+    } >"${STAGE_DIR}/secrets/storage-internal-auth.env"
+    chmod 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env"
   fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
 {"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"}]}
@@ -2778,7 +2813,7 @@ sync_remote_stage() {
   umask 077
   LOCAL_DEPLOY_ARCHIVE=$(mktemp "${TMPDIR:-/tmp}/moox-deploy-${TARGET_GOOS}-${TARGET_GOARCH}.XXXXXX")
   archive="${LOCAL_DEPLOY_ARCHIVE}"
-  tar -C "${STAGE_DIR}" -czf "${archive}" .
+  COPYFILE_DISABLE=1 tar --no-xattrs -C "${STAGE_DIR}" -czf "${archive}" .
   chmod 0600 "${archive}"
 
   remote_archive=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" \
@@ -2992,7 +3027,7 @@ prepare_cls_preflight
 
 if [[ "${PACKAGE_ONLY}" -eq 1 ]]; then
   umask 077
-  tar -C "${STAGE_DIR}" -czf "${PACKAGE_ARCHIVE}" .
+  COPYFILE_DISABLE=1 tar --no-xattrs -C "${STAGE_DIR}" -czf "${PACKAGE_ARCHIVE}" .
   chmod 0600 "${PACKAGE_ARCHIVE}"
   log "wrote deployment archive ${PACKAGE_ARCHIVE}"
   exit 0

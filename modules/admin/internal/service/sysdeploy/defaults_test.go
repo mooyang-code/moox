@@ -39,14 +39,18 @@ func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
 	}
 }
 
-func TestDefaultDeploymentsRemoveLegacyServiceGatewayRows(t *testing.T) {
+func TestDefaultDeploymentsDefineCanonicalGatewayEndpoints(t *testing.T) {
 	byName := map[string]Deployment{}
 	for _, row := range DefaultDeployments(testAdminNodeID) {
 		byName[row.ServiceName] = row
 	}
-	for _, name := range []string{"service_gateway", "service_gateway_internal"} {
-		if _, ok := byName[name]; ok {
-			t.Fatalf("legacy gateway row %s still exists", name)
+	if _, ok := byName["service_gateway_internal"]; ok {
+		t.Fatal("legacy internal service gateway row still exists")
+	}
+	for name, wantPort := range map[string]int32{"service_gateway": 11001, "service_gateway_native": 11003} {
+		row, ok := byName[name]
+		if !ok || row.Scope != "public" || row.Port != wantPort {
+			t.Fatalf("%s deployment = %#v", name, row)
 		}
 	}
 }

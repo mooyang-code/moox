@@ -6,6 +6,7 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-storage-profile.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/storage.tar.gz"
 SHARD_ARCHIVE="${TMP_ROOT}/storage-with-shard.tar.gz"
+SHARED_GATEWAY_ARCHIVE="${TMP_ROOT}/storage-shared-gateway.tar.gz"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
@@ -61,8 +62,12 @@ for binary in moox-admin moox-web-host moox-cloudnode moox-collector; do
 done
 [[ -x "${TMP_ROOT}/unpacked/bin/moox-storage-node" ]]
 [[ -f "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" ]]
+[[ -f "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" ]]
 [[ $(stat -f '%Lp' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" 2>/dev/null || stat -c '%a' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env") == 600 ]]
+[[ $(stat -f '%Lp' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" 2>/dev/null || stat -c '%a' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env") == 600 ]]
 grep -Eq '^MOOX_STORAGE_NODE_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env"
+grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
+grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 [[ -d "${TMP_ROOT}/unpacked/storage/config" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
@@ -79,11 +84,21 @@ done
 grep -Eq '^MOOX_STORAGE_NODE_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env"
 grep -A 20 '^server:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.yaml" | grep -q 'ip: 0.0.0.0'
 grep -A 5 '^  admin:' "${TMP_ROOT}/unpacked/storage/config/trpc_go.yaml" | grep -q 'ip: 127.0.0.1'
+if grep -q 'host_metrics_cleanup.timer' "${TMP_ROOT}/unpacked/storage/config/trpc_go.yaml"; then
+  echo 'unimplemented Storage cleanup timer must not be deployed' >&2
+  exit 1
+fi
+if grep -q 'view.timer' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"; then
+  echo 'unimplemented Storage View scheduler must not be deployed' >&2
+  exit 1
+fi
 grep -q 'target: ip://127.0.0.1:20201' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q '^    - view$' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q 'source "\${ROOT}/secrets/storage-node-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
+grep -q 'source "\${ROOT}/secrets/storage-internal-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'register-node' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'import-seed' "${TMP_ROOT}/unpacked/start.sh"
+grep -q 'cd "${ROOT}/storage"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'activate-datasets' "${TMP_ROOT}/unpacked/start.sh"
 if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"; then
@@ -128,6 +143,16 @@ grep -q 'start_storage_view' <<<"${bootstrap_body}"
 grep -q 'defer Dataset activation' <<<"${doctor_body}"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+  --profile storage --no-gateway --package-only --archive "${SHARED_GATEWAY_ARCHIVE}" \
+  --target localhost --dir "${TMP_ROOT}/deploy-shared-gateway" --stage "${TMP_ROOT}/stage-shared-gateway" \
+  --goos linux --goarch amd64 --skip-build --node-id storage \
+  --gateway-control-url http://127.0.0.1:11000 >/dev/null
+mkdir "${TMP_ROOT}/unpacked-shared-gateway"
+tar -C "${TMP_ROOT}/unpacked-shared-gateway" -xzf "${SHARED_GATEWAY_ARCHIVE}"
+[[ ! -e "${TMP_ROOT}/unpacked-shared-gateway/bin/moox-gateway" ]]
+grep -q 'if \[\[ "${WITH_GATEWAY}" == "1" \]\]; then' "${TMP_ROOT}/unpacked-shared-gateway/start.sh"
+
+PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --profile storage --with-storage-node --package-only --archive "${SHARD_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-shard" --stage "${TMP_ROOT}/stage-shard" \
   --goos linux --goarch amd64 --skip-build --node-id storage \
@@ -145,6 +170,7 @@ grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage-node/config/st
 grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
 grep -q 'default_services+=(storage-node)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
 grep -q 'service_name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
+grep -q 'name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"
 grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'register-node' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'import-seed' "${TMP_ROOT}/unpacked-shard/start.sh"

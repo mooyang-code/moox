@@ -3,12 +3,14 @@ package serverless
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"testing"
+
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
-	"testing"
 )
 
 func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
@@ -53,6 +55,38 @@ func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
 	}
 	if heartbeats != 1 {
 		t.Fatalf("heartbeats = %d, want 1", heartbeats)
+	}
+	if polls != 1 {
+		t.Fatalf("polls = %d, want 1", polls)
+	}
+}
+
+func TestHandleKeepaliveRunsPollWhenHeartbeatFails(t *testing.T) {
+	oldReport := reportHeartbeatAfterProbe
+	oldPoll := pollJobItemsAfterHeartbeat
+	t.Cleanup(func() {
+		reportHeartbeatAfterProbe = oldReport
+		pollJobItemsAfterHeartbeat = oldPoll
+	})
+
+	polls := 0
+	reportHeartbeatAfterProbe = func(context.Context) error {
+		return errors.New("heartbeat unavailable")
+	}
+	pollJobItemsAfterHeartbeat = func(context.Context) error {
+		polls++
+		return nil
+	}
+
+	h := NewCloudFunctionHandler()
+	rsp, err := h.handleKeepalive(withFunctionContext(context.Background()), model.CloudFunctionEvent{
+		Action:               "keepalive",
+		Source:               "collector_schedule",
+		ServiceGatewayTarget: "http://127.0.0.1:11000",
+		Data:                 map[string]any{"node_id": "node-scf-1"},
+	})
+	if err != nil || rsp == nil || !rsp.Success {
+		t.Fatalf("handleKeepalive() = %#v, %v", rsp, err)
 	}
 	if polls != 1 {
 		t.Fatalf("polls = %d, want 1", polls)

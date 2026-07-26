@@ -47,7 +47,7 @@ func TestServiceImpl_SeedDefaults_ShouldInsertRows(t *testing.T) {
 	assert.Equal(t, "enabled", node.Status)
 	for _, row := range rows {
 		assert.Equal(t, testAdminNodeID, row.NodeID)
-		assert.NotContains(t, []string{"service_gateway", "service_gateway_internal"}, row.ServiceName)
+		assert.NotEqual(t, "service_gateway_internal", row.ServiceName)
 	}
 }
 

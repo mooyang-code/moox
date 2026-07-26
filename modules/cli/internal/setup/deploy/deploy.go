@@ -35,6 +35,7 @@ type Options struct {
 	TargetGOARCH          string
 	ResetControlData      bool
 	ResetStorageData      bool
+	UseControlGateway     bool
 	EventBusPublicAddress string
 	EventBusPort          int
 	EventBusTLSEnabled    bool
@@ -107,8 +108,14 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.ResetStorageData {
 		reset = "1"
 	}
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", installStorageScript, "moox-install-storage", reset}, nil); err != nil {
-		return fmt.Errorf("storage_install_failed")
+	controlGateway := "0"
+	if opts.UseControlGateway {
+		controlGateway = "1"
+	}
+	if result, err := transport.Run(ctx, []string{
+		"sh", "-lc", installStorageScript, "moox-install-storage", reset, controlGateway,
+	}, nil); err != nil {
+		return fmt.Errorf("storage_install_failed: stdout=%s stderr=%s", strings.TrimSpace(result.Stdout), strings.TrimSpace(result.Stderr))
 	}
 	installed := true
 	defer func() {
@@ -191,11 +198,11 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.ResetControlData {
 		reset = "1"
 	}
-	if _, err := transport.Run(ctx, []string{
+	if result, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
 		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset,
 	}, nil); err != nil {
-		return fmt.Errorf("control_install_failed")
+		return fmt.Errorf("control_install_failed: stdout=%s stderr=%s", result.Stdout, result.Stderr)
 	}
 	installed := true
 	defer func() {
@@ -414,8 +421,16 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	if skipBuild {
 		args = append(args, "--skip-build")
 	}
+	if opts.UseControlGateway {
+		args = append(args, "--no-gateway")
+	}
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"), args...)
 	command.Dir = root
+	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
+	if err != nil {
+		_ = os.Remove(archive)
+		return "", err
+	}
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
@@ -528,18 +543,31 @@ func probeCommand(stage ReadinessStage) string {
 const installStorageScript = `set -eu
 install_storage() {
   reset_storage_data="$1"
+  use_control_gateway="$2"
   case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
+  case "$use_control_gateway" in 0|1) ;; *) echo storage_gateway_invalid >&2; return 1 ;; esac
   root="$HOME/moox"
   deploy="$root/storage"
   next="$root/storage.next"
   previous="$root/storage.previous"
+  failed="$root/storage.failed"
   archive=/tmp/moox-storage.tar.gz.next
-  rm -rf "$next" "$previous"
+  rm -rf "$next" "$previous" "$failed"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
   if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
   mkdir -p "$next/secrets"
+  if [ "$use_control_gateway" = "1" ]; then
+    control_secrets="$root/prod/secrets"
+    for name in gateway-service.env gateway-storage-primary.key gateway-storage-view.key; do
+      if [ ! -s "$control_secrets/$name" ]; then
+        echo "storage_control_gateway_credentials_missing" >&2
+        return 1
+      fi
+      cp "$control_secrets/$name" "$next/secrets/$name"
+    done
+  fi
   if [ ! -s "$next/secrets/health-auth.env" ]; then
     umask 077
     secret=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
@@ -551,12 +579,12 @@ install_storage() {
   mv "$next" "$deploy"
   if ! "$deploy/start.sh"; then
     "$deploy/stop.sh" || true
-    rm -rf "$deploy"
+    mv "$deploy" "$failed"
     if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
     return 1
   fi
 }
-install_storage "$1"
+install_storage "$1" "$2"
 `
 
 const rollbackStorageScript = `set -eu

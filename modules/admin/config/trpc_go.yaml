@@ -9,7 +9,7 @@ server:
     - masking
     - opentelemetry
     - prometheus
-  timeout: 5000
+  timeout: 60000
   admin:
     ip: 127.0.0.1
     port: 11900
