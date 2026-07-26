@@ -399,16 +399,6 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
-	if err != nil {
-		return err
-	}
-	defer control.Close()
-	inputs, err := setupdeploy.PrepareStorageControlInputs(ctx, control)
-	if err != nil {
-		return err
-	}
-	defer inputs.Cleanup()
 	transport, err := dialSetupHost(ctx, host)
 	if err != nil {
 		return err
@@ -418,15 +408,14 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
-	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
-		RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData,
-		GatewayControlURL:     fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address),
-		GatewayControlKeyFile: inputs.ControlKeyFile,
-		GatewayServiceKeyFile: inputs.ServiceKeyFile,
-		GatewayCABundleFile:   inputs.CABundleFile,
-	}, setupdeploy.Dependencies{}); err != nil {
+	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return err
+	}
+	defer control.Close()
 	_, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Address)
 	return err
 }

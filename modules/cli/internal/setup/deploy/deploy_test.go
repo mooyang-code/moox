@@ -146,63 +146,15 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "custom.toml"), []byte("placeholder"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
-	controlKey := filepath.Join(root, "control.key")
-	serviceKey := filepath.Join(root, "service.key")
-	caBundle := filepath.Join(root, "ca.pem")
-	require.NoError(t, os.WriteFile(controlKey, []byte("control"), 0o600))
-	require.NoError(t, os.WriteFile(serviceKey, []byte("service"), 0o600))
-	require.NoError(t, os.WriteFile(caBundle, []byte("ca"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntouch ./compiled\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --gateway-control-url https://control.example.test:9527 '*) ;; *) exit 3 ;; esac\ncase \" $* \" in *' --gateway-control-key-file '*'/control.key '*) ;; *) exit 4 ;; esac\ncase \" $* \" in *' --gateway-service-key-file '*'/service.key '*) ;; *) exit 5 ;; esac\ncase \" $* \" in *' --gateway-ca-bundle '*'/ca.pem '*) ;; *) exit 6 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 7\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
 
 	archive, err := (StoragePackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
-		GatewayControlURL: "https://control.example.test:9527", GatewayControlKeyFile: controlKey,
-		GatewayServiceKeyFile: serviceKey, GatewayCABundleFile: caBundle,
 	})
 	require.NoError(t, err)
 	defer os.Remove(archive)
 	require.Equal(t, "package", string(requireFile(t, archive)))
-}
-
-func TestPrepareStorageControlInputsKeepsSecretsOutOfCommands(t *testing.T) {
-	events := []string{}
-	peerOne := testCertificate(t, "peer-one")
-	peerTwo := testCertificate(t, "peer-two")
-	caddyRoot := testCertificate(t, "caddy-root")
-	transport := &fakeTransport{events: &events, stdoutByPath: map[string]string{
-		"gateway-control.key": "control-secret\n",
-		"gateway-service.key": "service-secret\n",
-		"peers.pem":           peerOne + peerTwo,
-		"root.crt":            caddyRoot,
-	}}
-	inputs, err := PrepareStorageControlInputs(context.Background(), transport)
-	require.NoError(t, err)
-	defer inputs.Cleanup()
-	require.Equal(t, "control-secret\n", string(requireFile(t, inputs.ControlKeyFile)))
-	require.Equal(t, "service-secret\n", string(requireFile(t, inputs.ServiceKeyFile)))
-	require.Contains(t, string(requireFile(t, inputs.CABundleFile)), "BEGIN CERTIFICATE")
-	for _, path := range []string{inputs.ControlKeyFile, inputs.ServiceKeyFile, inputs.CABundleFile} {
-		info, statErr := os.Stat(path)
-		require.NoError(t, statErr)
-		require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
-	}
-	for _, command := range transport.commands {
-		joined := strings.Join(command, " ")
-		require.NotContains(t, joined, "control-secret")
-		require.NotContains(t, joined, "service-secret")
-	}
-}
-
-func testCertificate(t *testing.T, commonName string) string {
-	t.Helper()
-	dir := t.TempDir()
-	key := filepath.Join(dir, "key.pem")
-	cert := filepath.Join(dir, "cert.pem")
-	output, err := exec.Command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-		"-subj", "/CN="+commonName, "-keyout", key, "-out", cert).CombinedOutput()
-	require.NoError(t, err, string(output))
-	return string(requireFile(t, cert))
 }
 
 func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
@@ -471,7 +423,6 @@ type fakeTransport struct {
 	unameOS      string
 	unameArch    string
 	failFinalize bool
-	stdoutByPath map[string]string
 }
 
 func (f *fakeTransport) Check(context.Context) error { return nil }
@@ -486,11 +437,6 @@ func (f *fakeTransport) Upload(_ context.Context, src io.Reader, _ int64, dst st
 }
 func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	f.commands = append(f.commands, append([]string(nil), argv...))
-	for path, stdout := range f.stdoutByPath {
-		if strings.Contains(strings.Join(argv, " "), path) {
-			return setupssh.Result{Stdout: stdout}, nil
-		}
-	}
 	if len(argv) == 2 && argv[0] == "uname" && argv[1] == "-s" {
 		return setupssh.Result{Stdout: f.unameOS}, nil
 	}

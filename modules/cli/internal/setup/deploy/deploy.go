@@ -38,10 +38,6 @@ type Options struct {
 	EventBusPublicAddress string
 	EventBusPort          int
 	EventBusTLSEnabled    bool
-	GatewayControlURL     string
-	GatewayControlKeyFile string
-	GatewayServiceKeyFile string
-	GatewayCABundleFile   string
 }
 
 type Packager interface {
@@ -136,104 +132,6 @@ type Dependencies struct {
 	Packager Packager
 	Probe    Probe
 	CAStore  CAStore
-}
-
-type StorageControlInputs struct {
-	ControlKeyFile string
-	ServiceKeyFile string
-	CABundleFile   string
-	directory      string
-}
-
-func (i StorageControlInputs) Cleanup() {
-	if i.directory != "" {
-		_ = os.RemoveAll(i.directory)
-	}
-}
-
-func PrepareStorageControlInputs(ctx context.Context, transport setupssh.Client) (StorageControlInputs, error) {
-	if transport == nil {
-		return StorageControlInputs{}, fmt.Errorf("storage_control_inputs_invalid")
-	}
-	paths := []string{
-		"moox/prod/secrets/gateway-control.key",
-		"moox/prod/secrets/gateway-service.key",
-		"moox/prod/certs/gateway/peers.pem",
-		"moox/prod/certs/caddy/root.crt",
-	}
-	values := make([]string, 0, len(paths))
-	for _, remotePath := range paths {
-		result, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/$1"`, "moox-storage-input", remotePath}, nil)
-		if err != nil {
-			return StorageControlInputs{}, fmt.Errorf("storage_control_inputs_unavailable")
-		}
-		values = append(values, result.Stdout)
-	}
-	controlKey, err := normalizeGatewaySecret(values[0])
-	if err != nil {
-		return StorageControlInputs{}, err
-	}
-	serviceKey, err := normalizeGatewaySecret(values[1])
-	if err != nil {
-		return StorageControlInputs{}, err
-	}
-	bundle := strings.TrimSpace(values[2]) + "\n" + strings.TrimSpace(values[3]) + "\n"
-	if err := validateCertificateBundle(bundle, 3); err != nil {
-		return StorageControlInputs{}, fmt.Errorf("storage_control_inputs_invalid")
-	}
-	directory, err := os.MkdirTemp("", "moox-storage-control-*")
-	if err != nil {
-		return StorageControlInputs{}, fmt.Errorf("storage_control_inputs_unavailable")
-	}
-	if err := os.Chmod(directory, 0o700); err != nil {
-		_ = os.RemoveAll(directory)
-		return StorageControlInputs{}, fmt.Errorf("storage_control_inputs_unavailable")
-	}
-	inputs := StorageControlInputs{
-		ControlKeyFile: filepath.Join(directory, "control.key"),
-		ServiceKeyFile: filepath.Join(directory, "service.key"),
-		CABundleFile:   filepath.Join(directory, "ca-bundle.pem"),
-		directory:      directory,
-	}
-	for path, content := range map[string]string{
-		inputs.ControlKeyFile: controlKey + "\n",
-		inputs.ServiceKeyFile: serviceKey + "\n",
-		inputs.CABundleFile:   bundle,
-	} {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			inputs.Cleanup()
-			return StorageControlInputs{}, fmt.Errorf("storage_control_inputs_unavailable")
-		}
-	}
-	return inputs, nil
-}
-
-func normalizeGatewaySecret(raw string) (string, error) {
-	value := strings.TrimSuffix(raw, "\n")
-	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n") {
-		return "", fmt.Errorf("storage_control_inputs_invalid")
-	}
-	return value, nil
-}
-
-func validateCertificateBundle(raw string, minimum int) error {
-	rest := []byte(raw)
-	count := 0
-	for len(strings.TrimSpace(string(rest))) > 0 {
-		block, remaining := pem.Decode(rest)
-		if block == nil || block.Type != "CERTIFICATE" {
-			return fmt.Errorf("invalid certificate bundle")
-		}
-		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-			return err
-		}
-		count++
-		rest = remaining
-	}
-	if count < minimum {
-		return fmt.Errorf("certificate bundle is incomplete")
-	}
-	return nil
 }
 
 type CAStore interface{ Save(string, []byte) error }
@@ -511,10 +409,7 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	args := []string{
 		"--profile", "storage", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
-		"--public-host", opts.PublicHost, "--node-id", "storage", "--gateway-control-url", opts.GatewayControlURL,
-		"--gateway-control-key-file", opts.GatewayControlKeyFile,
-		"--gateway-service-key-file", opts.GatewayServiceKeyFile,
-		"--gateway-ca-bundle", opts.GatewayCABundleFile,
+		"--public-host", opts.PublicHost, "--node-id", "storage", "--gateway-control-url", "http://127.0.0.1:11000",
 	}
 	if skipBuild {
 		args = append(args, "--skip-build")
