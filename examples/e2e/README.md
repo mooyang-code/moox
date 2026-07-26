@@ -153,10 +153,12 @@ examples/metadata-quant-initial.seed.yaml --spaces crypto
 - `11000` admin gateway health 可访问；
 - 管理台 JWT 请求能访问 space、sysdeploy、cloudnode、collector、storage metadata；
 - SysDeploy 的地址派生、更新、删除后重建和再次删除契约通过临时服务记录验证；
-- collector 生成 task instances 且写入 `cloud_job_item_id`；
-- cloudnode JobItems 全部成功；
-- collector task instances 全部成功；
-- storage-primary 经 DataNode Snapshot 路径能读取到 `binance_spot_kline_1h` 时序 K 线数据。
+- collector 生成 task instances、绑定 `cloud_job_item_id`，并提交带未来 `execute_at` 的 JobItem；
+- 常驻诊断 SCF 启动前，JobItem 保持 pending，目标 Dataset 不发生本次采集写入；
+- 到期后 scheduled JobItem 全部成功，task instance 的 `cloud_job_item_id` 仍对应本次执行；
+- 另行提交一个缺失 `execute_at` 的 JobItem，确认其立即进入同一执行链路；
+- K 线严格写入规则指定的 `crypto/binance_spot_kline_1h`，并可经 DataNode Snapshot 和 View 查询；
+- 输出 scheduled/immediate `job_item_id`、预期生命周期事件和对应 CLS 查询条件。
 
 SCF 步骤从部署目录的 `secrets/gateway-service.env` 读取节点和服务身份，将公开 CA 证书以 `MOOX_GATEWAY_CA_PEM_B64` 传入运行时，并通过独立 Gateway `127.0.0.1:11002` 访问 `/api/service/*`。任一身份或 CA 配置缺失时会在调用前失败，不会打印密钥。
 

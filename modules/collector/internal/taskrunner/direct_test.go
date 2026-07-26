@@ -15,7 +15,7 @@ import (
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -43,6 +43,19 @@ type fakeQueueConsumer struct {
 type fakeFetchResult struct {
 	deliveries []*jetstream.Delivery
 	err        error
+}
+
+type directTestExecution struct {
+	itemID string
+	at     time.Time
+}
+
+type directTestAction struct {
+	itemID        string
+	decision      jetstream.HandlerDecision
+	delay         time.Duration
+	deliveryCount uint64
+	err           error
 }
 
 func (f *fakeQueueConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
@@ -246,36 +259,14 @@ func TestHandleDeliveryAtDefersFutureJobWithoutExecuting(t *testing.T) {
 }
 
 func TestDirectWorkerJetStreamAckRetryAndTerm(t *testing.T) {
-	server, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go server.Start()
-	if !server.ReadyForConnections(5 * time.Second) {
-		t.Fatal("NATS server did not become ready")
-	}
-	t.Cleanup(server.Shutdown)
-	url := fmt.Sprintf("nats://%s", server.Addr())
-	raw, err := nats.Connect(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(raw.Close)
-	js, err := raw.JetStream()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := js.AddStream(&nats.StreamConfig{
+	server := testkit.Start(t)
+	server.AddStream(t, &nats.StreamConfig{
 		Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.job.execution.requested.v1.>"},
 		Storage: nats.MemoryStorage, Retention: nats.WorkQueuePolicy,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	ctx := context.Background()
-	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{url}, Name: "direct-worker-e2e"})
+	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "direct-worker-e2e"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,6 +362,159 @@ func TestDirectWorkerJetStreamAckRetryAndTerm(t *testing.T) {
 	}
 }
 
+func TestDirectWorkerJetStreamExecuteAtTiming(t *testing.T) {
+	server := testkit.Start(t)
+	server.AddStream(t, &nats.StreamConfig{
+		Name: "MOOX_CLOUDNODE_EXEC", Subjects: []string{"moox.cloudnode.job.execution.requested.v1.>"},
+		Storage: nats.MemoryStorage, Retention: nats.WorkQueuePolicy,
+	})
+
+	ctx := context.Background()
+	client, err := jetstream.Connect(ctx, jetstream.Config{
+		URLs: []string{server.URL()}, Name: "direct-worker-execute-at",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
+	}))
+	t.Cleanup(gateway.Close)
+	cfg := nodeRuntime.Config{
+		ServiceGatewayTarget: gateway.URL, SpaceID: "crypto", NodeID: "scf-timing",
+		Auth: nodeRuntime.AuthConfig{AccessKey: "collector", SecretKey: "secret", TargetNode: "node-1"},
+	}
+
+	executions := make(chan directTestExecution, 4)
+	jobType := fmt.Sprintf("test.direct.execute-at.timing.%d", time.Now().UnixNano())
+	nodeRuntime.Register(jobType, nodeRuntime.HandlerFunc(func(_ context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
+		executions <- directTestExecution{itemID: item.JobItemID, at: time.Now()}
+		return nodeRuntime.Result{}, nil
+	}))
+	binding := bindDirectTestQueue(t, ctx, client, registry, jobType)
+
+	actions := make(chan directTestAction, 4)
+	runnerCtx, cancelRunner := context.WithCancel(ctx)
+	runnerDone := make(chan error, 1)
+	runnerStopped := false
+	go func() {
+		runnerDone <- jetstream.NewRunner(
+			binding.consumer,
+			jetstream.DeliveryHandlerFunc(func(handleCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+				return handleDelivery(handleCtx, registry, []queueBinding{binding}, cfg, delivery)
+			}),
+			jetstream.RunnerConfig{
+				BatchSize: 1,
+				ActionReporter: jetstream.ActionReporterFunc(func(
+					_ context.Context,
+					delivery *jetstream.Delivery,
+					result jetstream.HandlerResult,
+					err error,
+				) {
+					actions <- directTestAction{
+						itemID: delivery.RawMessageID, decision: result.Decision,
+						delay: result.Delay, deliveryCount: delivery.DeliveryCount, err: err,
+					}
+				}),
+			},
+		).Run(runnerCtx)
+	}()
+	t.Cleanup(func() {
+		cancelRunner()
+		if runnerStopped {
+			return
+		}
+		select {
+		case <-runnerDone:
+		case <-time.After(2 * time.Second):
+		}
+	})
+
+	publishDirectTestJobAt(t, ctx, publisher, binding, "timing-missing", nil)
+	assertDirectTestExecution(t, executions, "timing-missing")
+	assertDirectTestAction(t, actions, "timing-missing", jetstream.ACK, 1)
+
+	past := time.Now().Add(-time.Second)
+	publishDirectTestJobAt(t, ctx, publisher, binding, "timing-past", timestamppb.New(past))
+	assertDirectTestExecution(t, executions, "timing-past")
+	assertDirectTestAction(t, actions, "timing-past", jetstream.ACK, 1)
+
+	due := time.Now().Add(300 * time.Millisecond)
+	publishDirectTestJobAt(t, ctx, publisher, binding, "timing-future", timestamppb.New(due))
+	firstFuture := assertDirectTestAction(t, actions, "timing-future", jetstream.RETRY, 1)
+	if firstFuture.delay <= 0 || firstFuture.delay > 300*time.Millisecond {
+		t.Fatalf("future retry delay = %s, want (0, 300ms]", firstFuture.delay)
+	}
+	select {
+	case got := <-executions:
+		t.Fatalf("future workload executed before the pre-due guard: %+v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	futureExecution := assertDirectTestExecution(t, executions, "timing-future")
+	if futureExecution.at.Before(due) {
+		t.Fatalf("future workload executed at %s before due time %s", futureExecution.at, due)
+	}
+	assertDirectTestAction(t, actions, "timing-future", jetstream.ACK, 2)
+
+	cancelRunner()
+	select {
+	case err := <-runnerDone:
+		runnerStopped = true
+		if err != nil {
+			t.Fatalf("Runner.Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Runner.Run() did not stop after cancellation")
+	}
+}
+
+func assertDirectTestExecution(t *testing.T, executions <-chan directTestExecution, itemID string) directTestExecution {
+	t.Helper()
+	select {
+	case got := <-executions:
+		if got.itemID != itemID {
+			t.Fatalf("executed item = %+v, want %s", got, itemID)
+		}
+		return got
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for workload %s", itemID)
+		return directTestExecution{}
+	}
+}
+
+func assertDirectTestAction(
+	t *testing.T,
+	actions <-chan directTestAction,
+	itemID string,
+	decision jetstream.HandlerDecision,
+	deliveryCount uint64,
+) directTestAction {
+	t.Helper()
+	select {
+	case got := <-actions:
+		if got.itemID != itemID || got.decision != decision || got.deliveryCount != deliveryCount || got.err != nil {
+			t.Fatalf(
+				"action = %+v, want item=%s decision=%v delivery_count=%d with no transport error",
+				got, itemID, decision, deliveryCount,
+			)
+		}
+		return got
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for action %s", itemID)
+		return directTestAction{}
+	}
+}
+
 func bindDirectTestQueue(t *testing.T, ctx context.Context, client *jetstream.Client, registry *events.Registry, jobType string) queueBinding {
 	t.Helper()
 	identity := cloudjobqueue.Identity{SpaceID: "crypto", JobType: jobType}
@@ -397,8 +541,20 @@ func bindDirectTestQueue(t *testing.T, ctx context.Context, client *jetstream.Cl
 
 func publishDirectTestJob(t *testing.T, ctx context.Context, publisher *events.Publisher, binding queueBinding, itemID string) {
 	t.Helper()
+	publishDirectTestJobAt(t, ctx, publisher, binding, itemID, nil)
+}
+
+func publishDirectTestJobAt(
+	t *testing.T,
+	ctx context.Context,
+	publisher *events.Publisher,
+	binding queueBinding,
+	itemID string,
+	executeAt *timestamppb.Timestamp,
+) {
+	t.Helper()
 	_, err := publisher.Publish(ctx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
-		JobId: "job-1", JobItemId: itemID, JobType: binding.jobType,
+		JobId: "job-1", JobItemId: itemID, JobType: binding.jobType, ExecuteAt: executeAt,
 	}, events.PublishOptions{EventID: itemID, SpaceID: "crypto", SubjectID: binding.subjectID, OccurredAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
