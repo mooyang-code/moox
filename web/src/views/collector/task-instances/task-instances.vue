@@ -10,10 +10,8 @@
             <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
             <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
               <a-option :value="1">待执行</a-option>
-              <a-option :value="2">执行中</a-option>
-              <a-option :value="3">成功</a-option>
-              <a-option :value="4">部分失败</a-option>
-              <a-option :value="5">失败</a-option>
+              <a-option :value="2">成功</a-option>
+              <a-option :value="3">失败</a-option>
             </a-select>
             <a-switch v-model="form.includeDeleted" :checked-text="'含删除'" :unchecked-text="'仅有效'" />
             <a-button type="primary" @click="search">
@@ -223,10 +221,8 @@ const paginationConfig = computed(() => ({
 const getStatusColor = (status: number) => {
   const colors: { [key: number]: string } = {
     1: "gray", // 待执行
-    2: "blue", // 执行中
-    3: "green", // 成功
-    4: "orange", // 部分失败
-    5: "red" // 失败
+    2: "green", // 成功
+    3: "red" // 失败
   };
   return colors[status] || "gray";
 };
@@ -234,10 +230,8 @@ const getStatusColor = (status: number) => {
 const getStatusText = (status: number) => {
   const texts: { [key: number]: string } = {
     1: "待执行",
-    2: "执行中",
-    3: "成功",
-    4: "部分失败",
-    5: "失败"
+    2: "成功",
+    3: "失败"
   };
   return texts[status] || "未知";
 };

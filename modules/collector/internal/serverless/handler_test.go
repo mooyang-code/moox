@@ -142,14 +142,9 @@ func TestApplyRuntimeConfig_UpdatesFromDeployments(t *testing.T) {
 	assert.Equal(t, "node-scf-1", nodeID)
 }
 
-func TestProcessCloudFunctionEvent_UnsupportedAndUnknown(t *testing.T) {
+func TestProcessCloudFunctionEvent_Unknown(t *testing.T) {
 	h := NewCloudFunctionHandler()
-	rsp, err := h.processCloudFunctionEvent(context.Background(), model.CloudFunctionEvent{Action: model.EventActionTask})
-	require.NoError(t, err)
-	assert.False(t, rsp.Success)
-	assert.Contains(t, rsp.Message, "disabled")
-
-	rsp, err = h.processCloudFunctionEvent(context.Background(), model.CloudFunctionEvent{Action: "unknown"})
+	rsp, err := h.processCloudFunctionEvent(context.Background(), model.CloudFunctionEvent{Action: "unknown"})
 	require.NoError(t, err)
 	assert.False(t, rsp.Success)
 	assert.Contains(t, rsp.Message, "unknown")

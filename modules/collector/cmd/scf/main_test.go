@@ -121,7 +121,7 @@ func TestStartProductionRuntimeReturnsTRPCStartFailure(t *testing.T) {
 
 func TestDurationEnv(t *testing.T) {
 	t.Setenv("MOOX_RUNTIME_ONCE_TIMEOUT", "bad")
-	assert.Equal(t, 90*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second))
+	assert.Equal(t, defaultOnceTimeout, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", defaultOnceTimeout))
 	t.Setenv("MOOX_RUNTIME_ONCE_TIMEOUT", "30s")
-	assert.Equal(t, 30*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second))
+	assert.Equal(t, 30*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", defaultOnceTimeout))
 }

@@ -17,6 +17,8 @@ import (
 	_ "trpc.group/trpc-go/trpc-log-cls"
 )
 
+const defaultOnceTimeout = 120 * time.Second
+
 var Version string
 
 type onceOptions struct {
@@ -105,7 +107,7 @@ func onceOptionsFromEnv() onceOptions {
 		ServiceGatewayTarget:    strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")),
 		NodeID:                  strings.TrimSpace(os.Getenv("MOOX_RUNTIME_NODE_ID")),
 		StorageRPCGatewayTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")),
-		Timeout:                 durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second),
+		Timeout:                 durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", defaultOnceTimeout),
 	}
 	return opts
 }

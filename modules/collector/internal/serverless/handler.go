@@ -197,11 +197,7 @@ func normalizeDeploymentName(name string) string {
 func (h *CloudFunctionHandler) processCloudFunctionEvent(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
 	log.DebugContextf(ctx, "[CloudFunction] 处理云函数事件, action=%s", event.Action)
 
-	// 根据事件类型处理
 	switch event.Action {
-	case model.EventActionTask:
-		return h.errorResponse("unsupported_event_type", "direct task execution is disabled; use CloudNode JobItem polling"), nil
-
 	case model.EventActionKeepalive:
 		return h.handleKeepalive(ctx, event)
 

@@ -89,7 +89,7 @@ func TestExecuteJobItemRetryableFailureOnlyReportsOnLastDelivery(t *testing.T) {
 	defer server.Close()
 	item := JobItem{SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline"}
 	first := ExecuteJobItem(context.Background(), testConfig(server.URL), item, 1, 3)
-	if first.Decision != jetstream.RETRY || reports != 0 {
+	if first.Decision != jetstream.RETRY || first.Delay != normalRetryDelay || normalRetryDelay != time.Second || reports != 0 {
 		t.Fatalf("first=%+v reports=%d", first, reports)
 	}
 	last := ExecuteJobItem(context.Background(), testConfig(server.URL), item, 3, 3)
@@ -112,6 +112,9 @@ func TestExecuteJobItemReportFailureRetriesDelivery(t *testing.T) {
 	}, 1, 3)
 	if result.Decision != jetstream.RETRY || result.Err == nil {
 		t.Fatalf("result=%+v", result)
+	}
+	if result.Delay != normalRetryDelay || normalRetryDelay != time.Second {
+		t.Fatalf("retry delay = %v, want %v", result.Delay, normalRetryDelay)
 	}
 }
 

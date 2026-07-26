@@ -15,6 +15,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// DefaultAckWait leaves enough time for the Collector's bounded workload and status reports.
+const DefaultAckWait = 120 * time.Second
+
 type JetStreamQueue struct {
 	rt        *Runtime
 	client    *jetstream.Client
@@ -25,7 +28,7 @@ type JetStreamQueue struct {
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if cfg.AckWait <= 0 {
-		cfg.AckWait = time.Minute
+		cfg.AckWait = DefaultAckWait
 	}
 	if cfg.MaxDeliver <= 0 {
 		cfg.MaxDeliver = 3

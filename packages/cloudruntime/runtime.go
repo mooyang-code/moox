@@ -22,6 +22,7 @@ import (
 
 const (
 	defaultHTTPTimeout = 8 * time.Second
+	normalRetryDelay   = time.Second
 	reportSuccess      = 1
 	reportFailed       = 2
 	errorRetryable     = 1
@@ -175,7 +176,7 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 		Status: status, Duration: duration, ErrorCode: code, Err: execErr,
 	}, execErr != nil)
 	if execErr != nil && kind == errorRetryable && maxDeliver > 0 && deliveryCount < uint64(maxDeliver) {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: execErr}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: execErr}
 	}
 
 	req := reportRequest{
@@ -202,7 +203,7 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 		Status: status, Duration: duration, ErrorCode: reportErrorCode, Err: reportLogErr,
 	}, reportLogErr != nil)
 	if reportErr != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: reportErr}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: reportErr}
 	}
 	return jetstream.HandlerResult{Decision: decision, Err: execErr}
 }

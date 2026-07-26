@@ -18,8 +18,7 @@ func TestToPBRuleAndFromPBRule_ShouldRoundTripCoreFields(t *testing.T) {
 	require.NoError(t, err)
 	in := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Exchange: "binance",
-		CollectParams: `{"source":{"kind":"none"}}`, AssignmentType: "auto",
-		AssignedNodes: "[]", NodePattern: "node-*", NodeTags: "[]", Enabled: true,
+		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 		Creator: "tester", CreateTime: time.Unix(1, 0).UTC(), ModifyTime: time.Unix(2, 0).UTC(),
 	}
 	pbRule := toPBRule(in)
@@ -29,12 +28,11 @@ func TestToPBRuleAndFromPBRule_ShouldRoundTripCoreFields(t *testing.T) {
 
 	out := fromPBRule(&pb.TaskRule{
 		SpaceId: "crypto", RuleId: "rule-2", DataType: "kline", Exchange: "binance",
-		CollectParams: params, Enabled: &enabled, AssignedNodes: []string{"node-a"},
-		NodeTags: []string{"tag-a"},
+		CollectParams: params, Enabled: &enabled,
 	})
 	assert.Equal(t, "crypto", out.SpaceID)
 	assert.Equal(t, "rule-2", out.RuleID)
-	assert.Contains(t, out.AssignedNodes, "node-a")
+	assert.Equal(t, "binance", out.Exchange)
 }
 
 func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
@@ -68,8 +66,7 @@ func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 
 func TestStatusAndJSONHelpers(t *testing.T) {
 	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING, toPBStatus(domain.InstanceStatusPending))
-	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING, toPBStatus(domain.InstanceStatusRunning))
-	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED, toPBStatus(domain.InstanceStatusPartFailed))
+	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS, toPBStatus(domain.InstanceStatusSuccess))
 	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED, toPBStatus(domain.InstanceStatusFailed))
 	assert.Equal(t, domain.InstanceStatusSuccess, fromPBStatus(pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS))
 	assert.Equal(t, 0, fromPBStatus(pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_UNSPECIFIED))

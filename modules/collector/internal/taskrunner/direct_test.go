@@ -20,6 +20,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestCollectorWorkloadTimeout(t *testing.T) {
+	if collectorWorkloadTimeout != 100*time.Second {
+		t.Fatalf("collectorWorkloadTimeout = %v, want 100s", collectorWorkloadTimeout)
+	}
+}
+
 func TestCollectorErrorCodeDistinguishesInstanceReportFailure(t *testing.T) {
 	reportErr := fmt.Errorf("%w: gateway unavailable", executor.ErrTaskInstanceReportFailed)
 	if got := collectorErrorCode(reportErr); got != "TASK_INSTANCE_REPORT_FAILED" {

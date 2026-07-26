@@ -25,10 +25,8 @@ const JOB_STATUS = {
 
 const TASK_STATUS = {
   1: "TASK_INSTANCE_STATUS_PENDING",
-  2: "TASK_INSTANCE_STATUS_RUNNING",
-  3: "TASK_INSTANCE_STATUS_SUCCESS",
-  4: "TASK_INSTANCE_STATUS_PART_FAILED",
-  5: "TASK_INSTANCE_STATUS_FAILED",
+  2: "TASK_INSTANCE_STATUS_SUCCESS",
+  3: "TASK_INSTANCE_STATUS_FAILED",
 };
 
 class FatalAssertionError extends Error {}
@@ -197,10 +195,7 @@ async function assertAfterSCF(args) {
   const instances = await waitFor("collector task instances success", timeoutMs, async () => {
     const rows = await listTaskInstances(args, token);
     if (rows.length === 0) throw new Error("collector task instances are empty");
-    const failed = rows.filter((item) =>
-      isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_FAILED") ||
-      isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_PART_FAILED"),
-    );
+    const failed = rows.filter((item) => isTaskStatus(item.last_exec_status, "TASK_INSTANCE_STATUS_FAILED"));
     if (failed.length > 0) {
       throw new FatalAssertionError(`task instance failed: ${failed.map((item) => `${item.task_id}:${statusName(item.last_exec_status, TASK_STATUS)}`).join(", ")}`);
     }
@@ -552,10 +547,6 @@ async function ensureCollectorRule(args, token) {
       target: { dataset_id: args.dataset, job_type: "collect.kline" },
       schedule: { interval: "1h", timezone: "Asia/Shanghai" },
     },
-    assignment_type: "auto",
-    assigned_nodes: [],
-    node_pattern: "",
-    node_tags: [],
     enabled: true,
     creator: "moox-e2e",
   };

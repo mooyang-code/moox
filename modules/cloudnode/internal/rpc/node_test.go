@@ -284,7 +284,6 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 			Runtime:        "CustomRuntime",
 			Handler:        "main",
 			Config: map[string]string{
-				"timeout":       "60",
 				"memory_size":   "256",
 				"cls_logset_id": "logset-config",
 				"cls_topic_id":  "topic-config",
@@ -312,7 +311,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	if create.COSBucket != "moox-scf-1255382561" || create.COSRegion != "ap-guangzhou" || create.COSObject != "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip" {
 		t.Fatalf("cos package = bucket:%q region:%q object:%q", create.COSBucket, create.COSRegion, create.COSObject)
 	}
-	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 60 || create.MemorySize != 256 {
+	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 120 || create.MemorySize != 256 {
 		t.Fatalf("runtime config = %#v", create)
 	}
 	if create.ClsLogsetID != "logset-config" || create.ClsTopicID != "topic-config" {

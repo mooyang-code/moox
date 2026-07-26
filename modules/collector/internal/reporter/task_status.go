@@ -19,10 +19,8 @@ import (
 // TaskStatus 任务状态常量
 const (
 	StatusPending = 1 // 待执行
-	StatusRunning = 2 // 执行中
-	StatusSuccess = 3 // 成功
-	StatusPartial = 4 // 部分失败
-	StatusFailed  = 5 // 失败
+	StatusSuccess = 2 // 成功
+	StatusFailed  = 3 // 失败
 )
 
 // ReportTaskStatusRequest 上报任务状态请求

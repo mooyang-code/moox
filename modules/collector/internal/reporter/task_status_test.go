@@ -84,7 +84,7 @@ func TestTaskStatusLogFieldsAreStableAndOmitResult(t *testing.T) {
 	got := taskStatusLogLine("crypto", "task-1", "item-1", "node-1", 2, StatusSuccess, "success", nil)
 	want := `event="collector_job_instance_reported" space_id="crypto" job_item_id="item-1" ` +
 		`task_id="task-1" runtime_code_package_id="package-1" node_id="node-1" ` +
-		`delivery_count=2 task_status=3 status="success" error_code="" error=""`
+		`delivery_count=2 task_status=2 status="success" error_code="" error=""`
 	if got != want {
 		t.Fatalf("task status log:\n got: %s\nwant: %s", got, want)
 	}

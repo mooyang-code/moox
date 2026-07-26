@@ -107,17 +107,13 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
     "data_type": "kline",
     "data_source": "binance",
     "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\",\"job_type\":\"collect.kline\"},\"schedule\":{\"interval\":\"1h\",\"timezone\":\"Asia/Shanghai\"}}",
-    "assignment_type": "auto",
-    "assigned_nodes": "[]",
-    "node_pattern": "",
-    "node_tags": "[]",
     "enabled": "true",
     "creator": "system"
   }
 }
 ```
 
-创建规则后，调用 `/api/admin/collectmgr/ScheduleTasks`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline_1h` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 提交 CloudNode JobItem。
+创建规则后，调用 `/api/admin/collectmgr/ScheduleTasks`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline_1h` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 只提交下一次 CloudNode JobItem。`execute_at` 缺失或已到期时立即执行。
 
 ## 最小可演示闭环
 
@@ -180,3 +176,9 @@ examples/e2e/run.sh \
 - CloudNode 批量创建/部署节点返回 `batch_id`，这是控制面 `batch_change`，不是 collector `task_instance`，也不是 SCF runtime `JobItem`。
 - SCF 异步执行协议统一使用 `SubmitJobItems`、JetStream Job Execution Queue、
   `ReportJobItemStatus` 和 `job_item_id` 字段。
+- 每个 SCF 进程使用一个 NATS 连接和一个常驻 taskrunner 绑定多个受支持 durable；
+  心跳 timer 与 taskrunner 相互独立。动态增加实例后，相同 durable 自动加入竞争消费，
+  执行完全由 JetStream delivery 驱动。
+- 允许少量重复执行，不承诺任务级去重。JobItem 获取、延期、执行、状态上报、完成和
+  delivery action 可按 `job_item_id` 在 CLS 检索。
+- Binance TLS 证书校验关闭是本 E2E 接受的运行配置。

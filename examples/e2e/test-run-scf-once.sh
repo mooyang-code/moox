@@ -26,14 +26,14 @@ EOF
 chmod +x "${deploy}/bin/moox-collector-scf"
 
 args="${TMP}/args"
-MOOX_E2E_TEST_ARGS="${args}" "${ROOT}/examples/e2e/run-scf-once.sh" "${deploy}" 45s collector-node crypto >"${TMP}/output" 2>&1
+MOOX_E2E_TEST_ARGS="${args}" "${ROOT}/examples/e2e/run-scf-once.sh" "${deploy}" 120s collector-node crypto >"${TMP}/output" 2>&1
 grep -Fq -- '-service-gateway-target http://127.0.0.1:11002' "${args}"
 grep -Fq -- '-node-id collector-node' "${args}"
-grep -Fq -- '-timeout 45s' "${args}"
+grep -Fq -- '-timeout 120s' "${args}"
 ! grep -Rq -- 'test-secret-never-print' "${TMP}/output"
 
 sed -i.bak '/MOOX_GATEWAY_SERVICE_SECRET_KEY/d' "${deploy}/secrets/gateway-service.env"
-if MOOX_E2E_TEST_ARGS="${args}" "${ROOT}/examples/e2e/run-scf-once.sh" "${deploy}" 45s collector-node crypto >"${TMP}/missing-output" 2>&1; then
+if MOOX_E2E_TEST_ARGS="${args}" "${ROOT}/examples/e2e/run-scf-once.sh" "${deploy}" 120s collector-node crypto >"${TMP}/missing-output" 2>&1; then
   echo 'missing Gateway secret unexpectedly accepted' >&2
   exit 1
 fi

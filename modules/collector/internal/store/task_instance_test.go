@@ -78,7 +78,7 @@ func TestTaskInstanceRepository_UpdateStatusIgnoresStaleJobItemID(t *testing.T) 
 	instance := domain.TaskInstance{
 		SpaceID: "crypto", TaskID: "task-1", CloudJobItemID: "item-new", RuleID: "rule-1",
 		Exchange: "binance", Market: "spot", DataType: "symbol", TaskParams: `{}`,
-		LastExecNode: "node-current", LastExecStatus: domain.InstanceStatusRunning, Result: `{"state":"current"}`,
+		LastExecNode: "node-current", LastExecStatus: domain.InstanceStatusPending, Result: `{"state":"current"}`,
 	}
 	require.NoError(t, repo.UpsertMany(ctx, []domain.TaskInstance{instance}))
 
@@ -92,7 +92,7 @@ func TestTaskInstanceRepository_UpdateStatusIgnoresStaleJobItemID(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
 	assert.Equal(t, "node-current", instances[0].LastExecNode)
-	assert.Equal(t, domain.InstanceStatusRunning, instances[0].LastExecStatus)
+	assert.Equal(t, domain.InstanceStatusPending, instances[0].LastExecStatus)
 	assert.JSONEq(t, `{"state":"current"}`, instances[0].Result)
 }
 

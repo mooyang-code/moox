@@ -34,6 +34,8 @@ type queueBinding struct {
 	maxDeliver int
 }
 
+const collectorWorkloadTimeout = 100 * time.Second
+
 type queueConsumer interface {
 	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
 	Close() error
@@ -289,13 +291,13 @@ func runtimeSpaceID() string {
 }
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
-	execCtx, cancel := context.WithTimeout(ctx, 105*time.Second)
+	execCtx, cancel := context.WithTimeout(ctx, collectorWorkloadTimeout)
 	defer cancel()
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")
 	}
-	result, err := executor.ExecuteTaskImmediately(execCtx, taskEvent)
+	result, err := executor.ExecuteTask(execCtx, taskEvent)
 	summary := map[string]any{}
 	if strings.TrimSpace(result) != "" {
 		_ = json.Unmarshal([]byte(result), &summary)
@@ -346,7 +348,7 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 		TaskID: taskID, JobItemID: item.JobItemID, DeliveryCount: item.DeliveryCount, DataType: dataType,
 		DataSource: firstString(stringValue(payload, "exchange"), "binance"), Market: market,
 		InstType: strings.ToUpper(market), SubjectID: subjectID, Symbol: symbol, Intervals: intervals,
-		Immediate: true, Live: boolValue(payload, "live"),
+		Live: boolValue(payload, "live"),
 	}, nil
 }
 

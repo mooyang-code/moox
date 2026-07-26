@@ -48,13 +48,6 @@
             </a-table-column>
             <a-table-column title="数据类型" data-index="data_type" :width="120"></a-table-column>
             <a-table-column title="数据源" data-index="data_source" :width="120"></a-table-column>
-            <a-table-column title="云节点匹配规则" data-index="assignment_type" :width="120">
-              <template #cell="{ record }">
-                <a-tag bordered size="small" :color="getAssignmentColor(record.assignment_type)">
-                  {{ getAssignmentText(record.assignment_type) }}
-                </a-tag>
-              </template>
-            </a-table-column>
             <a-table-column title="创建时间" :width="160">
               <template #cell="{ record }">
                 {{ formatDateTime(record.create_time) }}
@@ -129,39 +122,6 @@
             </a-select>
           </a-form-item>
 
-          <a-divider>任务分配配置</a-divider>
-
-          <a-row :gutter="16">
-            <a-col :span="12">
-              <a-form-item field="assignment_type" label="云节点匹配规则">
-                <a-select v-model="addForm.assignment_type" placeholder="请选择云节点匹配规则" @change="onAssignmentTypeChange">
-                  <a-option value="auto">自动分配</a-option>
-                  <a-option value="fixed">固定节点</a-option>
-                  <a-option value="pattern">模式匹配</a-option>
-                  <a-option value="tag">标签匹配</a-option>
-                </a-select>
-              </a-form-item>
-            </a-col>
-          </a-row>
-
-          <a-form-item v-if="addForm.assignment_type === 'fixed'" label="指定节点列表">
-            <a-select v-model="assignedNodesList" placeholder="请选择节点" multiple>
-              <a-option v-for="node in nodeOptions" :key="node.node_id" :value="node.node_id">
-                {{ node.node_name }} ({{ node.node_id }})
-              </a-option>
-            </a-select>
-          </a-form-item>
-
-          <a-form-item v-if="addForm.assignment_type === 'pattern'" field="node_pattern" label="节点匹配模式">
-            <a-input v-model="addForm.node_pattern" placeholder="如：scf-collector-*" allow-clear />
-          </a-form-item>
-
-          <a-form-item v-if="addForm.assignment_type === 'tag'" label="节点标签">
-            <a-select v-model="nodeTagsList" placeholder="请选择节点标签" multiple allow-clear>
-              <a-option value="国内">国内</a-option>
-              <a-option value="海外">海外</a-option>
-            </a-select>
-          </a-form-item>
         </a-form>
 
         <!-- 采集参数配置 - 完全独立于表单 -->
@@ -268,9 +228,6 @@
         <a-descriptions-item label="规则ID">{{ detailData.rule_id }}</a-descriptions-item>
         <a-descriptions-item label="数据类型">{{ detailData.data_type }}</a-descriptions-item>
         <a-descriptions-item label="数据源">{{ detailData.data_source }}</a-descriptions-item>
-        <a-descriptions-item label="云节点匹配规则">{{
-          getAssignmentText(detailData.assignment_type || "")
-        }}</a-descriptions-item>
         <a-descriptions-item label="启用状态">
           <a-tag :color="detailData.enabled === 'true' ? 'green' : 'red'">
             {{ detailData.enabled === "true" ? "启用" : "禁用" }}
@@ -284,12 +241,6 @@
       <a-divider />
 
       <a-descriptions :column="1" bordered>
-        <a-descriptions-item label="节点配置">
-          <div v-if="detailData.assignment_type === 'fixed'">指定节点：{{ detailData.assigned_nodes }}</div>
-          <div v-else-if="detailData.assignment_type === 'pattern'">节点模式：{{ detailData.node_pattern }}</div>
-          <div v-else-if="detailData.assignment_type === 'tag'">节点标签：{{ detailData.node_tags }}</div>
-          <div v-else>自动分配</div>
-        </a-descriptions-item>
         <a-descriptions-item label="采集参数">
           <pre>{{ formatJSON(detailData.collect_params || "") }}</pre>
         </a-descriptions-item>
@@ -302,7 +253,6 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { callControl } from "@/api/admin/http";
-import { getNodeList as fetchCloudNodeList } from "@/api/cloud-node";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
@@ -313,10 +263,6 @@ interface TaskConfig {
   space_id: string;
   data_type: string;
   data_source: string;
-  assignment_type: string;
-  assigned_nodes: string;
-  node_pattern: string;
-  node_tags: string;
   collect_params: string;
   enabled: string;
   creator: string;
@@ -365,9 +311,6 @@ const title = ref("新建任务");
 const formRef = ref();
 const detailVisible = ref(false);
 const detailData = ref<Partial<TaskConfig>>({});
-const nodeOptions = ref<any[]>([]);
-const assignedNodesList = ref<string[]>([]);
-const nodeTagsList = ref<string[]>([]);
 const activeDataType = ref(""); // 用于跟踪当前激活的数据类型，防止重复初始化
 
 // 数据类型配置相关数据
@@ -449,10 +392,6 @@ const addForm = ref({
   space_id: "",
   data_type: "",
   data_source: "",
-  assignment_type: "auto",
-  assigned_nodes: "[]",
-  node_pattern: "",
-  node_tags: "[]",
   collect_params: "{}",
   enabled: "true",
   creator: ""
@@ -584,25 +523,6 @@ const INTERVAL_OPTIONS = [
   { label: "1月", value: "1M" }
 ];
 
-const getAssignmentColor = (type: string) => {
-  const colors: { [key: string]: string } = {
-    auto: "blue",
-    fixed: "green",
-    pattern: "orange"
-  };
-  return colors[type] || "gray";
-};
-
-const getAssignmentText = (type: string) => {
-  const texts: { [key: string]: string } = {
-    auto: "自动分配",
-    fixed: "固定节点",
-    pattern: "模式匹配",
-    tag: "标签匹配"
-  };
-  return texts[type] || type;
-};
-
 // 获取数据源标签
 const getDataSourceLabel = (value: string) => {
   const labels: { [key: string]: string } = {
@@ -655,29 +575,12 @@ const normalizeObject = (value: any): Record<string, any> => {
   }
 };
 
-const normalizeArray = (value: any): string[] => {
-  if (Array.isArray(value)) {
-    return value.map(item => String(item));
-  }
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(String(value));
-    return Array.isArray(parsed) ? parsed.map(item => String(item)) : [];
-  } catch {
-    return [];
-  }
-};
-
 const normalizeTaskConfig = (raw: any): TaskConfig => ({
   id: raw.id,
   rule_id: raw.rule_id || "",
   space_id: raw.space_id || "",
   data_type: raw.data_type || "",
   data_source: raw.exchange || raw.data_source || "",
-  assignment_type: raw.assignment_type || "auto",
-  assigned_nodes: JSON.stringify(normalizeArray(raw.assigned_nodes)),
-  node_pattern: raw.node_pattern || "",
-  node_tags: JSON.stringify(normalizeArray(raw.node_tags)),
   collect_params: JSON.stringify(normalizeObject(raw.collect_params)),
   enabled: (raw.enabled ?? true) ? "true" : "false",
   creator: raw.creator || "",
@@ -813,15 +716,6 @@ const getTaskList = async () => {
     Message.error("获取任务列表失败");
   } finally {
     loading.value = false;
-  }
-};
-
-const getNodeList = async () => {
-  try {
-    const data = await fetchCloudNodeList();
-    nodeOptions.value = data.items || [];
-  } catch (error) {
-    console.error("获取节点列表失败:", error);
   }
 };
 
@@ -962,16 +856,10 @@ const onAdd = () => {
     space_id: selectedSpaceId.value || "",
     data_type: "",
     data_source: "",
-    assignment_type: "auto",
-    assigned_nodes: "[]",
-    node_pattern: "",
-    node_tags: "[]",
     collect_params: "{}",
     enabled: "true",
     creator: account.value.user.userName || ""
   };
-  assignedNodesList.value = [];
-  nodeTagsList.value = [];
   currentFieldConfigs.value = [];
   resetDynamicFields();
   dataSourceOptions.value = [];
@@ -983,20 +871,6 @@ const onUpdate = (record: TaskConfig) => {
   title.value = "修改采集规则";
   addForm.value = { ...record };
   activeDataType.value = record.data_type;
-
-  // 解析 assigned_nodes
-  try {
-    assignedNodesList.value = JSON.parse(record.assigned_nodes || "[]");
-  } catch {
-    assignedNodesList.value = [];
-  }
-
-  // 解析 node_tags
-  try {
-    nodeTagsList.value = JSON.parse(record.node_tags || "[]");
-  } catch {
-    nodeTagsList.value = [];
-  }
 
   // 解析现有的采集参数
   let existingParams: { [key: string]: any } = {};
@@ -1062,21 +936,6 @@ const loadDataSourceOptions = (dataSources?: any) => {
   loadingDataSources.value = false;
 };
 
-const onAssignmentTypeChange = (value: string) => {
-  // 清空相关字段
-  if (value !== "fixed") {
-    assignedNodesList.value = [];
-    addForm.value.assigned_nodes = "[]";
-  }
-  if (value !== "pattern") {
-    addForm.value.node_pattern = "";
-  }
-  if (value !== "tag") {
-    nodeTagsList.value = [];
-    addForm.value.node_tags = "[]";
-  }
-};
-
 const afterClose = () => {
   formRef.value?.clearValidate();
   open.value = false;
@@ -1128,14 +987,6 @@ const handleOk = async (): Promise<boolean> => {
       return false;
     }
 
-    // 处理云节点匹配规则数据
-    if (addForm.value.assignment_type === "fixed") {
-      addForm.value.assigned_nodes = JSON.stringify(assignedNodesList.value || []);
-    }
-    if (addForm.value.assignment_type === "tag") {
-      addForm.value.node_tags = JSON.stringify(nodeTagsList.value || []);
-    }
-
     addForm.value.collect_params = JSON.stringify(buildStandardCollectParams());
     const collectParams = normalizeObject(addForm.value.collect_params);
 
@@ -1144,10 +995,6 @@ const handleOk = async (): Promise<boolean> => {
       space_id: spaceId,
       data_type: addForm.value.data_type,
       exchange: addForm.value.data_source,
-      assignment_type: addForm.value.assignment_type,
-      assigned_nodes: normalizeArray(addForm.value.assigned_nodes),
-      node_pattern: addForm.value.node_pattern || "",
-      node_tags: normalizeArray(addForm.value.node_tags),
       collect_params: collectParams,
       enabled: addForm.value.enabled !== "false",
       creator: addForm.value.creator || account.value.user?.userName || ""
@@ -1199,10 +1046,6 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       rule_id: record.rule_id,
       data_type: record.data_type,
       exchange: record.data_source,
-      assignment_type: record.assignment_type,
-      assigned_nodes: normalizeArray(record.assigned_nodes),
-      node_pattern: record.node_pattern || "",
-      node_tags: normalizeArray(record.node_tags),
       collect_params: normalizeObject(record.collect_params),
       enabled: value,
       creator: record.creator || account.value.user?.userName || ""
@@ -1243,7 +1086,6 @@ watch(
 
 onMounted(() => {
   getTaskList();
-  getNodeList();
   getDataTypeConfigs();
 });
 </script>

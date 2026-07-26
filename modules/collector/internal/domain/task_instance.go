@@ -8,11 +8,9 @@ import (
 )
 
 const (
-	InstanceStatusPending    = 1
-	InstanceStatusRunning    = 2
-	InstanceStatusSuccess    = 3
-	InstanceStatusPartFailed = 4
-	InstanceStatusFailed     = 5
+	InstanceStatusPending = 1
+	InstanceStatusSuccess = 2
+	InstanceStatusFailed  = 3
 )
 
 // DatasetSubject is a storage dataset subject projected into Collector.

@@ -10,6 +10,12 @@ func TestTaskInstance_TableName_ShouldReturnCollectorTaskInstancesTable(t *testi
 	assert.Equal(t, "t_collector_task_instances", (&TaskInstance{}).TableName())
 }
 
+func TestTaskInstanceStatusValuesAreCompact(t *testing.T) {
+	assert.Equal(t, 1, InstanceStatusPending)
+	assert.Equal(t, 2, InstanceStatusSuccess)
+	assert.Equal(t, 3, InstanceStatusFailed)
+}
+
 func TestTaskInstance_StableTaskID_SameInput_ShouldReturnDeterministicID(t *testing.T) {
 	spec := TaskSpec{
 		Exchange:  "binance",

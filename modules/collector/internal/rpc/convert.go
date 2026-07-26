@@ -13,19 +13,15 @@ import (
 func toPBRule(rule domain.TaskRule) *pb.TaskRule {
 	enabled := rule.Enabled
 	return &pb.TaskRule{
-		SpaceId:        rule.SpaceID,
-		RuleId:         rule.RuleID,
-		DataType:       rule.DataType,
-		Exchange:       rule.Exchange,
-		CollectParams:  structFromJSONString(rule.CollectParams),
-		AssignmentType: rule.AssignmentType,
-		AssignedNodes:  stringsFromJSONString(rule.AssignedNodes),
-		NodePattern:    rule.NodePattern,
-		NodeTags:       stringsFromJSONString(rule.NodeTags),
-		Enabled:        &enabled,
-		Creator:        rule.Creator,
-		CreateTime:     formatTime(rule.CreateTime),
-		ModifyTime:     formatTime(rule.ModifyTime),
+		SpaceId:       rule.SpaceID,
+		RuleId:        rule.RuleID,
+		DataType:      rule.DataType,
+		Exchange:      rule.Exchange,
+		CollectParams: structFromJSONString(rule.CollectParams),
+		Enabled:       &enabled,
+		Creator:       rule.Creator,
+		CreateTime:    formatTime(rule.CreateTime),
+		ModifyTime:    formatTime(rule.ModifyTime),
 	}
 }
 
@@ -34,17 +30,13 @@ func fromPBRule(rule *pb.TaskRule) domain.TaskRule {
 		return domain.TaskRule{}
 	}
 	return domain.TaskRule{
-		SpaceID:        rule.GetSpaceId(),
-		RuleID:         rule.GetRuleId(),
-		DataType:       rule.GetDataType(),
-		Exchange:       rule.GetExchange(),
-		CollectParams:  jsonStringFromStruct(rule.GetCollectParams()),
-		AssignmentType: rule.GetAssignmentType(),
-		AssignedNodes:  jsonStringFromStrings(rule.GetAssignedNodes()),
-		NodePattern:    rule.GetNodePattern(),
-		NodeTags:       jsonStringFromStrings(rule.GetNodeTags()),
-		Enabled:        taskRuleEnabled(rule),
-		Creator:        rule.GetCreator(),
+		SpaceID:       rule.GetSpaceId(),
+		RuleID:        rule.GetRuleId(),
+		DataType:      rule.GetDataType(),
+		Exchange:      rule.GetExchange(),
+		CollectParams: jsonStringFromStruct(rule.GetCollectParams()),
+		Enabled:       taskRuleEnabled(rule),
+		Creator:       rule.GetCreator(),
 	}
 }
 
@@ -83,12 +75,8 @@ func toPBStatus(status int) pb.TaskInstanceStatus {
 	switch status {
 	case domain.InstanceStatusPending:
 		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING
-	case domain.InstanceStatusRunning:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING
 	case domain.InstanceStatusSuccess:
 		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS
-	case domain.InstanceStatusPartFailed:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED
 	case domain.InstanceStatusFailed:
 		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED
 	default:
@@ -100,12 +88,8 @@ func fromPBStatus(status pb.TaskInstanceStatus) int {
 	switch status {
 	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING:
 		return domain.InstanceStatusPending
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING:
-		return domain.InstanceStatusRunning
 	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS:
 		return domain.InstanceStatusSuccess
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED:
-		return domain.InstanceStatusPartFailed
 	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED:
 		return domain.InstanceStatusFailed
 	default:

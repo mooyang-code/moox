@@ -381,15 +381,6 @@ func normalizeTaskRule(rule domain.TaskRule) domain.TaskRule {
 	if rule.RuleID == "" {
 		rule.RuleID = fmt.Sprintf("rule-%d", time.Now().UnixNano())
 	}
-	if strings.TrimSpace(rule.AssignmentType) == "" {
-		rule.AssignmentType = "auto"
-	}
-	if strings.TrimSpace(rule.AssignedNodes) == "" {
-		rule.AssignedNodes = "[]"
-	}
-	if strings.TrimSpace(rule.NodeTags) == "" {
-		rule.NodeTags = "[]"
-	}
 	if strings.TrimSpace(rule.CollectParams) == "" {
 		rule.CollectParams = "{}"
 	}

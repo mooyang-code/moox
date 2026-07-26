@@ -11,20 +11,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReportImmediateTaskStatusReturnsReporterError(t *testing.T) {
+func TestReportTaskStatusReturnsReporterError(t *testing.T) {
 	wantErr := errors.New("report failed")
-	oldReportTaskStatus := reportTaskStatus
-	reportTaskStatus = func(context.Context, string, string, string, uint64, int, string) error {
+	oldReportTaskStatus := sendTaskStatus
+	sendTaskStatus = func(context.Context, string, string, string, uint64, int, string) error {
 		return wantErr
 	}
-	defer func() { reportTaskStatus = oldReportTaskStatus }()
+	defer func() { sendTaskStatus = oldReportTaskStatus }()
 
-	err := reportImmediateTaskStatus(context.Background(), "space-a", "task-1", "item-1", 2, 3, "ok")
+	err := reportTaskStatus(context.Background(), "space-a", "task-1", "item-1", 2, 3, "ok")
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("reportImmediateTaskStatus() error = %v, want %v", err, wantErr)
+		t.Fatalf("reportTaskStatus() error = %v, want %v", err, wantErr)
 	}
 	if !errors.Is(err, ErrTaskInstanceReportFailed) {
-		t.Fatalf("reportImmediateTaskStatus() error = %v, want task instance report boundary", err)
+		t.Fatalf("reportTaskStatus() error = %v, want task instance report boundary", err)
 	}
 }
 
@@ -47,28 +47,28 @@ func TestNormalizeMarket(t *testing.T) {
 	assert.Equal(t, "spot", normalizeMarket(&model.TaskExecuteEvent{InstType: "SPOT"}))
 }
 
-func TestExecuteTaskImmediately_NilEvent(t *testing.T) {
-	_, err := ExecuteTaskImmediately(context.Background(), nil)
+func TestExecuteTask_NilEvent(t *testing.T) {
+	_, err := ExecuteTask(context.Background(), nil)
 	assert.Error(t, err)
 }
 
-func TestExecuteTaskImmediately_WithStubCollector(t *testing.T) {
-	old := reportTaskStatus
+func TestExecuteTask_WithStubCollector(t *testing.T) {
+	old := sendTaskStatus
 	var reportedJobItemID string
 	var reportedDeliveryCount uint64
-	reportTaskStatus = func(_ context.Context, _, _, jobItemID string, deliveryCount uint64, _ int, _ string) error {
+	sendTaskStatus = func(_ context.Context, _, _, jobItemID string, deliveryCount uint64, _ int, _ string) error {
 		reportedJobItemID = jobItemID
 		reportedDeliveryCount = deliveryCount
 		return nil
 	}
-	t.Cleanup(func() { reportTaskStatus = old })
+	t.Cleanup(func() { sendTaskStatus = old })
 
 	collector := &stubCollector{}
 	require.NoError(t, sources.GetRegistry().Register(&sources.CollectorDescriptor{
 		Source: "stubex", Market: "spot", DataType: "symbol", Collector: collector,
 	}))
 
-	msg, err := ExecuteTaskImmediately(context.Background(), &model.TaskExecuteEvent{
+	msg, err := ExecuteTask(context.Background(), &model.TaskExecuteEvent{
 		SpaceID: "crypto", DatasetID: "symbols-custom", TaskID: "task-1", JobItemID: "item-1",
 		DeliveryCount: 3, DataSource: "stubex", DataType: "symbol", InstType: "SPOT", Symbol: "BTCUSDT",
 	})

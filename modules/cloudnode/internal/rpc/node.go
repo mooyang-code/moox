@@ -18,6 +18,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+const (
+	defaultSCFTimeoutSeconds = 120
+	scfOperationTimeout      = 120 * time.Second
+)
+
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
@@ -261,7 +266,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		Handler:     firstString(item.GetHandler(), "main"),
 		Description: fmt.Sprintf("MooX cloud function node %s", node.NodeID),
 		MemorySize:  configInt64(config, "memory_size", 256),
-		Timeout:     configInt64(config, "timeout", 60),
+		Timeout:     configInt64(config, "timeout", defaultSCFTimeoutSeconds),
 		Environment: copyStringMap(item.GetEnvironment()),
 		COSBucket:   pkg.COSBucket,
 		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
@@ -399,7 +404,7 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 }
 
 func waitForSCFActive(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, current *tencentscf.FunctionInfo) (*tencentscf.FunctionInfo, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, scfOperationTimeout)
 	defer cancel()
 	for {
 		if current == nil {

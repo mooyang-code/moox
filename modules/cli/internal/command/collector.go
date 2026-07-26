@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const defaultCollectorSCFTimeout = "120"
+
 type collectorPackageOptions struct {
 	CollectorRoot            string
 	Version                  string
@@ -351,7 +353,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		config = make(map[string]string)
 	}
 	if strings.TrimSpace(config["timeout"]) == "" {
-		config["timeout"] = "120"
+		config["timeout"] = defaultCollectorSCFTimeout
 	}
 	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
 	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)

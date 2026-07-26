@@ -13,7 +13,6 @@ const (
 type EventAction string
 
 const (
-	EventActionTask      EventAction = "task"
 	EventActionKeepalive EventAction = "keepalive"
 )
 
@@ -109,7 +108,6 @@ type TaskExecuteEvent struct {
 	SubjectID     string   `json:"subject_id,omitempty"`
 	Symbol        string   `json:"symbol"`
 	Intervals     []string `json:"intervals"`
-	Immediate     bool     `json:"immediate"` // 是否立即执行
 	Live          bool     `json:"live,omitempty"`
 }
 

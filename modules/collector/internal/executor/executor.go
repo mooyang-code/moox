@@ -50,7 +50,7 @@ type taskStatusReporter func(
 	result string,
 )
 
-var reportTaskStatus = reporter.ReportTaskStatus
+var sendTaskStatus = reporter.ReportTaskStatus
 
 // ErrTaskInstanceReportFailed marks failures at the Collector TaskInstance
 // reporting boundary while preserving the underlying transport/service error.
@@ -189,15 +189,13 @@ func executeCollectTasks(
 	return result
 }
 
-// ExecuteTaskImmediately 立即执行任务（服务端触发的任务转移）
-// 用于任务失败后，服务端将任务转移到其他节点立即执行
-// 注意：客户端在上报失败前已经进行了多次重试，这里直接执行即可
-func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEvent) (string, error) {
+// ExecuteTask executes one task delivered by the resident JetStream taskrunner.
+func ExecuteTask(ctx context.Context, taskEvent *model.TaskExecuteEvent) (string, error) {
 	if taskEvent == nil {
 		return "", fmt.Errorf("taskEvent is nil")
 	}
 
-	log.InfoContextf(ctx, "[ExecuteTaskImmediately] Starting immediate execution: taskID=%s, symbol=%s",
+	log.InfoContextf(ctx, "[ExecuteTask] Starting execution: taskID=%s, symbol=%s",
 		taskEvent.TaskID, taskEvent.Symbol)
 
 	// 构建所有需要执行的采集任务
@@ -226,8 +224,8 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 
 	if len(collectTasks) == 0 {
 		errMsg := "没有需要执行的interval"
-		log.WarnContextf(ctx, "[ExecuteTaskImmediately] %s", errMsg)
-		if err := reportImmediateTaskStatus(
+		log.WarnContextf(ctx, "[ExecuteTask] %s", errMsg)
+		if err := reportTaskStatus(
 			ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount,
 			reporter.StatusFailed, errMsg,
 		); err != nil {
@@ -236,7 +234,7 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 		return "", errors.New(errMsg)
 	}
 
-	// 执行采集任务（立即执行场景：统一在最后上报状态）
+	// 执行采集任务，统一在最后上报状态。
 	result := executeCollectTasks(ctx, collectTasks, nil)
 
 	// 根据执行结果上报状态
@@ -251,10 +249,10 @@ func ExecuteTaskImmediately(ctx context.Context, taskEvent *model.TaskExecuteEve
 		resultMsg = "所有任务执行成功"
 	}
 
-	log.InfoContextf(ctx, "[ExecuteTaskImmediately] 任务执行完成: taskID=%s, status=%d, result=%s",
+	log.InfoContextf(ctx, "[ExecuteTask] 任务执行完成: taskID=%s, status=%d, result=%s",
 		taskEvent.TaskID, status, resultMsg)
 
-	if err := reportImmediateTaskStatus(
+	if err := reportTaskStatus(
 		ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount, status, resultMsg,
 	); err != nil {
 		return resultMsg, err
@@ -281,7 +279,7 @@ func normalizeMarket(taskEvent *model.TaskExecuteEvent) string {
 	}
 }
 
-func reportImmediateTaskStatus(
+func reportTaskStatus(
 	ctx context.Context,
 	spaceID string,
 	taskID string,
@@ -290,8 +288,8 @@ func reportImmediateTaskStatus(
 	status int,
 	result string,
 ) error {
-	if err := reportTaskStatus(ctx, spaceID, taskID, jobItemID, deliveryCount, status, result); err != nil {
-		log.WarnContextf(ctx, "[ExecuteTaskImmediately] 任务状态上报失败: taskID=%s, status=%d, error=%v",
+	if err := sendTaskStatus(ctx, spaceID, taskID, jobItemID, deliveryCount, status, result); err != nil {
+		log.WarnContextf(ctx, "[ExecuteTask] 任务状态上报失败: taskID=%s, status=%d, error=%v",
 			taskID, status, err)
 		return &taskInstanceReportError{err: err}
 	}

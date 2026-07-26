@@ -76,12 +76,12 @@ func TestCollectorService_TaskRuleCRUD(t *testing.T) {
 	updateRsp, err := svc.UpdateTaskRule(ctx, &pb.UpdateTaskRuleReq{
 		SpaceId: "crypto", RuleId: "rule-1", Rule: &pb.TaskRule{
 			SpaceId: "crypto", RuleId: "rule-1", DataType: "symbol", Exchange: "binance",
-			CollectParams: validCollectParams(t), NodePattern: "node-*",
+			CollectParams: validCollectParams(t), Creator: "updated",
 		},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
-	assert.Equal(t, "node-*", updateRsp.GetRule().GetNodePattern())
+	assert.Equal(t, "updated", updateRsp.GetRule().GetCreator())
 
 	disableRsp, err := svc.DisableTaskRule(ctx, &pb.DisableTaskRuleReq{SpaceId: "crypto", RuleId: "rule-1"})
 	require.NoError(t, err)
@@ -248,7 +248,6 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 func TestNormalizeAndValidateTaskRule(t *testing.T) {
 	rule := normalizeTaskRule(domain.TaskRule{SpaceID: "crypto", DataType: "symbol", Exchange: "binance"})
 	assert.NotEmpty(t, rule.RuleID)
-	assert.Equal(t, "auto", rule.AssignmentType)
 	assert.Equal(t, "{}", rule.CollectParams)
 
 	err := validateTaskRule(domain.TaskRule{SpaceID: "", DataType: "symbol", Exchange: "binance", RuleID: "r1"})

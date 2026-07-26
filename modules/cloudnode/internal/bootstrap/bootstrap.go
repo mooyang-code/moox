@@ -130,7 +130,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		stateStore := jobstate.NewKVStore(kv, jobstate.Options{})
 		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-			AckWait:       time.Minute,
+			AckWait:       jobqueue.DefaultAckWait,
 			MaxDeliver:    cfg.JetStream.MaxDeliver,
 			MaxAckPending: cfg.JetStream.MaxAckPending,
 		})
