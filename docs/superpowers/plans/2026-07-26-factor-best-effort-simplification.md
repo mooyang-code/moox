@@ -72,8 +72,8 @@ Storage DatasetRowsUpserted
 | Factor batcher 未装配 | `RETRY`，避免服务启动异常时直接 ACK | Consumer 会重投 |
 | 事件已进入内存 batcher | `ACK` | 进程退出后允许丢失 |
 | 没有可执行 Binding | `ACK`，不生成任务 | 不需要 |
-| scheduler 队列已满 | 丢弃新 scope，`dropped_tasks++` | 手动补算 |
-| 待执行 scope 收到更新 bar | 原位置替换为最新任务，`supersede_count++` | 不需要 |
+| scheduler 队列已满 | 新 scope 未能入队，`queue_overflow_count++` | 手动补算 |
+| 待执行 scope 收到更新 bar | 原位置替换为最新任务，不增加异常计数 | 不需要 |
 | Storage 读取失败 | 本进程内最多重试 `max_retry` 次 | 有限 |
 | Python worker 失败 | worker pool 自身恢复；任务最多重试 `max_retry` 次 | 有限 |
 | 结果校验失败 | 立即失败，不重试 | 修正因子后手动补算 |
@@ -155,16 +155,16 @@ message RecalcFactorRsp {
 message GetEngineStatusRsp {
   common.RetInfo ret_info = 1;
   int32 queue_depth = 2;
-  int32 queue_capacity = 3;
-  int64 supersede_count = 4;
-  int64 dropped_tasks = 5;
-  int64 writeback_failures = 6;
-  int32 worker_count = 7;
-  bool worker_ready = 8;
+  int64 queue_overflow_count = 3;
 }
 ```
 
-删除伪造的逐 worker `ready` 列表。当前 runtime pool 只提供整体 readiness，不声明无法观测的单 worker 状态。
+- `queue_depth` 是当前待执行 scope 数。
+- `queue_overflow_count` 是本进程启动以来，因为待执行 scope 已达到 `queue_capacity` 而未能入队的任务数。
+- 每次 `Enqueue` 因容量不足返回 `ErrQueueFull` 时，`queue_overflow_count` 恰好增加一次；supersede、参数错误、执行失败、写回失败和进程退出都不计入。
+- `queue_capacity` 继续作为 scheduler 静态配置和内存边界，但不通过状态响应重复暴露。
+- worker、数据库、scheduler 和 EventBus readiness 统一由 `/readyz` 返回，`GetEngineStatus` 不复制健康检查字段。
+- 删除伪造的逐 worker `ready` 列表，以及无明确操作价值的 supersede、writeback failure 累计计数。
 
 ### 3.4 SQLite
 
@@ -383,6 +383,7 @@ Expected: FAIL because旧字段和事件表仍存在。
 
 ```proto
 message FactorRun
+message WorkerStatus
 message GetRecalcProgressReq
 message GetRecalcProgressRsp
 message ListFactorRunsReq
@@ -400,7 +401,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/factor/p
 make clean all
 ```
 
-Expected: `factor.pb.go` 和 `factor.trpc.go` 不再包含 CrossSection、FactorRun、GetRecalcProgress 或 ListFactorRuns。
+Expected: `factor.pb.go` 和 `factor.trpc.go` 不再包含 CrossSection、FactorRun、WorkerStatus、GetRecalcProgress 或 ListFactorRuns。
 
 - [ ] **Step 3: 改写领域模型**
 
@@ -893,7 +894,7 @@ func TestSchedulerRejectsNewScopeWhenQueueIsFull(t *testing.T) {
 	second.SubjectID = "ETH-USDT"
 	err := svc.Enqueue(context.Background(), second)
 	require.ErrorIs(t, err, ErrQueueFull)
-	require.EqualValues(t, 1, svc.Status().DroppedTasks)
+	require.EqualValues(t, 1, svc.Status().QueueOverflowCount)
 }
 
 func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {
@@ -905,7 +906,6 @@ func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {
 	require.NoError(t, svc.Enqueue(context.Background(), first))
 	require.NoError(t, svc.Enqueue(context.Background(), second))
 	require.Equal(t, 1, svc.Status().QueueDepth)
-	require.EqualValues(t, 1, svc.Status().SupersedeCount)
 }
 ```
 
@@ -923,11 +923,8 @@ type Config struct {
 }
 
 type Status struct {
-	QueueDepth        int
-	QueueCapacity     int
-	SupersedeCount    int64
-	DroppedTasks      int64
-	WritebackFailures int64
+	QueueDepth         int
+	QueueOverflowCount int64
 }
 
 func (s *Service) Enqueue(ctx context.Context, task Task) error
@@ -948,12 +945,13 @@ pending map[taskKey]Task
 
 ```text
 existing key + newer/equal bar -> 只更新 pending[key]，不追加 queues
-existing key + older bar       -> supersede_count++，忽略
+existing key + older bar       -> 忽略，不增加异常计数
 new key + capacity available   -> pending[key]=task，queues[shard]=append(key)
-new key + capacity exhausted   -> dropped_tasks++，返回 ErrQueueFull
+new key + capacity exhausted   -> queue_overflow_count++，返回 ErrQueueFull
 ```
 
 `QueueDepth` 必须等于 `len(pending)`，不统计 stale item。
+删除 `supersedeCount` 和 `writebackFailures` 原子计数；supersede 是正常合并行为，最终执行或写回失败通过结构化任务日志记录。
 
 - [ ] **Step 4: 删除任务内因子分批**
 
@@ -1009,6 +1007,7 @@ same subject -> same shard
 same scope supersede -> depth remains 1
 different target -> separate task
 queue full -> deterministic ErrQueueFull
+queue full -> queue_overflow_count increments exactly once
 one task -> one Storage read, one executor call, one write
 ```
 
@@ -1494,19 +1493,14 @@ trpc.moox.factor.reconcile.timer
 
 - [ ] **Step 4: 返回真实整体状态**
 
-`GetEngineStatus` 从 scheduler 和 `RuntimePoolExecutor.Status()` 返回：
+`GetEngineStatus` 只从 scheduler 返回：
 
 ```text
 queue_depth
-queue_capacity
-supersede_count
-dropped_tasks
-writeback_failures
-worker_count
-worker_ready
+queue_overflow_count
 ```
 
-不得构造虚假的 `worker-1 ready` 列表。
+同时删除 RPC 层的 `engineStatusProvider`、`Service.engine` 和 `NewWithRuntime` 的 engine 参数，并更新 bootstrap 与测试调用点。`RuntimePoolExecutor.Status()` 继续供 `/readyz` 使用；不得在 RPC 中构造虚假的 `worker-1 ready` 列表或复制健康状态。
 
 - [ ] **Step 5: 验证严格 YAML 和服务启动**
 
@@ -1547,7 +1541,7 @@ FactorDef 使用 periods: number[]
 FactorDef 不含 kind/params_json
 RecalcFactor 返回 terminal status
 API 不导出 getRecalcProgress
-EngineStatus 包含 dropped_tasks/queue_capacity/worker_ready
+EngineStatus 只包含 queue_depth/queue_overflow_count
 ```
 
 示例：
@@ -1789,6 +1783,12 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 ! rg -n \
   'cross_section|params_json|ParamsJSON|default-params|sections_dir|arrow_row_threshold|max_batch_parallelism|snapshot_ttl_seconds|reconcile_interval_min|primary_target|heartbeat_interval_ms|t_factor_event_inbox|t_factor_event_processed|t_factor_replay_tasks|GetRecalcProgress|ListFactorRuns|StdioExecutor|WorkerPool|SnapshotStore' \
   modules/factor web/src/api/factor web/src/views/factor
+! rg -n \
+  'dropped_tasks|DroppedTasks|supersede_count|SupersedeCount|writeback_failures|WritebackFailures|WorkerStatus' \
+  modules/factor/proto modules/factor/internal/rpc modules/factor/internal/scheduler web/src/api/factor
+! rg -n \
+  'queue_capacity|QueueCapacity|worker_count|WorkerCount|worker_ready|WorkerReady' \
+  modules/factor/proto web/src/api/factor
 ```
 
 Expected: 命令退出 0。若命中 generated code，说明 Proto 未正确重新生成。
@@ -1887,7 +1887,7 @@ Expected: local HEAD 与远端 `feature/mooyang` 完全一致；工作树只允�
 1. 实时链路不再访问 Factor event inbox 或 replay 表。
 2. 文档明确承认 ACK 后进程退出会漏算。
 3. 因子和 Binding 任一禁用都不会进入新的实时任务。
-4. scheduler 的待执行 scope 数受 `queue_capacity` 限制。
+4. scheduler 的待执行 scope 数受 `queue_capacity` 限制；每次因容量不足而失败的入队操作只增加一次 `queue_overflow_count`。
 5. 一个任务只进行一次 Storage read、一次 Python execute、一次 Storage write。
 6. 平盘 Cci 的 null 输出不会导致整任务失败。
 7. `run-once` 和 `RecalcFactor` 可同步返回单 bar 补算结果。
