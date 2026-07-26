@@ -74,6 +74,9 @@ func (s *Service) recalcFactorGroups(ctx context.Context, req *factorpb.RecalcFa
 			binding.Freq != req.GetFreq() {
 			continue
 		}
+		if !domain.BindingAllowsSubject(binding, req.GetSubjectId()) {
+			continue
+		}
 		if req.GetFactorId() != "" && binding.FactorID != req.GetFactorId() {
 			continue
 		}

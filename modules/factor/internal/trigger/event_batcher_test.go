@@ -98,6 +98,20 @@ func TestEventBatcherHonorsIncludeModeSubjects(t *testing.T) {
 	}
 }
 
+func TestEventBatcherDiscardsBucketAfterBindingIsDisabled(t *testing.T) {
+	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
+	active := binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")
+	d := NewEventBatcher(time.Second, []domain.FactorBinding{active})
+
+	d.Add(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now), now)
+	active.Status = domain.BindingStatusDisabled
+	d.SetBindings([]domain.FactorBinding{active})
+
+	if tasks := flushPending(t, d, now.Add(2*time.Second)); len(tasks) != 0 {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+}
+
 func TestEventBatcherUsesFixedWindowFromFirstEvent(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 	window := 2 * time.Second

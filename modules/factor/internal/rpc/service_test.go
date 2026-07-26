@@ -56,6 +56,26 @@ func TestRecalcRejectsMissingOrInvalidRange(t *testing.T) {
 	}
 }
 
+func TestRecalcHonorsBindingSubjectScope(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
+	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "bind", FactorID: "bias", SpaceID: "crypto", SourceDataset: "bars",
+		Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["ETH"]`,
+		TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
+	}))
+	runner := &fakeRPCScheduler{}
+	svc := NewWithRuntime(db, runner, WithFactorsDir(t.TempDir()))
+	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
+		FactorId: "bias", SpaceId: "crypto", SourceDataset: "bars",
+		SubjectId: "BTC", Freq: "1m",
+		StartTime: "2026-07-26T00:00:00Z", EndTime: "2026-07-26T01:00:00Z",
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Empty(t, runner.tasks)
+}
+
 func TestGetEngineStatusIsMinimal(t *testing.T) {
 	runner := &fakeRPCScheduler{status: scheduler.Status{QueueDepth: 3, QueueOverflowCount: 4}}
 	svc := NewWithRuntime(openRPCTestDB(t), runner)

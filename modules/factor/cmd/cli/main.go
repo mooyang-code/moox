@@ -21,7 +21,6 @@ type cliConfig struct {
 	DefaultPeriods    []int
 	SpaceID           string
 	DatasetID         string
-	TargetDataset     string
 	SubjectID         string
 	Freq              string
 	StartTime         time.Time

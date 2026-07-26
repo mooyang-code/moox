@@ -32,11 +32,18 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 	sum := sha256.Sum256(source)
 	at := time.Date(2026, 7, 26, 0, 2, 0, 0, time.UTC)
 
-	batcher := trigger.NewEventBatcher(20*time.Millisecond, []domain.FactorBinding{{
-		BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
-		SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
-		SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
-	}})
+	batcher := trigger.NewEventBatcher(20*time.Millisecond, []domain.FactorBinding{
+		{
+			BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
+			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
+		},
+		{
+			BindingID: "bind-cci", FactorID: "cci", SpaceID: "crypto",
+			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusDisabled,
+		},
+	})
 	ns, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
 		NoLog: true, NoSigs: true,
@@ -95,6 +102,16 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 		return len(requests) == 1
 	}, 5*time.Second, 20*time.Millisecond)
 	require.Len(t, requests, 1)
+	require.Equal(t, []string{"bias"}, requests[0].FactorIDs)
+	ackConn, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer ackConn.Close()
+	ackJS, err := ackConn.JetStream()
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		info, infoErr := ackJS.ConsumerInfo(events.DatasetRowsUpserted.Stream(), eventconsumer.DatasetRowsConsumerName)
+		return infoErr == nil && info.NumAckPending == 0
+	}, 5*time.Second, 20*time.Millisecond)
 
 	task, err := scheduler.BuildTask(scheduler.TaskScope{
 		TaskID: "e2e-factor", TriggerType: "event", SpaceID: requests[0].SpaceID,

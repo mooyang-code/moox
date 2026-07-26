@@ -112,6 +112,9 @@ func (s *Service) Start(ctx context.Context) error {
 	if s.started.Swap(true) {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.workerCtx, s.workerCancel = context.WithCancel(ctx)
 	for shard := range s.queues {
 		s.workerWG.Add(1)
@@ -129,11 +132,10 @@ func (s *Service) runShard(shard int) {
 		case <-s.wake[shard]:
 		}
 		for {
-			task, ok := s.popShard(shard)
+			task, ok := s.popShard(shard, true)
 			if !ok {
 				break
 			}
-			s.running.Add(1)
 			if err := s.Run(s.workerCtx, task); err != nil {
 				log.ErrorContextf(s.workerCtx, "factor realtime task failed task_id=%s error=%v", task.TaskID, err)
 			}
@@ -142,7 +144,7 @@ func (s *Service) runShard(shard int) {
 	}
 }
 
-func (s *Service) popShard(shard int) (Task, bool) {
+func (s *Service) popShard(shard int, markRunning bool) (Task, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if shard < 0 || shard >= len(s.queues) || len(s.queues[shard]) == 0 {
@@ -152,6 +154,11 @@ func (s *Service) popShard(shard int) (Task, bool) {
 	s.queues[shard] = s.queues[shard][1:]
 	task, ok := s.pending[key]
 	if ok {
+		if markRunning {
+			// Mark the task as running before removing it from pending so
+			// WaitIdle can never observe an empty scheduler between states.
+			s.running.Add(1)
+		}
 		delete(s.pending, key)
 	}
 	return task, ok
@@ -159,12 +166,15 @@ func (s *Service) popShard(shard int) (Task, bool) {
 
 // Drain synchronously drains queued realtime work. It is intended for tests.
 func (s *Service) Drain(ctx context.Context) error {
+	if s.started.Load() {
+		return s.WaitIdle(ctx)
+	}
 	var first error
 	for {
 		var task Task
 		var ok bool
 		for shard := range s.queues {
-			if task, ok = s.popShard(shard); ok {
+			if task, ok = s.popShard(shard, false); ok {
 				break
 			}
 		}
@@ -247,7 +257,11 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 			chunkTask.EndTime = chunk.TargetTimes[len(chunk.TargetTimes)-1].Add(time.Nanosecond)
 			result, err = s.exec.Execute(ctx, &chunkTask, chunk.Frame)
 			if err != nil {
-				return err
+				var nonRetryable engine.NonRetryableError
+				if errors.As(err, &nonRetryable) {
+					return err
+				}
+				return engine.RetryableError{Err: err}
 			}
 			if err := validateFactorResult(task.Factors, len(chunk.TargetTimes), result); err != nil {
 				return engine.NonRetryableError{Err: err}

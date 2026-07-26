@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	FactorStatusEnabled  = "enabled"
@@ -25,4 +28,24 @@ type FactorDef struct {
 // TableName returns the factor definition table.
 func (FactorDef) TableName() string {
 	return "t_factor_defs"
+}
+
+// BindingAllowsSubject reports whether a binding applies to one subject.
+func BindingAllowsSubject(binding FactorBinding, subjectID string) bool {
+	if binding.SubjectMode == "" || binding.SubjectMode == SubjectModeAll {
+		return true
+	}
+	if binding.SubjectMode != SubjectModeInclude {
+		return false
+	}
+	var subjects []string
+	if err := json.Unmarshal([]byte(binding.SubjectsJSON), &subjects); err != nil {
+		return false
+	}
+	for _, subject := range subjects {
+		if subject == subjectID {
+			return true
+		}
+	}
+	return false
 }

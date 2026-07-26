@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
@@ -39,14 +40,18 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	factors = filterFactors(factors, cfg.FactorIDs)
-	if len(factors) == 0 {
-		return fmt.Errorf("no enabled factors selected")
-	}
 	for i := range factors {
 		if override := cfg.FactorSourcePaths[factors[i].FactorID]; override != "" {
 			factors[i].SourcePath = override
 		}
+	}
+	bindings, err := db.Bindings().ListExecutable(ctx)
+	if err != nil {
+		return err
+	}
+	groups := executableFactorGroups(factors, bindings, cfg)
+	if len(groups) == 0 {
+		return fmt.Errorf("no executable factors selected for the requested scope")
 	}
 
 	appCfg := bootstrap.Default()
@@ -55,24 +60,10 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	targetDataset := cfg.TargetDataset
-	if targetDataset == "" {
-		targetDataset = registry.ResultDataset(cfg.DatasetID)
-	}
 	taskID := cfg.TaskID
 	if taskID == "" {
 		taskID = fmt.Sprintf("manual-%d", time.Now().UnixNano())
 	}
-	task, err := scheduler.BuildTask(scheduler.TaskScope{
-		TaskID: taskID, TriggerType: "manual", SpaceID: cfg.SpaceID,
-		SourceDataset: cfg.DatasetID, TargetDataset: targetDataset,
-		SubjectID: cfg.SubjectID, Freq: cfg.Freq,
-		StartTime: cfg.StartTime, EndTime: cfg.EndTime,
-	}, factors, cfg.FactorsDir)
-	if err != nil {
-		return err
-	}
-
 	storageClient := storageio.NewClientWithCredentials(
 		appCfg.Storage.GatewayTarget, appCfg.Storage.GatewayNodeID, credentials, auth,
 	)
@@ -89,34 +80,78 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	defer pythonExec.Close()
 	runner := scheduler.NewService(scheduler.Config{Workers: 1, QueueCapacity: 1, MaxRetry: appCfg.Scheduler.MaxRetry}, storageClient, pythonExec)
 	started := time.Now()
-	if err := runner.Run(ctx, task); err != nil {
-		return err
+	targets := make([]string, 0, len(groups))
+	for target := range groups {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	factorCount := 0
+	for i, target := range targets {
+		currentTaskID := taskID
+		if len(targets) > 1 {
+			currentTaskID = fmt.Sprintf("%s-%d", taskID, i+1)
+		}
+		task, buildErr := scheduler.BuildTask(scheduler.TaskScope{
+			TaskID: currentTaskID, TriggerType: "manual", SpaceID: cfg.SpaceID,
+			SourceDataset: cfg.DatasetID, TargetDataset: target,
+			SubjectID: cfg.SubjectID, Freq: cfg.Freq,
+			StartTime: cfg.StartTime, EndTime: cfg.EndTime,
+		}, groups[target], cfg.FactorsDir)
+		if buildErr != nil {
+			return buildErr
+		}
+		if runErr := runner.Run(ctx, task); runErr != nil {
+			return runErr
+		}
+		factorCount += len(groups[target])
 	}
 	elapsed := time.Since(started).Milliseconds()
 	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "task_id": task.TaskID, "status": "succeeded",
-		"factor_count": len(factors),
+		"ok": true, "task_id": taskID, "status": "succeeded",
+		"factor_count": factorCount,
 		"start_time":   cfg.StartTime.UTC().Format(time.RFC3339Nano),
 		"end_time":     cfg.EndTime.UTC().Format(time.RFC3339Nano),
 		"elapsed_ms":   elapsed,
 	})
 }
 
-func filterFactors(factors []domain.FactorDef, ids []string) []domain.FactorDef {
-	if len(ids) == 0 {
-		return factors
+func executableFactorGroups(
+	factors []domain.FactorDef,
+	bindings []domain.FactorBinding,
+	cfg cliConfig,
+) map[string][]domain.FactorDef {
+	selected := map[string]struct{}{}
+	for _, id := range cfg.FactorIDs {
+		selected[id] = struct{}{}
 	}
-	allowed := map[string]struct{}{}
-	for _, id := range ids {
-		allowed[id] = struct{}{}
-	}
-	out := make([]domain.FactorDef, 0, len(factors))
+	byID := make(map[string]domain.FactorDef, len(factors))
 	for _, factor := range factors {
-		if _, ok := allowed[factor.FactorID]; ok {
-			out = append(out, factor)
-		}
+		byID[factor.FactorID] = factor
 	}
-	return out
+	groups := map[string][]domain.FactorDef{}
+	for _, binding := range bindings {
+		if binding.SpaceID != cfg.SpaceID ||
+			binding.SourceDataset != cfg.DatasetID ||
+			binding.Freq != cfg.Freq ||
+			!domain.BindingAllowsSubject(binding, cfg.SubjectID) {
+			continue
+		}
+		if len(selected) > 0 {
+			if _, ok := selected[binding.FactorID]; !ok {
+				continue
+			}
+		}
+		factor, ok := byID[binding.FactorID]
+		if !ok {
+			continue
+		}
+		target := binding.TargetDataset
+		if target == "" {
+			target = registry.ResultDataset(cfg.DatasetID)
+		}
+		groups[target] = append(groups[target], factor)
+	}
+	return groups
 }
 
 func serviceAuth() *commonpb.AuthInfo {

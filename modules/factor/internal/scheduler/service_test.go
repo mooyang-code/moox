@@ -89,6 +89,17 @@ func TestRunSecondChunkFailureLeavesFirstChunkWritten(t *testing.T) {
 	require.Equal(t, []int{2000}, storage.writeSizes)
 }
 
+func TestRunRetriesTransientExecutorFailure(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	times := makeTimes(base, 1)
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{frameChunk(times)}, repeatFirst: true}
+	exec := &fakeExecutor{transientFailures: 1}
+	svc := NewService(Config{MaxRetry: 1}, storage, exec)
+	require.NoError(t, svc.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Equal(t, 2, exec.calls)
+	require.Equal(t, []int{1}, storage.writeSizes)
+}
+
 func TestRunHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -106,9 +117,10 @@ func oneBarTask(subject string, at time.Time) Task {
 }
 
 type fakeStorage struct {
-	chunks     []*storageio.RangeChunk
-	writeSizes []int
-	writeErr   error
+	chunks      []*storageio.RangeChunk
+	writeSizes  []int
+	writeErr    error
+	repeatFirst bool
 }
 
 func (s *fakeStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error) {
@@ -116,7 +128,9 @@ func (s *fakeStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.
 		return &storageio.RangeChunk{Frame: &engine.DataFrame{}}, nil
 	}
 	chunk := s.chunks[0]
-	s.chunks = s.chunks[1:]
+	if !s.repeatFirst {
+		s.chunks = s.chunks[1:]
+	}
 	return chunk, nil
 }
 func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, _ *engine.FactorResult) error {
@@ -125,13 +139,18 @@ func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, 
 }
 
 type fakeExecutor struct {
-	calls  int
-	err    error
-	failAt int
+	calls             int
+	err               error
+	failAt            int
+	transientFailures int
 }
 
 func (e *fakeExecutor) Execute(_ context.Context, _ *engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
 	e.calls++
+	if e.transientFailures > 0 {
+		e.transientFailures--
+		return nil, errors.New("transient worker failure")
+	}
 	if e.failAt > 0 && e.calls == e.failAt {
 		return nil, engine.NonRetryableError{Err: errors.New("planned executor failure")}
 	}

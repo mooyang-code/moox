@@ -28,10 +28,13 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 
 ## Runtime Contract
 
+- 当前 schema 不兼容早期实验数据库；检测到旧表或旧列时会拒绝启动，请新建数据库。
 - `periods` 是因子计算周期；`depends` 是源码声明的额外输入列，不表示因子 DAG。
 - `lookback_bars` 是每个目标 chunk 前的输入上下文，不决定输出行数。
 - 实时事件转换为 `[bar_time, bar_time + 1ns)` 的单 bar 范围。
 - 手动补算使用 `[start_time, end_time)`；超过 2000 个目标 bar 时自动分 chunk。
+- `run-once` 和 `RecalcFactor` 都只执行适用于当前 source、freq、subject 的 enabled binding，
+  并按 binding 的 `target_dataset` 分组写回。
 - Python 每个结果列必须为每个目标 bar 返回一个有限数值或 `null`。
 - `null` 只跳过对应单元格写回，不影响同一行的其他因子列。
 

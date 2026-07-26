@@ -4,6 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOpenAndClose(t *testing.T) {
@@ -37,4 +40,21 @@ func TestBuildSQLiteDSNUsesDurablePragmas(t *testing.T) {
 	if strings.Contains(dsn, "synchronous(OFF)") {
 		t.Fatalf("dsn %q must not disable SQLite synchronization", dsn)
 	}
+}
+
+func TestApplySchemaRejectsObsoleteDatabase(t *testing.T) {
+	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.db.Exec(`
+		CREATE TABLE t_factor_defs (
+			c_factor_id TEXT PRIMARY KEY,
+			c_name TEXT,
+			c_params_json TEXT
+		);
+		CREATE TABLE t_factor_event_inbox (c_event_id TEXT PRIMARY KEY);
+	`).Error)
+
+	err = db.ApplySchema(factorschema.AllSQL())
+	require.ErrorContains(t, err, "fresh database")
 }

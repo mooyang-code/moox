@@ -19,5 +19,6 @@ go run ./cmd/cli run-once \
   --end-time 2026-07-27T00:00:00Z
 ```
 
-命令同步完成整个 `[start_time,end_time)` 范围；超过 2000 个目标 bar 自动分块。
+命令按当前 subject 匹配 enabled binding，并按 binding 的目标 Dataset 分组，同步完成整个
+`[start_time,end_time)` 范围；超过 2000 个目标 bar 自动分块。
 terminal JSON 的 `elapsed_ms` 是完整读取、计算和写回耗时。

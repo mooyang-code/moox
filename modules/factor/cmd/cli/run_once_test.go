@@ -34,7 +34,14 @@ func TestRunOnceRequiresRange(t *testing.T) {
 	require.Contains(t, err.Error(), "required")
 }
 
-func TestFilterFactors(t *testing.T) {
+func TestExecutableFactorGroupsHonorBindingScope(t *testing.T) {
 	factors := []domain.FactorDef{{FactorID: "a"}, {FactorID: "b"}}
-	require.Equal(t, []domain.FactorDef{{FactorID: "b"}}, filterFactors(factors, []string{"b"}))
+	bindings := []domain.FactorBinding{
+		{FactorID: "a", SpaceID: "crypto", SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll, TargetDataset: "custom"},
+		{FactorID: "b", SpaceID: "crypto", SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["ETH"]`},
+	}
+	groups := executableFactorGroups(factors, bindings, cliConfig{
+		SpaceID: "crypto", DatasetID: "bars", SubjectID: "BTC", Freq: "1m",
+	})
+	require.Equal(t, map[string][]domain.FactorDef{"custom": {{FactorID: "a"}}}, groups)
 }

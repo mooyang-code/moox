@@ -1,7 +1,6 @@
 package trigger
 
 import (
-	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -149,8 +148,10 @@ func (d *EventBatcher) Flush(now time.Time) []Task {
 	tasks := make([]Task, 0, len(keys))
 	for _, key := range keys {
 		item := d.buckets[key]
-		item.task.FactorIDs = orderedFactorIDs(item.factors, d.bindings)
-		tasks = append(tasks, item.task)
+		item.task.FactorIDs = orderedFactorIDs(key, item.factors, d.bindings)
+		if len(item.task.FactorIDs) > 0 {
+			tasks = append(tasks, item.task)
+		}
 		delete(d.buckets, key)
 	}
 	return tasks
@@ -165,7 +166,7 @@ func (d *EventBatcher) matchBindings(spaceID, datasetID, subjectID, freq string)
 		if binding.SpaceID != spaceID || binding.SourceDataset != datasetID || binding.Freq != freq {
 			continue
 		}
-		if !subjectAllowed(binding, subjectID) {
+		if !domain.BindingAllowsSubject(binding, subjectID) {
 			continue
 		}
 		out = append(out, binding)
@@ -173,29 +174,22 @@ func (d *EventBatcher) matchBindings(spaceID, datasetID, subjectID, freq string)
 	return out
 }
 
-func subjectAllowed(binding domain.FactorBinding, subjectID string) bool {
-	if binding.SubjectMode == "" || binding.SubjectMode == domain.SubjectModeAll {
-		return true
-	}
-	if binding.SubjectMode != domain.SubjectModeInclude {
-		return false
-	}
-	var subjects []string
-	if err := json.Unmarshal([]byte(binding.SubjectsJSON), &subjects); err != nil {
-		return false
-	}
-	for _, subject := range subjects {
-		if subject == subjectID {
-			return true
-		}
-	}
-	return false
-}
-
-func orderedFactorIDs(set map[string]struct{}, bindings []domain.FactorBinding) []string {
+func orderedFactorIDs(key bucketKey, set map[string]struct{}, bindings []domain.FactorBinding) []string {
 	out := []string{}
 	seen := map[string]struct{}{}
 	for _, binding := range bindings {
+		targetDataset := binding.TargetDataset
+		if targetDataset == "" {
+			targetDataset = registry.ResultDataset(binding.SourceDataset)
+		}
+		if binding.Status != domain.BindingStatusEnabled ||
+			binding.SpaceID != key.spaceID ||
+			binding.SourceDataset != key.sourceDataset ||
+			targetDataset != key.targetDataset ||
+			binding.Freq != key.freq ||
+			!domain.BindingAllowsSubject(binding, key.subjectID) {
+			continue
+		}
 		if _, ok := set[binding.FactorID]; !ok {
 			continue
 		}
