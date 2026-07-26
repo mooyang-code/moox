@@ -714,7 +714,7 @@ Expected: 第一条 `rg` 只允许命中 CloudNode 节点/SCF 部署元数据和
 - Modify: `modules/collector/internal/rpc/service.go`
 - Modify: `modules/collector/internal/rpc/service_test.go`
 
-- [ ] **Step 1: 先写旧作业不得覆盖新摘要的测试**
+- [x] **Step 1: 先写旧作业不得覆盖新摘要的测试**
 
 ```go
 func TestUpdateStatusMatchesCurrentJobItemID(t *testing.T)
@@ -729,7 +729,7 @@ func TestReportTaskStatusCarriesJobItemID(t *testing.T)
 3. RPC 返回成功，TaskInstance 摘要不变。
 4. `item-new` 上报后摘要更新。
 
-- [ ] **Step 2: 扩展 Collector 状态协议**
+- [x] **Step 2: 扩展 Collector 状态协议**
 
 ```proto
 message ReportInstanceStatusReq {
@@ -744,11 +744,11 @@ message ReportInstanceStatusReq {
 make -C modules/collector/proto all
 ```
 
-- [ ] **Step 3: 将 JobItem ID 贯穿执行模型**
+- [x] **Step 3: 将 JobItem ID 贯穿执行模型**
 
 `TaskExecuteEvent`、`collectTask`、reporter request 和 taskrunner 转换都携带 `JobItemID`。状态上报必须同时要求 `space_id`、`task_id`、`job_item_id`。
 
-- [ ] **Step 4: 使用三元条件更新最新摘要**
+- [x] **Step 4: 使用三元条件更新最新摘要**
 
 ```sql
 WHERE c_space_id = ?
@@ -758,7 +758,7 @@ WHERE c_space_id = ?
 
 RowsAffected 为 0 表示该执行已经过期或实例已不存在。Collector RPC 记录一条 info 日志并返回成功，避免旧 delivery 因摘要无法更新而持续重试。CloudNode JobItem 终态仍按原链路独立上报。
 
-- [ ] **Step 5: 运行状态链路测试**
+- [x] **Step 5: 运行状态链路测试**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/store ./internal/reporter ./internal/executor ./internal/rpc ./internal/taskrunner)
@@ -766,7 +766,7 @@ RowsAffected 为 0 表示该执行已经过期或实例已不存在。Collector 
 
 Expected: 新执行更新摘要，旧执行安静完成且不覆盖。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/collector
