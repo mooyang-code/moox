@@ -90,7 +90,8 @@ moox-cli setup metadata-import \
 ```
 
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
-位置。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
+位置。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
+二进制后再打包。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
 自然语言理解由 MooX Skill 负责，CLI 始终接收明确的主机名和稳定 Space ID。
 
 ### Storage Schema v5 验证

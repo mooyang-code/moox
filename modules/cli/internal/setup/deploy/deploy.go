@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -379,6 +380,23 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	if err != nil {
 		return "", err
 	}
+	skipBuild := false
+	if opts.TargetGOOS == "linux" && runtime.GOOS != "linux" {
+		executable, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "build-storage-linux.sh"))
+		command.Dir = root
+		command.Env = append(os.Environ(),
+			"MOOX_CLI="+executable,
+			"CONFIG="+filepath.Join(root, "custom.toml"),
+		)
+		if err := command.Run(); err != nil {
+			return "", err
+		}
+		skipBuild = true
+	}
 	file, err := os.CreateTemp("", "moox-storage-*.tar.gz")
 	if err != nil {
 		return "", err
@@ -388,11 +406,15 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	_ = os.Remove(archive)
-	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"),
+	args := []string{
 		"--profile", "storage", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		"--public-host", opts.PublicHost, "--node-id", "storage", "--gateway-control-url", "http://127.0.0.1:11000",
-	)
+	}
+	if skipBuild {
+		args = append(args, "--skip-build")
+	}
+	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"), args...)
 	command.Dir = root
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)

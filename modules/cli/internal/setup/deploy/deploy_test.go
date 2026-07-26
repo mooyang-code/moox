@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -134,6 +135,26 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 		"package", "upload", "install_storage", "storage_primary_ready", "storage_view_ready", "finalize_storage", "cleanup",
 	}, events)
 	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
+}
+
+func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("a native Linux host does not need compile_host")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "custom.toml"), []byte("placeholder"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntouch ./compiled\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
+
+	archive, err := (StoragePackager{}).Package(context.Background(), Options{
+		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+	})
+	require.NoError(t, err)
+	defer os.Remove(archive)
+	require.Equal(t, "package", string(requireFile(t, archive)))
 }
 
 func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
