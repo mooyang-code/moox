@@ -201,7 +201,7 @@ Task 9  跨模块验证、E2E 和部署验收
 - Modify: `packages/cloudruntime/runtime_test.go`
 - Modify: `packages/events/validation_test.go`
 
-- [ ] **Step 1: 先写协议与状态传播测试**
+- [x] **Step 1: 先写协议与状态传播测试**
 
 覆盖以下行为：
 
@@ -221,7 +221,7 @@ func TestJobItemDetailReturnsExecuteAt(t *testing.T)
 
 Expected: 新字段尚不存在，测试编译失败。
 
-- [ ] **Step 2: 修改 protobuf 契约并重新生成**
+- [x] **Step 2: 修改 protobuf 契约并重新生成**
 
 新增字段：
 
@@ -251,13 +251,13 @@ make -C packages/cloudjobpb all
 
 Expected: 生成文件更新，`go test` 可识别 `ExecuteAt`。
 
-- [ ] **Step 3: 在 CloudNode 状态和事件中完整保留字段**
+- [x] **Step 3: 在 CloudNode 状态和事件中完整保留字段**
 
 `jobstate.State` 使用 `*time.Time` 保存可选值。`CreatePending` 校验非空 timestamp 合法后转为 UTC；`State.ToDetail` 转回 protobuf。`JetStreamQueue.Publish` 原样写入事件。
 
 禁止在 CloudNode 根据服务器时间补默认值。字段缺失就是立即执行，语义由 worker 解释。
 
-- [ ] **Step 4: 扩展 CloudRuntime JobItem**
+- [x] **Step 4: 扩展 CloudRuntime JobItem**
 
 ```go
 type JobItem struct {
@@ -268,7 +268,7 @@ type JobItem struct {
 
 本 Task 只完成数据贯通，不在通用 CloudRuntime 中 sleep。到期判断属于 Collector delivery adapter，在 Task 3 实现。
 
-- [ ] **Step 5: 运行协议测试**
+- [x] **Step 5: 运行协议测试**
 
 ```bash
 (cd packages/cloudjobpb && go test -count=1 ./...)
@@ -279,7 +279,7 @@ type JobItem struct {
 
 Expected: 全部通过；带值和缺失两种 `execute_at` 都能往返。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/cloudnode/proto packages/cloudjobpb modules/cloudnode/internal/jobstate modules/cloudnode/internal/jobqueue packages/cloudruntime packages/events
@@ -309,7 +309,7 @@ git commit -m "feat(cloudjob): add optional execution time"
 - Modify: `examples/e2e/verify.mjs`
 - Modify: `examples/e2e/README.md`
 
-- [ ] **Step 1: 先写调度时间、ACK 和无 wake 测试**
+- [x] **Step 1: 先写调度时间、ACK 和无 wake 测试**
 
 新增或重写测试：
 
@@ -324,7 +324,7 @@ func TestCreatePendingDeduplicatedPendingDoesNotRepublish(t *testing.T)
 
 `REJECTED` 用例必须断言错误中包含 `job_item_id` 和 `reject_reason`，不能只断言非空错误。
 
-- [ ] **Step 2: 直接重命名 RPC**
+- [x] **Step 2: 直接重命名 RPC**
 
 将以下类型和 RPC 一次性改名：
 
@@ -344,7 +344,7 @@ HandleSchedule                 -> HandleSchedule
 make -C modules/collector/proto all
 ```
 
-- [ ] **Step 3: 按下一时间边界构造周期 JobItem**
+- [x] **Step 3: 按下一时间边界构造周期 JobItem**
 
 将时钟作为参数传入纯函数，避免测试覆盖全局时间：
 
@@ -375,7 +375,7 @@ func scheduledJobItemID(taskID string, executeAt time.Time) string {
 
 同一 `job_item_id` 已处于 pending 时，CloudNode 返回 `DEDUPLICATED` 且 `ShouldPublish=false`；只有 `enqueue_failed` 才重新发布。这样控制面每分钟重复规划同一个未来窗口不会系统性制造多份消息，也没有增加新的去重存储。
 
-- [ ] **Step 4: 将 REJECTED ACK 转成明确错误**
+- [x] **Step 4: 将 REJECTED ACK 转成明确错误**
 
 将 ACK 解析改为返回成功映射和错误：
 
@@ -385,7 +385,7 @@ func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) (map[string]
 
 `CREATED`、`DEDUPLICATED` 记录 ID；`REJECTED` 聚合为错误。部分批次已成功的 ID 仍返回并写入 TaskInstance，随后 `ScheduleTasks` 返回失败。
 
-- [ ] **Step 5: 删除 wake 全链路**
+- [x] **Step 5: 删除 wake 全链路**
 
 删除：
 
@@ -399,7 +399,7 @@ func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) (map[string]
 
 `taskpublisher.Config` 同步删除只为 wake event 服务的字段。不要留下“提交后可选 wake”的开关。
 
-- [ ] **Step 6: 运行 Collector 调度测试和零残留检查**
+- [x] **Step 6: 运行 Collector 调度测试和零残留检查**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/taskpublisher ./internal/rpc)
@@ -409,7 +409,7 @@ rg -n "RecalculateAllTaskInstances|WakeCollectorNodes|WakeOptions|collector_sche
 
 Expected: 测试通过；`rg` 零命中。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add modules/collector modules/cloudnode/internal/jobstate examples/e2e
