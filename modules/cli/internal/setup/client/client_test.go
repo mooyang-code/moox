@@ -51,6 +51,10 @@ password = "recognizable-admin-password"
 [tencent_cloud]
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
+[eventbus]
+public_address = "eventbus.example.test"
+port = 4222
+tls_enabled = true
 [control_host]
 name = "control"
 address = "192.0.2.10"

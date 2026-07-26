@@ -36,6 +36,10 @@ password = "admin-e2e-password"
 [tencent_cloud]
 secret_id = "AKID-e2e"
 secret_key = "cloud-e2e-secret"
+[eventbus]
+public_address = "eventbus.example.test"
+port = 4222
+tls_enabled = true
 [control_host]
 name = "control"
 address = "192.0.2.10"
@@ -77,6 +81,9 @@ password = "compute-e2e-password"
 	err = setupdeploy.Control(context.Background(), transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: snapshot.Manifest.ControlHost.Address, BrowserPort: 9527,
 		TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:          snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
 	}, setupdeploy.Dependencies{
 		Packager: staticPackager{path: archive},
 		Probe:    captureProbe{events: &events},
