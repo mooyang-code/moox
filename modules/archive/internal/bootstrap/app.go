@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
-	"github.com/mooyang-code/moox/modules/archive/internal/consumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/cosstore"
+	eventconsumer "github.com/mooyang-code/moox/modules/archive/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/health"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
@@ -113,9 +113,9 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	defer pull.Close()
-	decoder := consumer.NewDecoder(sourceLists(a.Config))
-	handler := consumer.NewHandler(decoder, store, nil)
-	runner := consumer.NewRunner(pull, handler, a.Config.Archive.EventBus.FetchBatch)
+	decoder := eventconsumer.NewDecoder(sourceLists(a.Config))
+	handler := eventconsumer.NewHandler(decoder, store, nil)
+	runner := eventconsumer.NewRunner(pull, handler, a.Config.Archive.EventBus.FetchBatch)
 	runnerErr := make(chan error, 1)
 	go func() { runnerErr <- runner.Run(ctx) }()
 	var serveErr <-chan error

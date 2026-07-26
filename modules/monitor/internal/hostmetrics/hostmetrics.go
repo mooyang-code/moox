@@ -14,31 +14,10 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const (
-	Stream       = "MOOX_METRICS"
-	ConsumerName = "monitor_hostmetrics_ingest_v1"
-	SpaceID      = "moox_system"
-)
-
-var Topic = governedFamily(events.MetricsHostReported)
-
-func governedFamily(event events.Event) string {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return ""
-	}
-	family, err := registry.FamilyPattern(event)
-	if err != nil {
-		return ""
-	}
-	return family
-}
+const SpaceID = "moox_system"
 
 var ErrInvalidHostMetric = errors.New("invalid host metric")
 
@@ -61,15 +40,8 @@ type Store struct {
 	latest map[string]AgentView
 }
 
-// NewStore accepts an interface value to keep old bootstrap call sites
-// compiling while deployments migrate to NewStoreWithWriter. Non-writer
-// values (including the former *gorm.DB argument) are deliberately ignored.
-func NewStore(writer any) *Store {
-	var snapshotWriter SnapshotWriter
-	if w, ok := writer.(SnapshotWriter); ok {
-		snapshotWriter = w
-	}
-	return NewStoreWithWriter(snapshotWriter)
+func NewStore(writer SnapshotWriter) *Store {
+	return NewStoreWithWriter(writer)
 }
 
 func NewStoreWithWriter(writer SnapshotWriter) *Store {
@@ -241,25 +213,7 @@ func percent(v float64, available bool) error {
 	return nil
 }
 
-func (s *Store) Ingest(ctx context.Context, d *jetstream.Delivery) error {
-	if s == nil || d == nil {
-		return errors.New("host metric store or delivery is nil")
-	}
-	decoded := events.DecodeDelivery(mustRegistry(), d)
-	if decoded.Err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidHostMetric, decoded.Err)
-	}
-	metric, err := ValidateMessage(decoded.Message)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidHostMetric, err)
-	}
-	if err := s.persist(ctx, d, decoded.Message, metric); err != nil {
-		return err
-	}
-	return d.Ack(ctx)
-}
-
-func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, msg *eventpb.EventMessage, metric *hostmetricpb.HostMetric) error {
+func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *hostmetricpb.HostMetric) error {
 	if s == nil {
 		return errors.New("host metric store is nil")
 	}
@@ -269,8 +223,8 @@ func (s *Store) persist(ctx context.Context, d *jetstream.Delivery, msg *eventpb
 	if s == nil || s.writer == nil {
 		return errors.New("host metric storage writer is not configured")
 	}
-	if d == nil || msg == nil || metric == nil {
-		return errors.New("host metric delivery is incomplete")
+	if msg == nil || metric == nil {
+		return errors.New("host metric event is incomplete")
 	}
 	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), metric.GetAgentId(), msg.GetOccurredAt().AsTime(), msg.GetEventId()); err != nil {
 		return fmt.Errorf("write host metric snapshot: %w", err)
@@ -355,112 +309,4 @@ func cloneSnapshot(snapshot *hostmetricpb.HostSnapshot) *hostmetricpb.HostSnapsh
 		return nil
 	}
 	return proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
-}
-
-type Consumer struct {
-	pull  *events.Consumer
-	store *Store
-}
-
-func Bind(ctx context.Context, client *jetstream.Client, store *Store) (*Consumer, error) {
-	if client == nil || store == nil {
-		return nil, errors.New("host metrics client and store are required")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return nil, err
-	}
-	pull, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
-		Name: ConsumerName, Event: events.MetricsHostReported,
-		AckWait: time.Minute, MaxDeliver: 3, MaxAckPending: 256,
-		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
-		DeliverDecodeErrors: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Consumer{pull: pull, store: store}, nil
-}
-func (c *Consumer) Close() error {
-	if c == nil || c.pull == nil {
-		return nil
-	}
-	return c.pull.Close()
-}
-func (c *Consumer) Run(ctx context.Context) error {
-	if c == nil || c.pull == nil || c.store == nil {
-		return errors.New("host metrics consumer is not initialized")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for {
-		if !c.store.StorageReady() {
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(time.Second):
-			}
-			continue
-		}
-		runner := jetstream.NewRunner(c.pull, c, jetstream.RunnerConfig{
-			BatchSize: 64,
-			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-				if ctx.Err() == nil {
-					log.WarnContextf(ctx, "monitor host metrics delivery failed: %v", err)
-				}
-			}),
-		})
-		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
-			return err
-		}
-		return nil
-	}
-}
-
-func isIdleFetchError(err error) bool {
-	return errors.Is(err, nats.ErrTimeout)
-}
-
-func (c *Consumer) Handle(ctx context.Context, d *jetstream.Delivery) jetstream.HandlerResult {
-	if d == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("host metrics delivery is nil")}
-	}
-	decoded := events.DecodeDelivery(mustRegistry(), d)
-	metric, err := ValidateMessage(decoded.Message)
-	if decoded.Err != nil {
-		err = decoded.Err
-	}
-	if err != nil {
-		log.WarnContextf(ctx, "component=monitor_hostmetrics consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%v",
-			ConsumerName, d.RawMessageID, d.Subject, d.DeliveryCount, err)
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-	}
-	if err := c.store.persist(ctx, d, decoded.Message, metric); err != nil {
-		// Storage is transient from the consumer's perspective. NAK lets
-		// JetStream redeliver up to the durable consumer's MaxDeliver=3.
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(d.DeliveryCount), Err: err}
-	}
-	return jetstream.HandlerResult{Decision: jetstream.ACK}
-}
-
-func (c *Consumer) handleDelivery(ctx context.Context, d *jetstream.Delivery) error {
-	result := c.Handle(ctx, d)
-	return errors.Join(result.Err, jetstream.ApplyHandlerResult(ctx, d, result))
-}
-
-func retryDelay(deliveryCount uint64) time.Duration {
-	switch {
-	case deliveryCount <= 1:
-		return time.Second
-	case deliveryCount == 2:
-		return 5 * time.Second
-	default:
-		return 15 * time.Second
-	}
-}
-
-func mustRegistry() *events.Registry {
-	registry, _ := events.DefaultRegistry()
-	return registry
 }

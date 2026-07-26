@@ -1,23 +1,103 @@
-package trigger
+package eventconsumer
 
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeNATSSession struct {
 	run        func(context.Context) error
 	closeCalls atomic.Int32
+}
+
+type pendingStoreFake struct {
+	mu        sync.Mutex
+	rows      map[string]pendingStoreRow
+	processed map[string]struct{}
+}
+
+type pendingStoreRow struct {
+	event      *storagepb.DatasetRowsUpserted
+	receivedAt time.Time
+}
+
+func (s *pendingStoreFake) pendingCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.rows)
+}
+
+func (s *pendingStoreFake) ClaimPendingEvent(_ context.Context, id string, event *storagepb.DatasetRowsUpserted, at time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rows == nil {
+		s.rows = map[string]pendingStoreRow{}
+	}
+	if _, ok := s.processed[id]; ok {
+		return false, nil
+	}
+	if _, ok := s.rows[id]; ok {
+		return false, nil
+	}
+	s.rows[id] = pendingStoreRow{event: proto.Clone(event).(*storagepb.DatasetRowsUpserted), receivedAt: at}
+	return true, nil
+}
+
+func (s *pendingStoreFake) LoadPendingEvents(_ context.Context, visit func(string, *storagepb.DatasetRowsUpserted, time.Time) error) error {
+	for id, row := range s.rows {
+		if err := visit(id, proto.Clone(row.event).(*storagepb.DatasetRowsUpserted), row.receivedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *pendingStoreFake) CommitPendingEvents(_ context.Context, ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.processed == nil {
+		s.processed = map[string]struct{}{}
+	}
+	for _, id := range ids {
+		s.processed[id] = struct{}{}
+		delete(s.rows, id)
+	}
+	return nil
+}
+
+func binding(factorID, sourceDataset, subjectMode, subjectsJSON string) domain.FactorBinding {
+	return domain.FactorBinding{
+		BindingID: "bind-" + factorID, FactorID: factorID, SpaceID: "crypto",
+		SourceDataset: sourceDataset, Freq: "1m", SubjectMode: subjectMode,
+		SubjectsJSON: subjectsJSON, TargetDataset: "binance_spot_factor",
+		Status: domain.BindingStatusEnabled,
+	}
+}
+
+func event(spaceID, datasetID, subjectID, freq string, dataTime time.Time) *storagepb.DatasetRowsUpserted {
+	return &storagepb.DatasetRowsUpserted{
+		SpaceId: spaceID, DatasetId: datasetID,
+		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{
+			SpaceId: spaceID, DatasetId: datasetID,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339),
+			}},
+		}}},
+	}
 }
 
 func (s *fakeNATSSession) Run(ctx context.Context) error {
@@ -29,7 +109,7 @@ func (s *fakeNATSSession) Close() error {
 	return nil
 }
 
-func TestNATSConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
+func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	started := make(chan struct{})
@@ -46,7 +126,7 @@ func TestNATSConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 		return nil
 	}}
 	var opens atomic.Int32
-	consumer := NewNATSConsumer(NATSConfig{}, nil)
+	consumer := New(Config{}, nil)
 	consumer.retryDelay = 50 * time.Millisecond
 	consumer.openSession = func(context.Context) (natsConsumerSession, error) {
 		opens.Add(1)
@@ -60,10 +140,10 @@ func TestNATSConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 		t.Fatal("consumer must be ready while the initial session is running")
 	}
 	close(release)
-	if !eventuallyNATSConsumer(time.Second, func() bool { return !consumer.Ready() }) {
+	if !eventuallyConsumer(time.Second, func() bool { return !consumer.Ready() }) {
 		t.Fatal("consumer did not become unready after the failed session")
 	}
-	if !eventuallyNATSConsumer(time.Second, func() bool { return consumer.Ready() }) {
+	if !eventuallyConsumer(time.Second, func() bool { return consumer.Ready() }) {
 		t.Fatal("consumer did not recover readiness")
 	}
 	<-recovered
@@ -72,7 +152,7 @@ func TestNATSConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 	}
 }
 
-func eventuallyNATSConsumer(timeout time.Duration, condition func() bool) bool {
+func eventuallyConsumer(timeout time.Duration, condition func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if condition() {
@@ -84,16 +164,16 @@ func eventuallyNATSConsumer(timeout time.Duration, condition func() bool) bool {
 }
 
 func TestLiveConsumerConfig(t *testing.T) {
-	ref := liveConsumerConfig(NATSConfig{FetchMaxWait: 2 * time.Second})
+	ref := liveConsumerConfig(Config{FetchMaxWait: 2 * time.Second})
 	if ref.Event.Name() != events.DatasetRowsUpserted.Name() ||
 		ref.Event.Version() != events.DatasetRowsUpserted.Version() ||
-		ref.Name != LiveConsumer ||
+		ref.Name != DatasetRowsConsumerName ||
 		ref.FetchMaxWait != 2*time.Second {
 		t.Fatalf("live consumer bind ref = %+v", ref)
 	}
 }
 
-func TestNATSConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
+func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 	ns, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
 	})
@@ -139,12 +219,12 @@ func TestNATSConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	inbox := &pendingStoreFake{}
-	batcher := NewDurableEventBatcher(20*time.Millisecond, []domain.FactorBinding{
+	batcher := trigger.NewDurableEventBatcher(20*time.Millisecond, []domain.FactorBinding{
 		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
 	}, inbox)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	consumer := NewNATSConsumer(NATSConfig{
+	consumer := New(Config{
 		URLs: []string{ns.ClientURL()}, FetchMaxWait: 50 * time.Millisecond,
 	}, batcher)
 	if err = consumer.Start(ctx); err != nil {
@@ -170,7 +250,7 @@ func TestNATSConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !eventuallyNATSConsumer(5*time.Second, func() bool { return inbox.pendingCount() == 1 }) {
+	if !eventuallyConsumer(5*time.Second, func() bool { return inbox.pendingCount() == 1 }) {
 		t.Fatal("real EventBus delivery did not reach Factor's durable inbox")
 	}
 	tasks, err := batcher.FlushPending(ctx, time.Now().Add(time.Second))
@@ -186,7 +266,7 @@ func TestNATSConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 	symbols := testkit.Symbols(500)
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewEventBatcher(time.Second, []domain.FactorBinding{{
+	d := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{{
 		BindingID:     "b1",
 		FactorID:      "bias",
 		SpaceID:       "crypto",
@@ -217,7 +297,7 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 
 func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := NewEventBatcher(time.Second, []domain.FactorBinding{
+	d := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{
 		{
 			BindingID:     "b1",
 			FactorID:      "bias",

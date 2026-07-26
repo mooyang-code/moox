@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +29,7 @@ func TestHealthHandlerSeparatesLivenessAndReadiness(t *testing.T) {
 
 func TestHealthHandler_ReadyAgent_ShouldReturnOK(t *testing.T) {
 	a := testAgent(t)
-	a.client = &jetstream.Client{}
+	a.publisher = &fakeEventPublisher{ready: true}
 	a.lastCollect = time.Now().UTC()
 	handler := healthHandler(a)
 

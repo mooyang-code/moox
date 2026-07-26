@@ -42,3 +42,7 @@ func recordIngest(result string, observed time.Time) {
 		}
 	}
 }
+
+func RecordIngest(result string, observed time.Time) {
+	recordIngest(result, observed)
+}

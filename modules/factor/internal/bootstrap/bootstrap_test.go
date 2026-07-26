@@ -39,11 +39,11 @@ func (s factorRealtimeStatus) Ready() bool { return bool(s) }
 
 func TestRealtimeConsumerReadinessIsRequiredOnlyWhenEnabled(t *testing.T) {
 	cfg := Default()
-	cfg.NATS.URLs = nil
+	cfg.EventBus.URLs = nil
 	if !realtimeConsumerReady(cfg, nil) {
 		t.Fatal("disabled realtime consumer must not block readiness")
 	}
-	cfg.NATS.URLs = []string{"nats://127.0.0.1:4222"}
+	cfg.EventBus.URLs = []string{"nats://127.0.0.1:4222"}
 	if realtimeConsumerReady(cfg, nil) || realtimeConsumerReady(cfg, factorRealtimeStatus(false)) {
 		t.Fatal("enabled realtime consumer must be live")
 	}

@@ -1,4 +1,4 @@
-package bootstrap
+package eventconsumer
 
 import (
 	"context"
@@ -13,13 +13,13 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
-type tradeSnapshotResolver struct {
-	store  *store.Store
-	engine *command.Engine
+type SnapshotResolver struct {
+	Store  *store.Store
+	Engine *command.Engine
 }
 
-func (r tradeSnapshotResolver) ResolveChannel(ctx context.Context, spaceID, accountID, channelID, mode string) (rebalanceapp.Channel, error) {
-	channel, err := r.engine.DescribeChannel(ctx, spaceID, channelID)
+func (r SnapshotResolver) ResolveChannel(ctx context.Context, spaceID, accountID, channelID, mode string) (rebalanceapp.Channel, error) {
+	channel, err := r.Engine.DescribeChannel(ctx, spaceID, channelID)
 	if err != nil {
 		return rebalanceapp.Channel{}, err
 	}
@@ -38,8 +38,8 @@ func (r tradeSnapshotResolver) ResolveChannel(ctx context.Context, spaceID, acco
 	return rebalanceapp.Channel{Exchange: channel.Exchange, MarketType: channel.MarketType}, nil
 }
 
-func (r tradeSnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, channelID, _ string, target *tradeeventpb.RebalanceTarget) (rebalanceapp.Market, error) {
-	adapter, err := r.engine.PublicAdapterFor(ctx, spaceID, channelID)
+func (r SnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, channelID, _ string, target *tradeeventpb.RebalanceTarget) (rebalanceapp.Market, error) {
+	adapter, err := r.Engine.PublicAdapterFor(ctx, spaceID, channelID)
 	if err != nil {
 		return rebalanceapp.Market{}, err
 	}
@@ -53,8 +53,8 @@ func (r tradeSnapshotResolver) ResolveLatestPrice(ctx context.Context, spaceID, 
 	return rebalanceapp.Market{BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Price: rules.LastPrice.String()}, nil
 }
 
-func (r tradeSnapshotResolver) ResolveCurrentQuantities(ctx context.Context, spaceID, accountID string) (map[string]shared.Decimal, error) {
-	rows, err := r.store.ListPositions(ctx, spaceID, accountID, "")
+func (r SnapshotResolver) ResolveCurrentQuantities(ctx context.Context, spaceID, accountID string) (map[string]shared.Decimal, error) {
+	rows, err := r.Store.ListPositions(ctx, spaceID, accountID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +69,8 @@ func (r tradeSnapshotResolver) ResolveCurrentQuantities(ctx context.Context, spa
 	return out, nil
 }
 
-func (r tradeSnapshotResolver) RoundQuantity(ctx context.Context, spaceID, channelID, _ string, symbol string, quantity shared.Decimal) (shared.Decimal, error) {
-	adapter, err := r.engine.PublicAdapterFor(ctx, spaceID, channelID)
+func (r SnapshotResolver) RoundQuantity(ctx context.Context, spaceID, channelID, _ string, symbol string, quantity shared.Decimal) (shared.Decimal, error) {
+	adapter, err := r.Engine.PublicAdapterFor(ctx, spaceID, channelID)
 	if err != nil {
 		return shared.Decimal{}, err
 	}

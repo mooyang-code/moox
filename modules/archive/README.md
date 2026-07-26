@@ -2,7 +2,9 @@
 
 `moox-archive` 消费 Storage 行变更事件，把事实写入本地 Journal，并物化为按月分区的 Parquet 文件；启用 COS 时还会同步长期副本。Parquet 默认永久保留，COS 副本不会自动删除本地文件，部署者仍需规划本地容量。
 
-Archive 从本地配置读取 EventBus 的 `stream`、`consumer` 和 `fetch_max_wait`，启动时创建并持有自己的 Consumer。Consumer 的 filter、ACK、DeliverPolicy 和投递限制由 Archive 在代码中明确声明。
+Archive 从本地配置读取 EventBus 地址、凭据和 `fetch_max_wait`，
+`internal/eventconsumer` 启动并持有固定身份的 Consumer。Stream、Consumer 名称、
+filter、ACK、DeliverPolicy 和投递限制由事件 Registry 与 Archive 代码声明。
 
 ## 定时任务
 

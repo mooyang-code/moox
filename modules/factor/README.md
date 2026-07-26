@@ -4,6 +4,10 @@
 
 实时 Storage 触发器启动时创建并持有 `MOOX_STORAGE/factor_calc` Consumer；filter、ACK、DeliverPolicy 和投递限制由 Factor 在代码中明确声明。
 
+传输生命周期位于 `internal/trigger/eventconsumer`；`internal/trigger` 只保留
+`EventBatcher`、重放和 pending inbox 语义。配置统一使用 `eventbus`，不再暴露
+NATS 命名的业务配置。
+
 `factor_calc` 的实时 DeliverPolicy 由 Factor 固定为只接收新消息。需要 replay 时，必须显式创建并使用独立 Consumer，或使用离线的 `run-once`/补算入口；不得修改或复用实时 Consumer 来承载历史重放。
 
 实时 delivery 在 ACK 前先写入 Factor SQLite 的 `t_factor_event_inbox`；进程重启会 replay 未 flush 的 inbox，窗口 flush 后才删除对应记录。这个本地 pending inbox 是实时 Consumer 之外的恢复边界，不替代 `MOOX_STORAGE/factor_calc`，也不把 replay 伪装成实时消费。
@@ -39,6 +43,7 @@ internal/engine/
 internal/registry/
 internal/store/
 internal/storageio/
+internal/trigger/eventconsumer/
 pyworker/
 examples/run-once/
 ```

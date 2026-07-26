@@ -18,7 +18,7 @@ import (
 type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	Storage   StorageConfig   `yaml:"storage"`
-	NATS      NATSConfig      `yaml:"nats"`
+	EventBus  EventBusConfig  `yaml:"eventbus"`
 	Engine    EngineConfig    `yaml:"engine"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Instance  InstanceConfig  `yaml:"instance"`
@@ -44,8 +44,8 @@ type StorageConfig struct {
 	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
-// NATSConfig describes the Storage event stream subscription.
-type NATSConfig struct {
+// EventBusConfig describes the Storage event stream subscription.
+type EventBusConfig struct {
 	URLs           []string      `yaml:"urls"`
 	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
 	CredentialFile string        `yaml:"credential_file"`
@@ -126,7 +126,7 @@ func Default() *Config {
 		Storage: StorageConfig{
 			GatewayTarget: "ip://127.0.0.1:11003",
 		},
-		NATS: NATSConfig{
+		EventBus: EventBusConfig{
 			URLs:         []string{"nats://127.0.0.1:4222"},
 			FetchMaxWait: time.Second,
 		},
@@ -183,11 +183,11 @@ func (c *Config) applyDefaults() {
 	if c.Storage.GatewayTarget == "" {
 		c.Storage.GatewayTarget = "ip://127.0.0.1:11003"
 	}
-	if len(c.NATS.URLs) == 0 {
-		c.NATS.URLs = []string{"nats://127.0.0.1:4222"}
+	if len(c.EventBus.URLs) == 0 {
+		c.EventBus.URLs = []string{"nats://127.0.0.1:4222"}
 	}
-	if c.NATS.FetchMaxWait == 0 {
-		c.NATS.FetchMaxWait = time.Second
+	if c.EventBus.FetchMaxWait == 0 {
+		c.EventBus.FetchMaxWait = time.Second
 	}
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"
@@ -262,7 +262,7 @@ func (c *Config) applyEnv() {
 		c.Storage.HMACKeyFile = v
 	}
 	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok {
-		c.NATS.URLs = splitEventBusURLs(v)
+		c.EventBus.URLs = splitEventBusURLs(v)
 	}
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_BIN"); v != "" {
 		c.Engine.PythonBin = v

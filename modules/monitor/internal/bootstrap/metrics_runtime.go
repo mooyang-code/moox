@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	metricseventconsumer "github.com/mooyang-code/moox/modules/monitor/internal/metrics/eventconsumer"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -90,7 +91,7 @@ func startMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runt
 				continue
 			}
 			runtime.setMetricsIngestState(true, nil)
-			err = monmetrics.RunWhenReady(ctx, monmetrics.ConsumerOptions{Client: js, Storage: storage, MessageStore: repo, Authorizer: monmetrics.CheckProducerAuthorizer{Checks: runtime.Repositories.Checks}, Config: cfg.Metrics, ServiceName: "moox-monitor", InstanceID: cfg.Instance.InstanceID})
+			err = metricseventconsumer.RunWhenReady(ctx, metricseventconsumer.ConsumerOptions{Client: js, Storage: storage, MessageStore: repo, Authorizer: monmetrics.CheckProducerAuthorizer{Checks: runtime.Repositories.Checks}, Config: cfg.Metrics, ServiceName: "moox-monitor", InstanceID: cfg.Instance.InstanceID})
 			_ = js.Close()
 			if ctx.Err() != nil {
 				return

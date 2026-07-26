@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/rebalance"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
@@ -126,12 +127,12 @@ func TestHandleRebalanceDeliveryAcknowledgesStaleSequenceWithoutCreatingRun(t *t
 	newer.RequestId = "request-2"
 	newer.StrategyRunId = "strategy-run-2"
 	newer.CommandSequence = 2
-	result := handleRebalanceDelivery(ctx, rebalanceDelivery(t, newer.GetRequestId(), newer.GetExecutionBindingId(), newer), s, engine, "trade_rebalance_v1", nil)
+	result := eventconsumer.HandleRebalance(ctx, rebalanceDelivery(t, newer.GetRequestId(), newer.GetExecutionBindingId(), newer), eventconsumer.RebalanceOptions{Store: s, Engine: engine, ConsumerName: "trade_rebalance_v1"})
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.NoError(t, result.Err)
 
 	stale := validRebalanceRequest()
-	result = handleRebalanceDelivery(ctx, rebalanceDelivery(t, stale.GetRequestId(), stale.GetExecutionBindingId(), stale), s, engine, "trade_rebalance_v1", nil)
+	result = eventconsumer.HandleRebalance(ctx, rebalanceDelivery(t, stale.GetRequestId(), stale.GetExecutionBindingId(), stale), eventconsumer.RebalanceOptions{Store: s, Engine: engine, ConsumerName: "trade_rebalance_v1"})
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.NoError(t, result.Err)
 
@@ -150,9 +151,9 @@ func TestHandleRebalanceDeliveryCreatesRunAndDeduplicates(t *testing.T) {
 
 	request := validRebalanceRequest()
 	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
-	first := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", newKernelWakeup())
+	first := eventconsumer.HandleRebalance(ctx, delivery, eventconsumer.RebalanceOptions{Store: s, Engine: engine, ConsumerName: "trade_rebalance_v1", Wake: newKernelWakeup().Wake})
 	assert.Equal(t, jetstream.ACK, first.Decision)
-	second := handleRebalanceDelivery(ctx, delivery, s, &command.Engine{Store: s}, "trade_rebalance_v1", newKernelWakeup())
+	second := eventconsumer.HandleRebalance(ctx, delivery, eventconsumer.RebalanceOptions{Store: s, Engine: &command.Engine{Store: s}, ConsumerName: "trade_rebalance_v1", Wake: newKernelWakeup().Wake})
 	assert.Equal(t, jetstream.ACK, second.Decision)
 
 	runs, err := s.ListActiveRebalanceRuns(ctx, 10)
@@ -177,7 +178,7 @@ func TestTradeSnapshotResolverRejectsModeChannelMismatch(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			resolver := tradeSnapshotResolver{engine: &command.Engine{
+			resolver := eventconsumer.SnapshotResolver{Engine: &command.Engine{
 				Resolver: workerResolver{adapter: workerStubAdapter{}, channel: tc.channel},
 			}}
 			_, err := resolver.ResolveChannel(context.Background(), "space", "acct", "chan", tc.mode)
@@ -198,7 +199,7 @@ func TestPaperRebalanceFillsWithoutPriorTradeOrRealExchangeCall(t *testing.T) {
 
 	request := validRebalanceRequest()
 	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
-	result := handleRebalanceDelivery(ctx, delivery, s, engine, "trade_rebalance_v1", nil)
+	result := eventconsumer.HandleRebalance(ctx, delivery, eventconsumer.RebalanceOptions{Store: s, Engine: engine, ConsumerName: "trade_rebalance_v1"})
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.NoError(t, result.Err)
 
@@ -231,7 +232,7 @@ func TestHandleRebalanceDeliveryRejectsPermanentContractError(t *testing.T) {
 	require.NoError(t, err)
 	delivery.Subject, err = registry.RenderSubject(events.TradeRebalanceRequested, "space", "wrong-binding")
 	require.NoError(t, err)
-	result := handleRebalanceDelivery(context.Background(), delivery, s, &command.Engine{Store: s, Adapter: workerStubAdapter{}}, "trade_rebalance_v1", nil)
+	result := eventconsumer.HandleRebalance(context.Background(), delivery, eventconsumer.RebalanceOptions{Store: s, Engine: &command.Engine{Store: s, Adapter: workerStubAdapter{}}, ConsumerName: "trade_rebalance_v1"})
 	assert.Equal(t, jetstream.TERM, result.Decision)
 	assert.Error(t, result.Err)
 }
@@ -240,7 +241,7 @@ func TestHandleRebalanceDeliveryRetriesSnapshotFailure(t *testing.T) {
 	s := openWorkerStore(t)
 	request := validRebalanceRequest()
 	delivery := rebalanceDelivery(t, request.GetRequestId(), request.GetExecutionBindingId(), request)
-	result := handleRebalanceDelivery(context.Background(), delivery, s, &command.Engine{Store: s, Adapter: workerStubAdapter{}}, "trade_rebalance_v1", nil)
+	result := eventconsumer.HandleRebalance(context.Background(), delivery, eventconsumer.RebalanceOptions{Store: s, Engine: &command.Engine{Store: s, Adapter: workerStubAdapter{}}, ConsumerName: "trade_rebalance_v1"})
 	assert.Equal(t, jetstream.RETRY, result.Decision)
 	assert.Error(t, result.Err)
 }

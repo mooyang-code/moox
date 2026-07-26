@@ -12,7 +12,7 @@ storage:
   key_id: "factor"
   hmac_key_file: ""
 
-nats:
+eventbus:
   urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml

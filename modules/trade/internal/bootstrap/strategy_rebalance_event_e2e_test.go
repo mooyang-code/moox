@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
@@ -116,7 +117,7 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 		t.Fatalf("fetch first delivery: count=%d err=%v", len(deliveries), err)
 	}
 	first := deliveries[0]
-	result := handleRebalanceDelivery(ctx, first, s, engine, "trade_rebalance_v1", nil)
+	result := eventconsumer.HandleRebalance(ctx, first, eventconsumer.RebalanceOptions{Store: s, Engine: engine, ConsumerName: "trade_rebalance_v1"})
 	if result.Decision != jetstream.ACK || result.Err != nil {
 		t.Fatalf("first decision=%v err=%v", result.Decision, result.Err)
 	}
@@ -128,7 +129,7 @@ func TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker(t *testing.T)
 		t.Fatalf("fetch redelivery: count=%d err=%v", len(deliveries), err)
 	}
 	second := deliveries[0]
-	result = handleRebalanceDelivery(ctx, second, s, engine, "trade_rebalance_v1", nil)
+	result = eventconsumer.HandleRebalance(ctx, second, eventconsumer.RebalanceOptions{Store: s, Engine: engine, ConsumerName: "trade_rebalance_v1"})
 	if result.Decision != jetstream.ACK || result.Err != nil {
 		t.Fatalf("redelivery decision=%v err=%v", result.Decision, result.Err)
 	}

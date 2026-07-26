@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/archive/internal/consumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
+	eventconsumer "github.com/mooyang-code/moox/modules/archive/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
@@ -76,8 +76,8 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pull.Close()
-	h := consumer.NewHandler(consumer.NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}}), store, nil)
-	runner := consumer.NewRunner(pull, h, 16)
+	h := eventconsumer.NewHandler(eventconsumer.NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}}), store, nil)
+	runner := eventconsumer.NewRunner(pull, h, 16)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runErr := make(chan error, 1)

@@ -1,4 +1,4 @@
-package metrics
+package eventconsumer
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
-	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
@@ -17,38 +17,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-var MetricTopic = governedFamily(events.MetricsSnapshotReported)
-
-func governedFamily(event events.Event) string {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return ""
-	}
-	family, err := registry.FamilyPattern(event)
-	if err != nil {
-		return ""
-	}
-	return family
-}
-
-type ProducerAuthorizer interface {
-	IsRegistered(context.Context, string, string) (bool, error)
-}
-
-type CheckProducerAuthorizer struct{ Checks *store.CheckRepository }
-
-func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, _ string) (bool, error) {
-	if a.Checks == nil {
-		return false, errors.New("check producer authorizer is not initialized")
-	}
-	return a.Checks.IsSysDeployRegistered(ctx, serviceName)
-}
-
 type ConsumerOptions struct {
 	Client       *jetstream.Client
-	Storage      *StorageAdapter
-	MessageStore *MetricMessageStore
-	Authorizer   ProducerAuthorizer
+	Storage      *metrics.StorageAdapter
+	MessageStore *metrics.MetricMessageStore
+	Authorizer   metrics.ProducerAuthorizer
 	Config       monconfig.MetricsConfig
 	ServiceName  string
 	InstanceID   string
@@ -190,7 +163,7 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 	if !ok || report.GetSnapshot() == nil {
 		return c.reject(ctx, delivery, errors.New("metric report payload is invalid"))
 	}
-	if message.GetSpaceId() != InternalMetricSpaceID {
+	if message.GetSpaceId() != metrics.InternalMetricSpaceID {
 		return c.reject(ctx, delivery, fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 	}
 	if c.opts.Authorizer != nil {
@@ -220,7 +193,7 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
 	observed := message.GetOccurredAt().AsTime()
-	samples, err := ParseSnapshot(report.GetSnapshot(), Envelope{ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(), ProducerVersion: report.GetServiceVersion(), ObservedAt: observed}, DefaultLimits())
+	samples, err := metrics.ParseSnapshot(report.GetSnapshot(), metrics.Envelope{ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(), ProducerVersion: report.GetServiceVersion(), ObservedAt: observed}, metrics.DefaultLimits())
 	if err != nil {
 		return c.reject(ctx, delivery, err)
 	}
@@ -234,12 +207,12 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 	if duplicate {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
-	recordIngest("success", observed)
+	metrics.RecordIngest("success", observed)
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
 func (c *Consumer) reject(ctx context.Context, delivery *jetstream.Delivery, reason error) jetstream.HandlerResult {
-	recordIngest("rejected", time.Time{})
+	metrics.RecordIngest("rejected", time.Time{})
 	log.WarnContextf(ctx, "component=monitor_metrics consumer=%s event_id=%s subject=%s delivery_count=%d decision=term reason=%v",
 		c.opts.Config.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, reason)
 	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: reason}
@@ -251,7 +224,7 @@ func (c *Consumer) HandleDelivery(ctx context.Context, delivery *jetstream.Deliv
 }
 
 func (c *Consumer) retry(err error) jetstream.HandlerResult {
-	recordIngest("error", time.Time{})
+	metrics.RecordIngest("error", time.Time{})
 	return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
 }
 

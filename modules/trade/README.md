@@ -10,6 +10,9 @@ Strategy 调仓命令经过 Consumer 解码和校验后，Trade 在同一数据�
 成交和调仓进度只写 Trade 数据库；私有 WebSocket 提供低延迟成交回报，REST 对账补齐
 断线缺口。
 
+`internal/eventconsumer` 拥有调仓事件的绑定、重连、解码、Inbox 判断、请求规划和
+ACK 分类；`internal/bootstrap` 只创建 EventBus 连接并启动该生命周期。
+
 Trade 从交易所公开 instrument 接口读取最新价格、精度和报价资产，新标的第一次调仓
 不依赖 Trade 历史订单。FullTarget 会把命令中省略的已有持仓收敛到 0；空 targets
 表示全部平仓；账户本来没有持仓时，空操作直接记为完成。非零权重经数量精度取整后
@@ -30,7 +33,7 @@ Trade 从交易所公开 instrument 接口读取最新价格、精度和报价�
 - `database.path`：Trade SQLite 路径。
 - `eventbus.urls`：JetStream 地址。
 - `eventbus.credential_file`：Trade 专属 EventBus 凭据。
-- `eventbus.rebalance_consumer`：Strategy 调仓命令 Consumer 名称。
+- Strategy 调仓命令 Consumer 名称固定为代码常量 `trade_rebalance_v1`。
 - `security.encryption_key`：交易所凭证 AES-GCM 密钥。
 
 `ReconcileNow` 直接执行一次有界对账，不发布事件。健康检查覆盖数据库、EventBus、

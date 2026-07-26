@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	hosteventconsumer "github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics/eventconsumer"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -62,7 +63,7 @@ func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *
 				waitHostMetrics(ctx)
 				continue
 			}
-			consumer, err := hostmetrics.Bind(ctx, client, store)
+			consumer, err := hosteventconsumer.Bind(ctx, client, store)
 			if err != nil {
 				_ = client.Close()
 				log.WarnContextf(ctx, "host metrics durable unavailable: %v", err)

@@ -9,6 +9,7 @@ import (
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	metricseventconsumer "github.com/mooyang-code/moox/modules/monitor/internal/metrics/eventconsumer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -75,7 +76,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := metrics.NewConsumer(ctx, metrics.ConsumerOptions{Client: eventClient, Storage: storage, MessageStore: messageStore, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
+	consumer, err := metricseventconsumer.NewConsumer(ctx, metricseventconsumer.ConsumerOptions{Client: eventClient, Storage: storage, MessageStore: messageStore, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTi
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
-func fetchMetricsEventually(ctx context.Context, consumer *metrics.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {
+func fetchMetricsEventually(ctx context.Context, consumer *metricseventconsumer.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	for {

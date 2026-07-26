@@ -1,4 +1,4 @@
-package consumer
+package eventconsumer
 
 import (
 	"testing"

@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,18 +9,10 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
-
-func TestHandleDeliveryAppliesTermAndReturnsBusinessError(t *testing.T) {
-	err := (&Consumer{}).HandleDelivery(context.Background(), nil)
-	if err == nil || !errors.Is(err, jetstream.ErrInvalidDelivery) || err.Error() == "empty metric delivery" {
-		t.Fatalf("HandleDelivery() error = %v, want business and transport errors", err)
-	}
-}
 
 func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
@@ -125,11 +116,5 @@ func requireNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestRunWhenReadyRequiresStorage(t *testing.T) {
-	if err := RunWhenReady(context.Background(), ConsumerOptions{}); err == nil {
-		t.Fatal("expected missing storage error")
 	}
 }

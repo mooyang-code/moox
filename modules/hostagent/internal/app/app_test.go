@@ -15,13 +15,9 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	mocker "github.com/tencent/goom"
-	"google.golang.org/protobuf/proto"
 )
 
 func writeEventBusConfig(t *testing.T, dir string) string {
@@ -60,13 +56,19 @@ type fakeSnapshotCollector struct {
 	err      error
 }
 
-type fakeEventPublisher struct{ err error }
+type fakeEventPublisher struct {
+	err    error
+	ready  bool
+	closed bool
+}
 
-func (f fakeEventPublisher) Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return &jetstream.PublishAck{Stream: "MOOX", Sequence: 1}, nil
+func (f *fakeEventPublisher) PublishHostMetric(context.Context, string, *hostmetricpb.HostMetric, time.Time) error {
+	return f.err
+}
+func (f *fakeEventPublisher) Ready() bool { return f.ready }
+func (f *fakeEventPublisher) Close() error {
+	f.closed = true
+	return f.err
 }
 
 func (f fakeSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
@@ -104,7 +106,7 @@ func TestAgent_GetStatus_ShouldExposeCountersAndLatest(t *testing.T) {
 	a.published.Store(2)
 	a.dropped.Store(1)
 	a.skipped.Store(4)
-	a.client = &jetstream.Client{}
+	a.publisher = &fakeEventPublisher{ready: true}
 
 	rsp, err := a.GetStatus(context.Background(), &hostagentpb.GetStatusReq{})
 	require.NoError(t, err)
@@ -147,22 +149,18 @@ func TestAgent_RecordError_ShouldPersistTruncatedMessage(t *testing.T) {
 	assert.Len(t, a.lastErr, 512)
 }
 
-func TestAgent_Close_NilClient_ShouldNoop(t *testing.T) {
+func TestAgent_Close_NilPublisher_ShouldNoop(t *testing.T) {
 	a := testAgent(t)
 	require.NoError(t, a.Close())
 }
 
-func TestAgent_Close_WithClient_ShouldCloseAndClear(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
-	client := &jetstream.Client{}
-	mock.Struct(client).Method("Close").Return(nil)
-
+func TestAgent_Close_WithPublisher_ShouldCloseAndClear(t *testing.T) {
+	publisher := &fakeEventPublisher{}
 	a := testAgent(t)
-	a.client = client
+	a.publisher = publisher
 	require.NoError(t, a.Close())
-	assert.Nil(t, a.client)
+	assert.True(t, publisher.closed)
+	assert.Nil(t, a.publisher)
 }
 
 func TestAgent_RunOnce_CollectError_ShouldIncrementDropped(t *testing.T) {
@@ -189,7 +187,7 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: snapshot}
-	a.publisher = fakeEventPublisher{}
+	a.publisher = &fakeEventPublisher{}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
@@ -203,7 +201,7 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.publisher = fakeEventPublisher{err: errors.New("publish failed")}
+	a.publisher = &fakeEventPublisher{err: errors.New("publish failed")}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
@@ -212,10 +210,10 @@ func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
 	assert.Contains(t, a.lastErr, "publish failed")
 }
 
-func TestAgent_Eventbus_InvalidConfig_ShouldReturnError(t *testing.T) {
+func TestAgent_EventPublisher_InvalidConfig_ShouldReturnError(t *testing.T) {
 	a := testAgent(t)
 	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
-	_, err := a.eventbus(context.Background())
+	_, err := a.eventPublisher(context.Background())
 	assert.Error(t, err)
 }
 
@@ -226,9 +224,6 @@ func TestAgent_RunOnce_NilAgent_ShouldReturnError(t *testing.T) {
 }
 
 func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
@@ -239,14 +234,14 @@ func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
 	assert.Equal(t, uint64(1), a.dropped.Load())
 }
 
-func TestAgent_Eventbus_ReusesExistingClient(t *testing.T) {
+func TestAgent_EventPublisher_ReusesExistingPublisher(t *testing.T) {
 	a := testAgent(t)
-	client := &jetstream.Client{}
-	a.client = client
+	publisher := &fakeEventPublisher{}
+	a.publisher = publisher
 
-	got, err := a.eventbus(context.Background())
+	got, err := a.eventPublisher(context.Background())
 	require.NoError(t, err)
-	assert.Same(t, client, got)
+	assert.Same(t, publisher, got)
 }
 
 func TestAgent_RunOnceGuarded_ReleasesRunningFlag(t *testing.T) {

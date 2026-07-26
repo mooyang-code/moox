@@ -14,11 +14,11 @@ func TestDefaultFactorConfig(t *testing.T) {
 	if cfg.Storage.GatewayTarget != "ip://127.0.0.1:11003" {
 		t.Fatalf("gateway target = %q", cfg.Storage.GatewayTarget)
 	}
-	if cfg.NATS.FetchMaxWait != time.Second {
-		t.Fatalf("nats fetch max wait = %s", cfg.NATS.FetchMaxWait)
+	if cfg.EventBus.FetchMaxWait != time.Second {
+		t.Fatalf("nats fetch max wait = %s", cfg.EventBus.FetchMaxWait)
 	}
-	if len(cfg.NATS.URLs) != 1 || cfg.NATS.URLs[0] != "nats://127.0.0.1:4222" {
-		t.Fatalf("nats urls = %v", cfg.NATS.URLs)
+	if len(cfg.EventBus.URLs) != 1 || cfg.EventBus.URLs[0] != "nats://127.0.0.1:4222" {
+		t.Fatalf("nats urls = %v", cfg.EventBus.URLs)
 	}
 	if cfg.Engine.Workers <= 0 {
 		t.Fatalf("engine workers = %d, want > 0", cfg.Engine.Workers)
@@ -49,11 +49,11 @@ func TestCheckedInConfigUsesEventBatchWindow(t *testing.T) {
 	if cfg.Scheduler.EventBatchWindowMS != 2000 {
 		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
 	}
-	if cfg.NATS.FetchMaxWait != time.Second {
-		t.Fatalf("checked-in nats fetch max wait = %s", cfg.NATS.FetchMaxWait)
+	if cfg.EventBus.FetchMaxWait != time.Second {
+		t.Fatalf("checked-in nats fetch max wait = %s", cfg.EventBus.FetchMaxWait)
 	}
-	if cfg.NATS.CredentialFile != "~/.config/moox/eventbus/factor-eventbus.yaml" {
-		t.Fatalf("checked-in credential file = %q", cfg.NATS.CredentialFile)
+	if cfg.EventBus.CredentialFile != "~/.config/moox/eventbus/factor-eventbus.yaml" {
+		t.Fatalf("checked-in credential file = %q", cfg.EventBus.CredentialFile)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestLoadAppliesFactorEnvOverrides(t *testing.T) {
 	path := writeConfig(t, `
 database:
   path: ./original/factor.db
-nats:
+eventbus:
   urls: [nats://127.0.0.1:4222]
 `)
 
@@ -87,10 +87,10 @@ nats:
 	if cfg.Database.Path != "./override/factor.db" {
 		t.Fatalf("database path = %q", cfg.Database.Path)
 	}
-	if len(cfg.NATS.URLs) != 2 ||
-		cfg.NATS.URLs[0] != "tls://eventbus-a.example:4222" ||
-		cfg.NATS.URLs[1] != "tls://eventbus-b.example:4222" {
-		t.Fatalf("nats urls = %v, want central EventBus override", cfg.NATS.URLs)
+	if len(cfg.EventBus.URLs) != 2 ||
+		cfg.EventBus.URLs[0] != "tls://eventbus-a.example:4222" ||
+		cfg.EventBus.URLs[1] != "tls://eventbus-b.example:4222" {
+		t.Fatalf("nats urls = %v, want central EventBus override", cfg.EventBus.URLs)
 	}
 	if cfg.Engine.PythonBin != "/tmp/factor-python" {
 		t.Fatalf("python bin = %q", cfg.Engine.PythonBin)
@@ -111,7 +111,7 @@ storage:
 	}
 }
 
-func TestLoadRejectsRemovedNATSURLField(t *testing.T) {
+func TestLoadRejectsRemovedNATSKey(t *testing.T) {
 	_, err := Load(writeConfig(t, "nats:\n  url: nats://127.0.0.1:4222\n"))
 	if err == nil {
 		t.Fatal("Load() error = nil, want removed nats.url rejection")

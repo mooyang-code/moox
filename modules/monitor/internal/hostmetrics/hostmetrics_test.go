@@ -11,17 +11,9 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
-
-func TestIdleFetchTimeoutKeepsConsumerRunning(t *testing.T) {
-	assert.True(t, isIdleFetchError(nats.ErrTimeout))
-	assert.False(t, isIdleFetchError(errors.New("connection closed")))
-}
 
 func validHostMetric() *hostmetricpb.HostMetric {
 	return &hostmetricpb.HostMetric{AgentId: "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
@@ -37,14 +29,6 @@ func validHostMessage(t *testing.T) *eventpb.EventMessage {
 	encoded, err := registry.Encode(events.MetricsHostReported, validHostMetric(), events.PublishOptions{EventID: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", OccurredAt: time.Now().UTC(), SpaceID: SpaceID, SubjectID: validHostMetric().GetAgentId()})
 	require.NoError(t, err)
 	return encoded.Message
-}
-
-func validHostDelivery(t *testing.T) (*jetstream.Delivery, *eventpb.EventMessage) {
-	t.Helper()
-	message := validHostMessage(t)
-	body, err := proto.Marshal(message)
-	require.NoError(t, err)
-	return &jetstream.Delivery{Subject: "moox.metrics.host.reported.v1.moox_system." + message.GetSubjectId(), RawData: body, RawMessageID: message.GetEventId(), ContentType: events.ContentType}, message
 }
 
 func TestValidateHostMetricContract(t *testing.T) {
@@ -75,10 +59,10 @@ func (w *fakeSnapshotWriter) WriteSnapshot(_ context.Context, snapshot *hostmetr
 func TestStorePersistsBeforeUpdatingLatest(t *testing.T) {
 	writer := &fakeSnapshotWriter{}
 	store := NewStoreWithWriter(writer)
-	delivery, message := validHostDelivery(t)
+	message := validHostMessage(t)
 	metric, err := ValidateMessage(message)
 	require.NoError(t, err)
-	require.NoError(t, store.persist(context.Background(), delivery, message, metric))
+	require.NoError(t, store.Persist(context.Background(), message, metric))
 	assert.Equal(t, 1, writer.calls)
 	agents, err := store.ListAgents(context.Background())
 	require.NoError(t, err)
@@ -88,9 +72,9 @@ func TestStorePersistsBeforeUpdatingLatest(t *testing.T) {
 
 func TestStoreLeavesLatestUnchangedWhenStorageFails(t *testing.T) {
 	store := NewStoreWithWriter(&fakeSnapshotWriter{err: errors.New("storage unavailable")})
-	delivery, message := validHostDelivery(t)
+	message := validHostMessage(t)
 	metric, _ := ValidateMessage(message)
-	assert.Error(t, store.persist(context.Background(), delivery, message, metric))
+	assert.Error(t, store.Persist(context.Background(), message, metric))
 	agents, err := store.ListAgents(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, agents)
@@ -124,9 +108,6 @@ func TestHostHelpers(t *testing.T) {
 	threshold, recovery := hostThresholds(domain.AlertRule{CheckID: HostMetricNetworkErrors}, HostMetricNetworkErrors)
 	assert.Equal(t, 1.0, threshold)
 	assert.Equal(t, 1.0, recovery)
-	assert.Equal(t, time.Second, retryDelay(1))
-	assert.Equal(t, 5*time.Second, retryDelay(2))
-	assert.Equal(t, 15*time.Second, retryDelay(3))
 }
 
 func validCPUMetric() *hostmetricpb.CpuMetric {

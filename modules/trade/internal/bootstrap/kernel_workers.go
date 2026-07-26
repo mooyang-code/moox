@@ -13,13 +13,11 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/reconciliation"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -75,92 +73,15 @@ func startKernelWorkers(ctx context.Context, cfg config.EventBusConfig, s *store
 		<-ctx.Done()
 		client.Close()
 	}()
-	go runRebalanceConsumer(ctx, client, cfg, s, e, wakeup)
+	go func() {
+		if err := eventconsumer.RunRebalance(ctx, eventconsumer.RebalanceOptions{
+			Client: client, ConsumerName: cfg.RebalanceConsumer,
+			Store: s, Engine: e, Wake: wakeup.Wake,
+		}); err != nil && ctx.Err() == nil {
+			log.WarnContextf(ctx, "trade rebalance consumer stopped: %v", err)
+		}
+	}()
 	return nil
-}
-
-func runRebalanceConsumer(ctx context.Context, client *jetstream.Client, cfg config.EventBusConfig, s *store.Store, e *command.Engine, wakeup *kernelWakeup) {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		log.WarnContextf(ctx, "load trade event registry: %v", err)
-		return
-	}
-	for ctx.Err() == nil {
-		consumer, openErr := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
-			Name: cfg.RebalanceConsumer, Event: events.TradeRebalanceRequested,
-			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64,
-			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
-			DeliverDecodeErrors: true,
-		})
-		if openErr != nil {
-			log.WarnContextf(ctx, "open trade rebalance consumer: %v", openErr)
-			if !sleepContext(ctx, time.Second) {
-				return
-			}
-			continue
-		}
-		handler := jetstream.DeliveryHandlerFunc(func(handlerCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-			return handleRebalanceDelivery(handlerCtx, delivery, s, e, cfg.RebalanceConsumer, wakeup)
-		})
-		runner := jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
-			BatchSize: 16,
-			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-				log.WarnContextf(ctx, "trade rebalance delivery failed: %v", err)
-			}),
-		})
-		runErr := runner.Run(ctx)
-		_ = consumer.Close()
-		if ctx.Err() != nil {
-			return
-		}
-		if runErr != nil {
-			log.WarnContextf(ctx, "trade rebalance consumer stopped: %v", runErr)
-		}
-		if !sleepContext(ctx, time.Second) {
-			return
-		}
-	}
-}
-
-func handleRebalanceDelivery(ctx context.Context, delivery *jetstream.Delivery, s *store.Store, e *command.Engine, consumerName string, wakeup *kernelWakeup) jetstream.HandlerResult {
-	if delivery == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-	}
-	message, payload, err := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
-	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-	}
-	request, ok := payload.(*tradeeventpb.RebalanceRequested)
-	if !ok || request.GetRequestId() != message.GetEventId() || request.GetExecutionBindingId() != message.GetSubjectId() {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: envelope identity mismatch", rebalanceapp.ErrInvalidRequest)}
-	}
-	processed, err := s.HasInbox(ctx, consumerName, message.GetEventId())
-	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-	}
-	if processed {
-		return jetstream.HandlerResult{Decision: jetstream.ACK}
-	}
-	planner := rebalanceapp.RequestPlanner{Resolver: tradeSnapshotResolver{store: s, engine: e}}
-	input, err := planner.Build(ctx, message.GetSpaceId(), request)
-	if err != nil {
-		if rebalanceapp.IsPermanentRequestError(err) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-		}
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-	}
-	fresh, err := (rebalanceapp.Service{Store: s, Engine: e}).CreateFromEvent(ctx, consumerName, message.GetEventId(), message.GetEventName(), input)
-	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
-	}
-	if fresh {
-		s.Wake()
-	}
-	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
 func runTradeStateWorker(ctx context.Context, s *store.Store, e *command.Engine, wakeup *kernelWakeup) {
@@ -337,15 +258,4 @@ func advanceActiveRebalances(ctx context.Context, s *store.Store, e *command.Eng
 		}
 	}
 	return nil
-}
-
-func sleepContext(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }

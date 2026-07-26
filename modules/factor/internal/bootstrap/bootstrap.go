@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -61,7 +62,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	keepResources := false
 	var runtimeExec *engine.RuntimePoolExecutor
 	var sched *scheduler.Service
-	var consumer *trigger.NATSConsumer
+	var consumer *eventconsumer.Consumer
 	var stopRealtime context.CancelFunc
 	var waitRealtime func()
 	var cleanupOnce sync.Once
@@ -131,16 +132,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "恢复 factor event inbox 失败: %v", err)
 		return nil, err
 	}
-	if len(cfg.NATS.URLs) == 0 {
-		log.WarnContextf(ctx, "factor nats.urls is empty, realtime trigger startup skipped")
+	if len(cfg.EventBus.URLs) == 0 {
+		log.WarnContextf(ctx, "factor eventbus.urls is empty, realtime trigger startup skipped")
 	} else {
-		consumer = trigger.NewNATSConsumer(trigger.NATSConfig{
-			URLs:           cfg.NATS.URLs,
-			FetchMaxWait:   cfg.NATS.FetchMaxWait,
-			CredentialFile: cfg.NATS.CredentialFile,
+		consumer = eventconsumer.New(eventconsumer.Config{
+			URLs:           cfg.EventBus.URLs,
+			FetchMaxWait:   cfg.EventBus.FetchMaxWait,
+			CredentialFile: cfg.EventBus.CredentialFile,
 		}, eventBatcher)
 		if err := consumer.Start(ctx); err != nil {
-			log.ErrorContextf(ctx, "启动 factor NATS trigger 失败: %v", err)
+			log.ErrorContextf(ctx, "启动 factor EventBus trigger 失败: %v", err)
 			return nil, err
 		}
 		realtimeCtx, cancelRealtime := context.WithCancel(ctx)
@@ -238,29 +239,29 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Servic
 		}
 		workerReady := workerStatus.Ready && workerStatus.Workers > 0
 		schedulerReady := sched != nil
-		natsReady := realtimeConsumerReady(cfg, consumer)
-		ready := databaseReady && workerReady && schedulerReady && natsReady
+		eventBusReady := realtimeConsumerReady(cfg, consumer)
+		ready := databaseReady && workerReady && schedulerReady && eventBusReady
 		state.SetReady(ready)
 		rsp := healthz.Base("factor", cfg.Instance.InstanceID, "", "", factorStartedAt, ready)
 		rsp.Details = map[string]any{
-			"database":        databaseReady,
-			"worker_ready":    workerReady,
-			"worker_version":  workerStatus.WorkerVersion,
-			"python_version":  workerStatus.PythonVersion,
-			"arrow_available": workerStatus.ArrowAvailable,
-			"scheduler_ready": schedulerReady,
-			"nats_ready":      natsReady,
-			"role":            cfg.Instance.Role,
-			"worker_count":    cfg.Engine.Workers,
-			"nats_enabled":    len(cfg.NATS.URLs) > 0,
-			"storage_gateway": cfg.Storage.GatewayTarget,
+			"database":         databaseReady,
+			"worker_ready":     workerReady,
+			"worker_version":   workerStatus.WorkerVersion,
+			"python_version":   workerStatus.PythonVersion,
+			"arrow_available":  workerStatus.ArrowAvailable,
+			"scheduler_ready":  schedulerReady,
+			"eventbus_ready":   eventBusReady,
+			"role":             cfg.Instance.Role,
+			"worker_count":     cfg.Engine.Workers,
+			"eventbus_enabled": len(cfg.EventBus.URLs) > 0,
+			"storage_gateway":  cfg.Storage.GatewayTarget,
 		}
 		return rsp
 	}
 }
 
 func realtimeConsumerReady(cfg *Config, consumer realtimeStatus) bool {
-	if cfg == nil || len(cfg.NATS.URLs) == 0 {
+	if cfg == nil || len(cfg.EventBus.URLs) == 0 {
 		return true
 	}
 	return consumer != nil && consumer.Ready()

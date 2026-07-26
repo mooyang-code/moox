@@ -1,4 +1,4 @@
-package metrics
+package eventconsumer
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
@@ -72,7 +73,7 @@ func TestAuthorizerFailureRetriesAtMostThreeDeliveries(t *testing.T) {
 
 var errAuthorizerUnavailable = errors.New("authorizer unavailable")
 
-func newMetricsEventBusConsumer(t *testing.T, authorizer ProducerAuthorizer) (context.Context, *Consumer, *events.Publisher, nats.JetStreamContext) {
+func newMetricsEventBusConsumer(t *testing.T, authorizer metrics.ProducerAuthorizer) (context.Context, *Consumer, *events.Publisher, nats.JetStreamContext) {
 	t.Helper()
 	port := freeMetricsEventBusPort(t)
 	server, err := natsserver.NewServer(&natsserver.Options{
@@ -111,7 +112,7 @@ func newMetricsEventBusConsumer(t *testing.T, authorizer ProducerAuthorizer) (co
 	}
 	t.Cleanup(func() { _ = client.Close() })
 	consumer, err := NewConsumer(ctx, ConsumerOptions{
-		Client: client, Storage: &StorageAdapter{}, MessageStore: &MetricMessageStore{}, Authorizer: authorizer,
+		Client: client, Storage: &metrics.StorageAdapter{}, MessageStore: &metrics.MetricMessageStore{}, Authorizer: authorizer,
 		Config: monconfig.MetricsConfig{
 			Consumer:       "monitor_metrics_ingest_v1",
 			FetchBatchSize: 1, FetchMaxWait: 200 * time.Millisecond, AckWait: 200 * time.Millisecond, MaxAckPending: 8,
@@ -142,7 +143,7 @@ func publishMetricReport(t *testing.T, ctx context.Context, publisher *events.Pu
 			Data:   []byte("# TYPE fixture gauge\nfixture 1\n"),
 		},
 	}, events.PublishOptions{
-		EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: InternalMetricSpaceID, SubjectID: "fixture-service/fixture-1",
+		EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: metrics.InternalMetricSpaceID, SubjectID: "fixture-service/fixture-1",
 	})
 	if err != nil {
 		t.Fatal(err)
