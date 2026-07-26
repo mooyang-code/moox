@@ -1166,7 +1166,7 @@ git commit -m "feat(collector): log complete job lifecycle to cls"
 - Modify: `docs/云节点管理.md`
 - Modify: `skills/debug/references/scf-e2e-debug.md`
 
-- [ ] **Step 1: 删除未生效的节点分配字段**
+- [x] **Step 1: 删除未生效的节点分配字段**
 
 从 proto、domain、store、schema、RPC conversion、前端表单和 E2E 删除：
 
@@ -1181,7 +1181,7 @@ node_tags
 
 这是新项目，不写 SQLite ALTER migration；实施发布时重建 Collector DB。
 
-- [ ] **Step 2: 删除未使用的 TaskInstance 状态**
+- [x] **Step 2: 删除未使用的 TaskInstance 状态**
 
 只保留：
 
@@ -1194,7 +1194,7 @@ FAILED = 3
 删除 `RUNNING`、`PART_FAILED` 及 reporter/domain/前端/E2E 映射。任务中间态由 JetStream delivery 表达，不复制到 TaskInstance。
 这是新项目，直接压紧枚举编号，不保留无意义的数值空洞。
 
-- [ ] **Step 3: 删除空壳和已禁用的直接执行概念**
+- [x] **Step 3: 删除空壳和已禁用的直接执行概念**
 
 删除：
 
@@ -1207,7 +1207,7 @@ FAILED = 3
 
 保留 taskrunner 作为“JetStream delivery 到 Collector executor”的明确适配层，不为两个 job type 复制 Handler。
 
-- [ ] **Step 4: 统一简单时间预算**
+- [x] **Step 4: 统一简单时间预算**
 
 最终常量：
 
@@ -1224,7 +1224,7 @@ FAILED = 3
 CloudNode 创建 SCF 的默认平台 timeout、Collector CLI 创建参数和本地 `-once`
 诊断外层 timeout 都统一到 120s；不要把 HTTP idle timeout 等无关配置机械替换。
 
-- [ ] **Step 5: 更新文档和 Web**
+- [x] **Step 5: 更新文档和 Web**
 
 文档必须明确：
 
@@ -1240,7 +1240,7 @@ CloudNode 创建 SCF 的默认平台 timeout、Collector CLI 创建参数和本�
 
 前端 Collector Rule 页面删除全部节点匹配 UI，只保留采集参数、目标 Dataset、周期和启停。
 
-- [ ] **Step 6: 重新生成并做零残留检查**
+- [x] **Step 6: 重新生成并做零残留检查**
 
 ```bash
 make -C modules/collector/proto all
@@ -1249,7 +1249,7 @@ rg -n "assignment_type|assigned_nodes|node_pattern|node_tags|AssignmentType|Assi
 
 Expected: 零命中。
 
-- [ ] **Step 7: 运行模块和前端测试**
+- [x] **Step 7: 运行模块和前端测试**
 
 ```bash
 (cd modules/collector && go test -count=1 ./...)
@@ -1258,12 +1258,19 @@ Expected: 零命中。
 
 Expected: Collector 全模块和 Web 构建通过。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add modules/collector web examples/e2e docs
 git commit -m "refactor(collector): remove unused scheduling concepts"
 ```
+
+完成证据：实现提交 `249f1e3e`、E2E 凭据夹具修复 `52a72eba`，
+以及 codeCR 问题修复 `2c15fca`。Collector 全量测试、相关 race 测试、
+Web 107 项测试与生产构建、Proto 重生成比对、SQLite schema 加载、
+resident/once shell 契约和 Node 状态契约均通过。codeCR 复审确认四项
+问题已关闭，生产 `taskrunner.Run` 仍由首次成功心跳控制 readiness；
+`-resident` 仅用于本地诊断 E2E。
 
 ---
 
